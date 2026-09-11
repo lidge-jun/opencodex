@@ -21,6 +21,21 @@ import {
 import { cursorFastCapableBases } from "../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "./openrouter-routing";
+import {
+  CODEBUDDY_CN_MODELS,
+  CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS,
+  CODEBUDDY_CN_MODEL_DEFAULT_REASONING_EFFORTS,
+  CODEBUDDY_CN_MODEL_MAX_OUTPUT_TOKENS,
+  CODEBUDDY_CN_MODEL_REASONING_EFFORTS,
+  CODEBUDDY_CN_NO_VISION_MODELS,
+  CODEBUDDY_GLOBAL_MODELS,
+  CODEBUDDY_GLOBAL_MODEL_CONTEXT_WINDOWS,
+  CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS,
+  CODEBUDDY_GLOBAL_MODEL_MAX_OUTPUT_TOKENS,
+  CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS,
+  CODEBUDDY_REASONING_EFFORTS,
+} from "./codebuddy-models";
+import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_REASONING_EFFORTS } from "./qoder-models";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
@@ -160,6 +175,13 @@ export interface ProviderRegistryEntry {
   staticHeaders?: Record<string, string>;
   modelSuffixBracketStrip?: boolean;
   featured?: boolean;
+  /**
+   * Paid provider sponsorship under SPONSORS.md. `main` is reserved for model developers,
+   * `standard` for relays and gateways. The picker pins sponsor rows first (alphabetical among
+   * themselves) and labels them; nothing else reads this field. Routing, failover, quota, and
+   * defaults never consult it — that boundary is what SPONSORS.md promises users.
+   */
+  sponsor?: { tier: "main" | "standard"; url: string };
   dashboardPreset?: boolean;
   note?: string;
   dashboardUrl?: string;
@@ -1544,8 +1566,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDiscovery: {
       // Resolves against effectiveBaseUrl (registry baseUrl .../v1) to the same
       // canonical endpoint https://inference-api.nousresearch.com/v1/models.
+      // Nous returns a mixed paid/free catalog whose JSON can exceed 256 KiB;
+      // keep the provider-specific limit below the process-wide 4 MiB ceiling.
       path: "models",
-      maxResponseBytes: 262_144,
+      maxResponseBytes: 1_048_576,
       maxModels: 512,
     },
     note: "Nous Research subscription gateway. OAuth device login with your own Portal account; mixed paid + :free models discovered live (fallback seed 2026-08-10: tencent/hy3:free, poolside/laguna-s-2.1:free, stepfun/step-3.7-flash:free, poolside/laguna-xs-2.1:free).",
@@ -1679,6 +1703,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Zen Go can close a Chat stream after a fully assembled function call without sending
     // finish_reason or [DONE] (#2260). The adapter still rejects incomplete argument JSON.
     openaiChatEofTolerance: true,
+    // Go rejects reasoning.encrypted_content with previous_response_id (#3838).
+    // Use explicit replay history and the existing stateless Responses policy.
+    statelessResponses: true,
     /* [Decision Log]
     - 목적과 의도: Route the exact models OpenCode Go documents on the Responses endpoint — GPT 5.6 Luna, Grok 4.6, and Muse Spark Contributor (#2617).
     - 기존 구현 및 제약 조건: The provider is mixed-wire but its provider-wide `openai-chat` adapter sent Luna to `/chat/completions`; explicit user `modelAdapters` entries must remain authoritative.
@@ -1903,6 +1930,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key", dashboardUrl: "https://www.orcarouter.ai/console",
     // The catalog is public, so a successful /models probe cannot validate a submitted key.
     apiKeyValidation: "unknown",
+    // Standard sponsor under SPONSORS.md (agreement signed 2026-09-07). Pins the row in the
+    // picker and adds the chip; nothing about routing or defaults changes.
+    sponsor: { tier: "standard", url: "https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme" },
     defaultModel: "openai/gpt-5.5",
     models: ORCAROUTER_MODELS,
     liveModels: true,
@@ -1914,6 +1944,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
     preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
     note: "OpenAI-compatible adaptive router. Models and multimodal capabilities are discovered live from the public chat catalog. Use the OrcaRouter account entry for PKCE login.",
+  },
+  {
+    // PackyCode: API relay (packyapi.com) for Claude Code, Codex, Gemini and more. Codex traffic
+    // uses the OpenAI-compatible host from their Codex/Kimi Code guides (docs.packyapi.com):
+    // https://cf.api.fan/v1 — GET /v1/models answers 401 without a key, so the host is live and
+    // discovery narrows to what the key's token group allows. Model ids are bare OpenAI-style
+    // ids (the Codex token group lists gpt-5.5 / gpt-5.1-codex).
+    // Standard sponsor under SPONSORS.md; the dashboardUrl carries their affiliate code.
+    id: "packycode", label: "PackyCode", adapter: "openai-chat", baseUrl: "https://cf.api.fan/v1",
+    authKind: "key", dashboardUrl: "https://www.packyapi.com/register?aff=k5KT",
+    sponsor: { tier: "standard", url: "https://www.packyapi.com/register?aff=k5KT" },
+    defaultModel: "gpt-5.5",
+    models: ["gpt-5.5", "gpt-5.1-codex"],
+    liveModels: true,
+    // New key preset: opt into collision preservation so a row named `packycode` that a user
+    // points at a different PackyCode host keeps its own destination instead of being pulled
+    // back onto the Codex endpoint below.
+    preserveCustomDestination: true,
+    note: "API relay for Claude Code, Codex, Gemini and more. Create a Codex-group token at packyapi.com; live discovery lists what the token group allows.",
   },
   {
     // BizRouter: Korean enterprise LLM gateway (api.bizrouter.ai). Model ids are
@@ -2594,6 +2643,23 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // Narrowed carry of #3641: the official Codex example declares a local static catalog,
   // not an HTTP /models contract. Keep Responses separate from the Chat endpoint above.
   // Source: https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md (checked 2026-09-07).
+  //
+  // #4201 completes the roster. The `models.json` example on that Codex page is a *starter
+  // catalog*, not the set of models the endpoint serves, and reading it as the latter is what
+  // left Flash off a subscription that sells it. Three upstream pages say so directly, all
+  // checked 2026-09-11:
+  //   - coding-plan/latest-model.md pins Codex to THIS baseUrl
+  //     (`Codex：https://open.bigmodel.cn/api/v1`) and opens with GLM Coding Plan supporting
+  //     GLM-5.3 and GLM-5.3-Flash for every tier (Max & Pro & Lite), then treats
+  //     `glm-5.3-flash` as an already-callable id in that same tool.
+  //   - coding-plan/overview.md: every plan supports GLM-5.3 and GLM-5.3-Flash, and calls to
+  //     GLM-5-Turbo are auto-switched to GLM-5.3-Flash. Turbo below is therefore an alias of
+  //     the very model this row omitted, which is the clearest statement that the endpoint
+  //     serves Flash: it was already serving it under another name.
+  //   - guide/models/vlm/glm-5.3-flash.md: native multimodal input, 1M context, and text
+  //     parameters explicitly "consistent with GLM-5.3".
+  // No authenticated /models probe is implied by any of this, so `liveModels` and
+  // `apiKeyValidation` below are deliberately unchanged.
   {
     id: "zhipu-bigmodel-responses",
     label: "Zhipu AI — BigModel Coding Plan (Responses)",
@@ -2602,22 +2668,34 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
     defaultModel: "glm-5.3",
-    models: ["glm-5.3", "glm-5-turbo"],
+    models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
     liveModels: false,
     // The local Codex catalog does not establish an authenticated HTTP /models contract.
     apiKeyValidation: "unknown",
     jawcodeBundle: "zai",
     // A pre-existing same-named custom provider must retain its destination and key boundary.
     preserveCustomDestination: true,
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5-turbo": 204_800 },
-    modelInputModalities: { "glm-5.3": ["text"], "glm-5-turbo": ["text"] },
+    // Flash tracks its 5.3 sibling on this row rather than the Chat row's 1_000_000. Both
+    // models are documented as "1M", and this preset expresses that family's 1M the way
+    // BigModel's own Codex declaration does. Splitting the two would leave one preset
+    // claiming two different sizes for one documented window.
+    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5-turbo": 204_800 },
+    // Flash is the only row here that can actually see an image. Its siblings are declared
+    // text-only and get `image` back from the vision sidecar at catalog-build time; declaring
+    // Flash text-only would route a native VLM's pictures through a describe-it-first detour
+    // and hand the model prose about an image it could have read (same defect
+    // ZAI_GLM_5X_SIDECAR_VISION_MODELS exists to prevent on the Chat rows).
+    modelInputModalities: { "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"] },
     modelReasoningEfforts: {
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
+      // Same three effective tiers: upstream documents Flash's text parameters as identical
+      // to GLM-5.3, and the Codex effort table folds every inbound value into low/high/max.
+      "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
       // Explicitly empty: Turbo must not inherit the generic selectable effort ladder.
       "glm-5-turbo": [],
     },
-    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5-turbo": "max" },
-    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5-turbo": true },
+    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5.3-flash": "max", "glm-5-turbo": "max" },
+    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5.3-flash": true, "glm-5-turbo": true },
     // Responses replay uses this provider-level flag, not the Chat-path model list.
     preserveResponsesReasoningContent: true,
     note: "Domestic BigModel Coding Plan Responses endpoint; static model roster",
@@ -2972,7 +3050,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     keyOptional: true,
     featured: true,
     liveModels: true,
-    note: "No key needed — public desktop tier. OpenCode currently advertises about 200 Big Pickle/free-model requests per 5 hours. The same Zen gateway can also short-window rate-limit free models at roughly 15-20 requests/minute, and may return generic 429s without Retry-After (opencodex synthesizes backoff only when that header is omitted). Free models are discovered live from Zen. Data use: per OpenCode's Zen docs (https://opencode.ai/docs/zen/), prompts sent to free models may be retained and used for training/improvement — do not send confidential material through this provider.",
+    note: "No key needed, but OpenCode now gates this tier to its own client: Zen refuses any request that arrives without an x-opencode-session header (error type MissingSessionID, \"OpenCode's free tier can only be used in OpenCode\"). opencodex does not mint that header or claim an OpenCode client identity, because no upstream contract authorizes a third-party agent to present itself as OpenCode. Until OpenCode publishes a third-party integration path for the keyless tier, use the keyed opencode-zen provider instead (https://opencode.ai/auth). Quota figures for when the tier admitted a request: OpenCode advertises about 200 Big Pickle/free-model requests per 5 hours, and the same Zen gateway can short-window rate-limit free models at roughly 15-20 requests/minute, and may return generic 429s without Retry-After (opencodex synthesizes backoff only when that header is omitted). Free models are discovered live from Zen. Data use: per OpenCode's Zen docs (https://opencode.ai/docs/zen/), prompts sent to free models may be retained and used for training/improvement — do not send confidential material through this provider.",
     dashboardUrl: "https://opencode.ai",
     staticHeaders: {
       // Zen answers a bare runtime User-Agent (Bun/x.y.z) more aggressively than a client
@@ -3138,6 +3216,101 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   // FREEZE 2026-07-10: no public OpenAI-compatible endpoint is documented. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "gitlab-duo", label: "GitLab Duo", baseUrl: "https://cloud.gitlab.com/ai/v1/proxy/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://gitlab.com/-/user_settings/personal_access_tokens" },
+  {
+    // Official Qoder Global CLI automation surface. The canonical URL is an identity boundary;
+    // inference and model discovery are performed only by the installed vendor CLI. Authentication
+    // uses the documented PAT environment variable and never imports desktop/session credentials.
+    id: "qoder",
+    label: "Qoder (Global)",
+    adapter: "qoder",
+    baseUrl: "https://qoder.com",
+    authKind: "key",
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://qoder.com/account/integrations",
+    defaultModel: "Qwen3.8-Max",
+    models: [...QODER_GLOBAL_MODELS],
+    liveModels: true,
+    reasoningEfforts: [...QODER_REASONING_EFFORTS],
+    noVisionModels: [...QODER_GLOBAL_MODELS],
+    note: "Official Qoder Global CLI using QODER_PERSONAL_ACCESS_TOKEN. Models are discovered per account with `qoder --list-models`; the documented roster is a degraded fallback. The CLI runs single-turn with tools, MCP, settings hooks, and session persistence disabled. Requires `npm install -g @qoder-ai/qodercli`.",
+  },
+  {
+    // Qoder CN is a separate credential, executable, destination, entitlement cache, and health
+    // domain. It deliberately does not reuse the OAuth/private-protocol design from #3010.
+    id: "qoder-cn",
+    label: "Qoder CN",
+    adapter: "qoder",
+    baseUrl: "https://qoder.cn",
+    authKind: "key",
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://qoder.cn/account/integrations",
+    defaultModel: "Qwen3.8-Max",
+    models: [...QODER_CN_MODELS],
+    liveModels: true,
+    reasoningEfforts: [...QODER_REASONING_EFFORTS],
+    noVisionModels: [...QODER_CN_MODELS],
+    note: "Official Qoder CN CLI using QODERCN_PERSONAL_ACCESS_TOKEN. Models are discovered per account with `qodercn --list-models`; the verified roster is a degraded fallback. The CLI runs single-turn with tools, MCP, settings hooks, and session persistence disabled. Requires `npm install -g @qodercn-ai/qoderclicn`.",
+  },
+  {
+    // Official CodeBuddy Code CLI provider (Tencent Cloud), GLOBAL / `public` environment.
+    // Transport is the vendor-documented headless CLI automation surface
+    // (`codebuddy -p --output-format stream-json --tools ""`) authenticated with the official
+    // `CODEBUDDY_API_KEY` (https://www.codebuddy.ai/profile/keys). It does NOT read desktop
+    // session files, import desktop bearer tokens, impersonate the desktop client, or call the
+    // private console endpoint — the approach closed in #687 and left in draft in #2244.
+    // baseUrl is the canonical region identity: the adapter fails closed if it is overridden, so a
+    // global key is never sent to the CN environment (that is the separate `codebuddy-cn` entry).
+    // v1 runs tools-disabled so Codex keeps tool ownership; this provider is text/reasoning only
+    // until the control-protocol tool bridge lands (see docs). Free/trial/promotional/subscription
+    // credits draw from the same official API-key pool. Requires the CLI: `npm i -g @tencent-ai/codebuddy-code`.
+    // GOVERNANCE: whether routing this vendor automation surface behind a proxy for a third-party
+    // agent satisfies CodeBuddy's AUP is an open question flagged for maintainer security review.
+    id: "codebuddy",
+    label: "CodeBuddy (Global)",
+    adapter: "codebuddy",
+    baseUrl: "https://www.codebuddy.ai",
+    authKind: "key",
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://www.codebuddy.ai/profile/keys",
+    defaultModel: "default-model",
+    models: CODEBUDDY_GLOBAL_MODELS,
+    liveModels: false,
+    modelContextWindows: CODEBUDDY_GLOBAL_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: CODEBUDDY_GLOBAL_MODEL_MAX_OUTPUT_TOKENS,
+    defaultMaxOutputTokens: 32_000,
+    reasoningEfforts: CODEBUDDY_REASONING_EFFORTS,
+    modelReasoningEfforts: CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS,
+    note: "Official CodeBuddy Code CLI (Tencent Cloud), global/public environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy-cn. v1 disables CLI tools (--tools \"\") so Codex retains tool ownership: text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
+  },
+  {
+    // Official CodeBuddy Code CLI provider, CHINA / `internal` environment. Identical adapter and
+    // binary as `codebuddy`; the region is fixed by the profile's CODEBUDDY_INTERNET_ENVIRONMENT
+    // and this canonical baseUrl. CN key: https://copilot.tencent.com/profile/keys. The CN model
+    // roster differs from Global (see codebuddy-models.ts) and is seeded separately (§八).
+    id: "codebuddy-cn",
+    label: "CodeBuddy (CN)",
+    adapter: "codebuddy",
+    baseUrl: "https://www.codebuddy.cn",
+    authKind: "key",
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://copilot.tencent.com/profile/keys",
+    defaultModel: "default",
+    models: CODEBUDDY_CN_MODELS,
+    liveModels: false,
+    modelContextWindows: CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: CODEBUDDY_CN_MODEL_MAX_OUTPUT_TOKENS,
+    defaultMaxOutputTokens: 32_000,
+    reasoningEfforts: CODEBUDDY_REASONING_EFFORTS,
+    modelReasoningEfforts: CODEBUDDY_CN_MODEL_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: CODEBUDDY_CN_MODEL_DEFAULT_REASONING_EFFORTS,
+    noVisionModels: CODEBUDDY_CN_NO_VISION_MODELS,
+    note: "Official CodeBuddy Code CLI (Tencent Cloud), China/internal environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy (Global); credentials are never exchanged across regions. v1 disables CLI tools (--tools \"\"): text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
+  },
 ];
 
 export function providerRegistryFastWireError(

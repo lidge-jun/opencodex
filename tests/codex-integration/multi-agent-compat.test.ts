@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace } from "../../src/server/responses";
+import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../src/codex/multi-agent-mode-policy";
 import { parseRequest } from "../../src/responses/parser";
 import type { OcxParsedRequest } from "../../src/types";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND, effectiveSubagentRoster } from "../../src/codex/catalog";
@@ -85,6 +86,14 @@ function catalogFixture(dir: string, models: CatalogFixtureModel[]): void {
 
 const V2_ON = "[features.multi_agent_v2]\nenabled = true\n";
 const V2_OFF = "[features]\nmulti_agent = true\n";
+const TRIGGER_ONLY_RECOMMENDATION = [
+  "Proactive multi-agent delegation is active.",
+  "Only the delegation trigger changes: a separate explicit request is no longer required.",
+  "All existing user, authority, task-scope, and collaboration-tool rules continue to apply.",
+  "Delegate eligible independent work when parallel execution could materially improve speed or quality.",
+  "User requests override this hint.",
+  "This mode remains active until a later multi-agent mode developer message changes it.",
+].join(" ");
 
 function parsedFixture(over: {
   reasoning?: string;
@@ -104,14 +113,14 @@ function parsedFixture(over: {
 }
 
 describe("multiAgentGuidanceText", () => {
-  test("v1 tool surface + max injects the tagged Proactive text", async () => {
+  test.each(["max", "ultra"])("v1 %s uses the trigger-only proactive recommendation", async reasoning => {
     codexHomeFixture(V2_OFF); // guidance fires regardless of v2 flag
     const text = await multiAgentGuidanceText(parsedFixture({
-      reasoning: "max",
+      reasoning,
       tools: [{ name: "spawn_agent", namespace: "agents" }, { name: "send_input", namespace: "agents" }],
     }));
-    expect(text).toContain("<multi_agent_mode>");
-    expect(text).toContain("Proactive multi-agent delegation is active");
+    expect(text).toBe(`<multi_agent_mode>${TRIGGER_ONLY_RECOMMENDATION}</multi_agent_mode>`);
+    expect(MULTI_AGENT_MODE_HINT_RECOMMENDATION.text).toBe(TRIGGER_ONLY_RECOMMENDATION);
   });
 
   test("v1 tool surface below the top tier stays silent", async () => {
@@ -267,7 +276,7 @@ describe("multiAgentGuidanceText", () => {
     }
   });
 
-  test("v2 built-in guidance is schema-agnostic and keeps fork rules", async () => {
+  test("v2 built-in guidance reports routing metadata without replacing native delegation rules", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [{
       slug: "anthropic/claude-sonnet-5",
@@ -279,10 +288,13 @@ describe("multiAgentGuidanceText", () => {
       { injectionModel: "anthropic/claude-sonnet-5" },
     );
 
-    expect(text).toContain("When the active spawn_agent tool supports optional");
-    expect(text).toContain("use only models listed for this collaboration surface");
-    expect(text).toContain("fork_turns");
-    expect(text).toContain('"none"');
+    expect(text).toStartWith("<opencodex_subagent_guidance>");
+    expect(text).toEndWith("</opencodex_subagent_guidance>");
+    expect(text).toContain("OpenCodex sub-agent routing metadata");
+    expect(text).toContain("does not override Codex delegation or model-selection rules");
+    expect(text).not.toContain("fork_turns");
+    expect(text).not.toContain("use it unless");
+    expect(text).not.toContain("<multi_agent_mode>");
     expect(text).not.toMatch(/hidden/i);
     expect(text).not.toMatch(/not in the schema/i);
     expect(text).not.toMatch(/never claim/i);
@@ -384,7 +396,7 @@ describe("multiAgentGuidanceText", () => {
         injectionPrompt: "Use {{model}}.",
       },
     );
-    expect(custom).toBe('<multi_agent_mode>Use team/gpt-5.6-sol.</multi_agent_mode>');
+    expect(custom).toBe('<opencodex_subagent_guidance>Use team/gpt-5.6-sol.</opencodex_subagent_guidance>');
 
     const exactBare = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
@@ -403,7 +415,7 @@ describe("multiAgentGuidanceText", () => {
         injectionPrompt: "Use {{model}}.",
       },
     );
-    expect(exactBareCustom).toBe("<multi_agent_mode>Use local-fast.</multi_agent_mode>");
+    expect(exactBareCustom).toBe("<opencodex_subagent_guidance>Use local-fast.</opencodex_subagent_guidance>");
 
     const bareParent = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
@@ -449,7 +461,7 @@ describe("multiAgentGuidanceText", () => {
         injectionPrompt: "Use {{model}}.",
       },
     );
-    expect(ambiguousCustom).toBe("<multi_agent_mode>Use .</multi_agent_mode>");
+    expect(ambiguousCustom).toBe("<opencodex_subagent_guidance>Use .</opencodex_subagent_guidance>");
     expect(ambiguousCustom).not.toContain("gpt-5.6-sol");
   });
 
@@ -508,7 +520,7 @@ describe("multiAgentGuidanceText", () => {
         injectionModel: "gpt-5.6-sol",
         injectionPrompt: "Use {{model}}.",
       },
-    )).toBe("<multi_agent_mode>Use .</multi_agent_mode>");
+    )).toBe("<opencodex_subagent_guidance>Use .</opencodex_subagent_guidance>");
   });
 
   test("effective roster applies alias, visibility, v2 compatibility, stable priority, cap, and diagnostics", async () => {
@@ -612,7 +624,7 @@ describe("multiAgentGuidanceText", () => {
       { injectionModel: "anthropic/claude-sonnet-5" },
     );
     expect(text).toContain('"anthropic/claude-sonnet-5"');
-    expect(text).toContain("fork_turns");
+    expect(text).toContain("OpenCodex sub-agent routing metadata");
     expect(text).not.toContain("Proactive multi-agent delegation is active");
     // and WITHOUT an injectionModel it stays silent (codex-rs owns the v2 Proactive text)
     expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "ultra", tools: nativeV2 }))).toBeNull();
@@ -654,7 +666,7 @@ describe("multiAgentGuidanceText", () => {
       injectionEffort: "xhigh",
       subagentModels: ["gpt-5.6-terra"],
     });
-    expect(text).toContain("When the active spawn_agent tool supports optional");
+    expect(text).toContain("OpenCodex sub-agent routing metadata");
     expect(text).not.toMatch(/hidden|not in the schema|never claim/i);
     expect(text).toContain('(reasoning_effort high/max/ultra): "gpt-5.6-terra"');
   });
@@ -738,8 +750,8 @@ describe("multiAgentGuidanceText", () => {
     // gpt-5.6-luna carries upstream's "v1" pin, which is now an eligible LEAF worker
     // (codex-rs 6d4d9442c), so it joins the substituted roster.
     expect(text).toBe(
-      '<multi_agent_mode>CUSTOM model=raw/preferred-model effort=max'
-        + ' Available models (reasoning_effort high/max): "gpt-5.6-terra", "gpt-5.6-luna".</multi_agent_mode>',
+      '<opencodex_subagent_guidance>CUSTOM model=raw/preferred-model effort=max'
+        + ' Available models (reasoning_effort high/max): "gpt-5.6-terra", "gpt-5.6-luna".</opencodex_subagent_guidance>',
     );
   });
 
@@ -778,14 +790,14 @@ describe("multiAgentGuidanceText", () => {
     expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "medium", tools: v2Tools }))).toBeNull();
   });
 
-  test("v2 surface + roster alone (no injectionModel) fires with the argument-acceptance preamble", async () => {
+  test("v2 surface + roster alone (no injectionModel) reports routing metadata", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [{ slug: "gpt-5.6-terra", efforts: ["high", "max", "ultra"] }]);
     const text = await multiAgentGuidanceText(
       parsedFixture({ reasoning: "medium", tools: [{ name: "spawn_agent" }] }),
       { subagentModels: ["gpt-5.6-terra"] },
     );
-    expect(text).toContain("When the active spawn_agent tool supports optional");
+    expect(text).toContain("OpenCodex sub-agent routing metadata");
     expect(text).not.toMatch(/hidden|not in the schema|never claim/i);
     expect(text).toContain('(reasoning_effort high/max/ultra): "gpt-5.6-terra"');
     expect(text).not.toContain("Preferred sub-agent");
@@ -861,7 +873,7 @@ describe("multiAgentGuidanceText", () => {
         subagentModels: ["gpt-5.5", "opencode-go/glm-5.2", "anthropic/claude-opus-4-6", "gpt-5.6-sol", "gpt-5.6-terra"],
       },
     );
-    const body = text!.replace(/^<multi_agent_mode>/, "").replace(/<\/multi_agent_mode>$/, "");
+    const body = text!.replace(/^<opencodex_subagent_guidance>/, "").replace(/<\/opencodex_subagent_guidance>$/, "");
     expect(body.length).toBeLessThanOrEqual(700);
     expect(body).toContain("Available models"); // roster fits inside the budget
   });
@@ -952,6 +964,43 @@ describe("injectDeveloperMessage", () => {
       && (part as Record<string, unknown>).type === "input_text"
       && (part as Record<string, unknown>).text === text;
   }).length;
+
+  test("upgrades historical v1 wording once and preserves replayed guidance", async () => {
+    codexHomeFixture(V2_OFF);
+    // Released bytes are independent of today's recommendation and remain in the conversation.
+    const legacyText = "<multi_agent_mode>Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Delegate independent sub-tasks to sub-agents whenever parallel work would materially improve speed or quality — do not serialize work that can run concurrently. Each sub-agent runs in its own context and can use all available tools; prefer spawning specialists over doing everything yourself. This mode remains active until a later multi-agent mode developer message changes it.</multi_agent_mode>";
+    const produce = () => multiAgentGuidanceText(parsedFixture({
+      reasoning: "max", tools: [{ name: "spawn_agent", namespace: "agents" }],
+    }));
+    const text = await produce();
+    expect(text).toBe(`<multi_agent_mode>${TRIGGER_ONLY_RECOMMENDATION}</multi_agent_mode>`);
+    const history = [generatedItem(legacyText),
+      { type: "message", role: "user", content: "previous turn" },
+      { type: "message", role: "assistant", content: "done" }];
+    const firstInput = [...structuredClone(history), { type: "message", role: "user", content: "new turn" }];
+    const first = parseRequest({ model: "gpt-5.5", input: firstInput, previous_response_id: "resp_old_v1" });
+    first._replayPrefixLen = history.length;
+    first._continuationConversationMessageIndex = history.length;
+    injectDeveloperMessage(first, text!);
+    expect(firstInput.slice(0, history.length)).toEqual(history);
+    expect(firstInput.slice(history.length)).toEqual([generatedItem(text!),
+      { type: "message", role: "user", content: "new turn" }]);
+    expect(countExact(firstInput, legacyText)).toBe(1);
+    expect(countExact(firstInput, text!)).toBe(1);
+
+    const nextHistory = [...firstInput, { type: "message", role: "assistant", content: "done again" }];
+    const secondInput = [...structuredClone(nextHistory), { type: "message", role: "user", content: "next turn" }];
+    const second = parseRequest({ model: "gpt-5.5", input: secondInput, previous_response_id: "resp_new_v1" });
+    second._replayPrefixLen = nextHistory.length;
+    second._continuationConversationMessageIndex = nextHistory.length;
+    const nextText = await produce();
+    expect(nextText).toBe(text);
+    injectDeveloperMessage(second, nextText!);
+    expect(secondInput.slice(0, nextHistory.length)).toEqual(nextHistory);
+    expect(secondInput).toHaveLength(nextHistory.length + 1);
+    expect(countExact(secondInput, legacyText)).toBe(1);
+    expect(countExact(secondInput, text!)).toBe(1);
+  });
 
   test("inserts after leading developer metadata and before conversation", () => {
     const parsed = parseRequest({
@@ -1180,6 +1229,96 @@ describe("injectDeveloperMessage", () => {
     expect((replay._rawBody as { input: unknown[] }).input).toHaveLength(4);
     injectDeveloperMessage(replay, guidanceA);
     expect((replay._rawBody as { input: unknown[] }).input.at(-1)).toEqual(generatedItem(guidanceA));
+  });
+
+  test("proxy guidance dedup records a metadata A-B-A transition", () => {
+    const metadataA = "<opencodex_subagent_guidance>A</opencodex_subagent_guidance>";
+    const metadataB = "<opencodex_subagent_guidance>B</opencodex_subagent_guidance>";
+    const current = { type: "message", role: "user", content: "current turn" };
+    const rawInput = [generatedItem(metadataA), generatedItem(metadataB), current];
+    const parsed = parseRequest({ model: "gpt-5.5", input: rawInput, previous_response_id: "resp_1" });
+    parsed._replayPrefixLen = 2;
+    parsed._continuationConversationMessageIndex = 2;
+
+    injectDeveloperMessage(parsed, metadataA);
+
+    expect(rawInput).toEqual([generatedItem(metadataA), generatedItem(metadataB), generatedItem(metadataA), current]);
+    expect(parsed.context.messages.map(message => message.content)).toEqual([metadataA, metadataB, metadataA, "current turn"]);
+  });
+
+  test("proxy guidance dedup preserves intervening native mode changes", () => {
+    const nativeA = "<multi_agent_mode>Native policy A</multi_agent_mode>";
+    const nativeB = "<multi_agent_mode>Native policy B</multi_agent_mode>";
+    const metadata = "<opencodex_subagent_guidance>Routing metadata</opencodex_subagent_guidance>";
+    const rawInput = [generatedItem(nativeA), generatedItem(metadata), generatedItem(nativeB), { role: "user", content: "work" }];
+    const before = structuredClone(rawInput);
+    const parsed = parseRequest({ model: "gpt-5.5", input: rawInput });
+    parsed._replayPrefixLen = 3;
+
+    injectDeveloperMessage(parsed, metadata);
+
+    expect(rawInput).toEqual(before);
+    expect(parsed.context.messages.map(message => message.content)).toEqual([nativeA, metadata, nativeB, "work"]);
+  });
+
+  test("native mode dedup ignores later proxy guidance", () => {
+    const native = "<multi_agent_mode>Native policy</multi_agent_mode>";
+    const metadata = "<opencodex_subagent_guidance>Routing metadata</opencodex_subagent_guidance>";
+    const rawInput = [generatedItem(native), generatedItem(metadata), { role: "user", content: "work" }];
+    const before = structuredClone(rawInput);
+    const parsed = parseRequest({ model: "gpt-5.5", input: rawInput });
+    parsed._replayPrefixLen = 2;
+
+    injectDeveloperMessage(parsed, native);
+
+    expect(rawInput).toEqual(before);
+    expect(countExact(rawInput, native)).toBe(1);
+  });
+
+  test("restores default v2 guidance after a custom prompt without changing the custom body", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{ slug: "gpt-5.6-terra", efforts: ["high", "max"], multiAgentVersion: "v2" }]);
+    const fixture = parsedFixture({ tools: [{ name: "spawn_agent" }] });
+    const options = { injectionModel: "gpt-5.6-terra", injectionEffort: "high" };
+    const metadata = await multiAgentGuidanceText(fixture, options);
+    const custom = await multiAgentGuidanceText(fixture, {
+      ...options,
+      injectionPrompt: "Custom {{model}} effort={{effort}}\nKeep {{unknown}}.",
+    });
+    expect(metadata).not.toBeNull();
+    const current = { type: "message", role: "user", content: "current turn" };
+    const rawInput = [generatedItem(metadata!), generatedItem(custom!), current];
+    const parsed = parseRequest({ model: "gpt-5.5", input: rawInput, previous_response_id: "resp_1" });
+    parsed._replayPrefixLen = 2;
+    parsed._continuationConversationMessageIndex = 2;
+
+    injectDeveloperMessage(parsed, (await multiAgentGuidanceText(fixture, options))!);
+
+    expect(rawInput).toEqual([generatedItem(metadata!), generatedItem(custom!), generatedItem(metadata!), current]);
+    expect(parsed.context.messages.map(message => message.content)).toEqual([metadata, custom, metadata, "current turn"]);
+    expect(custom).toBe("<opencodex_subagent_guidance>Custom gpt-5.6-terra effort=high\nKeep {{unknown}}.</opencodex_subagent_guidance>");
+  });
+
+  const legacyBuiltIn = '<multi_agent_mode>When the active spawn_agent tool supports optional "model" or "reasoning_effort" overrides, '
+    + 'use only models listed for this collaboration surface. When setting either override, set fork_turns to "none" '
+    + '(or a positive turn count such as "3"; full-history forks reject overrides) and make the task message self-contained.'
+    + ' Preferred sub-agent: model "gpt-5.6-terra", reasoning_effort "high" — use it unless the user names another.</multi_agent_mode>';
+  test.each([
+    ["built-in", legacyBuiltIn],
+    ["custom", "<multi_agent_mode>Operator-authored legacy prompt.</multi_agent_mode>"],
+  ])("preserves legacy %s and native policy when first injecting new proxy guidance", (_kind, legacy) => {
+    const native = "<multi_agent_mode>Native delegation policy</multi_agent_mode>";
+    const metadata = "<opencodex_subagent_guidance>Routing metadata</opencodex_subagent_guidance>";
+    const current = { type: "message", role: "user", content: "work" };
+    const prefix = [generatedItem(legacy), generatedItem(native)];
+    const rawInput = [...prefix, current];
+    const parsed = parseRequest({ model: "gpt-5.5", input: rawInput });
+    parsed._replayPrefixLen = prefix.length;
+
+    injectDeveloperMessage(parsed, metadata);
+
+    expect(rawInput).toEqual([...prefix, generatedItem(metadata), current]);
+    expect(parsed.context.messages.map(message => message.content)).toEqual([legacy, native, metadata, "work"]);
   });
 
   test("exact-guidance predicate rejects every near-match replay-prefix shape (#326)", () => {

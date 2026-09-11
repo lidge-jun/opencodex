@@ -154,7 +154,14 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
         {}, deps,
       );
       if (state.status === "done") {
-        printData({ ...state, modelSelection: modelSelectionNextSteps("openai") }, wantsJson, [`Logged in${state.email ? ` as ${String(state.email)}` : ""}.`, ...modelSelectionGuidance("openai")]);
+        if (state.validationPending === true) {
+          printData({ ...state, recoveryCommand: "ocx gui", recoveryAction: "After quota recovers, click Refresh quotas in the dashboard Codex account pool." }, wantsJson, [
+            "Account registered; validation pending (routing disabled).",
+            "After quota recovers, open 'ocx gui' and click Refresh quotas to complete validation.",
+          ]);
+        } else {
+          printData({ ...state, modelSelection: modelSelectionNextSteps("openai") }, wantsJson, [`Logged in${state.email ? ` as ${String(state.email)}` : ""}.`, ...modelSelectionGuidance("openai")]);
+        }
         if (!wantsJson) warnIfCodexCatalogRefreshPending(state);
         return;
       }

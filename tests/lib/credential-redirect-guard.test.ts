@@ -1,58 +1,97 @@
 /**
  * Cross-origin redirect guard for credential-bearing sidecars (#1471 review).
  *
- * Bun follows 3xx by default. It drops `Authorization` when the redirect crosses origins, but
- * it forwards NONSTANDARD headers unchanged — which is exactly where the Codex identity lives:
- * `chatgpt-account-id`, `session_id`, `x-codex-turn-metadata`. So a canonical ChatGPT endpoint
- * answering 302 would hand those to the redirect target while `Authorization` looked safely
- * stripped. The first test proves that runtime behavior rather than asserting it from memory;
- * the second pins the fix at every credential-bearing call site.
+ * Exercise production transports against two loopback origins. Safety is a property of the
+ * application send boundary, independent of which headers a particular runtime happens to
+ * strip when following redirects. Existing explicit sidecar guards remain checked below.
  */
 import { describe, expect, test } from "bun:test";
 import { repoPath } from "../helpers/repo-root";
+import { fetchWithHeaderTimeout, providerFetch } from "../../src/server/responses/fetch-helpers";
+import { fetchWithAttemptDeadline } from "../../src/lib/upstream-retry";
+import { fetchWithHeaderDeadline } from "../../src/server/claude-messages";
+import { fetchGoogleWithRetry } from "../../src/adapters/google-http";
+import { fetchKiroWithRetry } from "../../src/adapters/kiro-retry";
+import type { OcxProviderConfig } from "../../src/types";
 
-describe("Bun forwards nonstandard headers across a redirect", () => {
-  test("Authorization is dropped but Codex identity headers are not", async () => {
-    const captured: Record<string, string | null> = {};
+describe("credential-bearing production transports do not follow redirects", () => {
+  const nativeFetch = globalThis.fetch;
+  const senders = ["header", "header-legacy-false", "deadline", "provider", "provider-rebuilt", "claude", "google", "kiro"] as const;
+  for (const sender of senders) for (const sameOrigin of [false, true]) test.each([301, 302, 303, 307, 308])(`${sender} ${sameOrigin ? "same" : "cross"}-origin: preserves %i without a target send`, async status => {
+    let targetHits = 0;
+    let originHits = 0;
+    const observedRedirect: Array<RequestRedirect | undefined> = [];
     const target = Bun.serve({
-      port: 0,
-      fetch(req) {
-        captured.authorization = req.headers.get("authorization");
-        captured.account = req.headers.get("chatgpt-account-id");
-        captured.session = req.headers.get("session_id");
-        captured.turn = req.headers.get("x-codex-turn-metadata");
+      hostname: "127.0.0.1", port: 0,
+      fetch() {
+        targetHits += 1;
         return new Response("ok");
       },
     });
     const origin = Bun.serve({
-      port: 0,
-      fetch: () => new Response(null, {
-        status: 302,
-        headers: { location: `http://127.0.0.1:${target.port}/landed` },
-      }),
+      hostname: "127.0.0.1", port: 0,
+      fetch: req => {
+        if (new URL(req.url).pathname === "/landed") {
+          targetHits += 1;
+          return new Response("ok");
+        }
+        originHits += 1;
+        return new Response("untrusted redirect body", {
+          status,
+          headers: { location: sameOrigin ? "/landed" : `http://127.0.0.1:${target.port}/landed` },
+        });
+      },
     });
-
+    let response: Response | undefined;
     try {
-      await fetch(`http://127.0.0.1:${origin.port}/start`, {
+      const url = `http://127.0.0.1:${origin.port}/start`;
+      const init: RequestInit = {
+        method: "POST", body: "synthetic request", redirect: "follow",
         headers: {
-          authorization: "Bearer secret-token",
+          authorization: "Bearer synthetic-token",
+          "x-api-key": "synthetic-provider-key",
           "chatgpt-account-id": "acct-123",
-          session_id: "sess-456",
-          "x-codex-turn-metadata": "turn-789",
         },
-      });
+      };
+      const executor = (async (input, sentInit) => {
+        observedRedirect.push(sentInit?.redirect);
+        return nativeFetch(input, sentInit);
+      }) as typeof globalThis.fetch;
+      const signal = new AbortController().signal;
+      if (sender === "header") response = await fetchWithHeaderTimeout(url, init, signal, 2_000, false, executor);
+      else if (sender === "header-legacy-false") response = await fetchWithHeaderTimeout(url, init, signal, 2_000, false, executor, false);
+      else if (sender === "deadline") response = await fetchWithAttemptDeadline(url, init, 2_000, signal, false, executor);
+      else if (sender === "claude") {
+        const result = await fetchWithHeaderDeadline(url, init, 2_000, signal, undefined, executor);
+        expect(result.kind).toBe("response");
+        if (result.kind === "response") response = result.upstream;
+      } else if (sender === "google" || sender === "kiro") {
+        const request = { url, method: "POST", headers: init.headers as Record<string, string>, body: init.body as string };
+        const context = { abortSignal: signal, timeoutMs: 2_000, returnRawErrors: true, executor };
+        if (sender === "google") response = await fetchGoogleWithRetry("test", request, context);
+        else {
+          globalThis.fetch = executor;
+          response = await fetchKiroWithRetry(request, context);
+        }
+      }
+      else {
+        const provider = { adapter: "openai-chat", baseUrl: url, fetch: executor } as OcxProviderConfig & { fetch: typeof globalThis.fetch };
+        const fetcher = providerFetch(provider, undefined, sender === "provider-rebuilt" ? {
+          dispatchOverride: (input, sentInit, execute) => execute(input, { ...sentInit, redirect: "follow" }),
+        } : {});
+        response = await fetcher(url, init);
+      }
+      expect(targetHits).toBe(0);
+      expect(originHits).toBe(1);
+      expect(observedRedirect).toEqual(["manual"]);
+      expect(response?.status).toBe(status);
+      expect(response?.headers.get("location")).toBe(sameOrigin ? "/landed" : `http://127.0.0.1:${target.port}/landed`);
     } finally {
-      origin.stop(true);
-      target.stop(true);
+      globalThis.fetch = nativeFetch;
+      await response?.body?.cancel();
+      await origin.stop(true);
+      await target.stop(true);
     }
-
-    // The half that looks safe...
-    expect(captured.authorization).toBeNull();
-    // ...and the half that is not. This is why `redirect: "manual"` is required and why
-    // relying on Authorization stripping alone would be a false sense of safety.
-    expect(captured.account).toBe("acct-123");
-    expect(captured.session).toBe("sess-456");
-    expect(captured.turn).toBe("turn-789");
   });
 });
 
@@ -73,16 +112,5 @@ describe("credential-bearing sidecars refuse to follow redirects", () => {
     });
   }
 
-  // The Responses and compact paths reach the same policy through a different mechanism:
-  // `fetchWithHeaderTimeout` takes a `manualRedirect` flag and applies `redirect: "manual"`
-  // centrally (#914). Assert the shared helper still does that, so the two families cannot
-  // drift apart silently.
-  test("the shared credential-bearing fetch helper still applies manual redirects", async () => {
-    const helper = await Bun.file(new URL("../../src/server/responses/fetch-helpers.ts", import.meta.url)).text();
-    expect(helper).toContain('redirect: "manual" as const');
-
-    // And the callers still opt in for forward auth rather than dropping the flag.
-    const compact = await Bun.file(new URL("../../src/server/responses/compact.ts", import.meta.url)).text();
-    expect(compact).toContain('sendProvider.authMode === "forward"');
-  });
+  // These source checks supplement, rather than replace, the physical-send tests above.
 });

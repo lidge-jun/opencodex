@@ -1,8 +1,9 @@
 /** Canonical inventory and revision-bound custom-definition operations for one provider. */
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
+import { Switch } from "../../ui";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
-import type { ModelRow } from "../../pages/models-shared";
+import { filterFreeModelRows, freeOnlyInForce, modelPricingKnown, type ModelRow } from "../../pages/models-shared";
 import { putModelVisibility } from "../../model-visibility";
 import { readJsonOrThrow } from "../../fetch-json";
 import { createBoundedFetch } from "../../bounded-fetch";
@@ -45,6 +46,8 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
 }: ProviderModelsProps) {
   const t = useT();
   const [query, setQuery] = useState("");
+  // Free-only narrowing for this provider's inventory (#3666), mirroring the Models page.
+  const [freeOnly, setFreeOnly] = useState(false);
   const [draft, setDraft] = useState("");
   const [ownershipEpoch, setOwnershipEpoch] = useState(0);
   const ownershipKey = JSON.stringify([apiBase, item.name, modelRevision, ownershipEpoch]);
@@ -74,8 +77,18 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   const modelId = draft.trim();
   const duplicate = !!modelId && (known.includes(modelId) || encodedModelIdCollides(modelId, known));
   const visible = rows.filter(row => !row.disabled);
+  // Offered only where discovery actually returned per-token prices; a provider that publishes
+  // none would otherwise get a switch that can only empty its own inventory.
+  const pricingKnown = modelPricingKnown(visible);
+  // Absent pricingStatus is never free — the classifier omits it exactly when the provider's
+  // rates were missing, partial, or unusable.
+  // Lapses with the switch: `pricingKnown` hides the control when discovery stops returning
+  // prices, and a stale `freeOnly` would otherwise keep filtering an inventory in which nothing
+  // can classify as free.
+  const freeOnlyActive = freeOnlyInForce(freeOnly, visible);
+  const priced = filterFreeModelRows(visible, freeOnlyActive);
   const normalizedQuery = query.trim().toLowerCase();
-  const filtered = visible.filter(row => [row.id, row.namespaced].some(value => value.toLowerCase().includes(normalizedQuery)));
+  const filtered = priced.filter(row => [row.id, row.namespaced].some(value => value.toLowerCase().includes(normalizedQuery)));
   const labels = new Map<string, number>();
   for (const row of visible) labels.set(row.id, (labels.get(row.id) ?? 0) + 1);
 
@@ -245,10 +258,16 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
       </div> : (!ready || busy) && <p className="muted" role="status">{t(!modelRowsReady || modelsLoading ? "pws.modelsLoading" : "pws.modelOwnershipLoading")}</p>}
       {mutation && (mutation.outcome === "unconfirmed" || mutation.refreshPending) && !modelsLoadFailed && ownershipError !== ownershipKey &&
         <button type="button" className="btn btn-ghost btn-sm" onClick={retry} disabled={requestPending}>{t("common.retry")}</button>}
+      {/* Above the search box, matching the Models page group: the same filter must not sit on
+          opposite sides of the search input on the two surfaces that offer it. */}
+      {pricingKnown && <div className="row">
+        <Switch on={freeOnly} onClick={() => setFreeOnly(!freeOnly)} label={t("models.freeOnly")} showLabel />
+      </div>}
       <input ref={searchRef} type="search" className="input pws-model-search" placeholder={t("pws.modelSearchPlaceholder")}
         value={query} onChange={event => setQuery(event.target.value)} aria-label={t("pws.modelSearchPlaceholder")} />
       {modelRows !== null && visible.length === 0 ? <p className="muted">{t("pws.noModels")}</p>
-        : filtered.length === 0 && modelRows !== null ? <p className="muted" role="status">{t("pws.noModelMatch")}</p>
+        : filtered.length === 0 && modelRows !== null
+          ? <p className="muted" role="status">{t(freeOnlyActive && priced.length === 0 ? "models.noFreeMatch" : "pws.noModelMatch")}</p>
         : <ul className="pws-model-list">{filtered.slice(0, CHIP_RENDER_CAP).map(row => <ProviderModelChip key={row.namespaced}
           row={row} disambiguate={(labels.get(row.id) ?? 0) > 1} copied={copiedId === row.namespaced}
           isDefault={row.id === item.defaultModel} selected={row.native !== true && selectedSet.has(row.id)}

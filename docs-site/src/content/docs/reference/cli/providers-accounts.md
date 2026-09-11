@@ -154,6 +154,12 @@ by default. This protects new requests using the identified main account, not th
 already-running requests, unmatched caller-owned keyring credentials, and traffic outside the
 proxy can still spend quota. Added accounts and other providers remain available.
 
+With protection enabled, an owned startup restores the main credential's in-memory identity
+binding after native-profile recovery and cleanup, so a persisted 99% block survives a restart.
+Caller-owned Direct, exact-main, main-fallback, and main-pin requests can briefly receive 503
+while that binding is pending; healthy stored Pool accounts stay eligible throughout. No
+credential is read from a foreign or unconfirmed service home for this initialization.
+
 While this policy blocks main, Luna Reserve on that account is blocked too. Staying below ordinary
 quota exhaustion may prevent Reserve activation. Disabling the switch restores normal local
 handling, not additional upstream entitlement. Use the account quota refresh action to obtain a
@@ -439,6 +445,14 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 Inspect Codex reset credits for an account. Consuming a credit is destructive and requires both
 `--consume` and `--yes`.
+
+After a confirmed `reset`, fresh usage can recover the same account's eligible existing
+shared reset-derived cooldown. Paused accounts, accounts needing reauthentication and
+cooldowns owned by an in-flight probe remain excluded from this recovery. A failed or busy
+usage refresh after confirmed consumption does not require another credit: check usage
+again instead of repeating `--consume`. Consume success does not guarantee routability;
+see the [management API recovery contract](/reference/management-api/#codex-authentication-delegation)
+for reset/replay, freshness and scope limits.
 
 ### `ocx account main <subcommand>`
 

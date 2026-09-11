@@ -1,5 +1,5 @@
 /** Physical response attribution through the real adapter and response/search loops. */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,27 @@ import { handleResponses } from "../../../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
+const actualResolver = await import("../../../src/server/adapter-resolve");
+const actualResolveAdapter = actualResolver.resolveAdapter;
+let adapterRequestsFollow = false;
+mock.module("../../../src/server/adapter-resolve", () => ({
+  ...actualResolver,
+  resolveAdapter(...args: Parameters<typeof actualResolveAdapter>) {
+    const adapter = actualResolveAdapter(...args);
+    if (!adapterRequestsFollow) return adapter;
+    return {
+      ...adapter,
+      // Exercise the production OAuth dispatch callback with adapter-owned request options.
+      // Keep the real request builder/parser; only this caller asks for default-follow.
+      fetchResponse: (request: Parameters<NonNullable<typeof adapter.fetchResponse>>[0], context: Parameters<NonNullable<typeof adapter.fetchResponse>>[1]) =>
+        context!.executor!(request.url, {
+          method: request.method, headers: request.headers, body: request.body,
+          signal: context?.abortSignal, redirect: "follow",
+        }),
+    };
+  },
+}));
+
 const originalHome = process.env.OPENCODEX_HOME;
 let originalFetch: typeof globalThis.fetch;
 let unexpectedGlobalFetches = 0;
@@ -19,6 +40,7 @@ let home: string;
 let sent: { authorization: string | null; apiKey: string | null; body: Record<string, unknown> }[];
 
 beforeEach(() => {
+  adapterRequestsFollow = false;
   home = "";
   originalFetch = globalThis.fetch;
   unexpectedGlobalFetches = 0;
@@ -38,6 +60,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  adapterRequestsFollow = false;
   try {
     // Provider code may catch the guard's rejection; the attempted network call still fails the test.
     expect(unexpectedGlobalFetches).toBe(0);
@@ -142,6 +165,43 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test.each([307, 308])("OAuth provider override pins manual dispatch after adapter init for %i", async status => {
+  await seed(1);
+  adapterRequestsFollow = true;
+  let targetHits = 0;
+  let originHits = 0;
+  const redirects: Array<RequestRedirect | undefined> = [];
+  const statuses: number[] = [];
+  const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    targetHits++;
+    return answer(false);
+  } });
+  const origin = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    originHits++;
+    return new Response("redirect", { status, headers: { location: `http://127.0.0.1:${target.port}/target` } });
+  } });
+  const config = configFor(() => { throw new Error("unused canned transport"); });
+  (config.providers.anthropic as OcxProviderConfig & { fetch: typeof fetch }).fetch = (async (input, init) => {
+    expect(new URL(String(input)).hostname).toBe("anthropic-quota.test");
+    redirects.push(init?.redirect);
+    // Remap only the URL; the production callback must supply the safe request options.
+    const result = await originalFetch(`http://127.0.0.1:${origin.port}/messages`, init);
+    statuses.push(result.status);
+    return result;
+  }) as typeof fetch;
+  try {
+    const response = await post(config);
+    await response.text();
+    expect(targetHits).toBe(0);
+    expect(originHits).toBe(1);
+    expect(redirects).toEqual(["manual"]);
+    expect(statuses).toEqual([status]);
+  } finally {
+    await origin.stop(true);
+    await target.stop(true);
+  }
+});
 
 test("main A429 -> B200 records both physical responses against their sending accounts", async () => {
   const [a, b] = await seed();

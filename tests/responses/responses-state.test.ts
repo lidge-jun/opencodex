@@ -3019,21 +3019,26 @@ describe("Responses previous_response_id state", () => {
     // Two proxies sharing one config dir race every tick. Reporting the loser's ENOENT as a
     // failure would tell an operator a file is "in use or locked" when nobody holds it.
     const old = new Date(Date.now() - 60 * 60 * 1_000);
-    const path = join(home, "responses-state.json.ocx.9104.1.tmp");
+    const deadPid = findDeadPid();
+    expect(deadPid).not.toBe(process.pid);
+    const path = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
     writeFileSync(path, "private state");
     utimesSync(path, old, old);
 
+    const unlinked: string[] = [];
     const result = recoverStaleResponseStateTemps(home, {
       isProcessAlive: () => false,
       bootTime: () => 0,
-      unlink: () => {
+      unlink: target => {
+        unlinked.push(target);
         const error = new Error("gone") as NodeJS.ErrnoException;
         error.code = "ENOENT";
         throw error;
       },
     });
 
-    expect(result).toMatchObject({ matched: 1, removed: 1, failed: 0 });
+    expect(result).toMatchObject({ matched: 1, eligible: 1, removed: 1, failed: 0 });
+    expect(unlinked).toEqual([path]);
   });
 
   test("a dry run reports exactly what a reclaim then removes", () => {

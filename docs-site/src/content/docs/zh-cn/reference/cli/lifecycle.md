@@ -53,6 +53,10 @@ ocx eject back
 
 这是范围很广且具有破坏性的重标记：所有包含用户消息且当前标记为 `opencodex` 的线程都会改标为 `openai`，`exec` 会规范化为 `cli`，并设置事件标记。正常的专用提供方历史记录也在范围内。请先备份状态，并且仅在确实需要这一完整范围时执行。
 
+### `ocx recover-history --ocx-compaction <thread-id> --yes`
+
+在通过原生 Codex 恢复某个曾由路由提供方压缩的任务前，修复该任务的历史记录。此命令按 UUID 精确选择一个任务，先保存私有的逐字节备份，然后仅将 OpenCodeX 自有的 `ocx1:` 压缩状态转换为原生 Codex 可重放的普通摘要。原生加密内容和其他任务保持不变。运行前请关闭所选任务；如果 rollout 在处理期间发生变化，恢复会停止且不会替换原文件。
+
 ### `ocx uninstall` · `ocx remove`
 
 停止服务和代理，移除服务和 Codex shim，恢复原生 Codex，然后仅在所有恢复步骤都成功时才删除 opencodex 本地配置。`remove` 是 `uninstall` 的别名。配置清理需要由全新安装创建的所有权元数据；旧版或共享目录会保留原样。
@@ -208,6 +212,12 @@ ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+:::note[Windows 令牌环境]
+新生成的 Windows CMD 和 PowerShell shim 会在执行后恢复调用方原有的 `OPENCODEX_API_AUTH_TOKEN` 状态。Codex 及其子进程仍可能继承令牌。
+
+更新 OpenCodex 后，如需让现有 Windows shim 采用此行为，请先运行 `ocx codex-shim uninstall`，再运行 `ocx codex-shim install` 重新安装。常规更新不会重写正常的 Windows shim。
+:::
 
 :::tip[Service vs Shim]
 将 `ocx service` 用于始终在线的后台代理（推荐）。将 `ocx codex-shim` 用于无需守护进程的轻量按需启动——代理只会在启动 `codex` 时运行。

@@ -605,7 +605,7 @@
 /* Overview 2-column layout (Phase 030) */
 .pws-overview-layout {
   display: grid;
-  grid-template-columns: 1fr 280px;
+  grid-template-columns: minmax(0, 1fr) 280px;
   gap: 24px;
   align-items: start;
 }
@@ -618,6 +618,7 @@
 }
 
 .pws-overview-sidebar {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -678,11 +679,81 @@
 }
 
 /* Notes section */
+.pws-sponsor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 20px 32px;
+  margin-bottom: 28px;
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.pws-sponsor-copy { flex: 1 1 320px; min-width: 0; }
+.pws-sponsor-byline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.pws-sponsor-badge {
+  padding: 2px 7px;
+  border-radius: var(--radius-2xs);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+.pws-sponsor h3 {
+  margin: 0 0 6px;
+  font-size: 1.08rem;
+  font-weight: 600;
+  line-height: 1.45;
+  text-wrap: balance;
+  word-break: keep-all;
+}
+.pws-sponsor p {
+  margin: 0;
+  max-width: 64ch;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.65;
+  text-wrap: balance;
+  word-break: keep-all;
+}
+.pws-sponsor-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.pws-sponsor-actions a { gap: 8px; min-height: 36px; white-space: nowrap; }
+.pws-sponsor-console {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.pws-sponsor a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@container provider-workspace (max-width: 600px) {
+  .pws-sponsor { padding: 18px; gap: 16px; }
+  .pws-sponsor-actions { align-items: flex-start; }
+  .pws-sponsor-actions a { min-height: 44px; }
+}
+
 .pws-notes-section {
   min-width: 0;
 }
 
 .pws-notes-display {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
   display: block;
   width: 100%;
   text-align: left;
@@ -779,6 +850,8 @@
 }
 
 .pws-detail-tab {
+  flex-shrink: 0;
+  white-space: nowrap;
   appearance: none;
   background: none;
   border: none;

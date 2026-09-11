@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
+import { resolve } from "node:path";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -84,10 +85,13 @@ async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });
 }
 
+const toggle = () => container.querySelector<HTMLButtonElement>(".usage-range-toggle")!;
 const form = () => container.querySelector<HTMLFormElement>('form[aria-label="Custom date range"]')!;
 const startInput = () => form().querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[0];
 const endInput = () => form().querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[1];
-const interval = () => form().querySelector('[role="status"]')?.textContent;
+// The applied interval lives beside the trigger rather than inside the panel: collapsing the
+// controls must not hide which window the totals cover.
+const interval = () => container.querySelector('.usage-range-bar [role="status"]')?.textContent;
 const error = () => form().querySelector('[role="alert"]')?.textContent;
 const preset = (name: string) => container.querySelector<HTMLButtonElement>(`button.usage-segmented-btn[aria-label="${name}"]`)!;
 
@@ -96,7 +100,13 @@ async function click(button: HTMLButtonElement) {
   await act(async () => { button.click(); });
 }
 
+// The date fields are behind a closed-by-default disclosure, so every draft starts by opening it.
+async function openRange() {
+  if (toggle().getAttribute("aria-expanded") !== "true") await click(toggle());
+}
+
 async function enter(start: string, end: string) {
+  await openRange();
   await act(async () => {
     for (const [input, value] of [[startInput(), start], [endInput(), end]] as const) {
       Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, value);
@@ -154,31 +164,49 @@ for (const connected of [false, true]) {
 }
 
 test("America/Santiago midnight DST retains final-day activity and tooltip", async () => {
-  const previous = process.env.TZ;
-  process.env.TZ = "America/Santiago";
-  try {
-    expect(new Date(2026, 8, 6, 0).getHours()).toBe(1);
-    await mount();
-    await respond(0, "preset-marker");
-    await enter("2026-09-05T00:00", "2026-09-07T23:59");
-    await apply();
-    const gate = requests.at(-1)!;
-    const data = report(gate, "santiago-marker", "2026-09-07");
-    data.days = ["2026-09-05", "2026-09-06", "2026-09-07"].map(date => ({
-      date, requests: date === "2026-09-07" ? 7 : 0, measuredRequests: 0, reportedRequests: 0,
-      totalTokens: date === "2026-09-07" ? 700 : 0, models: [],
-    }));
-    await act(async () => gate.resolve(Response.json(data)));
-    const active = container.querySelector<HTMLElement>('.heatmap-grid .heatmap-cell:not(.heatmap-cell-0)');
-    expect(active).not.toBeNull();
-    await act(async () => active!.dispatchEvent(new testWindow.MouseEvent("mouseover", { bubbles: true })));
-    expect(container.querySelector(".heatmap-tip-date")?.textContent).toBe("2026-09-07");
-    expect(container.querySelector(".heatmap-tip")?.textContent).toContain("700");
-  } finally {
-    if (previous === undefined) delete process.env.TZ;
-    else process.env.TZ = previous;
+  if (process.env.OCX_USAGE_SANTIAGO_CHILD !== "1") {
+    // Restoring an absent TZ can change Bun's effective timezone on Windows.
+    // Start the DST case in its timezone without mutating this suite's clock.
+    const timezone = { present: Object.hasOwn(process.env, "TZ"), value: process.env.TZ };
+    const localTime = new Date(2020, 8, 15, 10, 20).getTime();
+    const child = Bun.spawnSync([
+      process.execPath, "test", import.meta.path,
+      "-t", "^America/Santiago midnight DST retains final-day activity and tooltip$",
+      "--timeout", "10000",
+    ], {
+      cwd: resolve(import.meta.dir, ".."),
+      env: { ...process.env, TZ: "America/Santiago", OCX_USAGE_SANTIAGO_CHILD: "1" },
+      stdout: "pipe", stderr: "pipe", timeout: 12000, killSignal: "SIGKILL",
+    });
+    const diagnostics = `${child.stdout.toString()}\n${child.stderr.toString()}`;
+    expect(child.exitedDueToTimeout, diagnostics).not.toBe(true);
+    expect(child.signalCode, diagnostics).toBeUndefined();
+    expect(child.exitCode, diagnostics).toBe(0);
+    expect(child.stdout.toString().split(/\r?\n/), diagnostics).toContain("OCX_SANTIAGO_CASE_COMPLETED");
+    expect({ present: Object.hasOwn(process.env, "TZ"), value: process.env.TZ }).toEqual(timezone);
+    expect(new Date(2020, 8, 15, 10, 20).getTime()).toBe(localTime);
+    return;
   }
-});
+  expect(process.env.TZ).toBe("America/Santiago");
+  expect(new Date(2026, 8, 6, 0).getHours()).toBe(1);
+  await mount();
+  await respond(0, "preset-marker");
+  await enter("2026-09-05T00:00", "2026-09-07T23:59");
+  await apply();
+  const gate = requests.at(-1)!;
+  const data = report(gate, "santiago-marker", "2026-09-07");
+  data.days = ["2026-09-05", "2026-09-06", "2026-09-07"].map(date => ({
+    date, requests: date === "2026-09-07" ? 7 : 0, measuredRequests: 0, reportedRequests: 0,
+    totalTokens: date === "2026-09-07" ? 700 : 0, models: [],
+  }));
+  await act(async () => gate.resolve(Response.json(data)));
+  const active = container.querySelector<HTMLElement>('.heatmap-grid .heatmap-cell:not(.heatmap-cell-0)');
+  expect(active).not.toBeNull();
+  await act(async () => active!.dispatchEvent(new testWindow.MouseEvent("mouseover", { bubbles: true })));
+  expect(container.querySelector(".heatmap-tip-date")?.textContent).toBe("2026-09-07");
+  expect(container.querySelector(".heatmap-tip")?.textContent).toContain("700");
+  if (process.env.OCX_USAGE_SANTIAGO_CHILD === "1") console.log("OCX_SANTIAGO_CASE_COMPLETED");
+}, process.env.OCX_USAGE_SANTIAGO_CHILD === "1" ? 10000 : 15000);
 
 test("Apply submits inclusive bounds once; Clear restores the held preset without custom cache entries", async () => {
   await mount();
@@ -337,4 +365,71 @@ test("each preset clears custom, including the retained preset; 7d never replace
   expect(container.querySelector(".daybars")).toBeNull();
   expect(container.querySelectorAll(".heatmap-grid .heatmap-cell")).toHaveLength(7);
   expect(preset("7d").getAttribute("aria-pressed")).toBe("false");
+});
+
+test("the range panel is closed until asked for, and collapsing it keeps the applied interval readable", async () => {
+  await mount();
+  await respond(0, "preset-report-marker");
+  // Closed is the default: a page that opens on a report should not also open on two empty
+  // date fields, and the collapsed panel must leave no tab stops behind.
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(toggle().textContent).toContain("Custom date range");
+  expect(container.querySelector('form[aria-label="Custom date range"]')).toBeNull();
+  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(0);
+  expect(toggle().className).not.toContain("is-active");
+  // Naming a panel that is not in the document would leave a dangling IDREF.
+  expect(toggle().hasAttribute("aria-controls")).toBe(false);
+
+  await click(toggle());
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
+  expect(toggle().getAttribute("aria-controls")).toBe(form().id);
+  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(2);
+  expect(requests).toHaveLength(1);
+
+  await enter("2020-09-15T10:20", "2020-09-15T10:21");
+  await apply();
+  expect(requests[1].url).toBe(`${apiBase}/api/usage?range=30d&surface=all&${boundsQuery}`);
+  await respond(1, "custom-report-marker");
+  const applied = interval();
+  expect(applied).toContain("both inclusive");
+
+  // Collapsing hides the controls, never the state: the interval line and the marked trigger
+  // still say which window produced the numbers below.
+  await click(toggle());
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(0);
+  expect(interval()).toBe(applied);
+  expect(toggle().className).toContain("is-active");
+  expect(container.textContent).toContain("custom-report-marker");
+  expect(requests).toHaveLength(2);
+
+  // Reopening restores the draft that produced the applied window rather than empty fields.
+  await click(toggle());
+  expect(startInput().value).toBe("2020-09-15T10:20");
+  expect(endInput().value).toBe("2020-09-15T10:21");
+  await clear();
+  expect(interval()).toBeUndefined();
+  expect(toggle().className).not.toContain("is-active");
+  expect(startInput().value).toBe("");
+});
+
+test("closing the panel retires a validation error instead of parking it out of sight", async () => {
+  await mount();
+  await respond(0, "held-report-marker");
+  await enter("2020-09-16T10:20", "2020-09-15T10:20");
+  await apply();
+  expect(error()).toContain("The end must");
+  expect(startInput().getAttribute("aria-invalid")).toBe("true");
+  expect(startInput().getAttribute("aria-describedby")).toBe("usage-range-help usage-range-error");
+
+  // The alert only means something beside the fields that produced it, so it does not outlive
+  // the panel — but the draft that produced it does.
+  await click(toggle());
+  await click(toggle());
+  expect(error()).toBeUndefined();
+  expect(startInput().value).toBe("2020-09-16T10:20");
+  expect(startInput().getAttribute("aria-invalid")).toBe("false");
+  expect(startInput().getAttribute("aria-describedby")).toBe("usage-range-help");
+  expect(requests).toHaveLength(1);
+  expect(container.textContent).toContain("held-report-marker");
 });

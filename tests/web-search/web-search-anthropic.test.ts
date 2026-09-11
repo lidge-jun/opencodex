@@ -291,6 +291,7 @@ describe("runAnthropicWebSearch request shape", () => {
   test("POSTs /v1/messages with the OAuth fingerprint, disabled thinking, and the web_search tool", async () => {
     let captured: { url: string; headers: Record<string, string>; body: Record<string, unknown> } | null = null;
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.redirect).toBe("manual");
       const headers: Record<string, string> = {};
       new Headers(init?.headers).forEach((v, k) => { headers[k] = v; });
       captured = { url: String(url), headers, body: JSON.parse(String(init?.body)) };

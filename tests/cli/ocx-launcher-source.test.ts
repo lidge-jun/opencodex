@@ -14,7 +14,7 @@ const validatorSource = readFileSync(
   "utf8",
 );
 
-describe("ocx.mjs npm launcher (source invariants)", () => {
+describe("ocx.mjs package launcher (source invariants)", () => {
   test("the Bun child receives the runtime provenance the launcher actually selected (#848)", () => {
     // The launcher is a plain-Node bin script executing at import time, so this is
     // asserted at the source level: the marker must reach the spawn env, and it must
@@ -58,9 +58,12 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(spawnCall).toContain("windowsHide: true");
   });
 
-  test("Windows npm spawns use the trusted absolute invocation without shell lookup", () => {
-    expect(source).toContain("const latestInvocation = npmInvocation(");
-    expect(source).toContain("const installInvocation = npmInvocation(");
+  test("Windows package-manager spawns use the trusted absolute invocation without shell lookup", () => {
+    expect(source).toContain("resolvePnpmGlobalOwner");
+    expect(source).toContain("const managerInvocation = args => manager === \"pnpm\"");
+    expect(source).toContain("pnpmOwnerInvocation(owner, args)");
+    expect(source).toContain("const latestInvocation = managerInvocation(");
+    expect(source).toContain("const installInvocation = managerInvocation(installArgs);");
     expect(source).toContain("spawnSync(latestInvocation.file, latestInvocation.args");
     // #1942: the staged install spawns through the same hardened npmInvocation resolver
     // inside the transactional runNpm callback.

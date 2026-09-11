@@ -1020,8 +1020,6 @@ describe("external task-input envelopes (#3735)", () => {
     { name: "blank name", item: { type: "function_call_output", id: "i", name: "", namespace: "ns", output: "ok" } },
     { name: "missing namespace", item: { type: "function_call_output", id: "i", name: "n", output: "ok" } },
     { name: "blank namespace", item: { type: "function_call_output", id: "i", name: "n", namespace: "\t", output: "ok" } },
-    { name: "empty call_id", item: { type: "function_call_output", call_id: "", id: "i", name: "n", namespace: "ns", output: "ok" } },
-    { name: "null call_id", item: { type: "function_call_output", call_id: null, id: "i", name: "n", namespace: "ns", output: "ok" } },
     { name: "number call_id", item: { type: "function_call_output", call_id: 1, id: "i", name: "n", namespace: "ns", output: "ok" } },
     { name: "custom_tool_call_output", item: { type: "custom_tool_call_output", id: "i", name: "n", namespace: "ns", output: "ok" } },
     {
@@ -1094,6 +1092,27 @@ describe("external task-input envelopes (#3735)", () => {
     const parsed = parseFrozen([item]);
     expect(parsed.context.messages.some((message) => message.role === "user")).toBe(false);
     expect(parsed.context.messages.some((message) => message.role === "toolResult")).toBe(true);
+  });
+
+  test.each([
+    { name: "empty call_id", callId: "" },
+    { name: "null call_id", callId: null },
+  ])("$name is a seed on the user path, not a tool result (#3807 supersedes)", ({ callId }) => {
+    // These rows asserted a toolResult until #3807: neither value can pair with a
+    // `function_call`, so a client that emits the field explicitly was carrying the same
+    // seed as the absent-field form and had it answered 400 downstream. A wrong-TYPED
+    // key ("number call_id" above) is malformed input and keeps its rejection.
+    //
+    // A whitespace-only `call_id` is deliberately absent from this table: it satisfies the
+    // schema's `z.string().min(1)`, so functionCallOutputItemSchema claims the item and
+    // strips id/name/namespace before the parser runs. The helper admits it (covered in
+    // responses-compaction-routing), but the envelope never survives to reach it here.
+    const parsed = parseFrozen([{
+      type: "function_call_output", call_id: callId,
+      id: "i", name: "n", namespace: "ns", output: "ok",
+    }]);
+    expect(parsed.context.messages).toMatchObject([{ role: "user", content: "ok" }]);
+    expect(parsed.context.messages.some((message) => message.role === "toolResult")).toBe(false);
   });
 
   test("own and inherited call_id properties are helper-ineligible", () => {

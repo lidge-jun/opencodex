@@ -22,7 +22,8 @@ import {
   setOcxStartProcessProbeForTests,
   sweepDeadOcxStartProcessCache,
 } from "../../src/config";
-import { STATE_STORE_REGISTRATIONS } from "../../src/lib/state-store-registrations";
+import { STATE_STORE_REGISTRATIONS, setLiveStateStoreConfig, reconcileLiveStateStores } from "../../src/lib/state-store-registrations";
+import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import {
   clearAccountQuotaCache,
@@ -78,12 +79,14 @@ beforeEach(() => {
   sweeperHome = mkdtempSync(join(tmpdir(), "ocx-sweeper-home-"));
   process.env.OPENCODEX_HOME = sweeperHome;
   resetStateStoreSweeperForTests();
+  clearComboRecallForTests();
   resetAppOwnedMemoryForTests();
   clearResponseStateMemoryForTests();
   __resetAntigravityReplayCache();
 });
 afterEach(() => {
   resetStateStoreSweeperForTests();
+  clearComboRecallForTests();
   resetAppOwnedMemoryForTests();
   clearResponseStateMemoryForTests();
   __resetAntigravityReplayCache();
@@ -147,6 +150,7 @@ describe("state-store sweeper", () => {
       "model-cache-history",
       "pool-rotation",
       "combo-rotation",
+      "combo-session-recall",
       "guardian-backoff",
       "codex-reauth",
       "oauth-reauth",
@@ -155,6 +159,59 @@ describe("state-store sweeper", () => {
       "oauth-flow-state",
       "ocx-start-process-cache",
     ]);
+  });
+
+  test("registered combo recall cleanup rejects an old completion after delete and recreate while retaining another owner", () => {
+    registerStateStore(STATE_STORE_REGISTRATIONS.find(row => row.name === "combo-session-recall")!);
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "a",
+      providers: { a: { adapter: "openai-chat", baseUrl: "https://a.example/v1" } },
+      combos: {
+        first: { targets: [{ provider: "a", model: "m1" }] },
+        other: { targets: [{ provider: "a", model: "m2" }] },
+      },
+    };
+    setLiveStateStoreConfig(config);
+    const staleGeneration = captureConfigGeneration();
+    rememberComboForLane("first-lane", "first", { provider: "a", model: "m1" }, "visible-first", staleGeneration);
+    rememberComboForLane("other-lane", "other", { provider: "a", model: "m2" }, "visible-other", staleGeneration);
+    delete config.combos!.first;
+    expect(reconcileLiveStateStores()).toEqual({ storesVisited: 1, rowsRemoved: 1 });
+    config.combos!.first = { targets: [{ provider: "a", model: "m1" }] };
+    expect(reconcileLiveStateStores()).toEqual({ storesVisited: 1, rowsRemoved: 0 });
+    rememberComboForLane("first-lane", "first", { provider: "a", model: "m1" }, "visible-first", staleGeneration);
+    expect(recallComboForLane(config, "first-lane", "visible-first")).toBeUndefined();
+    expect(recallComboForLane(config, "other-lane", "visible-other")).toBe("other");
+    rememberComboForLane("first-lane", "first", { provider: "a", model: "m1" }, "visible-new", captureConfigGeneration());
+    expect(recallComboForLane(config, "first-lane", "visible-new")).toBe("first");
+    delete config.providers.a;
+    expect(reconcileLiveStateStores()).toEqual({ storesVisited: 1, rowsRemoved: 2 });
+  });
+
+  test("combo recall watermark rejects writers after a partially failed generation", () => {
+    registerStateStore(STATE_STORE_REGISTRATIONS.find(row => row.name === "combo-session-recall")!);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const unregisterFailure = registerStateStore({ name: "failed-owner", reconcileGeneration: () => { throw new Error("retry"); } });
+    const owners = context(0, {
+      comboIds: new Set(["first"]), comboTargets: new Set(["first::a/m1"]), providerNames: new Set(["a"]),
+    });
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "a", providers: { a: { adapter: "openai-chat", baseUrl: "https://a.example/v1" } },
+      combos: { first: { targets: [{ provider: "a", model: "m1" }] } },
+    };
+    try {
+      reconcileStateGeneration(owners);
+      expect(captureConfigGeneration()).toBe(0);
+      rememberComboForLane("lane", "first", { provider: "a", model: "m1" }, "m1", 0);
+      expect(recallComboForLane(config, "lane", "m1")).toBeUndefined();
+      unregisterFailure();
+      reconcileStateGeneration(owners);
+      rememberComboForLane("lane", "first", { provider: "a", model: "m1" }, "m1", captureConfigGeneration());
+      expect(recallComboForLane(config, "lane", "m1")).toBe("first");
+    } finally {
+      unregisterFailure();
+      warning.mockRestore();
+    }
   });
 
   test("a sweeper tick expires continuation and Antigravity rows without store traffic", () => {

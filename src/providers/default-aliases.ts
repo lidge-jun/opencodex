@@ -15,7 +15,10 @@ export function effectiveProviderAlias(
   if (config?.providers) {
     const lower = regAlias.toLowerCase();
     const claimedByOther = Object.entries(config.providers).some(([name, p]) =>
-      name !== providerName && typeof p.alias === "string" && p.alias.trim().toLowerCase() === lower
+      name !== providerName && (
+        name.toLowerCase() === lower
+        || (typeof p.alias === "string" && p.alias.trim().toLowerCase() === lower)
+      )
     );
     if (claimedByOther) return undefined;
   }

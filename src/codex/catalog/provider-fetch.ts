@@ -52,12 +52,15 @@ import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
+import { fetchQoderModels } from "../../adapters/qoder/live-models";
+import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
   comboModelId,
   getCombo,
   listComboIds,
+  quotaInactiveReason,
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
@@ -77,6 +80,7 @@ import {
   type ProviderModelsApiItem,
   type ResolvedProviderModelDiscovery,
 } from "../../providers/model-discovery";
+import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
@@ -952,16 +956,21 @@ function comboMemberVendorMetadata(provider: string, modelId: string): ModelMeta
  */
 function vendorMetadataComboFallback(target: { provider: string; model: string }): ComboCatalogMemberFallback | undefined {
   const metadataProvider = resolveMetadataProvider(target.provider);
-  const metadata = metadataProvider ? comboMemberVendorMetadata(metadataProvider, target.model) : undefined;
+  // Custom OpenAI-compatible routes commonly retain the canonical OpenAI model id
+  // while using a provider name that has no metadata alias. Reuse only its effort
+  // ladder below; context/modality rows remain provider-owned.
+  const metadata = metadataProvider
+    ? comboMemberVendorMetadata(metadataProvider, target.model)
+    : comboMemberVendorMetadata("openai", target.model);
   if (!metadata) return undefined;
   return {
-    ...(typeof metadata.contextWindow === "number" && metadata.contextWindow > 0
+    ...(metadataProvider && typeof metadata.contextWindow === "number" && metadata.contextWindow > 0
       ? { contextWindow: metadata.contextWindow }
       : {}),
-    ...(typeof metadata.maxTokens === "number" && metadata.maxTokens > 0
+    ...(metadataProvider && typeof metadata.maxTokens === "number" && metadata.maxTokens > 0
       ? { maxOutputTokens: metadata.maxTokens }
       : {}),
-    ...(Array.isArray(metadata.input) && metadata.input.length > 0
+    ...(metadataProvider && Array.isArray(metadata.input) && metadata.input.length > 0
       ? { inputModalities: [...metadata.input] }
       : {}),
     ...(metadata.reasoning === true ? { reasoningEfforts: [...ROUTED_COMBO_MEMBER_REASONING_EFFORTS] } : {}),
@@ -1038,15 +1047,21 @@ export function resolveComboCatalogMember(
     && typeof existing.contextWindow === "number"
     && existing.contextWindow > 0
   ) {
-    const capped = applyProviderContextCap(existing.contextWindow, contextCap);
+    // Live discovery can explicitly say text-only even when configured routing
+    // supplies a vision sidecar. Apply the same provider hints used for thin
+    // rows before deriving a combo from this complete row.
+    const hinted = prov && isModelVisionSidecarConsumer(prov, existing.id)
+      ? applyProviderConfigHints(target.provider, prov, existing, contextCap, metadataModelIdCaseFold)
+      : existing;
+    const capped = applyProviderContextCap(hinted.contextWindow, contextCap);
     if (capped === undefined || capped === existing.contextWindow) {
-      return withFallbackMetadata(existing);
+      return withFallbackMetadata(hinted);
     }
-    const maxInput = typeof existing.maxInputTokens === "number" && existing.maxInputTokens > 0
-      ? Math.min(existing.maxInputTokens, capped)
+    const maxInput = typeof hinted.maxInputTokens === "number" && hinted.maxInputTokens > 0
+      ? Math.min(hinted.maxInputTokens, capped)
       : Math.min(fallback?.maxInputTokens ?? capped, capped);
     return withFallbackMetadata({
-      ...existing,
+      ...hinted,
       contextWindow: capped,
       maxInputTokens: maxInput,
       contextCap,
@@ -1387,6 +1402,51 @@ function modelInputModalities(
   return undefined;
 }
 
+/**
+ * A per-token rate exactly as a /models row publishes it, or undefined when the value is not a
+ * usable non-negative number. Providers ship these both as JSON numbers and as decimal strings —
+ * OpenRouter encodes free as the string `"0.00000000"` — so both shapes are accepted and nothing
+ * else is. The explicit numeric-shape test has to run BEFORE any coercion: `Number("")` and
+ * `Number(" ")` are both 0 and `Number(true)` is 1, so a bare `Number(value)` would classify a
+ * row with an empty price string as free.
+ */
+const DISCOVERED_PRICING_RATE_PATTERN = /^-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?$/;
+
+function discoveredPricingRate(value: unknown): number | undefined {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && DISCOVERED_PRICING_RATE_PATTERN.test(value.trim())
+      ? Number(value.trim())
+      : undefined;
+  if (numeric === undefined || !Number.isFinite(numeric) || numeric < 0) return undefined;
+  return numeric;
+}
+
+/**
+ * Cost class for one discovered row, read from the provider's own `pricing` object (#3666).
+ *
+ * Fail closed. Only a complete pair of non-negative numeric rates classifies at all; a missing,
+ * one-sided, non-numeric, or negative rate is "unknown" and therefore excluded from a free-only
+ * filter. Showing a paid model under a Free filter spends the user's money, while hiding a free
+ * one costs a click.
+ *
+ * Two things that look like evidence and are not. A `:free` id suffix is an OpenRouter naming
+ * convention, not a price — Nous ships `:free` slugs on a provider whose `freeTier` is false on
+ * purpose. And the operator's own `modelCosts` overlay is an estimate they typed, not something
+ * the provider published, so a zeroed overlay never reaches this field either.
+ *
+ * Classification is on numeric zero and never on a unit conversion: OpenRouter quotes USD per
+ * token while the cost overlays and the jawcode bundle quote per 1M, and zero is zero in both.
+ */
+export function discoveredPricingStatus(item: ProviderModelsApiItem): "free" | "paid" | "unknown" {
+  const pricing = plainRecord(item.pricing) ?? plainRecord(plainRecord(item.metadata)?.pricing);
+  if (!pricing) return "unknown";
+  const prompt = discoveredPricingRate(pricing.prompt ?? pricing.input);
+  const completion = discoveredPricingRate(pricing.completion ?? pricing.output);
+  if (prompt === undefined || completion === undefined) return "unknown";
+  return prompt === 0 && completion === 0 ? "free" : "paid";
+}
+
 export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
   const metadata = plainRecord(item.metadata);
   const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
@@ -1412,6 +1472,13 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       // supplying a recognized field changes behavior (#1797).
       plainRecord(item.meta)?.n_ctx,
       plainRecord(item.meta)?.n_ctx_train,
+      // A chained OpenCodex hub (and other re-serving gateways) reports the per-model
+      // window on the same capability record this function already reads for
+      // `max_output_tokens` below (#4032). Without it every routed row fell through to
+      // the 128k compatibility floor in parsing.ts while local forward rows kept their
+      // real values. Appended after the recognized fields for the same reason as the
+      // llama.cpp entries above: no provider that already resolves changes behavior.
+      capabilityRecord?.context_length,
     );
   const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
   const maxOutputTokens = positiveSafeInteger(
@@ -1444,6 +1511,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       : undefined;
   const capabilities = modelCapabilities(item);
   const inputModalities = modelInputModalities(item, capabilities);
+  const pricingStatus = discoveredPricingStatus(item);
   return {
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
@@ -1451,6 +1519,11 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(capabilities ? { capabilities } : {}),
+    // Omitted when the classification is "unknown", following this function's existing
+    // contract that an unknown property is absent rather than present-and-empty. Callers
+    // that need to tell "provider published no prices" from "this build does not classify"
+    // call discoveredPricingStatus directly.
+    ...(pricingStatus !== "unknown" ? { pricingStatus } : {}),
   };
 }
 
@@ -1582,6 +1655,50 @@ async function fetchProviderModelsWithAuth(
       ? [...models, vertexDefaultSeed]
       : models
   );
+  if (prov.adapter === "qoder") {
+    if (!apiKey) return observed(configured, "degraded");
+    const profile = resolveQoderProfile(prov.baseUrl);
+    if (!profile) return observed(configured, "degraded");
+    // Qoder's model list is entitlement-specific. Bind cache reads/writes to an irreversible PAT
+    // fingerprint so an account switch cannot observe another account's roster, even if a caller
+    // bypasses the normal config mutation path that clears provider caches.
+    const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
+    const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    if (fresh) {
+      return observed(withConfiguredRetention(
+        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      ), "authoritative");
+    }
+    const scopedStale = getStaleCached(name, authorityIdentity);
+    if (isModelsFetchCoolingDown(name) && scopedStale) {
+      return observed(withConfiguredRetention(
+        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      ), "degraded");
+    }
+    const live = await fetchQoderModels(profile, apiKey);
+    if (live.ok) {
+      const discovered = live.models.map(id => ({
+        id,
+        provider: name,
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      }));
+      const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, live.models.length);
+      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+    }
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name);
+      markProviderDiscoveryFailed(name, { reason: "provider" });
+      console.warn(`[opencodex] Qoder model discovery for "${name}" failed [${live.error}]${live.detail ? `: ${live.detail}` : ""}; using stale/static catalog degradation.`);
+    }
+    const stale = getStaleCached(name, authorityIdentity);
+    return observed(withConfiguredRetention(
+      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+    ), "degraded");
+  }
   if (prov.adapter === "cursor") {
     if (!apiKey) return observed(configured, "degraded");
     // Cursor uses a bespoke GetUsableModels RPC (not /models), returning the full effort-suffixed
@@ -1807,7 +1924,14 @@ async function fetchProviderModelsWithAuth(
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    const extracted = extractProviderModelItems(bounded.value, discovery);
+    const googleAiStudio = effectiveGoogleMode(name, prov) === "ai-studio"
+      ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
+      : undefined;
+    // Native /v1beta/models wins; a google row served by an OpenAI-compatible
+    // gateway keeps the generic data[] / top-level-array contract.
+    const extracted = googleAiStudio?.ok
+      ? googleAiStudio
+      : extractProviderModelItems(bounded.value, discovery);
     if (!extracted.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {
@@ -2558,7 +2682,16 @@ async function gatherRoutedModelsUncached(
   return {
     models: models.map(model => {
       const displayName = aliasDisplayNames.get(`${model.provider}/${model.id}`);
-      return displayName && !model.displayName ? { ...model, displayName } : model;
+      // #1711: one stamping point for every row this gather produces — routed, combo, and custom
+      // alike — because it is the only place that has both the finished list and the config the
+      // quota rules need. A combo votes over its own targets; anything else votes over the single
+      // provider that would serve it.
+      const targets = model.provider === COMBO_NAMESPACE
+        ? config.combos?.[model.id]?.targets ?? []
+        : [{ provider: model.provider }];
+      const inactive = quotaInactiveReason(config, targets);
+      const named = displayName && !model.displayName ? { ...model, displayName } : model;
+      return inactive ? { ...named, quotaInactiveReason: inactive } : named;
     }),
     comboOmissions: localOmissions,
     providerAuthOutcomes: localProviderAuthOutcomes,

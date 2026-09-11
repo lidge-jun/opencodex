@@ -125,6 +125,33 @@ describe("primeCodexPoolQuotas", () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
+  test("startup may observe pending account quota without inference or validation", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, "pending", "pro");
+    saveCodexAccountCredential("pending", readCodexAccountRecord("pending")!.credential!, { validationPending: true });
+    const originalFetch = globalThis.fetch;
+    let usageReads = 0;
+    let modelRequests = 0;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/usage")) {
+          usageReads++;
+          return whamResponse(0);
+        }
+        modelRequests++;
+        throw new Error("startup must not send inference for pending validation");
+      };
+      await primeCodexPoolQuotas(config, "startup");
+      expect(usageReads).toBe(1);
+      expect(getAccountQuota("pending")?.weeklyPercent).toBe(0);
+      expect(modelRequests).toBe(0);
+      expect(readCodexAccountRecord("pending")?.codexValidationPending).toBe(true);
+      expect(readCodexAccountRecord("pending")?.lastCodexValidatedAt).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("prime populates stale/unknown pool accounts", async () => {
     const config = makeConfig();
     seedPoolAccount(config, "p1");

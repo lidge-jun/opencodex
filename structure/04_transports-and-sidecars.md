@@ -90,6 +90,17 @@ executor contract. Main-request migration must not treat that branch as fixed-tr
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+### Credential-bearing HTTP redirects
+
+Credential/body-bearing HTTP sends use `redirect: "manual"` at the final executor boundary,
+including dispatch overrides and adapter/sidecar retries. `fetchWithHeaderTimeout` retains its
+legacy final argument for callers but no longer permits default-follow sends. Both same-origin
+and cross-origin redirects remain observable responses: retry helpers must not synthesize a 502
+before the owning route can apply its existing response and health policy. Native Responses and
+compact retain their 3xx/Location relay contract; image and search sidecar owners consume 3xx
+through their existing upstream-error path without relaying Location. This server policy does not govern client-side
+redirect following; providers requiring a redirect must be configured with their final API URL.
+
 ### Fetch-helper import boundary
 
 `src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
@@ -242,6 +253,13 @@ alone never opt a gateway in.
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+Combo compaction recall uses accepted completed-response callbacks to record the final client-visible
+model and originating combo target. The existing child callback gate defers publication until an
+attempt is accepted and drops discarded/failed attempts. Both compaction entry points preserve
+explicit configured selectors before consulting bounded lane state. The existing state-store
+reconciliation owns removal of obsolete targets and generation fencing; core imports no registration
+composition root or Lab code. Recall retains routing identity only, never account credentials.
+
 [Decision Log]
 - 목적과 의도: Complete Cursor turns at the protocol terminal instead of waiting for a separate HTTP-body EOF that may never arrive.
 - 기존 구현 및 제약 조건: Cursor can send turnEnded followed by a clean Connect END_STREAM envelope while RunSSE remains open or later closes through an abort-shaped transport error. The adapter logged the clean envelope but did not settle its terminal owner, so a completed-looking turn could remain open until the Responses stall watchdog.
@@ -366,12 +384,54 @@ have no exec-result seam today and are not annotated.
 - 다른 대안 대신 이 방식을 선택한 이유: One-field stripping exposes the next schema mismatch and turning `external_web_access:false` into xAI live search widens the caller's network policy; destination scoping leaves custom gateways and canonical OpenAI byte-shape native.
 - 장점, 단점 및 영향: Grok 4.5/4.6 no longer fail every default Codex turn with an unsupported-argument 400; live search remains available when explicitly enabled, while cached search degrades to no hosted search on xAI rather than silently going live.
 
+### xAI string agent-message continuation
+
+`normalizeRoutedAgentMessages` owns raw Responses `agent_message` lowering. Its existing
+nonempty all-readable array behavior remains shared by non-forward destinations. The optional
+`allowStringContent` argument defaults to false and is enabled only by the non-forward adapter
+call when `isXaiResponsesDestination` recognizes HTTPS `api.x.ai` or `cli-chat-proxy.grok.com`
+on the standard port. A nonblank string becomes one `input_text` part with the original text;
+the same author/recipient attribution is retained and the private transport item id is removed.
+
+This addresses readable child-result delivery (#3907), not scheduling or decryption. Blank,
+malformed, ciphertext-only and mixed unknown/encrypted content retains the existing fail-closed
+path. Forward destinations never enable the option. The parser and encrypted-task recovery
+owners are unchanged, and no broad content-schema validation or adapter-wide string conversion
+is introduced. Mocked server fixtures cover parent, child, and parent-result continuation over
+SSE and JSON while preserving actual tool-call/result pairs.
+
 OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
 Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and
 keeps the provider-wide `openai-chat` default for other non-pinned models. This endpoint correction
 does not set `modelResponsesUpstreamStreaming`: client `stream: true` remains real upstream
 streaming until a current-runtime reproduction justifies a separate bounded-JSON compatibility
 policy.
+
+Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
+`tools` through `src/adapters/opencode-go-additional-tools.ts`. Placement runs after existing
+custom/search/namespace lowering and before code-mode, compaction and final hosted-tool pruning.
+It does not recalculate wire identities or response aliases. The matcher reads the constructed
+send URL, resolving it with URL semantics, and requires HTTPS `opencode.ai`, the standard port
+and exact `/zen/go/v1/responses`. Normal and endpoint-inclusive bases or split `responsesPath`
+configurations agree; a custom path resolving to Zen or elsewhere does not acquire Go placement.
+Credentials, query, fragment, foreign hosts and other resource paths are excluded. The existing
+URL constructor canonicalizes trailing base slashes before this check. Malformed wrappers remain unchanged and
+the shared mixed-ciphertext agent-message gate remains fail-closed.
+
+The canonical `opencode-go` registry entry defaults to `statelessResponses: true` because Go
+rejects reasoning ciphertext combined with `previous_response_id` (#3838). Existing derive
+logic fills absent values and preserves explicit false; renamed custom configurations receive
+no new destination-based migration. The existing stateless pass sets `store: false`, removes
+stored continuation parameters, and repairs orphan calls/results without claiming execution
+success. A local replay-cache hit supplies history; a miss cannot reconstruct it, so callers
+must resend complete history without `previous_response_id`. This flag also enables the existing
+visible content-to-summary rewrite for SSE and JSON; summary-channel items and opaque reasoning
+blobs keep their existing response handling. The shared recording callback applies the same
+reasoning rewrite under the exact client-visible predicate before caching output, after tool
+restoration and function normalization. This keeps full-content replay fingerprints comparable
+for both full-history-plus-ID and delta continuations without weakening identity checks. Hidden
+summaries and opaque blobs keep their existing cache representation. It does not change streaming selection or Chat
+model routes. Go fixtures cover Luna, Grok and Muse against both response formats.
 
 The canonical OpenCode Go transport also derives `x-opencode-session` from the existing hashed
 session lane before per-model wire selection. One conversation keeps one opaque affinity value
@@ -477,7 +537,10 @@ Control frames remain bounded, and provider credential/cookie headers are not
 forwarded. Once a WS create may have been sent, a missing prelude, overflow or
 disconnect settles as an errored SSE body rather than a retryable fetch failure,
 so HTTP fallback cannot duplicate that inference. A standalone no-response
-exchange has a 30-second prelude deadline in addition to the upgrade deadline.
+exchange has a 90-second prelude deadline in addition to the upgrade deadline.
+That prelude deadline is a ceiling, not a floor: the exchange runs under the
+caller's abort signal, so a `connectTimeoutMs` shorter than 90 seconds cancels
+an already-sent create before the prelude timer fires.
 These are transport-fidelity guarantees, not a provider-billing guarantee.
 
 Eligible complete-input creates can retain a canonical upstream socket within
@@ -785,7 +848,13 @@ recognizes that terminal contract, marks the context as full, and can run its ow
 on the next turn. Combo routing treats 413 as a stop condition and performs the conversion only at
 the outer client boundary, so the failed target is never recorded as a successful combo attempt.
 
-Non-streaming callers retain the original 413 status/body contract. The proxy never silently drops
+Non-streaming Responses callers retain HTTP 413 and receive a JSON `error` with
+`type: invalid_request_error` and `code: context_length_exceeded`, including routed synthetic
+compaction. The upstream body is replaced with the same bounded, proxy-owned message used by SSE.
+Combo attempts retain their existing internal failure accounting; classification happens only at
+the outer client boundary. Local admission and configured outbound-byte refusals keep their own
+distinct codes. Classification does not shrink input or automatically retry compaction.
+The proxy never silently drops
 prompts or images: it does not own the client's transcript, and deleting input would hide data that
 was never analyzed. The streaming error message is proxy-owned and bounded instead of relaying the
 upstream 413 body, which may echo request content.
@@ -798,8 +867,8 @@ upstream 413 body, which may echo request content.
   Codex's persisted transcript safely.
 - 검토한 주요 대안: Relay 413 unchanged; return HTTP 400 JSON; silently remove media or old turns;
   synthesize a successful assistant warning.
-- 선택한 방식: Preserve 413 for non-streaming clients, but map the final streaming 413 to one
-  redacted non-retryable Responses failure at the outer request boundary.
+- 선택한 방식: Preserve HTTP 413 with typed JSON for non-streaming clients, and map the final
+  streaming 413 to one redacted non-retryable Responses failure at the outer request boundary.
 - 다른 대안 대신 이 방식을 선택한 이유: Raw 413 causes a retry loop, HTTP JSON does not enter
   Codex's context-window path, and silent deletion or fake success loses user intent without fixing
   transcript ownership.
@@ -1778,3 +1847,13 @@ The field is omitted when no classified recovery result exists, and existing com
 branches that return the original target failure keep that response.
 `recovery_unavailable` includes cache/singleflight capacity and does not prove an
 upstream request was attempted. No retry or broader envelope acceptance is enabled.
+
+## Voice diagnostic metadata
+
+`src/server/live.ts` owns optional `OCX_LIVE_FRAME_LOG` diagnostics for both sideband directions.
+The JSONL schema contains only `ts`, `dir`, `kind`, `bytes`, and `fffd`. It never stores frame
+content or transcript excerpts, and logging failures do not affect transparent frame delivery.
+Binary detection decodes only the supplied buffer view; malformed UTF-8 can itself produce U+FFFD,
+so the flag does not identify the peer responsible for corruption. Existing diagnostic files are
+not rewritten. Audio devices, WebRTC media negotiation, captions and spoken handoff delivery remain
+client responsibilities.

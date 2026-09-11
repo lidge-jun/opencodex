@@ -74,6 +74,19 @@ Aliases change the public name clients request; they do not change the combo's s
 concrete provider/model selectors behind it.
 :::
 
+## Compaction after switching combos
+
+When a client compacts using a bare model name after switching combos, opencodex can recall the
+combo that most recently completed successfully on that conversation lane. The model must match
+the completed response, and the combo and its target must still exist in the current configuration.
+The request then follows normal combo selection and failover.
+
+Explicit provider/combo selectors and configured combo aliases take precedence over this recall.
+Failed, incomplete, or cancelled responses do not replace the last successful selection. Recall is
+process-local and bounded to 256 lanes for 30 minutes; it does not store account credentials.
+Without usable conversation identity or valid remembered state, normal compaction routing applies.
+A restart clears the remembered state.
+
 ## Codex Desktop native-allowlist compatibility
 
 Some Codex Desktop releases apply a remote native-only `available_models` allowlist after the

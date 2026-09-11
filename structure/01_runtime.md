@@ -16,6 +16,7 @@
 | `src/server/ports.ts` | Owns bind availability and ephemeral-port selection. Temporary probes dispose accepted peers and wait for listener close before reporting success. |
 | `src/cli/status.ts` / `src/cli/status-probes.ts` | Status snapshot assembly and the shared read-only health/stale-process probes used by status and doctor. Probe evidence keeps recorded-port choice, before/after snapshots and per-call timer cleanup together. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. Policy execution and ordinary management dry-run share effective-provider capability evidence; unresolved, missing, and disabled providers are excluded before scoring. |
+| `src/providers/api-key-selection-capture.ts` | Pure request-owned snapshot of the configured key entry, reference, and revision. The router and stateful selection module share this leaf with type-only dependencies; `api-key-selection.ts` retains the compatibility export and owns persisted selection changes and route resolution. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
 | `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
@@ -57,12 +58,23 @@ uninstall still restore.
 
 `startServer` composes up to three sockets in one synchronous startup transaction: the public data
 listener, the optional unauthenticated data-loopback listener, and the optional hub-management
-listener. The hub-management socket is enabled only by `runtimeRole: "hub"` plus
-`hub.managementIngress.enabled`, always binds `127.0.0.1`, and default-denies everything except GUI,
-session bootstrap/exchange, and `/api/*`. A failed optional bind initiates rollback of every earlier
-socket; normal stop joins all bound sockets before lifecycle release. The existing launchd/systemd
-installer remains the service owner and continues loading the data token from `service-api-token`;
-hub mode adds no service-manager fork and no token-bearing unit/plist field.
+listener.
+
+The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
+the native search relay, the standalone Images POSTs, `GET /v1/models`, the realtime voice shapes,
+and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,
+`POST /v1/messages/count_tokens`, and `POST /v1/chat/completions`. It never serves `/api/*`,
+`/healthz`, `/readyz`, or GUI routes, so local management discovery has to use an authenticated
+surface with a management credential.
+
+The hub-management socket is enabled only by `runtimeRole: "hub"` plus
+`hub.managementIngress.enabled`, always binds `127.0.0.1`, and default-denies everything except
+GUI, session bootstrap/exchange, and `/api/*`.
+
+A failed optional bind initiates rollback of every earlier socket; normal stop joins all bound
+sockets before lifecycle release. The existing launchd/systemd installer remains the service owner
+and continues loading the data token from `service-api-token`; hub mode adds no service-manager
+fork and no token-bearing unit/plist field.
 
 [Decision Log]
 - 목적과 의도: Give a headless hub a browser management ingress without widening its data plane or trusting spoofable forwarding headers on the public listener.
@@ -78,6 +90,12 @@ fixed-path command-line check required before stop, kill, port reclaim, or stale
 Callers must not replace the latter with the former merely to avoid the Windows WMIC/PowerShell
 probe. Expected-PID and snapshot removal helpers are the TOCTOU boundary when a replacement proxy
 can write new state during a probe.
+
+Port reclamation must honor a rejected OCX verifier result even for a PID captured before stop or
+update. A rejected live holder prevents both termination and TCP-row deletion for that scan; later
+scans may proceed if verification succeeds or the holder exits. The allowlist narrows termination
+eligibility and supplies no identity evidence by itself. This contract uses the existing verifier;
+it does not add process-instance proof or change the classification cache.
 
 [Decision Log]
 - 목적과 의도: Separate proxy process ownership from persisted configuration without changing lifecycle behavior.
@@ -184,4 +202,4 @@ not an authentication or entitlement decision.
 
 ## Remote Hub hardening ownership
 
-`src/remote/protocol.ts` owns pure interval/feature negotiation. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption and key-id probes. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.
+`src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.

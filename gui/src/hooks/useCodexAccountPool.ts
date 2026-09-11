@@ -109,7 +109,7 @@ export interface CodexAccountPoolController {
    */
   activePinnedId: string | null;
 
-  load(refreshQuota?: boolean): Promise<boolean>;
+  load(refreshQuota?: boolean, options?: { validatePending?: boolean }): Promise<boolean>;
   switchAccount(id: string | null): Promise<CodexAccountActionResult<{ activeId: string | null }>>;
   setAccountPaused(id: string, paused: boolean): Promise<CodexAccountActionResult>;
   /** `null` resets the account to the default order. Accepts the `__main__` sentinel. */
@@ -217,10 +217,20 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   /** Full last /active payload, or undefined when none has succeeded yet. */
   const readLastActive = useCallback(() => lastActiveRef.current?.value, []);
 
-  const load = useCallback(async (refreshQuota = false): Promise<boolean> => {
+  const load = useCallback(async (refreshQuota = false, options: { validatePending?: boolean } = {}): Promise<boolean> => {
     const generation = ++loadGenerationRef.current;
-    // Bounded per attempt: a hung accounts/active read must settle, not pin the poll.
-    const bounded = createBoundedFetch(20_000);
+    const validatePending = options.validatePending === true;
+    // Validation can include token recovery, WHAM and two 30s model attempts.
+    // Budget per known row (conservatively ignoring server parallelism), plus
+    // native-main lookup time. Ordinary reads retain their short polling deadline.
+    const knownAccounts = lastGoodByBase.get(apiBase)?.accounts.length ?? 0;
+    const bounded = createBoundedFetch(validatePending ? 30_000 + 120_000 * Math.max(1, knownAccounts) : 20_000);
+    // A periodic read must not supersede this longer-running explicit operation.
+    const validationLease = validatePending ? {} as PauseToken : null;
+    if (validationLease) {
+      pauseTokensRef.current!.add(validationLease);
+      setPauseCount(pauseTokensRef.current!.size);
+    }
     setInflightCount(count => count + 1);
     // The try opens immediately after the increment so even a synchronous throw in the
     // observer snapshot below cannot leave the counter stuck above zero.
@@ -237,7 +247,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
 
       const accountsTask = (async (): Promise<boolean> => {
         try {
-          const response = await fetch(`${apiBase}/api/codex-auth/accounts${refreshQuota ? "?refresh=1" : ""}`, { signal: bounded.signal });
+          const response = await fetch(`${apiBase}/api/codex-auth/accounts${validatePending ? "/refresh" : refreshQuota ? "?refresh=1" : ""}`, {
+            method: validatePending ? "POST" : "GET",
+            signal: bounded.signal,
+          });
           if (!response.ok) throw new Error("account load failed");
           const payload = await response.json();
           if (loadGenerationRef.current === generation) {
@@ -318,6 +331,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       return false;
     } finally {
       bounded.clear();
+      if (validationLease) {
+        pauseTokensRef.current!.delete(validationLease);
+        setPauseCount(pauseTokensRef.current!.size);
+      }
       setInflightCount(count => Math.max(0, count - 1));
       setFirstAttemptSettled(true);
     }
@@ -354,7 +371,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   useEffect(() => {
     if (!enabled || !needsQuotaFill || pauseCount > 0) return;
     const timers = [350, 900, 2000].map((delayMs) => (
-      window.setTimeout(() => { void load(false); }, delayMs)
+      window.setTimeout(() => { if (pauseTokensRef.current!.size === 0) void load(false); }, delayMs)
     ));
     return () => {
       for (const timer of timers) window.clearTimeout(timer);
@@ -365,7 +382,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // (no timer, no traffic) while the tab is hidden.
   useEffect(() => {
     if (!enabled || pauseCount > 0) return;
-    return startVisibilityPoll(() => { void load(); }, REFRESH_INTERVAL_MS);
+    return startVisibilityPoll(() => { if (pauseTokensRef.current!.size === 0) void load(); }, REFRESH_INTERVAL_MS);
   }, [enabled, load, pauseCount]);
 
   const pauseRefresh = useCallback((): PauseToken => {

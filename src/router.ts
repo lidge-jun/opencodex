@@ -10,7 +10,7 @@ import {
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./providers/key-store";
-import { captureProviderApiKeySelection } from "./providers/api-key-selection";
+import { captureProviderApiKeySelection } from "./providers/api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import {
@@ -703,13 +703,16 @@ function routeModelInternal(
         throw new Error("provider alias '" + requestedProvider + "' is ambiguous: " + configuredMatches.map(([n]) => n).sort().join(", "));
       } else {
         // Pass 2: built-in registry aliases, only for providers that do NOT have an explicit alias override
-        // and whose registry alias has not been claimed by another configured provider (#3531 review)
+        // and whose registry alias has not been claimed by another configured provider name or alias
         const registryMatches = Object.entries(config.providers).filter(([name, provider]) => {
           if (provider.alias !== undefined) return false;
           const regAlias = PROVIDER_REGISTRY.find(e => e.id === name)?.alias;
           if (!regAlias || regAlias.toLowerCase() !== requestedLower) return false;
           const claimedByOther = Object.entries(config.providers).some(([otherName, p]) =>
-            otherName !== name && typeof p.alias === "string" && p.alias.trim().toLowerCase() === requestedLower
+            otherName !== name && (
+              otherName.toLowerCase() === requestedLower
+              || (typeof p.alias === "string" && p.alias.trim().toLowerCase() === requestedLower)
+            )
           );
           return !claimedByOther;
         });

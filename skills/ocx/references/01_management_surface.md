@@ -145,7 +145,7 @@ JSON mode: `payload`.
 
 ### `ocx logs`
 
-Recent request log rows, filterable by provider, model, conversation, and status.
+Recent request log rows, filterable by provider, model, conversation, account, and status.
 
 | Method | Route |
 |---|---|
@@ -156,6 +156,7 @@ Recent request log rows, filterable by provider, model, conversation, and status
 | `--provider` | string | Restrict to one provider, matching failover attempts too. |
 | `--model` | string | Restrict to one model id, matching failover attempts too. |
 | `--conversation` | string | Restrict to one conversation id (`--conversationId` is accepted too). |
+| `--account` | string | Restrict to one account log label (`main`, `p<hex6>`, `o<hex6>`), matching failover attempts too. |
 | `--status` | string | An exact code (429) or a class (5xx). |
 | `--limit` | number | Row cap; defaults to 200. |
 | `--follow` | boolean | Poll for new rows; add --jsonl to emit JSONL. |
@@ -166,6 +167,7 @@ JSON mode: `payload`.
 
 - `--provider` and `--model` both match a failover attempt, so a request is findable by what actually served it, not only by what was asked for.
 - Rows print `conv=<id>` when the entry carries one, so a conversation filter can be told apart from an empty result.
+- Rows print `acct=<label>` when the account is known, so an `--account` filter can be told apart from an empty result.
 - `--follow` deduplicates by row id and cannot be combined with `--json`.
 
 ### `ocx storage report`
@@ -392,6 +394,28 @@ JSON mode: `payload`.
 
 - Uses the exact upstream model ID after the first slash. Omitted cache rates default to zero; sibling model prices are preserved.
 
+### `ocx hub invite`
+
+Mint a single-use pairing code on a hub and print the exact `ocx connect` line for one more machine.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit code, expiresAt, dataUrl, managementUrl, and command. |
+| `--data-url` | string | Advertise this data origin instead of hub.dataPublicOrigin or the bind address. |
+| `--management-url` | string | Confirm the management origin; it must equal hub.managementPublicOrigin. |
+| `--clients` | string | Pre-select codex and/or claude in the printed connect command. |
+
+JSON mode: `envelope`.
+
+- Hub only: refuses when runtimeRole is not hub, and requires a running attested proxy.
+- The code is secret, single-use and short-lived; it is bound to hub.managementPublicOrigin and to the connecting machine's loopback browser origin.
+- The bound browser origin is always printed; when it is not http://localhost:10100 the warning names the port the connecting machine must use.
+- Refuses when the advertised data origin would be loopback (a loopback or wildcard bind with no hub.dataPublicOrigin and no --data-url) rather than printing a line that dials the other machine itself.
+- Prints no data-plane token. Remote machines receive their own revocable per-client key from the exchange.
+- Mints through the attested local pairing-grant route, the same one ocx gui pair uses; no admin token is read.
+
 ### `ocx connect rotate`
 
 Rotate the connected client's data key against the hub, with commit and abort.
@@ -430,6 +454,23 @@ JSON mode: `payload`.
 
 - `store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.
 - Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.
+
+### `ocx account refresh`
+
+Refresh account quotas without model validation; pending Codex accounts require dashboard consent.
+
+| Method | Route |
+|---|---|
+| POST | `/api/codex-auth/accounts/refresh` |
+| GET | `/api/provider-quotas` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the refresh result as JSON. |
+
+JSON mode: `payload`.
+
+- CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary.
 
 ### `ocx account pause`
 
@@ -687,6 +728,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 37
-- of those, state-changing: 16
+- declared capabilities: 39
+- of those, state-changing: 18
 - head-resolved invocations: 2

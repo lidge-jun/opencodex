@@ -66,7 +66,10 @@ export function computeVersionSkew(cliVersion: string, proxyVersion: string | un
   const order = cliSemver && proxySemver ? compareVersions(cliSemver, proxySemver) : 0;
   const advice = order > 0
     ? "the running proxy is older than this CLI. Restart the proxy using the intended current installation. "
-      + "For a background service, run ocx service repair (ocx service restart is an alias)."
+      // `restart`, not `repair`: a version skew leaves the service DEFINITION unchanged, and
+      // repair reloads only when something changed, so it would no-op and keep the old
+      // process serving (#4249).
+      + "For a background service, run ocx service restart (repair reloads only a changed definition)."
     : order < 0
       ? "this ocx on PATH is older than the running proxy. Upgrade the CLI or resolve PATH to the intended installation."
       : "the versions differ, but neither can be identified as older. Check which installations the CLI and proxy use.";

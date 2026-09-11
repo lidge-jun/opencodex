@@ -1640,6 +1640,43 @@ describe("combo catalog capability intersection", () => {
     )).not.toHaveProperty("reasoningEfforts");
   });
 
+  test("resolveComboCatalogMember restores canonical OpenAI effort levels through generic routes", () => {
+    const providers = new Map([["azu-lab2", {
+      adapter: "openai-chat" as const,
+      baseUrl: "https://azu-lab2.example/v1",
+    }]]);
+    const member = resolveComboCatalogMember(
+      { provider: "azu-lab2", model: "gpt-5.6-terra" },
+      new Map([["azu-lab2/gpt-5.6-terra", {
+        provider: "azu-lab2",
+        id: "gpt-5.6-terra",
+        contextWindow: 373_000,
+        inputModalities: ["text", "image"],
+      }]]),
+      providers,
+    );
+    expect(member?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("resolveComboCatalogMember applies sidecar hints to complete discovery rows", () => {
+    const providers = new Map([["sidecar", {
+      adapter: "openai-chat" as const,
+      baseUrl: "https://sidecar.example/v1",
+      modelInputModalities: { planner: ["text"] },
+    }]]);
+    const member = resolveComboCatalogMember(
+      { provider: "sidecar", model: "planner" },
+      new Map([["sidecar/planner", {
+        provider: "sidecar",
+        id: "planner",
+        contextWindow: 200_000,
+        inputModalities: ["text"],
+      }]]),
+      providers,
+    );
+    expect(member?.inputModalities).toEqual(["text", "image"]);
+  });
+
   // Sniper for the OUTPUT-vs-INPUT mapping defect carried over from PR #3332. The test
   // above uses toMatchObject, which only inspects the keys it names, so without this a
   // regression that puts the OUTPUT ceiling into the INPUT slot passes green.
@@ -7027,23 +7064,25 @@ describe("Codex reasoning-effort capability clamp", () => {
     const supported = supportedCodexReasoningEffortsFromObservedCatalog(observed);
     const clamp = clampCatalogModelsToObservedCodexSupport(models, supported);
 
+    // max and ultra are exempt from the observed-runtime intersection: nothing is removed,
+    // the ladder is untouched, and an ultra default survives a runtime that stops at xhigh.
     expect(clamp).toEqual({
-      removedEfforts: ["max", "ultra"],
-      affectedModels: ["openrouter/example"],
+      removedEfforts: [],
+      affectedModels: [],
     });
     expect(models[0]!.supported_reasoning_levels.map(level => level.effort))
-      .toEqual(["low", "medium", "high", "xhigh"]);
-    expect(models[0]!.default_reasoning_level).toBe("xhigh");
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(models[0]!.default_reasoning_level).toBe("ultra");
     expect(JSON.stringify(observed)).toBe(before);
   });
 
-  test("strips max and ultra when the installed Codex ladder stops at xhigh", () => {
+  test("keeps max and ultra when the installed Codex ladder stops at xhigh", () => {
     const models = [routedEntry()];
 
     clampCatalogModelsToCodexSupport(models, bundledCatalogDeps(["low", "medium", "high", "xhigh"]));
 
     expect(models[0]!.supported_reasoning_levels.map(level => level.effort))
-      .toEqual(["low", "medium", "high", "xhigh"]);
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 
   test("preserves max and ultra when the installed Codex ladder includes them", () => {
@@ -7055,7 +7094,7 @@ describe("Codex reasoning-effort capability clamp", () => {
       .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 
-  test("falls back to the conservative universal ladder when every advertised effort is unsupported", () => {
+  test("a max/ultra-only ladder survives instead of collapsing to the universal fallback", () => {
     const entry = {
       supported_reasoning_levels: [{ effort: "max" }, { effort: "ultra" }],
       default_reasoning_level: "ultra",
@@ -7063,16 +7102,39 @@ describe("Codex reasoning-effort capability clamp", () => {
 
     clampEntryToCodexSupportedEfforts(entry, new Set(["low", "medium", "high", "xhigh"]));
 
+    expect(entry.supported_reasoning_levels.map(level => level.effort)).toEqual(["max", "ultra"]);
+    expect(entry.default_reasoning_level).toBe("ultra");
+  });
+
+  test("still falls back to the conservative universal ladder when every advertised effort is genuinely unsupported", () => {
+    const entry = {
+      supported_reasoning_levels: [{ effort: "xhigh" }],
+      default_reasoning_level: "xhigh",
+    };
+
+    clampEntryToCodexSupportedEfforts(entry, new Set(["low", "medium"]));
+
     expect(entry.supported_reasoning_levels.map(level => level.effort)).toEqual(["low", "medium", "high"]);
     expect(clampedDefaultEffort("max", [])).toBe("medium");
   });
 
-  test("repairs an unsupported max default to the highest surviving xhigh rung", () => {
+  test("keeps an unclampable max default instead of repairing it down to xhigh", () => {
     const entry = routedEntry();
 
     clampEntryToCodexSupportedEfforts(entry, new Set(["low", "medium", "high", "xhigh"]));
 
-    expect(entry.default_reasoning_level).toBe("xhigh");
+    expect(entry.default_reasoning_level).toBe("max");
+  });
+
+  test("still repairs a genuinely unsupported default to the highest surviving rung", () => {
+    const entry = routedEntry();
+    entry.default_reasoning_level = "xhigh";
+
+    clampEntryToCodexSupportedEfforts(entry, new Set(["low", "medium", "high"]));
+
+    expect(entry.supported_reasoning_levels.map(level => level.effort))
+      .toEqual(["low", "medium", "high", "max", "ultra"]);
+    expect(entry.default_reasoning_level).toBe("high");
   });
 
   test("is a no-op when the installed Codex binary cannot be probed", () => {
@@ -7083,6 +7145,21 @@ describe("Codex reasoning-effort capability clamp", () => {
 
     expect(models).toEqual(before);
   });
+});
+
+test("provider-configured cap applies to discovered window and does not get overwritten by discovery", () => {
+  const resolved = applyProviderConfigHints("prov", {
+    adapter: "openai-chat",
+    baseUrl: "https://prov.test/v1",
+    modelContextWindows: { "disco-model": 100_000 },
+  }, {
+    provider: "prov",
+    id: "disco-model",
+    contextWindow: 200_000,
+  }, 150_000);
+
+  expect(resolved.contextWindow).toBe(100_000);
+  expect(resolved.contextCap).toBe(150_000);
 });
 
 describe("auto_review_model configuration (#1225)", () => {

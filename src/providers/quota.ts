@@ -1398,6 +1398,21 @@ function parseClaudeLimit(value: unknown): { label: string; percent: number; res
 /** Claude's OAuth usage endpoint, probed with ONE account's own bearer token. */
 const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
 
+/**
+ * Anthropic per-credential usage.
+ *
+ * This endpoint reports quota only. Its body carries `five_hour`, `seven_day`, the
+ * model-scoped weekly buckets (`seven_day_fable`/`_opus`/`_sonnet`) and a `limits` array,
+ * and **no subscription or tier field** — nor does the OAuth token response, which yields only
+ * `account.uuid` and `account.email_address` (`src/oauth/anthropic.ts`). That is why
+ * `OAuthAccountSummary.plan` is `null` for Anthropic rather than populated here (#3777); it is
+ * a missing upstream field, not an unfinished mapping.
+ *
+ * A tier must not be inferred from what is here. Percentages are normalized per account, so a
+ * Max x5 seat at 50% is byte-identical to a Max x20 seat at 50%, and the presence of a
+ * model-scoped window tracks entitlement rather than seat size. Populate `plan` only when
+ * upstream returns the tier itself.
+ */
 async function fetchAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
   const joinable = anthropicUsageInflight.get(accessToken);
   if (joinable) return joinable;
@@ -2891,7 +2906,11 @@ function keyQuotaReaderForProvider(name: string, provider: OcxProviderConfig): K
   if (name === "deepseek" && isCanonicalDeepSeekBaseUrl(provider.baseUrl)) return fetchDeepSeekQuota;
   if (name === "cline-pass" && isCanonicalClineBaseUrl(provider.baseUrl)) return fetchClineQuota;
   if (isCanonicalOllamaCloudBaseUrl(provider.baseUrl ?? getProviderRegistryEntry(name)?.baseUrl)) return fetchOllamaCloudQuota;
-  if (["zai", "glm", "glm-cn", "zhipu-bigmodel-coding"].includes(name) && isCanonicalZaiBaseUrl(provider.baseUrl)) return fetchZaiQuota;
+  // #4201: the Responses preset is the same domestic GLM Coding Plan subscription on the OpenAI
+  // Responses wire, so it reads the same monitor endpoint. Eligibility stays a name list AND the
+  // canonical-URL guard: the guard is what keeps BigModel's bare-key Authorization from reaching a
+  // lookalike host, so a same-named custom destination still dispatches nothing.
+  if (["zai", "glm", "glm-cn", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses"].includes(name) && isCanonicalZaiBaseUrl(provider.baseUrl)) return fetchZaiQuota;
   if (["minimax", "minimax-cn"].includes(name) && isCanonicalMinimaxBaseUrl(provider.baseUrl)) return fetchMinimaxQuota;
   if (name === "moonshot" && isCanonicalMoonshotBaseUrl(provider.baseUrl)) return fetchMoonshotQuota;
   if (name === "venice" && isCanonicalVeniceBaseUrl(provider.baseUrl)) return fetchVeniceQuota;

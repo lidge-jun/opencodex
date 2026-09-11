@@ -32,15 +32,25 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "meta-model", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
+  "anthropic-apikey", "openai-apikey", "meta-model", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "packycode", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "chutes", "deepinfra", "hyperbolic", "nscale", "vultr", "baseten", "commandcode", "sambanova", "nebius", "digitalocean", "scaleway", "featherless", "novita", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
+  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn",
 ];
 
 describe("provider registry parity", () => {
+  test("CodeBuddy static catalogs cover every official CLI-agent model in the bundled 2.143.0 manifest", () => {
+    const global = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "codebuddy")!);
+    const cn = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "codebuddy-cn")!);
+    expect(global.models).toContain("gemini-3.5-flash");
+    expect(cn.models).toEqual(expect.arrayContaining([
+      "glm-5.0", "glm-5.0-turbo", "glm-5v-turbo", "glm-4.7", "kimi-k2.5", "deepseek-v3-2-volc",
+    ]));
+  });
+
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -441,9 +451,20 @@ describe("provider registry parity", () => {
     expect(glm53Entry?.default_reasoning_level).toBe("max");
   });
 
-  test("BigModel Responses exports only the officially documented static Codex models", () => {
-    // Independent oracle: https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md,
-    // local models.json example checked 2026-09-07; not an authenticated /models response.
+  test("BigModel Responses exports the documented Coding Plan roster for the Codex endpoint", () => {
+    // Independent oracle, all checked 2026-09-11 and none of them an authenticated /models
+    // response. The earlier version of this test read the models.json sample on
+    // https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md as the endpoint's whole roster and
+    // hard-locked two models. It is a starter catalog, and three other upstream pages contradict
+    // that reading (#4201):
+    //   - coding-plan/latest-model.md binds Codex to https://open.bigmodel.cn/api/v1 and states
+    //     GLM-5.3 and GLM-5.3-Flash are available to every plan tier.
+    //   - coding-plan/overview.md states GLM-5-Turbo calls are auto-switched to GLM-5.3-Flash,
+    //     so this preset was already reaching Flash through the Turbo id it does list.
+    //   - guide/models/vlm/glm-5.3-flash.md gives native multimodal input, a 1M window, and text
+    //     parameters "consistent with GLM-5.3".
+    // What stays locked is the part no document supports: there is still no HTTP /models
+    // contract here, so liveModels and apiKeyValidation must not drift.
     const id = "zhipu-bigmodel-responses";
     const registry = PROVIDER_REGISTRY.find(entry => entry.id === id)!;
     expect(registry).toMatchObject({
@@ -451,17 +472,24 @@ describe("provider registry parity", () => {
       baseUrl: "https://open.bigmodel.cn/api/v1",
       authKind: "key",
       defaultModel: "glm-5.3",
-      models: ["glm-5.3", "glm-5-turbo"],
+      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
       liveModels: false,
       preserveCustomDestination: true,
       preserveResponsesReasoningContent: true,
     });
     expect(registry.modelDiscovery).toBeUndefined();
     expect(registry.preserveReasoningContentModels).toBeUndefined();
-    const upstreamModalities = { "glm-5.3": ["text"], "glm-5-turbo": ["text"] };
+    // Flash is the one row upstream documents as natively multimodal; the other two are text.
+    // Pinned separately from the global VLM rule above so that copying glm-5.3's ["text"] onto
+    // Flash fails here, naming this preset, rather than only in a loop over every provider.
+    const upstreamModalities = {
+      "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"],
+    };
     expect(registry.modelInputModalities).toEqual(upstreamModalities);
+    expect(registry.modelInputModalities?.["glm-5.3-flash"]).toContain("image");
+    expect(registry.noVisionModels ?? []).not.toContain("glm-5.3-flash");
     expect(KEY_LOGIN_PROVIDERS[id]).toMatchObject({
-      models: ["glm-5.3", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
+      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
     });
     const provider = providerConfigSeed(registry);
     enrichProviderFromRegistry(id, provider);
@@ -470,11 +498,15 @@ describe("provider registry parity", () => {
     const models = provider.models!.map(modelId => applyProviderConfigHints(id, provider, {
       provider: id, id: modelId,
     }));
-    // The official upstream declaration stays text-only. Catalog hints add image for the
-    // existing vision sidecar (vision/eligibility.ts), not native BigModel image support.
+    // glm-5.3 and glm-5-turbo stay text-only upstream and get image back from the existing
+    // vision sidecar (vision/eligibility.ts). Flash already declares image, so its catalog
+    // modality is the model's own capability rather than a sidecar detour — the rows look
+    // alike below, and this assertion is what keeps the reason for them different.
     expect(provider.modelInputModalities).toEqual(upstreamModalities);
     expect(models).toMatchObject([
       { id: "glm-5.3", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
+        defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
+      { id: "glm-5.3-flash", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
         defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
       { id: "glm-5-turbo", contextWindow: 204_800, reasoningEfforts: [],
         defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
@@ -482,6 +514,7 @@ describe("provider registry parity", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
     for (const [modelId, window, efforts] of [
       ["glm-5.3", 1_048_576, ["low", "high", "max", "ultra"]],
+      ["glm-5.3-flash", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5-turbo", 204_800, []],
     ] as const) {
       const entry = entries.find(row => row.slug === `${id}/${modelId}`);
@@ -495,7 +528,9 @@ describe("provider registry parity", () => {
       expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(row => row.effort))
         .toEqual([...efforts]);
     }
-    expect(entries.some(entry => String(entry.slug).includes("glm-5.3-flash"))).toBe(false);
+    // The reported gap: Flash reaches the exported catalog for this preset, once, under its
+    // own slug rather than only as the Turbo alias upstream silently redirects.
+    expect(entries.filter(entry => String(entry.slug) === `${id}/glm-5.3-flash`)).toHaveLength(1);
   });
 
   test("BigModel Responses key login does not probe an undocumented models endpoint", async () => {
@@ -1243,13 +1278,13 @@ describe("free-provider directory isolation", () => {
   test("directory metadata never becomes a canonical runtime provider", () => {
     // The directory is a catalog of endpoints we have not adopted. If its ids reached
     // PROVIDER_REGISTRY, routedProviderConfig() would canonicalize a user's same-named provider
-    // onto the directory's adapter and baseUrl — for `qoder` that baseUrl is the empty string,
-    // so the request would lose its destination entirely.
+    // onto the directory's adapter and baseUrl, so the request could lose its destination.
     const directoryOnlyIds = FREE_PROVIDER_DIRECTORY
       .filter(entry => entry.supportLevel === "reference")
       .map(entry => entry.id);
     expect(directoryOnlyIds.length).toBeGreaterThan(0);
-    expect(directoryOnlyIds).toContain("qoder");
+    expect(directoryOnlyIds).not.toContain("qoder");
+    expect(directoryOnlyIds).not.toContain("qoder-cn");
 
     const registryIds = new Set(PROVIDER_REGISTRY.map(entry => entry.id));
     for (const id of directoryOnlyIds) {
@@ -1294,6 +1329,33 @@ describe("free-provider directory isolation", () => {
       baseUrl: "https://custom.example.test/v1",
       liveModels: true,
     });
+    expect(routed.provider.adapter).not.toBe("qoder");
+    expect(routed.provider.baseUrl).not.toBe("https://qoder.com");
+    expect(routed.modelId).toBe("custom-model");
+  });
+
+  test("a custom provider named codebuddy keeps its own destination (preserveCustomDestination)", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "codebuddy",
+      providers: {
+        codebuddy: {
+          adapter: "openai-chat",
+          baseUrl: "https://custom.codebuddy.example.test/v1",
+          apiKey: "test-key",
+          liveModels: true,
+        },
+      },
+    };
+
+    const routed = routeModel(config, "codebuddy/custom-model");
+    expect(routed.provider).toMatchObject({
+      adapter: "openai-chat",
+      baseUrl: "https://custom.codebuddy.example.test/v1",
+      liveModels: true,
+    });
+    expect(routed.provider.adapter).not.toBe("codebuddy");
+    expect(routed.provider.baseUrl).not.toBe("https://www.codebuddy.ai");
     expect(routed.modelId).toBe("custom-model");
   });
 

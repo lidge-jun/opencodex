@@ -586,23 +586,60 @@ describe("executeArchivedCleanup", () => {
     db.close();
   }, { timeout: STORE_BUDGET_MS });
 
-  test("rejects candidates still referenced by a live spawn edge", () => {
+  test("skips candidates still referenced by a live spawn edge", () => {
     home = buildHome({ withSpawnEdges: true });
     // Edge told→tmid; deleting only oldest (told) leaves tmid outside the set.
     const result = runWithDigest(34, "quarantine", home);
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("referenced_history");
+    expect(result.ok).toBe(true);
+    expect(result.count).toBe(0);
+    expect(result.skippedReferencedPaths).toEqual(["archived_sessions/rollout-old.jsonl"]);
     expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    // Stage dir should not remain when no candidates are selected.
+    expect(existsSync(join(home, ".trash"))).toBe(false);
   });
 
-  test("rejects paginated history_mode threads", () => {
+  test("skips paginated history_mode threads", () => {
     home = buildHome();
     const db = new Database(join(home, "state_5.sqlite"));
     db.exec(`UPDATE threads SET history_mode='paginated' WHERE id='told'`);
     db.close();
     const result = runWithDigest(50, "quarantine", home);
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("referenced_history");
+    expect(result.ok).toBe(true);
+    expect(result.count).toBe(0);
+    expect(result.skippedReferencedPaths).toEqual(["archived_sessions/rollout-old.jsonl"]);
+    // Ensure the trash root has been removed when nothing was staged.
+    expect(existsSync(join(home, ".trash"))).toBe(false);
+  });
+
+  test("deletes safe candidates while skipping referenced history", () => {
+    home = buildHome({ withSpawnEdges: true });
+    const exactPaths = [
+      "archived_sessions/rollout-old.jsonl",
+      "archived_sessions/rollout-new.jsonl",
+    ];
+    const preview = previewExactArchivedCleanup(
+      listArchivedCandidates(home).filter(candidate => exactPaths.includes(candidate.relPath)),
+      home,
+    );
+    const result = executeArchivedCleanup({
+      percent: 0,
+      mode: "quarantine",
+      digest: preview.digest,
+      candidateRelPaths: [
+        "archived_sessions/rollout-old.jsonl",
+        "archived_sessions/rollout-new.jsonl",
+      ],
+      codexHome: home,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.removedPaths).toEqual(["archived_sessions/rollout-new.jsonl"]);
+    expect(result.skippedReferencedPaths).toEqual(["archived_sessions/rollout-old.jsonl"]);
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(false);
+    const db = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    expect(db.query("SELECT id FROM threads WHERE id='told'").get()).toBeTruthy();
+    expect(db.query("SELECT id FROM threads WHERE id='tnew'").get()).toBeNull();
+    db.close();
   });
 
   test("quarantine removes both plain and compressed physical files", () => {

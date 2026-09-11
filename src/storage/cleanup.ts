@@ -96,6 +96,7 @@ export interface CleanupResult {
   trashDir?: string;
   error?: CleanupErrorCode;
   removedPaths: string[];
+  skippedReferencedPaths?: string[];
 }
 
 const STATE_DB_FILE = /^state_(\d+)\.sqlite$/;
@@ -684,52 +685,59 @@ function loadMatchingThreads(db: Database, candidates: ArchivedCandidate[], code
 }
 
 /**
- * True when any matched thread is still linked to a thread outside the delete set
- * (spawn edges) or uses paginated history that other live threads may depend on via fork.
- * Throws real DB errors (busy/corruption) so callers can refuse cleanup.
+ * Partition matched threads into deletable and referenced snapshots. Linked spawn/fork
+ * history and paginated histories stay in the skipped set. Throws real DB errors.
  */
-function findReferencedHistory(
+function filterReferencedHistory(
   db: Database,
   threads: ThreadSnapshot[],
-): boolean {
-  if (threads.length === 0) return false;
-  const ids = threads.map(t => t.id);
-  const idSet = new Set(ids);
+): { safe: ThreadSnapshot[]; skipped: ThreadSnapshot[] } {
+  let safe = threads.filter(t => (t.history_mode ?? "").toLowerCase() !== "paginated");
+  const skipped = new Map(threads
+    .filter(t => (t.history_mode ?? "").toLowerCase() === "paginated")
+    .map(t => [t.id, t]));
 
-  // Paginated history keeps durable projections tied to the rollout — refuse cleanup.
-  if (threads.some(t => (t.history_mode ?? "").toLowerCase() === "paginated")) {
-    return true;
-  }
+  while (safe.length > 0) {
+    const idSet = new Set(safe.map(t => t.id));
+    const unsafeIds = new Set<string>();
 
-  // Spawn edges that cross the delete boundary keep history reachable.
-  if (tableExists(db, "thread_spawn_edges")) {
-    for (const chunk of chunkIds(ids, SQLITE_ID_CHUNK)) {
+    // Spawn edges that cross the delete boundary keep history reachable.
+    if (tableExists(db, "thread_spawn_edges")) {
+      for (const chunk of chunkIds([...idSet], SQLITE_ID_CHUNK)) {
       const placeholders = chunk.map(() => "?").join(",");
       const edges = db.query<{ parent_thread_id: string; child_thread_id: string }, string[]>(
         `SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges
          WHERE parent_thread_id IN (${placeholders}) OR child_thread_id IN (${placeholders})`,
       ).all(...chunk, ...chunk);
       for (const edge of edges) {
-        if (!idSet.has(edge.parent_thread_id) || !idSet.has(edge.child_thread_id)) {
-          return true;
+        if (!idSet.has(edge.parent_thread_id)) unsafeIds.add(edge.child_thread_id);
+        if (!idSet.has(edge.child_thread_id)) unsafeIds.add(edge.parent_thread_id);
+      }
+    }
+    }
+
+    // Other threads that list one of ours as forked_from / parent (when columns exist).
+    for (const column of ["forked_from_id", "parent_thread_id", "source_thread_id"] as const) {
+      if (!columnExists(db, "threads", column)) continue;
+      for (const chunk of chunkIds([...idSet], SQLITE_ID_CHUNK * 2)) {
+        const placeholders = chunk.map(() => "?").join(",");
+        const rows = db.query<{ id: string; ref: string }, string[]>(
+          `SELECT id, ${column} AS ref FROM threads WHERE ${column} IN (${placeholders})`,
+        ).all(...chunk);
+        for (const row of rows) {
+          if (!idSet.has(row.id)) unsafeIds.add(row.ref);
         }
       }
     }
-  }
 
-  // Other threads that list one of ours as forked_from / parent (when columns exist).
-  for (const column of ["forked_from_id", "parent_thread_id", "source_thread_id"] as const) {
-    if (!columnExists(db, "threads", column)) continue;
-    for (const chunk of chunkIds(ids, SQLITE_ID_CHUNK * 2)) {
-      const placeholders = chunk.map(() => "?").join(",");
-      const rows = db.query<{ id: string }, string[]>(
-        `SELECT id FROM threads WHERE ${column} IN (${placeholders})`,
-      ).all(...chunk);
-      if (rows.some(r => !idSet.has(r.id))) return true;
+    if (unsafeIds.size === 0) break;
+    for (const thread of safe) {
+      if (unsafeIds.has(thread.id)) skipped.set(thread.id, thread);
     }
+    safe = safe.filter(thread => !unsafeIds.has(thread.id));
   }
 
-  return false;
+  return { safe, skipped: [...skipped.values()] };
 }
 
 function tableExists(db: Database, name: string): boolean {
@@ -778,6 +786,7 @@ function deleteThreadsAndDependents(db: Database, threadIds: string[]): void {
 interface ReconcileOk {
   ok: true;
   threads: ThreadSnapshot[];
+  skipped: ThreadSnapshot[];
 }
 interface ReconcileErr {
   ok: false;
@@ -1463,14 +1472,14 @@ function withWritableDb(
   }
 }
 
-/** Load matching archived threads and refuse referenced history — no deletes yet. */
+/** Load matching archived threads and retain referenced history — no deletes yet. */
 function loadThreadsForCleanup(
   stateDbPath: string,
   candidates: ArchivedCandidate[],
   codexHome: string,
   busyTimeoutMs: number,
 ): ReconcileOk | ReconcileErr {
-  if (!stateDbPath || !existsSync(stateDbPath)) return { ok: true, threads: [] };
+  if (!stateDbPath || !existsSync(stateDbPath)) return { ok: true, threads: [], skipped: [] };
   let db: Database | undefined;
   try {
     db = openDbWritable(stateDbPath, busyTimeoutMs);
@@ -1478,10 +1487,8 @@ function loadThreadsForCleanup(
     if (threads.some(t => Number(t.is_pinned ?? 0) === 1)) {
       return { ok: false, error: "pinned_thread" };
     }
-    if (findReferencedHistory(db, threads)) {
-      return { ok: false, error: "referenced_history" };
-    }
-    return { ok: true, threads };
+    const filtered = filterReferencedHistory(db, threads);
+    return { ok: true, threads: filtered.safe, skipped: filtered.skipped };
   } catch (error) {
     return { ok: false, error: mapDbError(error) };
   } finally {
@@ -1504,7 +1511,7 @@ function reconcileDeletedThreads(
   stageDir: string,
   hooks?: ReconcileTestHooks,
 ): ReconcileOk | ReconcileErr {
-  if (!paths.state || !existsSync(paths.state)) return { ok: true, threads: [] };
+  if (!paths.state || !existsSync(paths.state)) return { ok: true, threads: [], skipped: [] };
 
   if (hooks?.beforeReconcileLock) hooks.beforeReconcileLock();
 
@@ -1546,7 +1553,7 @@ function reconcileDeletedThreads(
       stateDb.exec("ROLLBACK");
       return { ok: false, error: "pinned_thread" };
     }
-    if (findReferencedHistory(stateDb, threads)) {
+    if (filterReferencedHistory(stateDb, threads).safe.length !== threads.length) {
       stateDb.exec("ROLLBACK");
       return { ok: false, error: "referenced_history" };
     }
@@ -1582,7 +1589,7 @@ function reconcileDeletedThreads(
       if (hooks?.afterSatelliteMutations) hooks.afterSatelliteMutations();
 
       // Re-check under the same lock before committing state deletes.
-      if (findReferencedHistory(stateDb, threads)) {
+      if (filterReferencedHistory(stateDb, threads).safe.length !== threads.length) {
         stateDb.exec("ROLLBACK");
         return failWithRestore("referenced_history");
       }
@@ -1590,7 +1597,7 @@ function reconcileDeletedThreads(
       if (hooks?.failBeforeStateCommit) throw new Error("test_fail_before_state_commit");
       stateDb.exec("COMMIT");
       // Keep satellite-backup.json for quarantine restore; permanent purge removes the stage.
-      return { ok: true, threads };
+      return { ok: true, threads, skipped: [] };
     } catch (error) {
       if (satelliteLocks) rollbackAllSatelliteLocks(satelliteLocks);
       throw error;
@@ -1895,7 +1902,30 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     const normalized = normalizeArchivedRolloutPath(thread.rollout_path, codexHome);
     if (normalized) threadByRelPath.set(normalized, thread);
   }
-  const manifestEntries: CleanupManifestEntry[] = preview.candidates.map(candidate => {
+  const skippedReferencedPaths = loaded.skipped
+    .map(thread => normalizeArchivedRolloutPath(thread.rollout_path, codexHome))
+    .filter((path): path is string => path !== null);
+  const matchedPaths = new Set([
+    ...threadByRelPath.keys(),
+    ...skippedReferencedPaths,
+  ]);
+  const candidates = preview.candidates.filter(candidate => {
+    return !matchedPaths.has(candidate.relPath) || threadByRelPath.has(candidate.relPath);
+  });
+  if (candidates.length === 0) {
+    removeStageIfEmpty(stageDir, []);
+    removeEmptyTrashRoot(codexHome);
+    return {
+      ok: true,
+      mode,
+      percent,
+      count: 0,
+      bytes: 0,
+      removedPaths: [],
+      ...(skippedReferencedPaths.length ? { skippedReferencedPaths } : {}),
+    };
+  }
+  const manifestEntries: CleanupManifestEntry[] = candidates.map(candidate => {
     const thread = threadByRelPath.get(candidate.relPath);
     return {
       relPath: candidate.relPath,
@@ -1936,7 +1966,7 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     return fail(mode, percent, "fs_failed");
   }
 
-  const stageResult = stageCandidates(codexHome, preview.candidates, stageDir, {
+  const stageResult = stageCandidates(codexHome, candidates, stageDir, {
     blockDestBasenames: blockStageDest.size > 0 ? blockStageDest : undefined,
   });
   if (!stageResult.ok) {
@@ -1956,7 +1986,7 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
 
   const deleted = reconcileDeletedThreads(
     paths,
-    preview.candidates,
+    candidates,
     codexHome,
     busyTimeoutMs,
     stageDir,
@@ -1973,8 +2003,8 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     return fail(mode, percent, deleted.error, keepTrash ? { trashDir } : undefined);
   }
 
-  const removedPaths = preview.candidates.map(c => c.relPath);
-  const bytes = preview.candidates.reduce((sum, c) => sum + c.bytes, 0);
+  const removedPaths = candidates.map(c => c.relPath);
+  const bytes = candidates.reduce((sum, c) => sum + c.bytes, 0);
 
   if (mode === "quarantine") {
     return {
@@ -1985,6 +2015,7 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
       bytes,
       trashDir,
       removedPaths,
+      ...(skippedReferencedPaths.length ? { skippedReferencedPaths } : {}),
     };
   }
 
@@ -2038,6 +2069,7 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     count: removedPaths.length,
     bytes,
     removedPaths,
+    ...(skippedReferencedPaths.length ? { skippedReferencedPaths } : {}),
   };
 }
 

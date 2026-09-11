@@ -260,6 +260,21 @@ export interface OcxHubConfig {
   /** Canonical browser-reachable management origin advertised by a hub. */
   managementPublicOrigin?: string;
   /**
+   * Canonical client-reachable DATA origin of this hub — what a remote machine passes as the
+   * positional URL to `ocx connect`, and what `ocx hub invite` prints.
+   *
+   * Separate from `managementPublicOrigin` because the two are genuinely different sockets on a
+   * real deployment: management is a loopback-only ingress published by an HTTPS frontend, while
+   * the data listener is bound to the hub's tailnet/LAN address and fronted on its own port
+   * (`https://hub.tailnet.ts.net:8443`). Deriving one from the other produced an origin that
+   * answered `/readyz` and nothing else.
+   *
+   * Advisory only: it is the origin the hub ADVERTISES, never a bind address. When omitted,
+   * `ocx hub invite` falls back to `http://<hostname>:<port>`, which is correct for a plain
+   * tailnet bind with no TLS frontend.
+   */
+  dataPublicOrigin?: string;
+  /**
    * Optional management-only listener for a local HTTPS frontend such as Tailscale Serve.
    * The hostname is deliberately not configurable: when enabled the socket is always bound
    * to 127.0.0.1, and only GUI, session-bootstrap, and management API routes are admitted.
@@ -287,6 +302,26 @@ export interface OcxRemoteGuiConfig {
 }
 
 export type OcxConnectedClientId = "codex" | "claude";
+
+/**
+ * Redaction policy for management and CLI projections (#3859).
+ *
+ * `privacy` rather than `dashboard`: `ocx status` and `ocx account` are not the dashboard, and
+ * they read the same projections.
+ */
+export interface OcxPrivacyConfig {
+  /**
+   * Mask stored account emails before they leave the proxy. Omitted or `true` is the historical
+   * behaviour and the default.
+   *
+   * Setting this to `false` is a real disclosure decision, not a display preference. Management
+   * is not always loopback — under `remoteGui` the unmasked address reaches every management
+   * principal that can reach the hub, not only someone sitting at the machine. The default
+   * therefore stays masked, and turning it off is an explicit opt-in by the operator who owns
+   * those accounts.
+   */
+  maskEmails?: boolean;
+}
 
 export interface OcxClientConnectionConfig {
   serverUrl: string;
@@ -335,6 +370,8 @@ export interface OcxConfig {
   remoteGui?: OcxRemoteGuiConfig;
   /** Remote-hub client state. The admission secret is stored only in service-api-token. */
   client?: OcxClientConnectionConfig;
+  /** Operator-facing redaction policy for management and CLI projections. */
+  privacy?: OcxPrivacyConfig;
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
   /**
@@ -469,8 +506,8 @@ export interface OcxConfig {
    */
   syncCodexSubagentDefaults?: boolean;
   /**
-   * Optional reasoning effort the delegation prompt tells the agent to pass in spawn_agent calls
-   * (`reasoning_effort` argument). Only meaningful while `injectionModel` is set; validated against
+   * Optional reasoning effort reported as advisory metadata in v2 sub-agent guidance.
+   * It does not prescribe spawn overrides. Only meaningful while `injectionModel` is set; validated against
    * the Codex ladder (src/reasoning-effort.ts CODEX_REASONING_LEVELS) at the API boundary.
    */
   injectionEffort?: string;
@@ -513,7 +550,7 @@ export interface OcxConfig {
   streamMode?: "auto" | "legacy-tee" | "eager-relay";
   /**
    * Custom override for the injected v2 multi-agent guidance body (the text inside
-   * the <multi_agent_mode> tags). After guidance is enabled and the v2 surface and
+   * the <opencodex_subagent_guidance> tags). After guidance is enabled and the v2 surface and
    * catalog-state gates pass, a configured injectionModel is sufficient to render it;
    * otherwise an eligible roster or fallback is required. Placeholders: `{{model}}` -> the
    * effective preferred model for the request (a bare native model is account-qualified
@@ -639,13 +676,24 @@ export interface OcxConfig {
    * surface: every process on the machine can reach it, spend account quota, and consume paid
    * provider credentials. Off by default; not for multi-tenant hosts.
    *
-   * The port is required when enabled and must differ from the proxy port. An OS-assigned port
-   * would change across restarts, which would break already-running app-servers holding the
-   * previous `base_url` — the exact symptom #1102 reported and we disproved for token rotation.
+   * Two enabled forms:
+   *
+   *  - `{ enabled: true, port: N }` — a distinct port (the #1102 form). N must differ from the
+   *    proxy port.
+   *  - `{ enabled: true }` — the "companion" form: bind `127.0.0.1:<proxy port>`. Legal only
+   *    when `hostname` is a specific non-loopback, non-wildcard address (a tailnet or LAN IP),
+   *    because otherwise the public socket already owns that loopback address. This is the
+   *    one-port hub shape: remote clients dial `hostname:port`, local processes dial
+   *    `127.0.0.1:port`, and every integration that hardcodes `http://127.0.0.1:<proxy port>`
+   *    keeps working on a hub whose public bind they cannot reach (#4236).
+   *
+   * Neither form is OS-assigned. A changing port would break already-running app-servers
+   * holding the previous `base_url` — the exact symptom #1102 reported and we disproved for
+   * token rotation.
    */
   unauthenticatedLoopbackListener?:
     | { enabled: false }
-    | { enabled: true; port: number };
+    | { enabled: true; port?: number };
   /**
    * Outbound HTTP(S) proxy URL for provider requests (e.g. "http://user:pass@proxy:8080", or
    * "${HTTPS_PROXY}"-style env reference). Mirrored into HTTP_PROXY/HTTPS_PROXY at startup when
@@ -694,6 +742,12 @@ export interface OcxConfig {
    */
   codexDesktopAuthless?: boolean;
   /**
+   * Opt into Codex-owned client compaction while keeping OpenCodex routing. On an authenticated
+   * loopback bind, inject the dedicated `opencodex` model provider instead of overriding the
+   * built-in `openai` provider, so Codex does not select native remote compaction. Default off.
+   */
+  codexClientCompaction?: boolean;
+  /**
    * Compatibility mode: temporarily rewrite Codex resume-history metadata while the proxy is active
    * so Codex App can show old OpenAI chats and opencodex-created exec chats under its default
    * interactive-source/provider filters. Default true; originals are backed up and restored by
@@ -718,6 +772,14 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
+  /**
+   * Codex pool selection policy. Absent means no policy, so an existing install rotates exactly
+   * as before.
+   *
+   * Not in `getDefaultConfig()` on purpose — that function carries no optional-feature keys, so
+   * absence is the only default state this policy has.
+   */
+  codexPool?: OcxCodexPoolConfig;
   /** Opt-in per-account activation of newly reset Codex quota windows. */
   codexQuotaAutoRefresh?: Record<string, {
     fiveHour?: boolean;
@@ -753,7 +815,7 @@ export interface OcxConfig {
    */
   codexAccountPickerEnabled?: boolean;
   /**
-   * Show the GPT-5.3-Codex-Spark weekly window on Codex quota surfaces. Default false.
+   * Show the GPT-5.3-Codex-Spark 5-hour and weekly windows on Codex quota surfaces. Default false.
    *
    * Spark is a single-model window that reads 0% for most operators, and on a multi-account
    * pool it doubles the bar count for information almost nobody acts on. Hidden by default and
@@ -795,6 +857,20 @@ export interface OcxConfig {
    * that work today — on Azure and custom Responses gateways as well, whose limits are unknown.
    */
   maxUpstreamBodyBytes?: number;
+  /**
+   * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
+   *
+   * Omitted or 0 = the built-in 256 MiB default. The lever exists because a session on the
+   * 922k-token opt-in window serializes its full history past that default, and the request
+   * that crosses it is Codex's own remote-compaction request — so the session hits 413 on the
+   * one operation that would have shrunk it and cannot recover.
+   *
+   * Bounded on purpose. `resolveInboundBodyLimitBytes()` clamps to
+   * [1 MiB, 512 MiB]; an unbounded inbound cap is a memory DoS because the reader materializes
+   * the body several times over. The Bun listener's own `maxRequestBodySize` is fixed when the
+   * server starts, so raising this takes effect on restart.
+   */
+  maxInboundBodyBytes?: number;
   /**
    * Opt-in Anthropic OAuth PROACTIVE routing (#294). Default OFF.
    * Sticky session affinity; new sessions may pick lowest known 5h usage.
@@ -1131,6 +1207,25 @@ export interface OcxWebSearchSidecarConfig {
    * answer. Default: false (buffered, previous behavior).
   */
   streamRoutedModelOutput?: boolean;
+}
+
+/**
+ * Codex account-pool selection policy.
+ *
+ * This is a selection policy, not a block. An excluded account keeps its credential, quota
+ * history, and thread affinity, stays visible on the account surface, and remains reachable by
+ * explicit account selection. Only automatic rotation skips it.
+ */
+export interface OcxCodexPoolConfig {
+  /**
+   * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
+   * account. Absent or empty means no policy.
+   *
+   * There is no `minimumPlan` counterpart: ranking ChatGPT plans against each other needs a total
+   * ordering this repository does not have, and inventing one would silently drain a tier the
+   * operator never meant to exclude.
+   */
+  excludedPlans?: string[];
 }
 
 /**

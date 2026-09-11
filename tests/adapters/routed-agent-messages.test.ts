@@ -30,6 +30,94 @@ test("ciphertext and unknown content are never reclassified as plaintext", () =>
   }
 });
 
+test("string agent messages require an explicit opt-in and preserve exact text", () => {
+  const text = "  Child result\nwith a trailing line.\n ";
+  const message = Object.freeze({ type: "agent_message", id: "amsg_string", content: text });
+  const raw = Object.freeze({ input: Object.freeze([message]) });
+  expect(normalizeRoutedAgentMessages(raw)).toBe(raw);
+  expect(normalizeRoutedAgentMessages(raw, { allowStringContent: false })).toBe(raw);
+  expect(normalizeRoutedAgentMessages(raw, { allowStringContent: true })).toEqual({ input: [{
+    type: "message", role: "user", content: [{ type: "input_text", text }],
+  }] });
+  expect(raw.input[0]).toBe(message);
+  expect(message.content).toBe(text);
+});
+
+for (const baseUrl of ["https://api.x.ai/v1", "https://cli-chat-proxy.grok.com/v1"]) {
+  test.each(["key", "oauth"] as const)(`${baseUrl} lowers string child results with %s auth`, async authMode => {
+    const raw = { model: "grok-4.6", stream: true, input: [{
+      type: "agent_message", id: "amsg_string", author: "/root/worker", recipient: "/root",
+      content: "  Complete child result\nSecond line.\n ",
+    }] };
+    const original = structuredClone(raw);
+    const parsed = parseRequest(raw);
+    const budget = createTranslatorBudget();
+    try {
+      const request = await createResponsesPassthroughAdapter({ ...base, baseUrl, authMode }).buildRequest(parsed, {
+        headers: new Headers(), translatorBudget: budget,
+      });
+      const sent = JSON.parse(request.body as string);
+      expect(sent.input).toEqual([{
+        type: "message", role: "user", content: [
+          { type: "input_text", text: 'Agent message {"author":"/root/worker","recipient":"/root"}' },
+          { type: "input_text", text: original.input[0]!.content },
+        ],
+      }]);
+      expect(parsed._rawBody).toBe(raw);
+      expect(raw).toEqual(original);
+    } finally {
+      budget.dispose();
+    }
+  });
+}
+
+test.each([
+  { baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
+  { baseUrl: "https://api.x.ai/v1", authMode: "forward" as const },
+  { baseUrl: "https://cli-chat-proxy.grok.com/v1", authMode: "forward" as const },
+  { baseUrl: "https://custom.test/v1", authMode: "forward" as const },
+  { baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key" as const },
+  { baseUrl: "https://example.test/v1", authMode: "key" as const },
+  { baseUrl: "https://api.x.ai.evil.test/v1", authMode: "key" as const },
+  { baseUrl: "https://cli-chat-proxy.grok.com.evil.test/v1", authMode: "key" as const },
+  { baseUrl: "http://api.x.ai/v1", authMode: "key" as const },
+  { baseUrl: "https://api.x.ai:444/v1", authMode: "key" as const },
+])("preserves string messages for $authMode at $baseUrl", async destination => {
+  const raw = { model: "grok-4.6", input: [{ type: "agent_message", content: "Child result" }] };
+  const original = structuredClone(raw);
+  const budget = createTranslatorBudget();
+  try {
+    const request = await createResponsesPassthroughAdapter({ ...base, ...destination }).buildRequest(parseRequest(raw), {
+      headers: new Headers(), translatorBudget: budget,
+    });
+    expect(JSON.parse(request.body as string).input).toEqual(original.input);
+    expect(raw).toEqual(original);
+  } finally {
+    budget.dispose();
+  }
+});
+
+test.each([
+  "", " \n\t", null, 42, { text: "not a content string" }, [],
+  [{ type: "encrypted_content", encrypted_content: "opaque" }],
+  [{ type: "input_text", text: "Routing header" }, { type: "encrypted_content", encrypted_content: "opaque" }],
+  [{ type: "input_text", text: "Known prefix" }, { type: "future_type", text: "Unknown suffix" }],
+].map(content => ({ content })))("xAI string opt-in leaves incomplete or unreadable content unchanged: %j", async ({ content }) => {
+  const raw = { model: "grok-4.6", input: [{ type: "agent_message", content }] };
+  const original = structuredClone(raw);
+  expect(normalizeRoutedAgentMessages(raw, { allowStringContent: true })).toBe(raw);
+  const budget = createTranslatorBudget();
+  try {
+    const request = await createResponsesPassthroughAdapter({ ...base, baseUrl: "https://api.x.ai/v1" }).buildRequest(parseRequest(raw), {
+      headers: new Headers(), translatorBudget: budget,
+    });
+    expect(JSON.parse(request.body as string).input).toEqual(original.input);
+    expect(raw).toEqual(original);
+  } finally {
+    budget.dispose();
+  }
+});
+
 test("image parts stay intact beside the assignment", () => {
   const image = { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" };
   const raw = { input: [{ type: "agent_message", content: [{ type: "input_text", text: "Inspect image" }, image] }] };

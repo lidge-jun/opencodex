@@ -23,6 +23,7 @@ const WIRE_MODELS: Record<AdapterWire, string> = {
   kiro: "claude-sonnet-4.5",
   "openai-responses": "deepseek-v4-flash",
   cursor: "cursor/auto",
+  codebuddy: "glm-5.3",
 };
 
 function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfig {
@@ -35,6 +36,7 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
     kiro: "https://runtime.us-east-1.kiro.dev",
     "openai-responses": "https://api.deepseek.com",
     cursor: "https://api2.cursor.sh",
+    codebuddy: "https://www.codebuddy.ai",
   };
   const baseUrl = adapterId === "mimo-free"
     ? "https://api.xiaomimimo.com/api/free-ai/openai/chat"

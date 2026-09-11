@@ -27,7 +27,7 @@ describe("version skew detection", () => {
       skewed: true,
       warning: "CLI 2.42.0 does not match the running proxy 2.10.1-preview.20260805 — "
         + "the running proxy is older than this CLI. Restart the proxy using the intended current installation. "
-        + "For a background service, run ocx service repair (ocx service restart is an alias).",
+        + "For a background service, run ocx service restart (repair reloads only a changed definition).",
     });
     expect(skew.warning).not.toContain("this ocx on PATH is older");
   });

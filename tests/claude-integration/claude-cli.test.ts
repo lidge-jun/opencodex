@@ -6,6 +6,7 @@ import {
   claudeLaunchPreflight,
   claudeNotFoundHint,
   ensureProxyForClaude,
+  fetchClaudeCodeState,
   isProxyOnlyModelId,
   nativeModelOverride,
   readPickerDefaultModel,
@@ -540,6 +541,236 @@ describe("ocx claude env assembly", () => {
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-owned-key");
   });
 
+});
+
+/**
+ * Which local socket `ocx claude` dials (#4236).
+ *
+ * `ocx claude` is handed the live PUBLIC port. On a hub bound to a tailnet address nothing
+ * answers on `127.0.0.1:<public port>`, so the launch resolves the unauthenticated loopback
+ * listener instead — the same port `ocx sync` already writes into Codex. With NO listener the
+ * destination is the BIND address: reachable, but it demands a data-plane credential, so the
+ * launch has to carry one or say out loud that it cannot. The first round of this change
+ * returned loopback unconditionally and these tests pinned that as intended.
+ */
+describe("ocx claude local inference destination", () => {
+  const hub = (listener?: { enabled: boolean; port?: number }) => cfg({
+    hostname: "100.76.170.81",
+    runtimeRole: "hub",
+    ...(listener ? { unauthenticatedLoopbackListener: listener } : {}),
+  } as Partial<OcxConfig>);
+
+  test("a ported listener moves the base URL to the listener's port", () => {
+    const env = buildClaudeEnv(hub({ enabled: true, port: 10104 }), 10100, {});
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10104");
+  });
+
+  test("a companion listener keeps the public port, which is the point of that form", () => {
+    const env = buildClaudeEnv(hub({ enabled: true }), 10100, {});
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+  });
+
+  test("a plain loopback install is byte-identical to before", () => {
+    expect(buildClaudeEnv(cfg(), 10100, {}).ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+  });
+
+  test("with the listener OFF the destination is the bind address, not a dead loopback port", () => {
+    // The #4236 topology itself. `127.0.0.1:10100` does not exist on this hub, so returning it
+    // — which the first round of this change did — is a guaranteed connect failure. The bind
+    // address answers, and the admission token the launch carries is what makes it usable.
+    const config = cfg({
+      claudeCode: { authMode: "proxy" },
+      hostname: "100.76.170.81",
+      runtimeRole: "hub",
+      apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }],
+    } as Partial<OcxConfig>);
+    const env = buildClaudeEnv(config, 10100, {}, {}, AUTH_PRESENT);
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://100.76.170.81:10100");
+    // `targetsLocalClaudeProxy` has to recognize the value we just wrote, or the launch would
+    // refuse to attach the credential to its own destination one line later.
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("ocx_data_this_proxy_key");
+  });
+
+  test("a wildcard bind keeps loopback but still carries the credential it demands", () => {
+    const config = cfg({
+      claudeCode: { authMode: "proxy" },
+      hostname: "0.0.0.0",
+      apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }],
+    } as Partial<OcxConfig>);
+    const env = buildClaudeEnv(config, 10100, {}, {}, AUTH_PRESENT);
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("ocx_data_this_proxy_key");
+  });
+
+  test("a subscription launch on a bind that demands admission degrades out loud", () => {
+    // Asserting a host token would log a claude.ai subscriber out (#253), so the launch cannot
+    // carry one — and a silent 401 on the first request is the failure this warning replaces.
+    const config = cfg({
+      claudeCode: { authMode: "subscription" },
+      hostname: "100.76.170.81",
+      runtimeRole: "hub",
+      apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }],
+    } as Partial<OcxConfig>);
+    const errors: string[] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+    try {
+      const env = buildClaudeEnv(config, 10100, {}, {}, AUTH_PRESENT);
+      expect(env.ANTHROPIC_BASE_URL).toBe("http://100.76.170.81:10100");
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    } finally {
+      console.error = realError;
+    }
+    expect(errors.some(line =>
+      line.includes("http://100.76.170.81:10100") && line.includes("data-plane credential"),
+    )).toBe(true);
+  });
+
+  test("both live local ports are ours; a port nothing answers on is not", () => {
+    // On a LOOPBACK or wildcard bind the public port and the listener port BOTH answer on
+    // 127.0.0.1, so a URL naming either was written by us. Rewriting one into the other would
+    // strip the admission token minted for it and silently downgrade the launch.
+    for (const hostname of ["127.0.0.1", "0.0.0.0"]) {
+      const config = cfg({
+        claudeCode: { authMode: "proxy" },
+        hostname,
+        runtimeRole: "hub",
+        unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
+        apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }],
+      } as Partial<OcxConfig>);
+      for (const origin of ["http://127.0.0.1:10100", "http://127.0.0.1:10104"]) {
+        const env = buildClaudeEnv(config, 10100, { ANTHROPIC_BASE_URL: origin }, {}, {
+          ...AUTH_PRESENT,
+          preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"],
+        });
+        expect({ hostname, origin, baseUrl: env.ANTHROPIC_BASE_URL }).toEqual({ hostname, origin, baseUrl: origin });
+        expect({ hostname, origin, token: env.ANTHROPIC_AUTH_TOKEN })
+          .toEqual({ hostname, origin, token: "ocx_data_this_proxy_key" });
+      }
+    }
+  });
+
+  test("on a tailnet bind the public port is NOT ours on loopback, so it is replaced", () => {
+    // The counterpart of the case above, and the reason the set is computed from the bind scope
+    // instead of from "our two port numbers": nothing answers on 127.0.0.1:10100 here, so an
+    // inherited value naming it is stale and must be rewritten to the listener.
+    const config = cfg({
+      claudeCode: { authMode: "proxy" },
+      hostname: "100.76.170.81",
+      runtimeRole: "hub",
+      unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
+      apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }],
+    } as Partial<OcxConfig>);
+    const env = buildClaudeEnv(config, 10100, { ANTHROPIC_BASE_URL: "http://127.0.0.1:10100" }, {}, {
+      ...AUTH_PRESENT,
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"],
+    });
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10104");
+    // Still ours: the listener admits without a credential, but the launch keeps the one it has.
+    const ported = buildClaudeEnv(config, 10100, { ANTHROPIC_BASE_URL: "http://127.0.0.1:10104" }, {}, {
+      ...AUTH_PRESENT,
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"],
+    });
+    expect(ported.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10104");
+  });
+
+  test("a genuinely foreign loopback port is replaced with the resolved destination", () => {
+    const env = buildClaudeEnv(
+      hub({ enabled: true, port: 10104 }),
+      10100,
+      { ANTHROPIC_BASE_URL: "http://127.0.0.1:19999" },
+      {},
+      { ...AUTH_PRESENT, preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
+    );
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10104");
+  });
+
+  test("a native launch sheds the managed destination on either local port", () => {
+    // Shedding asks a WIDER question than replacement: "could we have written this?". The
+    // public port qualifies on every topology, because an earlier config on this machine may
+    // have been loopback-bound — and leaving such a URL behind with its token stripped (which
+    // always happens) would point the native launch at a dead socket with no credential.
+    const config = cfg({
+      hostname: "100.76.170.81",
+      runtimeRole: "hub",
+      unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
+      apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }],
+    } as Partial<OcxConfig>);
+    for (const origin of ["http://127.0.0.1:10100", "http://127.0.0.1:10104"]) {
+      const env = buildNativeClaudeEnv(config, {
+        ANTHROPIC_BASE_URL: origin,
+        ANTHROPIC_AUTH_TOKEN: "ocx_data_this_proxy_key",
+      }, { preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] });
+      expect({ origin, baseUrl: env.ANTHROPIC_BASE_URL }).toEqual({ origin, baseUrl: undefined });
+    }
+  });
+});
+
+/**
+ * The OTHER destination contract (#4236): `/api/claude-code` is management state, never served
+ * by the unauthenticated loopback listener, so it resolves to the authenticated surface — a
+ * hub's loopback management ingress when it has one — and keeps carrying the local admin token.
+ * `enabled: false` from this call is what makes `ocx claude` launch natively, so a wrong
+ * destination here downgrades every launch on the machine.
+ */
+describe("ocx claude management discovery destination", () => {
+  const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+  const FAKE_ADMIN_TOKEN = `ocx_admin_${"t".repeat(43)}`;
+
+  async function captureDiscovery(config: OcxConfig): Promise<{ url: string; header: string | null }> {
+    const realFetch = globalThis.fetch;
+    let seen = { url: "", header: null as string | null };
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = FAKE_ADMIN_TOKEN;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input as never, init);
+      seen = { url: request.url, header: request.headers.get("x-opencodex-api-key") };
+      return new Response(JSON.stringify({ enabled: true, contextWindows: { "claude-x": 200_000 } }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const state = await fetchClaudeCodeState(config, 10100);
+      expect(state.enabled).toBe(true);
+      return seen;
+    } finally {
+      globalThis.fetch = realFetch;
+      if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+      else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+    }
+  }
+
+  test("a hub with a management ingress is asked on the ingress, not the proxy bind", async () => {
+    const seen = await captureDiscovery(cfg({
+      hostname: "100.76.170.81",
+      runtimeRole: "hub",
+      hub: { managementIngress: { enabled: true, port: 10102 } },
+      unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
+    } as Partial<OcxConfig>));
+    expect(seen.url).toBe("http://127.0.0.1:10102/api/claude-code");
+    // The listener's port must NOT be used: it serves no /api/* at all.
+    expect(seen.url).not.toContain("10104");
+    expect(seen.header).toBe(FAKE_ADMIN_TOKEN);
+  });
+
+  test("a hub without an ingress falls back to its own public bind", async () => {
+    const seen = await captureDiscovery(cfg({
+      hostname: "100.76.170.81",
+      runtimeRole: "hub",
+      unauthenticatedLoopbackListener: { enabled: true },
+    } as Partial<OcxConfig>));
+    expect(seen.url).toBe("http://100.76.170.81:10100/api/claude-code");
+    expect(seen.header).toBe(FAKE_ADMIN_TOKEN);
+  });
+
+  test("a loopback or wildcard install keeps asking 127.0.0.1 on the public port", async () => {
+    for (const hostname of [undefined, "127.0.0.1", "localhost", "0.0.0.0"]) {
+      const seen = await captureDiscovery(cfg(hostname === undefined ? {} : { hostname }));
+      const expected = hostname === "localhost"
+        ? "http://localhost:10100/api/claude-code"
+        : "http://127.0.0.1:10100/api/claude-code";
+      expect({ hostname, url: seen.url }).toEqual({ hostname, url: expected });
+    }
+  });
 });
 
 describe("ocx claude Windows launch (devlog 260715_cross_platform_audit/020)", () => {

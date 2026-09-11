@@ -14,7 +14,7 @@ import {
 const USAGE = `Usage:
   ocx system [status] [--json]
   ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>]
-      [--desktop-authless <on|off>] [--json]
+      [--desktop-authless <on|off>] [--client-compaction <on|off>] [--json]
   ocx system startup <health|install-service|install-shim> [--json]
   ocx system diagnostics [--json]
   ocx system sync [--json]
@@ -23,7 +23,11 @@ const USAGE = `Usage:
   ocx system codex-cli-update check [--json]
   ocx system update check [--channel <latest|preview>] [--json]
   ocx system update run [--channel <latest|preview>] [--restart <on|off>] --yes [--json]
-  ocx system update status <job-id> [--json]`;
+  ocx system update status <job-id> [--json]
+
+--client-compaction favors native replay portability for future compactions while
+keeping OpenCodeX routing active; the configured provider may process summaries
+and consume its quota.`;
 
 async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
@@ -44,8 +48,10 @@ async function settings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const autoStart = takeBooleanOption(args, "--auto-start");
   const streamMode = takeOption(args, "--stream-mode");
   const desktopAuthless = takeBooleanOption(args, "--desktop-authless");
+  const clientCompaction = takeBooleanOption(args, "--client-compaction");
   rejectArgs(args, USAGE);
-  if (autoStart === undefined && streamMode === undefined && desktopAuthless === undefined) {
+  if (autoStart === undefined && streamMode === undefined
+    && desktopAuthless === undefined && clientCompaction === undefined) {
     const result = await runtimeRequest("/api/settings", {}, deps);
     printData(result, wantsJson, summaryLines(result));
     return;
@@ -54,6 +60,7 @@ async function settings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     ...(autoStart !== undefined ? { codexAutoStart: autoStart } : {}),
     ...(streamMode !== undefined ? { streamMode } : {}),
     ...(desktopAuthless !== undefined ? { codexDesktopAuthless: desktopAuthless } : {}),
+    ...(clientCompaction !== undefined ? { codexClientCompaction: clientCompaction } : {}),
   };
   const result = await runtimeRequest("/api/settings", { method: "PUT", body: JSON.stringify(body) }, deps);
   printData(result, wantsJson, ["System settings updated."]);

@@ -76,9 +76,55 @@ type LocalClientSyncConfig = Pick<
   "clientIntegrations" | "runtimeRole" | "unauthenticatedLoopbackListener"
 >;
 
-function localClientSyncAllowed(config: LocalClientSyncConfig): boolean {
+export function localClientSyncAllowed(config: LocalClientSyncConfig): boolean {
   return config.runtimeRole !== "hub"
     || config.unauthenticatedLoopbackListener?.enabled === true;
+}
+
+/**
+ * The one sentence every hub-gated skip says (#4236).
+ *
+ * The gate is a reasonable decision; reporting it as "Codex integration is OFF" was not. An
+ * operator whose `clientIntegrations` says nothing — or says `true` — was told their own switch
+ * was off, and `ocx restore back` went further and blamed a competing writer that did not
+ * exist. Name the gate and name the key that opens it.
+ */
+export const HUB_GATED_SKIP_MESSAGE =
+  "This machine is a hub; it does not rewrite its own Codex/Grok/Claude configs unless "
+  + "unauthenticatedLoopbackListener is enabled.";
+
+/** Why a local-client write was skipped. The gate outranks the toggle: it is the surprising one. */
+export type LocalClientSkipReason = "desired_disabled" | "hub-gated";
+
+/**
+ * "hub-gated" is claimed only when the toggle is ON and the gate is what stopped the write.
+ * With the toggle OFF the gate is moot: telling that operator to enable the loopback listener
+ * would send them to a key that cannot make the sync happen — the mirror image of the defect
+ * this reason exists to fix.
+ */
+export function localClientSkipReason(
+  config: LocalClientSyncConfig,
+  client: DurableIntentClientId = "codex",
+): LocalClientSkipReason {
+  return integrationEnabled(config, client) && !localClientSyncAllowed(config)
+    ? "hub-gated"
+    : "desired_disabled";
+}
+
+/**
+ * Pick the skip message for a snapshot: today's toggle text, or the hub-gate sentence.
+ *
+ * `hubSuffix` states what the hub-gated path still did (a catalog refresh, say) so the
+ * composed line stays as informative as the toggle one it replaces.
+ */
+export function localClientSkipMessage(
+  config: LocalClientSyncConfig,
+  integrationOffMessage: string,
+  hubSuffix?: string,
+  client: DurableIntentClientId = "codex",
+): string {
+  if (localClientSkipReason(config, client) !== "hub-gated") return integrationOffMessage;
+  return hubSuffix ? `${HUB_GATED_SKIP_MESSAGE} ${hubSuffix}` : HUB_GATED_SKIP_MESSAGE;
 }
 
 export function shouldSyncCodexOnStart(config: LocalClientSyncConfig): boolean {

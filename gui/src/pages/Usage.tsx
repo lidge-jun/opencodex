@@ -5,6 +5,7 @@ import { formatTokens } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
+import { IconChevron } from "../icons";
 import { modelLabel } from "../model-display";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
@@ -804,6 +805,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
   const [draftWindow, setDraftWindow] = useState({ since: "", until: "" });
   const [customWindow, setCustomWindow] = useState<UsageTimeWindow | null>(null);
   const [rangeError, setRangeError] = useState<UsageRangeError | null>(null);
+  const [rangeOpen, setRangeOpen] = useState(false);
   const since = customWindow?.since;
   const until = customWindow?.until;
 
@@ -877,54 +879,85 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
         <UsageFilters surface={surface} range={customWindow ? null : range} onSurface={setSurface} onRange={selectRange} t={t} />
       </div>
       <p className="page-sub">{t("usage.subtitle")}</p>
-      <form aria-label={t("usage.range.custom")} noValidate onSubmit={event => {
-        event.preventDefault();
-        const result = parseUsageTimeRange(draftWindow.since, draftWindow.until);
-        if (result.ok === false) {
-          setRangeError(result.error);
-          return;
-        }
-        setRangeError(null);
-        setCustomWindow(result.window);
-      }}>
-        <div className="usage-filters">
-          <label>
-            <span className="field-label">{t("usage.range.start")}</span>
-            <input className="input" type="datetime-local" step="60" required
-              value={draftWindow.since}
-              aria-invalid={rangeError !== null}
-              aria-describedby={rangeError ? "usage-range-help usage-range-error" : "usage-range-help"}
-              onChange={event => {
-                const value = event.currentTarget.value;
-                setDraftWindow(current => ({ ...current, since: value }));
-                setRangeError(null);
-              }} />
-          </label>
-          <label>
-            <span className="field-label">{t("usage.range.end")}</span>
-            <input className="input" type="datetime-local" step="60" required
-              value={draftWindow.until}
-              aria-invalid={rangeError !== null}
-              aria-describedby={rangeError ? "usage-range-help usage-range-error" : "usage-range-help"}
-              onChange={event => {
-                const value = event.currentTarget.value;
-                setDraftWindow(current => ({ ...current, until: value }));
-                setRangeError(null);
-              }} />
-          </label>
-          <button type="submit" className="btn btn-primary btn-sm">{t("usage.range.apply")}</button>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={clearCustomWindow}>{t("usage.range.clear")}</button>
+      {/*
+        An explicit interval is the rare path — the presets answer the question almost every
+        time — so the two date fields open on request instead of greeting every visit as the
+        second thing on the page. The applied interval stays outside the panel: collapsing the
+        controls must never hide which window the totals below actually cover.
+      */}
+      <section className="usage-range">
+        <div className="usage-range-bar">
+          <button
+            type="button"
+            className={`usage-range-toggle${customWindow ? " is-active" : ""}`}
+            aria-expanded={rangeOpen}
+            // The panel is unmounted while closed, so naming it then would leave a dangling IDREF.
+            aria-controls={rangeOpen ? "usage-range-panel" : undefined}
+            // A validation failure is only legible next to the fields that caused it. Closing the
+            // panel would otherwise park an invisible error on a trigger that looks untouched, and
+            // re-render the alert on reopen for a draft the user walked away from. The check reads
+            // the rendered value rather than an updater argument: a setState updater has to stay
+            // pure, and this one would fire the second setState twice under StrictMode.
+            onClick={() => {
+              if (rangeOpen) setRangeError(null);
+              setRangeOpen(!rangeOpen);
+            }}
+          >
+            <span>{t("usage.range.custom")}</span>
+            <IconChevron width={12} height={12} aria-hidden="true" className="usage-range-chevron" />
+          </button>
+          {customWindow && <p className="usage-range-applied muted text-control" role="status">{(() => {
+            const formatter = new Intl.DateTimeFormat(locale, {
+              year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+              second: "2-digit", fractionalSecondDigits: 3, timeZoneName: "short",
+            });
+            return t("usage.range.applied", { start: formatter.format(customWindow.since), end: formatter.format(customWindow.until) });
+          })()}</p>}
         </div>
-        <p id="usage-range-help" className="muted text-caption">{t("usage.range.help")}</p>
-        {rangeError && <p id="usage-range-error" role="alert" className="notice notice-err">{t(`usage.range.${rangeError}`)}</p>}
-        {customWindow && <p className="muted text-control" role="status">{(() => {
-          const formatter = new Intl.DateTimeFormat(locale, {
-            year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-            second: "2-digit", fractionalSecondDigits: 3, timeZoneName: "short",
-          });
-          return t("usage.range.applied", { start: formatter.format(customWindow.since), end: formatter.format(customWindow.until) });
-        })()}</p>}
-      </form>
+        {rangeOpen && (
+          <form id="usage-range-panel" className="usage-range-panel" aria-label={t("usage.range.custom")} noValidate onSubmit={event => {
+            event.preventDefault();
+            const result = parseUsageTimeRange(draftWindow.since, draftWindow.until);
+            if (result.ok === false) {
+              setRangeError(result.error);
+              return;
+            }
+            setRangeError(null);
+            setCustomWindow(result.window);
+          }}>
+            <div className="usage-range-fields">
+              <label className="usage-range-field">
+                <span className="field-label">{t("usage.range.start")}</span>
+                <input className="input" type="datetime-local" step="60" required
+                  value={draftWindow.since}
+                  aria-invalid={rangeError !== null}
+                  aria-describedby={rangeError ? "usage-range-help usage-range-error" : "usage-range-help"}
+                  onChange={event => {
+                    const value = event.currentTarget.value;
+                    setDraftWindow(current => ({ ...current, since: value }));
+                    setRangeError(null);
+                  }} />
+              </label>
+              <label className="usage-range-field">
+                <span className="field-label">{t("usage.range.end")}</span>
+                <input className="input" type="datetime-local" step="60" required
+                  value={draftWindow.until}
+                  aria-invalid={rangeError !== null}
+                  aria-describedby={rangeError ? "usage-range-help usage-range-error" : "usage-range-help"}
+                  onChange={event => {
+                    const value = event.currentTarget.value;
+                    setDraftWindow(current => ({ ...current, until: value }));
+                    setRangeError(null);
+                  }} />
+              </label>
+              <button type="submit" className="btn btn-primary btn-sm usage-range-action">{t("usage.range.apply")}</button>
+              <button type="button" className="btn btn-ghost btn-sm usage-range-action" onClick={clearCustomWindow}>{t("usage.range.clear")}</button>
+            </div>
+            <p id="usage-range-help" className="muted text-caption">{t("usage.range.help")}</p>
+            {rangeError && <p id="usage-range-error" role="alert" className="notice notice-err">{t(`usage.range.${rangeError}`)}</p>}
+          </form>
+        )}
+      </section>
       {/*
         Only shown when connected. Naming the source is a two-plane concept: it answers
         "which store served these numbers", and that question only exists once there are

@@ -88,7 +88,21 @@
   margin-top: 3px;
   max-width: 72ch;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
+
+.swi-ultra-mode-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+}
+
+.swi-ultra-mode-textarea {
+  min-width: 0;
+  width: 100%;
+}
+
+.swi-ultra-mode-editor > button { justify-self: end; }
 
 .swi-delegation-controls {
   display: flex;
@@ -587,4 +601,6 @@
 @media (max-width: 640px) {
   .swi-fallback-editor { flex-direction: column; }
   .swi-fallback-controls { width: 100%; }
+  .swi-ultra-mode-editor { grid-template-columns: minmax(0, 1fr) auto; }
+  .swi-ultra-mode-textarea { grid-column: 1 / -1; }
 }

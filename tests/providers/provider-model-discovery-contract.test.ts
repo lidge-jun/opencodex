@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatherRoutedModels } from "../../src/codex/catalog";
 import { catalogHintsFromModelsApiItem } from "../../src/codex/catalog/provider-fetch";
-import { clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
+import { clearModelCache, getFreshCached, getProviderDiscoveryStatus, getProviderLiveModelCount, setCached } from "../../src/codex/model-cache";
 import { buildModelsRequest } from "../../src/oauth";
+import { saveCredential } from "../../src/oauth/store";
 import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../../src/oauth/key-providers";
 import { deriveKeyLoginMap, providerConfigSeed } from "../../src/providers/derive";
 import {
@@ -25,6 +27,7 @@ import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import { withRegistryDiscovery } from "../helpers/provider-registry-discovery";
 import { fixturePath } from "../helpers/repo-root";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const FIXTURE = readFileSync(fixturePath("provider-model-discovery.json"), "utf8");
 const originalFetch = globalThis.fetch;
@@ -426,6 +429,79 @@ describe("registry-owned provider model discovery", () => {
     const result = await readBoundedDiscoveryJson(response, 64);
     expect(result).toEqual({ ok: false, reason: "response_too_large" });
     expect(cancelled).toBe(true);
+  });
+
+  describe("Nous native catalog response cap (#3939)", () => {
+    let previousHome: string | undefined;
+    let credentialHome: string;
+
+    beforeEach(async () => {
+      previousHome = process.env.OPENCODEX_HOME;
+      credentialHome = mkdtempSync(join(tmpdir(), "ocx-nous-discovery-"));
+      process.env.OPENCODEX_HOME = credentialHome;
+      clearModelCache("nous");
+      await saveCredential("nous", {
+        access: "access-token-nous-discovery-fixture",
+        refresh: "nous-discovery-fixture-refresh",
+        expires: Date.now() + 3_600_000,
+      });
+    });
+
+    afterEach(() => {
+      clearModelCache("nous");
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(credentialHome);
+    });
+
+    test("gathers and caches 390 synthetic paid/free rows above 256 KiB", async () => {
+      const entry = PROVIDER_REGISTRY.find(row => row.id === "nous");
+      if (!entry) throw new Error("missing nous registry entry");
+      const payload = JSON.stringify({
+        data: Array.from({ length: 390 }, (_, index) => ({
+          id: index === 0 ? "tencent/hy3:free" : `vendor/model-${index}`,
+          metadata: { description: "x".repeat(1_400) },
+        })),
+      });
+      const bytes = new TextEncoder().encode(payload).byteLength;
+      expect(bytes).toBeGreaterThan(262_144);
+      expect(bytes).toBeLessThan(1_048_576);
+
+      let fetches = 0;
+      globalThis.fetch = (async (input, init) => {
+        fetches += 1;
+        expect(String(input)).toBe("https://inference-api.nousresearch.com/v1/models");
+        expect(init?.method ?? "GET").toBe("GET");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-token-nous-discovery-fixture");
+        return new Response(payload, { headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const config = withStubbedProviderFetch<OcxConfig>({
+        defaultProvider: "nous",
+        providers: { nous: { ...providerConfigSeed(entry), models: ["safe-fallback"] } },
+      });
+      const discovery = resolveProviderModelDiscovery("nous", config.providers.nous!);
+      expect(discovery.maxResponseBytes).toBe(1_048_576);
+      expect(discovery.maxModels).toBe(512);
+      const warning = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const models = (await gatherRoutedModels(config)).filter(model => model.provider === "nous");
+        expect(fetches).toBe(1);
+        expect(models).toHaveLength(390);
+        const ids = models.map(model => model.id);
+        expect(ids).toContain("tencent/hy3:free");
+        expect(ids).toContain("vendor/model-1");
+        expect(ids).toContain("vendor/model-389");
+        expect(ids).not.toContain("safe-fallback");
+        // Gather sorts its published rows; the cache retains upstream order.
+        expect(getFreshCached("nous", 60_000)?.map(model => model.id).sort()).toEqual([...ids].sort());
+        expect(getProviderLiveModelCount("nous")).toBe(390);
+        expect(getProviderDiscoveryStatus("nous")).toEqual({ status: "ok" });
+        expect((await gatherRoutedModels(config)).filter(model => model.provider === "nous")).toEqual(models);
+        expect(fetches).toBe(1);
+      } finally {
+        warning.mockRestore();
+      }
+    });
   });
 
   test("rejects invalid UTF-8 before JSON parsing", async () => {

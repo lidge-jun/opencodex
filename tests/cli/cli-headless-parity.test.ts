@@ -13,11 +13,29 @@ import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import { providerQuotaLine } from "../../src/cli/account-extended";
 import { formatAccountTable } from "../../src/cli/account";
 import { handleConnectCommand } from "../../src/cli/connect";
+import { handleSystemCommand } from "../../src/cli/system-command";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
 type Recorded = { path: string; method: string; body: unknown };
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
+
+describe("ocx system settings client compaction", () => {
+  test("persists the explicit boolean through the shared settings endpoint", async () => {
+    const { requests, deps } = fakeRuntime((_req, body) => ({ ok: true, ...body }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["settings", "--client-compaction", "on"], deps)).toBe(0);
+      expect(requests).toEqual([{
+        path: "/api/settings",
+        method: "PUT",
+        body: { codexClientCompaction: true },
+      }]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+});
 
 describe("ocx agent sidecar --list (#2188)", () => {
   test("web --list prints the server's webSearchModels — the GUI's exact list", async () => {

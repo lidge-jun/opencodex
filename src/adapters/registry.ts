@@ -2,6 +2,8 @@ import { createAnthropicAdapter } from "./anthropic";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
 import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-deepseek-v4-tool-replay";
+import { createCodeBuddyAdapter } from "./codebuddy/adapter";
+import { createQoderAdapter } from "./qoder/adapter";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
 import { createGoogleAdapter } from "./google";
@@ -20,6 +22,7 @@ export interface AdapterFactoryContext {
 }
 
 export type AdapterWire =
+  | "codebuddy"
   | "command-code"
   | "openai-chat"
   | "ollama-native"
@@ -53,6 +56,11 @@ type InheritedAdapterDefinition = {
 type AdapterDefinition = DirectAdapterDefinition | InheritedAdapterDefinition;
 
 export const ADAPTER_REGISTRY = {
+  codebuddy: {
+    wire: "codebuddy",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createCodeBuddyAdapter(provider),
+  },
   "command-code": {
     wire: "command-code",
     mutation: "codex-owned",
@@ -107,6 +115,10 @@ export const ADAPTER_REGISTRY = {
   "mimo-free": {
     contractParent: "openai-chat",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createMimoFreeAdapter(provider),
+  },
+  qoder: {
+    contractParent: "codebuddy",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createQoderAdapter(provider),
   },
 } as const satisfies Record<string, AdapterDefinition>;
 

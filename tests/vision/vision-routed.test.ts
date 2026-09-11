@@ -3,12 +3,15 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { configuredPort, setCorsOrigin } from "../../src/server/auth-cors";
+import { parseRequest } from "../../src/responses/parser";
 import { startServer } from "../../src/server";
-import type { OcxConfig } from "../../src/types";
-import { resetVisionDescriptionCache } from "../../src/vision";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { planVisionSidecar, resetVisionDescriptionCache } from "../../src/vision";
 import {
   describeImageRouted,
   routedDescribeAdmissionToken,
+  routedDescribeBaseUrl,
   VISION_DESCRIBE_TERMINAL_HEADER,
 } from "../../src/vision/routed-describe";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -86,6 +89,93 @@ describe("describeImageRouted unit", () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  /**
+   * The self-fetch is a local client too (#4236): on a hub bound to a tailnet address the only
+   * credential-free socket is the unauthenticated loopback listener, which now admits the chat
+   * wire this helper speaks — and with no listener the destination is the bind address, because
+   * nothing answers on loopback at all. One destination per topology.
+   */
+  test("the self-fetch base URL follows the unauthenticated loopback listener", () => {
+    expect(routedDescribeBaseUrl({
+      port: 10100,
+      hostname: "100.76.170.81",
+      unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
+    })).toBe("http://127.0.0.1:10104");
+    expect(routedDescribeBaseUrl({
+      port: 10100,
+      hostname: "100.76.170.81",
+      unauthenticatedLoopbackListener: { enabled: true },
+    })).toBe("http://127.0.0.1:10100");
+    // Listener off on a tailnet bind: the bind address, not a closed loopback port.
+    expect(routedDescribeBaseUrl({
+      port: 10100,
+      hostname: "100.76.170.81",
+      unauthenticatedLoopbackListener: { enabled: false },
+    })).toBe("http://100.76.170.81:10100");
+    expect(routedDescribeBaseUrl({ port: 10100 })).toBe("http://127.0.0.1:10100");
+  });
+
+  test("a config with no usable port falls back to the default, never to port 0", () => {
+    // `_corsOrigin` carries no explicit port until the server records one, so `configuredPort()`
+    // returns "" and an unguarded `Number(configuredPort())` composed `http://127.0.0.1:0` — a
+    // URL that connects to nothing. Pin that exact state rather than whatever a sibling test's
+    // server left behind in this module-level global.
+    const restore = configuredPort();
+    try {
+      // A recorded port is used as-is.
+      setCorsOrigin(4321);
+      expect(routedDescribeBaseUrl({ port: 0 })).toBe("http://127.0.0.1:4321");
+      // An ephemeral bind that has not recorded one yet yields "0", whose Number() is 0.
+      setCorsOrigin(0);
+      expect(Number(configuredPort())).toBe(0);
+      const url = new URL(routedDescribeBaseUrl({ port: 0 }));
+      expect(url.port).not.toBe("0");
+      expect(url.href).toBe("http://127.0.0.1:10100/");
+    } finally {
+      setCorsOrigin(Number(restore) || 10_100);
+    }
+  });
+
+  test("the vision plan carries the listener through to the self-fetch", () => {
+    // The planner hands `describeImageRouted` a NARROWED config. Dropping the listener there
+    // would leave the resolver nothing to resolve and silently restore the closed port.
+    const routed: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://routed.test/v1",
+      apiKey: "routed-key",
+      noVisionModels: ["text-model"],
+    };
+    const vlm: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://vlm.test/v1", apiKey: "k" };
+    const request = parseRequest({
+      model: "routed/text-model",
+      input: [{
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "look at this" },
+          { type: "input_image", image_url: PNG_DATA_URL },
+        ],
+      }],
+    });
+    const plan = planVisionSidecar({
+      port: 10100,
+      hostname: "100.76.170.81",
+      runtimeRole: "hub",
+      unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
+      defaultProvider: "routed",
+      providers: { routed, vlm },
+      visionSidecar: { enabled: true, backend: "routed", model: "vlm/qwen-vl" },
+    } as unknown as OcxConfig, routed, "text-model", request);
+    expect(plan?.backend).toBe("routed");
+    expect(plan?.routedConfig?.unauthenticatedLoopbackListener).toEqual({ enabled: true, port: 10104 });
+    // `hostname` has to survive the narrowing for the same reason: with no listener it is the
+    // ONLY field that distinguishes a reachable destination from a closed loopback port.
+    expect(plan?.routedConfig?.hostname).toBe("100.76.170.81");
+    expect(routedDescribeBaseUrl(plan!.routedConfig!)).toBe("http://127.0.0.1:10104");
+    expect(routedDescribeBaseUrl({ ...plan!.routedConfig!, unauthenticatedLoopbackListener: undefined }))
+      .toBe("http://100.76.170.81:10100");
   });
 
   test("admission ladder: env token first, then first apiKeys entry, as x-opencodex-api-key", () => {

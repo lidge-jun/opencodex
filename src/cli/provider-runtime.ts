@@ -204,7 +204,8 @@ async function presets(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const rows = Array.isArray(result) ? result : result.providers ?? [];
   printData(result, wantsJson, rows.map(row => {
     const record = row as Record<string, unknown>;
-    return `${String(record.id ?? record.name ?? "?")}  ${String(record.label ?? record.adapter ?? "")}`.trimEnd();
+    const sponsor = record.sponsor ? `  (sponsor: ${String(record.sponsor)})` : "";
+    return `${String(record.id ?? record.name ?? "?")}  ${String(record.label ?? record.adapter ?? "")}${sponsor}`.trimEnd();
   }));
 }
 

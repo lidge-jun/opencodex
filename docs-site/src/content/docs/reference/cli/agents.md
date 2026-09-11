@@ -33,6 +33,27 @@ ocx agent sidecar web --list
 ocx agent sidecar web --model gpt-5.6-luna
 ```
 
+### `ocx effort [status|set|clear]`
+
+Inspect or change main and subagent reasoning-effort caps through the live proxy, or the local
+configuration when no proxy is available. Cap values are `low`, `medium`, `high`, `xhigh`, `max`,
+and `ultra`; `-` clears the selected cap. `none` and `minimal` are not cap levels and are rejected
+before probing the proxy or submitting an update, including when another option in the same command is valid.
+They remain valid for `--injection`, which sets the separate injection effort rather than a cap.
+
+```bash
+ocx effort status --json
+ocx effort set --main high --subagent low
+ocx effort set --subagent -
+```
+
+Status preserves existing stored/runtime cap values and reports unsupported values in `warnings`
+(an empty array when none are unsupported). The same warnings appear in human output and name the
+field that is ignored with a correction command. Status never repairs or rewrites those values.
+An ignored subagent field does not remove a valid main cap. `ocx effort clear` clears both caps
+while retaining the separate injection-effort setting. See [Sub-agent surfaces](/guides/sub-agent-surface/)
+for the request surfaces where caps apply.
+
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.

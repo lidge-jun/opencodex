@@ -8,7 +8,8 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 
 import { atomicWriteFile } from "../config";
-import type { CodexWriteLockResult } from "./codex-write-lock";
+import type { CodexWriteLockResult, CodexWriteLockSkipReason } from "./codex-write-lock";
+import { HUB_GATED_SKIP_MESSAGE } from "./desired-state";
 import { inspectCodexCoordinatorPath } from "./coordinator-doctor";
 import { JOURNAL_PATH } from "./journal";
 import { updateIntegrationRecord } from "./integration-record";
@@ -443,16 +444,20 @@ export function recomputeInjectWitness(options: {
 export function codexInjectLockOutcome(
   result: Exclude<CodexWriteLockResult<unknown>, { status: "acquired" }>,
 ): { success: false; message: string; retryable: boolean } | {
-  success: true; status: "skipped"; skippedReason: "desired_disabled" | "desired_enabled"; message: string;
+  success: true; status: "skipped"; skippedReason: CodexWriteLockSkipReason; message: string;
 } {
   if (result.status === "skipped") {
     return {
       success: true,
       status: "skipped",
       skippedReason: result.reason,
-      message: result.reason === "desired_disabled"
-        ? "Codex integration is OFF; no Codex config, catalog, cache, or history was changed."
-        : "Codex integration was re-enabled; native restore was skipped.",
+      // Three distinct facts, three sentences. The hub gate in particular must not borrow the
+      // toggle's wording — that is the phantom "integration is OFF" report from #4236.
+      message: result.reason === "hub-gated"
+        ? `${HUB_GATED_SKIP_MESSAGE} No Codex config, catalog, cache, or history was changed.`
+        : result.reason === "desired_disabled"
+          ? "Codex integration is OFF; no Codex config, catalog, cache, or history was changed."
+          : "Codex integration was re-enabled; native restore was skipped.",
     };
   }
   if (result.status === "busy") {

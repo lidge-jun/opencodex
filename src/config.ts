@@ -46,6 +46,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "./codex/account-priority";
+import { loopbackCompanionAllowed } from "./codex/loopback-target";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
 import {
   adoptCustomModelCatalogMigration,
@@ -73,6 +74,7 @@ import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   OPENAI_PROVIDER_TIER_VERSION,
   pinnedWireAdapter,
+  PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxClaudeCodeConfig,
   type OcxConfig,
@@ -497,6 +499,47 @@ export function requestPacingConfigError(value: unknown): string | null {
   return "requestPacing must contain enabled and a valid requestsPerMinute/minIntervalMs provider rule or model overrides";
 }
 
+/**
+ * Bounds for the opt-in passthrough web-search bridge (`providers.<name>.webSearchBridge`,
+ * #3761). Strict for the same reason `retryOn429` is: a misspelled key here would silently
+ * leave the bridge disarmed while the operator believes they enabled it. `endpoint` is only
+ * shape-checked here; `planPassthroughWebSearchBridge` re-validates the origin before any key
+ * is sent to it, because config validation is not an authorization boundary.
+ */
+const providerWebSearchBridgeSchema = z.object({
+  enabled: z.boolean().optional(),
+  backend: z.enum(PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS).optional(),
+  maxSearches: z.number().int().min(1).max(10).optional(),
+  timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
+  endpoint: z.string().min(1).optional(),
+}).strict();
+
+export function providerWebSearchBridgeConfigError(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "webSearchBridge must be a plain object";
+  }
+  const parsed = providerWebSearchBridgeSchema.safeParse(value);
+  if (!parsed.success) {
+    return "webSearchBridge accepts only enabled (boolean), backend "
+      + `(${PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS.join("|")}), maxSearches (1..10), `
+      + "timeoutMs (1000..600000), and endpoint (absolute http(s) URL)";
+  }
+  const endpoint = parsed.data.endpoint;
+  if (endpoint !== undefined) {
+    let url: URL;
+    try {
+      url = new URL(endpoint);
+    } catch {
+      return "webSearchBridge.endpoint must be an absolute http(s) URL";
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return "webSearchBridge.endpoint must be an absolute http(s) URL";
+    }
+  }
+  return null;
+}
+
 const fastWireSchema = z.object({
   kind: z.string(),
   canonicalToWire: z.record(z.string().trim(), z.string().trim()),
@@ -600,6 +643,10 @@ const providerConfigSchema = z.object({
     repairInvalidIds: z.boolean().optional(),
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
+  // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
+  // bridge block must never send an operator through invalid-config recovery for an opt-in
+  // feature that is off by default. The management write boundary still rejects it loudly.
+  webSearchBridge: providerWebSearchBridgeSchema.optional().catch(undefined),
   xaiResponsesXSearch: z.boolean().optional(),
   xaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
 }).passthrough();
@@ -990,6 +1037,18 @@ const hubConfigSchema = z.object({
     }
     return origin;
   }).optional(),
+  // Same canonical-origin rule as managementPublicOrigin, and deliberately NOT `.catch`ed:
+  // a mistyped data origin must be rejected at write time, because silently dropping it
+  // makes `ocx hub invite` print the `http://<hostname>:<port>` fallback that the operator
+  // set this field precisely to replace.
+  dataPublicOrigin: z.string().transform((value, ctx) => {
+    const origin = canonicalHttpOrigin(value);
+    if (!origin) {
+      ctx.addIssue({ code: "custom", message: "must be a canonical http(s) origin without credentials, path, query, or fragment" });
+      return z.NEVER;
+    }
+    return origin;
+  }).optional(),
   // A malformed hand edit disables only the optional ingress. Live writes are rejected by
   // managementIngressConfigError before this load-time degradation can hide the mistake.
   managementIngress: z.union([
@@ -1066,6 +1125,17 @@ const clientConnectionSchema = z.object({
 }).strict();
 
 /**
+ * Codex pool selection policy section.
+ *
+ * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
+ * rejected write rather than a silently ignored key that leaves the operator believing they
+ * excluded something.
+ */
+const codexPoolSchema = z.object({
+  excludedPlans: z.array(z.string().trim().min(1)).optional(),
+}).strict();
+
+/**
  * Quota-reset notification section.
  *
  * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
@@ -1100,6 +1170,9 @@ const configSchema = z.object({
   // candidates are rejected explicitly by remoteGuiConfigError below.
   hub: hubConfigSchema.optional().catch(undefined),
   remoteGui: remoteGuiConfigSchema.optional().catch(undefined),
+  // A malformed privacy block must never be read as "unmask": .catch(undefined) drops it and
+  // emailMaskingEnabled then falls back to masked, which is also what an absent block means.
+  privacy: z.object({ maskEmails: z.boolean().optional() }).strict().optional().catch(undefined),
   // A malformed present client block must remain diagnosable from raw config and
   // fail closed through src/client/state.ts; unrelated provider state still loads.
   client: clientConnectionSchema.optional().catch(undefined),
@@ -1118,6 +1191,15 @@ const configSchema = z.object({
     .min(0)
     .optional()
     .catch(undefined),
+  // Opt-in inbound body ceiling (#3573). An invalid hand edit degrades to the 256 MiB default
+  // rather than failing the parse, matching the outbound guard above: a malformed number must
+  // not change what the proxy admits. The hard ceiling is NOT enforced here — because of that
+  // `.catch`, and because a config object can be built without this schema at all — but in
+  // `resolveInboundBodyLimitBytes()`, which every reader goes through.
+  maxInboundBodyBytes: z.number().int()
+    .min(0)
+    .optional()
+    .catch(undefined),
   appOwnedMemoryBudgetMb: z.number().int()
     .min(MIN_APP_OWNED_MEMORY_BUDGET_MB)
     .max(MAX_APP_OWNED_MEMORY_BUDGET_MB)
@@ -1130,13 +1212,16 @@ const configSchema = z.object({
   // is safe: startServer() already falls back to 127.0.0.1 for a missing hostname. Write-time
   // rejection lives in validateConfigCandidate() so bad values still surface to the caller.
   hostname: z.string().trim().min(1).optional().catch(undefined),
-  // Discriminated on `enabled` so a disabled entry cannot be forced to carry a port, and an
-  // enabled one cannot omit it (#1102). A malformed value degrades to undefined rather than
-  // failing the whole parse: this is an opt-in convenience surface, and a hand-edit typo here
-  // must never reset providers/apiKeys through the backup-and-defaults repair path.
+  // Discriminated on `enabled` so a disabled entry cannot be forced to carry a port (#1102).
+  // An enabled one MAY omit it: that is the companion form, which binds 127.0.0.1 on the proxy
+  // port and is legal only off a loopback/wildcard bind — a relationship between two fields, so
+  // it is enforced in validateConfigCandidate() and again at startup, not here (#4236).
+  // A malformed value degrades to undefined rather than failing the whole parse: this is an
+  // opt-in convenience surface, and a hand-edit typo here must never reset providers/apiKeys
+  // through the backup-and-defaults repair path.
   unauthenticatedLoopbackListener: z.union([
     z.object({ enabled: z.literal(false) }),
-    z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535) }),
+    z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535).optional() }),
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
@@ -1189,7 +1274,12 @@ const configSchema = z.object({
   ).optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
+  codexClientCompaction: z.boolean().optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
+  // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
+  // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.
+  codexPool: codexPoolSchema.optional().catch(undefined),
   codexQuotaAutoRefresh: codexQuotaAutoRefreshSchema.optional().catch(undefined),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Selection order is a preference, not a safety control like pause: a malformed
@@ -2102,6 +2192,20 @@ function malformedQuotaResetNotifyWarning(rawParsed: unknown): string | null {
 }
 
 /**
+ * Same silent-in-the-wrong-direction failure as the notification block: a dropped pool policy means
+ * the accounts the operator meant to exclude keep taking traffic, and the only visible symptom is
+ * traffic going somewhere it was supposed to stop going.
+ */
+function malformedCodexPoolWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "codexPool")) return null;
+  const result = codexPoolSchema.safeParse(raw.codexPool);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `codexPool${field ? `.${field}` : ""} ignored: invalid Codex pool selection policy`;
+}
+
+/**
  * Warn once per load that the section was dropped.
  *
  * This matters more than a usual degradation notice: the failure is SILENT in the direction
@@ -2110,6 +2214,18 @@ function malformedQuotaResetNotifyWarning(rawParsed: unknown): string | null {
  */
 function warnDegradedQuotaResetNotify(rawParsed: unknown): void {
   const warning = malformedQuotaResetNotifyWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
+/**
+ * Warn once per load that the pool policy was dropped.
+ *
+ * `.catch(undefined)` turns a malformed policy into a SUCCESSFUL parse, so without this the proxy
+ * starts, rotates onto the accounts the operator meant to exclude, and prints nothing. The visible
+ * symptom would be traffic going exactly where it was told not to go.
+ */
+function warnDegradedCodexPool(rawParsed: unknown): void {
+  const warning = malformedCodexPoolWarning(rawParsed);
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
@@ -2272,6 +2388,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
       warnDegradedQuotaResetNotify(parsed);
+      warnDegradedCodexPool(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
@@ -2300,6 +2417,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
       warnDegradedQuotaResetNotify(parsed);
+      warnDegradedCodexPool(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Still failing, but if every complaint is about one or more named entries
@@ -2324,6 +2442,7 @@ export function loadConfig(): OcxConfig {
         warnDegradedRuntimeRole(parsed);
         warnDegradedOptionalRemoteBlocks(parsed);
         warnDegradedQuotaResetNotify(parsed);
+        warnDegradedCodexPool(parsed);
         return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
       }
     }
@@ -2468,6 +2587,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (clientWarning) warnings.push(clientWarning);
   const notifyWarning = malformedQuotaResetNotifyWarning(rawParsed);
   if (notifyWarning) warnings.push(notifyWarning);
+  const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
+  if (codexPoolWarning) warnings.push(codexPoolWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -2617,6 +2738,21 @@ function quotaResetNotifyError(value: unknown): string | null {
 }
 
 /**
+ * The read path degrades a malformed pool policy to undefined, which for an exclusion policy means
+ * the excluded accounts quietly keep serving traffic. Reject it on write so `ocx config set` cannot
+ * create a policy that looks applied and is not.
+ */
+function codexPoolError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "codexPool") || raw.codexPool === undefined) return null;
+  const result = codexPoolSchema.safeParse(raw.codexPool);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return `schema_invalid: codexPool${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
+}
+
+/**
  * Same reasoning as {@link blankHostnameError}, and more urgent: the read path degrades a
  * malformed selection-order map to undefined, which on a write would drop every entry the
  * user had accumulated and still report success. A load-time degrade leaves the raw map in
@@ -2700,15 +2836,22 @@ function oauthOpenBrowserError(value: unknown): string | null {
 
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 /**
- * Reject a loopback-listener port that collides with the proxy port (#1102).
+ * Reject a loopback-listener port that collides with the proxy port (#1102), and a port-less
+ * companion listener on a bind address that already owns 127.0.0.1 (#4236).
  *
- * The schema can only check the shape of each field on its own; the two ports being distinct
- * is a relationship between them. Letting the pair through would surface as a startup failure
- * after the public listener already bound, which reads like an unrelated port conflict.
+ * The schema can only check the shape of each field on its own; the two ports being distinct —
+ * and the port-less form being compatible with `hostname` — are relationships between fields.
+ * Letting either through would surface as a startup failure after the public listener already
+ * bound, which reads like an unrelated port conflict.
+ *
+ * Both keys are read from the same candidate, so `ocx config set hostname 127.0.0.1` on a host
+ * whose listener is already the companion form is refused by this same check, with the same
+ * message, rather than breaking the next start.
  *
  * This is write-time only, matching `blankHostnameError`: a live caller can be told the value
  * is wrong, whereas a hand-edited config on the read path degrades to undefined rather than
- * resetting the whole file.
+ * resetting the whole file. `assertLoopbackListenerBindable` repeats the decision at startup so
+ * a hand edit that skipped this boundary fails with the same sentence instead of EADDRINUSE.
  */
 function loopbackListenerPortError(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -2726,15 +2869,44 @@ function loopbackListenerPortError(value: unknown): string | null {
     return "schema_invalid: unauthenticatedLoopbackListener.enabled: must be a boolean";
   }
   if (entry.enabled !== true) return null;
-  const listenerPort = entry.port;
-  if (typeof listenerPort !== "number" || !Number.isInteger(listenerPort) || listenerPort < 1 || listenerPort > 65535) {
-    return "schema_invalid: unauthenticatedLoopbackListener.port: must be an integer port when enabled";
-  }
+  const hostname = typeof (value as Record<string, unknown>).hostname === "string"
+    ? (value as Record<string, unknown>).hostname as string
+    : undefined;
   const proxyPort = (value as Record<string, unknown>).port;
+  const listenerPort = entry.port;
+  // The companion form. `port` omitted means "same port as the public listener, on 127.0.0.1",
+  // which only exists as a free address when the public listener is bound somewhere else.
+  if (listenerPort === undefined) {
+    return loopbackCompanionBindError(
+      hostname,
+      typeof proxyPort === "number" ? proxyPort : 10100,
+    );
+  }
+  if (typeof listenerPort !== "number" || !Number.isInteger(listenerPort) || listenerPort < 1 || listenerPort > 65535) {
+    return "schema_invalid: unauthenticatedLoopbackListener.port: must be an integer port when enabled, or omitted to share the proxy port";
+  }
   if (typeof proxyPort === "number" && proxyPort === listenerPort) {
     return "schema_invalid: unauthenticatedLoopbackListener.port: must differ from the proxy port";
   }
   return null;
+}
+
+/**
+ * The one sentence both the write boundary and startup use for an impossible companion bind.
+ *
+ * Exported so `startServer` can fail with the identical text: an operator who hand-edited the
+ * file past `validateConfigCandidate` must read the same diagnosis, not EADDRINUSE.
+ */
+export function loopbackCompanionBindError(
+  hostname: string | undefined,
+  proxyPort: number,
+): string | null {
+  if (loopbackCompanionAllowed(hostname)) return null;
+  const bind = (hostname ?? "").trim() || "127.0.0.1";
+  return "schema_invalid: unauthenticatedLoopbackListener: a port-less listener binds "
+    + `127.0.0.1:${proxyPort}, which the public listener on hostname "${bind}" already holds. `
+    + "Either set a distinct unauthenticatedLoopbackListener.port, or remove the listener — a "
+    + "loopback bind already admits local callers without a credential.";
 }
 
 /**
@@ -2791,6 +2963,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? upstreamHostCircuitThresholdError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
+    ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
     ?? codexQuotaAutoRefreshError(value)

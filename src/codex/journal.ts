@@ -62,10 +62,38 @@ export interface RestoreJournalResult {
   configChanged: boolean;
   profileChanged: boolean;
   complete: boolean;
+  /** A changed artifact has no recorded injected hash, so snapshot ownership is unknown. */
+  unverified: boolean;
 }
 
 function sha256(content: string | null): string | null {
   return content === null ? null : createHash("sha256").update(content).digest("hex");
+}
+
+function compareJournalState(journal: Journal, config: string | null, profile: string | null) {
+  const originalConfig = Buffer.from(journal.originalConfig, "base64").toString("utf-8");
+  const originalProfile = journal.originalProfile === null
+    ? null
+    : Buffer.from(journal.originalProfile, "base64").toString("utf-8");
+  const configAlreadyOriginal = config === originalConfig;
+  const profileAlreadyOriginal = profile === originalProfile;
+  const configHashKnown = typeof journal.injectedConfigHash === "string" && journal.injectedConfigHash.length > 0;
+  const profileHashKnown = journal.injectedProfileHash !== undefined;
+  return {
+    originalConfig,
+    originalProfile,
+    configAlreadyOriginal,
+    profileAlreadyOriginal,
+    configUnchanged: configAlreadyOriginal || (configHashKnown && sha256(config) === journal.injectedConfigHash),
+    profileUnchanged: profileAlreadyOriginal || (profileHashKnown && sha256(profile) === (journal.injectedProfileHash ?? null)),
+    unverified: (!configHashKnown && !configAlreadyOriginal) || (!profileHashKnown && !profileAlreadyOriginal),
+  };
+}
+
+/** Read-only check of the pre-injection snapshot input, never the newly injected bytes. */
+export function hasUnverifiedJournalBaseline(config: string | null, profile: string | null): boolean {
+  const journal = readJournal(false);
+  return journal !== null && compareJournalState(journal, config, profile).unverified;
 }
 
 export interface WriteJournalOptions {
@@ -114,7 +142,7 @@ export function writeJournal(options: WriteJournalOptions = {}): void {
   const journal: Journal = {
     version: 1,
     originalConfig: Buffer.from(config).toString("base64"),
-    originalProfile: profile ? Buffer.from(profile).toString("base64") : null,
+    originalProfile: profile !== null ? Buffer.from(profile).toString("base64") : null,
     pid: process.pid,
     owner: options.owner?.kind === "client"
       ? { kind: "client", apiKeyId: options.owner.apiKeyId }
@@ -208,22 +236,34 @@ export function journalOwner(): JournalOwner | null {
 export function restoreJournalState(): RestoreJournalResult {
   const journal = readJournal();
   if (!journal) {
-    return { configRestored: false, profileRestored: false, configChanged: false, profileChanged: false, complete: false };
+    return { configRestored: false, profileRestored: false, configChanged: false, profileChanged: false, complete: false, unverified: false };
   }
-  const currentConfig = existsSync(CODEX_CONFIG_PATH) ? readFileSync(CODEX_CONFIG_PATH, "utf-8") : "";
+  const currentConfig = existsSync(CODEX_CONFIG_PATH) ? readFileSync(CODEX_CONFIG_PATH, "utf-8") : null;
   const currentProfile = existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf-8") : null;
-  const configUnchanged = !journal.injectedConfigHash || sha256(currentConfig) === journal.injectedConfigHash;
-  const profileUnchanged = journal.injectedProfileHash === undefined || sha256(currentProfile) === (journal.injectedProfileHash ?? null);
+  const comparison = compareJournalState(journal, currentConfig, currentProfile);
+  const { configUnchanged, profileUnchanged } = comparison;
+  // A legacy record or interruption before markJournalInjectedState is not proof that
+  // later bytes belong to OpenCodex. Keep the whole pair and its recovery evidence intact.
+  if (comparison.unverified) {
+    return {
+      configRestored: comparison.configAlreadyOriginal,
+      profileRestored: comparison.profileAlreadyOriginal,
+      configChanged: !configUnchanged,
+      profileChanged: !profileUnchanged,
+      complete: false,
+      unverified: true,
+    };
+  }
 
-  let configRestored = false;
-  let profileRestored = false;
-  if (configUnchanged) {
-    atomicWriteFile(CODEX_CONFIG_PATH, Buffer.from(journal.originalConfig, "base64").toString("utf-8"));
+  let configRestored = comparison.configAlreadyOriginal;
+  let profileRestored = comparison.profileAlreadyOriginal;
+  if (configUnchanged && !configRestored) {
+    atomicWriteFile(CODEX_CONFIG_PATH, comparison.originalConfig);
     configRestored = true;
   }
-  if (profileUnchanged) {
-    if (journal.originalProfile !== null) {
-      atomicWriteFile(CODEX_PROFILE_PATH, Buffer.from(journal.originalProfile, "base64").toString("utf-8"));
+  if (profileUnchanged && !profileRestored) {
+    if (comparison.originalProfile !== null) {
+      atomicWriteFile(CODEX_PROFILE_PATH, comparison.originalProfile);
       profileRestored = true;
     } else if (existsSync(CODEX_PROFILE_PATH)) {
       // "There was no profile before, so remove the one we generated." Claiming success
@@ -249,6 +289,7 @@ export function restoreJournalState(): RestoreJournalResult {
     configChanged: !configUnchanged,
     profileChanged: !profileUnchanged,
     complete,
+    unverified: false,
   };
 }
 
@@ -267,6 +308,10 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
   if (owner?.kind === "client") {
     if (options.activeClientApiKeyId === owner.apiKeyId) return false;
     const restored = restoreJournalState();
+    if (restored.unverified) {
+      console.error("⚠️ Codex journal recovery was not verified; current configuration files and the journal were preserved.");
+      return false;
+    }
     if (!restored.configRestored && !restored.profileRestored) return false;
     console.error(`⚠️  Uncommitted or mismatched client routing (${owner.apiKeyId}) was restored from the Codex journal.`);
     return true;
@@ -281,6 +326,10 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
     }
   }
   const restored = restoreJournalState();
+  if (restored.unverified) {
+    console.error("⚠️ Codex journal recovery was not verified; current configuration files and the journal were preserved.");
+    return false;
+  }
   if (!restored.configRestored && !restored.profileRestored) return false;
   console.error(`⚠️  Previous session (PID ${pid}) did not shut down cleanly. Codex state restored from journal.`);
   return true;

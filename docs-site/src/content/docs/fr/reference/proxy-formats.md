@@ -20,6 +20,10 @@ la sécurité des réponses se produit toujours à la limite du proxy. Configure
 [Configuration](/fr/reference/configuration/); utilisez [Combos](/fr/guides/combos/) lorsqu'un identifiant de modèle public
 doit choisir parmi plusieurs cibles.
 
+## Redirections en amont
+
+Les requêtes de modèle, d’image, de vidéo et de recherche contenant des identifiants ne suivent pas automatiquement les redirections HTTP, même vers la même origine. Configurez l’URL finale de l’API plutôt qu’un alias qui redirige. Le serveur ne renvoie ni les identifiants ni le corps de la requête à la destination d’une redirection. Chaque chemin conserve sa gestion des erreurs ou son relais existant ; les routes Responses natives et compact peuvent renvoyer le 3xx et le `Location` d’origine au client. Le comportement de redirection du client est distinct de cette politique de transport du serveur.
+
 ## Présentation du point de terminaison
 
 | Espace client | Point de terminaison | Résultat non-stream réussi | Résultat de flux ou de socket réussi |
@@ -317,16 +321,18 @@ utilisez la matrice ci-dessous. « Dédié » signifie `X-OpenCodex-API-Key` ; l
 
 | Surfaces | Dédié | Porteur | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP et WebSocket | Obligatoire | Rejeté pour l’admission au proxy | Rejeté |
-| `/v1/responses/compact` | Obligatoire | Rejeté pour l’admission au proxy | Rejeté |
-| `/v1/chat/completions` | Obligatoire | Rejeté pour l’admission au proxy | Rejeté |
+| `/v1/responses` HTTP et WebSocket | Accepté | Accepté | Rejeté |
+| `/v1/responses/compact` | Accepté | Accepté | Rejeté |
+| `/v1/chat/completions` | Accepté | Accepté | Rejeté |
 | `/v1/messages` et `/v1/messages/count_tokens` | Accepté | Accepté | Accepté |
 | `/v1/models` | Accepté | Accepté | Accepté |
 | `/v1/live`, `/v1/realtime/calls` et jointures de bande latérale | Accepté | Accepté | Accepté |
 
-Réponses-famille et demandes de chat réservées `Authorization` au fournisseur ou Codex Direct
-passthrough, donc une clé proxy distante doit utiliser l'en-tête dédié. Messages et surfaces en temps réel
-ont besoin d’une compatibilité client plus large et acceptent donc les trois formes.
+Les requêtes Responses et Chat acceptent une clé du proxy dans l’en-tête dédié ou dans Bearer. Sur une route native, l’identifiant Codex stocké sélectionné remplace le bearer d’admission ; sur les autres routes, ce bearer est supprimé. Il ne sert jamais d’identifiant upstream. Utilisez l’en-tête dédié si vous fournissez aussi un bearer distinct pour le fournisseur.
+
+Une route Cursor sans clé et sans OAuth peut utiliser ce bearer distinct de l’appelant, mais jamais un secret du proxy ni l’authentification ChatGPT main ajoutée automatiquement. La sélection Combo/policy et les réécritures effectives shadow/thread-spawn ne transmettent pas les identifiants bruts de l’appelant aux nouvelles cibles. Le routage OpenAI canonique peut restaurer l’unique bearer de l’appelant qui n’est pas une clé du proxy après un changement de route interne uniquement si son JWT contient un claim de compte ChatGPT et si tout en-tête de compte explicite correspond à ce claim. La transmission de l’authentification de l’appelant aux sidecars OpenAI facultatifs exige un unique JWT et un `chatgpt-account-id` explicite et correspondant. Les bearers opaques ne sont pas restaurés lors des changements de route, même avec un en-tête de compte explicite. Dans les autres cas, la cible finale doit disposer de son propre identifiant configuré, OAuth ou stocké ; sinon, la requête échoue localement. Un simple marqueur thread-spawn sans changement de route ne supprime pas les identifiants.
+
+Le replay Claude ne conserve l’authentification main que dans un snapshot en mémoire dont le turn a acquis la propriété, et ne la reconstruit que pour une route ChatGPT canonique finale.
 
 :::caution
 Les clés du plan de données ne sont pas des informations d’identification de gestion. La gestion API utilise un secret d'administration distinct ;

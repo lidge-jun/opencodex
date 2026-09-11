@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decodeJwtPayload, extractAccountId, extractEmail } from "../../src/oauth/chatgpt";
+import { decodeJwtPayload, extractAccountId, extractAccountIdClaims, extractEmail } from "../../src/oauth/chatgpt";
 
 function fakeJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
@@ -61,6 +61,39 @@ describe("ChatGPT OAuth JWT helpers", () => {
     const jwt = fakeJwt({ sub: "user", email: "a@b.com" });
     expect(extractAccountId(jwt)).toBeUndefined();
     expect(extractAccountId(undefined, undefined)).toBeUndefined();
+  });
+
+  test("extractAccountIdClaims accepts agreeing account-id encodings", () => {
+    const jwt = fakeJwt({
+      chatgpt_account_id: "acct_same",
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct_same" },
+    });
+    expect(extractAccountIdClaims(jwt)).toEqual({ accountId: "acct_same", conflict: false });
+  });
+
+  test("extractAccountIdClaims flags conflicting account-id encodings", () => {
+    const jwt = fakeJwt({
+      chatgpt_account_id: "acct_top",
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct_ns_other" },
+    });
+    expect(extractAccountIdClaims(jwt)).toEqual({ accountId: "acct_top", conflict: true });
+  });
+
+  test("extractAccountIdClaims treats organizations as membership, never as a conflict", () => {
+    // id_token_add_organizations makes org ids legitimately differ from the account id.
+    const jwt = fakeJwt({
+      chatgpt_account_id: "acct_main",
+      organizations: [{ id: "org_member" }, { id: "org_other" }],
+    });
+    expect(extractAccountIdClaims(jwt)).toEqual({ accountId: "acct_main", conflict: false });
+    const orgOnly = fakeJwt({ organizations: [{ id: "org_fallback" }, { id: "org_second" }] });
+    expect(extractAccountIdClaims(orgOnly)).toEqual({ accountId: "org_fallback", conflict: false });
+  });
+
+  test("extractAccountIdClaims reads nothing from a claim-free or malformed token", () => {
+    expect(extractAccountIdClaims(fakeJwt({ sub: "user" }))).toEqual({ accountId: undefined, conflict: false });
+    expect(extractAccountIdClaims(undefined)).toEqual({ accountId: undefined, conflict: false });
+    expect(extractAccountIdClaims("not-a-jwt")).toEqual({ accountId: undefined, conflict: false });
   });
 
   test("extractEmail extracts and lowercases email", () => {

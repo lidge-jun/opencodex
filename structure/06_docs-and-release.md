@@ -217,15 +217,19 @@ separate channel-aware invariant and release-note baseline design.
 
 ### Release notes
 
-Release notes are rendered OpenAI-Codex-style by `scripts/release-notes.ts render` inside
-`.github/workflows/release.yml`: `## New Features` / `## Bug Fixes` / `## Documentation` /
-`## Chores` / `## Other Changes` sections with prefix-free, scope-grouped summary bullets
-(`- Providers: Add X; Add Y (#1, #2)`), followed by a `## Changelog` section listing every PR
-as `- #N <title> @author`; when a comparison baseline exists, that section also includes a
-compare link. Carried preview changelogs and the since-preview delta feed the same renderer,
-so stable notes are the aggregate of their preview train. The raw commit dump is
-intentionally gone — non-PR commits stay reachable via the Full Changelog compare link when
-that link is available.
+The release workflow invokes `scripts/build-release-changelog.ts`, which builds notes from
+the actual Git range and uses generated PR notes as enrichment. Its categorized summaries
+contain one bullet per PR or direct commit, followed by `## Changelog` entries retaining PR
+titles and authors or sanitized direct-commit text. A comparison baseline adds a compare link.
+Preview notes are incremental; stable notes cover the range since the previous stable tag.
+The standalone `scripts/release-notes.ts render` command retains its separate scope-grouped
+summary and carried-preview rendering behavior.
+
+Both renderers strip the exact leading `[WRONG BRANCH]` marker followed by one ASCII space
+from PR summary bullets and full-changelog titles. Other bracketed text is preserved.
+Summary bullets remove conventional commit prefixes; PR changelog entries keep those prefixes,
+PR numbers, and author attribution. This normalization does not change category selection,
+direct-commit coverage, or PR-target enforcement.
 
 The deterministic renderer produces the structure but not curated prose. Maintainers who want
 the OpenAI-style grouped summaries can run the optional local polish step against the rendered

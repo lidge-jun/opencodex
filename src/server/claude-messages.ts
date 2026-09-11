@@ -30,12 +30,18 @@ import {
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
+import { registryEntryForProviderDestination } from "../providers/registry";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
-import { readJsonRequestBody } from "./request-decompress";
+import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
-import { conversationIdFromClaudeMetadata } from "./request-log-conversation";
+import {
+  conversationIdFromClaudeMetadata,
+  linkRequestSessionLane,
+  normalizeLogConversationId,
+  sessionLaneIdFromRequest,
+} from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import {
@@ -128,9 +134,9 @@ function claudeInboundDisabled(config: OcxConfig): Response | null {
   return null;
 }
 
-async function readAnthropicBody(req: Request, budget: TranslatorBudget): Promise<unknown> {
+async function readAnthropicBody(req: Request, budget: TranslatorBudget, maxBytes: number): Promise<unknown> {
   try {
-    return await readJsonRequestBody(req, budget);
+    return await readJsonRequestBody(req, budget, maxBytes);
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) throw err;
     throw new AnthropicRequestError(err instanceof Error && err.message ? err.message : "Invalid JSON body");
@@ -602,7 +608,7 @@ export async function fetchWithHeaderDeadline(
 ): Promise<HeaderDeadlineFetchResult> {
   const deadline = makeDeadline(timeoutMs, parent);
   try {
-    const upstream = await fetchImpl(input, { ...init, signal: deadline.signal, timeout: 0 });
+    const upstream = await fetchImpl(input, { ...init, redirect: "manual", signal: deadline.signal, timeout: 0 });
     return { kind: "response", upstream };
   } catch (error) {
     if (deadline.didExpire()) return { kind: "timeout" };
@@ -654,7 +660,7 @@ async function handleClaudeMessagesWithBudget(
   let fastRow: ParsedFastRowId | null = null;
   let requestedModel = "";
   try {
-    anthropicBody = await readAnthropicBody(req, translatorBudget);
+    anthropicBody = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
     // marker themselves; the 1M signal we act on is the anthropic-beta header.
     // Case-insensitive — the CLI matches /\[1m\]/i (audit 021 #7).
@@ -786,8 +792,12 @@ async function handleClaudeMessagesWithBudget(
   // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
   let nativeRoute = false;
+  let opencodeGoRoute = false;
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
+    // Match the fixed key-auth destination before per-model wire overrides, including
+    // renamed Go providers without treating custom or lookalike URLs as Go.
+    opencodeGoRoute = registryEntryForProviderDestination(route.provider)?.id === "opencode-go";
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
@@ -832,6 +842,7 @@ async function handleClaudeMessagesWithBudget(
   }
 
   const headers = new Headers({ "content-type": "application/json" });
+  let trustedClaudeMainAuth: { authorization: string; chatgptAccountId?: string } | undefined;
   for (const name of FORWARD_HEADERS) {
     // The caller's bearer is the proxy admission token (ocx claude placeholder), never a
     // ChatGPT credential — forwarding it upstream turns into {"detail":"Unauthorized"}.
@@ -847,19 +858,36 @@ async function handleClaudeMessagesWithBudget(
     const { getMainAccountToken } = await import("../codex/main-account");
     const token = getMainAccountToken();
     if (token) {
-      headers.set("authorization", `Bearer ${token.accessToken}`);
+      const authorization = `Bearer ${token.accessToken}`;
+      headers.set("authorization", authorization);
       headers.set("chatgpt-account-id", token.chatgptAccountId);
+      trustedClaudeMainAuth = {
+        authorization,
+        ...(token.chatgptAccountId ? { chatgptAccountId: token.chatgptAccountId } : {}),
+      };
     }
   }
-  if (nativeRoute) {
+  if (opencodeGoRoute) {
+    const session = req.headers.get("x-opencode-session");
+    if (session) headers.set("x-opencode-session", session);
+  }
+  const hasExplicitGoSession = opencodeGoRoute
+    && (sessionLaneIdFromRequest(headers) !== undefined
+      || normalizeLogConversationId(headers.get("x-opencode-session")) !== undefined);
+  const synthesizeGoSession = opencodeGoRoute && !hasExplicitGoSession
+    && isRec(anthropicBody)
+    && conversationIdFromClaudeMetadata(isRec(anthropicBody.metadata) ? anthropicBody.metadata : undefined) !== undefined;
+  // Go can also use the Responses adapter; its eligibility gate must win on both wires.
+  if (opencodeGoRoute ? synthesizeGoSession : nativeRoute) {
     // ChatGPT-backend prompt-cache affinity rides the session_id HEADER (codex
     // clients always send their session uuid; devlog 090 follow-up: body-level
     // prompt_cache_key alone still yielded cached_tokens:0). Claude Code never sends
-    // the header, so synthesize a stable per-session uuid from the same cache key —
+    // the header, so synthesize a stable per-session uuid from the same cache key.
+    // Routed Go requests need this lane too for their x-opencode-session affinity —
     // but ONLY for a real per-session key (metadata.user_id). The system-hash fallback
     // key is shared across Desktop conversations, and a shared session_id's backend
     // semantics are unproven (audit 133 R2#3): body prompt_cache_key only there.
-    if (cacheKeySource === "metadata" && !headers.has("session_id") && typeof internalBody.prompt_cache_key === "string") {
+    if (cacheKeySource === "metadata" && (synthesizeGoSession || !headers.has("session_id")) && typeof internalBody.prompt_cache_key === "string") {
       headers.set("session_id", uuidFromHex(internalBody.prompt_cache_key));
     }
   }
@@ -874,6 +902,7 @@ async function handleClaudeMessagesWithBudget(
         headers,
         body: JSON.stringify(internalBody),
       });
+      linkRequestSessionLane(req, internalReq);
     } finally {
       reservation.release();
     }
@@ -906,6 +935,10 @@ async function handleClaudeMessagesWithBudget(
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
     stripClaudeMainAuthForNoncanonicalForward: true,
+    ...(trustedClaudeMainAuth ? { trustedClaudeMainAuth } : {}),
+    // Claude's internal stored-main enrichment is not an original caller credential.
+    nativeCallerAuth: null,
+    callerDirectAuth: null,
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
@@ -1127,7 +1160,7 @@ export async function handleClaudeCountTokens(
   let body: unknown;
   const translatorBudget = createTranslatorBudget();
   try {
-    body = await readAnthropicBody(req, translatorBudget);
+    body = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
   } catch (err) {
     if (err instanceof DesktopModelMappingUnavailableError) return desktopMappingUnavailableResponse(err);
     if (err instanceof AnthropicRequestError) return anthropicErrorResponse(400, err.message);

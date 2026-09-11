@@ -163,7 +163,7 @@ describe("GET /api/settings", () => {
     persistEffortClamp({
       runtimePath: fakeCodex,
       runtimeVersion: "0.133.0",
-      removedEfforts: ["max", "ultra"],
+      removedEfforts: ["xhigh"],
       affectedModels: ["gpt-5.6-sol"],
     }, { configDir: TEST_DIR });
 
@@ -190,7 +190,7 @@ describe("GET /api/settings", () => {
       expect(body.codexRuntime?.source).toBe("environment");
       expect(body.codexRuntime?.catalogClamp).toEqual({
         active: true,
-        removedEfforts: ["max", "ultra"],
+        removedEfforts: ["xhigh"],
         runtimeVersion: "0.133.0",
       });
       expect(
@@ -376,6 +376,42 @@ describe("PUT /api/settings", () => {
     expect(convergences).toBe(2);
 
     const bad = await putSettings(config, { codexDesktopAuthless: "yes" });
+    expect(bad!.status).toBe(400);
+  });
+
+  test("codexClientCompaction (#3978): absent reports false, changes converge once, and disable deletes the key", async () => {
+    const config = baseConfig();
+    const absent = await (await getSettings(config))!.json() as { codexClientCompaction?: boolean };
+    expect(absent.codexClientCompaction).toBe(false);
+
+    let convergences = 0;
+    let saved: OcxConfig | undefined;
+    const on = await putSettings(config, { codexClientCompaction: true }, {
+      saveConfigPreservingClaudeCode: next => { saved = next; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    });
+    expect(on!.status).toBe(200);
+    expect(await on!.json()).toMatchObject({ codexClientCompaction: true });
+    expect(saved?.codexClientCompaction).toBe(true);
+    expect(convergences).toBe(1);
+
+    const same = await putSettings(config, { codexClientCompaction: true }, {
+      saveConfigPreservingClaudeCode: () => {},
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    });
+    expect(same!.status).toBe(200);
+    expect(convergences).toBe(1);
+
+    const off = await putSettings(config, { codexClientCompaction: false }, {
+      saveConfigPreservingClaudeCode: next => { saved = next; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    });
+    expect(off!.status).toBe(200);
+    expect(await off!.json()).toMatchObject({ codexClientCompaction: false });
+    expect(Object.hasOwn(saved!, "codexClientCompaction")).toBe(false);
+    expect(convergences).toBe(2);
+
+    const bad = await putSettings(config, { codexClientCompaction: "yes" });
     expect(bad!.status).toBe(400);
   });
 

@@ -60,6 +60,11 @@ export function isAccountNeedsReauth(id: string): boolean {
   return true;
 }
 
-export function clearAccountNeedsReauth(id: string): void {
+export function clearAccountNeedsReauth(id: string, credentialGeneration?: number): void {
+  // A model response proves only the credential it used. Keep account-wide
+  // quarantine and evidence from another generation intact.
+  if (credentialGeneration !== undefined
+    && (reauthAccounts.get(id) !== credentialGeneration
+      || !isCodexAccountGenerationLive(id, credentialGeneration))) return;
   reauthAccounts.delete(id);
 }

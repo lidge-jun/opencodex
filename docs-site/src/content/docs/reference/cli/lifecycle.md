@@ -38,6 +38,19 @@ and only a stop running outside the proxy can verify that restart window before 
 your client config — so the dashboard refuses with `respawnable_service`, changes nothing,
 and asks you to run `ocx stop`.
 
+The dashboard also refuses when the proxy is running *as* the installed launchd or systemd
+service. Stopping that manager from inside the proxy would terminate the process before
+native Codex is restored, leaving your client config pointed at a proxy that is gone, so the
+dashboard returns `self_unload_service`, changes nothing, and asks you to run `ocx stop` —
+which stops the service from outside and completes the restore.
+
+A proxy exit alone does not confirm that shared Codex/Grok restoration succeeded. If the stop
+response reports failure, is unreadable, or does not confirm the assigned teardown mode, the CLI
+keeps restoration with the stopping parent after the existing ownership and respawn checks.
+It does not enter the forced-stop fallback for a process already observed to have exited. A
+receipt-backed deferral still leaves final restoration and receipt cleanup with the parent;
+failure to restore shared client configuration keeps the stop failed and its receipt outstanding.
+
 ### `ocx restart`
 
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its
@@ -49,6 +62,11 @@ closed without an `ensure` or stop/start fallback. After confirming ownership, u
 `ocx start` for a standalone proxy. For a service-managed proxy, use `ocx stop` followed by
 `ocx service start` so supervision is restored.
 
+Port recovery after stop or update respects a failed OCX process check even when the PID was
+recorded before shutdown. A rejected live holder is left running and prevents TCP-row cleanup.
+If it stays unverified, the bounded recovery wait can expire with the port still busy. Check the
+current port holder and retry the restart after the conflict is resolved.
+
 ### `ocx ensure`
 
 Idempotently ensure a background proxy is running, then sync its live model catalog. If
@@ -58,6 +76,10 @@ Idempotently ensure a background proxy is running, then sync its live model cata
 
 Restore native Codex **without** stopping the proxy — strips the injected config lines and routed
 catalog entries so plain `codex` works natively again. `eject` is an alias of `restore`.
+
+Restoration reports failure instead of replacing changed configuration files when a saved journal
+lacks the corresponding injection hashes. The current files and journal remain available for
+review; see [recovery without injection hashes](/guides/codex-integration/#recovery-without-injection-hashes).
 
 Pass `back` to either spelling to re-point plain `codex` at an already-running proxy without changing
 the proxy lifecycle:
@@ -77,6 +99,15 @@ changed to `openai`, `exec` is normalized to `cli`, and the event marker is set.
 legitimate dedicated-provider history. Back up the state and run it only when that full scope is
 intended.
 
+### `ocx recover-history --ocx-compaction <thread-id> --yes`
+
+Repair one thread that was compacted through a routed provider before resuming it through native
+Codex. The command reads the exact thread selected by UUID, saves a private byte-for-byte backup,
+then converts only OpenCodeX-owned `ocx1:` compaction state into a plain summary that native Codex
+can replay. Native encrypted content and other threads are left unchanged. Close the selected
+thread before running the command; a concurrent rollout change makes recovery stop without
+replacing the file.
+
 ### `ocx uninstall` · `ocx remove`
 
 Stop the service and proxy, remove the service and Codex shim, restore native Codex, then remove
@@ -90,7 +121,8 @@ are left in place.
 
 Status and `ocx doctor` compare this CLI's version with the running proxy. If the CLI is newer,
 restart the proxy using the intended current installation; for a background service, run
-`ocx service repair` (`ocx service restart` is an alias). If the proxy is newer, upgrade the CLI
+`ocx service restart` — a version skew leaves the service definition byte-identical, so
+`ocx service repair` would reload nothing and keep the old process serving. If the proxy is newer, upgrade the CLI
 or resolve `PATH` to the intended installation. These diagnostics do not repair the service or
 change whether requests are allowed.
 
@@ -214,6 +246,10 @@ and pending history migration. The Codex app-home targeting section also detects
 Orca runtime-home mismatch and explains service migration when applicable. Paths shown by this
 diagnostic redact the OS username. Doctor prints repair hints but does not apply them.
 
+Project-config diagnostics ignore provider examples inside TOML multiline strings, including
+`developer_instructions`. Real provider and profile settings after the closing delimiter are still
+checked, even when an escaped quote immediately precedes that delimiter.
+
 The **OAuth reliability** section reports whether credential storage is writable, whether refresh
 single-flight/lock files can be created under `OPENCODEX_HOME`, non-healthy OAuth or Codex pool
 accounts (redacted ids) with a recovery `Action:`, and a static OK that the Codex forward path does
@@ -275,16 +311,17 @@ Definitions installed before this change still carry the old versioned paths and
 themselves — once the old executable is deleted, no opencodex code runs to fix it. Run
 `ocx service repair` once after upgrading; after that, each service start follows the launcher.
 An already-running proxy is not replaced by an external upgrade: when the installed CLI is newer
-than the running proxy, restart the service (or run `ocx service repair`) so the new build serves.
+than the running proxy, run `ocx service restart` so the new build serves. `repair` is not enough
+there: the definition did not change, and a repair that changes nothing reloads nothing.
 If the proxy is newer instead, check the CLI installation and `PATH` as described under
 [`ocx status`](#ocx-status---json).
 
 | Subcommand | Action |
 | --- | --- |
-| none | Install and start when absent; otherwise refresh and restart the existing service. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
+| none | Install and start when absent; otherwise `repair` the existing service. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
 | `install` | Create and start the service. Registers it, which on Windows needs elevation. |
-| `repair` | Refresh an installed service in place and restart it. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
-| `restart` | Alias of `repair`. |
+| `repair` | Refresh an installed service in place, reloading the manager only when something changed — so on macOS a healthy, unchanged job keeps running and the repair is not an outage. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
+| `restart` | The same refresh, but it always restarts. On macOS an unchanged, already-loaded job is kickstarted in place. Not an alias of `repair`. |
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |
 | `status` | Report service and proxy diagnostics plus log paths. |
@@ -439,6 +476,12 @@ ocx codex-shim install
 ocx codex-shim status
 ocx codex-shim uninstall
 ```
+
+:::note[Windows token environment]
+Newly generated Windows CMD and PowerShell shims restore the caller's `OPENCODEX_API_AUTH_TOKEN` after execution. Codex and its child processes can still inherit the token.
+
+After updating OpenCodex, recreate an existing Windows shim with `ocx codex-shim uninstall` followed by `ocx codex-shim install` to obtain this behavior. An ordinary update does not rewrite a healthy Windows shim.
+:::
 
 :::tip[Service vs Shim]
 Use `ocx service` for an always-on background proxy (recommended). Use `ocx codex-shim` for

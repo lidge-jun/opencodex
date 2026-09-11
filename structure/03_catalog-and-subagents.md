@@ -346,6 +346,11 @@ wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhig
 (`src/server/effort-policy.ts`): they lower or preserve the requested effort rather than rejecting
 the request, and they never raise it.
 
+The `ocx effort` CLI accepts only the same canonical cap ladder before live probing or persistence.
+Its status output preserves unsupported legacy cap values and reports that those fields are ignored;
+the read does not normalize or migrate them, and an ignored subagent field does not disable a valid
+main cap. Injection-effort input remains a separate contract.
+
 Operator-owned `pinnedReasoningEffort`, `modelPinnedReasoningEfforts`, and root
 `modelPinnedEfforts` resolve before applicable effort caps at the final destination.
 Provider model pins precede provider-wide pins, then global selector/destination pins.
@@ -464,6 +469,33 @@ the active Codex routing; external user-managed provider configs remain untouche
 cause delegation. The TOML edit owns only marker-tagged values, preserves existing unmarked
 user-owned `[agents]` defaults rather than overwriting them, and rejects ambiguous table shapes
 without changing the file.
+
+V2 proxy guidance uses `<opencodex_subagent_guidance>` for both built-in metadata and
+custom `injectionPrompt` bodies. The built-in text reports the resolved preferred model,
+effort, roster and fallback chain without prescribing delegation, spawn overrides or
+`fork_turns`. Custom bodies retain their placeholder behavior. The guidance switch and
+catalog-state gates still apply; stale or unknown catalog state suppresses proxy guidance.
+V1 uses the shared `MULTI_AGENT_MODE_HINT_RECOMMENDATION.text` inside `<multi_agent_mode>`
+at `max` or `ultra`. Only the separate explicit delegation-request trigger changes; user,
+authority, task-scope and collaboration-tool rules remain applicable. This is guidance,
+not an enforcement mechanism or a change to native settings or tool access.
+
+Replay deduplication compares the latest exact generated developer text separately for
+each tag family, preserving built-in → custom → built-in transitions without duplicating
+unchanged proxy metadata after a native policy change. Native and legacy-tagged history
+remain intact: tags do not establish historical authorship or revoke old instructions,
+and mixed-version transition detection is not guaranteed.
+
+The native mode hint is separate from proxy guidance and native `[agents]` defaults.
+`src/codex/multi-agent-mode-policy.ts` owns the proactive recommendation; the dashboard
+obtains it from `/api/v2` rather than maintaining its own preset. An explicit dashboard,
+API or CLI hint write passes through `setMultiAgentModeHintText`, which replaces only
+the two byte-exact released OpenCodex presets with the current recommendation. Other
+valid custom text, including whitespace variants, is preserved. Reads, unrelated writes
+and upgrades do not migrate stored hints. The writer retains its native capability check
+and stores only `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex TOML;
+`null` removes that key. The hint affects new native Codex sessions when their v2 surface
+is active, without changing reasoning effort or the proxy guidance switch.
 
 Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions

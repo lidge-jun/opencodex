@@ -19,6 +19,10 @@ Responses 표현이 이 연결의 중심입니다. 네이티브 호환 경로는
 [Configuration](/reference/configuration/)에서 리스너와 admission 키를 설정하십시오. 하나의 공개 모델 id가
 여러 대상 중 하나를 골라야 할 때는 [Combos](/guides/combos/)를 사용하십시오.
 
+## 업스트림 리다이렉트
+
+자격 증명을 포함하는 모델·이미지·동영상·검색 요청은 동일 출처를 포함한 HTTP 리다이렉트를 자동으로 따라가지 않습니다. 리다이렉트하는 별칭 대신 최종 업스트림 API URL을 설정하세요. 서버는 리다이렉트 대상으로 자격 증명이나 요청 본문을 다시 보내지 않습니다. 각 응답 처리 경로의 기존 오류·전달 동작은 유지되며, native Responses와 compact 경로는 원래 3xx와 `Location`을 클라이언트에 반환할 수 있습니다. 클라이언트의 리다이렉트 동작은 이 서버 전송 정책과 별개입니다.
+
 ## 엔드포인트 개요
 
 | 클라이언트 표면 | 엔드포인트 | 성공한 비스트리밍 결과 | 성공한 스트리밍 또는 소켓 결과 |
@@ -299,16 +303,18 @@ loopback 전용 bind에서는 data-plane admission에 설정된 key가 필요하
 
 | 표면 | Dedicated | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP and WebSocket | 필요함 | proxy admission에서는 거부됨 | 거부됨 |
-| `/v1/responses/compact` | 필요함 | proxy admission에서는 거부됨 | 거부됨 |
-| `/v1/chat/completions` | 필요함 | proxy admission에서는 거부됨 | 거부됨 |
+| `/v1/responses` HTTP and WebSocket | 허용됨 | 허용됨 | 거부됨 |
+| `/v1/responses/compact` | 허용됨 | 허용됨 | 거부됨 |
+| `/v1/chat/completions` | 허용됨 | 허용됨 | 거부됨 |
 | `/v1/messages`와 `/v1/messages/count_tokens` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/models` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/live`, `/v1/realtime/calls`, 및 sideband joins | 허용됨 | 허용됨 | 허용됨 |
 
-Responses 계열과 Chat 요청은 `Authorization`을 provider 또는 Codex Direct passthrough용으로 예약하므로, remote
-proxy key는 전용 헤더를 사용해야 합니다. Messages와 Realtime 표면은 더 넓은 클라이언트 호환성이 필요하므로
-세 가지 형식을 모두 허용합니다.
+Responses 계열과 Chat 요청은 전용 헤더 또는 Bearer 필드의 프록시 키를 허용합니다. 네이티브 경로에서는 선택한 저장 Codex 자격 증명이 admission bearer를 대체하고, 다른 경로에서는 해당 bearer를 제거합니다. 프록시 키를 upstream 자격 증명으로 사용하지 않습니다. 별도의 provider bearer도 전달하려면 프록시 키는 전용 헤더에 넣으십시오.
+
+키가 없고 OAuth를 쓰지 않는 Cursor 경로는 별도의 호출자 bearer를 사용할 수 있지만, 프록시 secret이나 자동으로 보충한 ChatGPT main 인증은 사용할 수 없습니다. Combo/policy 선택과 실제 shadow/thread-spawn 경로 변경은 호출자의 원본 자격 증명을 새 대상으로 넘기지 않습니다. 정규 OpenAI 라우팅은 JWT에 ChatGPT 계정 claim이 포함되어 있고 명시적 계정 헤더가 있으면 그 claim과 일치하는 경우에만, 내부 경로 변경 후 프록시 키가 아닌 호출자의 단일 bearer를 복원할 수 있습니다. 선택적 OpenAI sidecar에 호출자 인증을 전달하려면 단일 JWT와 이에 일치하는 명시적 `chatgpt-account-id`가 필요합니다. Opaque bearer는 명시적 계정 헤더가 있어도 경로 변경을 거쳐 복원되지 않습니다. 그 외의 최종 대상에는 자체 설정·OAuth·저장 자격 증명이 필요하며, 없으면 로컬에서 실패합니다. thread-spawn 표지만 있고 경로가 바뀌지 않으면 자격 증명을 제거하지 않습니다.
+
+Claude replay는 해당 turn이 소유권을 확보한 main 인증만 메모리 snapshot으로 유지하며, 최종 대상이 정규 ChatGPT 경로일 때만 복원합니다.
 
 :::caution
 data-plane key는 management credential이 아닙니다. management API는 별도의 admin secret을 사용합니다.

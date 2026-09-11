@@ -45,7 +45,7 @@ sponsor receives:
   supplied by the sponsor and published verbatim. The maintainer may decline or require edits to
   text that is false, misleading, disparages third parties, or breaches applicable law or GitHub
   policy. A second-language blurb (for example Chinese) may run alongside the English one.
-- A built-in provider preset (`ocx provider select <id>`) shipped in a public npm release,
+- A built-in provider preset (`ocx provider add <id>`) shipped in a public npm release,
   listed near the top of the provider picker in the dashboard and CLI and marked as a sponsor
   there. (The registry field and picker ordering that back this land with the first sponsor
   preset; today the picker follows registry order.)

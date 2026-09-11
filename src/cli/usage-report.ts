@@ -59,8 +59,11 @@ interface UsageReportInput {
 
 const MAX_MODEL_ROWS = 10;
 
-function terminalText(value: string): string {
-  return value.replace(/[\x00-\x1f\x7f-\x9f]/g, character => {
+function terminalText(value: unknown): string {
+  const text = typeof value === "string" ? value
+    : value === null || value === undefined ? ""
+    : typeof value === "number" || typeof value === "boolean" ? String(value) : "[invalid]";
+  return text.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, character => {
     const code = character.charCodeAt(0);
     return code <= 0x7f
       ? `\\x${code.toString(16).padStart(2, "0")}`
@@ -69,7 +72,8 @@ function terminalText(value: string): string {
 }
 
 function count(value: number | undefined): string {
-  return (value ?? 0).toLocaleString("en-US");
+  if (value === undefined || value === null) return "0";
+  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US") : "—";
 }
 
 /**
@@ -111,7 +115,7 @@ export function formatUsageReport(data: UsageReportInput): string[] {
       .filter(Boolean).join(" and ");
     lines.push(`No usage recorded for ${terminalText(what)} in this range.`);
     lines.push("Check the spelling against `ocx usage --json`, or widen --range.");
-    return lines;
+    return lines.map(terminalText);
   }
 
   const tokenSplit = [
@@ -185,5 +189,5 @@ export function formatUsageReport(data: UsageReportInput): string[] {
 
   lines.push("");
   lines.push("Not a billing receipt. Subscription usage or provider credits may apply instead.");
-  return lines;
+  return lines.map(terminalText);
 }

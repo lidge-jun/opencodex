@@ -13,6 +13,70 @@ const provider: OcxProviderConfig = {
   apiKey: "test-key",
 };
 
+describe("Anthropic usage numeric boundary", () => {
+  test("preserves empty usage and absent usage as distinct states", async () => {
+    for (const usage of [{}, undefined]) {
+      const events = await createAnthropicAdapter(provider).parseResponse!(Response.json({
+        content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", ...(usage ? { usage } : {}),
+      })) as AdapterEvent[];
+      const done = events.find(event => event.type === "done");
+      expect(done && "usage" in done ? done.usage : undefined)
+        .toEqual(usage ? { inputTokens: 0, outputTokens: 0 } : undefined);
+    }
+  });
+
+  test("preserves inclusive cache input and cumulative streaming output", async () => {
+    const frames = [
+      { type: "message_start", message: { usage: { input_tokens: 10, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 } } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } },
+      { type: "message_stop" },
+    ].map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join("");
+    const events: AdapterEvent[] = [];
+    for await (const event of createAnthropicAdapter(provider).parseStream(new Response(frames))) events.push(event);
+    const done = events.find(event => event.type === "done");
+    expect(done && "usage" in done ? done.usage : undefined).toEqual({
+      inputTokens: 15, outputTokens: 4, cachedInputTokens: 3, cacheReadInputTokens: 3, cacheCreationInputTokens: 2,
+    });
+  });
+
+  test.each(["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"])(
+    "does not emit malformed %s as reported usage", async key => {
+      for (const invalid of ["\x1b[2J", "42", null, -1, true, {}, []]) {
+        const response = Response.json({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 4, [key]: invalid } });
+        const events = await createAnthropicAdapter(provider).parseResponse!(response) as AdapterEvent[];
+        const done = events.find(event => event.type === "done");
+        expect(done).toBeDefined();
+        expect(done && "usage" in done ? done.usage : undefined).toBeUndefined();
+      }
+    },
+  );
+
+  test("rejects an overflowing inclusive input total", async () => {
+    const response = Response.json({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn",
+      usage: { input_tokens: Number.MAX_VALUE, cache_read_input_tokens: Number.MAX_VALUE, output_tokens: 4 } });
+    const events = await createAnthropicAdapter(provider).parseResponse!(response) as AdapterEvent[];
+    const done = events.find(event => event.type === "done");
+    expect(done && "usage" in done ? done.usage : undefined).toBeUndefined();
+  });
+
+  test("streaming rejects a malformed cumulative update without changing content", async () => {
+    const frames = [
+      { type: "message_start", message: { usage: { input_tokens: 10 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: "\x1b[2J" } },
+      { type: "message_stop" },
+    ].map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join("");
+    const events: AdapterEvent[] = [];
+    for await (const event of createAnthropicAdapter(provider).parseStream(new Response(frames))) events.push(event);
+    const done = events.find(event => event.type === "done");
+    expect(done).toBeDefined();
+    expect(done && "usage" in done ? done.usage : undefined).toBeUndefined();
+    expect(JSON.stringify(buildResponseJSON(events, "anthropic/claude-test"))).toContain("ok");
+  });
+});
+
 /**
  * These drive the REAL adapter parsers. An earlier version of this suite constructed the
  * downstream error event by hand, so it stayed green while the adapter itself still emitted a

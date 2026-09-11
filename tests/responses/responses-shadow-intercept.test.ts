@@ -251,6 +251,134 @@ describe("shadow call intercept request path (issue #311)", () => {
 });
 
 /**
+ * A shadow-call replacement naming a COMBO used to run exactly one attempt and never enter
+ * the failover loop (#4129). Two cooperating causes: the combo gate reads the UN-rewritten
+ * body, where the model is still the bare helper slug, and the late intercept resolved the
+ * replacement through routeModel/tryPickComboModel, which collapses the combo table to a
+ * single target while still tagging routeKind "combo" — so the reported "combo route, one
+ * attempt" was a collapsed native pick, and 429/5xx hops (which only exist inside
+ * handleComboResponses) were unreachable.
+ */
+function comboInterceptConfig(
+  targets: Array<{ provider: string; model: string }>,
+  shadowCallIntercept: Record<string, unknown> = { enabled: true, model: "combo/shadow" },
+): OcxConfig {
+  return {
+    port: 0,
+    defaultProvider: "xai",
+    providers: {
+      xai: {
+        adapter: "openai-chat",
+        baseUrl: "https://api.x.ai/v1",
+        authMode: "key",
+        apiKey: "test-xai-key",
+      },
+      alt: {
+        adapter: "openai-chat",
+        baseUrl: "https://alt.example/v1",
+        authMode: "key",
+        apiKey: "test-alt-key",
+      },
+    },
+    combos: {
+      shadow: { strategy: "failover", targets },
+    },
+    shadowCallIntercept,
+  } as unknown as OcxConfig;
+}
+
+function chatOk(text: string): Response {
+  return Response.json({
+    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 1, completion_tokens: 1 },
+  });
+}
+
+describe("a combo shadow-call target enters the failover loop (#4129)", () => {
+  test("a helper call rewritten to a combo hops past a 429 to the second target", async () => {
+    const urls: string[] = [];
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    globalThis.fetch = (async (url: unknown) => {
+      urls.push(String(url));
+      return urls.length === 1
+        ? Response.json({ error: { message: "rate limited" } }, { status: 429 })
+        : chatOk("ok");
+    }) as typeof fetch;
+
+    const config = comboInterceptConfig([
+      { provider: "xai", model: "grok-4.5" },
+      { provider: "alt", model: "grok-4.5" },
+    ]);
+    const response = await post(config, "gpt-5.6-luna", "turn", logCtx);
+
+    expect(response.ok).toBe(true);
+    // The whole point: two upstream attempts, in configured order.
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain("api.x.ai");
+    expect(urls[1]).toContain("alt.example");
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("shadow");
+    expect(logCtx.routeDecision?.routeKind).toBe("combo");
+    expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.6-luna");
+    const attempts = (logCtx.attempts ?? []) as Array<{ provider?: string; model?: string }>;
+    expect(attempts).toHaveLength(2);
+    expect(attempts.map(a => `${a.provider}/${a.model}`))
+      .toEqual(["xai/grok-4.5", "alt/grok-4.5"]);
+  });
+
+  test("a combo whose first target intersects the source still routes as a combo", async () => {
+    const urls: string[] = [];
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    globalThis.fetch = (async (url: unknown) => {
+      urls.push(String(url));
+      return chatOk("ok");
+    }) as typeof fetch;
+
+    // The #2706 self-target shape: the source model routes to xai, and the combo's FIRST
+    // target is that same provider+model. shadowCallTargetsIntersect is therefore true for
+    // the collapsed one-candidate pick, which is what used to suppress the intercept
+    // outright and leave the request on a plain native route.
+    const config = comboInterceptConfig(
+      [
+        { provider: "xai", model: "custom-helper" },
+        { provider: "alt", model: "grok-4.5" },
+      ],
+      { enabled: true, model: "combo/shadow", sourceModels: ["custom-helper"] },
+    );
+    const response = await post(config, "custom-helper", "turn", logCtx);
+
+    expect(response.ok).toBe(true);
+    // A healthy first target still costs exactly one upstream call.
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("api.x.ai");
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("shadow");
+    expect(logCtx.routeDecision?.routeKind).toBe("combo");
+    // Red before the fix: shouldInterceptShadowCall saw the collapsed pick as a self-target,
+    // skipped the rewrite, and the request left as a plain native route with no marker.
+    expect(logCtx.shadowCallRewrittenFrom).toBe("custom-helper");
+  });
+
+  test("a non-combo replacement still takes the ordinary late intercept", async () => {
+    const urls: string[] = [];
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    globalThis.fetch = (async (url: unknown) => {
+      urls.push(String(url));
+      return chatOk("ok");
+    }) as typeof fetch;
+
+    const config = comboInterceptConfig([{ provider: "xai", model: "grok-4.5" }]);
+    config.shadowCallIntercept = { enabled: true, model: "xai/grok-4.5" };
+    const response = await post(config, "gpt-5.6-luna", "turn", logCtx);
+
+    expect(response.ok).toBe(true);
+    expect(urls).toHaveLength(1);
+    expect(logCtx.comboId).toBeUndefined();
+    expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.6-luna");
+  });
+});
+
+/**
  * The GUI badge/tooltip used to hard-code "5.4-mini", so it kept naming a model
  * Codex no longer sends. The management API is the single source of truth for
  * which models are intercepted; every client renders what it reports.

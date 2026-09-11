@@ -57,7 +57,7 @@ describe("readUpdateBadge", () => {
 
   test("reading the badge never spawns a registry refresh", () => {
     // The GUI polls this endpoint. A refresh-on-read would let repeated polls launch
-    // repeated `npm view` helpers with no coalescing, so the deps surface has no
+    // repeated manager `view` helpers with no coalescing, so the deps surface has no
     // refresh hook at all — this test pins that shape.
     const keys = Object.keys(deps({}));
     expect(keys).toEqual(["currentVersion", "detectInstall", "readCache"]);

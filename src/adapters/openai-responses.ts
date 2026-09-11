@@ -1,4 +1,6 @@
 import { normalizeRoutedAgentMessages } from "./routed-agent-messages";
+import { normalizeOpenCodeGoAdditionalTools } from "./opencode-go-additional-tools";
+import { isXaiResponsesDestination } from "../providers/xai-transport";
 import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../types";
@@ -24,6 +26,7 @@ import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-t
 import { openaiResponsesUrl } from "./openai-responses-url";
 import { stripBracketedModelSuffix } from "./openai-chat";
 import { normalizeResponsesCodeMode } from "./responses-code-mode";
+import { stripUnicodePropertyPatterns } from "./responses-tool-schema";
 import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "./xai-web-search";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "./empty-tool-output-annotation";
 import {
@@ -648,14 +651,18 @@ function mapRoutedResponsesReasoningEffort(
 
 function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
+  // Runs for every Responses destination, forward auth included: the ChatGPT backend is where
+  // the `\p{…}` rejection was observed, and it reaches this function through the same seam.
+  const compatible = stripUnicodePropertyPatterns(tool);
+  const source = isPlainObject(compatible) ? compatible : tool;
   if (xaiTarget) {
-    const parameters = normalizeXaiToolParameters(isPlainObject(tool.parameters) ? tool.parameters : {});
-    return parameters === undefined ? undefined : { ...tool, parameters };
+    const parameters = normalizeXaiToolParameters(isPlainObject(source.parameters) ? source.parameters : {});
+    return parameters === undefined ? undefined : { ...source, parameters };
   }
-  if (isPlainObject(tool.parameters) && tool.parameters.type === "object") return tool;
+  if (isPlainObject(source.parameters) && source.parameters.type === "object") return source;
   return {
-    ...tool,
-    parameters: { ...(isPlainObject(tool.parameters) ? tool.parameters : {}), type: "object" },
+    ...source,
+    parameters: { ...(isPlainObject(source.parameters) ? source.parameters : {}), type: "object" },
   };
 }
 
@@ -2133,6 +2140,7 @@ const MUSE_SPARK_WEB_SEARCH_STRICT_MODELS = new Set([
 const MUSE_SPARK_WEB_SEARCH_STRICT_RESPONSE_URLS = new Set([
   "https://opencode.ai/zen/v1/responses",
   "https://opencode.ai/zen/go/v1/responses",
+  "https://api.meta.ai/v1/responses",
 ]);
 
 const MUSE_SPARK_UNSUPPORTED_WEB_SEARCH_FIELDS = [
@@ -2141,12 +2149,13 @@ const MUSE_SPARK_UNSUPPORTED_WEB_SEARCH_FIELDS = [
 ] as const;
 
 /**
- * OpenCode Zen / Go Muse Spark Responses gateway refuses a short list of Codex
- * `web_search` fields. `web_search_preview` keeps its accepted shape, and Luna
- * remains untouched. Match the exact effective request URL; malformed, credentialed,
- * or parameterized destinations keep their original body instead of assuming this
- * gateway contract. Keep the rejected names together so a newly identified field is
- * a one-line compatibility update rather than another bespoke rewrite.
+ * OpenCode Zen / Go and the direct Meta Muse Spark Responses gateways refuse a
+ * short list of Codex `web_search` fields. `web_search_preview` keeps its accepted
+ * shape, and Luna remains untouched. Match the exact effective request URL;
+ * malformed, credentialed, or parameterized destinations keep their original body
+ * instead of assuming this gateway contract. Keep the rejected names together so a
+ * newly identified field is a one-line compatibility update rather than another
+ * bespoke rewrite.
  */
 function stripMuseSparkUnsupportedWebSearchFields(
   body: unknown,
@@ -2366,7 +2375,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
-      if (!forward) outBody = normalizeRoutedAgentMessages(outBody);
+      if (!forward) outBody = normalizeRoutedAgentMessages(outBody, {
+        allowStringContent: isXaiResponsesDestination(provider),
+      });
       outBody = mapRoutedResponsesReasoningEffort(outBody, provider, parsed.modelId);
       // stripPreviousResponseId() intentionally returns its input on a no-op. Detach before the
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
@@ -2458,6 +2469,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
+      if (!forward) outBody = normalizeOpenCodeGoAdditionalTools(outBody, url);
       // Same predicate as the routedCompaction gate in handleResponses(): an authMode check would
       // let a noncanonical custom forward provider skip this rewrite while the server still routes
       // it as a summarizer turn (#422). The compaction body build removes the tool surface and must

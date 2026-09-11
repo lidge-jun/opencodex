@@ -1,7 +1,7 @@
 import { getCodexAccountHealthSnapshot, type CodexCooldownSource } from "../codex/routing";
 import { getAnthropicAccountHealthSnapshot } from "./anthropic-routing";
 import { isAccountNeedsReauth } from "../codex/account-runtime-state";
-import { getCodexAccountCredential, listCodexAccountIds } from "../codex/account-store";
+import { getCodexAccountCredential, listCodexAccountIds, readCodexAccountRecord } from "../codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { readRuntimePort } from "../config/process-state";
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
@@ -15,7 +15,7 @@ export type OAuthAccountHealth =
   | { status: "healthy" }
   | { status: "cooldown"; until: string; reason: "rate_limit" | "quota" }
   | { status: "reauth_required"; reason: "unauthorized" | "forbidden" | "refresh_failed" }
-  | { status: "warning"; reason: "refresh_conflict" | "metadata_mismatch" | "stale_credentials" };
+  | { status: "warning"; reason: "refresh_conflict" | "metadata_mismatch" | "stale_credentials" | "validation_pending" };
 
 export type OAuthHealthLabel =
   | "Healthy"
@@ -24,7 +24,8 @@ export type OAuthHealthLabel =
   | "Reauthentication required"
   | "Refresh failed"
   | "Metadata mismatch"
-  | "Credential conflict";
+  | "Credential conflict"
+  | "Validation pending";
 
 /** Shared masked-id fallback when `maskAccountId` returns nullish. */
 export const MASKED_ACCOUNT_FALLBACK = "account-…????";
@@ -88,6 +89,9 @@ export function projectOAuthAccountHealth(input: {
 export const CODEX_REAUTH_ACTION = "reauthenticate via the dashboard Codex account pool";
 
 function actionFor(provider: string, health: OAuthAccountHealth): string | undefined {
+  if (health.status === "warning" && health.reason === "validation_pending") {
+    return "wait for quota recovery, then click Refresh quotas in the dashboard Codex account pool to finish validation";
+  }
   if (health.status === "reauth_required") {
     if (provider === "codex") return CODEX_REAUTH_ACTION;
     return `run \`ocx login ${provider}\``;
@@ -112,6 +116,8 @@ export function oauthHealthLabel(health: OAuthAccountHealth): OAuthHealthLabel {
       return health.reason === "refresh_failed" ? "Refresh failed" : "Reauthentication required";
     case "warning":
       switch (health.reason) {
+        case "validation_pending":
+          return "Validation pending";
         case "refresh_conflict":
           return "Credential conflict";
         case "metadata_mismatch":
@@ -198,11 +204,42 @@ export function projectCodexAccountHealth(input: {
   needsReauth: boolean;
   now?: number;
 }): OAuthAccountHealth {
+  // One read serves every verdict below. Each lookup re-reads and re-hardens the whole store
+  // file, and the main account lives in the native Codex auth file rather than the pool store,
+  // so a lookup for it could only ever miss.
+  const stored = input.accountId !== MAIN_CODEX_ACCOUNT_ID ? readCodexAccountRecord(input.accountId) : null;
+  const record = stored?.deletedAt == null ? stored : null;
+
+  // A successful quota read is not evidence that model authorization recovered.
+  // Preserve this guidance until validation succeeds or reauthentication replaces it.
+  const validationAuthFailed = record !== null
+    && record.codexValidationPending === true
+    && record.lastCodexValidationStatus === "failed"
+    && (record.lastCodexValidationError === "http_status:401" || record.lastCodexValidationError === "http_status:403");
+
+  // A persisted terminal verdict outranks the in-memory reauth flag rather than duplicating it:
+  // the flag lives in this process and a revoked grant does not. Without it, an account whose
+  // grant was revoked upstream keeps its login-time `lastCodexValidationStatus: "ok"` and every
+  // surface reports it healthy until someone tries to use it (#4120). Only a re-login clears the
+  // marker, so `reauth_required` is the accurate projection — and it is deliberately checked
+  // ahead of any cooldown, because telling an operator to wait out a rate limit on a credential
+  // that will never work again is a false promise.
+  const terminalGrantFailure = record !== null
+    && record.lastCodexValidationTerminal === true
+    && record.lastCodexValidationStatus === "failed";
+
+  const needsReauth = input.needsReauth || validationAuthFailed || terminalGrantFailure;
+
+  // Deferred validation is only worth reporting while the credential itself is still viable. A
+  // revoked grant needs a re-login, not a "Refresh quotas" click, so reauth is resolved first.
+  if (!needsReauth && record?.codexValidationPending) {
+    return { status: "warning", reason: "validation_pending" };
+  }
   const now = input.now ?? Date.now();
   const snap = getCodexAccountHealthSnapshot(input.accountId, now);
   return projectOAuthAccountHealth({
-    needsReauth: input.needsReauth,
-    reauthReason: input.needsReauth ? "refresh_failed" : undefined,
+    needsReauth,
+    reauthReason: needsReauth ? "refresh_failed" : undefined,
     cooldownUntilMs: snap?.cooldownUntil,
     cooldownReason: cooldownReasonFromSource(snap?.cooldownSource),
     now,
@@ -272,13 +309,11 @@ function collectLocalCodexEntries(now: number): OAuthHealthEntry[] {
     const hasPoolCredential = accountId !== MAIN_CODEX_ACCOUNT_ID && getCodexAccountCredential(accountId) !== null;
     if (!hasPoolCredential && !needsReauth && !snap) continue;
 
-    const health = projectOAuthAccountHealth({
-      needsReauth,
-      reauthReason: needsReauth ? "refresh_failed" : undefined,
-      cooldownUntilMs: snap?.cooldownUntil,
-      cooldownReason: cooldownReasonFromSource(snap?.cooldownSource),
-      now,
-    });
+    // Call the projector rather than inlining a second copy of it. This collector serves the CLI
+    // (`ocx status`, `ocx doctor`) while the dashboard DTO goes through projectCodexAccountHealth,
+    // and the duplicated body is exactly how the CLI would have kept reporting a revoked account
+    // as healthy after the dashboard stopped.
+    const health = projectCodexAccountHealth({ accountId, needsReauth, now });
     pushEntry(entries, "codex", accountId, health);
   }
   return entries;

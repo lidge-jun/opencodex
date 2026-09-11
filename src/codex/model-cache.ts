@@ -18,6 +18,8 @@ interface CacheEntry {
   models: CatalogModel[];
   fetchedAt: number;
   sizeBytes: number;
+  /** Irreversible credential/account identity for entitlement-sensitive catalogs. */
+  authorityIdentity?: string;
 }
 
 export type ProviderModelDiscoveryFailureReason =
@@ -149,15 +151,19 @@ export function isModelsFetchCoolingDown(provider: string, cooldownMs = MODELS_F
 }
 
 /** Fresh cached models for a provider, or null when absent/stale (caller should re-fetch). */
-export function getFreshCached(provider: string, ttlMs: number, now = Date.now()): CatalogModel[] | null {
+export function getFreshCached(provider: string, ttlMs: number, now = Date.now(), authorityIdentity?: string): CatalogModel[] | null {
   const entry = cache.get(provider);
   if (!entry) return null;
+  if (authorityIdentity !== undefined && entry.authorityIdentity !== authorityIdentity) return null;
   return now - entry.fetchedAt < ttlMs ? entry.models : null;
 }
 
 /** Last-known-good models regardless of age — the fallback when a live fetch fails. */
-export function getStaleCached(provider: string): CatalogModel[] | null {
-  return cache.get(provider)?.models ?? null;
+export function getStaleCached(provider: string, authorityIdentity?: string): CatalogModel[] | null {
+  const entry = cache.get(provider);
+  if (!entry) return null;
+  if (authorityIdentity !== undefined && entry.authorityIdentity !== authorityIdentity) return null;
+  return entry.models;
 }
 
 /** Capture the cache generation before an asynchronous provider discovery starts. */
@@ -181,12 +187,13 @@ export function setCached(
   models: CatalogModel[],
   now = Date.now(),
   generation?: string,
+  authorityIdentity?: string,
 ): boolean {
   if (generation !== undefined && !isModelCacheGenerationCurrent(provider, generation)) return false;
   deleteCachedProvider(provider);
   const sizeBytes = modelCacheEncoder.encode(provider).byteLength
     + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
-  cache.set(provider, { models, fetchedAt: now, sizeBytes });
+  cache.set(provider, { models, fetchedAt: now, sizeBytes, ...(authorityIdentity ? { authorityIdentity } : {}) });
   cacheBytes += sizeBytes;
   if (oldestCachedAt === null || now < oldestCachedAt) {
     oldestCachedProvider = provider;

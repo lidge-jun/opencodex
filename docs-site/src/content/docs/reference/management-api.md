@@ -389,7 +389,7 @@ whether to star the repository.
 | --- | --- | --- |
 | `GET /api/system/memory` | Return scalar process, heap, stream, response-state, watchdog, and active-turn metrics. Response-state diagnostics include spill-write status, consecutive failures, fixed privacy-safe failure class, and last failure/success timestamps. `spillLastWriteFailureOrigin` is `retry_returned_timeout`, `timeout_memo_refusal`, or null; cumulative `spillAclRetryReturnedTimeouts` and `spillAclTimeoutMemoRefusals` count terminal failed publications. See [Windows spill diagnostics](/troubleshooting/windows-memory/) for process-local semantics. Raw errors and paths are never returned. | — |
 | `POST /api/system/restart` | Begin a drain-aware process restart without removing client injection | Returns 202; repeated calls report the existing drain |
-| `POST /api/stop` | Stop the service, restore native Codex, remove managed Grok injection, and drain the proxy | 409 service ownership conflict; 409 `respawnable_service` when a Windows Task Scheduler wrapper could respawn the proxy and the caller is not `ocx stop` (nothing is changed); 409 when the installed manager refuses to stop; 409 `service_state_unknown` when the Task Scheduler state cannot be read (nothing is changed; repair the query and retry) |
+| `POST /api/stop` | Stop the service, restore native Codex, remove managed Grok injection, and drain the proxy | 409 service ownership conflict; 409 `respawnable_service` when a Windows Task Scheduler wrapper could respawn the proxy and the caller is not `ocx stop` (nothing is changed); 409 `self_unload_service` when this proxy is running as the installed launchd/systemd service, because stopping the manager from inside it would end the process before native Codex is restored — run `ocx stop` instead (nothing is changed); 409 when the installed manager refuses to stop; 409 `service_state_unknown` when the Task Scheduler state cannot be read (nothing is changed; repair the query and retry) |
 | `GET /api/system/codex-app-server` | Report whether running Codex app-servers predate the current model catalog | — |
 | `POST /api/system/codex-restart` | Refresh the catalog, then ask stale Codex app-servers to exit so the model picker reloads | Returns 200 with `code: partially_stopped` when a target survives |
 
@@ -426,6 +426,31 @@ manager. Its routes are:
 | `POST /api/codex-auth/login/code` | Submit a manual code for a Codex login flow | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Cancel a Codex login flow | — |
 | `GET /api/codex-auth/login-status` | Poll a flow or account login state. A completed new-account flow includes `catalogRefreshPending: true` only when recovery is needed. | Unknown flows report `expired`; no active flow reports `idle` |
+
+For reset-credit consumption, a different `operationId` supplied while the same physical
+account has an unfinished operation joins that operation as an alias. Its retry uses the
+original upstream request ID and records the outcome under that same identity, so later
+requests with the original ID or a known alias replay the stored result without another
+consume request. A previously unseen ID supplied after settlement starts a new explicit
+redemption; clients retrying an existing action should keep its ID.
+
+After a confirmed manual `reset`, OpenCodex checks fresh usage for that same account
+and can reconcile its eligible pre-existing shared reset-derived cooldown immediately.
+Paused accounts, accounts requiring reauthentication and cooldowns already owned by an
+in-flight probe remain excluded from this recovery; their cooldowns are retained. Usage
+started before the reset, incomplete or exhausted usage, a changed account, and a newer
+quota failure do not qualify. Older main-account usage responses cannot replace a newer
+published observation. If usage needs credential refresh, recovery requires that refresh's
+confirmed lineage; an externally replaced credential does not qualify merely because it
+belongs to the same account. Explicit `Retry-After`, Spark/Reserve cooldowns, pause
+settings, pins and the selected account are preserved. `already_redeemed` and durable
+replay do not prove a new reset and do not gain this recovery behavior.
+
+A failed or busy usage refresh after a confirmed `reset` or `already_redeemed` does not
+turn the completed consumption into an error: the response remains HTTP 200 with its
+consume `code`, omitting `remaining` when no fresh count was obtained. This response
+confirms the consume outcome, not that the account is now routable. Refresh usage to
+check availability; do not consume another credit to retry a failed usage refresh.
 
 If a new account config row is saved but credential setup cannot finish, OAuth `login-status` reports
 `status: "error"` with

@@ -5,9 +5,15 @@ import { applyProxyEnv, loadConfig } from "../config";
 import type { OcxConfig } from "../types";
 import { collectOrcaCodexHomeDiagnostic } from "./home";
 import { summarizeComboCatalogOmissions, type ComboCatalogOmission } from "./catalog/aggregation";
-import { shouldSyncCodexOnStart } from "./desired-state";
+import {
+  localClientSkipMessage,
+  localClientSkipReason,
+  shouldSyncCodexOnStart,
+  type LocalClientSkipReason,
+} from "./desired-state";
 import { admitCodexWrite, type CodexAdmission } from "./admission";
 import type { CodexCatalogSyncOptions } from "./catalog/sync";
+import { resetCodexAppServerCatalogStateCache } from "./app-server-processes";
 
 export interface CodexSyncResult {
   /**
@@ -17,7 +23,8 @@ export interface CodexSyncResult {
    */
   status: "applied" | "skipped" | "catalog-only" | "refused";
   ok: boolean;
-  skippedReason?: "desired_disabled";
+  /** `hub-gated` is the hub-role gate, not the user's toggle — the two read very differently. */
+  skippedReason?: LocalClientSkipReason;
   /** Present when unattended convergence refused another service's native home. */
   authority?: "service-home";
   added: number;
@@ -84,19 +91,24 @@ export async function syncModelsToCodex(
   // durable user switch and must be read again at this production boundary: a
   // PUT OFF while provider discovery is in flight cannot be allowed to commit
   // through an older captured object.
-  const desiredDisabled = !shouldSyncCodexOnStart(loadConfig());
+  const gateSnapshot = loadConfig();
+  const desiredDisabled = !shouldSyncCodexOnStart(gateSnapshot);
   const catalogEvenWhenNotInjected = options.catalogEvenWhenNotInjected === true;
   if (desiredDisabled && !catalogEvenWhenNotInjected) {
     return {
       status: "skipped",
-      skippedReason: "desired_disabled",
+      skippedReason: localClientSkipReason(gateSnapshot),
       ok: true,
       added: 0,
       catalogPath: null,
       catalogExists: false,
       catalogWritten: false,
       cacheSynced: false,
-      message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+      message: localClientSkipMessage(
+        gateSnapshot,
+        "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+        "No Codex config, catalog, cache, or history was changed.",
+      ),
     };
   }
   // Catalog gathering precedes injection and can itself write the native
@@ -116,6 +128,10 @@ export async function syncModelsToCodex(
       message: admission.message,
     };
   }
+  // Config injection is a relevant Codex write even when the catalog bytes are unchanged.
+  // Drop cached process evidence before async discovery so a process that appeared since the
+  // last read cannot make native-default guidance report active after this sync.
+  resetCodexAppServerCatalogStateCache();
   const p = port ?? config.port ?? 10100;
   const externalProvider = (deps.currentExternalCodexModelProvider ?? currentExternalCodexModelProvider)();
 
@@ -126,8 +142,16 @@ export async function syncModelsToCodex(
     applyProxyEnv(config);
     const refreshed = await refreshCatalogForSync(config, deps, { allowWhenDesiredDisabled: true }, log);
     const message = refreshed.catalogWritten || refreshed.cacheSynced
-      ? "Codex integration is OFF; catalog and models cache refreshed, Codex config untouched."
-      : "Codex integration is OFF; catalog refresh skipped, Codex config untouched.";
+      ? localClientSkipMessage(
+        gateSnapshot,
+        "Codex integration is OFF; catalog and models cache refreshed, Codex config untouched.",
+        "Catalog and models cache refreshed, Codex config untouched.",
+      )
+      : localClientSkipMessage(
+        gateSnapshot,
+        "Codex integration is OFF; catalog refresh skipped, Codex config untouched.",
+        "Catalog refresh skipped, Codex config untouched.",
+      );
     return {
       status: "catalog-only",
       ok: true,
@@ -237,8 +261,9 @@ export async function syncModelsToCodex(
   if (result.status === "skipped") {
     return {
       status: "skipped",
-      // The apply direction's only under-lock policy skip is desired OFF.
-      skippedReason: "desired_disabled",
+      // The apply direction's only under-lock policy skips are desired OFF and the hub gate;
+      // carry whichever the injector reported so the caller can say the honest thing.
+      skippedReason: result.skippedReason === "hub-gated" ? "hub-gated" : "desired_disabled",
       ok: true,
       added: 0,
       catalogPath: null,

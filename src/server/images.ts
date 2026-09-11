@@ -29,7 +29,7 @@ import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
 import { getProviderRegistryEntry } from "../providers/registry";
-import { readJsonRequestBody } from "./request-decompress";
+import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
@@ -288,6 +288,7 @@ async function tryCcaImageGeneration(
     try {
       upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
         method: "POST",
+        redirect: "manual",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`,
@@ -601,7 +602,7 @@ export async function handleImages(
 ): Promise<Response> {
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req);
+    body = await readJsonRequestBody(req, undefined, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
   } catch (err) {
     return decodeRequestErrorResponse(err, "images");
   }

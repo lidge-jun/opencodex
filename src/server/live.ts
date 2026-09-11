@@ -86,39 +86,29 @@ export const LIVE_CLIENT_PROTOCOL_HEADERS = [
  *
  * When `OCX_LIVE_FRAME_LOG` is set to a file path, every relayed sideband frame appends one
  * JSONL record: direction, frame kind, byte length, and whether the payload contains U+FFFD.
- * Privacy: full frame payloads are never written — only when U+FFFD is present, a short
- * excerpt around the first replacement character is included so the corruption point can be
- * attributed (upstream vs relay vs client). Disabled entirely when the env var is unset.
+ * Privacy: no frame content is written, including excerpts around replacement characters.
+ * For binary frames, U+FFFD may also be introduced by UTF-8 decoding; the flag alone does not
+ * identify the source of corruption. Disabled entirely when the env var is unset.
  */
 export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
-const LIVE_FRAME_LOG_CONTEXT_CHARS = 24;
-
-function fffdContext(text: string): string | undefined {
-  const idx = text.indexOf("\uFFFD");
-  if (idx < 0) return undefined;
-  const start = Math.max(0, idx - LIVE_FRAME_LOG_CONTEXT_CHARS);
-  const end = Math.min(text.length, idx + LIVE_FRAME_LOG_CONTEXT_CHARS);
-  return text.slice(start, end);
-}
-
 export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
   const logPath = process.env[LIVE_FRAME_LOG_ENV];
   if (!logPath) return;
   try {
     let kind: "text" | "binary" = "binary";
     let bytes = 0;
-    let context: string | undefined;
+    let fffd = false;
     if (typeof data === "string") {
       kind = "text";
       bytes = Buffer.byteLength(data);
-      context = fffdContext(data);
+      fffd = data.includes("\uFFFD");
     } else if (data instanceof ArrayBuffer) {
       bytes = data.byteLength;
-      context = fffdContext(new TextDecoder().decode(new Uint8Array(data)));
+      fffd = new TextDecoder().decode(new Uint8Array(data)).includes("\uFFFD");
     } else if (ArrayBuffer.isView(data)) {
       const view = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
       bytes = data.byteLength;
-      context = fffdContext(new TextDecoder().decode(view));
+      fffd = new TextDecoder().decode(view).includes("\uFFFD");
     } else {
       return;
     }
@@ -127,8 +117,7 @@ export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
       dir,
       kind,
       bytes,
-      fffd: context !== undefined,
-      ...(context !== undefined ? { context } : {}),
+      fffd,
     };
     appendFileSync(logPath, `${JSON.stringify(record)}\n`);
   } catch {

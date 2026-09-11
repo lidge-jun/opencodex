@@ -133,14 +133,17 @@ collision-safe public function tool. Matching request history and JSON/SSE funct
 translated back to the private `tool_search` lifecycle for the client. Canonical OpenAI forward
 keeps the native private type unchanged.
 
-Requests with `authMode` other than `"forward"` convert plaintext Codex `agent_message`
-items into public user messages, preserving content parts and readable author/recipient
+Requests with `authMode` other than `"forward"` convert Codex `agent_message`
+items containing nonempty arrays of supported plaintext parts into public user messages, preserving those parts and readable author/recipient
 metadata. `agent_message` is private to the ChatGPT Codex backend, and the routed
 destinations reported so far reject the entire body with
 `422 unknown item type "agent_message"` — and because Codex replays sub-agent history on
 every turn, that failure repeats for the rest of the thread. This conversion leaves
 encrypted or unknown content unchanged. Providers using `authMode: "forward"` retain
-these items unchanged.
+these items unchanged. For xAI Responses on HTTPS `api.x.ai` or `cli-chat-proxy.grok.com`
+using the standard port, a nonblank string child result is also converted into an `input_text`
+part with its exact whitespace and newlines. Other destinations retain string-valued items;
+blank strings and mixed encrypted/unknown parts are not partially converted.
 See [agent messages](/reference/configuration/providers/#routed-agent-messages)
 for the separate opt-in encrypted-task recovery behavior.
 

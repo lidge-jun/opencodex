@@ -7,7 +7,7 @@ import {
   runCodexCooldownRecoveryProbes,
   seedCodexAuthAdmissionForTests,
 } from "../../src/codex/auth-api";
-import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { readCodexAccountRecord, saveCodexAccountCredential, saveCodexAccountCredentialIfGeneration } from "../../src/codex/account-store";
 import {
   codexQuotaWindowForPlan,
   getAccountQuota,
@@ -20,6 +20,11 @@ import upstreamModels from "../../src/codex/data/upstream-models.json";
 import {
   CODEX_QUOTA_PROBE_INTERVAL_MS,
   clearCodexUpstreamHealth,
+  clearCodexUpstreamHealthForAccount,
+  claimDueCodexQuotaRecoveryProbes,
+  claimManualResetCooldowns,
+  settleCodexQuotaRecoveryProbe,
+  settleManualResetCooldown,
   getCodexQuotaHealthSnapshot,
   recordCodexUpstreamOutcome,
   resolveCodexAccountForThread,
@@ -104,6 +109,78 @@ describe("Codex cooldown recovery worker", () => {
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
+
+  test("manual reset bypasses pacing but does not steal a live background lease", () => {
+    const config = makeConfig(["a"]); saveCredential("a"); cool(config, "a");
+    const manual = claimManualResetCooldowns(config, "a", START + 1);
+    expect(manual).toHaveLength(1);
+    expect(claimDueCodexQuotaRecoveryProbes(config, 1, due())).toEqual([]);
+    settleManualResetCooldown(config, manual[0]!, false, {}, START + 2);
+    const [background] = claimDueCodexQuotaRecoveryProbes(config, 1, due(START + 2));
+    expect(background).toBeDefined();
+    expect(claimManualResetCooldowns(config, "a", due(START + 2))).toEqual([]);
+    expect(settleManualResetCooldown(config, manual[0]!, false, {}, due(START + 2))).toBe(false);
+    expect(settleCodexQuotaRecoveryProbe(background!, true, {
+      credentialGeneration: readCodexAccountRecord("a")!.generation,
+    }, due(START + 2))).toBe(true);
+  });
+
+  test("manual recovery rejects an unrelated refresh edge and preserves exact-generation settlement", () => {
+    const config = makeConfig(["a"]); saveCredential("a"); cool(config, "a");
+    const [claim] = claimManualResetCooldowns(config, "a", START);
+    expect(claim?.kind).toBe("pool");
+    const before = readCodexAccountRecord("a")!;
+    const generation = before.generation;
+    expect(saveCodexAccountCredentialIfGeneration("a", generation, {
+      ...before.credential!, accessToken: "fresh-a", refreshToken: "fresh-refresh-a",
+    })).toBe(true);
+    expect(readCodexAccountRecord("a")!.replacedAt).toBe(before.replacedAt);
+    expect(settleManualResetCooldown(config, claim!, true, {
+      credentialGeneration: generation + 1,
+      refreshLineage: { fromGeneration: generation - 1, toGeneration: generation + 1, provenance: "self-refresh" },
+    }, START)).toBe(false);
+    expect(getCodexQuotaHealthSnapshot("a", "shared", START)).not.toBeNull();
+    // Rejection releases the lease rather than leaving manual recovery stuck.
+    const [exact] = claimManualResetCooldowns(config, "a", START);
+    expect(exact).toBeDefined();
+    expect(settleManualResetCooldown(config, exact!, true, { credentialGeneration: generation + 1 }, START)).toBe(true);
+  });
+
+  test("a replacement between auth and claiming cannot acquire the replacement's cooldown", () => {
+    const config = makeConfig(["a"]); saveCredential("a"); cool(config, "a");
+    const generation = readCodexAccountRecord("a")!.generation;
+    saveCredential("a", "-replacement");
+    expect(claimManualResetCooldowns(config, "a", START, generation)).toEqual([]);
+    expect(getCodexQuotaHealthSnapshot("a", "shared", START)).not.toBeNull();
+  });
+
+  test("deleted and recreated cooldown with identical generation and clock cannot reuse a manual lease", () => {
+    const config = makeConfig(["a"]); saveCredential("a"); cool(config, "a");
+    const [old] = claimManualResetCooldowns(config, "a", START);
+    clearCodexUpstreamHealthForAccount("a"); cool(config, "a");
+    const [replacement] = claimManualResetCooldowns(config, "a", START);
+    expect(replacement!.probe.cooldownGeneration).toBe(old!.probe.cooldownGeneration);
+    expect(replacement!.probe.leaseId).not.toBe(old!.probe.leaseId);
+    const proof = { credentialGeneration: readCodexAccountRecord("a")!.generation };
+    expect(settleManualResetCooldown(config, old!, true, proof, START)).toBe(false);
+    expect(getCodexQuotaHealthSnapshot("a", "shared", START)).not.toBeNull();
+    expect(settleManualResetCooldown(config, replacement!, true, proof, START)).toBe(true);
+  });
+
+  test.each(["retry-after", "default", "spark", "reserve", "paused", "missing"])(
+    "manual reset never claims an ineligible target: %s", kind => {
+      const config = makeConfig(["a"]); saveCredential("a");
+      if (kind === "retry-after") recordCodexUpstreamOutcome(config, "a", 429, { now: START, retryAfter: "3600" });
+      else if (kind === "default") recordCodexUpstreamOutcome(config, "a", 429, { now: START });
+      else if (kind === "reserve") recordCodexUpstreamOutcome(config, "a", 429, {
+        now: START, resetAt: START + 3_600_000, modelId: "gpt-reserve",
+      });
+      else cool(config, "a", kind === "spark" ? "spark" : "shared");
+      if (kind === "paused") config.pausedCodexAccountIds = ["a"];
+      if (kind === "missing") config.codexAccounts = [];
+      expect(claimManualResetCooldowns(config, "a", START + 1)).toEqual([]);
+    },
+  );
 
   test("recovers cooled A independently while ordinary routing only selects B", async () => {
     const config = makeConfig();

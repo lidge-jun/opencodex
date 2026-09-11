@@ -1,11 +1,25 @@
-import { describe, expect, test } from "bun:test";
-import { reclaimListenPort } from "../../src/server/port-reclaim";
+import { describe, expect, spyOn, test } from "bun:test";
+import { reclaimListenPort, type ReclaimListenPortOptions } from "../../src/server/port-reclaim";
 import {
   isBareIpv6Address,
   parseTcpQuadsForLocalPort,
   dropWindowsTcpRowsForLocalPort,
 } from "../../src/server/windows-tcp-drop";
 import { parseListenPidsFromNetstat } from "../../src/server/port-reclaim";
+
+/** Exercise several scans and the deadline without depending on wall-clock scheduling. */
+async function reclaimWithMockClock(options: ReclaimListenPortOptions): Promise<boolean> {
+  let now = 1_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    return await reclaimListenPort(10100, "127.0.0.1", {
+      ...options, timeoutMs: 50, intervalMs: 10, scanIntervalMs: 10,
+      sleepMs: async () => { now += 10; },
+    });
+  } finally {
+    clock.mockRestore();
+  }
+}
 
 describe("parseListenPidsFromNetstat", () => {
   test("extracts Windows LISTENING owners for the local port", () => {
@@ -299,14 +313,11 @@ describe("reclaimListenPort", () => {
     expect(killed).toEqual([4242]);
   });
 
-  test("allowlisted pid with failing ocx revalidation is still killed (trusted teardown PID)", async () => {
+  test("skips kill across later scans when allowlisted pid fails revalidation", async () => {
     const killed: number[] = [];
     let available = false;
     let checks = 0;
-    await expect(reclaimListenPort(10100, "127.0.0.1", {
-      timeoutMs: 200,
-      intervalMs: 20,
-      scanIntervalMs: 20,
+    await expect(reclaimWithMockClock({
       dropTcpRows: false,
       killOcxHolders: true,
       onlyKillPids: [100],
@@ -315,29 +326,25 @@ describe("reclaimListenPort", () => {
       isAliveFn: () => !available,
       verifyOcxFn: pid => {
         checks += 1;
-        // First pass (scan identity) succeeds; later scans reclassify as non-ocx.
-        // Allowlisted teardown PIDs still take the best-effort kill path.
+        // Scan identity succeeds, then pre-kill revalidation and later scans reject it.
         return checks === 1 ? pid : null;
       },
       killFn: pid => {
         killed.push(pid);
         available = true;
       },
-      sleepMs: async () => {},
-    })).resolves.toBe(true);
-    expect(killed).toEqual([100]);
+    })).resolves.toBe(false);
+    expect(checks).toBeGreaterThanOrEqual(3);
+    expect(killed).toEqual([]);
   });
 
-  test("allowlisted revalidation failure still permits TCP drop after kill", async () => {
+  test("does not drop TCP rows across later scans after allowlisted revalidation fails", async () => {
     const killed: number[] = [];
     const dropped: number[] = [];
     let alive = true;
     let available = false;
     let checks = 0;
-    await expect(reclaimListenPort(10100, "127.0.0.1", {
-      timeoutMs: 200,
-      intervalMs: 20,
-      scanIntervalMs: 20,
+    await expect(reclaimWithMockClock({
       dropTcpRows: true,
       killOcxHolders: true,
       onlyKillPids: [100],
@@ -357,19 +364,16 @@ describe("reclaimListenPort", () => {
         available = true;
         return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
       },
-      sleepMs: async () => {},
-    })).resolves.toBe(true);
-    expect(killed).toEqual([100]);
-    expect(dropped).toEqual([10100]);
+    })).resolves.toBe(false);
+    expect(checks).toBeGreaterThanOrEqual(3);
+    expect(killed).toEqual([]);
+    expect(dropped).toEqual([]);
   });
 
-  test("does not drop TCP rows while allowlisted non-ocx survives kill", async () => {
+  test("does not kill or drop TCP rows for an allowlisted non-ocx listener", async () => {
     const killed: number[] = [];
     const dropped: number[] = [];
-    await expect(reclaimListenPort(10100, "127.0.0.1", {
-      timeoutMs: 80,
-      intervalMs: 20,
-      scanIntervalMs: 20,
+    await expect(reclaimWithMockClock({
       dropTcpRows: true,
       killOcxHolders: true,
       onlyKillPids: [100],
@@ -384,9 +388,8 @@ describe("reclaimListenPort", () => {
         dropped.push(port);
         return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
       },
-      sleepMs: async () => {},
     })).resolves.toBe(false);
-    expect(killed).toEqual([100]);
+    expect(killed).toEqual([]);
     expect(dropped).toEqual([]);
   });
 
@@ -525,20 +528,17 @@ describe("reclaimListenPort", () => {
     expect(dropped).toEqual([]);
   });
 
-  test("allowlisted PID that fails ocx verify still gets killed and does not block TCP drop", async () => {
+  test("allowlisted PID that fails ocx verify stays protected until the deadline", async () => {
     const killed: number[] = [];
     const dropped: number[] = [];
     let alive = true;
     let available = false;
-    await expect(reclaimListenPort(10100, "127.0.0.1", {
-      timeoutMs: 200,
-      intervalMs: 20,
-      scanIntervalMs: 20,
+    await expect(reclaimWithMockClock({
       dropTcpRows: true,
       killOcxHolders: true,
       onlyKillPids: [14772],
       isAvailableFn: async () => available,
-      // Windows often keeps a dead pre-update owner listed; cmdline probe already failed.
+      // This holder is still alive; a historical PID does not override verifier rejection.
       listListenPidsFn: () => (alive ? [14772] : []),
       isAliveFn: () => alive,
       verifyOcxFn: () => null,
@@ -551,9 +551,40 @@ describe("reclaimListenPort", () => {
         available = true;
         return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
       },
-      sleepMs: async () => {},
+    })).resolves.toBe(false);
+    expect(killed).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  test.each([false, true])("a different verifier PID is rejected with killAllOcxOnPort=%s", async killAllOcxOnPort => {
+    const killed: number[] = [];
+    const dropped: number[] = [];
+    await expect(reclaimWithMockClock({
+      dropTcpRows: true, killOcxHolders: true, killAllOcxOnPort, onlyKillPids: [100],
+      isAvailableFn: async () => false, listListenPidsFn: () => [100], isAliveFn: () => true,
+      verifyOcxFn: () => 200,
+      killFn: pid => { killed.push(pid); },
+      dropTcpFn: port => { dropped.push(port); return 1; },
+    })).resolves.toBe(false);
+    expect(killed).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  test("a later successful verification can reclaim a previously rejected holder", async () => {
+    let alive = true;
+    let available = false;
+    let checks = 0;
+    const checksAtKill: number[] = [];
+    const dropped: number[] = [];
+    await expect(reclaimWithMockClock({
+      dropTcpRows: true, killOcxHolders: true, onlyKillPids: [100],
+      isAvailableFn: async () => available, listListenPidsFn: () => alive ? [100] : [],
+      isAliveFn: () => alive,
+      verifyOcxFn: pid => ++checks === 1 ? null : pid,
+      killFn: () => { checksAtKill.push(checks); alive = false; },
+      dropTcpFn: port => { dropped.push(port); available = true; return 1; },
     })).resolves.toBe(true);
-    expect(killed).toEqual([14772]);
+    expect(checksAtKill).toEqual([3]); // rejected scan, accepted scan, accepted pre-kill check
     expect(dropped).toEqual([10100]);
   });
 

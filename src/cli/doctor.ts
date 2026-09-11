@@ -45,6 +45,9 @@ import {
   probeCodexCoordinatorNamespace,
   resolveEffectiveUserIdentity,
 } from "../codex/user-identity";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
+import type { OcxProviderConfig } from "../types/provider";
+import { routedProviderConfig } from "../router";
 import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from "../codex/project-config-warnings";
 import {
   collectLegacyCodexConfigKeyDiagnostics,
@@ -53,6 +56,8 @@ import {
 import { collectStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import {
   displayCodexRuntimePath,
+  effortClampAppliesToRuntime,
+  liveRemovedEfforts,
   loadLastEffortClamp,
   persistCodexRuntime,
   resolveAndPersistCodexRuntime,
@@ -1000,6 +1005,41 @@ export function proxyDownRestartHint(input: {
   return `The ocx proxy is not running. ${uncleanExit}Codex/Claude clients pinned to 127.0.0.1:${input.port} fail with errors like "error sending request for url (http://127.0.0.1:${input.port}/v1/responses)". ${restart}`;
 }
 
+/** Explain the expected channel and latency trade-off for native ChatGPT routing. */
+export function chatgptPublicEndpointHint(
+  providers: Record<string, unknown> | undefined,
+): string | null {
+  const openai = providers?.openai;
+  if (!openai || typeof openai !== "object") {
+    return null;
+  }
+  // A disabled row never routes, so it must not be described as the route in use.
+  const configured = openai as OcxProviderConfig;
+  if (configured.disabled === true) {
+    return null;
+  }
+  // Classify the destination the router resolves, not the raw config text. Two things follow
+  // from the registry entry for the built-in `openai` id: a row that omits `authMode` still
+  // forwards, and a row carrying some other `baseUrl` has it discarded in favour of the
+  // canonical ChatGPT endpoint. Both keep using the public endpoint, so both want this hint;
+  // reading the raw row would have suppressed the first and misjudged the second.
+  //
+  // `routedProviderConfig` throws for an unresolved URL only when the registry entry allows a
+  // baseUrl override, which this entry does not, so no input reaches that path today. The guard
+  // is here because doctor is read-only diagnostics: a later registry change must not turn a
+  // diagnostic into a crash.
+  let routed: OcxProviderConfig;
+  try {
+    routed = routedProviderConfig("openai", configured);
+  } catch {
+    return null;
+  }
+  if (!isCanonicalOpenAiForwardProvider(routed)) {
+    return null;
+  }
+  return "ChatGPT-family requests use the public ChatGPT endpoint through this proxy, in both Pool and Direct modes. Eligible streaming turns dial the ChatGPT websocket transport (the same responses_websockets lane Codex CLI defaults to) and fall back to SSE over HTTP when a turn is not eligible - an unsupported Bun runtime, an oversized create frame, or a proxy route that cannot carry the socket - and local provider pacing can hold a request before it is dispatched at all. This hint classifies configuration only and measures nothing, so upstream queueing is one possible contributor to a slow first output: compare actual transport, pacing, network, and provider observations before concluding. service_tier=priority is a request preference: this backend can echo service_tier \"default\" even on turns it scheduled as priority (#2558), so the echoed response tier in request logs stays an observation with confirmation \"assumed\" and cannot confirm or deny the granted tier.";
+}
+
 export async function runDoctor(args: string[] = []): Promise<void> {
   if (args.includes("--fix-codex-runtime")) {
     const resolved = resolveCodexRuntime();
@@ -1139,9 +1179,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       console.log("       Suggested: set CODEX_CLI_PATH to the desired binary and run ocx sync.");
       console.log("       Optional: ocx doctor --fix-codex-runtime");
     }
+    // Doctor used to warn on any non-empty `removedEfforts`, while `ocx status` asked
+    // `effortClampAppliesToRuntime` — so the two could disagree about the same file, and doctor
+    // would tell an operator to install a newer Codex while the resolved runtime was already
+    // newer than the one the diagnostic described. Both surfaces now read the same predicate.
     const lastClamp = loadLastEffortClamp();
-    if (lastClamp && lastClamp.removedEfforts.length > 0) {
-      console.log(`  !!  ${lastClamp.removedEfforts.join(" and ")} were removed during catalog sync.`);
+    if (effortClampAppliesToRuntime(lastClamp, resolved.runtime)) {
+      const live = liveRemovedEfforts(lastClamp);
+      console.log(`  !!  ${live.join(" and ")} were removed during catalog sync.`);
       console.log("       Suggested: set CODEX_CLI_PATH to a newer Codex binary and run ocx sync.");
     }
   }
@@ -1330,6 +1375,8 @@ export async function runDoctor(args: string[] = []): Promise<void> {
 
   // Hints, not fixes.
   const hints: string[] = [];
+  const chatgptHint = chatgptPublicEndpointHint(doctorConfig.providers);
+  if (chatgptHint) hints.push(chatgptHint);
   const proxyDown = proxyDownRestartHint({
     proxyRunning: Boolean(live),
     port: live?.port ?? doctorConfig.port ?? 10100,

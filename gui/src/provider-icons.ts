@@ -43,6 +43,14 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   "opencode-zen": "opencode.svg",
   openrouter: "openrouter-color.svg",
   qianfan: "qianfan-color.svg",
+  /*
+   * Qoder Global and Qoder CN are one brand on two operators (BRIGHT ZENITH
+   * PRIVATE LIMITED and 通义云启（杭州）信息技术有限公司), the meta-model/meta-muse
+   * shape. codebuddy / codebuddy-cn deliberately have no alias: see the
+   * provider-icons README for the terms clause that forbids the Tencent mark.
+   */
+  qoder: "qoder.svg",
+  "qoder-cn": "qoder.svg",
   alibaba: "alibaba-color.svg",
   "alibaba-token-plan": "alibaba-color.svg",
   "alibaba-token-plan-intl": "alibaba-color.svg",
@@ -61,6 +69,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   novita: "novita.svg",
   orcarouter: "orcarouter.svg",
   "orcarouter-oauth": "orcarouter.svg",
+  packycode: "packycode.svg",
   parallel: "parallel.svg",
   sambanova: "sambanova.svg",
   scaleway: "scaleway.svg",
@@ -124,6 +133,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "opencode-zen": "OpenCode Zen",
   orcarouter: "OrcaRouter - API",
   "orcarouter-oauth": "OrcaRouter - Auth",
+  packycode: "PackyCode",
   mistral: "Mistral",
   groq: "Groq",
   "meta-model": "Meta Model API",
@@ -141,6 +151,10 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "qwen-cloud": "Qwen Cloud",
   siliconflow: "SiliconFlow",
   "tencent-coding-plan": "Tencent Cloud Coding Plan",
+  codebuddy: "CodeBuddy",
+  "codebuddy-cn": "CodeBuddy CN",
+  qoder: "Qoder",
+  "qoder-cn": "Qoder CN",
   "vercel-ai-gateway": "Vercel AI Gateway",
   vllm: "vLLM",
   litellm: "LiteLLM",
@@ -200,6 +214,7 @@ const MASKED_PROVIDER_ICONS: ReadonlySet<string> = new Set([
   "neuralwatt.svg",
   "nous.svg",
   "novita.svg",
+  "packycode.svg",
   "siliconflow.svg",
   "synthetic.svg",
   "zenmux.svg",

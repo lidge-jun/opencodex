@@ -537,6 +537,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 // hop-by-hop header alone (oven-sh/bun#20492).
                 return requestFetch(request.url, applyUpstreamRecoveryInit({
                   method: request.method,
+                  redirect: "manual",
                   headers: h,
                   body: request.body,
                   signal: headerDeadline.signal,

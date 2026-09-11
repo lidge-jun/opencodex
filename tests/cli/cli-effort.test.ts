@@ -112,6 +112,112 @@ describe("ocx effort offline config operations", () => {
     expect(parsed.subagentEffortCap).toBeNull();
     expect(parsed.efforts).toContain("low");
     expect(parsed.efforts).toContain("ultra");
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  for (const value of ["none", "minimal"]) {
+    for (const target of ["shorthand", "--main", "--subagent"]) {
+      test(`rejects unsupported cap ${value} through ${target} before probing or saving`, async () => {
+        const args = target === "shorthand" ? [value] : ["set", target, value];
+        const { deps, logs, errors } = fakeDeps(args);
+        const configBefore = readFileSync(join(tempHome!, "config.json"), "utf8");
+        let probes = 0;
+        deps.findLiveProxy = async () => { probes += 1; return null; };
+        expect(await handleEffortCommand(args, deps)).toBe(2);
+        expect(errors.join("\n")).toContain('unknown reasoning effort "' + value + '"');
+        expect(errors.join("\n")).toContain("allowed: low, medium, high, xhigh, max, ultra, -");
+        expect(probes).toBe(0);
+        expect(logs).toEqual([]);
+        expect(readFileSync(join(tempHome!, "config.json"), "utf8")).toBe(configBefore);
+      });
+    }
+
+    test(`offline injection still accepts ${value} without treating it as a cap`, async () => {
+      const { deps } = fakeDeps();
+      expect(await handleEffortCommand(["set", "--injection", value], deps)).toBe(0);
+      expect(readTestConfig().injectionEffort).toBe(value);
+      expect(readTestConfig().effortCap).toBeUndefined();
+      expect(readTestConfig().subagentEffortCap).toBeUndefined();
+    });
+  }
+
+  test("rejects unsupported cap spelling without advertising sentinel cap values", async () => {
+    const { deps, errors } = fakeDeps();
+    expect(await handleEffortCommand(["set", "--main", "bogus"], deps)).toBe(2);
+    expect(errors.join("\n")).toContain("allowed: low, medium, high, xhigh, max, ultra, -");
+    expect(errors.join("\n")).not.toContain("ultra, none, minimal");
+  });
+
+  for (const source of ["config", "runtime"] as const) {
+    for (const wantsJson of [false, true]) {
+      test(`legacy unsupported cap diagnostics preserve ${source} values (${wantsJson ? "json" : "human"})`, async () => {
+        const conf = { ...readTestConfig(), effortCap: "none", subagentEffortCap: "minimal", injectionEffort: "none" };
+        const configPath = join(tempHome!, "config.json");
+        writeFileSync(configPath, JSON.stringify(conf, null, 2), "utf8");
+        const configBefore = readFileSync(configPath, "utf8");
+        const { deps, logs } = fakeDeps();
+        const methods: string[] = [];
+        const main = source === "config" ? "none" : "minimal";
+        const subagent = source === "config" ? "minimal" : "none";
+        const runtime = source === "runtime" ? {
+          baseUrl: "http://127.0.0.1:10100",
+          fetchImpl: async (url: string | URL | Request, init?: RequestInit) => {
+            methods.push(init?.method ?? "GET");
+            const body = new URL(url.toString()).pathname === "/api/effort-caps"
+              ? { effortCap: main, subagentEffortCap: subagent }
+              : { effort: "none" };
+            return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+          },
+        } : {};
+        const args = wantsJson ? ["status", "--json"] : ["status"];
+        expect(await handleEffortCommand(args, { ...deps, ...runtime })).toBe(0);
+        let warnings: string[];
+        if (wantsJson) {
+          const result = JSON.parse(logs.join("\n"));
+          expect(result.source).toBe(source);
+          expect(result.effortCap).toBe(main);
+          expect(result.subagentEffortCap).toBe(subagent);
+          expect(result.injectionEffort).toBe("none");
+          expect(result.warnings).toHaveLength(2);
+          warnings = result.warnings;
+        } else {
+          expect(logs.join("\n")).toContain(`Main agent effort cap:     ${main}`);
+          warnings = logs;
+        }
+        expect(warnings.join("\n")).toContain(`effortCap="${main}" is invalid and is not applied`);
+        expect(warnings.join("\n")).toContain(`subagentEffortCap="${subagent}" is invalid and is not applied`);
+        expect(warnings.join("\n")).toContain("ocx effort set --main");
+        expect(warnings.join("\n")).toContain("ocx effort set --subagent");
+        expect(methods).toEqual(source === "runtime" ? ["GET", "GET"] : []);
+        expect(readFileSync(configPath, "utf8")).toBe(configBefore);
+      });
+    }
+  }
+
+  test("invalid legacy cap diagnostics do not normalize stored whitespace or casing", async () => {
+    const conf = { ...readTestConfig(), effortCap: " high ", subagentEffortCap: "HIGH" };
+    const configPath = join(tempHome!, "config.json");
+    writeFileSync(configPath, JSON.stringify(conf, null, 2), "utf8");
+    const before = readFileSync(configPath, "utf8");
+    const { deps, logs } = fakeDeps();
+    expect(await handleEffortCommand(["status", "--json"], deps)).toBe(0);
+    const result = JSON.parse(logs.join("\n"));
+    expect(result.effortCap).toBe(" high ");
+    expect(result.subagentEffortCap).toBe("HIGH");
+    expect(result.warnings).toHaveLength(2);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  test("an ignored subagent cap warning preserves the valid main cap", async () => {
+    const conf = { ...readTestConfig(), effortCap: "high", subagentEffortCap: "minimal" };
+    writeFileSync(join(tempHome!, "config.json"), JSON.stringify(conf, null, 2), "utf8");
+    const { deps, logs } = fakeDeps();
+    expect(await handleEffortCommand(["status", "--json"], deps)).toBe(0);
+    const result = JSON.parse(logs.join("\n"));
+    expect(result.effortCap).toBe("high");
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0].startsWith('subagentEffortCap="minimal"')).toBe(true);
+    expect(readTestConfig()).toEqual(conf);
   });
 
   test("ocx effort <level> sets main effort cap offline", async () => {
@@ -210,6 +316,26 @@ describe("ocx effort offline config operations", () => {
 });
 
 describe("ocx effort online live-proxy integration & negative regressions", () => {
+  for (const value of ["none", "minimal"]) {
+    test(`invalid cap values reject a mixed live update before any request (${value})`, async () => {
+      const { deps, logs } = fakeDeps();
+      const before = readFileSync(join(tempHome!, "config.json"), "utf8");
+      let requests = 0;
+      let probes = 0;
+      const code = await handleEffortCommand(["set", "--main", "high", "--subagent", value, "--injection", "medium"], {
+        ...deps,
+        baseUrl: "http://127.0.0.1:10100",
+        findLiveProxy: async () => { probes += 1; return null; },
+        fetchImpl: async () => { requests += 1; return new Response("{}"); },
+      });
+      expect(code).toBe(2);
+      expect(probes).toBe(0);
+      expect(requests).toBe(0);
+      expect(logs).toEqual([]);
+      expect(readFileSync(join(tempHome!, "config.json"), "utf8")).toBe(before);
+    });
+  }
+
   test("live status read failures never substitute offline config", async () => {
     const { logs, errors } = fakeDeps(["status", "--json"]);
     const configBefore = readTestConfig();

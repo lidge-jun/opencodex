@@ -84,8 +84,9 @@ lorsqu'un modèle préféré, une liste éligible ou une chaîne de secours est 
 est suffisant pour afficher une invite personnalisée ; si une valeur non qualifiée ne peut pas être résolue de manière unique, `{{model}}`
 se développe en une chaîne vide.
 
-Sur la v1, opencodex injecte uniquement les conseils de délégation proactive de style amont à `max` ou `ultra`
-effort. Il n’ajoute aucun modèle préféré, aucune liste, aucune chaîne de repli ni aucune invite personnalisée en v1.
+Sur la v1, opencodex injecte le même texte de délégation proactive que le préréglage recommandé de la v2, uniquement aux niveaux d’effort `max` ou `ultra`.
+Seule la condition de déclenchement change : aucune demande de délégation distincte n’est nécessaire ; les instructions de l’utilisateur, les autorisations, le périmètre de la tâche et les règles des outils de collaboration restent applicables.
+Il n’ajoute aucun modèle préféré, aucune liste, aucune chaîne de repli ni aucune invite personnalisée en v1.
 
 L'option `syncCodexSubagentDefaults` désactivée par défaut est distincte du guidage. Quand opencodex possède
 le routage Codex actif, la synchronisation ou le redémarrage peut écrire les valeurs sélectionnées en tant que propriété du marqueur

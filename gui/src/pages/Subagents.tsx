@@ -10,6 +10,11 @@ import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from 
 
 type CachedSubagents = { available: string[]; chosen: string[]; fallback?: string[]; pollMs?: number; fallbackAvailable?: string[] };
 
+const UNLOADED_ULTRA_MODE: UltraModeState = {
+  enabled: false, hintText: null, recommendation: null,
+  multiAgentV2Enabled: false, multiAgentMode: "default",
+};
+
 function seedSubagents(cacheKey: string): CachedSubagents | null {
   return readSessionListCache<CachedSubagents>(cacheKey);
 }
@@ -40,7 +45,9 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   /** Sync guard: state-only `busy` can miss clicks before the disabled re-render commits. */
   const saveInFlight = useRef(false);
   const delegation = useSubagentDelegation(apiBase);
-  const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false, multiAgentMode: "default" });
+  const [ultraState, setUltraState] = useState<{ apiBase: string; mode: UltraModeState } | null>(null);
+  const ultraModeCurrent = ultraState?.apiBase === apiBase;
+  const ultraMode = ultraModeCurrent ? ultraState.mode : UNLOADED_ULTRA_MODE;
   const [ultraSaving, setUltraSaving] = useState(false);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
@@ -62,21 +69,31 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       multiAgentMode?: "v1" | "default" | "v2";
       multiAgentModeHintText?: string | null;
       keepNativeChatGptOnV1?: boolean;
+      multiAgentModeHintRecommendation?: { text?: unknown; revision?: unknown };
     }>(res, t("sub.ultraModeLoadFail"));
     if (!data) return false;
     if (signal?.aborted || generation !== ultraLoadGeneration.current || currentUltraApiBase.current !== apiBase) return false;
     setUltraLoadFailed(false);
-    setUltraMode({
+    const rawRecommendation = data.multiAgentModeHintRecommendation;
+    const recommendation = rawRecommendation
+      && typeof rawRecommendation.text === "string"
+      && rawRecommendation.text.trim().length > 0
+      && typeof rawRecommendation.revision === "string"
+      && rawRecommendation.revision.trim().length > 0
+      ? { text: rawRecommendation.text, revision: rawRecommendation.revision }
+      : null;
+    setUltraState({ apiBase, mode: {
       enabled: data.enabled ?? false,
       loaded: true,
       keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
       hintText: data.multiAgentModeHintText ?? null,
+      recommendation,
       // Ultra mode replaces Codex's effort-derived policy for every model. The
       // `default` surface still preserves upstream V1 pins (for example luna),
       // so only an explicitly forced V2 catalog is an effective surface here.
       multiAgentV2Enabled: data.enabled === true && data.multiAgentMode === "v2",
       multiAgentMode: data.multiAgentMode ?? "default",
-    });
+    } });
     return true;
   }, [apiBase, t]);
 
@@ -95,7 +112,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   }, [loadUltraMode, t]);
 
   const saveUltraMode = async (patch: UltraModePatch) => {
-    if (ultraSaving) return;
+    if (ultraSaving || !ultraModeCurrent || currentUltraApiBase.current !== apiBase) return;
     const requestApiBase = apiBase;
     setUltraSaving(true);
     setStatus("");
@@ -343,7 +360,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           saving: delegation.saving,
           onSave: patch => { void delegation.save(patch); },
           ultraMode,
-          ultraSaving,
+          ultraSaving: ultraSaving || !ultraModeCurrent,
           onUltraModeSave: patch => { void saveUltraMode(patch); },
           ultraLoadFailed,
           onUltraModeRetry: () => { void retryUltraMode(); },

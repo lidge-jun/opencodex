@@ -1,5 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STORE_BUDGET_MS } from "../helpers/test-budget";
 import {
@@ -54,9 +55,75 @@ import { consumeForInspection } from "../../src/server/relay";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-codex-routing-test");
+import { flushConfigDirHardeningForTests, hardenConfigDir } from "../../src/config/paths";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+
+let TEST_DIR = "";
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+
+const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+
+function installRoutingScratchHome(): void {
+  previousOpencodexHome = process.env.OPENCODEX_HOME;
+  previousCodexHome = process.env.CODEX_HOME;
+  TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-routing-"));
+  // Routing cases exercise account state, not the operating system ACL implementation.
+  setIcaclsRunnerForTests(() => ICACLS_OK);
+  setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
+  process.env.OPENCODEX_HOME = TEST_DIR;
+  process.env.CODEX_HOME = TEST_DIR;
+}
+
+async function removeRoutingScratchHome(): Promise<void> {
+  const ownedDirectory = TEST_DIR;
+  TEST_DIR = "";
+  try {
+    await flushConfigDirHardeningForTests();
+  } finally {
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
+    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    if (ownedDirectory) removeTreeWithRetry(ownedDirectory);
+  }
+}
+
+test.skipIf(process.platform !== "win32")("routing scratch cleanup waits for its outstanding hardening flight", async () => {
+  installRoutingScratchHome();
+  const ownedDirectory = TEST_DIR;
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let cleanup: Promise<void> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    setAsyncIcaclsRunnerForTests(async () => { entered(); await gate; return ICACLS_OK; });
+    hardenConfigDir();
+    await Promise.race([
+      started,
+      new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("hardening fixture did not start")), 5_000); }),
+    ]);
+    let cleaned = false;
+    cleanup = removeRoutingScratchHome().then(() => { cleaned = true; });
+    await Promise.resolve();
+    expect(cleaned).toBe(false);
+    expect(existsSync(ownedDirectory)).toBe(true);
+    release();
+    await cleanup;
+    expect(cleaned).toBe(true);
+    expect(existsSync(ownedDirectory)).toBe(false);
+  } finally {
+    if (deadline !== undefined) clearTimeout(deadline);
+    release();
+    if (cleanup) await cleanup;
+    else await removeRoutingScratchHome();
+  }
+}, STORE_BUDGET_MS);
+
 
 function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return {
@@ -89,14 +156,7 @@ function pendingInspectionStream(): ReadableStream<Uint8Array> {
 
 describe("codex routing", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    // Isolate the main-account credential source: TEST_DIR has no auth.json, so the main
-    // account is deterministically absent (these cases test the pool-only scenario).
-    previousCodexHome = process.env.CODEX_HOME;
-    process.env.CODEX_HOME = TEST_DIR;
+    installRoutingScratchHome();
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
     clearAccountQuota();
@@ -107,18 +167,17 @@ describe("codex routing", () => {
     saveTestCredential("b");
   });
 
-  afterEach(() => {
-    clearAccountQuota();
-    clearCodexUpstreamHealth();
-    clearThreadAccountMap();
-    clearAccountNeedsReauth("a");
-    clearAccountNeedsReauth("b");
-    clearAccountNeedsReauth("c");
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-    else process.env.CODEX_HOME = previousCodexHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  afterEach(async () => {
+    try {
+      clearAccountQuota();
+      clearCodexUpstreamHealth();
+      clearThreadAccountMap();
+      clearAccountNeedsReauth("a");
+      clearAccountNeedsReauth("b");
+      clearAccountNeedsReauth("c");
+    } finally {
+      await removeRoutingScratchHome();
+    }
   });
 
   test("usage score uses the hottest known quota window", () => {
@@ -1687,8 +1746,9 @@ describe("codex routing", () => {
     });
   });
 
-  test("WHAM preserves the 5h, weekly, and Spark weekly windows", () => {
+  test("WHAM keeps general and Spark windows separate", () => {
     expect(parseUsageQuota({
+      plan_type: "pro",
       rate_limit: {
         primary_window: { used_percent: 11, reset_at: 1, limit_window_seconds: 5 * 60 * 60 },
         secondary_window: { used_percent: 22, reset_at: 2, limit_window_seconds: 7 * 24 * 60 * 60 },
@@ -1697,7 +1757,8 @@ describe("codex routing", () => {
         limit_name: "GPT-5.3-Codex-Spark",
         metered_feature: "codex_bengalfox",
         rate_limit: {
-          primary_window: { used_percent: 33, reset_at: 3, limit_window_seconds: 7 * 24 * 60 * 60 },
+          primary_window: { used_percent: 33, reset_at: 3, limit_window_seconds: 5 * 60 * 60 },
+          secondary_window: { used_percent: 44, reset_at: 4, limit_window_seconds: 7 * 24 * 60 * 60 },
         },
       }],
     })).toEqual({
@@ -1706,7 +1767,10 @@ describe("codex routing", () => {
       shortWindowSeconds: 5 * 60 * 60,
       weeklyPercent: 22,
       weeklyResetAt: 2,
-      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 33, resetAt: 3 }],
+      customWindows: [
+        { label: "GPT-5.3-Codex-Spark 5h", percent: 33, resetAt: 3 },
+        { label: "GPT-5.3-Codex-Spark Weekly", percent: 44, resetAt: 4 },
+      ],
     });
   });
 
@@ -2175,12 +2239,7 @@ describe("codex routing", () => {
 
 describe("codex account selection order", () => {
   beforeEach(() => {
-    previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    previousCodexHome = process.env.CODEX_HOME;
-    process.env.CODEX_HOME = TEST_DIR;
+    installRoutingScratchHome();
     clearThreadAccountMap();
     clearCodexUpstreamHealth();
     clearAccountQuota();
@@ -2191,18 +2250,17 @@ describe("codex account selection order", () => {
     saveTestCredential("b");
   });
 
-  afterEach(() => {
-    clearAccountQuota();
-    clearCodexUpstreamHealth();
-    clearThreadAccountMap();
-    clearPoolRotationState();
-    clearAccountNeedsReauth("a");
-    clearAccountNeedsReauth("b");
-    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-    else process.env.CODEX_HOME = previousCodexHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  afterEach(async () => {
+    try {
+      clearAccountQuota();
+      clearCodexUpstreamHealth();
+      clearThreadAccountMap();
+      clearPoolRotationState();
+      clearAccountNeedsReauth("a");
+      clearAccountNeedsReauth("b");
+    } finally {
+      await removeRoutingScratchHome();
+    }
   });
 
   /** `a` is ordered above `b`; the persisted operator selection is the lower tier. */

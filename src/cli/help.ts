@@ -33,6 +33,8 @@ Usage:
   ocx restore back            Re-point codex at the running proxy (undo restore)
   ocx recover-history --legacy-openai --yes
                                Force all user-message opencodex rows to OpenAI (legacy recovery)
+  ocx recover-history --ocx-compaction <thread-id> --yes
+                               Back up and make one ocx1-compacted thread replayable by native Codex
   ocx uninstall               Remove service/shim/config and restore native Codex (alias: remove)
   ocx service [sub]           Run as a background service (default: install/update/start)
   ocx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall|remove)
@@ -43,7 +45,7 @@ Usage:
   ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
-  ocx status                  Check proxy server status
+  ocx status                  Check proxy server status (on a hub: one block with its ports and token source)
   ocx doctor                  Diagnose environment/network issues (WSL, proxy, ChatGPT reachability)
   ocx doctor --reclaim-response-temps
                               Reclaim abandoned response-state temp files (works without a running proxy)
@@ -54,6 +56,8 @@ Usage:
   ocx logout <provider>       Remove a stored OAuth login
   ocx gui [pair --origin <browser-origin> [--json]]
                               Open the dashboard or create a single-use remote pairing grant
+  ocx hub invite [--json]     Print a ready-to-run \`ocx connect\` line for one more machine
+                              (hub only; see \`ocx help hub\` for the one-port topology)
   ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|keep-native-v1|threads|mode-hint)
@@ -97,6 +101,7 @@ Examples:
   ocx start                   Start on default port (10100)
   ocx start --port 8080       Start on custom port
   ocx help service            Show service command help
+  ocx help hub                Explain the hub topology, token file, and invites
   ocx sync                    Sync available models to Codex`);
 }
 

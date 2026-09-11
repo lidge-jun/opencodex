@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
-import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
+import { isCodexAccountGenerationLive, readCodexAccountRecord, type CodexRefreshProvenance } from "./account-store";
 import { codexAccountLogLabel } from "./account-label";
 import { NATIVE_RESERVE_MODEL } from "./catalog/native-models";
 import { isCodexAccountPaused } from "./account-pause";
@@ -19,7 +19,7 @@ import {
   selectPriorityTier,
 } from "./pool-rotation";
 import { CODEX_EXHAUSTED_USAGE_PERCENT, CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
-import { isThirtyDayOnlyCodexPlan } from "./plan";
+import { codexPlanKey, isThirtyDayOnlyCodexPlan } from "./plan";
 import {
   MAIN_CODEX_ACCOUNT_ID,
   getMainAccountPlan,
@@ -642,6 +642,80 @@ export function claimDueCodexQuotaRecoveryProbes(
   });
 }
 
+type CooldownRecoveryLease = Pick<CodexQuotaRecoveryProbeClaim,
+  "accountId" | "scope" | "leaseId" | "cooldownGeneration">;
+
+export type ManualResetCooldownClaim =
+  | { kind: "pool"; probe: CodexQuotaRecoveryProbeClaim }
+  | { kind: "main"; probe: CooldownRecoveryLease };
+
+function manualResetAccountEligible(config: OcxConfig, accountId: string): boolean {
+  return !isCodexAccountPaused(config, accountId) && !isAccountNeedsReauth(accountId)
+    && (accountId === MAIN_CODEX_ACCOUNT_ID
+      || (config.codexAccounts ?? []).some(account => account.id === accountId && isSelectableCodexPoolAccount(account)));
+}
+
+/** Explicit reset bypasses probe pacing, never another owner's lease or quota scope. */
+export function claimManualResetCooldowns(
+  config: OcxConfig,
+  accountId: string,
+  now = Date.now(),
+  expectedPoolGeneration?: number,
+): ManualResetCooldownClaim[] {
+  if (!manualResetAccountEligible(config, accountId)) return [];
+  const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
+  if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) return [];
+  if (record && expectedPoolGeneration !== undefined && record.generation !== expectedPoolGeneration) return [];
+  const claims: ManualResetCooldownClaim[] = [];
+  for (const scope of [undefined, "shared"] as const) {
+    const health = scope ? scopedHealthFor(accountId, scope) : upstreamHealth.get(accountId);
+    if (!health || health.cooldownSource !== "reset-derived" || health.probeLeaseId !== undefined
+      || !Number.isFinite(health.cooldownUntil) || !(health.cooldownUntil! > now)) continue;
+    const leaseId = randomUUID();
+    const cooldownGeneration = health.cooldownGeneration ?? 0;
+    const next = { ...health, probeLeaseId: leaseId, probeLeaseGeneration: cooldownGeneration, lastProbeAt: now };
+    if (scope) setScopedHealth(accountId, scope, next);
+    else upstreamHealth.set(accountId, next);
+    const probe = { accountId, scope, leaseId, cooldownGeneration };
+    claims.push(record ? { kind: "pool", probe: {
+      ...probe, credentialGeneration: record.generation, credentialReplacedAt: record.replacedAt,
+    } } : { kind: "main", probe });
+  }
+  return claims;
+}
+
+export type ManualResetRefreshLineage = Readonly<{
+  fromGeneration: number;
+  toGeneration: number;
+  provenance: CodexRefreshProvenance;
+}>;
+
+type ManualResetQuotaProof = CodexQuotaRecoveryProbeProof & {
+  refreshLineage?: ManualResetRefreshLineage;
+};
+
+/** Main proof is checked by the already-owned auth operation, never by a Pool record. */
+export function settleManualResetCooldown(
+  config: OcxConfig,
+  claim: ManualResetCooldownClaim,
+  recovered: boolean,
+  proof: ManualResetQuotaProof = {},
+  now = Date.now(),
+): boolean {
+  if (!recovered) return settleCooldownRecoveryLease(claim.probe, false, now);
+  const eligible = manualResetAccountEligible(config, claim.probe.accountId);
+  if (claim.kind === "main") return settleCooldownRecoveryLease(claim.probe, eligible, now);
+  const lineage = proof.refreshLineage;
+  // Equal wall-clock replacement stamps do not establish ancestry. Manual +1
+  // recovery additionally needs the actual forced-refresh result for this edge.
+  const ownedGeneration = proof.credentialGeneration === claim.probe.credentialGeneration
+    || (proof.credentialGeneration === claim.probe.credentialGeneration + 1
+      && lineage?.fromGeneration === claim.probe.credentialGeneration
+      && lineage.toGeneration === proof.credentialGeneration
+      && (lineage.provenance === "self-refresh" || lineage.provenance === "joined-lineage"));
+  return settleCodexQuotaRecoveryProbe(claim.probe, eligible && ownedGeneration, proof, now);
+}
+
 /** Settle one background recovery claim without mutating account-wide outcome state. */
 export function settleCodexQuotaRecoveryProbe(
   claim: CodexQuotaRecoveryProbeClaim,
@@ -665,9 +739,16 @@ export function settleCodexQuotaRecoveryProbe(
       : proofGeneration === claim.credentialGeneration + 1
         && currentRecord?.replacedAt === claim.credentialReplacedAt
         && isCodexAccountGenerationLive(claim.accountId, proofGeneration));
-  const fenced = (health.cooldownGeneration ?? 0) === claim.cooldownGeneration
-    && (health.probeLeaseGeneration ?? 0) === claim.cooldownGeneration
-    && generationFenced;
+  return settleCooldownRecoveryLease(claim, recovered && generationFenced, now);
+}
+
+function settleCooldownRecoveryLease(claim: CooldownRecoveryLease, recovered: boolean, now: number): boolean {
+  const health = claim.scope ? scopedHealthFor(claim.accountId, claim.scope) : upstreamHealth.get(claim.accountId);
+  if (!health || health.probeLeaseId !== claim.leaseId) return false;
+  const fenced = (claim.scope === undefined || claim.scope === "shared")
+    && health.cooldownSource === "reset-derived"
+    && (health.cooldownGeneration ?? 0) === claim.cooldownGeneration
+    && (health.probeLeaseGeneration ?? 0) === claim.cooldownGeneration;
   if (!recovered || !fenced) {
     const released = withProbeLeaseReleased(health, now);
     if (claim.scope) setScopedHealth(claim.accountId, claim.scope, released);
@@ -923,6 +1004,50 @@ export function isCodexAccountSoftAvoided(accountId: string, now = Date.now()): 
   return getCodexAccountSoftAvoidUntil(accountId, now) !== null;
 }
 
+/**
+ * Plan keys the operator excluded from automatic rotation. Absent or empty means no policy, so an
+ * existing install rotates exactly as before. Compared with `codexPlanKey` because the stored plan
+ * is an unrestricted provider string whose casing this repository does not control.
+ */
+function excludedCodexPoolPlanKeys(config: OcxConfig): ReadonlySet<string> | undefined {
+  const configured = config.codexPool?.excludedPlans;
+  if (!configured?.length) return undefined;
+  const keys = configured
+    .map(plan => codexPlanKey(plan))
+    .filter((key): key is string => key !== undefined);
+  return keys.length > 0 ? new Set(keys) : undefined;
+}
+
+/**
+ * Whether the operator's plan policy removes this account from automatic selection.
+ *
+ * Modelled on pause rather than usability: an excluded account keeps its credential, quota history,
+ * and affinity, stays visible on the account surface, and is still reachable by explicit account
+ * selection. Only automatic rotation skips it, which is the distinction #4211 asked for.
+ *
+ * It is checked in the same two places pause is checked, and that is not redundancy. The eligible
+ * list is consulted only when routing picks a NEW account; an already-active or already-affined
+ * account is served straight from {@link isCodexAccountSelectable}. A lapsed subscription leaves
+ * behind exactly that account, so a policy that filtered only the eligible list would miss the case
+ * it exists for.
+ *
+ * `__main__` is exempt. {@link getPoolAccountPlanForSelection} withholds the main plan during a
+ * selection-only drain so routing never reads the fenced native credential for it, so a rule that
+ * covered main would disagree with itself between drain and ordinary routing.
+ */
+function isCodexAccountPlanExcluded(
+  config: OcxConfig,
+  accountId: string,
+  precomputed?: ReadonlySet<string>,
+): boolean {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) return false;
+  // Callers that test a whole list pass the set once rather than rebuilding it per row.
+  const excluded = precomputed ?? excludedCodexPoolPlanKeys(config);
+  if (!excluded) return false;
+  const plan = codexPlanKey(getPoolAccountPlan(config, accountId));
+  return plan !== undefined && excluded.has(plan);
+}
+
 function isCodexAccountSelectable(
   config: OcxConfig,
   accountId: string,
@@ -931,6 +1056,7 @@ function isCodexAccountSelectable(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): boolean {
   return !isCodexAccountPaused(config, accountId)
+    && !isCodexAccountPlanExcluded(config, accountId)
     && getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(accountId, now)
     && isCodexAccountUsable(config, accountId, selectionOptions);
@@ -1161,10 +1287,12 @@ function getEligiblePoolAccounts(
   selectionOptions?: CodexAccountUsabilityOptions,
   skipFailoverReadyCandidates = false,
 ): readonly string[] {
+  const excludedPlans = excludedCodexPoolPlanKeys(config);
   const ids = (config.codexAccounts ?? [])
     .filter(account => isSelectableCodexPoolAccount(account)
       && account.id !== excludeId
       && !isCodexAccountPaused(config, account.id)
+      && !isCodexAccountPlanExcluded(config, account.id, excludedPlans)
       && !isAccountNeedsReauth(account.id)
       && (!skipFailoverReadyCandidates || !shouldFailover(config, account.id, now)))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)

@@ -80,6 +80,10 @@ export interface DerivedProviderPreset {
   keyOptional?: boolean;
   /** Free pricing (may still require a key). */
   freeTier?: boolean;
+  /** Sponsor tier from SPONSORS.md; the picker pins and labels these rows. */
+  sponsor?: "main" | "standard";
+  /** Sponsor landing URL (with its tracking parameters), for the picker's row link. */
+  sponsorUrl?: string;
   /**
    * Endpoint picker rows (token plan / payg / custom). When present, the add-provider
    * form shows a dropdown; `custom` reveals a free-text base URL field.
@@ -607,6 +611,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     ...(entry.note ? { note: entry.note } : {}),
     ...(entry.keyOptional ? { keyOptional: true } : {}),
     ...(entry.freeTier ? { freeTier: true } : {}),
+    ...(entry.sponsor ? { sponsor: entry.sponsor.tier, sponsorUrl: entry.sponsor.url } : {}),
     ...(entry.baseUrlChoices ? { baseUrlChoices: entry.baseUrlChoices.map(c => ({ ...c })) } : {}),
   };
 }

@@ -10,7 +10,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 프록시 수신 포트입니다. |
-| `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 루프백이 아닌 바인드에는 `OPENCODEX_API_AUTH_TOKEN`이 필요합니다. |
+| `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 루프백이 아닌 바인드에는 데이터 admission 토큰이 필요하며, `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 설치된 owner-only `service-api-token` 순서로 결정됩니다. 손으로 내보낼 값은 없습니다. [Remote access](#remote-access)를 보세요. |
 | `proxy?` | `string` | — | 송신용 HTTP(S) 프록시 URL 또는 `${ENV_VAR}`입니다. 해당 변수가 비어 있을 때만 `HTTP_PROXY` / `HTTPS_PROXY`에 적용되며, 루프백은 `NO_PROXY`에 그대로 남습니다. |
 | `emptyCompletionRetry?` | `boolean` | `false` | 텍스트나 도구 호출이 없는 Responses 턴을, 터미널 이벤트 전에 스트림이 종료된 경우를 포함해 동일한 요청으로 한 번 재시도하도록 선택합니다. 재시도에는 비용이 발생할 수 있습니다. `OCX_EMPTY_COMPLETION_RETRY=0`은 설정을 바꾸지 않고 비활성화하며, combo 및 routed-compaction turn은 제외됩니다. |
 | `stallTimeoutSec?` | `number` | `300` | 업스트림 데이터가 없을 때 `response.incomplete`가 되기까지의 초 수입니다. 최소 1입니다. |
@@ -34,14 +34,20 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 
 ## Remote access
 
-기본 `127.0.0.1` 바인드는 루프백 전용입니다. `0.0.0.0` 같은 루프백이 아닌 주소는 `/api/*`와 데이터 플레인 모두에서 토큰 인증이 필요합니다. 시작하기 전에 토큰을 내보냅니다:
+기본 `127.0.0.1` 바인드는 루프백 전용입니다. `0.0.0.0`이나 tailnet IP처럼 루프백이 아닌 주소는 `/api/*`와 데이터 플레인 모두에서 토큰 인증이 필요합니다.
+
+토큰을 직접 만들 필요는 없습니다. 루프백이 아닌 바인드에서 `ocx service install`이 다음 순서로 토큰을 준비합니다: 설치하는 셸의 `OPENCODEX_API_AUTH_TOKEN` → 기존 owner-only `service-api-token` 파일 → 무작위 32바이트 새 값. 결과는 `0600`으로 기록되고 실행 래퍼(launchd plist, systemd unit, Windows 래퍼)가 시작할 때 그 파일을 읽으므로, 값이 서비스 정의나 argv에 들어가지 않습니다. 포그라운드 `ocx start`도 같은 우선순위(환경 변수 → `OCX_API_TOKEN_FILE` → 설치된 `service-api-token`)를 적용하므로 토큰을 내보내지 않아도 루프백이 아닌 hostname에 바인드합니다.
+
+**관리자 토큰**은 나타날 수 있는 두 곳 모두에서 거부합니다. 환경 변수이거나 재사용하는 `service-api-token` 파일이며, 메시지는 그 자리에 맞는 해결책을 알려 줍니다. 변수를 unset하거나, 파일을 삭제하고 `ocx service repair`를 실행하세요. 두 검사는 루프백 단축 경로보다 앞에서 실행됩니다. 실행 래퍼가 hostname과 무관하게 파일을 `OPENCODEX_API_AUTH_TOKEN`으로 읽기 때문에, 관리자 토큰이 든 파일은 루프백 바인드에서도 관리 API를 닫아 버립니다. 허브에서는 `ocx status`가 이 상태를 `admin-collision (file)`로 보고합니다.
+
+값을 직접 관리하려는 운영자는 여전히 변수를 설정할 수 있습니다:
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-이 변수가 없으면 프록시는 원격 바인드를 거부합니다. 백그라운드 서비스라면 `ocx service install` 전에 내보내서 launchd, systemd, 또는 Task Scheduler가 이를 받도록 합니다. 클라이언트는 다음을 보내야 합니다:
+클라이언트는 다음을 보내야 합니다:
 
 ```text
 x-opencodex-api-key: your-secret-token
@@ -65,6 +71,48 @@ Messages와 `count_tokens`는 라우팅 클라이언트 호환성을 위해 세 
 :::caution[LAN exposure]
 `0.0.0.0` 바인드는 프록시와 설정된 provider 접근을 LAN에 노출합니다. 신뢰할 수 있는 네트워크에서 강한 토큰과 함께만 사용합니다.
 :::
+
+### 토큰을 받을 수 없는 로컬 클라이언트
+
+루프백이 아닌 바인드는 로컬 호출자에게도 자격 증명을 요구합니다. 그래서 한 가지 경우가 깨집니다. 호스트 프로세스가 Codex 진입점을 직접 resolve해서 띄운 `codex app-server`는 생성된 `codex` shim을 거치지 않으므로 `OPENCODEX_API_AUTH_TOKEN`을 물려받지 못하고, 모든 모델 호출이 스트림이 열리기 전에 `401`로 실패합니다.
+
+`unauthenticatedLoopbackListener`는 자격 증명 없이 허용하는 두 번째 리스너를 `127.0.0.1`에 엽니다. 메인 리스너는 그대로입니다. 원격 호출자는 여전히 토큰이 필요합니다. `port`는 **선택 사항**이고, 있는지 없는지가 두 형태를 가릅니다.
+
+`port`를 생략하면 *companion* 형태입니다. 리스너가 프록시 포트와 같은 번호로 `127.0.0.1`에 바인드합니다.
+
+```json
+{
+  "hostname": "100.76.170.81",
+  "port": 10100,
+  "unauthenticatedLoopbackListener": { "enabled": true }
+}
+```
+
+원격 클라이언트는 자격 증명과 함께 `100.76.170.81:10100`을, 로컬 프로세스는 자격 증명 없이 `127.0.0.1:10100`을 호출합니다. 로컬 통합이 이미 기록하는 주소가 바로 그것이라서, 공개 바인드에 닿을 수 없는 호스트에서도 `ocx claude`, Claude Desktop, Cursor, `system-env` 주입이 그대로 동작합니다.
+
+companion 형태는 `hostname`이 루프백도 와일드카드도 아닌 구체 주소일 때만 허용됩니다. `127.0.0.1`, `localhost`, `0.0.0.0`에서는 공개 리스너가 이미 그 루프백 주소를 쓰고 있으므로, opencodex가 두 번째 바인드를 실패하게 두지 않고 쓰는 시점과 시작 시점에 거부합니다. 그런 바인드에서는 리스너가 필요 없습니다. 루프백 바인드는 이미 로컬 호출자를 허용합니다.
+
+`port`를 지정하면 두 표면이 서로 다른 포트에 놓입니다.
+
+```json
+{
+  "hostname": "0.0.0.0",
+  "port": 10100,
+  "unauthenticatedLoopbackListener": { "enabled": true, "port": 10200 }
+}
+```
+
+이때 `ocx sync`는 관리되는 Codex provider 블록에 `base_url = "http://127.0.0.1:10200/v1"`을 기록하고 auth 헤더를 생략합니다. `port`는 프록시 포트와 달라야 하며 OS가 자동 할당하지 않습니다. 임시 포트는 재시작마다 바뀌는데 이미 실행 중인 app-server는 예전 `base_url`을 들고 있기 때문입니다.
+
+**어느 형태든 이 필드를 바꾸면 프록시를 재시작하세요.** 소켓은 시작할 때 한 번 바인드되고 내보내는 클라이언트 값도 그때 결정된 포트로 기록되므로, 실행 중인 프록시는 예전 답을 유지합니다.
+
+이 리스너는 `POST /v1/responses`와 그 WebSocket 업그레이드, `POST /v1/responses/compact`, `POST /v1/messages`, `POST /v1/chat/completions`, `POST /v1/alpha/search`, `GET /v1/models`, 실시간 음성 표면만 제공합니다. `POST /v1/messages/count_tokens`를 포함해 `/api/*`, `/healthz`, `/readyz`, 대시보드는 모두 `404`입니다. `ocx claude`의 탐색 호출 같은 로컬 관리 읽기는 관리 자격 증명을 들고 인증된 관리 표면으로 갑니다.
+
+:::danger[인증 없는 표면입니다]
+컴퓨터의 모든 프로세스가 이 리스너를 사용할 수 있습니다. 계정 쿼터와 유료 provider 비용을 소모합니다.
+:::
+
+`runtimeRole: "hub"`에서는 이 필드가 허브가 **자기 자신의** 로컬 클라이언트 설정을 고칠지 결정하는 게이트이기도 합니다. 리스너가 꺼져 있으면 `ocx sync`, `ocx ensure`, `ocx restore back`이 허브 자신의 Codex/Grok/Claude 쓰기를 건너뛰고, `clientIntegrations` 토글이 아니라 `unauthenticatedLoopbackListener`를 지목해 이유를 밝힙니다.
 
 ### SSH port forwarding
 
@@ -165,6 +213,17 @@ Anthropic OAuth 사이드카는 opencodex의 기존 Claude Code OAuth fingerprin
 ## Remote Hub 키와 기본값
 
 `runtimeRole` 기본값은 `standalone`입니다. 허브는 `hub.managementPublicOrigin`, 로컬에만 열리는 `hub.managementIngress`(없으면 `enabled:false`), 정확한 `remoteGui.allowedTailscaleUsers`(없으면 빈 목록)를 사용합니다. 클라이언트 데이터 키는 `config.json`이 아니라 `service-api-token`에 저장되며 교체 중에는 `service-api-token.prev`가 잠시 생길 수 있습니다. 사용량 기록은 서로 복제하지 않습니다.
+
+| 키 | 형식 | 없을 때 기본값 | 역할 |
+| --- | --- | --- | --- |
+| `hub.managementPublicOrigin` | string | 없음 | 허브가 광고하는, 브라우저가 실제로 닿는 관리 Origin입니다. `runtimeRole`이 `hub`일 때 `/readyz`가 `managementUrl`로 보고합니다. 설정하지 않으면 요청이 도착한 Origin으로 대체하므로, 다른 프런트엔드 뒤의 클라이언트가 닿을 수 없는 주소를 받을 수 있습니다. |
+| `hub.dataPublicOrigin` | string | 없음 | 원격 클라이언트가 **데이터** 플레인으로 호출해야 하는 정식 Origin입니다(예: tailnet 바인드 앞의 TLS 프런트엔드가 공개하는 HTTPS Origin). 광고용 값이며 바인드 주소가 아니고, 바꿔도 소켓은 움직이지 않습니다. `ocx hub invite`가 출력하는 `ocx connect` 줄의 위치 인자 URL로 쓰이고, 없으면 `http://<hostname>:<port>`로 대체합니다. 그 대체값은 원격 컴퓨터가 TLS로 닿지 못할 LAN/tailnet 주소이므로 프런트엔드가 있는 허브라면 설정하세요. 대부분의 선택 키와 달리 잘못된 값은 조용히 버리지 않고 쓰는 시점에 거부합니다. 바인드 주소로 대체되는 것이 바로 이 필드가 막으려는 상황입니다. |
+| `hub.managementIngress` | `{enabled:false}` 또는 `{enabled:true, port}` | `{enabled:false}` | 로컬 HTTPS 프런트엔드용 관리 전용 리스너입니다. hostname은 설정할 수 없고, 켜면 항상 `127.0.0.1`에 바인드하며 GUI·세션 부트스트랩·관리 API 경로만 허용합니다. 데이터 플레인 경로는 dispatch 전에 거부합니다. |
+| `remoteGui.allowedTailscaleUsers` | string[] | `[]`(아무도 없음) | 자동 원격 GUI 세션을 발급받을 수 있는 정확한 Tailscale 로그인 ID입니다. `Tailscale-User-Login` 헤더는 별도 관리 인그레스에서**만** 신뢰합니다. 빈 목록은 실수가 아니라 안전한 기본값입니다. 정확히 비교하므로 오타는 조용히 거부됩니다. |
+
+`dataPublicOrigin`과 `managementPublicOrigin`은 서로 독립적인 광고이며, 실제 배포에서는 서로 다른 소켓입니다. 관리는 443에 공개하는 루프백 전용 인그레스이고, 데이터는 자체 HTTPS 포트에 공개하는 tailnet 바인드입니다. 둘은 `ocx hub invite`가 출력하는 명령의 두 조각이고, 그중 `managementPublicOrigin`이 더 엄격합니다. pairing grant가 이 값을 grant 자신의 server origin으로 기록하고 교환 시 비교하므로, `ocx hub invite --management-url`은 설정값을 *확인*할 수만 있고 다른 값은 거부합니다. `--data-url`은 아무것도 바인드되어 있지 않으므로 실제로 덮어쓰기입니다. `dataPublicOrigin`과 `--data-url`이 모두 없으면 `invite`는 바인드 주소로 대체하는데, 루프백이나 와일드카드 바인드에서는 그것이 이 컴퓨터 자신의 루프백이 되므로 상대가 쓸 수 없는 주소를 광고하는 대신 거부합니다.
+
+허브가 자기 로컬 클라이언트까지 서비스하려면 [`unauthenticatedLoopbackListener`](#토큰을-받을-수-없는-로컬-클라이언트)도 설정합니다. `port` 없는 companion 형태가 허브를 단일 포트 배포로 만들어 주며, 공개 리스너가 이미 `127.0.0.1:<port>`를 쓰는 루프백·와일드카드 `hostname`에서는 거부됩니다.
 
 `remoteGui.allowInsecureHttp`는 이전 strict-schema 설정을 계속 읽기 위해서만 남겨 둔 폐기된 no-op입니다. 설정에서 제거하세요. 페어링 grant는 loopback 또는 인증된 HTTPS에서만 허용되며, 이 값을 `true`로 설정해도 평문 HTTP 페어링은 다시 활성화되지 않습니다.
 

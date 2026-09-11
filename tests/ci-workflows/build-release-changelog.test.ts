@@ -41,6 +41,42 @@ const generatedBugFix = [
   "**Full Changelog**: https://github.com/lidge-jun/opencodex/compare/v1.0.0...v1.1.0",
 ].join("\n");
 
+describe("active release builder enforcement markers", () => {
+  test.each(["generated", "associated"])("normalizes summary and changelog titles from %s PRs", source => {
+    const title = "[WRONG BRANCH] fix(api): preserve release coverage";
+    const result = buildReleaseNotes({
+      version: "1.1.0", tags: ["v1.0.0"], npmMetadata: "", repository: "lidge-jun/opencodex",
+      generatedNotes: source === "generated"
+        ? `## What's Changed\n### Bug Fixes\n* ${title} by @alice in https://github.com/lidge-jun/opencodex/pull/10`
+        : "",
+      commits: [commit("a", "fix(api): preserve release coverage (#10)", [
+        { number: 10, title, author: "alice", labels: ["bug"], merged: true },
+      ])],
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.releasableCommitCount).toBe(1);
+    expect(result.body).toContain("- Preserve release coverage (#10)");
+    expect(result.body).toContain("- #10 fix(api): preserve release coverage @alice");
+    expect(result.body).not.toContain("[WRONG BRANCH]");
+  });
+
+  test.each([
+    "[Preview] fix(api): retain this marker",
+    "fix(api): explain [WRONG BRANCH] markers",
+    "[WRONG BRANCH]ish: retain this title",
+  ])("retains meaningful changelog title text: %s", title => {
+    const result = buildReleaseNotes({
+      version: "1.1.0", tags: ["v1.0.0"], npmMetadata: "", repository: "lidge-jun/opencodex",
+      generatedNotes: "",
+      commits: [commit("a", "fix(api): preserve release coverage (#10)", [
+        { number: 10, title, author: "alice", labels: ["bug"], merged: true },
+      ])],
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.body).toContain(`- #10 ${title} @alice`);
+  });
+});
+
 describe("selectReleaseBaseline", () => {
   test("skips a newer release that is not reachable from the target", () => {
     // A preview lives on its own lineage. Selecting the newest tag regardless of

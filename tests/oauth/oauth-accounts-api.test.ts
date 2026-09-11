@@ -156,7 +156,9 @@ describe("multiauth accounts API", () => {
       expect(requireManagementAuth(ctx.req, state, ctx.config)).toBeNull(); // Deliberately memoized.
       const pending = reader.read();
       publishAccountSelection("private-provider", "oauth");
-      await expect(pending).rejects.toMatchObject({ name: "NotAllowedError" });
+      // Nothing was queued before revocation, so the stream closes quietly instead of
+      // erroring; the pending read resolves done and the post-revocation frame is never sent.
+      await expect(pending).resolves.toMatchObject({ done: true });
     } finally { await reader.cancel().catch(() => undefined); }
   });
 
@@ -179,7 +181,31 @@ describe("multiauth accounts API", () => {
       session.expiresAt = Date.now() - 1;
       const pending = reader.read();
       tick();
-      await expect(pending).rejects.toMatchObject({ name: "NotAllowedError" });
+      await expect(pending).resolves.toMatchObject({ done: true });
+    } finally {
+      await reader?.cancel().catch(() => undefined);
+      interval.mockRestore();
+    }
+  });
+
+  test("selection stream discards frames queued before revocation instead of draining them", async () => {
+    const { ctx, state, token } = selectionSessionFixture();
+    const interval = spyOn(globalThis, "setInterval");
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await handleOauthAccountRoutes(ctx);
+      expect(response?.status).toBe(200);
+      reader = response!.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("event: ready");
+      // No pending read: this event stays queued in the controller when the session expires.
+      publishAccountSelection("queued-provider", "oauth");
+      state.sessions.get(token)!.expiresAt = Date.now() - 1;
+      const tick = interval.mock.calls.find(call => call[1] === 15_000)?.[0];
+      if (typeof tick !== "function") throw new Error("selection heartbeat not registered");
+      tick();
+      // A non-empty queue still takes the error path: the queued frame is discarded and the
+      // revoked consumer rejects instead of ever draining it.
+      await expect(reader.read()).rejects.toMatchObject({ name: "NotAllowedError" });
     } finally {
       await reader?.cancel().catch(() => undefined);
       interval.mockRestore();
@@ -321,6 +347,44 @@ describe("multiauth accounts API", () => {
       expect(account.healthSummary).not.toContain("aaaa1111");
       expect(account.healthSummary).not.toContain("first@example.com");
       expect(account.healthAction).toContain("ocx login anthropic");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("GET reports an explicit null plan for an Anthropic account", async () => {
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      anthropic: {
+        activeAccountId: "aaaa1111",
+        accounts: [
+          {
+            id: "aaaa1111",
+            credential: {
+              access: "t1",
+              refresh: "r1",
+              expires: 9999999999999,
+              email: "first@example.com",
+              accountId: "acct-1",
+            },
+          },
+        ],
+      },
+    }), { mode: 0o600 });
+
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { accounts: Array<{ id: string; plan?: string | null }> };
+      const account = body.accounts[0]!;
+
+      // The key must be PRESENT and null, not omitted. A consumer weighting a pool by seat size
+      // has to tell "this version looked and upstream did not say" apart from "this proxy is too
+      // old to report a tier"; omitting the key collapses those and invites assuming a tier
+      // (#3777). Anthropic's usage endpoint carries no subscription field, so null is the only
+      // truthful answer available today.
+      expect("plan" in account).toBe(true);
+      expect(account.plan).toBeNull();
     } finally {
       await server.stop(true);
     }

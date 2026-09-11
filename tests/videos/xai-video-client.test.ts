@@ -16,6 +16,31 @@ function mockFetchResponse(body: unknown, status = 200): Response {
   });
 }
 
+for (const phase of ["submit", "poll"] as const) test.each([307, 308])(`video ${phase} never follows %i`, async status => {
+  let targetHits = 0;
+  let originHits = 0;
+  const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    targetHits++;
+    return Response.json({ request_id: "redirected", status: "done" });
+  } });
+  const origin = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    originHits++;
+    return new Response("redirect", { status, headers: { location: `http://127.0.0.1:${target.port}/target` } });
+  } });
+  try {
+    const scopedAuth = { baseUrl: `http://127.0.0.1:${origin.port}`, token: "synthetic-video-token" };
+    const result = phase === "submit" ? submitVideoJob({ prompt: "synthetic prompt" }, scopedAuth) : pollVideoJob("job", scopedAuth);
+    const error = await result.catch(error => error as Error & { status: number });
+    expect(targetHits).toBe(0);
+    expect(originHits).toBe(1);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ status });
+  } finally {
+    await origin.stop(true);
+    await target.stop(true);
+  }
+});
+
 describe("submitVideoJob", () => {
   test("returns request_id from response", async () => {
     const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ request_id: "vid-123" })));

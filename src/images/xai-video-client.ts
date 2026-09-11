@@ -80,6 +80,7 @@ export async function submitVideoJob(
 
   const resp = await fetch(`${auth.baseUrl}/videos/generations`, {
     method: "POST",
+    redirect: "manual",
     headers: {
       "Authorization": `Bearer ${auth.token}`,
       "Content-Type": "application/json",
@@ -118,6 +119,7 @@ export async function pollVideoJob(
 
   const resp = await fetch(`${auth.baseUrl}/videos/${encodeURIComponent(requestId)}`, {
     method: "GET",
+    redirect: "manual",
     headers: {
       "Authorization": `Bearer ${auth.token}`,
     },

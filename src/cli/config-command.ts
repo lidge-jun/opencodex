@@ -4,6 +4,7 @@ import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeMo
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
+import type { ClientConnectionStatus } from "./connect";
 import { CliUsageError, printData, rejectArgs, runCliAction, takeFlag } from "./runtime-api";
 
 const USAGE = `Usage:
@@ -26,8 +27,55 @@ const USAGE = `Usage:
 const SECRET_KEYS = /^(apiKey|key|accessToken|refreshToken|idToken|token|password|clientSecret|webhookUrl)$/i;
 const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
+/**
+ * The synthetic `_remoteHub` note printed by `ocx config show` on a client (#4236).
+ *
+ * `runtimeRole: "client"` and the `client` block were already printed, and were already ignored:
+ * an agent read a client's `config.json`, saw an empty `providers` map and no grok, and concluded
+ * the hub could not serve grok. Naming the situation in the config output costs one key.
+ *
+ * `connected` is OBSERVED, never assumed. It was briefly hardcoded `true` for any config with a
+ * `client` block, which is the same defect in miniature: the presence of configuration is not
+ * evidence that the connection works, and a machine whose data-plane token was revoked, rotated
+ * away or deleted would have been labelled `connected: true` while it could not reach the hub at
+ * all. `collectClientConnectionStatus` is the one reader that knows — it compares the token file's
+ * fingerprint against the connection record — so the caller passes its answer in and this stays
+ * pure and testable.
+ *
+ * Synthetic and NOT persisted, for two reasons. `clientConnectionSchema` is `.strict()`, so a
+ * `client.note` field would not validate; and persisted prose drifts from the behaviour it
+ * describes. The leading underscore marks it as an annotation rather than a setting, and
+ * `config export` emits the real config untouched so round-trips still validate.
+ */
+export function remoteHubConfigNote(
+  config: OcxConfig,
+  readConnection: () => Pick<ClientConnectionStatus, "state" | "reason" | "token">,
+): { connected: boolean; origin: string; note: string } | null {
+  if (config.runtimeRole !== "client" || !config.client) return null;
+  // A thunk, so a standalone or hub install pays nothing: the guard above returns first and the
+  // connection probe (three file reads) never runs.
+  const connection = readConnection();
+  // Both halves are required: a settled connection record AND the token it recorded. Either one
+  // alone describes a machine that cannot read its hub, and `ocx status` is still the command
+  // that has the facts — so the note points there in every case, connected or not.
+  const connected = connection.state === "connected" && connection.token === "owned";
+  const note = connection.state !== "connected"
+    ? `this machine is configured as a client but its connection is ${connection.state}${connection.reason ? ` (${connection.reason})` : ""}; run ocx connect status`
+    : connection.token !== "owned"
+      ? `this machine is configured as a client but its hub data-plane token is ${connection.token}; run ocx connect status`
+      : "provider credentials and model availability live on the hub; run ocx status";
+  return { connected, origin: config.client.serverUrl, note };
+}
+
 function redact(value: unknown, key = ""): unknown {
   if (SECRET_KEYS.test(key) && typeof value === "string") return value ? "********" : value;
+  // `client.priorCatalog` is the base64 catalog snapshot connect took before overwriting the
+  // local one — up to 64 MB of it (src/config.ts). Printed in full it buried `runtimeRole` and
+  // the `client` block under a wall of base64, which is how a reader came to miss that this
+  // machine is a client at all. Size only, mirroring sanitizeModelCostsForDisplay.
+  if (key === "priorCatalog" && typeof value === "string") {
+    return value ? `<omitted: ${Buffer.byteLength(value)} bytes>` : value;
+  }
   // modelCosts rows are keyed by model id; a pasted API key in a key position
   // must not be echoed back by config show/get (values are already redacted).
   if (key === "modelCosts") return sanitizeModelCostsForDisplay(value);
@@ -119,7 +167,25 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const source = takeFlag(args, "--source");
       rejectArgs(args, USAGE);
       const diagnostics = readConfigDiagnostics();
-      const config = redact(diagnostics.config);
+      const redacted = redact(diagnostics.config);
+      // Imported here rather than at module scope: `./connect` pulls the whole client lifecycle
+      // in, and `ocx config get/set` has no use for it.
+      const { collectClientConnectionStatus } = await import("./connect");
+      // The readiness probe is declined explicitly. `collectClientConnectionStatus` observes the
+      // local Codex ladder for a connected client, and observing it spawns `codex debug models`
+      // under a 45s budget. `ocx config show` reads only `state`, `reason` and `token` from the
+      // result, so paying for a subprocess here would buy nothing and would quietly turn a
+      // read-only config dump into a runtime probe. Returning no ladder resolves readiness to
+      // `unverified`, which is the honest answer for a caller that never asked.
+      const note = remoteHubConfigNote(
+        diagnostics.config,
+        () => collectClientConnectionStatus(undefined, undefined, { supportedEfforts: () => null }),
+      );
+      // First key, not last: it has to be read before the empty `providers` map that misled a
+      // reader into concluding nothing was configured anywhere.
+      const config = note && redacted && typeof redacted === "object" && !Array.isArray(redacted)
+        ? { _remoteHub: note, ...redacted as Record<string, unknown> }
+        : redacted;
       const result = source ? { config, source: diagnostics.source, error: diagnostics.error, warnings: diagnostics.warnings ?? [] } : config;
       printData(result, true);
       return;

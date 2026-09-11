@@ -478,6 +478,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 // replay on this leg eligible for the same dead socket the reset came from.
                 return requestFetch(request.url, applyUpstreamRecoveryInit({
                   method: request.method,
+                  redirect: "manual",
                   headers: h,
                   body: request.body,
                   signal: headerDeadline.signal,

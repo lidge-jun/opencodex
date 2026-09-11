@@ -41,7 +41,7 @@ const KEYRING_SERVICE = "opencodex.native-main-profile.v1";
 const SHARED_METADATA_DIR = ".opencodex-native-main-profiles";
 const INSTANCE_STAGING_DIR = "native-main-profile-staging";
 const LEGACY_METADATA_DIR = "native-main-profiles";
-const MAX_AUTH_BYTES = 4 * 1024 * 1024;
+export const MAX_AUTH_BYTES = 4 * 1024 * 1024;
 export const MAX_NATIVE_PROFILE_METADATA_BYTES = 4 * 1024 * 1024;
 export const MAX_NATIVE_PROFILE_JOURNAL_BYTES = 17 * 1024 * 1024;
 export const MAX_NATIVE_PROFILES = 32;
@@ -376,7 +376,7 @@ export function resolveNativeProfileContext(options: { codexHome?: string; confi
   };
 }
 
-function readBounded(path: string, limit: number, testSeam?: BoundedReadTestSeam): Buffer {
+export function readBounded(path: string, limit: number, testSeam?: BoundedReadTestSeam): Buffer {
   let fd: number | undefined;
   let failed = false;
   try {

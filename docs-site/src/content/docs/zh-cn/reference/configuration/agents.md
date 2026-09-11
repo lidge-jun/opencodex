@@ -26,15 +26,25 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 
 管理 API 公开 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 和 `/api/subagent-model-fallback`。injection-model 更新是部分更新；自定义 prompt 是该 API 上的 `prompt` 字段。
 
+## 始终主动委派
+
+Subagents → 高级中的 **始终主动委派**（原名 **Ultra mode**）只改变触发委派的条件，不改变推理 effort。推荐预设仍遵循用户指令、权限边界、任务范围和工具规则。
+
+`GET` 和 `PUT /api/v2` 还会返回 `multiAgentModeHintRecommendation: { text, revision }`。仪表板在启用或恢复预设时使用服务器提供的文本，不会回退到硬编码文案。如果旧服务器没有提供推荐值，或返回的值格式无效，则无法应用或恢复预设；仍可编辑或清除现有的自定义提示。恢复预设只修改本地草稿，保存操作才会将其写入配置。
+
+读取设置、无关更新和版本升级不会迁移已保存的提示。只有显式更新提示，且正文与两种已知旧版 OpenCodex 预设之一逐字节完全一致时，才会替换为当前推荐文本。其他有效的自定义文本，包括仅空白字符不同的变体，都会逐字节保留。现有的 v2 启用、功能支持检查和清除提示规则保持不变；更改会应用于新的 Codex 会话。
+
 ## 名单与引导
 
-有效的 v2 名单，是已配置、在选择器中可见、按优先级排序的前五个模型中，和 v2 兼容且存在于注入目录中的那些模型。v2 资格判定会把显式的 `"v2"`、`null`，或缺失的上游固定值视为可用；真正的 `"v1"` 固定值会被排除。被排除的条目仍会保留在配置中，以便将来重新变为可用。
+有效的 v2 名单，是已配置、在选择器中可见、按优先级排序的前五个模型中，存在于注入目录且未明确标记为 `"disabled"` 的模型。显式的 `"v2"` 标记支持递归子代理；`"v1"`、`null` 和缺失的标记仍可作为叶子子代理。被排除的条目仍会保留在配置中，以便将来重新变为可用。
 
 界面检测使用工具形状来判断。带命名空间的 `spawn_agent`，如果具有 `send_input`、`resume_agent` 或 `close_agent`，就是 v1。平铺的 `spawn_agent`，如果具有 `send_message`、`followup_task`、`interrupt_agent` 或 `list_agents`，就是 v2。
 
 V1 引导只会在 `max` 或 `ultra` 时以主动文本形式出现。V2 只有在存在首选模型、可用名单或回退链时，才会收到代理生成的开发者消息。内置 v2 引导有 700 个字符的预算，必要时会先删减名单。引导会在 replay prefix 之间去重，并插入到末尾的 `compaction_trigger` 之前。
 
-除非启用了原生默认值同步，`injectionModel` 和 `injectionEffort` 都只是建议。内置 v2 文本会要求 Codex 使用 `fork_turns: "none"` 将受支持的模型/effort 覆盖传给 `spawn_agent`。自定义 `injectionPrompt` 会把缺失值替换为空字符串。
+内置 v2 子代理引导和自定义 `injectionPrompt` 正文都使用 `<opencodex_subagent_guidance>`，与 Codex 原生的 `<multi_agent_mode>` 消息区分开来。内置文本会说明解析后的首选模型、名单和回退链，但不会指示委派、模型覆盖或 `fork_turns`。自定义正文的占位符替换和内容保持不变。除非启用了原生默认值同步，`injectionModel` 和 `injectionEffort` 仍只是建议；自定义占位符的缺失值仍替换为空字符串。
+
+replay 去重会分别与每类标签的最新文本进行精确比较。当两个值都使用新的代理标签时，从自定义引导切回内置形式会追加当前的引导内容；期间原生模式的变化不会导致未改变的代理引导被重复添加。现有的原生消息历史和带旧标签的历史都会保留。更换包装标签并不能确定旧消息的作者，也不会撤销先前的指令；对于混合版本的历史，不能仅凭旧标签进行分类，也不保证检测到这类历史中的设置切换。
 
 ## Codex 原生默认值同步
 
@@ -52,7 +62,7 @@ per-role fallback 链必须放在 opencodex 配置里。把 `model_fallback` 写
 `$CODEX_HOME/agents/*.toml` 会让 Codex 0.146+ 把整个角色文件当作未知字段拒绝并跳过该角色
 （#1190）。TOML 中的旧版 `model_fallback` 仍会被读取以保持向后兼容，但 `ocx doctor` 会标记它。
 
-opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或已达到配额阈值的候选项。可用性快照会在 `subagentModelFallbackPollMs` 期间缓存。对于加密的子任务，候选链只包含规范的原生 ChatGPT 目标，以及通过 `allowEncryptedV2AgentTasks: true` 明确信任的直接密钥认证 Responses 路由。如果没有目标能处理加密载荷，且可选恢复无法支持路由发送，请求就会失败，不会转发不可读的密文。combo 会先尝试可用的规范原生目标；如果没有可选择的原生目标或原生尝试已耗尽，且已启用 `agentTaskRecovery`，会在路由到 combo 目标前对加密的 `NEW_TASK` 恢复一次。
+opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或已达到配额阈值的候选项。可用性快照会在 `subagentModelFallbackPollMs` 期间缓存。对于加密的子任务，候选链只包含规范的原生 ChatGPT 目标，以及通过 `allowEncryptedV2AgentTasks: true` 明确信任的直接密钥认证 Responses 路由。如果没有目标能处理加密载荷，且可选恢复无法支持路由发送，请求就会失败，不会转发不可读的密文。combo 会先尝试可用的规范原生目标；如果没有可选择的原生目标或原生尝试已耗尽，且已启用 `agentTaskRecovery`，会在路由到 combo 目标前对加密的 `NEW_TASK` 恢复一次。combo 恢复只在 spawn 出的子回合生效；直接路由路径还会恢复会话中途的模型切换。
 
 ```json
 {

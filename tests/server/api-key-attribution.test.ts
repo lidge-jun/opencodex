@@ -632,7 +632,8 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // Read-only endpoints must be exercised with GET: sending POST would draw a 405
           // from routing and the assertions below would be testing the method guard rather
           // than admission. /v1/catalog joined this set in #809.
-          const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog";
+          const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog"
+            || row.endpoint === "/v1/hub-state";
           const res = await fetch(new URL(row.endpoint, server.url), {
             method: isGet ? "GET" : "POST",
             headers: { "content-type": "application/json", ...headers },
@@ -660,6 +661,10 @@ describe("AUTH_MATRIX is true of the running server", () => {
             // which is admission proof rather than a missing route. Pin the distinguishing
             // code so a deleted route still cannot pass here.
             if (row.endpoint === "/v1/catalog") expect(body.error?.code).toBe("catalog_not_found");
+            // /v1/hub-state 404s for the same kind of reason (#4236): this fixture is not a
+            // hub, and the role gate runs AFTER admission, so reaching the gate is itself the
+            // admission proof. Pin its distinguishing code too.
+            if (row.endpoint === "/v1/hub-state") expect(body.error?.code).toBe("hub_state_not_a_hub");
           }
           const admitted = res.status !== 401;
           expect({ endpoint: row.endpoint, headers: Object.keys(headers)[0], admitted })

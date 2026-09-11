@@ -1,3 +1,5 @@
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 /**
  * Issue #422: a Responses-shaped wire does not imply support for Codex's private
  * `compaction_trigger` item. Only the canonical ChatGPT backend speaks that
@@ -10,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import { OPAQUE_COMPACTION_NOTE, SUMMARY_PREFIX } from "../../src/responses/compaction";
+import { externalTaskInputContent } from "../../src/responses/task-input";
 import { looksLikeBackendCiphertext } from "../../src/server/responses/encrypted-payload";
 import * as adapterResolveModule from "../../src/server/adapter-resolve";
 import * as visionModule from "../../src/vision";
@@ -35,6 +38,8 @@ import { supportsNativeResponsesCompactEndpoint } from "../../src/providers/open
 import type { RequestLogContext } from "../../src/server/request-log";
 import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../../src/server/lifecycle";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
+import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
@@ -949,6 +954,90 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   }
 
+  for (const version of ["v1", "v2"] as const) {
+    test(`${version} recalled native combo reselects the current account and respects admission refusal`, async () => {
+      await withPoolEnv("ocx-combo-recall-account-", async config => {
+        clearComboRecallForTests();
+        clearComboSelectionState();
+        clearComboTargetCooldowns();
+        config.combos = { native: { targets: [{ provider: "openai", model: "gpt-5.5" }] } };
+        config.codexAccountNamespaces = { side: "pool-a" };
+        const headers = { session_id: "account-recall" };
+        const accounts: Array<string | null> = [];
+        // Fix the selected account deterministically while retaining the real credential
+        // and admission owner; an explicit namespace still owns its account selection.
+        const resolver = authContextModule.resolveCodexAuthContext;
+        const authSpy = spyOn(authContextModule, "resolveCodexAuthContext").mockImplementation(
+          (incoming, liveConfig, mode, options = {}) => resolver(incoming, liveConfig, mode, {
+            ...options, accountId: options.accountId ?? liveConfig.activeCodexAccountId,
+          }),
+        );
+        globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+          const request = new Request(input, init);
+          accounts.push(request.headers.get("chatgpt-account-id"));
+          const body = await request.json() as { input?: Array<{ type?: string }> };
+          if (request.url.endsWith("/responses/compact")) {
+            return jsonResponse({ output: [{ type: "compaction", encrypted_content: "native-recall-ciphertext" }] });
+          }
+          const compact = Array.isArray(body.input) && body.input.some(item => item.type === "compaction_trigger");
+          return sseResponse([{ type: "response.completed", response: {
+            ...completedPayload("native answer"), model: "gpt-5.5",
+            ...(compact ? { output: [{ type: "compaction", encrypted_content: "native-recall-ciphertext" }] } : {}),
+          } }]);
+        }) as typeof fetch;
+        const client = new AbortController();
+        let completionTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          let complete!: () => void;
+          const completed = new Promise<void>(resolve => { complete = resolve; });
+          const seedWork = (async () => {
+            const seed = await handleResponses(compactionRequest({ model: "combo/native", stream: true, input: "hello" }, client.signal, headers),
+              config, { model: "", provider: "" }, { onResponseComplete: complete, abortSignal: client.signal });
+            expect(seed.status).toBe(200);
+            await seed.text();
+            await completed;
+          })();
+          await Promise.race([
+            seedWork,
+            new Promise<never>((_, reject) => {
+              completionTimer = setTimeout(() => reject(new Error("native combo seed did not complete")), 10_000);
+            }),
+          ]);
+          clearTimeout(completionTimer);
+          completionTimer = undefined;
+          expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "account-recall" })), "gpt-5.5")).toBe("native");
+          config.activeCodexAccountId = "pool-b";
+          const compact = version === "v1" ? handleResponsesCompact : handleResponses;
+          const log: RequestLogContext = { model: "", provider: "" };
+          const response = await compact(compactionRequest(baseCompactionBody({ model: "gpt-5.5", stream: true }), client.signal, headers), config, log);
+          expect(response.status).toBe(200);
+          await response.text();
+          expect(log.comboId).toBe("native");
+          expect(accounts).toEqual(["pool_acc_a", "pool_acc_b"]);
+
+          const explicitLog: RequestLogContext = { model: "", provider: "" };
+          const explicit = await compact(compactionRequest(baseCompactionBody({ model: "side/gpt-5.5", stream: true }), client.signal, headers), config, explicitLog);
+          expect(explicit.status).toBe(200);
+          await explicit.text();
+          expect(explicitLog.comboId).toBeUndefined();
+          expect(accounts.at(-1)).toBe("pool_acc_a");
+          const sends = accounts.length;
+          authSpy.mockRejectedValue(new authContextModule.CodexMainProfileDrainingError());
+          const refused = await compact(compactionRequest(baseCompactionBody({ model: "gpt-5.5", stream: true }), client.signal, headers), config, { model: "", provider: "" });
+          expect(refused.status).toBe(503);
+          expect(accounts).toHaveLength(sends);
+        } finally {
+          if (completionTimer !== undefined) clearTimeout(completionTimer);
+          client.abort();
+          authSpy.mockRestore();
+          clearComboRecallForTests();
+          clearComboSelectionState();
+          clearComboTargetCooldowns();
+        }
+      });
+    });
+  }
+
   for (const [model, account] of [["gpt-5.5", "pool-a"], ["side/gpt-5.5", "pool-b"]] as const) {
     test(`native 404 falls back to canonical SSE with ${model} account and session identity`, async () => {
       await withPoolEnv("ocx-compact-404-canonical-", async config => {
@@ -1693,6 +1782,419 @@ describe("compact alternate-account attempt (#913)", () => {
   });
 });
 
+describe("compaction combo recall after combo switch (#3891)", () => {
+  afterEach(() => clearComboRecallForTests());
+
+  function comboTestConfig(): OcxConfig {
+    return {
+      defaultProvider: "gw",
+      providers: {
+        gw: {
+          adapter: "openai-chat",
+          baseUrl: "https://gw-primary.example/v1",
+          authMode: "key",
+          apiKey: "key-gw",
+          models: ["gpt-5.6-terra"],
+        },
+        alt: {
+          adapter: "openai-chat",
+          baseUrl: "https://gw-alt.example/v1",
+          authMode: "key",
+          apiKey: "key-alt",
+          models: ["gpt-5.6-luna"],
+        },
+      },
+      combos: {
+        terra: { strategy: "failover", targets: [{ provider: "gw", model: "gpt-5.6-terra" }] },
+      },
+    } as unknown as OcxConfig;
+  }
+
+  function chatCompletionPayload(text: string): Record<string, unknown> {
+    return {
+      choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    };
+  }
+
+  // The routed compact turn dispatches combo children as SSE (stream is forced
+  // when route.combo is set), so streaming-capable mocks answer the chat wire.
+  function chatStreamResponse(text: string): Response {
+    return new Response([
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+  }
+
+  test("bare native model after combo switch routes through the remembered combo", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
+      return jsonResponse(chatCompletionPayload("handoff summary"));
+    }) as typeof fetch;
+
+    const config = comboTestConfig();
+    const laneHeaders = { "session_id": "lane-combo-recall" };
+
+    // Step 1: an ordinary combo turn succeeds, populating the recall map.
+    const comboRes = await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(comboRes.status).toBe(200);
+
+    // Step 2: compaction arrives with the bare native model on the same lane.
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponses(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("terra");
+    expect(logCtx.requestedModel).toBe("combo/terra");
+    const json = await res.json() as { output?: Array<{ type?: string }> };
+    expect((json.output ?? []).filter(item => item.type === "compaction").length).toBe(1);
+  });
+
+  test("v1 /responses/compact takes the same recall path", async () => {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const body = await request.json() as { stream?: boolean };
+      return body.stream === true
+        ? chatStreamResponse("handoff summary")
+        : jsonResponse(chatCompletionPayload("handoff summary"));
+    }) as typeof fetch;
+
+    const config = comboTestConfig();
+    const laneHeaders = { "session_id": "lane-compact-recall" };
+
+    const comboRes = await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(comboRes.status).toBe(200);
+
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const compactRes = await handleResponsesCompact(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(compactRes.status).toBe(200);
+    expect(logCtx.provider).toBe("combo");
+  });
+
+  test("a different lane does not borrow the remembered combo", async () => {
+    globalThis.fetch = (async () => jsonResponse(chatCompletionPayload("handoff summary"))) as typeof fetch;
+
+    const config = comboTestConfig();
+
+    // Populate recall on lane A.
+    await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, { "session_id": "lane-A" }),
+      config,
+      { model: "", provider: "" },
+    );
+
+    // Compaction on lane B: the bare model should NOT be rewritten to the combo.
+    // It falls through to the compaction default-provider fallback (#2901) and lands on gw.
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponses(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, { "session_id": "lane-B" }),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("gw");
+    expect(logCtx.comboId).toBeUndefined();
+  });
+
+  test("a non-matching bare model is not rewritten", async () => {
+    globalThis.fetch = (async () => jsonResponse(chatCompletionPayload("handoff summary"))) as typeof fetch;
+
+    const config = comboTestConfig();
+    const laneHeaders = { "session_id": "lane-no-match" };
+
+    await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+
+    // Bare model "gpt-5.6-luna" does not match terra combo target "gpt-5.6-terra".
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponses(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-luna" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("gw");
+    expect(logCtx.comboId).toBeUndefined();
+  });
+
+  test("recall routes before the bare model can 404 without an openai provider", async () => {
+    // Maintainer review: with no canonical openai row, the bare model dies in
+    // routeCompactionModel before any combo logic unless the recall rewrite
+    // also reaches the routed identity, not only the raw body model.
+    const config = {
+      defaultProvider: "openai",
+      providers: {
+        gw: {
+          adapter: "openai-chat",
+          baseUrl: "https://gw-primary.example/v1",
+          authMode: "key",
+          apiKey: "key-gw",
+          models: ["gpt-5.6-terra"],
+        },
+      },
+      combos: {
+        terra: { strategy: "failover", targets: [{ provider: "gw", model: "gpt-5.6-terra" }] },
+      },
+    } as unknown as OcxConfig;
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push(body);
+      return body.stream === true
+        ? chatStreamResponse("handoff summary")
+        : jsonResponse(chatCompletionPayload("handoff summary"));
+    }) as typeof fetch;
+
+    const laneHeaders = { "session_id": "lane-recall-404" };
+    const comboRes = await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(comboRes.status).toBe(200);
+
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponsesCompact(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("terra");
+    // The internal combo turn goes out streaming through the combo dispatch.
+    expect(bodies[1]!.stream).toBe(true);
+    await res.text();
+  });
+
+  test("recall keeps a native-compact target on the combo /responses path", async () => {
+    // CodeRabbit review: the recalled target itself can live on a provider
+    // that supports the native /responses/compact endpoint. Without the
+    // routed identity sync, the bare model would go straight to the native
+    // compact endpoint and bypass combo dispatch entirely.
+    const config = {
+      defaultProvider: "openai-apikey",
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+      combos: {
+        terra: { strategy: "failover", targets: [{ provider: "openai-apikey", model: "gpt-5.6-terra" }] },
+      },
+    } as unknown as OcxConfig;
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/responses/compact")) {
+        return Response.json({ detail: "Not Found" }, { status: 404 });
+      }
+      calls.push({ url: request.url, body: await request.json() as Record<string, unknown> });
+      return calls.at(-1)!.body.stream === true
+        ? sseResponse([{ type: "response.completed", response: { ...completedPayload("handoff summary"), model: "gpt-5.6-terra" } }])
+        : jsonResponse({ ...completedPayload("handoff summary"), model: "gpt-5.6-terra" });
+    }) as typeof fetch;
+
+    const laneHeaders = { "session_id": "lane-recall-native" };
+    const comboRes = await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(comboRes.status).toBe(200);
+
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponsesCompact(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("terra");
+    // Both upstream calls take the plain /responses path; the native compact
+    // endpoint (which this provider supports) must never be hit.
+    expect(calls.map(call => call.url)).toEqual([
+      "https://api.openai.com/v1/responses",
+      "https://api.openai.com/v1/responses",
+    ]);
+    expect(calls[1]!.body.stream).toBe(true);
+    await res.text();
+  });
+
+  function installRecallChatFixture(): void {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const body = await new Request(input, init).json() as { stream?: boolean };
+      return body.stream ? chatStreamResponse("summary") : jsonResponse(chatCompletionPayload("answer"));
+    }) as typeof fetch;
+  }
+
+  async function seedRecall(config: OcxConfig, lane: string | undefined = "recall-lane"): Promise<void> {
+    const response = await handleResponses(compactionRequest(
+      { model: "combo/terra", stream: false, input: "hello" }, undefined,
+      lane ? { session_id: lane } : {},
+    ), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "completed", model: "gpt-5.6-terra" });
+  }
+
+  for (const version of ["v1", "v2"] as const) {
+    const compact = version === "v1" ? handleResponsesCompact : handleResponses;
+    const dispatch = async (config: OcxConfig, model: string, lane: string | undefined = "recall-lane") => {
+      const log: RequestLogContext = { model: "", provider: "" };
+      const response = await compact(compactionRequest(baseCompactionBody({ model }), undefined,
+        lane ? { session_id: lane } : {}), config, log);
+      expect(response.status).toBe(200);
+      await response.text();
+      return log;
+    };
+
+    test(`${version} explicit bare nativeAlias beats a different remembered combo`, async () => {
+      installRecallChatFixture();
+      const config = comboTestConfig();
+      config.combos!.explicit = {
+        alias: "gpt-5.6-terra", nativeAlias: true,
+        targets: [{ provider: "alt", model: "gpt-5.6-luna" }],
+      };
+      await seedRecall(config);
+      expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "recall-lane" })), "gpt-5.6-terra")).toBe("terra");
+      const log = await dispatch(config, "gpt-5.6-terra");
+      expect(log.comboId).toBe("explicit");
+      expect(log.resolvedModel).toBe("gpt-5.6-luna");
+    });
+
+    test(`${version} explicit provider and combo selectors beat recall`, async () => {
+      installRecallChatFixture();
+      const config = comboTestConfig();
+      config.combos!.explicit = { targets: [{ provider: "alt", model: "gpt-5.6-luna" }] };
+      await seedRecall(config);
+      expect((await dispatch(config, "alt/gpt-5.6-luna")).provider).toBe("alt");
+      expect((await dispatch(config, "combo/explicit")).comboId).toBe("explicit");
+    });
+
+    for (const mutation of ["delete", "rename", "replace-target", "delete-provider", "disable-provider"] as const) {
+      test(`${version} ${mutation} invalidates remembered ownership before fallback`, async () => {
+        installRecallChatFixture();
+        const config = comboTestConfig();
+        await seedRecall(config);
+        // The default is distinct from the original target and remains usable.
+        config.defaultProvider = "alt";
+        if (mutation === "rename") config.combos!.renamed = config.combos!.terra!;
+        if (mutation === "delete" || mutation === "rename") delete config.combos!.terra;
+        if (mutation === "replace-target") config.combos!.terra!.targets = [{ provider: "alt", model: "gpt-5.6-luna" }];
+        if (mutation === "delete-provider") delete config.providers.gw;
+        if (mutation === "disable-provider") config.providers.gw!.disabled = true;
+        const log = await dispatch(config, "gpt-5.6-terra");
+        expect(log.comboId).toBeUndefined();
+        expect(log.provider).toBe("alt");
+      });
+    }
+
+    test(`${version} missing and sibling lanes cannot borrow a completed selection`, async () => {
+      installRecallChatFixture();
+      const config = comboTestConfig();
+      await seedRecall(config);
+      expect((await dispatch(config, "gpt-5.6-terra", "sibling")).comboId).toBeUndefined();
+      // Empty lane explicitly omits the header (undefined would use the helper default).
+      expect((await dispatch(config, "gpt-5.6-terra", "")).comboId).toBeUndefined();
+      clearComboRecallForTests();
+      await seedRecall(config, "");
+      expect((await dispatch(config, "gpt-5.6-terra")).comboId).toBeUndefined();
+    });
+
+    test(`${version} recall expires at thirty minutes and evicts the oldest of 257 lanes`, async () => {
+      installRecallChatFixture();
+      const config = comboTestConfig();
+      let now = 100_000;
+      const clock = spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        await seedRecall(config);
+        now += 30 * 60 * 1000 - 1;
+        expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "recall-lane" })), "gpt-5.6-terra")).toBe("terra");
+        now += 1;
+        expect((await dispatch(config, "gpt-5.6-terra")).comboId).toBeUndefined();
+        const target = { provider: "gw", model: "gpt-5.6-terra" };
+        for (let index = 0; index < 257; index += 1) {
+          rememberComboForLane(sessionLaneIdFromRequest(new Headers({ session_id: `lane-${index}` })), "terra", target, "gpt-5.6-terra", captureConfigGeneration());
+        }
+        expect((await dispatch(config, "gpt-5.6-terra", "lane-0")).comboId).toBeUndefined();
+        expect((await dispatch(config, "gpt-5.6-terra", "lane-1")).comboId).toBe("terra");
+        expect((await dispatch(config, "gpt-5.6-terra", "lane-256")).comboId).toBe("terra");
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    test(`${version} virtual Pro target recalls the emitted base model`, async () => {
+      const config = comboTestConfig();
+      config.providers["openai-apikey"] = {
+        adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key", apiKey: "test-key",
+      };
+      config.combos!.terra!.targets = [{ provider: "openai-apikey", model: "gpt-5.6-terra-pro" }];
+      const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const body = await request.json() as Record<string, unknown>;
+        calls.push({ url: request.url, body });
+        const completed = { ...completedPayload("summary"), model: "gpt-5.6-terra" };
+        return body.stream ? sseResponse([{ type: "response.completed", response: completed }]) : jsonResponse(completed);
+      }) as typeof fetch;
+      await seedRecall(config);
+      expect(calls[0]!.body).toMatchObject({ model: "gpt-5.6-terra", reasoning: { mode: "pro" } });
+      expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "recall-lane" })), "gpt-5.6-terra-pro")).toBeUndefined();
+      expect((await dispatch(config, "gpt-5.6-terra")).comboId).toBe("terra");
+      expect(calls.every(call => call.url.endsWith("/responses"))).toBe(true);
+    });
+
+    test(`${version} recalled combo resolves the current key rather than retaining a credential`, async () => {
+      const config = comboTestConfig();
+      const auth: Array<string | null> = [];
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        auth.push(request.headers.get("authorization"));
+        const body = await request.json() as { stream?: boolean };
+        return body.stream ? chatStreamResponse("summary") : jsonResponse(chatCompletionPayload("answer"));
+      }) as typeof fetch;
+      await seedRecall(config);
+      config.providers.gw!.apiKey = "key-current";
+      expect((await dispatch(config, "gpt-5.6-terra")).comboId).toBe("terra");
+      expect(auth).toEqual(["Bearer key-gw", "Bearer key-current"]);
+    });
+  }
+
+});
+
 test("a no-eligible policy compact request persists the evaluation trace", async () => {
   const config = {
     ...keyProviderConfig(),
@@ -1890,9 +2392,27 @@ describe("external task-input envelopes (#3735)", () => {
     expect(captured[0]!.messages).toEqual([{ role: "user", content: "plaintext task" }]);
   });
 
+  test("an empty or null call_id is task input, not a rejection (#3807 supersedes)", async () => {
+    // These two shapes were in the invalid list above until #3807 showed they are the same
+    // seed as the absent-field form: neither value can pair with a `function_call`, and a
+    // Codex desktop sub-agent seed emitted with an explicit `call_id: null` was answered
+    // 400 for a turn that is really external task input. A wrong-TYPED key stays rejected.
+    const captured: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      captured.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ id: "chat_seed", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    }) as typeof fetch;
+    for (const callId of [null, ""]) {
+      captured.length = 0;
+      const res = await handleResponses(compactionRequest(body({ ...external("seeded task"), call_id: callId })),
+        keyProviderConfig({ adapter: "openai-chat" }), { model: "", provider: "" });
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(captured[0]!.messages).toEqual([{ role: "user", content: "seeded task" }]);
+    }
+  });
+
   const invalid: Array<[string, Record<string, unknown>]> = [
-    ["empty call id", { ...external(), call_id: "" }],
-    ["null call id", { ...external(), call_id: null }],
     ["numeric call id", { ...external(), call_id: 42 }],
     ["incomplete metadata", { ...external(), namespace: "" }],
     ["custom output", { ...external(), type: "custom_tool_call_output" }],
@@ -2165,5 +2685,51 @@ describe("unpaired tool result boundary (#3259)", () => {
     expect(bodies.length).toBe(1);
     expect(bodies[0]).toContain("[tool output for unknown call]");
     expect(bodies[0]).not.toContain("undefined");
+  });
+});
+
+describe("unusable-call_id task-input seed (#3807)", () => {
+  const seed = (extra: Record<string, unknown>) => ({
+    type: "function_call_output", id: "fc_seed", name: "create_thread", namespace: "codex",
+    output: "<codex_delegation>continue</codex_delegation>", ...extra,
+  });
+
+  test("a seed carrying call_id: null is admitted as task input", () => {
+    // `null` is not a pairing key, so the item is the same external seed the absent-field
+    // form already carries. Rejecting it produced the reported 400 on clients that emit
+    // the field explicitly.
+    expect(externalTaskInputContent(seed({ call_id: null }))).toBe("<codex_delegation>continue</codex_delegation>");
+  });
+
+  test("a seed carrying an empty-string call_id is admitted identically", () => {
+    expect(externalTaskInputContent(seed({ call_id: "" }))).toBe("<codex_delegation>continue</codex_delegation>");
+    expect(externalTaskInputContent(seed({ call_id: "   " }))).toBe("<codex_delegation>continue</codex_delegation>");
+  });
+
+  test("the absent-field form still works (no regression on a73bb160f)", () => {
+    expect(externalTaskInputContent(seed({}))).toBe("<codex_delegation>continue</codex_delegation>");
+  });
+
+  test("a REAL call_id is still a paired tool result, never task input", () => {
+    // The pairing key is what separates a tool result from a seed. Admitting a paired
+    // result as user text would silently drop a real tool round-trip.
+    expect(externalTaskInputContent(seed({ call_id: "call_1" }))).toBeUndefined();
+  });
+
+  test("a non-string, non-null call_id stays rejected", () => {
+    // A numeric id is malformed input, not the absent-pairing seed shape; it keeps the
+    // #3259 rejection so a wrong-typed key cannot reach a translating adapter.
+    expect(externalTaskInputContent(seed({ call_id: 42 }))).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: {} }))).toBeUndefined();
+  });
+
+  test("every other #3735 validation still holds with an unusable call_id", () => {
+    // The relaxation is ONLY about the pairing key. Envelope completeness, blank output,
+    // and opaque ciphertext keep their existing rejections.
+    expect(externalTaskInputContent({ type: "function_call_output", call_id: null, output: "x" })).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: null, namespace: "" }))).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: null, output: "   " }))).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: null, output: [] }))).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: null, output: [{ type: "input_image", image_url: 42 }] }))).toBeUndefined();
   });
 });

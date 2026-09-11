@@ -181,6 +181,7 @@ describe("Anthropic vision executor", () => {
   test("POSTs /v1/messages with the Claude Code OAuth fingerprint and a base64 image block", async () => {
     let captured: { url: string; headers: Headers; body: Record<string, unknown> } | undefined;
     globalThis.fetch = (async (url, init) => {
+      expect(init?.redirect).toBe("manual");
       captured = {
         url: String(url),
         headers: new Headers(init?.headers),

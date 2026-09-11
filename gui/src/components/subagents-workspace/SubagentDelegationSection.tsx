@@ -299,10 +299,15 @@ export default function SubagentDelegationSection({
         <button
           type="button"
           className={`switch ${ultraOn ? "on" : ""}`}
-          onClick={() => onUltraModeSave({ multiAgentModeHintText: ultraOn ? null : ULTRA_MODE_PRESET })}
+          onClick={() => {
+            if (ultraOn) onUltraModeSave({ multiAgentModeHintText: null });
+            else if (ultraMode.recommendation) {
+              onUltraModeSave({ multiAgentModeHintText: ultraMode.recommendation.text });
+            }
+          }}
           // Turning OFF (clear) is always safe, even when v2 is disabled — a stale
           // hint would otherwise silently re-activate on the next v2 enable.
-          disabled={saving || ultraSaving || (!ultraOn && !ultraMode.multiAgentV2Enabled)}
+          disabled={saving || ultraSaving || (!ultraOn && (!ultraMode.multiAgentV2Enabled || !ultraMode.recommendation))}
           aria-label={t("sub.ultraMode")}
           aria-pressed={ultraOn}
         >
@@ -319,7 +324,7 @@ export default function SubagentDelegationSection({
             initialHint={ultraMode.hintText ?? ""}
             disabled={saving || ultraSaving}
             onSave={onUltraModeSave}
-            preset={ULTRA_MODE_PRESET}
+            preset={ultraMode.recommendation?.text ?? null}
             labels={{
               text: t("sub.ultraModeText"),
               preset: t("sub.ultraModePreset"),
@@ -348,7 +353,7 @@ function UltraModeEditor({
   initialHint: string;
   disabled: boolean;
   onSave: (patch: UltraModePatch) => void;
-  preset: string;
+  preset: string | null;
   labels: { text: string; preset: string; save: string };
 }) {
   const [draft, setDraft] = useState(initialHint);
@@ -369,8 +374,8 @@ function UltraModeEditor({
       <button
         type="button"
         className="btn btn-ghost btn-sm"
-        onClick={() => setDraft(preset)}
-        disabled={disabled}
+        onClick={() => { if (preset !== null) setDraft(preset); }}
+        disabled={disabled || preset === null}
       >
         {labels.preset}
       </button>
@@ -385,7 +390,3 @@ function UltraModeEditor({
     </>
   );
 }
-
-/** Canonical Proactive delegation text mirrored from codex-rs (multi_agent_mode_instructions.rs). */
-export const ULTRA_MODE_PRESET =
-  "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Delegate independent sub-tasks to sub-agents whenever parallel work would materially improve speed or quality — do not serialize work that can run concurrently. Each sub-agent runs in its own context and can use all available tools; prefer spawning specialists over doing everything yourself. This mode remains active until a later multi-agent mode developer message changes it.";

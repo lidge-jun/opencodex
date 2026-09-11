@@ -2,6 +2,7 @@ import { usageSummary30dResourceKey } from "../usage-summary-resource";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
+import { matchingWorkspacePreset, type CatalogPreset } from "../components/provider-catalog/provider-presets";
 import { isAccountProvider, type WorkspaceProvider } from "../provider-workspace/catalog";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { oauthTosRisk } from "../oauth-tos-risk";
@@ -259,8 +260,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, []);
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
-    if (completion.catalogRefreshPending) {
-      setStatus(t("codexAuth.catalogRefreshPending"));
+    if (completion.validationPending || completion.catalogRefreshPending) {
+      setStatus(t(completion.validationPending ? "pws.healthLabel.validationPending" : "codexAuth.catalogRefreshPending"));
       setStatusOk(false);
       setStatusTone("warn");
       setStatusRevision(revision => revision + 1);
@@ -290,13 +291,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // modal does not wait on a cold /api/provider-presets round-trip (~same key as
   // AddProviderModal). Prefetch usage too so the catalog does not paint alpha then
   // re-rank when the slow usage probe (~5s cold) finally returns.
-  useKeyedClientResource(
+  const presetResource = useKeyedClientResource(
     `add-provider-presets:${apiBase}`,
     [apiBase],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/provider-presets`, { signal });
       if (!res.ok) throw new Error(String(res.status));
-      const data = await res.json() as { providers?: unknown[] };
+      const data = await res.json() as { providers?: CatalogPreset[] };
       return Array.isArray(data.providers) && data.providers.length > 0 ? data.providers : null;
     },
   );
@@ -418,7 +419,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     const configured = config?.providers[provider];
     const mode = configured?.authMode;
     const readAccounts = configured && isAccountProvider(provider, configured)
-      ? () => codexPool.load(true)
+      ? () => codexPool.load(true, { validatePending: true })
       : mode === "oauth"
         ? () => fetchAccountSets([provider], true)
         : mode === "forward" || mode === "local"
@@ -598,6 +599,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <ProviderDetails
             key={item.name}
             item={item}
+            preset={matchingWorkspacePreset(item, presetResource.data ?? [])}
             usageTotals={data.usageTotals}
             modelUsage={data.modelUsage}
             quotaReport={data.quotaReport}
@@ -708,7 +710,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onCodexAdded={(completion) => {
           setCodexLoginOpen(false);
           notifyCodexCompletion(completion);
-          modelsNotice.open("openai", !config.providers.openai, completion.catalogRefreshPending);
+          if (!completion.validationPending) modelsNotice.open("openai", !config.providers.openai, completion.catalogRefreshPending);
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

@@ -439,6 +439,7 @@ function VisionAdvancedPopover({ t, open, triggerRef, onClose, maxValue, maxInva
 export function DashboardSidecarPanels({ d }: { d: Dash }) {
   const {
     t, settings, settingsSaving, syncing, toggleCodexAutoStart, toggleCodexDesktopAuthless,
+    toggleCodexClientCompaction,
     sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
@@ -519,6 +520,26 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             disabled={!settings || settingsSaving || syncing}
             aria-label={t("dash.codexDesktopAuthless")}
             aria-pressed={settings?.codexDesktopAuthless ?? false}
+          >
+            <span className="knob" />
+          </button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="spread">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="font-semibold">{t("dash.codexClientCompaction")}</div>
+            <div className="muted setting-hint">{t("dash.codexClientCompactionHint")}</div>
+            {settings?.catalogRefreshPending && <div className="muted setting-hint" role="status">{t("codexAuth.catalogRefreshPending")}</div>}
+          </div>
+          <button
+            type="button"
+            className={`switch ${settings?.codexClientCompaction ?? false ? "on" : ""}`}
+            onClick={toggleCodexClientCompaction}
+            disabled={!settings || settingsSaving || syncing}
+            aria-label={t("dash.codexClientCompaction")}
+            aria-pressed={settings?.codexClientCompaction ?? false}
           >
             <span className="knob" />
           </button>

@@ -253,6 +253,20 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |
 | `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다. 새 계정 완료 시 복구가 필요할 때만 `catalogRefreshPending: true`를 포함합니다. | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
 
+수동 소비가 `reset`으로 확인되면 같은 계정의 새 usage를 조회하여 기존 shared reset-derived
+쿨다운을 즉시 복구할 수 있습니다. 복구는 조건부입니다. 계정이 일시 정지되었거나 재인증이
+필요하거나 다른 진행 중인 probe가 쿨다운을 소유하면 쿨다운은 유지됩니다. reset 이전에 시작한
+조회, 불완전하거나 소진된 usage, 신원이 바뀐 계정, 더 최근의 quota 실패로는 복구하지 않습니다.
+오래된 main usage 응답은 더 최근에 반영한 관측을 덮어쓰지 않습니다. credential 갱신을 거쳤다면
+해당 인증에서 이어진 갱신인지 확인되어야 하며, 외부에서 교체된 credential은 같은 계정이어도
+복구 근거가 되지 않습니다. 명시적 `Retry-After`, Spark/Reserve 쿨다운, pause·pin·선택
+설정도 보존됩니다. `already_redeemed`와 저장된 결과 재생은 새 reset을 증명하지 않습니다.
+
+`reset` 또는 `already_redeemed`가 확인된 뒤 usage 조회가 실패하거나 바쁘더라도 소비 응답은
+HTTP 200과 원래 `code`를 유지합니다. 새 잔여 수를 얻지 못하면 `remaining`을 생략합니다.
+이는 소비 결과의 확인이며 라우팅 가능 상태를 보장하지 않습니다. usage를 다시 조회하십시오.
+usage 조회 실패를 재시도하기 위해 reset credit을 다시 소비하지 마십시오.
+
 새 account의 config row는 저장되었지만 credential setup을 완료하지 못하면 OAuth `login-status`는
 `status: "error"`를 보고하며
 `code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, 필요한 경우

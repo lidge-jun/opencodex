@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { ConfigMutationLockError, withConfigMutationLockSync } from "../config";
 import { atomicWriteFile } from "../config/atomic-write";
 import { getConfigDir } from "../config/paths";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
@@ -91,9 +92,9 @@ function readJournal(path: string): Journal {
   }
 }
 
-function writeJournal(path: string, journal: Journal): void {
+function writeJournal(path: string, journal: Journal, now: number): void {
   // Keep only entries whose credit could still matter: settled ones older than a week are noise.
-  const cutoff = Date.now() - 7 * 24 * 60 * 60_000;
+  const cutoff = now - 7 * 24 * 60 * 60_000;
   journal.entries = journal.entries.filter(e => e.state !== "settled" || e.updatedAt > cutoff);
   atomicWriteFile(path, JSON.stringify(journal, null, 2));
 }
@@ -112,6 +113,7 @@ export interface AutoRedeemDeps {
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
+  /** Callers sharing an overridden journal must also share the OPENCODEX_HOME mutation coordinator. */
   journalFile?: string;
   log?: (line: string) => void;
   /** Upper bound on one sleep so a laptop sleep or clock jump re-checks rather than trusting a stale plan. */
@@ -155,15 +157,38 @@ export function createResetCreditAutoRedeemer(deps: AutoRedeemDeps): ResetCredit
     handle = setTimer(() => { handle = null; void tick(); }, Math.max(0, Math.min(ms, maxSleepMs)));
   };
 
+  const retryJournal = (error: unknown): void => {
+    const cause = error instanceof ConfigMutationLockError ? error.cause : error;
+    const code = cause && typeof cause === "object" && "code" in cause ? String(cause.code) : "";
+    const busy = code === "SQLITE_BUSY" || code === "SQLITE_LOCKED"
+      || (cause instanceof Error && /database (?:is|table is) locked/i.test(cause.message));
+    schedule(busy ? 1_000 : idleRecheckMs);
+  };
+
   const dispatch = async (plan: AutoRedeemPlan): Promise<AutoRedeemOutcome> => {
-    const journal = readJournal(path);
-    let entry = journal.entries.find(e => e.accountKey === accountKey && e.grantedAt === plan.grantedAt && e.expiresAt === plan.expiresAt);
-    if (entry?.state === "settled") return { kind: "skipped", reason: "credit-gone" };
-    if (!entry) {
-      entry = { accountKey, grantedAt: plan.grantedAt, expiresAt: plan.expiresAt, redeemRequestId: randomUUID(), state: "dispatched", updatedAt: now() };
-      journal.entries.push(entry);
-      // Journal BEFORE the network call: a crash after this line replays the same request id.
-      writeJournal(path, journal);
+    // Reserve under the shared config-mutation lock. `inFlight` only serializes ticks inside
+    // ONE process; two servers on the same config dir would otherwise both read a journal with
+    // no entry, each mint a different `redeem_request_id`, and spend two credits for one plan.
+    let entry: JournalEntry;
+    try {
+      entry = withConfigMutationLockSync(() => {
+        const journal = readJournal(path);
+        const existing = journal.entries.find(e => e.accountKey === accountKey && e.grantedAt === plan.grantedAt && e.expiresAt === plan.expiresAt);
+        if (existing) return existing;
+        const created: JournalEntry = { accountKey, grantedAt: plan.grantedAt, expiresAt: plan.expiresAt, redeemRequestId: randomUUID(), state: "dispatched", updatedAt: now() };
+        journal.entries.push(created);
+        // Journal BEFORE the network call: a crash after this line replays the same request id.
+        writeJournal(path, journal, created.updatedAt);
+        return created;
+      });
+    } catch (error) {
+      // Only contention gets a short retry; persistent storage failures must not spin.
+      retryJournal(error);
+      return { kind: "error", message: error instanceof Error ? error.message : "journal reservation failed" };
+    }
+    if (entry.state === "settled") {
+      schedule(idleRecheckMs);
+      return { kind: "skipped", reason: "credit-gone" };
     }
     log(`[opencodex] reset-credit auto-redeem: dispatching for account ${accountKey} (credit expires ${plan.expiresAt})`);
     let result: { code: string };
@@ -174,9 +199,25 @@ export function createResetCreditAutoRedeemer(deps: AutoRedeemDeps): ResetCredit
       schedule(60_000);
       return { kind: "ambiguous", redeemRequestId: entry.redeemRequestId };
     }
-    entry.state = "settled";
-    entry.updatedAt = now();
-    writeJournal(path, journal);
+    // Re-read under the lock: a peer may have appended its own entries since the reservation,
+    // and writing a stale in-memory journal would drop them.
+    try {
+      withConfigMutationLockSync(() => {
+        const journal = readJournal(path);
+        const current = journal.entries.find(e => e.accountKey === accountKey && e.grantedAt === plan.grantedAt && e.expiresAt === plan.expiresAt);
+        if (!current || current.redeemRequestId !== entry.redeemRequestId) {
+          throw new Error("auto-redeem journal reservation changed before settlement");
+        }
+        current.state = "settled";
+        current.updatedAt = now();
+        writeJournal(path, journal, current.updatedAt);
+      });
+    } catch (error) {
+      // Upstream answered, but settlement could not be committed. Preserve any reservation;
+      // a later dispatch must reuse its request id. A vanished credit may never dispatch again.
+      retryJournal(error);
+      return { kind: "error", message: error instanceof Error ? error.message : "journal settlement failed" };
+    }
     log(`[opencodex] reset-credit auto-redeem: upstream answered ${result.code} for account ${accountKey}`);
     schedule(idleRecheckMs);
     return { kind: "dispatched", code: result.code, redeemRequestId: entry.redeemRequestId };

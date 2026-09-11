@@ -106,7 +106,9 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
         to,
       }, cursor, limit);
       return jsonResponse({
-        entries: page.rows.map(row => requestLogDto(requestLogEntryFromPersistedUsage(row))),
+        // The decode rate is a Logs-page metric; this endpoint shares the DTO but not its
+        // contract, so it opts out rather than silently widening its own response shape (#4038).
+        entries: page.rows.map(row => requestLogDto(requestLogEntryFromPersistedUsage(row), { includeDecodeRate: false })),
         ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         hasMore: page.hasMore,
         index: {
@@ -184,7 +186,7 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
     if (!entry) {
       return jsonResponse({ error: { code: "not_found", message: "unknown request" } }, 404, req, config);
     }
-    return jsonResponse(requestLogDto(requestLogEntryFromPersistedUsage(entry)), 200, req, config);
+    return jsonResponse(requestLogDto(requestLogEntryFromPersistedUsage(entry), { includeDecodeRate: false }), 200, req, config);
   }
 
   return null;

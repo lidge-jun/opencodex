@@ -20,11 +20,17 @@ export type DelegationPatch = {
 };
 
 /** Ultra mode (Proactive delegation for every model/effort) via /api/v2. */
+export type UltraModeHintRecommendation = {
+  text: string;
+  revision: string;
+};
+
 export type UltraModeState = {
   loaded?: boolean;
   keepNativeChatGptOnV1?: boolean;
   enabled: boolean;
   hintText: string | null;
+  recommendation: UltraModeHintRecommendation | null;
   multiAgentV2Enabled: boolean;
   /** The raw multi-agent mode; Subagents renders the v1/base/v2 switch from it. */
   multiAgentMode: "v1" | "default" | "v2";

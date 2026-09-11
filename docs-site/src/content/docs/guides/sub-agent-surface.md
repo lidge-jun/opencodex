@@ -99,8 +99,10 @@ when a preferred model, eligible roster, or fallback chain resolves. A configure
 is sufficient to render a custom prompt; if a bare value cannot resolve uniquely, `{{model}}`
 expands to an empty string.
 
-On v1, opencodex injects only the upstream-style proactive delegation guidance at `max` or `ultra`
-effort. It does not add a preferred model, roster, fallback list, or custom prompt on v1.
+On v1, opencodex injects the same proactive delegation guidance as the v2 recommended preset only
+at `max` or `ultra` effort. Only the delegation trigger changes: no separate delegation request is
+needed; user instructions, authority, task scope, and collaboration-tool rules still apply.
+It does not add a preferred model, roster, fallback list, or custom prompt on v1.
 
 The default-off `syncCodexSubagentDefaults` option is separate from guidance. When opencodex owns
 active Codex routing, sync or restart can write the selected values as marker-owned
@@ -170,6 +172,13 @@ byte-for-byte fidelity is not guaranteed. It rejects generic/API-key proxy calle
 `unreadable_encrypted_agent_task`; after native attempts have failed, their last error is retained. See
 [Agent configuration: Encrypted v2 task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery)
 for the full trust boundary and configuration.
+
+The same recovery also covers a live thread switched from a native ChatGPT model to a routed one.
+Such a thread replays a backend-minted encrypted agent message on every later turn, so before
+[#4089](https://github.com/lidge-jun/opencodex/issues/4089) it failed closed on every turn and the
+only workaround was to start a new thread. That switch turn is not a spawn, so the direct routed
+path no longer restricts recovery to spawned child turns; combo recovery still does.
+
 Combo routing prefers a selectable canonical native ChatGPT target for encrypted tasks. If none
 is usable, or native authorization attempts are exhausted, an explicitly enabled recovery may
 make the task readable for one available routed target. All recovery trust and no-persistence

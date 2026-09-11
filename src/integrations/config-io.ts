@@ -256,7 +256,10 @@ export function fileIO(): Omit<IntegrationIO, "appendJournal" | "putRecord" | "d
         return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "failed";
       }
     },
-    writeText: (path, text) => atomicWriteFile(path, text),
+    writeText: (path, text) => {
+      assertIntegrationWriteOwnership(path);
+      atomicWriteFile(path, text);
+    },
     removeFile: path => rmSync(path, { force: true }),
     mkdirp: path => mkdirSync(path, { recursive: true, mode: 0o700 }),
     now: () => Date.now(),
@@ -282,3 +285,53 @@ export function defaultIntegrationIO(store: {
     dropRecord: clientId => store.dropRecord(clientId),
   };
 }
+
+/**
+ * Refuse to replace an integration file this process does not own.
+ *
+ * `atomicWriteFile` writes a private temp file and renames it over the target. That is the right
+ * shape for a secret — the replacement is atomic and the result is owner-only `0600` — but it also
+ * means the surviving inode belongs to whoever runs opencodex. When the target is another product's
+ * configuration on a shared mount, the replace quietly takes the file away from its owner. #4197 is
+ * that case: opencodex at uid 1000 replaces a DSH `settings.yaml` owned by uid 987, and DSH dies with
+ * `EACCES` on its next read while the restore call reports success.
+ *
+ * Preserving the previous uid would need a `chown` capability we usually do not have, and relaxing
+ * `0600` would weaken every integration to fix one. So refuse before writing, and say what is wrong,
+ * rather than succeeding into a broken state.
+ *
+ * Windows has no uid model here; `hardenSecretPath` owns that platform, so the check is skipped when
+ * the runtime exposes no effective uid.
+ */
+export function assertIntegrationWriteOwnership(
+  path: string,
+  deps: {
+    effectiveUid?: () => number | undefined;
+    ownerUid?: (target: string) => number | undefined;
+  } = {},
+): void {
+  const effectiveUid = deps.effectiveUid ?? (() =>
+    typeof process.geteuid === "function" ? process.geteuid() : undefined);
+  const euid = effectiveUid();
+  if (euid === undefined) return;
+
+  const ownerUid = deps.ownerUid ?? ((target: string) => {
+    try {
+      return statSync(target).uid;
+    } catch {
+      // An absent or unreadable target has no owner to dispossess; the write itself will report
+      // any real failure.
+      return undefined;
+    }
+  });
+  const owner = ownerUid(path);
+  if (owner === undefined || owner === euid) return;
+
+  throw new Error(
+    `refusing to replace ${path}: it belongs to uid ${owner} while opencodex runs as uid ${euid}. `
+    + "An atomic replace would transfer ownership of that file and leave its owner unable to read "
+    + "its own configuration. Run both under the same user, or give each one its own copy instead "
+    + "of sharing the mount.",
+  );
+}
+

@@ -1,3 +1,4 @@
+import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
 import { managementFetch as fetch, ManagementRequest as Request } from "../helpers/management-auth";
@@ -38,7 +39,9 @@ import {
 import { clearCursorThreadContinuityForTests } from "../../src/adapters/cursor/thread-continuity";
 import { COMPACT_PROMPT, encodeCompactionSummary } from "../../src/responses/compaction";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
-import { consumeComboFailure } from "../../src/server/responses/core";
+import { consumeComboFailure, createChildPassthroughCallbackGate } from "../../src/server/responses/core";
+import { clearComboRecallForTests, recallComboForLane, reconcileComboRecall } from "../../src/server/responses/combo-session-recall";
+import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -139,6 +142,7 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-combo-030-"));
   process.env.OPENCODEX_HOME = testDir;
   clearComboSelectionState();
+  clearComboRecallForTests();
   clearComboTargetCooldowns();
   clearKeyCooldowns();
   clearCodexUpstreamHealth();
@@ -171,6 +175,7 @@ afterEach(async () => {
     isolatedCodexHome = null;
     if (testDir) removeTreeWithRetry(testDir);
     clearComboSelectionState();
+    clearComboRecallForTests();
     clearComboTargetCooldowns();
     clearKeyCooldowns();
     clearCodexUpstreamHealth();
@@ -432,6 +437,289 @@ function heldNativeTerminal(payload: Record<string, unknown>) {
 }
 
 describe("server combo failover 030 activation matrix", () => {
+  test("recall completion has an independent gate slot and publishes once only on commit", () => {
+    const calls: string[] = [];
+    const gate = createChildPassthroughCallbackGate({
+      onNativePassthroughTerminal: status => calls.push(status),
+      onResponseComplete: model => calls.push(model),
+    });
+    gate.onTerminal("completed");
+    gate.onResponseComplete("final-model");
+    expect(calls).toEqual([]);
+    gate.commit();
+    gate.commit();
+    gate.onResponseComplete("duplicate-model");
+    expect(calls).toEqual(["completed", "final-model"]);
+  });
+
+  for (const rejection of ["discard", "failed", "incomplete", "cancel"] as const) {
+    test(`recall gate drops pre-commit completion on ${rejection}`, () => {
+      const models: string[] = [];
+      const gate = createChildPassthroughCallbackGate({ onResponseComplete: model => models.push(model) });
+      gate.onResponseComplete("unaccepted-model");
+      if (rejection === "discard") gate.discard();
+      else if (rejection === "cancel") gate.onCancel();
+      else gate.onTerminal(rejection);
+      gate.commit();
+      gate.onResponseComplete("late-model");
+      expect(models).toEqual([]);
+    });
+  }
+
+  for (const wire of ["native", "chat", "runTurn"] as const) {
+    for (const stream of [false, true]) {
+      for (const terminal of ["completed", "failed", "incomplete"] as const) {
+        test(`${wire} ${stream ? "SSE" : "JSON"} ${terminal} B replaces A only after completed response`, async () => {
+          const encode = (events: Array<Record<string, unknown>>) => events.map(event =>
+            `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+          const upstream = serve(async request => {
+            const body = await request.json() as { model: string; stream?: boolean };
+            if (body.model === "m1") return Response.json(responsesSuccess("A", "m1"));
+            if (wire === "native") {
+              const response = { ...responsesSuccess("B output", "final-b"), status: terminal };
+              return stream ? new Response(encode([
+                { type: "response.output_text.delta", delta: "B output", item_id: "msg_b", output_index: 0, content_index: 0 },
+                { type: `response.${terminal}`, response },
+              ]), { headers: { "content-type": "text/event-stream" } }) : Response.json(response);
+            }
+            if (stream) {
+              if (terminal === "failed") return chatErrorStream("failed after output", "B output");
+              return new Response([
+                `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "B output" }, finish_reason: null }] })}\n\n`,
+                `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: terminal === "incomplete" ? "length" : "stop" }] })}\n\n`,
+                "data: [DONE]\n\n",
+              ].join(""), { headers: { "content-type": "text/event-stream" } });
+            }
+            if (terminal === "failed") return Response.json({ error: { message: "failed B" } });
+            return Response.json({ choices: [{ index: 0, message: { role: "assistant", content: "B output" }, finish_reason: terminal === "incomplete" ? "length" : "stop" }] });
+          });
+          customRunTurn = async (_parsed, _incoming, emit) => {
+            emit({ type: "text_delta", text: "B output" });
+            if (terminal === "failed") emit({ type: "error", message: "failed after output" });
+            else emit({ type: "done", ...(terminal === "incomplete" ? { stopReason: "length" } : {}) });
+          };
+          const config = comboConfig({
+            a: provider("openai-responses", baseUrl(upstream), "key-a"),
+            b: provider(wire === "native" ? "openai-responses" : wire === "chat" ? "openai-chat" : "test-run-turn", baseUrl(upstream), "key-b"),
+          });
+          config.combos = {
+            alpha: { targets: [{ provider: "a", model: "m1" }] },
+            beta: { targets: [{ provider: "b", model: "m2" }] },
+          };
+          const headers = { session_id: "terminal-recall" };
+          const a = await post(config, { model: "combo/alpha" }, {}, headers);
+          expect(await a.json()).toMatchObject({ status: "completed", model: "m1" });
+          expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "terminal-recall" })), "m1")).toBe("alpha");
+          const models: string[] = [];
+          const completed = deferred();
+          const b = await post(config, { model: "combo/beta", stream }, {
+            onResponseComplete: model => { models.push(model); completed.resolve(); },
+          }, headers);
+          const body = await b.text();
+          if (terminal === "completed") {
+            await within(completed.promise);
+            const expected = wire === "native" ? "final-b" : "m2";
+            expect(body).toContain(`"model":"${expected}"`);
+            expect(models).toEqual([expected]);
+            expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "terminal-recall" })), expected)).toBe("beta");
+            expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "terminal-recall" })), "m1")).toBeUndefined();
+          } else {
+            expect(models).toEqual([]);
+            expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "terminal-recall" })), "m1")).toBe("alpha");
+          }
+        });
+      }
+    }
+  }
+
+  for (const recordTerminalOutcomes of [true, false]) {
+    for (const scenario of ["completed", "missing-model", "empty-model", "failed-first", "incomplete-first", "undeclared-tool"] as const) {
+      test(`native SSE recall ${scenario} with terminal recording ${recordTerminalOutcomes}`, async () => {
+        const upstream = serve(() => {
+          const response = responsesSuccess("B", "final-b");
+          if (scenario === "missing-model") delete response.model;
+          if (scenario === "empty-model") response.model = "";
+          const events: Array<Record<string, unknown>> = [{ type: "response.output_text.delta", delta: "B", item_id: "msg_b", output_index: 0, content_index: 0 }];
+          if (scenario === "failed-first" || scenario === "incomplete-first") {
+            const status = scenario === "failed-first" ? "failed" : "incomplete";
+            events.push({ type: `response.${status}`, response: { ...response, status } });
+          }
+          if (scenario === "undeclared-tool") events.push({
+            type: "response.output_item.added", output_index: 0,
+            item: { type: "function_call", id: "fc_bad", call_id: "bad", name: "not_declared", arguments: "{}" },
+          });
+          // Empty terminal output cannot erase an earlier rejected tool call.
+          events.push({ type: "response.completed", response: { ...response, output: [] } });
+          return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
+            headers: { "content-type": "text/event-stream" },
+          });
+        });
+        const seed = serve(() => Response.json(responsesSuccess("A", "m1")));
+        const config = comboConfig({
+          a: provider("openai-responses", baseUrl(seed), "key-a"),
+          b: provider("openai-responses", baseUrl(upstream), "key-b"),
+        });
+        config.combos = {
+          alpha: { targets: [{ provider: "a", model: "m1" }] },
+          beta: { targets: [{ provider: "b", model: "m2" }] },
+        };
+        const headers = { session_id: "native-sticky" };
+        await (await post(config, { model: "combo/alpha" }, {}, headers)).text();
+        const completed = deferred();
+        const models: string[] = [];
+        const response = await post(config, { model: "combo/beta", stream: true, tools: [] }, {
+          recordTerminalOutcomes,
+          onResponseComplete: model => { models.push(model); completed.resolve(); },
+        }, headers);
+        await response.text();
+        if (scenario === "completed") {
+          await within(completed.promise);
+          expect(models).toEqual(["final-b"]);
+          expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "native-sticky" })), "final-b")).toBe("beta");
+        } else {
+          expect(models).toEqual([]);
+          expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "native-sticky" })), "m1")).toBe("alpha");
+        }
+      });
+    }
+  }
+
+  for (const streamMode of ["legacy-tee", "eager-relay"] as const) {
+    for (const recordTerminalOutcomes of [true, false]) {
+      for (const firstModel of [undefined, "", "missing-response", "null-response"] as const) {
+        test(`native ${streamMode} ignores hidden completion after ${firstModel === undefined ? "missing-model" : firstModel || "empty-model"} with recording ${recordTerminalOutcomes}`, async () => {
+          const seed = serve(() => Response.json(responsesSuccess("A", "m1")));
+          const upstream = serve(() => {
+            const first = responsesSuccess("first", "ignored");
+            if (firstModel === undefined) delete first.model;
+            else if (firstModel === "") first.model = firstModel;
+            const firstEvent: Record<string, unknown> = { type: "response.completed", response: first };
+            if (firstModel === "missing-response") delete firstEvent.response;
+            else if (firstModel === "null-response") firstEvent.response = null;
+            const events = [
+              { type: "response.output_text.delta", delta: "B", item_id: "msg_b", output_index: 0, content_index: 0 },
+              firstEvent,
+              { type: "response.completed", response: responsesSuccess("hidden", "final-b") },
+            ];
+            return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
+              headers: { "content-type": "text/event-stream" },
+            });
+          });
+          const config = comboConfig({
+            a: provider("openai-responses", baseUrl(seed), "key-a"),
+            b: provider("openai-responses", baseUrl(upstream), "key-b"),
+          });
+          config.streamMode = streamMode;
+          config.combos = {
+            alpha: { targets: [{ provider: "a", model: "m1" }] },
+            beta: { targets: [{ provider: "b", model: "m2" }] },
+          };
+          const headers = { session_id: "first-terminal-recall" };
+          const lane = sessionLaneIdFromRequest(new Headers(headers));
+          await (await post(config, { model: "combo/alpha" }, {}, headers)).text();
+          expect(recallComboForLane(config, lane, "m1")).toBe("alpha");
+          const completedModels: string[] = [];
+          const response = await post(config, { model: "combo/beta", stream: true }, {
+            recordTerminalOutcomes, onResponseComplete: model => { completedModels.push(model); },
+          }, headers);
+          const wire = await response.text();
+          expect(wire).not.toContain("final-b");
+          expect(completedModels).toEqual([]);
+          expect(recallComboForLane(config, lane, "m1")).toBe("alpha");
+          expect(recallComboForLane(config, lane, "final-b")).toBeUndefined();
+        });
+      }
+    }
+  }
+
+  test("native output before cancellation preserves A and cannot record late B completion", async () => {
+    const seed = serve(() => Response.json(responsesSuccess("A", "m1")));
+    const held = heldNativeTerminal({ type: "response.completed", response: responsesSuccess("B", "final-b") });
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(seed), "key-a"),
+      b: provider("openai-responses", baseUrl(held.upstream), "key-b"),
+    });
+    config.combos = {
+      alpha: { targets: [{ provider: "a", model: "m1" }] },
+      beta: { targets: [{ provider: "b", model: "m2" }] },
+    };
+    const headers = { session_id: "cancel-recall" };
+    await (await post(config, { model: "combo/alpha" }, {}, headers)).text();
+    const abort = new AbortController();
+    const models: string[] = [];
+    const response = await post(config, { model: "combo/beta", stream: true }, {
+      abortSignal: abort.signal, onResponseComplete: model => models.push(model),
+    }, headers);
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "cancel-recall" })), "m1")).toBe("alpha");
+    abort.abort();
+    held.release();
+    await response.text().catch(() => undefined);
+    expect(models).toEqual([]);
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "cancel-recall" })), "m1")).toBe("alpha");
+  });
+
+  test("a held completed response cannot resurrect recall across combo delete and recreate", async () => {
+    const seed = serve(() => Response.json(responsesSuccess("A", "m1")));
+    const held = heldNativeTerminal({ type: "response.completed", response: responsesSuccess("B", "final-b") });
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(seed), "key-a"),
+      b: provider("openai-responses", baseUrl(held.upstream), "key-b"),
+    });
+    config.combos = {
+      alpha: { targets: [{ provider: "a", model: "m1" }] },
+      beta: { targets: [{ provider: "b", model: "m2" }] },
+    };
+    const headers = { session_id: "recreated-recall" };
+    await (await post(config, { model: "combo/alpha" }, {}, headers)).text();
+    const completed = deferred();
+    const response = await post(config, { model: "combo/beta", stream: true }, {
+      onResponseComplete: () => completed.resolve(),
+    }, headers);
+    const generation = captureConfigGeneration();
+    delete config.combos.beta;
+    const owners = {
+      generation: generation + 1,
+      providerNames: new Set(["a", "b"]), comboIds: new Set(["alpha"]), comboTargets: new Set(["alpha::a/m1"]),
+      codexAccountIds: new Set<string>(), oauthAccountKeys: new Set<string>(), configRoots: new Set<string>(),
+    };
+    reconcileComboRecall(owners);
+    config.combos.beta = { targets: [{ provider: "b", model: "m2" }] };
+    reconcileComboRecall({
+      ...owners, generation: generation + 2,
+      comboIds: new Set(["alpha", "beta"]), comboTargets: new Set(["alpha::a/m1", "beta::b/m2"]),
+    });
+    held.release();
+    await response.text();
+    await within(completed.promise);
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "recreated-recall" })), "m1")).toBe("alpha");
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "recreated-recall" })), "final-b")).toBeUndefined();
+  });
+
+  for (const media of ["image", "video"] as const) {
+    test(`${media} bridge completion records the final response model`, async () => {
+      const tools: string[] = [];
+      const routed = serve(async request => {
+        const body = await request.json() as { tools?: Array<{ function?: { name?: string } }> };
+        tools.push(...(body.tools ?? []).map(tool => tool.function?.name ?? ""));
+        return chatStream("media bridge answer");
+      });
+      const config = comboConfig({
+        a: provider("openai-chat", baseUrl(routed), "key-a"),
+        xai: provider("openai-chat", "https://api.x.ai/v1", "synthetic-xai-key"),
+      }, [{ provider: "a", model: "m1" }]);
+      config.images = media === "image" ? { bridgeEnabled: true } : { videoBridgeEnabled: true };
+      const models: string[] = [];
+      const response = await post(config, {
+        stream: true, ...(media === "image" ? { tools: [{ type: "image_generation" }] } : {}),
+      }, { onResponseComplete: model => models.push(model) }, { session_id: "media-recall" });
+      const frames = await collectSse(response);
+      expect(tools).toContain(media === "image" ? "image_gen" : "video_gen");
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+      expect(models).toEqual(["m1"]);
+      expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "media-recall" })), "m1")).toBe("free");
+    });
+  }
+
   test("dispatches a selected concrete target despite a shadowing combo alias", async () => {
     const hits: string[] = [];
     const a = serve(async request => {
@@ -1570,12 +1858,14 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("hosted web-search eager model failure hops through the loop path", async () => {
-    const modelHits: Array<{ model?: string; hasWebTool: boolean }> = [];
+    const modelHits: Array<{ model?: string; hasWebTool: boolean; authorization: string | null; account: string | null }> = [];
     const routed = serve(async request => {
       const body = await request.json() as { model?: string; tools?: Array<{ type?: string }> };
       modelHits.push({
         model: body.model,
         hasWebTool: body.tools?.some(tool => tool.type === "function") ?? false,
+        authorization: request.headers.get("authorization"),
+        account: request.headers.get("chatgpt-account-id"),
       });
       if (body.model === "m1") {
         return Response.json({ error: { message: "loop unavailable" } }, { status: 503 });
@@ -1596,10 +1886,12 @@ describe("server combo failover 030 activation matrix", () => {
       { provider: "b", model: "m2" },
     ]);
     config.webSearchSidecar = { enabled: true, backend: "openai" };
+    const models: string[] = [];
     const response = await post(config, {
       stream: true,
       tools: [{ type: "web_search" }],
-    }, {}, {
+    }, { onResponseComplete: model => models.push(model) }, {
+      session_id: "web-search-recall",
       authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-combo-search" })}`,
       "chatgpt-account-id": "acct-combo-search",
     });
@@ -1607,6 +1899,76 @@ describe("server combo failover 030 activation matrix", () => {
     expect(JSON.stringify(await collectSse(response))).toContain("web loop backup");
     expect(modelHits.map(hit => hit.model)).toEqual(["m1", "m2"]);
     expect(modelHits.every(hit => hit.hasWebTool)).toBe(true);
+    expect(modelHits.map(hit => hit.authorization)).toEqual(["Bearer key-a", "Bearer key-b"]);
+    expect(modelHits.every(hit => hit.account === null)).toBe(true);
+    expect(models).toEqual(["m2"]);
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "web-search-recall" })), "m2")).toBe("free");
+  });
+
+  test.each(["valid", "chat-valid", "mismatched-account", "proxy-secret", "joined-proxy-secret", "explicit-null", "org-only-jwt"])("Combo sidecar auth stays off primary wires: %s", async authKind => {
+    const valid = authKind === "valid" || authKind === "chat-valid";
+    const nativeToken = fakeChatGptJwt({ chatgpt_account_id: "acct-scoped-sidecar" });
+    // A generic organizations claim is not OpenAI-domain evidence for a sidecar snapshot.
+    const token = authKind === "proxy-secret" ? `ocx_data_${nativeToken}`
+      : authKind === "joined-proxy-secret" ? `${nativeToken}, Bearer ocx_data_embedded`
+      : authKind === "org-only-jwt" ? fakeChatGptJwt({ organizations: [{ id: "org-foreign" }] }) : nativeToken;
+    const sidecarHits: Array<{ authorization: string | null; account: string | null }> = [];
+    const primaryHits: Array<{ model?: string; authorization: string | null; account: string | null; webTool: boolean }> = [];
+    let requestedSearch = false;
+    const sidecar = serve(request => {
+      sidecarHits.push({ authorization: request.headers.get("authorization"), account: request.headers.get("chatgpt-account-id") });
+      return new Response(
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"synthetic web result"}\n\n'
+          + 'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const routed = serve(async request => {
+      const body = await request.json() as { model?: string; tools?: Array<{ type?: string; function?: { name?: string } }> };
+      const tool = body.tools?.find(tool => tool.type === "function")?.function?.name;
+      primaryHits.push({ model: body.model, authorization: request.headers.get("authorization"), account: request.headers.get("chatgpt-account-id"), webTool: !!tool });
+      if (body.model === "m1") return Response.json({ error: { message: "try next model" } }, { status: 503 });
+      if (tool && !requestedSearch) {
+        requestedSearch = true;
+        return new Response(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_search", type: "function", function: { name: tool, arguments: '{"query":"synthetic query"}' } }] }, finish_reason: null }] })}\n\n`
+          + 'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n',
+        { headers: { "content-type": "text/event-stream" } });
+      }
+      return chatStream("scoped sidecar complete");
+    });
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof globalThis.Request ? input.url : String(input));
+      if (url.origin === "https://chatgpt.com" && url.pathname === "/backend-api/codex/responses") {
+        return originalFetch(sidecar.url, init);
+      }
+      if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") throw new Error("unexpected external request");
+      return originalFetch(input, init);
+    }) as typeof globalThis.fetch;
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(routed), "key-a"),
+      b: provider("openai-chat", baseUrl(routed), "key-b"),
+      openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" },
+    }, [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }]);
+    config.webSearchSidecar = { enabled: true, backend: "openai" };
+    const headers = {
+      authorization: `Bearer ${token}`,
+      "chatgpt-account-id": authKind === "mismatched-account" ? "other-account"
+        : authKind === "org-only-jwt" ? "org-foreign" : "acct-scoped-sidecar",
+    };
+    const response = authKind === "chat-valid"
+      ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ model: "combo/free", messages: [{ role: "user", content: "search" }], stream: true, tools: [{ type: "web_search" }] }),
+      }), config, { model: "", provider: "" })
+      : await post(config, { stream: true, tools: [{ type: "web_search" }] }, authKind === "explicit-null" ? { openAiSidecarAuth: null } : {}, headers);
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("scoped sidecar complete");
+    expect(sidecarHits).toEqual(valid
+      ? [{ authorization: `Bearer ${nativeToken}`, account: "acct-scoped-sidecar" }] : []);
+    expect(primaryHits.map(hit => hit.authorization)).toEqual(valid
+      ? ["Bearer key-a", "Bearer key-b", "Bearer key-b"] : ["Bearer key-a", "Bearer key-b"]);
+    expect(primaryHits.every(hit => hit.account === null)).toBe(true);
+    expect(primaryHits.every(hit => hit.webTool === valid)).toBe(true);
   });
 
   test("context 400 stops while exhausted retryable targets return the sanitized last status", async () => {
@@ -2881,7 +3243,7 @@ describe("server combo failover 030 activation matrix", () => {
     const terminalFrame = (status: "failed" | "completed") => [
       `event: response.${status}`,
       `data: ${JSON.stringify({ type: `response.${status}`, response: {
-        id: `resp_${status}`, status, output: [],
+        id: `resp_${status}`, status, model: status === "completed" ? "final-b" : "failed-a", output: [],
         ...(status === "failed" ? { error: { code: "rate_limit_exceeded", message: "discarded quota failure" } } : {}),
       } })}`,
       "",
@@ -2900,13 +3262,16 @@ describe("server combo failover 030 activation matrix", () => {
     });
     const finalized = deferred();
     const statuses: string[] = [];
+    const models: string[] = [];
+    const completed = deferred();
     let cancels = 0;
     const parent: RequestLogContext = { model: "", provider: "" };
     const snapshots: RequestLogContext[] = [];
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
-      method: "POST", headers: { "content-type": "application/json" },
+      method: "POST", headers: { "content-type": "application/json", session_id: "hop-recall" },
       body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
     }), config, parent, {
+      onResponseComplete: model => { models.push(model); completed.resolve(); },
       onNativePassthroughTerminal: status => {
         statuses.push(status);
         snapshots.push({ ...parent });
@@ -2917,10 +3282,14 @@ describe("server combo failover 030 activation matrix", () => {
     expect(response.status).toBe(200);
     await response.text();
     await within(finalized.promise);
+    await within(completed.promise);
+    expect(models).toEqual(["final-b"]);
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "hop-recall" })), "final-b")).toBe("free");
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "hop-recall" })), "m1")).toBeUndefined();
     expect(statuses).toEqual(["completed"]);
     expect(cancels).toBe(0);
     expect(snapshots).toHaveLength(1);
-    expect(snapshots[0]).toMatchObject({ provider: "combo", model: "combo/free", resolvedModel: "m2" });
+    expect(snapshots[0]).toMatchObject({ provider: "combo", model: "combo/free", resolvedModel: "final-b" });
     for (const field of ["terminalHttpStatus", "terminalIncompleteReason", "terminalErrorCode", "upstreamError"] as const) {
       expect(snapshots[0]![field]).toBeUndefined();
     }
