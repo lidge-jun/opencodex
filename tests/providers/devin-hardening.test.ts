@@ -52,9 +52,19 @@ describe("devin auth paste", () => {
     expect(parseDevinAuthPaste(`https://windsurf.com/cb?firebase_id_token=${FAKE_TOKEN}`)).toBe(FAKE_TOKEN);
   });
 
+  test("accepts the one-time token shape a live sign-in actually returns", () => {
+    // Measured, not assumed: a free-tier sign-in on 2026-09-12 returned a
+    // 47-character `ott$…` value, and RegisterUser exchanged it successfully.
+    // A JWT-only check here would reject every real login.
+    const oneTime = "ott$lLA_RUkVq3nB7xYz0aQpMdT4sWgEhJcK-TjATkAk";
+    expect(parseDevinAuthPaste(oneTime)).toBe(oneTime);
+    expect(parseDevinAuthPaste(` ${oneTime}\n`)).toBe(oneTime);
+  });
+
   test("refuses a paste with no token instead of posting it as the token", () => {
     expect(() => parseDevinAuthPaste("https://windsurf.com/windsurf/signin?prompt=login")).toThrow(/no auth token/i);
-    expect(() => parseDevinAuthPaste("hello")).toThrow(/not a Devin auth token/i);
+    expect(() => parseDevinAuthPaste("this is not a token")).toThrow(/not a Devin auth token/i);
+    expect(() => parseDevinAuthPaste("short")).toThrow(/not a Devin auth token/i);
     expect(() => parseDevinAuthPaste("   ")).toThrow(/No auth token pasted/i);
   });
 });

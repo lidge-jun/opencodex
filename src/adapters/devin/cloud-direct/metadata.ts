@@ -19,15 +19,18 @@ import {
 } from './wire.js';
 
 /**
- * extension_version + ide_version sent to the cloud. MUST be a string the
- * cloud recognizes as a real Windsurf release — Cognition's API silently
- * rejects unknown version strings with `failed_precondition: "an internal
- * error occurred"`. We previously tried pulling our package.json version
- * (e.g. "0.3.0") and the cloud rejected every request. Stays pinned to a
- * known-good "2.0.0" until/unless someone explicitly overrides via
- * `MetadataInput.windsurfVersion`.
+ * extension_version + ide_version sent to the cloud. It MUST be a string the
+ * cloud recognizes as a real client release: an unknown version comes back as
+ * an opaque "an internal error occurred", with no hint that the version is what
+ * it objected to.
+ *
+ * Pinned to the version the shipped desktop client reports
+ * (`product.json` -> `windsurfVersion`) rather than to anything of ours. The
+ * previous pin of "2.0.0" predates the Devin rebrand and no longer chats.
+ * `OPENCODEX_DEVIN_CLIENT_VERSION` overrides it, which is the escape hatch when
+ * Cognition retires a version before this constant is updated.
  */
-const WINDSURF_VERSION_STRING = '2.0.0';
+const WINDSURF_VERSION_STRING = process.env.OPENCODEX_DEVIN_CLIENT_VERSION?.trim() || '3.9.19';
 
 export interface MetadataInput {
   /** Persistent api_key from OAuth (`devin-session-token$<JWT>`). */

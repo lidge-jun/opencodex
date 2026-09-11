@@ -84,8 +84,18 @@ function buildSignInUrl(region: WindsurfRegion): string {
   return region.website + "/windsurf/signin?" + params.toString();
 }
 
-/** Shape of a Firebase / Auth0 ID token: three base64url segments. */
-const JWT_SHAPE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+$/;
+/**
+ * Shape of the value the sign-in page hands back.
+ *
+ * It is not always a JWT. A live free-tier sign-in against
+ * windsurf.com/windsurf/signin returns a 47-character one-time token of the
+ * form `ott$<base64url>`, and RegisterUser accepts it; an earlier JWT-only
+ * check here would have rejected every real login. So this is deliberately a
+ * shape check for "one opaque credential-looking word" rather than a format
+ * check: the point is to tell a token from a pasted URL or a sentence, not to
+ * second-guess what the vendor mints.
+ */
+const TOKEN_SHAPE = /^[A-Za-z0-9._$~+/=-]{20,4096}$/;
 
 const TOKEN_PARAM_NAMES = ["firebase_id_token", "access_token", "id_token", "token"] as const;
 
@@ -101,7 +111,6 @@ const TOKEN_PARAM_NAMES = ["firebase_id_token", "access_token", "id_token", "tok
 export function parseDevinAuthPaste(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) throw new Error("No auth token pasted; cannot complete Devin sign-in.");
-  if (JWT_SHAPE.test(trimmed)) return trimmed;
   if (/^https?:\/\//i.test(trimmed)) {
     let url: URL;
     try {
@@ -113,11 +122,12 @@ export function parseDevinAuthPaste(raw: string): string {
     for (const params of [new URLSearchParams(hash), url.searchParams]) {
       for (const name of TOKEN_PARAM_NAMES) {
         const value = params.get(name)?.trim();
-        if (value && JWT_SHAPE.test(value)) return value;
+        if (value && TOKEN_SHAPE.test(value)) return value;
       }
     }
     throw new Error("That sign-in URL carries no auth token. Paste the token shown on the Windsurf page instead.");
   }
+  if (TOKEN_SHAPE.test(trimmed)) return trimmed;
   throw new Error("That paste is not a Devin auth token. Copy the token shown on the Windsurf sign-in page.");
 }
 

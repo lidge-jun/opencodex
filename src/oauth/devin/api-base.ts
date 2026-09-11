@@ -43,6 +43,11 @@ export function validateDevinApiBaseUrl(raw: string | undefined | null): string 
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":")) return undefined;
   const allowed =
     host === "server.codeium.com" ||
+    // The shipped client (Devin Desktop 3.9.19,
+    // Contents/Resources/app/extensions/windsurf/dist/extension.js) also names
+    // these two, and a beta account's RegisterUser can return one.
+    host === "server-staging.codeium.com" ||
+    host === "server-beta.codeium.com" ||
     host === "windsurf.com" ||
     host.endsWith(".windsurf.com") ||
     host === "windsurf.fedstart.com";
