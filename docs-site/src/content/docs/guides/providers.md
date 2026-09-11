@@ -473,8 +473,10 @@ inbound value is treated as client input and
 hashed into Go affinity; the internal bridge carries the original value, so native
 Chat, bridged Chat, and Responses derive the same result. Explicit provider-config
 session headers are operator overrides and are sent unchanged. Clients must keep the
-identifier stable within a conversation and distinct across conversations; requests
-without a session identifier cannot receive automatic session affinity.
+identifier stable within a conversation and distinct across conversations. A request
+without any session identifier is not given an inferred cross-request identity; it is
+instead sent under a session allocated for that request alone, isolated from every
+other request (see the provider reference for how that value is carried).
 For Claude Messages, configured OpenCode Go session headers remain authoritative.
 Otherwise, valid explicit session or thread headers take precedence, and valid
 conversation identity in `metadata.user_id` supplies the fallback. This fallback is
