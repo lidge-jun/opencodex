@@ -45,7 +45,13 @@ afterEach(() => {
 });
 
 describe("pinned-start child cleanup", () => {
-  type FakeChild = EventEmitter & Pick<ChildProcess, "pid" | "exitCode" | "signalCode">;
+  // exitCode/signalCode are readonly on ChildProcess, but these fakes must move a child from
+  // "running" to "exited" mid-test. Redeclare them as mutable rather than widening each
+  // assignment with a cast, so the transitions stay type-checked.
+  type FakeChild = EventEmitter & Pick<ChildProcess, "pid"> & {
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+  };
 
   async function exhaustRetries(options: {
     spawned?: (child: FakeChild) => void;
