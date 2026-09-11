@@ -73,3 +73,31 @@ matter here:
 
 `quangdang46/openproxy` talks to a different product (gRPC-web
 `LanguageServerService`), so it is a secondary reference only.
+
+## wp2 outcome: the cloud chat path stays unverified
+
+Every request-shape hypothesis was tried against the live account and none of
+them changed the trailer. In probe order: client version `3.9.19`, `2.0.0`,
+`1.48.2`; the Connect request frame sent uncompressed with
+`Connect-Content-Encoding` dropped; `Metadata` #31 filled with 732 hex
+characters; `GetChatMessageRequest` #2, #15 and #20 added and #22 dropped on the
+first turn; `ChatMessagePrompt` #1 `message_id` added; `Authorization: Basic`
+in both base64 and raw doubled-key forms; and both hosts. Same
+`invalid_argument: an internal error occurred` every time, with a fresh trace id.
+
+The model gate is provably fine. `swe-2-high` and `claude-sonnet-5-medium` are
+refused locally as disabled, and a bogus uid is refused as unlisted, so the
+failure is specific to `swe-1-6-slow` — the one model a free account has, and a
+"slow" lane at that.
+
+**Entitlement now outranks request shape as the explanation.** The site
+advertises "Slow Devin Cloud access with limited quotas" for free accounts, and a
+slow lane plausibly is not served by this RPC at all. #4078's author reported a
+live PONG on 2026-09-09 with the *original* field set, which is the deciding
+fact: shipping unverified wire changes would risk regressing an account that
+works today in exchange for no measured gain here. The whole experimental delta
+was reverted; only the wp1 hardening and the MIT notice remain.
+
+Confirming this needs a paid account or a captured working request. Neither is
+available in this session, so the cloud provider is not merge-ready and the
+adapter's own model gate is what stops a user hitting this blindly.
