@@ -4,6 +4,9 @@ import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCo
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import type { OcxConfig } from "../../src/types";
 import { runGuiCommand } from "../../src/cli/gui";
+import { isCodexAccountLoginName } from "../../src/cli/account-auth";
+import { listOAuthProviders } from "../../src/oauth";
+import { loginUsageMessage } from "../../src/oauth/login-cli";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -719,5 +722,68 @@ describe("GUI command delegation", () => {
       logSpy.mockRestore();
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("login routes the Codex account names instead of printing the provider wall", () => {
+  /**
+   * `ocx login codex` used to fall through to handleLogin, which knows only the public
+   * OAuth and API-key providers, and answered with a ~90-name usage list that never
+   * contains the word the user typed. The Codex pool is reachable (`ocx account login
+   * codex`), so the dead end was vocabulary, not capability.
+   *
+   * The observable proof that the routing happened is the account path's own precondition:
+   * that flow runs inside the proxy, so with no live proxy it reports "Proxy is not
+   * running" and exits 1. handleLogin would have printed "Usage: ocx login <provider>"
+   * and killed the process with process.exit(1) instead, which is also why these cases
+   * cannot simply assert on a non-Codex name here.
+   */
+  const runLogin = async (args: string[]): Promise<{ code: number; err: string }> => {
+    const err: string[] = [];
+    const errorSpy = spyOn(console, "error").mockImplementation((...v: unknown[]) => { err.push(v.join(" ")); });
+    try {
+      const argv = ["login", ...args];
+      const code = await dispatchCommand(
+        { kind: "command", command: "login", args: argv },
+        { ...fakeDeps, args: argv, findLiveProxy: async () => null } as unknown as CliDispatchDeps,
+      );
+      return { code, err: err.join("\n") };
+    } finally {
+      errorSpy.mockRestore();
+    }
+  };
+
+  test("every Codex spelling reaches the account-pool login", async () => {
+    for (const name of ["codex", "chatgpt", "openai", "CODEX", " codex "]) {
+      const result = await runLogin([name]);
+      expect(result.code, `${name} must route to the account login`).toBe(1);
+      expect(result.err).toContain("Proxy is not running");
+      expect(result.err).not.toContain("Usage: ocx login <provider>");
+    }
+  });
+
+  test("account-login flags survive the route", async () => {
+    // --reauth/--id are parsed by the account login; a dropped argv would surface as a
+    // usage error (exit 2) before the liveness probe rather than the 503 path.
+    const result = await runLogin(["codex", "--reauth", "--id", "acct-1"]);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("Proxy is not running");
+  });
+
+  test("an unsupported flag is still rejected as a usage error", async () => {
+    const result = await runLogin(["codex", "--nope"]);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("Unexpected argument(s): --nope");
+  });
+
+  test("the provider wall names the Codex route without joining the public OAuth surface", () => {
+    const usage = loginUsageMessage();
+    expect(usage).toContain("ocx login codex");
+    // Routing must not re-open the generic OAuth path for the pool credential:
+    // tests/oauth/oauth-public-surface.test.ts owns that exclusion.
+    expect(listOAuthProviders()).not.toContain("chatgpt");
+    expect(listOAuthProviders()).not.toContain("codex");
+    expect(isCodexAccountLoginName("codex")).toBe(true);
+    expect(isCodexAccountLoginName("xai")).toBe(false);
   });
 });

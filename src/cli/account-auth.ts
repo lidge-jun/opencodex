@@ -49,7 +49,19 @@ visible to anyone who can run ps:
   pbpaste | ocx account code <provider> --flow <flow-id>
   ocx account login <provider> --code -   (same, for the login flow)`;
 
+/**
+ * The Codex account pool answers to three spellings, and a user reaches for whichever
+ * one they already have a word for. `ocx login codex` routes here as well (dispatch.ts):
+ * the pool is deliberately not an `ocx login` provider -- it keeps its own account
+ * ledger and runs its browser flow inside the proxy -- but that is an implementation
+ * boundary, not something a user should have to know before they can log in.
+ */
 const CODEX_NAMES = new Set(["openai", "codex", "chatgpt"]);
+
+/** True for every spelling that means "the Codex account pool" rather than an OAuth provider. */
+export function isCodexAccountLoginName(name: string): boolean {
+  return CODEX_NAMES.has(name.trim().toLowerCase());
+}
 
 interface LoginStart {
   url?: string;

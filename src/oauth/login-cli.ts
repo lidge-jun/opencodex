@@ -65,15 +65,24 @@ export function warnIfLiveReloadSkipped(result: LocalProviderReloadResult | null
   );
 }
 
+/**
+ * The provider wall is the first thing an unfamiliar user sees, so it names the Codex
+ * route before the ~90 provider ids. 'codex' is not in either list on purpose: it is
+ * routed to the account-pool login in dispatch.ts, and 'chatgpt' stays off the public
+ * OAuth surface (isPublicOAuthProvider) because the pool owns that credential.
+ */
+export function loginUsageMessage(): string {
+  return `Usage: ocx login <provider>\n`
+    + `  Codex / ChatGPT: ocx login codex   (Codex account pool; the proxy must be running)\n`
+    + `  OAuth login:   ${listOAuthProviders().join(", ")}\n`
+    + `  API-key login: ${Object.keys(KEY_LOGIN_PROVIDERS).join(", ")}`;
+}
+
 export async function handleLogin(provider?: string): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
   if (isPublicOAuthProvider(name)) return handleOAuthLogin(name);
   if (isKeyLoginProvider(name)) return handleKeyLogin(name);
-  console.error(
-    `Usage: ocx login <provider>\n` +
-      `  OAuth login:   ${listOAuthProviders().join(", ")}\n` +
-      `  API-key login: ${Object.keys(KEY_LOGIN_PROVIDERS).join(", ")}`,
-  );
+  console.error(loginUsageMessage());
   process.exit(1);
 }
 

@@ -52,7 +52,7 @@ Usage:
   ocx doctor --recover-zero-byte-coordinator --yes
                               Back up a proven zero-byte Codex coordinator after stopping the proxy
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset
-  ocx login <provider>        OAuth or API-key provider login
+  ocx login <provider>        OAuth or API-key provider login (ocx login codex for Codex/ChatGPT)
   ocx logout <provider>       Remove a stored OAuth login
   ocx gui [pair --origin <browser-origin> [--json]]
                               Open the dashboard or create a single-use remote pairing grant
