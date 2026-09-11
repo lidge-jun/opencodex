@@ -3457,6 +3457,7 @@ export function initializePersistedConfigIfMissing(
     adoptCustomModelCatalogMigration(config, persisted);
     if (persisted.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(persisted.configRebaseProvenance);
+    clearPendingConfigObjectChildDeletions(config);
     clearPendingConfigTopLevelDeletions(config);
     refreshUserCostOverlays(persisted);
     return "created";

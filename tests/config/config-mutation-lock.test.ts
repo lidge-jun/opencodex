@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { closeSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ConfigMutationLockError, deleteConfigTopLevelKey, getConfigPath, initializePersistedConfigIfMissing, loadConfig, observeInitialConfigState, readConfigGeneration, saveConfig, withConfigMutationLockSync } from "../../src/config";
+import { armClaudeCodeBaseline, ConfigMutationLockError, deleteConfigTopLevelKey, getConfigPath, initializePersistedConfigIfMissing, loadConfig, observeInitialConfigState, readConfigGeneration, saveConfig, saveConfigPreservingClaudeCode, withConfigMutationLockSync } from "../../src/config";
+import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
 import { InitialConfigPublicationError, publishInitialConfigNoReplace } from "../../src/config/initialize";
 import { nextAtomicTempSequence } from "../../src/config/atomic-write";
 import { CodexCredentialRefreshLockTimeoutError, getCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -203,6 +204,43 @@ test("initial creation keeps candidate values and existing bytes; the explicit s
   saveConfig(config(21003));
   expect(loadConfig().port).toBe(21003);
   expect(initTemps()).toEqual([]);
+});
+
+test.each([0, 60])("initial publication consumes a deleted %i account override before a later disk recreation", (threshold) => {
+  const candidate = { ...config(), codexAccountAutoSwitchThresholds: { work: threshold, side: 70 } };
+  setCodexAccountAutoSwitchThresholdOverride(candidate, "work", null);
+  expect(initializePersistedConfigIfMissing(candidate)).toBe("created");
+  expect(loadConfig().codexAccountAutoSwitchThresholds).toEqual({ side: 70 });
+  armClaudeCodeBaseline(candidate);
+
+  const newer = JSON.parse(readFileSync(getConfigPath(), "utf8"));
+  newer.codexAccountAutoSwitchThresholds = { work: 80, side: 70, added: 90 };
+  writeFileSync(getConfigPath(), JSON.stringify(newer));
+  candidate.port = 21001;
+  saveConfigPreservingClaudeCode(candidate);
+
+  expect(candidate.codexAccountAutoSwitchThresholds).toEqual({ work: 80, side: 70, added: 90 });
+  expect(loadConfig().codexAccountAutoSwitchThresholds).toEqual({ work: 80, side: 70, added: 90 });
+  expect(loadConfig().port).toBe(21001);
+});
+
+test("failed initial publication retains child deletion intent for the next guarded save", () => {
+  const candidate = { ...config(), codexAccountAutoSwitchThresholds: { work: 60, side: 70 } };
+  armClaudeCodeBaseline(candidate);
+  setCodexAccountAutoSwitchThresholdOverride(candidate, "work", null);
+  expect(() => initializePersistedConfigIfMissing(candidate, {
+    link() { throw new Error("publication refused"); },
+  })).toThrow();
+  expect(existsSync(getConfigPath())).toBe(false);
+
+  writeFileSync(getConfigPath(), JSON.stringify({
+    ...config(),
+    codexAccountAutoSwitchThresholds: { work: 80, side: 70, added: 90 },
+  }));
+  saveConfigPreservingClaudeCode(candidate);
+
+  expect(candidate.codexAccountAutoSwitchThresholds).toEqual({ side: 70, added: 90 });
+  expect(loadConfig().codexAccountAutoSwitchThresholds).toEqual({ side: 70, added: 90 });
 });
 
 test.each(["", "not-json\n", '{"port":"broken"}', '\uFEFF{ "port":21002, "providers":{}, "defaultProvider":"openai", "unknown":42 }\n'])(

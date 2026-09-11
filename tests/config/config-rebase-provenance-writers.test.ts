@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 
 const writerContracts: Record<string, string[]> = {
@@ -23,6 +22,28 @@ const writerContracts: Record<string, string[]> = {
   "src/cli/v2.ts": ["multiAgentMode", "keepNativeChatGptOnV1"],
 };
 
+const childWriterContracts: Record<string, string[]> = {
+  "src/codex/account-auto-switch.ts": ["codexAccountAutoSwitchThresholds"],
+};
+
+function childDeletionFields(source: string): Set<string> {
+  const fields = new Set<string>();
+  // Keep string literals whole and discard comments, so examples are not mistaken
+  // for calls. The contract checks a helper call with a config identifier and a
+  // literal field name, independently of formatting and local identifier names.
+  const tokens = (source.match(/\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[\w$]+|[^\s]/g) ?? [])
+    .filter(token => !token.startsWith("//") && !token.startsWith("/*"));
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index] === "deleteConfigObjectChildKey" && tokens[index + 1] === "("
+      && /^[\w$]+$/.test(tokens[index + 2] ?? "") && tokens[index + 3] === ","
+      && tokens[index + 5] === ",") {
+      const field = tokens[index + 4];
+      if (field && /^(["'])[\w$]+\1$/.test(field)) fields.add(field.slice(1, -1));
+    }
+  }
+  return fields;
+}
+
 test("every enumerated top-level deletion writer records config rebase provenance", () => {
   for (const [path, keys] of Object.entries(writerContracts)) {
     const source = readFileSync(repoPath(path), "utf8");
@@ -38,11 +59,27 @@ test("every enumerated top-level deletion writer records config rebase provenanc
   }
 });
 
-test("record child deletions use field-scoped rebase provenance", () => {
-  const source = readFileSync(join(import.meta.dir, "..", "..", "src/codex/account-auto-switch.ts"), "utf8");
-  expect(source).toContain(
-    "deleteConfigObjectChildKey(config, \"codexAccountAutoSwitchThresholds\", accountId)",
-  );
+test("every enumerated child deletion writer records field-scoped rebase provenance", () => {
+  for (const [path, keys] of Object.entries(childWriterContracts)) {
+    const fields = childDeletionFields(readFileSync(repoPath(path), "utf8"));
+    for (const key of keys) {
+      expect(fields.has(key), `${path} must record child deletion provenance for ${key}`).toBe(true);
+    }
+  }
+});
+
+test("child writer contracts tolerate formatting and ignore comments, strings, and top-level deletions", () => {
+  const source = `
+    // deleteConfigObjectChildKey(config, "comment", id);
+    const example = 'deleteConfigObjectChildKey(config, "string", id)';
+    deleteConfigTopLevelKey(renamedConfig, "topLevel");
+    deleteConfigObjectChildKey(
+      renamedConfig,
+      'codexAccountAutoSwitchThresholds',
+      renamedAccountId,
+    );
+  `;
+  expect([...childDeletionFields(source)]).toEqual(["codexAccountAutoSwitchThresholds"]);
 });
 
 test("live-config writers contain no untracked direct top-level deletion", () => {
