@@ -48,17 +48,23 @@ function config(): OcxConfig {
   return {
     defaultProvider: "go",
     providers: {
-      go: {
+     go: {
+       adapter: "openai-responses",
+       baseUrl: "https://opencode.ai/zen/go/v1",
+       authMode: "key",
+       apiKey: "go-test-key",
+     },
+      other: {
         adapter: "openai-responses",
-        baseUrl: "https://opencode.ai/zen/go/v1",
+        baseUrl: "https://other.example.test/v1",
         authMode: "key",
-        apiKey: "go-test-key",
+        apiKey: "other-test-key",
       },
-    },
-  } as OcxConfig;
+   },
+ } as OcxConfig;
 }
 
-function request(stream = false): Request {
+function request(stream = false, provider = "go"): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: {
@@ -66,7 +72,7 @@ function request(stream = false): Request {
       "session_id": "thread-console-go-upload-retry",
     },
     body: JSON.stringify({
-      model: "go/muse-spark-1.3-contributor",
+      model: provider + "/muse-spark-1.3-contributor",
       stream,
       store: false,
       input: [
@@ -129,6 +135,19 @@ describe("Console Go transient upload refusal recovery", () => {
     expect(response.status).toBe(400);
     expect(sends).toBe(2);
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["console-go-upload-retry"]);
+  });
+
+  test("does not replay the same refusal text from a non-Console provider", async () => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      return refusal();
+    }) as typeof fetch;
+
+    const response = await handleResponses(request(false, "other"), config(), { model: "", provider: "" });
+
+    expect(response.status).toBe(400);
+    expect(sends).toBe(1);
   });
 });
 

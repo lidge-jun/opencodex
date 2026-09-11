@@ -233,38 +233,46 @@ describe("opencode-free keyless tier lock-in (#4121)", () => {
 });
 
 describe("Console Go transient upload refusal", () => {
-  // The exact body Console Go returns for a payload it accepts moments later.
-  const UPLOAD_REFUSAL = JSON.stringify({
-    model: "muse-spark-1.3-contributor",
-    error: {
-      param: null,
-      type: "invalid_request_error",
-      message: "Error from provider (Console Go): Upstream request failed: [invalid_request_error] Invalid upload request.",
-    },
+  // The observed Go-route refusal, byte-for-byte as Console serves it.
+  const GO_MESSAGE = "Error from provider (Console Go): Upstream request failed: [invalid_request_error] Invalid upload request.";
+  // The Zen key route names the same gateway without the Go suffix.
+  const ZEN_MESSAGE = "Error from provider (Console): Upstream request failed: [invalid_request_error] Invalid upload request.";
+  const envelope = (message: string) => JSON.stringify({ model: "muse-spark-1.3-contributor", error: { param: null, type: "invalid_request_error", message } });
+  const GO_ROUTE = { providerName: "opencode-go", baseUrl: "https://opencode.ai/zen/go/v1" };
+  const ZEN_ROUTE = { providerName: "opencode-zen", baseUrl: "https://opencode.ai/zen/v1" };
+
+  test("accepts the canonical refusal on both canonical Console routes", () => {
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: envelope(GO_MESSAGE), ...GO_ROUTE })).toBe(true);
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: envelope(ZEN_MESSAGE), ...ZEN_ROUTE })).toBe(true);
+    // A custom row pointed at the same destination is still Console: the base URL decides.
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: envelope(GO_MESSAGE), providerName: "my-go-row", baseUrl: "https://opencode.ai/zen/go/v1" })).toBe(true);
   });
 
-  test("accepts the 400 upload refusal regardless of casing", () => {
-    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: UPLOAD_REFUSAL })).toBe(true);
-    expect(isTransientConsoleGoUploadRejection({
-      status: 400,
-      errorBody: '{"error":"INVALID UPLOAD REQUEST."}',
-    })).toBe(true);
+  test("rejects the refusal text from a non-Console route", () => {
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: envelope(GO_MESSAGE), providerName: "deepseek", baseUrl: "https://api.deepseek.com/v1" })).toBe(false);
+    // opencode.ai without the /zen segment is not the Console gateway.
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: envelope(GO_MESSAGE), providerName: "other", baseUrl: "https://opencode.ai/v1" })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: envelope(GO_MESSAGE) })).toBe(false);
   });
 
-  test("rejects every other status and error body", () => {
-    // Status is part of the identity: only the gateway's 400 is the flap.
-    expect(isTransientConsoleGoUploadRejection({ status: 200, errorBody: UPLOAD_REFUSAL })).toBe(false);
-    expect(isTransientConsoleGoUploadRejection({ status: 500, errorBody: UPLOAD_REFUSAL })).toBe(false);
-    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: undefined })).toBe(false);
-    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: "" })).toBe(false);
-    // Other 400s on the same wire are deterministic verdicts on the request, not flaps.
+  test("rejects noncanonical envelopes, suffixes, and other statuses", () => {
+    // A bare string is not the structured envelope.
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: JSON.stringify({ error: "Invalid upload request." }), ...GO_ROUTE })).toBe(false);
+    // A suffix means the gateway said something else; do not guess.
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: envelope(GO_MESSAGE + " Please retry."), ...GO_ROUTE })).toBe(false);
+    // Different status: only the gateway 400 is the flap.
+    expect(isTransientConsoleGoUploadRejection({ status: 500, errorBody: envelope(GO_MESSAGE), ...GO_ROUTE })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: undefined, ...GO_ROUTE })).toBe(false);
+    // Other 400s on the same wire are verdicts on the request, not flaps.
     expect(isTransientConsoleGoUploadRejection({
       status: 400,
-      errorBody: '{"error":{"param":"reasoning.effort","type":"invalid_request_error","message":"Error from provider (Console Go): Upstream request failed: [invalid_request_error] reasoning_effort max requires an active Muse Code subscription for model muse-spark-1.3-contributor."}}',
+      errorBody: envelope("Error from provider (Console Go): Upstream request failed: [invalid_request_error] reasoning_effort max requires an active Muse Code subscription for model muse-spark-1.3-contributor."),
+      ...GO_ROUTE,
     })).toBe(false);
     expect(isTransientConsoleGoUploadRejection({
       status: 400,
-      errorBody: '{"type":"error","error":{"type":"MissingSessionID","message":"Request is missing x-opencode-session"}}',
+      errorBody: JSON.stringify({ type: "error", error: { type: "MissingSessionID", message: "Request is missing x-opencode-session" } }),
+      ...GO_ROUTE,
     })).toBe(false);
   });
 });

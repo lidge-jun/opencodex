@@ -190,10 +190,62 @@ export function enrichOpenCodeZenUpstreamMessage(
  * callers replay the byte-identical request once instead of failing the turn.
  * Upstream tracker: anomalyco/opencode#47237.
  */
+/** Canonical Console destinations: the Zen/Go provider rows and any opencode.ai /zen base URL. */
+const CONSOLE_GO_PROVIDER_IDS = new Set(["opencode-go", "opencode-zen", "opencode-free"]);
+
+export function isConsoleGoDestination(opts: {
+  providerName?: string;
+  baseUrl?: string;
+}): boolean {
+  const name = opts.providerName?.trim();
+  if (name && CONSOLE_GO_PROVIDER_IDS.has(name)) return true;
+  const baseUrl = opts.baseUrl?.trim();
+  if (!baseUrl) return false;
+  try {
+    const url = new URL(baseUrl);
+    if (url.hostname !== "opencode.ai") return false;
+    const path = url.pathname.replace(/\/+$/, "");
+    return path === "/zen" || path.startsWith("/zen/");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The canonical refusal envelope, as served on both Console routes:
+ *   {"error":{"param":null,"type":"invalid_request_error","message":"Error from provider
+ *   (Console Go): Upstream request failed: [invalid_request_error] Invalid upload request."}}
+ *
+ * The gateway names itself Console on the Zen key route and Console Go on the Go route, so the
+ * anchor is the shared product name plus the refusal sentence. The message is matched whole: a
+ * bare string, a suffix, or any other envelope is a different refusal and must not be replayed.
+ * Being stricter than necessary is the safe direction: a missed match leaves the turn failing
+ * exactly as it does today, while a loose match spends an extra request on unrelated 400s.
+ */
+const CONSOLE_UPLOAD_REFUSAL_RE =
+  /^Error from provider \(Console(?: Go)?\): Upstream request failed: \[invalid_request_error\] Invalid upload request\.$/;
+
+/**
+ * True only for the canonical Console upload refusal on a canonical Console destination.
+ * Route-gated on purpose: the message alone would let any other upstream that happens to answer
+ * with this English sentence trigger a second send from an unrelated provider.
+ */
 export function isTransientConsoleGoUploadRejection(opts: {
   status: number;
   errorBody: string | undefined;
+  providerName?: string;
+  baseUrl?: string;
 }): boolean {
   if (opts.status !== 400 || !opts.errorBody) return false;
-  return /invalid upload request/i.test(opts.errorBody);
+  if (!isConsoleGoDestination({ providerName: opts.providerName, baseUrl: opts.baseUrl })) return false;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(opts.errorBody);
+  } catch {
+    return false;
+  }
+  const error = (payload as { error?: unknown } | null)?.error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" && CONSOLE_UPLOAD_REFUSAL_RE.test(message.trim());
 }

@@ -5816,6 +5816,8 @@ async function handleResponsesInner(
     // later with 400 invalid_request_error / "Invalid upload request." Replay the byte-identical
     // request once: the same conversation re-sent 22s later answered 200, so surfacing this flap
     // would fail a turn the upstream would have served. Single-shot guard.
+    // No same-target cache invalidation here: the passthrough rebuild calls buildRequest on every
+    // attempt, and the cache guarded by invalidateSameTargetRequest() belongs to the generic loop.
     if (!consoleGoUploadRetryGuard.attempted) {
       const uploadRejectionBody = await consoleGoUploadRejectionBody(
         upstreamResponse,
@@ -5826,6 +5828,8 @@ async function handleResponsesInner(
         && isTransientConsoleGoUploadRejection({
           status: upstreamResponse.status,
           errorBody: uploadRejectionBody,
+          providerName: route.providerName,
+          baseUrl: route.provider.baseUrl,
         })) {
         consoleGoUploadRetryGuard.attempted = true;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -7730,6 +7734,8 @@ async function handleResponsesInner(
           && isTransientConsoleGoUploadRejection({
             status: upstreamResponse.status,
             errorBody: uploadRejectionBody,
+            providerName: route.providerName,
+            baseUrl: route.provider.baseUrl,
           })) {
           consoleGoUploadRetryGuard.attempted = true;
           invalidateSameTargetRequest();
