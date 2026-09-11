@@ -79,6 +79,18 @@ describe("provider registry parity", () => {
       "qwen3.7-max",
     ]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("kimi-k2.7-code");
+    // #1338 / #1415: the Zen gateway rejects json_schema on its DeepSeek routes. The three
+    // presets that share that gateway carry the narrow opt-out as a registry-only seed, so
+    // an operator no longer has to disable structured output by hand. Registry-only means
+    // it is asserted here against the raw entry, not the derived key-login map.
+    const zenDeepseekJsonSchema: Record<string, string[]> = {
+      "opencode-go": ["deepseek-v4-pro", "deepseek-v4-flash"],
+      "opencode-zen": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+      "opencode-free": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+    };
+    for (const [id, expected] of Object.entries(zenDeepseekJsonSchema)) {
+      expect(PROVIDER_REGISTRY.find(entry => entry.id === id)?.noJsonSchemaModels).toEqual(expected);
+    }
     expect(KEY_LOGIN_PROVIDERS.mimo.noVisionModels).toEqual(["mimo-v2.5-pro"]);
     expect(KEY_LOGIN_PROVIDERS.mimo.noVisionModels).not.toContain("mimo-v2.5");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"]).toMatchObject({

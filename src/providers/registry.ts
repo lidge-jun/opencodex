@@ -321,6 +321,12 @@ export interface ProviderRegistryEntry {
   noTemperatureModels?: string[];
   noTopPModels?: string[];
   noPenaltyModels?: string[];
+  /**
+   * Registry-only seed for `OcxProviderConfig.noJsonSchemaModels`. Merged into the
+   * resolved provider at route time rather than persisted as user config, the same way
+   * `directReasoningEffortModels` above is registry-owned.
+   */
+  noJsonSchemaModels?: string[];
   /** Opt this provider into parallel tool calls (see OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
   /** Opt this provider into forwarding prompt_cache_key (OpenAI-specific; strict backends reject it). */
@@ -1788,6 +1794,16 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     autoToolChoiceOnlyModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     // Issue #78: DeepSeek V4 thinking mode requires reasoning_content replay on tool-call turns.
     preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", ...DEEPSEEK_THINKING_MODELS],
+    /*
+     * Issues #1338 / #1415: this gateway answers a `response_format` of type
+     * `json_schema` with HTTP 400 `This response_format type is unavailable now`
+     * (quoted from the upstream body as `Error from provider (Console Go)`), which
+     * breaks every Codex auto-review turn on a DeepSeek route. #1424 shipped the
+     * operator-side opt-out; operators have been applying it by hand ever since.
+     * The reported rejection is type-specific, so this narrower list downgrades the
+     * request to `json_object` instead of claiming the whole field is unavailable.
+     */
+    noJsonSchemaModels: [...DEEPSEEK_THINKING_MODELS],
   },
   {
     id: "neuralwatt",
@@ -3036,6 +3052,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
     },
     noVisionModels: [...OPENCODE_ZEN_TEXT_ONLY_MODELS, ...DEEPSEEK_THINKING_MODELS],
+    // Same DeepSeek routes as the Go preset above, behind the same vendor, so they carry
+    // the same json_schema rejection (#1338 / #1415).
+    noJsonSchemaModels: [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
   {
@@ -3076,6 +3095,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Same Zen roster behind the same base URL, so it carries the same measured
     // text-only list rather than only its DeepSeek member (#1043).
     noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,
+    // Same reasoning: the free tier is the same Zen roster, so its DeepSeek members get
+    // the keyed tier's json_schema treatment and its reasoning contract rather than a
+    // narrower table that silently falls behind whenever the keyed one is updated.
+    noJsonSchemaModels: [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
   { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
   // Xiaomi's public OpenAI-compatible endpoint is a distinct transport from both the Anthropic

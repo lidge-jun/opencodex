@@ -622,6 +622,9 @@ const providerConfigSchema = z.object({
   noStructuredOutputModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
+  noJsonSchemaModels: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .optional(),
   retainModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
@@ -1610,6 +1613,17 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "noStructuredOutputModels"],
         message: structuredOutputOptOutError,
+      });
+    }
+    const jsonSchemaOptOutError = nonBlankStringArrayConfigError(
+      (provider as { noJsonSchemaModels?: unknown }).noJsonSchemaModels,
+      "noJsonSchemaModels",
+    );
+    if (jsonSchemaOptOutError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "noJsonSchemaModels"],
+        message: jsonSchemaOptOutError,
       });
     }
     const retainModelsError = nonBlankStringArrayConfigError(

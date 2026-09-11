@@ -140,6 +140,16 @@ export function buildOpenAIChatPassthroughRequest(
   // ingress enforces exactly that. A prefix match here would strip response_format from
   // `<listed>:<tag>` siblings the operator never opted out, silently returning prose.
   if (provider.noStructuredOutputModels?.includes(modelId)) delete body.response_format;
+  // Narrower neighbour: the model takes `json_object` but rejects `json_schema`. Downgrade
+  // rather than drop, so a caller that asked for JSON still gets JSON. The type check also
+  // makes the kill switch above win without an else — after its `delete` there is no type
+  // left to match.
+  const passthroughFormat = body.response_format;
+  if (provider.noJsonSchemaModels?.includes(modelId)
+      && typeof passthroughFormat === "object" && passthroughFormat !== null
+      && (passthroughFormat as { type?: unknown }).type === "json_schema") {
+    body.response_format = { type: "json_object" };
+  }
 
   // Run the same complete Fast policy as the translated Chat path, including explicit
   // fastMode and foreign-tier handling. On inherited canonical Fast, the passthrough still
@@ -1582,15 +1592,19 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (textFormat?.type === "json_object") {
           body.response_format = { type: "json_object" };
         } else if (textFormat?.type === "json_schema") {
-          body.response_format = {
-            type: "json_schema",
-            json_schema: {
-              name: textFormat.name ?? "response",
-              ...(textFormat.description !== undefined ? { description: textFormat.description } : {}),
-              ...(textFormat.schema !== undefined ? { schema: textFormat.schema } : {}),
-              ...(textFormat.strict !== undefined ? { strict: textFormat.strict } : {}),
-            },
-          };
+          // Same downgrade as the passthrough path: the schema is dropped because the
+          // upstream rejects it, but the JSON-mode request itself survives.
+          body.response_format = provider.noJsonSchemaModels?.includes(parsed.modelId)
+            ? { type: "json_object" }
+            : {
+              type: "json_schema",
+              json_schema: {
+                name: textFormat.name ?? "response",
+                ...(textFormat.description !== undefined ? { description: textFormat.description } : {}),
+                ...(textFormat.schema !== undefined ? { schema: textFormat.schema } : {}),
+                ...(textFormat.strict !== undefined ? { strict: textFormat.strict } : {}),
+              },
+            };
         }
       }
 

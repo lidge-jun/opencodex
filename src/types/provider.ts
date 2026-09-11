@@ -642,6 +642,19 @@ export interface OcxProviderConfig {
    */
   noStructuredOutputModels?: string[];
   /**
+   * Model ids whose Chat Completions endpoint rejects `response_format` of type
+   * `json_schema` specifically. Such a request is downgraded to
+   * `{ type: "json_object" }` instead of being dropped, so a client that asked for
+   * JSON still gets JSON rather than prose — at the cost of the schema itself, which
+   * the upstream would have rejected anyway.
+   *
+   * Deliberately narrower than `noStructuredOutputModels`: that field claims the
+   * endpoint rejects the whole `response_format` field, which is a strictly stronger
+   * claim than any reported upstream error supports for these gateways. When a model
+   * appears in both lists the stronger opt-out wins and the field is omitted entirely.
+   */
+  noJsonSchemaModels?: string[];
+  /**
    * Model ids that accept a reasoning-effort field on an ordinary turn but reject it
    * once function tools are present. The model keeps its advertised effort ladder;
    * OpenCodex omits the wire field for tool-bearing requests only and lets the

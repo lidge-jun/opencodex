@@ -130,3 +130,60 @@ describe("opencode-go DeepSeek V4 thinking mode", () => {
     expect(body.messages[1]).toHaveProperty("tool_calls");
   });
 });
+
+/*
+ * Issues #1338 / #1415: the Zen Go upstream answers a `json_schema` response_format with
+ * HTTP 400 "This response_format type is unavailable now" on its DeepSeek routes, which
+ * kills every Codex auto-review turn there. The preset now carries that fact, so the
+ * request is downgraded to `json_object` instead of the operator having to disable
+ * structured output by hand.
+ */
+describe("opencode-go DeepSeek json_schema downgrade", () => {
+  const buildWith = (modelId: string, extra: Record<string, unknown> = {}) => {
+    const config = configFor(modelId);
+    Object.assign(config.providers["opencode-go"], extra);
+    const route = routeModel(config, `opencode-go/${modelId}`);
+    const req = createOpenAIChatAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      options: { textFormat: { type: "json_schema", name: "review", schema: { type: "object" }, strict: true } },
+      stream: false,
+    });
+    return {
+      provider: route.provider,
+      body: JSON.parse(req.body as string) as { response_format?: { type?: string } },
+    };
+  };
+
+  test("the preset reaches the routed provider", () => {
+    expect(buildWith("deepseek-v4-flash").provider.noJsonSchemaModels)
+      .toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+  });
+
+  test("a listed DeepSeek route is downgraded to json_object", () => {
+    expect(buildWith("deepseek-v4-flash").body.response_format).toEqual({ type: "json_object" });
+    expect(buildWith("deepseek-v4-pro").body.response_format).toEqual({ type: "json_object" });
+  });
+
+  test("an unlisted sibling on the same gateway keeps its schema", () => {
+    expect(buildWith("glm-5.3").body.response_format?.type).toBe("json_schema");
+  });
+
+  test("the operator kill switch still wins over the downgrade", () => {
+    const { body } = buildWith("deepseek-v4-flash", { noStructuredOutputModels: ["deepseek-v4-flash"] });
+    expect(body.response_format).toBeUndefined();
+  });
+
+  test("a json_object request is left alone on a listed route", () => {
+    const config = configFor("deepseek-v4-flash");
+    const route = routeModel(config, "opencode-go/deepseek-v4-flash");
+    const req = createOpenAIChatAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      options: { textFormat: { type: "json_object" } },
+      stream: false,
+    });
+    expect((JSON.parse(req.body as string) as { response_format?: unknown }).response_format)
+      .toEqual({ type: "json_object" });
+  });
+});
