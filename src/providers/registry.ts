@@ -1285,7 +1285,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "devin-cli",
     label: "Devin CLI (local)",
     adapter: "devin-cli",
-    baseUrl: "devin://acp/stdio",
+    // A canonical identity URL, not a transport. The CLI performs the real
+    // transport over stdio; this is the destination the config records, and it
+    // has to be an http(s) URL because providerBaseUrlConfigError rejects any
+    // other scheme — a `devin://` destination made the generated config
+    // unloadable. Same shape as the other CLI-backed providers.
+    baseUrl: "https://cli.devin.ai",
     authKind: "local",
     featured: false,
     dashboardPreset: false,

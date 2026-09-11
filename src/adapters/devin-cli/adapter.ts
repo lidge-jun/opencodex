@@ -45,6 +45,13 @@ const DEVIN_CLI_KILL_GRACE_MS = 2_000;
 const DEVIN_CLI_REAP_MS = 5_000;
 
 /**
+ * Identity URL for the provider. The CLI does the real transport over stdio;
+ * this is only what the configuration records as the destination, and it has to
+ * be an http(s) URL because provider config validation rejects other schemes.
+ */
+export const DEVIN_CLI_IDENTITY_URL = "https://cli.devin.ai";
+
+/**
  * Opt-in for letting the CLI act on the machine.
  *
  * Off by default: this provider runs an agent in the operator's own tree, and a
@@ -61,13 +68,24 @@ export function devinCliToolsAllowed(env: NodeJS.ProcessEnv = process.env): bool
 
 export function createDevinCliAdapter(provider: OcxProviderConfig, deps?: { spawn?: DevinCliSpawn }): ProviderAdapter {
   const spawnChild: DevinCliSpawn = deps?.spawn
-    ?? ((binary, args, options) => spawn(binary, args, { ...options, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }) as ChildProcessWithoutNullStreams);
+    ?? ((binary, args, options) => spawn(binary, args, {
+      ...options,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      // Give the child its own process group on POSIX so the reap below can
+      // signal the whole tree. Devin spawns shells and tools of its own when
+      // the operator allows them, and signalling only the direct pid leaves
+      // those descendants writing in the operator's tree after the turn ended.
+      detached: process.platform !== "win32",
+    }) as ChildProcessWithoutNullStreams);
 
   return {
     name: "devin-cli",
 
     buildRequest() {
-      return { url: provider.baseUrl || "devin://acp/stdio", method: "POST", headers: {}, body: "" };
+      // Placeholder: this adapter never travels the fetch path. The URL is the
+      // provider's identity, not a destination anything connects to.
+      return { url: provider.baseUrl || DEVIN_CLI_IDENTITY_URL, method: "POST", headers: {}, body: "" };
     },
 
     async *parseStream(): AsyncGenerator<AdapterEvent> {
@@ -111,6 +129,7 @@ export function createDevinCliAdapter(provider: OcxProviderConfig, deps?: { spaw
 
         let settled = false;
         let closed = false;
+        let sawProtocolFrame = false;
         let sawPromptReply = false;
         let buffer = "";
         let totalBytes = 0;
@@ -142,9 +161,27 @@ export function createDevinCliAdapter(provider: OcxProviderConfig, deps?: { spaw
             resolve();
           };
           child.once("close", settle);
-          try { child.kill("SIGTERM"); } catch { /* already gone */ }
-          const killTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already gone */ } }, DEVIN_CLI_KILL_GRACE_MS);
+          signalTree("SIGTERM");
+          const killTimer = setTimeout(() => signalTree("SIGKILL"), DEVIN_CLI_KILL_GRACE_MS);
           const reapTimer = setTimeout(settle, DEVIN_CLI_REAP_MS);
+        }
+
+        /**
+         * Signal the child's whole process group where the platform has one.
+         * Devin launches shells and tools of its own once the operator allows
+         * them, and those descendants do not receive a signal aimed at the
+         * direct pid. Falls back to the single process when the group send is
+         * unavailable or the group is already gone.
+         */
+        function signalTree(signal: NodeJS.Signals): void {
+          const pid = child.pid;
+          if (pid !== undefined && process.platform !== "win32") {
+            try {
+              process.kill(-pid, signal);
+              return;
+            } catch { /* no group, or already reaped - fall through */ }
+          }
+          try { child.kill(signal); } catch { /* already gone */ }
         }
 
         /** Terminate the turn exactly once, with an error when given a reason. */
@@ -229,10 +266,18 @@ export function createDevinCliAdapter(provider: OcxProviderConfig, deps?: { spaw
           try {
             frame = JSON.parse(line) as Record<string, unknown>;
           } catch {
-            // The CLI prints a banner before the protocol starts; a non-JSON
-            // line is noise, not a protocol violation.
+            // The CLI prints a banner before the protocol starts, so plain text
+            // is expected up to the first valid frame. After that the stream is
+            // protocol, and a line that is shaped like a frame but does not
+            // parse is corruption: dropping it silently loses a session/update
+            // or lets the turn wait out the timeout for a reply that already
+            // arrived damaged.
+            if (sawProtocolFrame || line.startsWith("{")) {
+              finish("Devin CLI emitted a malformed ACP frame.");
+            }
             return;
           }
+          sawProtocolFrame = true;
           handle(frame);
         }
 

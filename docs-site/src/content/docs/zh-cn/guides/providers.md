@@ -106,7 +106,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、带可选 HTTP/1.1 兼容路径的 HTTP/2 传输，以及按账号筛选的模型发现。 |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | 浏览器授权与密钥交换走 `https://www.orcarouter.ai` + S256 PKCE。交换结果是用户自己的普通 `sk-orca-…` API key，保存在现有凭据库中并持续复用，直到被撤销。 |
-| `devin-cli` | `devin-cli` | `devin://acp/stdio` | 通过 Agent Client Protocol（`devin acp`，stdio 上的 JSON-RPC）驱动本地安装的 Devin CLI。凭据由 CLI 自己通过 `devin auth login` 持有，opencodex 不保存密钥。可用 `OPENCODEX_DEVIN_CLI_BIN` 指定可执行文件；要允许 CLI 读写文件，必须显式设置 `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1`，默认拒绝。 |
+| `devin-cli` | `devin-cli` | `https://cli.devin.ai` | 通过 Agent Client Protocol（`devin acp`，stdio 上的 JSON-RPC）驱动本地安装的 Devin CLI。凭据由 CLI 自己通过 `devin auth login` 持有，opencodex 不保存密钥。可用 `OPENCODEX_DEVIN_CLI_BIN` 指定可执行文件；要允许 CLI 读写文件，必须显式设置 `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1`，默认拒绝。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
 Google Antigravity 账户和提供方的配额查询（包括模型列表回退）使用固定的 Google 计量端点。这些目标支持透明 Fake-IP DNS，同时保留 TLS 验证、重定向拒绝和私有地址检查。自定义 base URL 仅改变模型请求，不改变配额目标；`NO_PROXY` 仍使用直连策略。

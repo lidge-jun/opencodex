@@ -26,7 +26,7 @@ describe("devin-cli registration", () => {
     // so the proxy must never ask for or hold a key for this provider.
     expect(entry?.authKind).toBe("local");
     expect(entry?.dashboardPreset).toBe(false);
-    expect(createDevinCliAdapter({ adapter: "devin-cli", baseUrl: "devin://acp/stdio" }).name).toBe("devin-cli");
+    expect(createDevinCliAdapter({ adapter: "devin-cli", baseUrl: "https://cli.devin.ai" }).name).toBe("devin-cli");
   });
 });
 
@@ -118,14 +118,22 @@ describe("acp update mapping", () => {
     expect(acpUpdateToEvents({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "" } })).toEqual([]);
   });
 
-  test("the CLI's own tool calls never become Codex client tools", () => {
+  test("the CLI's own tool calls become heartbeats, never Codex client tools", () => {
     // Devin executes these itself inside its session. Emitting tool_call_start
     // would either fail the turn, because the bridge rejects a tool Codex never
-    // declared, or ask Codex to run something the agent already ran.
-    expect(acpUpdateToEvents({ sessionUpdate: "tool_call", toolCallId: "t1", title: "read", rawInput: { path: "a" } })).toEqual([]);
-    expect(acpUpdateToEvents({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" })).toEqual([]);
-    expect(acpUpdateToEvents({ sessionUpdate: "plan", entries: [] })).toEqual([]);
+    // declared, or ask Codex to run something the agent already ran. Dropping
+    // them outright is not right either: a long internal tool operation would
+    // read as upstream silence and get the working turn stall-aborted.
+    expect(acpUpdateToEvents({ sessionUpdate: "tool_call", toolCallId: "t1", title: "read", rawInput: { path: "a" } })).toEqual([
+      { type: "heartbeat" },
+    ]);
+    expect(acpUpdateToEvents({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" })).toEqual([
+      { type: "heartbeat" },
+    ]);
+    expect(acpUpdateToEvents({ sessionUpdate: "plan", entries: [] })).toEqual([{ type: "heartbeat" }]);
+    expect(acpUpdateToEvents({ sessionUpdate: "something_new" })).toEqual([]);
   });
+
 });
 
 describe("acp turn outcome", () => {
@@ -216,7 +224,7 @@ describe("devin-cli runTurn", () => {
     const { child, stdout, stdinWrites } = fakeChild();
     const events: AdapterEvent[] = [];
     process.env[DEVIN_CLI_BIN_ENV] = "/fake/devin";
-    const adapter = createDevinCliAdapter({ adapter: "devin-cli", baseUrl: "devin://acp/stdio" }, {
+    const adapter = createDevinCliAdapter({ adapter: "devin-cli", baseUrl: "https://cli.devin.ai" }, {
       spawn: () => { queueMicrotask(() => script(stdout, child as unknown as EventEmitter)); return child; },
     });
     await adapter.runTurn!(parsed, {} as never, (e) => events.push(e));
@@ -268,5 +276,18 @@ describe("devin-cli runTurn", () => {
     });
     expect(events).toHaveLength(1);
     expect((events[0] as { message: string }).message).toMatch(/session\/new failed: not authenticated/);
+  });
+
+  test("a malformed frame after the protocol starts fails the turn instead of vanishing", async () => {
+    // A banner line before the first frame is expected noise. A broken frame
+    // afterwards is corruption: swallowing it loses output, or waits out the
+    // ten-minute timeout for a reply that already arrived damaged.
+    const { events } = await run((stdout) => {
+      stdout.write("Devin CLI v3000.10.21\n");
+      stdout.write('{"jsonrpc":"2.0","id":1,"result":{}}\n');
+      queueMicrotask(() => stdout.write('{"jsonrpc":"2.0","id":2,"result":{"sessionId"\n'));
+    });
+    expect(events).toHaveLength(1);
+    expect((events[0] as { message: string }).message).toMatch(/malformed ACP frame/);
   });
 });

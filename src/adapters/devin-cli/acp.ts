@@ -183,6 +183,14 @@ export function acpUpdateToEvents(update: Record<string, unknown>): AdapterEvent
   // Codex to run something the agent has already run. Vendor tools stay
   // internal and Codex keeps ownership of mutation, which is the same rule the
   // CodeBuddy and Qoder adapters follow.
+  //
+  // They are not dropped silently, though. A Devin tool operation that runs
+  // longer than the bridge's stall timeout would otherwise look like upstream
+  // silence and get the still-working turn aborted, so an internal update
+  // becomes a heartbeat: proof of life without a client-visible tool.
+  if (kind === "tool_call" || kind === "tool_call_update" || kind === "plan" || kind === "current_mode_update") {
+    return [{ type: "heartbeat" }];
+  }
   return [];
 }
 /** Ceiling on the flattened conversation handed to one ACP prompt. */
