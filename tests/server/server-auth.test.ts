@@ -244,6 +244,9 @@ async function startPoolRetryHarness(
     omitCredentialAccountIds?: string[];
     combos?: OcxConfig["combos"];
     modelRosterByAccount?: Record<string, string[]>;
+    codexAccountPickerModels?: Record<string, string[]>;
+    disabledModels?: string[];
+    codexDesktopAuthless?: boolean;
   } = {},
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
@@ -306,6 +309,9 @@ async function startPoolRetryHarness(
     ],
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
+    ...(options.codexAccountPickerModels ? { codexAccountPickerModels: options.codexAccountPickerModels } : {}),
+    ...(options.disabledModels ? { disabledModels: options.disabledModels } : {}),
+    ...(options.codexDesktopAuthless ? { codexDesktopAuthless: true } : {}),
     ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
     ...(options.websockets ? { websockets: true } : {}),
@@ -4581,6 +4587,90 @@ describe("POST /opencodex-session pairing body bound", () => {
       expect(response.status).toBe(401);
     } finally {
       await server.stop(true);
+    }
+  });
+
+});
+
+describe("GET /v1/models Codex client-version account-picker projection", () => {
+  test("keeps common native rows for both specific and empty selective maps", async () => {
+    const commonModel = "gpt-5.6-sol";
+    const selectedModel = "gpt-5.5";
+    for (const codexAccountPickerModels of [
+      { side: [selectedModel] },
+      {},
+    ]) {
+      const harness = await startPoolRetryHarness(
+        () => Response.json({ id: "unused", status: "completed", output: [] }),
+        {
+          accountNamespaces: { side: "pool-a" },
+          codexAccountPickerModels,
+          modelRosterByAccount: {
+            "acct-pool-a": [commonModel, selectedModel],
+            "acct-pool-b": [commonModel],
+          },
+        },
+      );
+      try {
+        const response = await originalGlobalFetch(
+          new URL("/v1/models?client_version=0.150.0", harness.server.url),
+          { headers: { authorization: "Bearer inbound-token" } },
+        );
+        expect(response.status).toBe(200);
+        const payload = await response.json() as { models: Array<{ slug: string }> };
+        const slugs = payload.models.map(model => model.slug);
+        expect(slugs).toContain(commonModel);
+        expect(slugs).not.toContain("side/" + commonModel);
+        if (Object.keys(codexAccountPickerModels).length > 0) {
+          expect(slugs).toContain("side/" + selectedModel);
+        } else {
+          expect(slugs).not.toContain("side/" + selectedModel);
+        }
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    }
+  });
+
+  test("projects Reserve only for the selected authless main selector", async () => {
+    const reserveModel = "gpt-reserve";
+    for (const [codexDesktopAuthless, codexAccountPickerModels, expected, disabledModels] of [
+      [true, { main: [reserveModel] }, true, []],
+      [true, { main: [reserveModel] }, false, [reserveModel]],
+      [true, { main: [reserveModel] }, false, [`main/${reserveModel}`]],
+      [true, { main: [] }, false, []],
+      [true, {}, false, []],
+      [true, { side: [reserveModel] }, false, []],
+      [false, { main: [reserveModel] }, false, []],
+    ] as const) {
+      const harness = await startPoolRetryHarness(
+        () => Response.json({ id: "unused", status: "completed", output: [] }),
+        {
+          accountNamespaces: { main: "@main", side: "pool-a" },
+          codexDesktopAuthless,
+          codexAccountPickerModels,
+          disabledModels: [...disabledModels],
+        },
+      );
+      try {
+        const response = await originalGlobalFetch(
+          new URL("/v1/models?client_version=0.150.0", harness.server.url),
+          { headers: { authorization: "Bearer inbound-token" } },
+        );
+        expect(response.status).toBe(200);
+        const payload = await response.json() as { models: Array<{ slug: string; visibility?: string }> };
+        const slugs = payload.models.map(model => model.slug);
+        const reserve = payload.models.find(model => model.slug === `main/${reserveModel}`);
+        expect(reserve !== undefined && reserve.visibility !== "hide").toBe(expected);
+        if (disabledModels.length > 0) {
+          expect(reserve).toBeDefined();
+          expect(reserve!.visibility).toBe("hide");
+        }
+        expect(slugs).not.toContain(`side/${reserveModel}`);
+        expect(slugs).not.toContain(reserveModel);
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
     }
   });
 });

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
+import { getConfigPath, loadConfig, saveConfig, validateConfigCandidate } from "../../src/config";
 import { handleManagementAPI, type ManagementApiDeps } from "../../src/server/management-api";
 import { invalidateStartupHealthCache } from "../../src/server/startup-health-cache";
 import { USAGE_RANGES, USAGE_SURFACES } from "../../src/usage/summary";
@@ -307,6 +307,7 @@ describe("PUT /api/settings", () => {
     const config = baseConfig();
     const res = await putSettings(config, {});
     expect(res!.status).toBe(400);
+    expect((await res!.json()).error).toContain("codexAccountPickerModels");
   });
 
   test.each([[null], [[]], ["settings"], [42]] as const)(
@@ -640,3 +641,195 @@ describe("config.json schema resilience", () => {
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
+
+
+describe("selective account model settings", () => {
+  test("saves selected models, converges, and null restores legacy mode", async () => {
+    const config = baseConfig();
+    config.codexAccountNamespaces = { main: "@main" };
+    config.codexAccountPickerEnabled = true;
+    let convergences = 0;
+    const deps: ManagementApiDeps = {
+      saveConfigPreservingClaudeCode: saveConfig,
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences++; }),
+    };
+    const selected = { main: ["gpt-5.5"] };
+    const saved = await putSettings(config, { codexAccountPickerModels: selected }, deps);
+    expect(saved!.status).toBe(200);
+    expect(await saved!.json()).toMatchObject({ codexAccountPickerModels: selected });
+    expect(loadConfig().codexAccountPickerModels).toEqual(selected);
+    expect(convergences).toBe(1);
+    const loaded = await (await getSettings(config))!.json();
+    expect(loaded.codexAccountPickerOptions.find((option: { selector: string }) => option.selector === "main").models).toContain("gpt-5.5");
+    await putSettings(config, { codexAccountPickerModels: selected }, deps);
+    expect(convergences).toBe(1);
+    await putSettings(config, { codexAccountPickerModels: null }, deps);
+    expect(config.codexAccountPickerModels).toBeUndefined();
+    expect(loadConfig().codexAccountPickerModels).toBeUndefined();
+    expect(convergences).toBe(2);
+  });
+
+  test.each([[], "all", { main: "gpt-5.5" }, { main: ["other/gpt-5.5"] }, { missing: ["gpt-5.5"] }, JSON.parse('{"__proto__":[]}')])(
+    "rejects malformed or unknown selections without persisting (%j)", async value => {
+      let writes = 0;
+      const response = await putSettings(baseConfig(), { codexAccountPickerModels: value }, {
+        saveConfigPreservingClaudeCode: () => { writes++; },
+      });
+      expect(response!.status).toBe(400);
+      expect(writes).toBe(0);
+    },
+  );
+
+  test("rejects an unavailable model on a known selector before any mutation", async () => {
+    const config = baseConfig();
+    config.codexAccountNamespaces = { main: "@main" };
+    config.codexAccountPickerEnabled = true;
+    config.codexAccountPickerModels = { main: ["gpt-5.5"] };
+    saveConfig(config);
+    const stored = readFileSync(getConfigPath(), "utf-8");
+    let writes = 0;
+    let convergences = 0;
+    const response = await putSettings(config, {
+      codexAccountPickerModels: { main: ["gpt-5.5", "gpt-not-real"] },
+      codexAccountPickerEnabled: false,
+    }, {
+      saveConfigPreservingClaudeCode: () => { writes++; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences++; }),
+    });
+    expect(response!.status).toBe(400);
+    expect(await response!.json()).toEqual({ error: "Model is not available for this Codex account selector" });
+    expect(writes).toBe(0);
+    expect(convergences).toBe(0);
+    expect(config.codexAccountPickerModels).toEqual({ main: ["gpt-5.5"] });
+    expect(config.codexAccountPickerEnabled).toBe(true);
+    expect(readFileSync(getConfigPath(), "utf-8")).toBe(stored);
+  });
+
+  test("failed persistence restores selection and original switch state", async () => {
+    const config = baseConfig();
+    const previous = { main: ["gpt-5.5"] };
+    config.codexAccountNamespaces = { main: "@main" };
+    config.codexAccountPickerModels = previous;
+    await expect(putSettings(config, { codexAccountPickerModels: {}, codexAccountPickerEnabled: true }, {
+      saveConfigPreservingClaudeCode: () => { throw new Error("disk full"); },
+    })).rejects.toThrow("disk full");
+    expect(config.codexAccountPickerModels).toBe(previous);
+    expect(config.codexAccountPickerEnabled).toBeUndefined();
+  });
+});
+
+
+test("malformed stored account model preferences preserve providers and reject live writes", () => {
+  const config = baseConfig();
+  saveConfig(config);
+  writeFileSync(getConfigPath(), JSON.stringify({ ...config, codexAccountPickerModels: "invalid" }));
+  const loaded = loadConfig();
+  expect(loaded.providers.openai).toEqual(config.providers.openai);
+  expect(loaded.codexAccountPickerModels).toBeUndefined();
+  expect(validateConfigCandidate({ ...config, codexAccountPickerModels: "invalid" })).toMatchObject({ ok: false });
+});
+
+
+test("o-series account model preferences survive config validation and persistence", () => {
+  const config = { ...baseConfig(), codexAccountPickerModels: { main: ["o1", "o3", "o1-mini", "o3-mini", "o4-mini"] } };
+  expect(validateConfigCandidate(config)).toMatchObject({ ok: true });
+  saveConfig(config);
+  expect(loadConfig().codexAccountPickerModels).toEqual(config.codexAccountPickerModels);
+});
+
+
+test("first enable and selected models save atomically with generated selectors", async () => {
+  const config = baseConfig();
+  const response = await putSettings(config, { codexAccountPickerEnabled: true, codexAccountPickerModels: { main: ["gpt-5.5"] } }, {
+    saveConfigPreservingClaudeCode: saveConfig,
+    createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+  });
+  expect(response!.status).toBe(200);
+  expect(config.codexAccountNamespaces).toEqual({ main: "@main" });
+  expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.5"] });
+});
+
+test("invalid atomic selection does not initialize selectors or write settings", async () => {
+  const config = baseConfig();
+  const before = structuredClone(config);
+  let writes = 0;
+  const response = await putSettings(config, { codexAccountPickerEnabled: true, codexAccountPickerModels: { main: ["gpt-not-real"] } }, {
+    saveConfigPreservingClaudeCode: () => { writes++; },
+  });
+  expect(response!.status).toBe(400);
+  expect(config).toEqual(before);
+  expect(writes).toBe(0);
+});
+
+test("saving after account removal prunes stale choices, including a restored draft", async () => {
+  const config = baseConfig();
+  config.codexAccountPickerEnabled = true;
+  config.codexAccountNamespaces = { main: "@main", removed: "deleted-pool" };
+  config.codexAccounts = [];
+  const draft = { main: ["gpt-5.5"], removed: ["gpt-5.5"] };
+  config.codexAccountPickerModels = structuredClone(draft);
+  const deps: ManagementApiDeps = { saveConfigPreservingClaudeCode: saveConfig, createManagementConvergeCodex: catalogConvergenceFactory(() => {}) };
+  for (const restore of [false, true]) {
+    if (restore) await putSettings(config, { codexAccountPickerModels: null }, deps);
+    const response = await putSettings(config, { codexAccountPickerModels: draft }, deps);
+    expect(response!.status).toBe(200);
+    expect(config.codexAccountPickerModels).toEqual({ main: ["gpt-5.5"] });
+    expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.5"] });
+    expect(config.codexAccountNamespaces.removed).toBe("deleted-pool");
+  }
+  const response = await putSettings(config, { codexAccountPickerModels: { unknown: ["gpt-5.5"] } }, deps);
+  expect(response!.status).toBe(400);
+});
+
+
+test("eligible Reserve is selectable only for main-account bindings", async () => {
+  const config = baseConfig();
+  config.codexAccountPickerEnabled = true;
+  config.codexDesktopAuthless = true;
+  config.codexAccountNamespaces = { main: "@main", side: "pool-side" };
+  config.codexAccounts = [{ id: "pool-side", email: "side@example.test" }];
+  const options = (await (await getSettings(config))!.json()).codexAccountPickerOptions;
+  expect(options.find((row: { selector: string }) => row.selector === "main").models).toContain("gpt-reserve");
+  expect(options.find((row: { selector: string }) => row.selector === "side").models).not.toContain("gpt-reserve");
+  const deps: ManagementApiDeps = { saveConfigPreservingClaudeCode: saveConfig, createManagementConvergeCodex: catalogConvergenceFactory(() => {}) };
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
+  expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-reserve"] });
+  expect((await putSettings(config, { codexAccountPickerModels: { side: ["gpt-reserve"] } }, deps))!.status).toBe(400);
+  config.codexDesktopAuthless = false;
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
+  expect(config.codexAccountPickerModels).toEqual({ main: [] });
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(400);
+  expect((await putSettings(config, { codexDesktopAuthless: true, codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
+  config.runtimeRole = "client";
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
+  expect(config.codexAccountPickerModels).toEqual({ main: [] });
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(400);
+});
+
+
+test("an eligibility change does not let unchanged stale selections block the next edit", async () => {
+  const config = baseConfig();
+  config.codexAccountPickerEnabled = true;
+  config.codexDesktopAuthless = true;
+  config.codexAccountNamespaces = { main: "@main" };
+  config.codexAccountPickerModels = { main: ["gpt-reserve", "gpt-5.5"] };
+  const deps: ManagementApiDeps = { saveConfigPreservingClaudeCode: saveConfig, createManagementConvergeCodex: catalogConvergenceFactory(() => {}) };
+  expect((await putSettings(config, { codexDesktopAuthless: false }, deps))!.status).toBe(200);
+  const response = await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve", "gpt-5.5", "gpt-5.6-sol"] } }, deps);
+  expect(response!.status).toBe(200);
+  expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.5", "gpt-5.6-sol"] });
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-not-real"] } }, deps))!.status).toBe(400);
+});
+
+
+test("a removed namespace is pruned from saved selections but a new unknown key is rejected", async () => {
+  const config = baseConfig();
+  config.codexAccountPickerEnabled = true;
+  config.codexAccountNamespaces = { main: "@main" };
+  config.codexAccountPickerModels = { main: ["gpt-5.5"], former: ["gpt-5.5"] };
+  const deps: ManagementApiDeps = { saveConfigPreservingClaudeCode: saveConfig, createManagementConvergeCodex: catalogConvergenceFactory(() => {}) };
+  const response = await putSettings(config, { codexAccountPickerModels: { main: ["gpt-5.6-sol"], former: ["gpt-5.5"] } }, deps);
+  expect(response!.status).toBe(200);
+  expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.6-sol"] });
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-5.6-sol"], unknown: ["gpt-5.5"] } }, deps))!.status).toBe(400);
+});

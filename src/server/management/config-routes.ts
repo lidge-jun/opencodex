@@ -1,3 +1,8 @@
+import { isEffectiveCodexDesktopAuthless } from "../../codex/loopback-target";
+import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../../codex/account-namespaces";
+import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
+import { isCodexAccountPickerModels } from "../../config/codex-account-picker";
+import { accountBoundNativeOpenAiSlugsBySelector } from "../../codex/catalog/metadata";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -178,6 +183,23 @@ interface ClientIntegrationSyncOutcome {
  * does not fail the sync: Codex is the one that matters for routing, and a broken Grok file
  * should surface as a warning, not as a 500 on a command that did its main job.
  */
+function accountPickerSettings(config: OcxConfig) {
+  const choices = { ...config, codexAccountPickerEnabled: true };
+  delete choices.codexAccountPickerModels;
+  // Catalog candidates are display choices, not proof of upstream account entitlement.
+  const targets = new Map(codexAccountNamespaceEntries(choices));
+  return {
+    codexAccountPickerModels: config.codexAccountPickerModels ?? null,
+    codexAccountPickerOptions: [...accountBoundNativeOpenAiSlugsBySelector(choices)]
+      .map(([selector, models]) => ({
+        selector,
+        models: isEffectiveCodexDesktopAuthless(choices) && isMainCodexAccountTarget(targets.get(selector) ?? "")
+          ? [...models, NATIVE_RESERVE_MODEL]
+          : models,
+      })),
+  };
+}
+
 export async function syncEnabledClientIntegrations(
   port: number | undefined,
   config: OcxConfig,
@@ -315,6 +337,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: codexAccountPickerEnabled(config),
+      ...accountPickerSettings(config),
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       // Absent means hidden, so the GUI renders the switch without having to know that
       // `undefined` and `false` mean the same thing.
@@ -415,6 +438,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode?: unknown;
       appOwnedMemoryBudgetMb?: unknown;
       codexAccountPickerEnabled?: unknown;
+      codexAccountPickerModels?: unknown;
       codexQuotaAutoRefresh?: unknown;
       oauthOpenBrowser?: unknown;
       showCodexSparkQuota?: unknown;
@@ -427,6 +451,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.streamMode === undefined
       && body.appOwnedMemoryBudgetMb === undefined
       && body.codexAccountPickerEnabled === undefined
+      && body.codexAccountPickerModels === undefined
       && body.codexQuotaAutoRefresh === undefined
       && body.oauthOpenBrowser === undefined
       && body.showCodexSparkQuota === undefined
@@ -434,7 +459,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexAccountPickerModels, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -448,6 +473,39 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.codexAccountPickerEnabled !== undefined
       && typeof body.codexAccountPickerEnabled !== "boolean") {
       return jsonResponse({ error: "codexAccountPickerEnabled boolean is required" }, 400);
+    }
+    if (body.codexAccountPickerModels !== undefined && body.codexAccountPickerModels !== null && !isCodexAccountPickerModels(body.codexAccountPickerModels)) {
+      return jsonResponse({ error: "codexAccountPickerModels must map public account selectors to arrays of bare native model ids" }, 400);
+    }
+    let selectedAccountModels: Record<string, string[]> | undefined;
+    let initializedPickerNamespaces: OcxConfig["codexAccountNamespaces"];
+    if (body.codexAccountPickerModels !== undefined && body.codexAccountPickerModels !== null) {
+      const choices = { ...config };
+      if (typeof body.codexDesktopAuthless === "boolean") choices.codexDesktopAuthless = body.codexDesktopAuthless;
+      if (body.codexAccountPickerEnabled === true) {
+        choices.codexAccountPickerEnabled = true;
+        if (initializeDefaultCodexAccountNamespaces(choices)) {
+          initializedPickerNamespaces = choices.codexAccountNamespaces;
+        }
+      }
+      const available = new Map(accountPickerSettings(choices).codexAccountPickerOptions
+        .map(option => [option.selector, new Set(option.models)]));
+      selectedAccountModels = {};
+      for (const [selector, models] of Object.entries(body.codexAccountPickerModels as Record<string, string[]>)) {
+        const candidates = available.get(selector);
+        if (!candidates) {
+          // Discard saved display choices for deleted accounts or removed/renamed bindings.
+          if (Object.hasOwn(choices.codexAccountNamespaces ?? {}, selector)
+            || Object.hasOwn(config.codexAccountPickerModels ?? {}, selector)) continue;
+          return jsonResponse({ error: "Unknown Codex account selector" }, 400);
+        }
+        const previous = new Set(config.codexAccountPickerModels?.[selector] ?? []);
+        if (models.some(model => !candidates.has(model) && !previous.has(model))) {
+          return jsonResponse({ error: "Model is not available for this Codex account selector" }, 400);
+        }
+        // Eligibility can change after a selection was saved; drop unchanged stale choices.
+        selectedAccountModels[selector] = models.filter(model => candidates.has(model));
+      }
     }
     if (body.showCodexSparkQuota !== undefined && typeof body.showCodexSparkQuota !== "boolean") {
       return jsonResponse({ error: "showCodexSparkQuota boolean is required" }, 400);
@@ -504,6 +562,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexAccountNamespaces: Object.hasOwn(config, "codexAccountNamespaces"),
       codexAccountPickerEnabled: config.codexAccountPickerEnabled,
       hasCodexAccountPickerEnabled: Object.hasOwn(config, "codexAccountPickerEnabled"),
+      codexAccountPickerModels: config.codexAccountPickerModels,
       codexQuotaAutoRefresh: config.codexQuotaAutoRefresh,
       hasCodexQuotaAutoRefresh: Object.hasOwn(config, "codexQuotaAutoRefresh"),
       oauthOpenBrowser: config.oauthOpenBrowser,
@@ -539,9 +598,15 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
       if (body.codexAccountPickerEnabled === true) {
         config.codexAccountPickerEnabled = true;
-        initializeDefaultCodexAccountNamespaces(config);
+        if (initializedPickerNamespaces) config.codexAccountNamespaces = initializedPickerNamespaces;
+        else initializeDefaultCodexAccountNamespaces(config);
       } else if (body.codexAccountPickerEnabled === false) {
         config.codexAccountPickerEnabled = false;
+      }
+      if (body.codexAccountPickerModels === null) {
+        deleteConfigTopLevelKey(config, "codexAccountPickerModels");
+      } else if (body.codexAccountPickerModels !== undefined) {
+        config.codexAccountPickerModels = structuredClone(selectedAccountModels!);
       }
       if (typeof body.oauthOpenBrowser === "boolean") {
         config.oauthOpenBrowser = body.oauthOpenBrowser;
@@ -586,6 +651,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexAccountPickerEnabled) {
         config.codexAccountPickerEnabled = previousSettings.codexAccountPickerEnabled;
       } else deleteConfigTopLevelKey(config, "codexAccountPickerEnabled");
+      if (previousSettings.codexAccountPickerModels !== undefined) config.codexAccountPickerModels = previousSettings.codexAccountPickerModels;
+      else deleteConfigTopLevelKey(config, "codexAccountPickerModels");
       if (previousSettings.hasCodexQuotaAutoRefresh) {
         config.codexQuotaAutoRefresh = previousSettings.codexQuotaAutoRefresh;
       } else deleteConfigTopLevelKey(config, "codexQuotaAutoRefresh");
@@ -618,6 +685,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const authlessIsEnabled = config.codexDesktopAuthless === true;
     const clientCompactionIsEnabled = config.codexClientCompaction === true;
     const catalogRefresh = pickerWasEnabled !== pickerIsEnabled
+      || JSON.stringify(previousSettings.codexAccountPickerModels) !== JSON.stringify(config.codexAccountPickerModels)
       || authlessWasEnabled !== authlessIsEnabled
       || clientCompactionWasEnabled !== clientCompactionIsEnabled
       ? await convergeCodexCatalog()
@@ -633,6 +701,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: pickerIsEnabled,
+      ...accountPickerSettings(config),
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
       catalogRefreshPending,

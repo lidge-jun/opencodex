@@ -7,7 +7,9 @@ opencodex 不会修改 Codex App。它会写入 Codex CLI/TUI 使用的同一套
 app-server 会读取这份共享状态，但部分 Codex Desktop 版本还会在 renderer 中应用第二层远程
 allowlist，因此仍可能从选择器里删掉路由模型。
 
-OpenAI 条目有两种凭据通道：原生 Codex 登录，以及命名空间化的 `openai-apikey/<model>` API key 通道。仅在 Pool 与 Direct 之间切换 `codexAccountMode` 不会改变选择器 id。但当 `codexAccountPickerEnabled` 启用了账户限定的选择器行，且 `codexAccountNamespaces` 中有目标账户存在的 selector 时，opencodex 会为映射账户添加独立的 `<selector>/<native-openai-model>` 行，并在选择器中隐藏裸原生行。Selector 名称是用户自定义的公开标签，没有内置的账户角色含义。选择带 `selector` 的行只会使用映射账户，不会更改当前 Pool 账户；目标不可用时，请求会直接失败，不会切换到其他账户。详情请参阅[精确 Codex 账户选择器](/reference/configuration/routing/#exact-codex-account-selectors)。
+OpenAI 条目有两种凭据通道：原生 Codex 登录，以及命名空间化的 `openai-apikey/<model>` API key 通道。仅在 Pool 与 Direct 之间切换 `codexAccountMode` 不会改变选择器 id。但当 `codexAccountPickerEnabled` 启用了账户限定的选择器行，且 `codexAccountNamespaces` 中有目标账户存在的 selector 时，结果取决于 `codexAccountPickerModels`。省略该映射时，系统沿用旧行为：为每个受支持模型添加独立的 `<selector>/<native-openai-model>` 行，并在选择器中隐藏裸原生行。提供该映射时，公共池原生模型仍以裸行显示，只有所选的模型和账户组合会添加限定行。Selector 名称是用户自定义的公开标签，没有内置的账户角色含义。选择带 `selector` 的行只会使用映射账户，不会更改当前 Pool 账户；目标不可用时，请求会直接失败，不会切换到其他账户。详情请参阅[精确 Codex 账户选择器](/reference/configuration/routing/#exact-codex-account-selectors)。
+
+启用、选择并保存模型以及恢复原有模式的步骤，请参阅[英文设置说明](/guides/codex-app-models/#select-only-particular-account-models)。
 
 `codexAccountNamespaces` 映射为空时，账户限定的选择器行处于关闭状态。非空映射中省略 `codexAccountPickerEnabled` 时，为保持向后兼容会视为已启用。设为 `false` 会隐藏生成的账户限定行并恢复选择器中的裸原生行，但不会删除映射，也不会禁用精确的 `<selector>/<native-openai-model>` 路由。
 
@@ -66,7 +68,7 @@ visibility = "list"
 | 路由 | 选择器 id 与目录元数据 |
 | --- | --- |
 | Codex 登录（账户限定的选择器行未启用） | 显示 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` 等裸原生 id，并按 `codexAccountMode` 使用 Pool 或 Direct。GPT-5.6 行使用 922,000-token 目录窗口。 |
-| Codex 登录（账户限定的选择器行已启用且存在有效 selector） | 为每个有效 selector 与受支持原生模型的组合显示 `<selector>/<native-openai-model>` 行。每行只使用映射账户，裸原生行会从选择器中隐藏。原生 metadata 与 context window 会保留。 |
+| Codex 登录（账户限定的选择器行已启用且存在有效 selector） | 省略 `codexAccountPickerModels` 时，每个有效 selector 都会获得所有受支持原生模型的行，裸原生行会被隐藏。提供该映射时，公共池原生模型仍以裸行显示，只有所选的模型和 selector 组合会添加限定行。每个限定行只使用映射账户。原生 metadata 与 context window 会保留。 |
 | OpenAI（API key） | 恰好八个命名空间行：`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna，以及三个 `*-pro` 虚拟 id（八个条目均为 1,050,000 context / 922,000 max input） |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna`（922,000） |
 | Cursor | 静态回退包含 `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna`（1,000,000），以及 Grok 4.5/4.6 的普通和 Fast 条目（500,000）。4.6 还提供 `xhigh`；实时账户发现会决定最终哪些条目仍然可见。 |

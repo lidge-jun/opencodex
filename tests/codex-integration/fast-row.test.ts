@@ -247,6 +247,22 @@ describe("publication and parsing agree", () => {
     expect(parseFastRowId("desktop/gpt-5.6-sol--fast", config, new Set(), bases))
       .toEqual({ baseId: "desktop/gpt-5.6-sol" });
   });
+
+  test("a selective picker filter cannot make an exact-account fast base unparsable", () => {
+    // `codexAccountPickerModels` filters catalog display only. The underlying exact-account
+    // route remains valid, and the Fast parser must keep stripping its synthetic suffix even
+    // when this base is deliberately absent from the account's picker rows.
+    const config = configWith({
+      openai: provider({ authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" }),
+    }, {
+      codexAccountNamespaces: { side: "@main" },
+      codexAccountPickerModels: { side: ["gpt-daybreak-blue-latest"] },
+    } as Partial<OcxConfig>);
+    const bases = fastRowBases(config);
+    expect(bases("side/gpt-5.6-sol")).toBe(true);
+    expect(parseFastRowId("side/gpt-5.6-sol--fast", config, new Set(), bases))
+      .toEqual({ baseId: "side/gpt-5.6-sol" });
+  });
 });
 
 describe("routable bases do not depend on the live-model cache", () => {

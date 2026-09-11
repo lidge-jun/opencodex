@@ -398,7 +398,7 @@ whether to star the repository.
 `GET /api/settings` reports the effective `codexAccountPickerEnabled` boolean. A `PUT` containing
 that strict boolean initializes privacy-safe account selectors when enabling an empty map, preserves
 existing selector labels when disabling or re-enabling, persists first, and then requests one bounded
-catalog convergence only when effective picker visibility changed. The successful response includes
+catalog convergence only when effective picker visibility or the selected account models changed. The successful response includes
 `catalogRefreshPending`: `false` means the catalog commit completed (or no refresh was needed), while
 `true` means the setting was saved but `POST /api/sync` should be used to retry the catalog refresh.
 Persistence or selector-allocation failure rolls the in-memory settings back and does not run
@@ -478,3 +478,23 @@ Direct HTTP is most useful for integrations that need the exact endpoint contrac
 ## Remote sessions and data-key rotation
 
 `POST /api/keys/rotate {id}` starts a ten-minute overlap and returns the new data secret once. `POST /api/keys/rotate/commit {id,rotationId}` commits it; `DELETE /api/keys/rotate {id,rotationId}` aborts it. All require management authentication; data keys cannot call them. `POST /api/session/logout` requires the current `gui-session`, matching Origin, and CSRF. An admin token receives 403 and can never mint or exchange into a consent session.
+
+
+### Selective Codex account models
+
+`GET /api/settings` also returns `codexAccountPickerModels` (a public-selector-to-model-array
+map, or `null` for legacy mode) and `codexAccountPickerOptions` (objects with `selector`
+and `models`, containing the known candidate model IDs for editing). Candidate choices are
+not proof of upstream permission; catalog entitlement checks still apply.
+
+`PUT /api/settings` accepts `codexAccountPickerModels` alone or with the existing switch.
+An object enables selective mode, `{}` selects none, and `null` removes the preference to
+restore legacy behavior. Invalid keys, non-array values, and non-native model IDs return 400 before writing.
+An account selector returns 400 only if it is not a current candidate, a retained
+`codexAccountNamespaces` binding, or a key in the previously saved selection map. An atomic enable-and-select request validates
+against the newly initialized selectors and persists those same bindings. Choices for retained
+bindings whose accounts are no longer selectable, and saved choices for removed or renamed
+bindings, are discarded on save, so stale drafts do not
+block editing remaining accounts. Previously saved model choices that are no longer eligible
+are also discarded on the next save; newly added unavailable model IDs still return 400. Saving converges the catalog when the preference
+changes; failure rolls the in-memory preference back. No credential fields are returned.

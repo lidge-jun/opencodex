@@ -12,9 +12,11 @@ Les entrées OpenAI utilisent deux routes d'identification : la connexion Codex 
 clé API avec espace de noms `openai-apikey/<model>`. Le simple passage de `codexAccountMode` entre Pool et
 Direct ne change pas les identifiants du sélecteur. Toutefois, lorsque les lignes qualifiées par compte sont
 activées avec `codexAccountPickerEnabled` et que `codexAccountNamespaces` contient des sélecteurs admissibles
-dont les comptes associés existent toujours, opencodex ajoute une ligne
-`<selector>/<native-openai-model>` distincte pour chaque compte associé et masque les lignes natives non
-qualifiées du sélecteur Codex. Les libellés des sélecteurs sont des noms publics choisis par l'utilisateur et
+dont les comptes associés existent toujours, le résultat dépend de `codexAccountPickerModels`. Lorsque cette
+table est omise, le comportement historique ajoute une ligne `<selector>/<native-openai-model>` pour chaque
+modèle pris en charge et masque les lignes natives non qualifiées du sélecteur Codex. Lorsque la table est
+présente, les modèles natifs du groupe commun restent visibles sous forme de lignes non qualifiées, et seules
+les paires de modèles et de comptes sélectionnées reçoivent des lignes qualifiées. Les libellés des sélecteurs sont des noms publics choisis par l'utilisateur et
 n'ont aucune signification intégrée quant au rôle du compte. Choisir une ligne qualifiée utilise exclusivement
 le compte associé, ne change pas le compte Pool actif et échoue de façon fermée au lieu de changer de compte
 si la cible n'est pas disponible. Si le catalogue Codex propre à un compte contient un identifiant visible de
@@ -25,6 +27,8 @@ clé API. La ligne est reconnue d'après la structure de champs d'une véritable
 filtre les entrées mal formées ; cela ne prouve pas que l'identifiant provient d'une réponse en amont, car le
 cache appartient à l'utilisateur. Consultez les
 [sélecteurs exacts de compte Codex](/fr/reference/configuration/routing/#sélecteurs-exacts-de-comptes-codex).
+
+Pour activer cette option, choisir les modèles, enregistrer ou revenir au mode précédent, consultez les [étapes de configuration en anglais](/guides/codex-app-models/#select-only-particular-account-models).
 
 `gpt-daybreak-blue-latest` suit cette règle d'observation uniquement pour les lignes qualifiées par compte et
 n'est pas ajouté à la liste d'autorisation native non qualifiée. Une entrée `customModels` distincte et
@@ -139,7 +143,7 @@ approximation fondée sur un ancien modèle d'entrée.
 | Route | Identifiants du sélecteur et métadonnées du catalogue |
 | --- | --- |
 | Connexion Codex (lignes qualifiées par compte désactivées) | Identifiants natifs non qualifiés comme `gpt-5.6-sol`, `gpt-5.6-terra` et `gpt-5.6-luna` ; Pool ou Direct est choisi avec `codexAccountMode`. Les lignes GPT-5.6 utilisent une fenêtre de catalogue de 372 000 jetons. |
-| Connexion Codex (lignes qualifiées par compte activées avec des sélecteurs admissibles) | Une ligne `<selector>/<native-openai-model>` par sélecteur admissible et modèle natif pris en charge ; chaque ligne utilise exclusivement le compte associé, et les lignes natives non qualifiées sont masquées dans le sélecteur. Les métadonnées natives et les fenêtres de contexte sont préservées. |
+| Connexion Codex (lignes qualifiées par compte activées avec des sélecteurs admissibles) | Lorsque `codexAccountPickerModels` est omis, chaque sélecteur admissible reçoit tous les modèles natifs pris en charge et les lignes natives non qualifiées sont masquées. Lorsque la table est présente, les modèles natifs du groupe commun restent visibles sous forme de lignes non qualifiées et seules les paires de modèles et de sélecteurs choisies reçoivent des lignes qualifiées. Chaque ligne qualifiée utilise exclusivement le compte associé. Les métadonnées natives et les fenêtres de contexte sont préservées. |
 | Connexion Codex (ligne Daybreak transférée explicitement) | `openai/gpt-daybreak-blue-latest` uniquement lorsque l'entrée `customModels` exacte est configurée sur le fournisseur canonique `openai`. Elle conserve l'identifiant Daybreak transmis et utilise l'instantané de capacités Sol épinglé (contexte de 372 000 jetons ; compactage automatique à 334 800 jetons). |
 | OpenAI (clé API) | Exactement dix lignes avec espace de noms : `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, les trois identifiants virtuels `*-pro` et les deux alias Daybreak (contexte de 1 050 000 jetons ; entrée maximale de 922 000 jetons pour les dix) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1 050 000) |

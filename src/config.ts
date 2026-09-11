@@ -3,6 +3,7 @@ import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
+import { isCodexAccountPickerModels } from "./config/codex-account-picker";
 import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./config/subagent-models";
 export { DEFAULT_SUBAGENT_MODELS } from "./config/subagent-models";
@@ -1291,6 +1292,7 @@ const configSchema = z.object({
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
   codexAccountPickerEnabled: z.boolean().optional().catch(false),
+  codexAccountPickerModels: z.custom<Record<string, string[]>>(isCodexAccountPickerModels).optional().catch(undefined),
   // Same degrade-not-reject rule: a malformed hand edit hides Spark rather than discarding the
   // whole config. Hidden is also the default, so `catch(false)` and the default agree.
   showCodexSparkQuota: z.boolean().optional().catch(false),
@@ -2260,6 +2262,10 @@ function malformedNativeSubagentFieldWarning(field: NativeSubagentPersistedField
 
 function malformedCodexAccountPickerWarning(rawParsed: unknown): string | null {
   const raw = rawConfigRecord(rawParsed);
+  if (raw && Object.hasOwn(raw, "codexAccountPickerModels")
+    && raw.codexAccountPickerModels !== undefined && !isCodexAccountPickerModels(raw.codexAccountPickerModels)) {
+    return "codexAccountPickerModels ignored: expected account selectors mapped to native model arrays";
+  }
   if (!raw || !Object.hasOwn(raw, "codexAccountPickerEnabled")) return null;
   if (typeof raw.codexAccountPickerEnabled === "boolean") return null;
   return "codexAccountPickerEnabled ignored: expected a boolean";
@@ -2801,6 +2807,16 @@ function googleAntigravityStaticCatalogVersionError(value: unknown): string | nu
   return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1, 2, or omitted";
 }
 
+function codexAccountPickerModelsError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw) return null;
+  const descriptor = Object.getOwnPropertyDescriptor(raw, "codexAccountPickerModels");
+  if (!descriptor && !("codexAccountPickerModels" in raw)) return null;
+  if (descriptor && "value" in descriptor
+    && (descriptor.value === undefined || isCodexAccountPickerModels(descriptor.value))) return null;
+  return "schema_invalid: codexAccountPickerModels: expected an own account-selector model map or omitted";
+}
+
 function codexAccountPickerEnabledError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw) return null;
@@ -2968,6 +2984,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexAccountPrioritiesError(value)
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)
+    ?? codexAccountPickerModelsError(value)
     ?? emptyCompletionRetryError(value)
     ?? oauthOpenBrowserError(value)
     ?? runtimeRoleError(value)

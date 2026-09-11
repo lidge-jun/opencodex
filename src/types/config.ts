@@ -814,6 +814,9 @@ export interface OcxConfig {
    * selector map remains visible for compatibility with hand-written configurations.
    */
   codexAccountPickerEnabled?: boolean;
+  /** Selected bare model ids per public account selector. Omitted = legacy all; {} = none.
+   * Selective entries are added alongside common pool-routed native models. */
+  codexAccountPickerModels?: Record<string, string[]>;
   /**
    * Show the GPT-5.3-Codex-Spark 5-hour and weekly windows on Codex quota surfaces. Default false.
    *

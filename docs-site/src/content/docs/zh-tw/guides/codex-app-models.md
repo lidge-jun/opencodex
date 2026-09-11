@@ -10,11 +10,15 @@ Codex 的 app-server 會讀取這份共享狀態，但部分 Codex Desktop 版�
 OpenAI 條目使用兩條憑證路線：原生 Codex 登入，以及帶名稱空間的 `openai-apikey/<model>`
 API key 傳輸。僅在 Pool 與 Direct 之間切換 `codexAccountMode` 本身不會改變選擇器 id。不過，
 當 `codexAccountPickerEnabled` 啟用帳號限定選擇器列，且 `codexAccountNamespaces` 中仍有對應
-帳號存在的合格選擇器時，opencodex 會為這些對應帳號新增獨立的 `<selector>/<native-openai-model>`
-列，並從 Codex 選擇器中隱藏裸的原生列。選擇器標籤是使用者自訂的公開名稱，本身沒有帳號角色
+帳號存在的合格選擇器時，結果取決於 `codexAccountPickerModels`。省略這份對應表時，系統沿用舊行為：
+為每個受支援模型新增獨立的 `<selector>/<native-openai-model>` 列，並從 Codex 選擇器中隱藏裸的
+原生列。提供這份對應表時，共用池原生模型仍以裸列顯示，只有選取的模型與帳號組合會新增限定列。
+選擇器標籤是使用者自訂的公開名稱，本身沒有帳號角色
 的語意。選擇限定列只會使用其對應的帳號，不會改變目前 Pool 帳號；當目標不可用時會失敗關閉
 （fails closed），而不是切換帳號。參見
 [精確 Codex 帳號選擇器](/zh-tw/reference/configuration/routing/#精確-codex-帳號選擇器)。
+
+啟用、選擇並儲存模型及恢復原有模式的步驟，請參閱[英文設定說明](/guides/codex-app-models/#select-only-particular-account-models)。
 
 當 `codexAccountNamespaces` 對應表為空時，帳號限定選擇器列是關閉的。若省略
 `codexAccountPickerEnabled` 但對應表非空，基於向後相容會被視為啟用。將其設為 `false` 可以
@@ -88,7 +92,7 @@ GPT-5.6，以便提供每個模型真實的身份和後設資料，而不是套�
 | 路由 | 選擇器 id 與目錄後設資料 |
 | --- | --- |
 | Codex 登入（停用帳號限定列） | 裸原生 id，例如 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`；透過 `codexAccountMode` 選擇 Pool 或 Direct。GPT-5.6 列使用 922,000 token 的目錄視窗。 |
-| Codex 登入（啟用帳號限定列且有合格選擇器） | 每個合格選擇器與受支援的原生模型各有一列 `<selector>/<native-openai-model>`；每列只使用其對應帳號，且裸原生列會從選擇器中隱藏。原生後設資料與 context 視窗保持不變。 |
+| Codex 登入（啟用帳號限定列且有合格選擇器） | 省略 `codexAccountPickerModels` 時，每個合格選擇器都會取得所有受支援原生模型的列，裸原生列會被隱藏。提供這份對應表時，共用池原生模型仍以裸列顯示，只有選取的模型與選擇器組合會新增限定列。每個限定列只使用其對應帳號。原生後設資料與 context 視窗保持不變。 |
 | OpenAI（API key） | 恰好八個帶名稱空間的列：`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna 與三個 `*-pro` 虛擬 id（全部八個都是 1,050,000 context；922,000 max input） |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna`（922,000） |
 | Cursor | 靜態回退目錄包含 `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna`（1,000,000），以及 Grok 4.5/4.6 的一般與 Fast 項目（500,000）。4.6 還提供 `xhigh`；帳號的即時發現結果決定最終顯示哪些模型。 |
