@@ -1112,6 +1112,17 @@ const clientConnectionSchema = z.object({
 }).strict();
 
 /**
+ * Codex pool selection policy section.
+ *
+ * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
+ * rejected write rather than a silently ignored key that leaves the operator believing they
+ * excluded something.
+ */
+const codexPoolSchema = z.object({
+  excludedPlans: z.array(z.string().trim().min(1)).optional(),
+}).strict();
+
+/**
  * Quota-reset notification section.
  *
  * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
@@ -1249,6 +1260,10 @@ const configSchema = z.object({
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
+  // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
+  // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.
+  codexPool: codexPoolSchema.optional().catch(undefined),
   codexQuotaAutoRefresh: codexQuotaAutoRefreshSchema.optional().catch(undefined),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Selection order is a preference, not a safety control like pause: a malformed
@@ -2161,6 +2176,20 @@ function malformedQuotaResetNotifyWarning(rawParsed: unknown): string | null {
 }
 
 /**
+ * Same silent-in-the-wrong-direction failure as the notification block: a dropped pool policy means
+ * the accounts the operator meant to exclude keep taking traffic, and the only visible symptom is
+ * traffic going somewhere it was supposed to stop going.
+ */
+function malformedCodexPoolWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "codexPool")) return null;
+  const result = codexPoolSchema.safeParse(raw.codexPool);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `codexPool${field ? `.${field}` : ""} ignored: invalid Codex pool selection policy`;
+}
+
+/**
  * Warn once per load that the section was dropped.
  *
  * This matters more than a usual degradation notice: the failure is SILENT in the direction
@@ -2169,6 +2198,18 @@ function malformedQuotaResetNotifyWarning(rawParsed: unknown): string | null {
  */
 function warnDegradedQuotaResetNotify(rawParsed: unknown): void {
   const warning = malformedQuotaResetNotifyWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
+/**
+ * Warn once per load that the pool policy was dropped.
+ *
+ * `.catch(undefined)` turns a malformed policy into a SUCCESSFUL parse, so without this the proxy
+ * starts, rotates onto the accounts the operator meant to exclude, and prints nothing. The visible
+ * symptom would be traffic going exactly where it was told not to go.
+ */
+function warnDegradedCodexPool(rawParsed: unknown): void {
+  const warning = malformedCodexPoolWarning(rawParsed);
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
@@ -2331,6 +2372,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
       warnDegradedQuotaResetNotify(parsed);
+      warnDegradedCodexPool(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
@@ -2359,6 +2401,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
       warnDegradedQuotaResetNotify(parsed);
+      warnDegradedCodexPool(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Still failing, but if every complaint is about one or more named entries
@@ -2383,6 +2426,7 @@ export function loadConfig(): OcxConfig {
         warnDegradedRuntimeRole(parsed);
         warnDegradedOptionalRemoteBlocks(parsed);
         warnDegradedQuotaResetNotify(parsed);
+        warnDegradedCodexPool(parsed);
         return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
       }
     }
@@ -2527,6 +2571,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (clientWarning) warnings.push(clientWarning);
   const notifyWarning = malformedQuotaResetNotifyWarning(rawParsed);
   if (notifyWarning) warnings.push(notifyWarning);
+  const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
+  if (codexPoolWarning) warnings.push(codexPoolWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -2673,6 +2719,21 @@ function quotaResetNotifyError(value: unknown): string | null {
   const issue = result.error.issues[0];
   const field = issue?.path.join(".");
   return `schema_invalid: quotaResetNotify${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
+}
+
+/**
+ * The read path degrades a malformed pool policy to undefined, which for an exclusion policy means
+ * the excluded accounts quietly keep serving traffic. Reject it on write so `ocx config set` cannot
+ * create a policy that looks applied and is not.
+ */
+function codexPoolError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "codexPool") || raw.codexPool === undefined) return null;
+  const result = codexPoolSchema.safeParse(raw.codexPool);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return `schema_invalid: codexPool${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
 }
 
 /**
@@ -2850,6 +2911,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? upstreamHostCircuitThresholdError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
+    ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
     ?? codexQuotaAutoRefreshError(value)

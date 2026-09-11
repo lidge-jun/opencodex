@@ -22,7 +22,15 @@ export function deriveOpenCodeGoSessionId(sessionLane: string): string {
   return `ocx_${digest}`;
 }
 
-/** Add per-conversation Go affinity only to the canonical fixed-key destination. */
+/**
+ * Add Go affinity only to the canonical fixed-key destination.
+ *
+ * Callers on the request path resolve the lane with `getOrAllocateRequestSessionLane`, which returns
+ * real conversation identity when the client supplied it and a per-request value otherwise, so a
+ * request reaching this helper from the proxy always carries a lane. The `!sessionLane` guard stays
+ * for direct callers that have no request context; it is not a per-request identity of its own, and
+ * minting one here would hand each retry a different value.
+ */
 export function resolveOpenCodeGoTransport<T extends OcxProviderConfig>(
   provider: T,
   sessionLane: string | undefined,

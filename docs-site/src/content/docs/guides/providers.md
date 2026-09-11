@@ -81,6 +81,59 @@ credentials must never be replayed on the same token, and local runtimes have no
 preserve. It is opt-in: when the option is absent the feature is off; object presence enables
 it unless `enabled: false`.
 
+### Which account a request spends
+
+The question people ask before connecting an account is whether opencodex will draw on the
+subscription that login already pays for, or bill a separate API account. The answer follows the
+`authMode` above rather than the vendor's marketing tier.
+
+- `forward` — the ChatGPT login. The request carries your Codex credential, so it spends the
+  ChatGPT plan behind that login and reports that plan's Codex quota windows. Which windows exist
+  is plan-dependent: not every plan has a five-hour window. It never reads an API key.
+- `oauth` — a subscription login. The request carries a stored access token, so it spends whichever
+  account you logged in as, and opencodex reports whichever usage windows that provider exposes.
+- `key` — the request carries the key you supplied, so usage lands on the account that owns that
+  key, on that key's own terms. That is metered usage for a pay-as-you-go API account, but a plan
+  allowance when the key *is* a subscription: Z.AI GLM Coding Plan, Kimi Code, the BigModel coding
+  plan, Command Code and CodeBuddy all sell one that way.
+
+A request uses exactly one of these, and opencodex does not fall back from one to the other. When an
+OAuth credential cannot be resolved the request fails with an authentication error instead of
+reaching for a stored key, and the key-pool failover that answers a 429 or a 401 is refused outright
+for OAuth and forward providers.
+
+Two exceptions are worth knowing because you can hit them:
+
+- `xai` and `github-copilot` accept `authMode: "key"` on the same provider id, and if that provider
+  already had a key stored, running `ocx login` for it can leave it in key mode rather than
+  switching it to the subscription. What that changes differs: an `xai` key retargets the provider
+  to `https://api.x.ai/v1`, so a different account pays, while a `github-copilot` key is still a
+  Copilot credential against `api.githubcopilot.com`, so the Copilot subscription pays either way.
+- `orcarouter-oauth` is a consent flow that mints a user-owned `sk-orca-…` API key. Once it has,
+  the request carries a key, so it follows the `key` rule above.
+
+#### Providers that accept both a login and a key
+
+| Provider | Subscription login | API key |
+| --- | --- | --- |
+| OpenAI / ChatGPT | `openai` — Codex login; spends the ChatGPT plan behind it | `openai-apikey` — a separate provider; usage lands on the OpenAI Platform account that owns the key |
+| Anthropic | `ocx login anthropic` — signs in as your Claude account. opencodex reads its five-hour and seven-day usage windows; that endpoint reports no subscription tier | `anthropic-apikey` — direct Anthropic API billing, no Claude subscription |
+| xAI | `ocx login xai` — the Grok CLI subscription gateway. opencodex reads SuperGrok weekly credits, or the monthly pool | the same `xai` provider with `authMode: "key"`, which targets `https://api.x.ai/v1`, so usage lands on that API account |
+| Kimi | `ocx login kimi` — log in with your Kimi account | `kimi-code` — the API-key form of the same Kimi Code Plan transport |
+| Command Code | `ocx login command-code` — opencodex reads five-hour and weekly windows plus a credit balance | `commandcode` — the same service on `/provider/v1` with a key |
+| GitHub Copilot | `ocx login github-copilot` — requires an active Copilot subscription | the same `github-copilot` provider with `authMode: "key"`. The device flow above is the supported path, and either credential is a Copilot one, so the subscription still pays |
+| OrcaRouter | `ocx login orcarouter-oauth` — consent mints a user-owned, long-lived `sk-orca-…` key, and the request then carries a key | `orcarouter` — the same key pasted by hand |
+| Meta Muse | `ocx login meta-muse` imports the Muse Code CLI key. Meta scopes that credential to its own CLI, so this is an unsupported use: how the calls settle is not observable from the API, and you should treat every call as billable against your account | `meta-model` is the supported path — every call is metered per token, and a Muse Code subscription does not work there |
+
+Cursor, Kiro and Nous Portal are login-only and have no API-key equivalent. Google Antigravity is
+login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
+Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
+reached with its own key, not a key mode for the same login.
+
+To check which mode a provider is actually using, open it on the Providers page: the **Connection**
+block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
+`No key needed`. It is a provider-level setting, so the account rows below it do not repeat it.
+
 ## 1. ChatGPT login (forward / passthrough)
 
 The `openai` provider needs **no API key**. Direct forwards credentials from your existing

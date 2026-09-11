@@ -74,8 +74,14 @@ for management. The values below are examples:
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
-ocx config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
 ocx config set corsAllowOrigins '["http://localhost:10100"]'
+
+# A fresh standalone config has no `hub` or `remoteGui` object, and `ocx config set` does not
+# create a missing parent: a nested set fails with `config parent path not found: hub`. Setting
+# `runtimeRole` does not create it either. Create each object first, then set its fields.
+ocx config set hub '{}'
+ocx config set remoteGui '{}'
+ocx config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
 ocx config set hub.managementIngress '{"enabled":true,"port":10101}'
 ocx config set remoteGui.allowedTailscaleUsers '["operator@example.com"]'
 
@@ -85,6 +91,25 @@ export OPENCODEX_API_AUTH_TOKEN="$(openssl rand -hex 32)"
 ocx service install
 ocx service status
 ```
+
+On a genuinely empty configuration you can set each object in one call instead:
+
+```bash
+ocx config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.net","managementIngress":{"enabled":true,"port":10101}}'
+ocx config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
+```
+
+Use that form only when the object does not exist yet. A whole-object set **replaces** the object
+rather than merging into it, so running the line above against a config that already had
+`hub.managementIngress` silently drops the ingress. When you are adapting an existing
+configuration, set one field at a time — the parent is already there, so the nested form works and
+touches nothing else.
+
+Two details that decide whether a line is accepted. The value is parsed as JSON first and falls
+back to the raw string, which is why a URL is written as `'"https://…"'`: objects, arrays, booleans
+and numbers must be valid JSON. And `hub` and `remoteGui` are strict, so a mistyped key is rejected
+at write time as `schema_invalid: hub.<field>` instead of becoming a setting that never takes
+effect. `managementPublicOrigin` must be a bare origin with no path, query or fragment.
 
 `ocx service install` copies the token into the existing owner-only `service-api-token` path. The
 launchd plist and systemd user unit read that protected file when the process starts; neither embeds
@@ -128,6 +153,63 @@ curl --fail --silent --show-error https://hub-name.tailnet-name.ts.net/ >/dev/nu
 The positive browser test must use a real signed-in Tailscale session; a bare `curl` may not carry the
 identity headers needed for automatic session issuance. Pairing remains the fallback when the HTTPS
 frontend cannot provide trustworthy Tailscale identity.
+
+### Giving the data listener TLS
+
+The Serve mapping above publishes the **management** ingress only. That ingress never serves
+`/v1/*`, `/healthz` or `/readyz`, so on its own it does not give a remote client a usable data
+plane. opencodex also terminates no TLS of its own: the listener is plain HTTP and HTTPS is always
+an operator-owned frontend.
+
+Serve can be that frontend for the data plane too, on a second HTTPS port. On macOS it needs one
+extra hop, because Tailscale Serve proxies only to `127.0.0.1` — it cannot target the listener you
+bound to the node's own tailnet address, and the App Store build of the macOS client refuses a
+remote destination outright. Run a loopback forwarder on the hub and point Serve at that:
+
+```bash
+# Any loopback TCP forwarder works; socat is one. The data listener is bound to the tailnet
+# address, so 127.0.0.1:10100 is free for the forwarder to take.
+socat TCP-LISTEN:10100,bind=127.0.0.1,fork,reuseaddr TCP:100.64.0.10:10100 &
+
+tailscale serve --bg --https=8443 http://127.0.0.1:10100
+tailscale serve status   # expect both mappings: 443 -> 10101, 8443 -> 10100
+```
+
+Serve accepts a limited set of HTTPS ports; confirm the mapping was actually created with
+`tailscale serve status` rather than assuming the port was allowed.
+
+Give the forwarder the same lifetime as the hub. A backgrounded shell job dies on reboot while the
+service comes back up, which leaves a hub that is running and unreachable over TLS; run it from
+launchd or systemd alongside `ocx service install`.
+
+Then connect with the two origins stated separately. The positional URL is the **data** origin —
+it is where `/readyz` and `/v1/catalog` are fetched — and `--management-url` is the dashboard
+origin used for pairing and key issuance. They do not have to share a port:
+
+```bash
+ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --admin-token-stdin
+```
+
+When `--management-url` is omitted it is taken from the `/readyz` response, which reports
+`hub.managementPublicOrigin`. Setting it explicitly is clearer when the two origins differ.
+
+**Do not shortcut this by binding the data listener to `127.0.0.1`.** A loopback bind is how
+opencodex recognizes a purely local deployment: it stops requiring a data credential, and it starts
+requiring the request's `Host` header to be loopback as well. A TLS frontend forwards
+`Host: hub-name.tailnet-name.ts.net`, so `/v1/catalog` answers `403 origin_rejected` — while
+`/readyz`, which does not run that check, still returns `200`. The deployment looks healthy and
+cannot serve a model. Nothing in the request path reads `X-Forwarded-Host`, so the frontend cannot
+repair it. Keep the listener on the tailnet address, where credential admission stays on and the
+`Host` check does not apply.
+
+Binding `0.0.0.0` also works and removes the need for a forwarder, since the listener is then
+reachable on loopback as well. It publishes the data port on every interface, so prefer it only
+where the host has no other network you care about.
+
+Re-run the acceptance checks against the HTTPS data origin once Serve is up: `/readyz`, an
+authenticated `GET /v1/catalog`, and one real routed response.
 
 ### Operator-owned ts.net certificate proxy
 
@@ -269,6 +351,10 @@ docker compose run --rm hub bun run src/cli/index.ts config set remoteGui.allowe
 docker compose restart hub
 ```
 
+These nested sets work because the image seeds a first-run `hub` configuration, so the object
+already exists. On a fresh standalone install it does not, and the same lines fail until you create
+it — see [Linux systemd or macOS launchd](#linux-systemd-or-macos-launchd) above.
+
 Do not put a token in `ARG`, `ENV`, `COPY`, Compose YAML, image history, or command arguments. Do not
 mount the Docker socket, the host's home or Codex home, SSH agent, or provider-key files. A management
 ingress bound to `127.0.0.1:10101` inside the container is reachable only by a TLS/tailnet frontend
@@ -328,8 +414,11 @@ For a service rollback, stop the branch service and repair the prior release aga
   Negotiation fails before token, catalog, journal, or client-state writes.
 - **Lost or burned pairing code:** create a new short-lived code. Grants are one-use and repeated
   failures are rate-limited without revealing whether a code exists.
-- **Plain HTTP warning:** pairing over non-loopback HTTP requires the explicit
-  `--allow-insecure-http` opt-in. Admin tokens are never sent over HTTP.
+- **Plain HTTP refused:** pairing over non-loopback HTTP is refused outright, and there is no flag
+  that opts out of it. Put the management origin behind HTTPS, or pair over loopback. Admin tokens
+  are never sent over HTTP.
+- **`403 origin_rejected` from `/v1/catalog` while `/readyz` returns `200`:** the data listener is
+  bound to loopback behind a TLS frontend. See [Giving the data listener TLS](#giving-the-data-listener-tls).
 - **Remote session ended:** sign in or pair again. Logout and expiry invalidate only the browser
   session, not a client data key.
 - **Outstanding revocation after disconnect:** use the hub dashboard's **Integrations → API Keys**

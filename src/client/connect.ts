@@ -67,6 +67,7 @@ import {
   readClientConnectionState,
   assertNoClientDisconnectPending, assertClientConnectionUnchanged, sameClientConnectionOwner,
 } from "./state";
+import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
 
 class RotationRecoveryRequiredError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -89,6 +90,7 @@ export interface ClientConnectDeps {
   fetchImpl?: typeof fetch;
   now?: () => Date;
   lifecycleLockDeps?: ClientLifecycleLockDeps;
+  catalogCompatibility?: CatalogCompatibilityDeps;
 }
 
 export interface RotateClientOptions {
@@ -543,6 +545,12 @@ export async function connectClient(
       fetchImpl: deps.fetchImpl,
       timeoutMs: options.catalogTimeoutMs,
     });
+    // Fail closed BEFORE the write (#4207). The hub being reachable and the credential working
+    // does not mean the selected local Codex runtime can consume what arrived: an older CLI
+    // exits on an unknown reasoning level before making a single request, while connect
+    // reports success. Refusing here leaves the previous catalog in place untouched, rather
+    // than writing one and restoring it afterwards.
+    assertClientCatalogCompatible(catalog.body, deps.catalogCompatibility);
     writtenCatalogFingerprint = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
       assertConnectingState(persisted.fingerprint);
       atomicWriteFile(DEFAULT_CATALOG_PATH, catalog.body);
@@ -659,6 +667,10 @@ export async function syncConnectedClient(
     if (!transient) throw error;
     stale = true;
   }
+  // Same gate as connect (#4207): a sync must never replace a catalog the local CLI can parse
+  // with one it cannot. Refusing leaves the connection and the existing catalog exactly as
+  // they were, which is the known-good state.
+  if (downloaded) assertClientCatalogCompatible(downloaded.body, deps.catalogCompatibility);
   const next = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     assertClientConnectionUnchanged(initial.connection);
     const token = readServiceApiTokenState();

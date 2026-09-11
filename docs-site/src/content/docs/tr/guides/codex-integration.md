@@ -425,13 +425,31 @@ Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ## Codex hesap ısınması
 
-Hesap ekleme veya yeniden kimlik doğrulama, normalde kaydetmeden önce `response.completed` bekleyen küçük bir model isteğiyle doğrulanır. Varsayılan model `gpt-5.4-mini` olup HTTP 400 durumunda `gpt-5.5` denenir. Genel hatalar ham yanıt gövdesi yerine sabit hata kategorilerini içerir.
+Hesap ekleme veya yeniden kimlik doğrulama, normalde kaydetmeden önce `response.completed` bekleyen küçük bir model isteğiyle doğrulanır. Varsayılan model `gpt-5.4-mini` olup HTTP 400 veya HTTP 404 durumunda `gpt-5.5` ve `gpt-5.6-luna` denenir. Genel hatalar ham yanıt gövdesi yerine sabit hata kategorilerini içerir.
 
 Yeni OAuth belirteciyle yapılan kota sorgusu 5 saatlik, haftalık veya aylık kotanın tükendiğini doğrularsa hesap model çağrısı olmadan kaydedilir ve **Doğrulama bekleniyor** gösterilir. Yeniden başlatma veya belirteç yenileme yönlendirmeyi açmaz. Kota geri geldiğinde kotaları yenileyin: kullanılabilir kapasite gösteren eksiksiz güncel veri küçük bir doğrulama isteğine izin verir. Yalnızca tamamlanan yanıt hesabı etkinleştirir. Hatalarda kısıtlama korunur. Pasif sorgulama bu isteği göndermez. İlk kayıtta bilinmeyen kota normal doğrulamayı gerektirir.
 
 `ocx account refresh openai` ve `ocx account list openai --quota --refresh` yalnızca kullanımı okur. Model doğrulaması kota tüketir ve insanın pano oturumunu gerektirir: kota yenilendikten sonra `ocx gui` açıp **Refresh quotas** düğmesine tıklayın. Grafik arayüzü olmayan bir sunucunun panosuna da tarayıcınızdan erişin; yalnızca yönetici belirteci doğrulama yetkisi vermez. Duraklatılmış hesap doğrulanabilir, ancak devam ettirilmez veya seçilmez. Model yetkilendirme hataları başarılı doğrulama veya yeniden girişe kadar görünür kalır.
 
 Arka plan doğrulaması ayrı ve varsayılan olarak kapalıdır. Token Guardian, `openai` için `proactive` yenileme ilkesi ve `tokenGuardian.codexWarmupEnabled` gerektirir; kayıt doğrulaması bekleyen hesapları atlar.
+
+### Bir hesabın istek karşılamayı bırakma nedeni
+
+Bir hesap havuz seçiminden çıktığında neden, görüntüleme için yeniden hesaplanmak yerine kararla birlikte taşınır; böylece yönlendirme hesabı dışarıda bırakırken hiçbir yüzey onu sağlıklı gösteremez. `GET /api/codex-auth/accounts` her hesapta `needsReauth` yanında `reauthReason` döndürür: kimlik bilgisi hiç kaydedilmediyse `missing_credential`, yenileme sürekli başarısızsa `refresh_failed`, kullanım sorgusunun kendisi reddedildiyse `quota_unauthorized`.
+
+Tamamlanmayan bir ana hesap yenilemesi, yeniden denemede başarılı olabileceği için hâlâ `Retry-After` ile `503` yanıtı verir. Mesaj artık kalıcı bir başarısızlığın ana hesabın yeniden kimlik doğrulaması gerektirdiğini de belirtiyor.
+
+### Sürümü düşen bir hesabı rotasyondan çıkarma
+
+`codexPool.excludedPlans`, otomatik havuz seçiminin atladığı plan anahtarlarını listeler ve her hesapta saklanan planla büyük/küçük harf gözetmeden karşılaştırır. Varsayılan olarak yoktur; mevcut bir kurulum tam olarak eskisi gibi rotasyon yapar.
+
+```bash
+ocx config set codexPool '{"excludedPlans":["free"]}'
+```
+
+Bu bir engelleme değil, seçim politikasıdır. Dışarıda bırakılan hesap kimlik bilgisini, kota geçmişini ve iş parçacığı bağını korur, hesap listesinde görünmeye devam eder ve `work/gpt-5.4` gibi açık bir seçimle hâlâ erişilebilir. Değişen tek şey, otomatik rotasyonun onu artık seçmemesidir; hesap zaten etkin olsa ya da bir iş parçacığına bağlı olsa bile. Süresi dolan bir abonelik tam olarak bu durumu bırakır.
+
+İki kasıtlı sınır var. Ana Codex hesabı plana göre hiçbir zaman dışarıda bırakılmaz: yalnızca-seçim yönlendirmesi korunan yerel kimlik bilgisini okumamak için planını saklar, dolayısıyla ana hesabı kapsayan bir kural kendisiyle çelişirdi. Ayrıca dışarıda bırakılmamış hiçbir hesap kalmadığında, dışarıda bırakılan hesap başarısız olmak yerine yine yanıt verir; hizmeti tamamen durdurmak için hâlâ tüm hesapları duraklatmak gerekir. `minimumPlan` karşılığı yoktur, çünkü ChatGPT planlarını sıralamak burada bulunmayan bir tam sıralama gerektirir.
 
 ## Yerel Codex'i geri yükleme
 

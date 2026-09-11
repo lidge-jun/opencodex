@@ -949,6 +949,27 @@ receive the default only when the setting is absent; custom renamed entries keep
 value and do not acquire this default by destination matching. Chat model routes keep their
 existing protocol. The stateless flag does not force Responses streaming into JSON.
 
+## OpenCode Go session affinity
+
+Every request opencodex routes to an OpenCode Go destination carries an `x-opencode-session` header.
+The upstream began rejecting requests without it on 2026-09-06, so the header is not an optimization.
+
+The value depends on what the request already knows about itself:
+
+- An operator-configured `x-opencode-session` on the provider is preserved exactly as written.
+- A request that carries conversation identity — Codex thread headers, a Claude `metadata.user_id`,
+  a `session_id`, or an inbound `x-opencode-session` — is hashed into a stable per-conversation value,
+  so every turn of one conversation reaches Go under the same session.
+- A request with no identity at all, such as a model-availability probe or a first request before any
+  conversation metadata exists, receives a value allocated once for that request. It is isolated from
+  other requests rather than shared, and it survives the places opencodex rebuilds the request: the
+  translation to the internal Responses shape, compaction, combo children, and the policy-fallback
+  retry that hands the turn to the next candidate.
+
+Non-Go destinations are unaffected: opencodex never derives or adds the session header for them. A
+header an operator configured on such a provider is still sent, because opencodex leaves that
+configuration alone.
+
 ## OpenCode Go reasoning efforts
 
 Go catalog rows preserve their configured reasoning efforts exactly, including during

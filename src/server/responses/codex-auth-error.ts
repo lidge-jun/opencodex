@@ -29,10 +29,15 @@ export function nativeMainRefreshFailureResponse(error: unknown): Response {
   if (error instanceof MainAccountTokenRefreshError
     || error instanceof MainAuthJsonChangedDuringRefreshError
     || (error instanceof NativeProfileError && error.retryable)) {
+    // A bare "retry this request" reads as a transient server fault, which is how #4212's reporter
+    // concluded the proxy had broken while one account was the thing that needed them. The refusal
+    // stays a retryable 503 because the refresh genuinely may succeed, but it now names what is
+    // failing and what to do when retrying stops helping.
     const response = formatErrorResponse(
       503,
       "server_busy",
-      "Codex main credential refresh did not complete; retry this request",
+      "Codex main credential refresh did not complete; retry this request. "
+        + "If it keeps failing, the main Codex account needs reauthentication.",
     );
     const headers = new Headers(response.headers);
     headers.set("Retry-After", "1");

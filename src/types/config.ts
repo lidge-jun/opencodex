@@ -746,6 +746,14 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
+  /**
+   * Codex pool selection policy. Absent means no policy, so an existing install rotates exactly
+   * as before.
+   *
+   * Not in `getDefaultConfig()` on purpose — that function carries no optional-feature keys, so
+   * absence is the only default state this policy has.
+   */
+  codexPool?: OcxCodexPoolConfig;
   /** Opt-in per-account activation of newly reset Codex quota windows. */
   codexQuotaAutoRefresh?: Record<string, {
     fiveHour?: boolean;
@@ -1173,6 +1181,25 @@ export interface OcxWebSearchSidecarConfig {
    * answer. Default: false (buffered, previous behavior).
   */
   streamRoutedModelOutput?: boolean;
+}
+
+/**
+ * Codex account-pool selection policy.
+ *
+ * This is a selection policy, not a block. An excluded account keeps its credential, quota
+ * history, and thread affinity, stays visible on the account surface, and remains reachable by
+ * explicit account selection. Only automatic rotation skips it.
+ */
+export interface OcxCodexPoolConfig {
+  /**
+   * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
+   * account. Absent or empty means no policy.
+   *
+   * There is no `minimumPlan` counterpart: ranking ChatGPT plans against each other needs a total
+   * ordering this repository does not have, and inventing one would silently drain a tier the
+   * operator never meant to exclude.
+   */
+  excludedPlans?: string[];
 }
 
 /**

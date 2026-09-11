@@ -19,7 +19,7 @@ import {
   selectPriorityTier,
 } from "./pool-rotation";
 import { CODEX_EXHAUSTED_USAGE_PERCENT, CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
-import { isThirtyDayOnlyCodexPlan } from "./plan";
+import { codexPlanKey, isThirtyDayOnlyCodexPlan } from "./plan";
 import {
   MAIN_CODEX_ACCOUNT_ID,
   getMainAccountPlan,
@@ -1004,6 +1004,50 @@ export function isCodexAccountSoftAvoided(accountId: string, now = Date.now()): 
   return getCodexAccountSoftAvoidUntil(accountId, now) !== null;
 }
 
+/**
+ * Plan keys the operator excluded from automatic rotation. Absent or empty means no policy, so an
+ * existing install rotates exactly as before. Compared with `codexPlanKey` because the stored plan
+ * is an unrestricted provider string whose casing this repository does not control.
+ */
+function excludedCodexPoolPlanKeys(config: OcxConfig): ReadonlySet<string> | undefined {
+  const configured = config.codexPool?.excludedPlans;
+  if (!configured?.length) return undefined;
+  const keys = configured
+    .map(plan => codexPlanKey(plan))
+    .filter((key): key is string => key !== undefined);
+  return keys.length > 0 ? new Set(keys) : undefined;
+}
+
+/**
+ * Whether the operator's plan policy removes this account from automatic selection.
+ *
+ * Modelled on pause rather than usability: an excluded account keeps its credential, quota history,
+ * and affinity, stays visible on the account surface, and is still reachable by explicit account
+ * selection. Only automatic rotation skips it, which is the distinction #4211 asked for.
+ *
+ * It is checked in the same two places pause is checked, and that is not redundancy. The eligible
+ * list is consulted only when routing picks a NEW account; an already-active or already-affined
+ * account is served straight from {@link isCodexAccountSelectable}. A lapsed subscription leaves
+ * behind exactly that account, so a policy that filtered only the eligible list would miss the case
+ * it exists for.
+ *
+ * `__main__` is exempt. {@link getPoolAccountPlanForSelection} withholds the main plan during a
+ * selection-only drain so routing never reads the fenced native credential for it, so a rule that
+ * covered main would disagree with itself between drain and ordinary routing.
+ */
+function isCodexAccountPlanExcluded(
+  config: OcxConfig,
+  accountId: string,
+  precomputed?: ReadonlySet<string>,
+): boolean {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) return false;
+  // Callers that test a whole list pass the set once rather than rebuilding it per row.
+  const excluded = precomputed ?? excludedCodexPoolPlanKeys(config);
+  if (!excluded) return false;
+  const plan = codexPlanKey(getPoolAccountPlan(config, accountId));
+  return plan !== undefined && excluded.has(plan);
+}
+
 function isCodexAccountSelectable(
   config: OcxConfig,
   accountId: string,
@@ -1012,6 +1056,7 @@ function isCodexAccountSelectable(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): boolean {
   return !isCodexAccountPaused(config, accountId)
+    && !isCodexAccountPlanExcluded(config, accountId)
     && getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(accountId, now)
     && isCodexAccountUsable(config, accountId, selectionOptions);
@@ -1242,10 +1287,12 @@ function getEligiblePoolAccounts(
   selectionOptions?: CodexAccountUsabilityOptions,
   skipFailoverReadyCandidates = false,
 ): readonly string[] {
+  const excludedPlans = excludedCodexPoolPlanKeys(config);
   const ids = (config.codexAccounts ?? [])
     .filter(account => isSelectableCodexPoolAccount(account)
       && account.id !== excludeId
       && !isCodexAccountPaused(config, account.id)
+      && !isCodexAccountPlanExcluded(config, account.id, excludedPlans)
       && !isAccountNeedsReauth(account.id)
       && (!skipFailoverReadyCandidates || !shouldFailover(config, account.id, now)))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)

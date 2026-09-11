@@ -1,5 +1,5 @@
 /**
- * Trusted facts captured by the plain-Node npm launcher before Bun auto-loads
+ * Trusted facts captured by the plain-Node package launcher before Bun auto-loads
  * project dotenv files. The random proof travels in argv while the context
  * travels in the environment, so a project `.env` cannot forge the pair during
  * an ordinary `ocx ...` invocation.

@@ -116,7 +116,7 @@ import type { CodexQuotaRefreshOutcome } from "./quota-refresh-outcome";
 import { getMainAccountHardLockStatus, type MainAccountHardLockStatus } from "./main-account-hard-lock";
 import { observeMainReserveRevocation } from "./reserve-availability";
 import { emailMaskingEnabled, projectEmail } from "../lib/privacy";
-import { codexWarmupFailureReason, warmCodexAccount } from "./warmup";
+import { codexWarmupFailureReason, isCodexWarmupProvisioningFailure, warmCodexAccount } from "./warmup";
 export { maskEmail } from "../lib/privacy";
 import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../types";
 import type { CatalogDisposition } from "./convergence-types";
@@ -364,6 +364,20 @@ function mainQuotaWithCarriedResetCredits(
   };
 }
 
+/**
+ * Why an account needs the operator. `missing_credential`, `refresh_failed`, and
+ * `quota_unauthorized` are the three causes this surface tells apart on its own. `unauthorized`
+ * and `forbidden` exist because the shared health projection may return them; today
+ * `projectCodexAccountHealth` only ever produces `refresh_failed`, so accepting the full union
+ * keeps this field correct if that projection widens rather than silently dropping a reason.
+ */
+export type CodexAccountReauthReason =
+  | "missing_credential"
+  | "refresh_failed"
+  | "quota_unauthorized"
+  | "unauthorized"
+  | "forbidden";
+
 function poolAccountDto(
   account: CodexAccount,
   quotaResult: PoolQuotaResult,
@@ -374,8 +388,19 @@ function poolAccountDto(
 ): CodexAuthAccountDto {
   const plan = codexPlanValue(account.plan);
   const quota = quotaForPlan(quotaResult.quota, plan);
-  const needsReauth = !hasCredential || quotaResult.needsReauth || isAccountNeedsReauth(account.id);
+  const runtimeReauth = isAccountNeedsReauth(account.id);
+  const needsReauth = !hasCredential || quotaResult.needsReauth || runtimeReauth;
   const health = projectCodexAccountHealth({ accountId: account.id, needsReauth });
+  // `needsReauth` is an OR of three independent causes plus a persisted verdict resolved inside the
+  // health projection. Emitting only the boolean is what left #4212's reporter guessing which
+  // account took their model away and why, so name the cause they actually have to act on.
+  const reauthReason: CodexAccountReauthReason | undefined = !hasCredential
+    ? "missing_credential"
+    : runtimeReauth
+      ? "refresh_failed"
+      : quotaResult.needsReauth
+        ? "quota_unauthorized"
+        : health.status === "reauth_required" ? health.reason : undefined;
   return {
     id: account.id,
     email: projectEmail(account.email, maskEmails) ?? account.email,
@@ -387,6 +412,7 @@ function poolAccountDto(
     priority,
     quota: quota ? { ...quota } : null,
     needsReauth: needsReauth || health.status === "reauth_required",
+    ...(reauthReason !== undefined ? { reauthReason } : {}),
     hasCredential,
     ...(quotaResult.quotaProbeSkipped ? { quotaProbeSkipped: true as const } : {}),
     ...oauthAccountHealthFields("codex", account.id, health),
@@ -588,7 +614,11 @@ async function verifyCodexAccountWarmup(
     return {
       ok: false,
       response: jsonResponse({
-        error: "Codex account warmup failed. Reauthenticate the account and try again.",
+        // Every fallback model was refused for a provisioning reason, so telling the operator to
+        // reauthenticate sends them back through a login that already succeeded.
+        error: isCodexWarmupProvisioningFailure(err)
+          ? "Codex account warmup failed. Verify account model access or provisioning and try again."
+          : "Codex account warmup failed. Reauthenticate the account and try again.",
         code: "codex_warmup_failed",
         reason,
         accountId,
@@ -1157,6 +1187,11 @@ export interface CodexAuthAccountDto {
   priority: number;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
   needsReauth?: boolean;
+  /**
+   * Which of the independent causes behind `needsReauth` fired. Present only when the account
+   * needs the operator; `/api/oauth/accounts` already carries the same field name.
+   */
+  reauthReason?: CodexAccountReauthReason;
   hasCredential: boolean;
   health: OAuthAccountHealth;
   healthLabel: OAuthHealthLabel;
@@ -2005,12 +2040,20 @@ export async function listCodexAuthAccountsSnapshot(
   const hasMainCredential = mainSnapshotLive && mainResult.credentialChecked
     ? mainResult.hasCredential
     : getMainAccountCredentialPresence() ?? false;
-  const mainNeedsReauth = (mainSnapshotLive && mainResult.credentialChecked && !hasMainCredential)
-    || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+  const mainMissingCredential = mainSnapshotLive && mainResult.credentialChecked && !hasMainCredential;
+  const mainNeedsReauth = mainMissingCredential || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   const mainHealth = projectCodexAccountHealth({
     accountId: MAIN_CODEX_ACCOUNT_ID,
     needsReauth: mainNeedsReauth,
   });
+  // The main row carries the same attribution as a pool row. Reaching this point without
+  // `mainMissingCredential` means the runtime reauth flag is what set `mainNeedsReauth`, so the
+  // cause is a refresh that did not complete.
+  const mainReauthReason: CodexAccountReauthReason | undefined = mainMissingCredential
+    ? "missing_credential"
+    : mainNeedsReauth
+      ? "refresh_failed"
+      : mainHealth.status === "reauth_required" ? mainHealth.reason : undefined;
   const main: CodexAuthAccountDto = {
     id: MAIN_CODEX_ACCOUNT_ID,
     email: projectEmail(mainInfo.email, maskEmails) ?? "Codex App login",
@@ -2025,6 +2068,7 @@ export async function listCodexAuthAccountsSnapshot(
     priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     hasCredential: hasMainCredential,
     needsReauth: mainNeedsReauth,
+    ...(mainReauthReason !== undefined ? { reauthReason: mainReauthReason } : {}),
     quota: mainInfo.quota ? {
       ...quotaForPlan(mainQuotaWithCarriedResetCredits(mainInfo.quota), mainInfo.plan),
     } : null,

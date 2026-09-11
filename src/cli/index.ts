@@ -68,7 +68,7 @@ import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-li
 import { createReadinessGate } from "../server/readiness";
 import { runReady, type ReadyArgs } from "./ready";
 import { runCli } from "./root";
-import { isProcessAlive, ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
+import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
@@ -952,7 +952,12 @@ async function handleStop() {
       if (detail) console.error(`   ${detail}`);
       if (err instanceof ProxyOwnershipRefusedError) {
         ownershipBlocked = true;
-        console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
+        // Every refusal `POST /api/stop` produces is written for an API client, so it
+        // recommends `ocx stop` — the command printing it. Following that advice returns
+        // the operator to this exact message, which is the loop #4169 was filed for. The
+        // service manager was already asked to stop above, so name what is actually left.
+        console.error(`   ${refusalNextStep(err.code)}`);
+        console.error("   Skipping shared teardown (native Codex restore, Grok config): the refusing proxy is still running.");
       }
     }
   } else {
@@ -979,7 +984,9 @@ async function handleStop() {
         if (detail) console.error(`   ${detail}`);
         if (err instanceof ProxyOwnershipRefusedError) {
           ownershipBlocked = true;
-          console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
+          // Same loop as the tracked-pid path above: the refusal recommends this command.
+          console.error(`   ${refusalNextStep(err.code)}`);
+          console.error("   Skipping shared teardown (native Codex restore, Grok config): the refusing proxy is still running.");
         }
       }
     } else if (live) {

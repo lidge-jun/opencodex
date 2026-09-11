@@ -389,6 +389,47 @@ export interface ObservedCatalogEffortClamp {
   readonly affectedModels: readonly string[];
 }
 
+export interface CatalogEffortCompatibility {
+  readonly compatible: boolean;
+  readonly unsupportedEfforts: readonly string[];
+  readonly affectedModels: readonly string[];
+}
+
+/**
+ * Report which reasoning efforts in a catalog the local Codex runtime would reject, without
+ * changing anything.
+ *
+ * The clamp above is mutate-and-continue, which is right when this process owns the file it
+ * is about to write. It is wrong for a catalog downloaded from a hub: rewriting it locally
+ * would make the client disagree with hub truth, and #4207 asks for the opposite — establish
+ * compatibility first, and refuse rather than materialise a catalog the local CLI cannot
+ * parse. `supported` of null means the runtime ladder could not be observed, which is not
+ * evidence of incompatibility, so nothing is reported.
+ */
+export function catalogEffortCompatibility(
+  models: readonly RawEntry[],
+  supported: ReadonlySet<string> | null,
+): CatalogEffortCompatibility {
+  if (!supported) return { compatible: true, unsupportedEfforts: [], affectedModels: [] };
+  const unsupported = new Set<string>();
+  const affected: string[] = [];
+  for (const entry of models) {
+    const rejected = catalogEntryEfforts(entry).filter(effort => !supported.has(effort));
+    const fallback = typeof entry.default_reasoning_level === "string"
+      && !supported.has(entry.default_reasoning_level)
+      ? [entry.default_reasoning_level]
+      : [];
+    if (rejected.length === 0 && fallback.length === 0) continue;
+    for (const effort of [...rejected, ...fallback]) unsupported.add(effort);
+    if (typeof entry.slug === "string") affected.push(entry.slug);
+  }
+  return {
+    compatible: unsupported.size === 0,
+    unsupportedEfforts: [...unsupported].sort(),
+    affectedModels: affected,
+  };
+}
+
 /** Apply an already-observed runtime ladder without probing, logging, or writing diagnostics. */
 export function clampCatalogModelsToObservedCodexSupport(
   models: RawEntry[],
