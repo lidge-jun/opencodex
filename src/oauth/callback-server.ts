@@ -38,6 +38,27 @@ function errorHtml(message: string): string {
 export type CallbackResult = { code: string; state: string };
 
 /**
+ * Every response this listener sends ends its connection.
+ *
+ * The preferred callback port is FIXED per provider, so a later login listens on the same
+ * number — but a keep-alive socket stays bound to the flow that served it, and stopping that
+ * listener does not close an already-established connection. A client reusing the socket would
+ * hand the NEXT login's callback to the RETIRED flow, which rejects the unknown state as a CSRF
+ * mismatch while the live flow waits for a callback it can no longer receive.
+ *
+ * This is not limited to the callback itself: a browser that fetches `/favicon.ico` after the
+ * success page pools the socket on the 404, which is why the policy belongs to EVERY response
+ * rather than the callback path. Nothing here benefits from reuse — exactly one callback is
+ * expected per flow — so route every response through this helper.
+ */
+function closingResponse(body: string, status: number, contentType = "text/html"): Response {
+  return new Response(body, {
+    status,
+    headers: { "Content-Type": contentType, "Connection": "close" },
+  });
+}
+
+/**
  * The redirect URI advertised to providers must stay `localhost` (it is what the OAuth
  * apps have registered), but Windows commonly resolves `localhost` to `::1` first while
  * we historically bound IPv4-only — the browser then hits refusal/timeouts/wrong server.
@@ -177,7 +198,7 @@ export abstract class OAuthCallbackFlow {
   #handleCallback(req: Request, expectedState: string): Response {
     const url = new URL(req.url);
     if (url.pathname !== this.callbackPath) {
-      return new Response("Not Found", { status: 404 });
+      return closingResponse("Not Found", 404, "text/plain");
     }
 
     const code = url.searchParams.get("code");
@@ -214,16 +235,7 @@ export abstract class OAuthCallbackFlow {
       });
     }
 
-    // End the connection with the response. The preferred callback port is FIXED per provider,
-    // so a later login listens on the same number — but a keep-alive socket stays bound to the
-    // flow that served it, and stopping that listener does not close an already-established
-    // connection. A client reusing it would hand the NEXT login's callback to the RETIRED flow,
-    // which rejects the unknown state as a CSRF mismatch while the live flow keeps waiting.
-    // Nothing here benefits from connection reuse: exactly one callback is expected per flow.
-    return new Response(ok ? SUCCESS_HTML : errorHtml(errMessage), {
-      status: ok ? 200 : consumeFlow ? 500 : 400,
-      headers: { "Content-Type": "text/html", "Connection": "close" },
-    });
+    return closingResponse(ok ? SUCCESS_HTML : errorHtml(errMessage), ok ? 200 : consumeFlow ? 500 : 400);
   }
 
   #waitForCallback(expectedState: string): Promise<CallbackResult> {

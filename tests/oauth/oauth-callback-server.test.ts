@@ -29,6 +29,16 @@ class ManualFallbackFlow extends OAuthCallbackFlow {
 
 const ctrl: OAuthController = {};
 
+/** Keeps the listener alive across the token exchange so stray requests can reach it. */
+class SlowExchangeFlow extends ManualFallbackFlow {
+  holdExchange?: Promise<void>;
+
+  override async exchangeToken(code: string, state: string, redirectUri: string): Promise<OAuthCredentials> {
+    await this.holdExchange;
+    return super.exchangeToken(code, state, redirectUri);
+  }
+}
+
 describe("OAuth callback server defaults", () => {
   test("binds callback listeners to numeric loopback by default", () => {
     const flow = new TestFlow(ctrl, 54545, "/callback");
@@ -155,6 +165,49 @@ describe("OAuth callback server defaults", () => {
     expect(await deliver(secondState)).toBe(200);
     await secondLogin;
     expect(second.exchanged?.state).toBe(secondState);
+  });
+
+  test("a non-callback request cannot pin the socket to the retiring flow", async () => {
+    // A browser that asks for /favicon.ico after the success page would pool the socket on the
+    // 404 while exchangeToken() is still running, which re-pins it to the flow that is about to
+    // retire. The close policy therefore belongs to EVERY response, not just the callback path.
+    const port = await freeLoopbackPort();
+    const options = {
+      preferredPort: port,
+      callbackPath: "/callback",
+      callbackHostname: "127.0.0.1",
+      callbackBindHostname: "127.0.0.1",
+    };
+    const deliver = async (state: string): Promise<number> => {
+      const url = new URL(`http://127.0.0.1:${port}/callback`);
+      url.searchParams.set("code", "authorization-code");
+      url.searchParams.set("state", state);
+      const res = await fetch(url);
+      await res.text();
+      return res.status;
+    };
+
+    // The exchange is held open so the listener is still up for the stray request, which is
+    // exactly the window the reproduction describes.
+    const exchanging = Promise.withResolvers<void>();
+    const first = new SlowExchangeFlow(ctrl, options);
+    first.holdExchange = exchanging.promise;
+    const firstLogin = first.login();
+    await waitForState(() => first.generated?.state);
+    expect(await deliver(first.generated!.state)).toBe(200);
+    const favicon = await fetch(`http://127.0.0.1:${port}/favicon.ico`);
+    await favicon.text();
+    expect(favicon.status).toBe(404);
+    exchanging.resolve();
+    await firstLogin;
+
+    const second = new ManualFallbackFlow(ctrl, options);
+    const secondLogin = second.login();
+    await waitForState(() => second.generated?.state);
+    // Without the close policy on the 404 this is answered by the retired flow and returns 400.
+    expect(await deliver(second.generated!.state)).toBe(200);
+    await secondLogin;
+    expect(second.exchanged?.state).toBe(second.generated!.state);
   });
 });
 
