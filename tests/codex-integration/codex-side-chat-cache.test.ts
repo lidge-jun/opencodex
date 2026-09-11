@@ -423,3 +423,28 @@ test.each(["developer", "user"])("extra inherited %s items remain an unmatched s
   changedPrefix.input[1] = message("user", "Different parent question");
   expect(cache.prepare(changedPrefix, headers("child", "parent")).reason).toBe("input-prefix-change");
 });
+
+test("measurements distinguish prepared, stored, superseded, and expired snapshots", () => {
+  let now = 0;
+  const cache = new SideChatCache(() => now, 1, 10);
+  const parent = cache.prepare(body(), headers());
+  expect(parent.metrics).toMatchObject({ phase: "parent", snapshotOutcome: "not-observed", retainedSnapshots: 0 });
+  parent.complete();
+  expect(parent.metrics).toMatchObject({ snapshotOutcome: "stored", retainedSnapshots: 1 });
+  const child = cache.prepare(side(), headers("child", "parent"));
+  expect(child.metrics).toMatchObject({ phase: "unbound-side", parentCandidates: 1, matchedItems: 2 });
+  child.complete();
+  expect(child.metrics).toMatchObject({ snapshotOutcome: "stored", retainedSnapshots: 2, retainedBindings: 1, evictedEntries: 1 });
+  expect(child.metrics.estimatedRetainedBytes).toBeGreaterThan(0);
+  expect(cache.prepare(side(), headers("child", "parent")).metrics.phase).toBe("bound-side");
+  now = 11;
+  const expired = cache.prepare(body("other"), headers("other"));
+  expect(expired.metrics.expiredEntries).toBe(2);
+  expect(expired.metrics.retainedSnapshots).toBe(0);
+  now = 22;
+  expect(expired.complete()).toBe("expired");
+  const first = cache.prepare(body(), headers());
+  const newer = cache.prepare(body(), headers()); newer.complete();
+  expect(first.complete()).toBe("superseded");
+  expect(first.metrics.snapshotOutcome).toBe("superseded");
+});

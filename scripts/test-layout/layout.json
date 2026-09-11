@@ -1323,7 +1323,9 @@
     "zhipu-bigmodel-provider.test.ts": "providers",
     "zz-ci-api-usage-isolation.test.ts": "ci-workflows",
     "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
-    "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
+    "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
+    "side-chat-cache-metrics.test.ts": "usage",
+    "side-chat-cache-proxy.test.ts": "responses"
   },
   "migrated": [
     "adapters",

@@ -1046,3 +1046,59 @@ Account switching or credential refresh can prevent a match. Upstream cache
 retention and hits are opportunistic; enabling this option does not guarantee a
 hit. Existing provider debug diagnostics report reason codes, opaque task tags,
 and token counts without recording prompt text or credentials.
+
+
+### Monitor side-chat cache reuse
+
+When the experimental setting is enabled, eligible adapter preparations include `sideChatCache`
+in the existing local `usage.jsonl` request and attempt records. No additional database or telemetry
+service is created. Missing metadata can mean an uninstrumented version, a disabled feature, or an
+adapter path that does not prepare side-chat reuse; it is not a measured miss.
+
+The fixed `reason` describes the reuse decision. `phase` distinguishes parent observations, side
+requests with no binding yet (`unbound-side`), and requests with an existing binding (`bound-side`).
+An unbound request is not necessarily the first-ever side request: restarts, expiry, eviction, and
+failed requests can remove or prevent a binding. `matchedItems` counts the verified inherited prefix.
+
+`snapshotOutcome` records whether a completed response stored the snapshot, or whether it expired,
+was superseded by a newer completion, or belonged to a disabled cache. `not-observed` means no accepted
+successful completion was recorded; it must not be interpreted as a stored parent. A reused prefix
+and a stored snapshot do not prove that the upstream returned cached tokens.
+
+`prepareMs` measures preparation including instrumentation. `normalizeMs` covers execution-reference
+normalization, `hashMs` accumulates fingerprint work, and `matchMs` covers candidate matching and
+prefix rewriting. **Hash time overlaps match time**, so do not add the phases. `completionMs` measures
+snapshot publication and pruning. Each attempt holds its last preparation and observed completion;
+multiple sends or rebuilds are not a cumulative timing trace.
+
+Retention fields count unique retained snapshots and bindings, plus estimated retained UTF-8 payload
+bytes. They exclude JavaScript object overhead and in-flight requests, and are not process heap usage.
+Expiry and eviction counts describe map entries removed during the recorded operations. Snapshots
+come from those operations, not a live memory query. `observedAt` timestamps the measurement;
+retention reports use it rather than request start time when completions arrive out of order. The optional child `threadIdHash` uses the same
+SHA-256 prefix convention as log conversation IDs and permits exact child correlation without storing
+a raw thread ID. No prompts, tool descriptions, credentials, or raw account identifiers are added.
+
+Summarize the newest usage rows from a source checkout:
+
+```bash
+bun scripts/side-chat-cache-report.ts 1000
+```
+
+An optional second argument selects an exact request ID within the bounded window. `OPENCODEX_HOME`
+selects another installation. The report counts attempts once, separates reported cache reads from
+unknown/estimated usage, and groups results by parent/unbound/bound phase. Cached-token ratios and
+first-output latency are observations; they do not establish which feature caused a cache hit.
+
+Run isolated synthetic control/treatment measurements without model API calls:
+
+```bash
+bun scripts/side-chat-cache-eval.ts .tmp/side-cache-eval 20 4
+```
+
+The harness compares the existing setting off/on with concurrent HTTP and WebSocket clients, 1 KiB,
+64 KiB, and 1 MiB inherited text, plus direct large-history and reordered-tool-catalog workloads.
+It writes `report.json` and `samples.jsonl`, recording the source commit, dirty status, full Bun build
+identity, and observed upstream transports. Fixture WebSocket availability does not imply its use:
+runtime gates can select HTTP fallback. Synthetic usage counters are fixtures, never measured cache
+savings. Run on the target operating system and validate actual Desktop behavior with ordinary usage.
