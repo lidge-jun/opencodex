@@ -1,6 +1,6 @@
 import type { TKey } from "./en";
 
-export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr";
+export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi";
 export type LabCatalogKey = Exclude<Extract<TKey, `lab.${string}`>, `lab.production.${string}`>;
 export type LabSupplementKey =
   | "subjectKindUnknown"
@@ -464,6 +464,56 @@ const zhTW: Record<LabCatalogKey, string> = {
   "lab.layer.task_effectiveness": "任務有效性",
 };
 
+const vi: Record<LabCatalogKey, string> = {
+  "lab.title": "Phòng thí nghiệm tương thích",
+  "lab.subtitle": "Ma trận kết quả tương thích chỉ đọc từ bằng chứng dự báo của phòng thí nghiệm.",
+  "lab.loadFailed": "Không thể tải dữ liệu phòng thí nghiệm tương thích",
+  "lab.projectionUnavailable": "Dự báo của phòng thí nghiệm không khả dụng. Hãy chạy đánh giá sự phù hợp hoặc đầu dò trực tiếp trước.",
+  "lab.projectionIncompatible": "Lược đồ dự báo của phòng thí nghiệm không tương thích. Xây dựng lại dự báo.",
+  "lab.statusTitle": "Trạng thái dự báo",
+  "lab.matrixTitle": "Ma trận tương thích",
+  "lab.verdictsTitle": "Bản ghi kết quả",
+  "lab.filter.layer": "Lớp bằng chứng",
+  "lab.filter.verdict": "Kết quả",
+  "lab.filter.subject": "ID Chủ đề",
+  "lab.filter.all": "Tất cả",
+  "lab.col.subject": "Chủ đề",
+  "lab.col.layer": "Layer",
+  "lab.col.suite": "Suite",
+  "lab.col.verdict": "Kết quả",
+  "lab.col.asOf": "As of",
+  "lab.col.protocol": "Protocol conformance",
+  "lab.col.live": "Live route compatibility",
+  "lab.col.task": "Task effectiveness",
+  "lab.empty": "No compatibility verdicts in the projection yet.",
+  "lab.subjectKind": "Kind",
+  "lab.observationCount": "Observations",
+  "lab.eventCount": "Events",
+  "lab.verdictCount": "Verdicts",
+  "lab.subjectCount": "Subjects",
+  "lab.builtAt": "Built",
+  "lab.loading": "Loading compatibility evidence…",
+  "lab.loadMore": "Load more",
+  "lab.detailTitle": "Verdict detail",
+  "lab.detailClose": "Close",
+  "lab.detailSubject": "Chủ đề",
+  "lab.detailObservations": "Observations",
+  "lab.detailEvents": "Evidence events",
+  "lab.detailArtifacts": "Artifact metadata",
+  "lab.detailLoadFailed": "Could not load verdict detail",
+  "lab.refresh": "Refresh",
+  "lab.verdict.UNKNOWN": "Unknown",
+  "lab.verdict.CLAIMED": "Claimed",
+  "lab.verdict.PROBED": "Probed",
+  "lab.verdict.VERIFIED": "Verified",
+  "lab.verdict.DEGRADED": "Degraded",
+  "lab.verdict.BLOCKED": "Blocked",
+  "lab.verdict.UNSUPPORTED": "Unsupported",
+  "lab.layer.protocol_conformance": "Protocol conformance",
+  "lab.layer.live_route_compatibility": "Live route compatibility",
+  "lab.layer.task_effectiveness": "Task effectiveness",
+};
+
 export const LAB_CATALOG_OVERRIDES: Record<LabLocale, Record<LabCatalogKey, string>> = {
   en,
   de,
@@ -474,6 +524,7 @@ export const LAB_CATALOG_OVERRIDES: Record<LabLocale, Record<LabCatalogKey, stri
   ru,
   ja,
   tr,
+  vi,
 };
 
 const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
@@ -584,6 +635,9 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "community.bundles": "Paketler",
     "community.activeRecords": "Etkin kayıtlar",
     "community.revokedRecords": "Geri çekilen kayıtlar",
+  },
+  vi: {
+    subjectKindUnknown: "Không xác định", "artifact.present": "Có sẵn", "artifact.corrupt": "Hỏng", "artifact.purged_unavailable": "Đã xóa / không khả dụng", selectVerdict: "Xem kết quả cho {subject}", "community.title": "Bằng chứng cộng đồng", "community.notLocalVerdict": "Ngữ cảnh chỉ đọc không đáng tin cậy. Không được đưa vào kết quả cục bộ này.", "community.bundles": "Gói bằng chứng", "community.activeRecords": "Bản ghi đang hoạt động", "community.revokedRecords": "Bản ghi đã thu hồi",
   },
 };
 
