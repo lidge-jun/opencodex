@@ -116,4 +116,60 @@ describe("OAuth callback server defaults", () => {
       blocker.stop(true);
     }
   });
+
+  test("a retired flow cannot serve the next login on the same callback port", async () => {
+    // The preferred callback port is fixed per provider, so consecutive logins listen on the
+    // same number. Stopping a listener does not close a connection that is already open, so a
+    // client that pools the socket would deliver the SECOND login's callback to the FIRST
+    // flow, which rejects the unknown state as a CSRF mismatch while the live flow waits.
+    const port = await freeLoopbackPort();
+    const options = {
+      preferredPort: port,
+      callbackPath: "/callback",
+      callbackHostname: "127.0.0.1",
+      callbackBindHostname: "127.0.0.1",
+    };
+    const deliver = async (state: string): Promise<number> => {
+      const url = new URL(`http://127.0.0.1:${port}/callback`);
+      url.searchParams.set("code", "authorization-code");
+      url.searchParams.set("state", state);
+      const res = await fetch(url);
+      await res.text();
+      return res.status;
+    };
+
+    const first = new ManualFallbackFlow(ctrl, options);
+    const firstLogin = first.login();
+    await waitForState(() => first.generated?.state);
+    const firstState = first.generated!.state;
+    expect(await deliver(firstState)).toBe(200);
+    await firstLogin;
+
+    const second = new ManualFallbackFlow(ctrl, options);
+    const secondLogin = second.login();
+    await waitForState(() => second.generated?.state);
+    const secondState = second.generated!.state;
+    expect(secondState).not.toBe(firstState);
+    // Served by the LIVE flow, so the retired state is now an unknown one.
+    expect(await deliver(firstState)).toBe(400);
+    expect(await deliver(secondState)).toBe(200);
+    await secondLogin;
+    expect(second.exchanged?.state).toBe(secondState);
+  });
 });
+
+/** A port that is free right now; the flows bind it themselves, so it must not stay held. */
+async function freeLoopbackPort(): Promise<number> {
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, reusePort: false, fetch: () => new Response("probe") });
+  const { port } = probe;
+  probe.stop(true);
+  return port;
+}
+
+async function waitForState(read: () => string | undefined, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (read() === undefined) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for the login flow to publish its state");
+    await Bun.sleep(5);
+  }
+}
