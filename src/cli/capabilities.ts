@@ -260,6 +260,27 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary."],
   },
   {
+    command: ["account", "grok-reset-coupons"],
+    summary: "Inspect or redeem Grok billing reset coupons; redemption is journaled and idempotent.",
+    routes: [
+      { method: "GET", path: "/api/grok/reset-coupons" },
+      { method: "POST", path: "/api/grok/reset-coupons/consume" },
+    ],
+    flags: [
+      { name: "--consume", value: "boolean", summary: "Redeem one reset coupon; requires --yes." },
+      { name: "--yes", value: "boolean", summary: "Explicit confirmation required by --consume." },
+      { name: "--token-id", value: "string", summary: "Redeem a specific reset token instead of the default selection." },
+      { name: "--operation-id", value: "string", summary: "UUIDv4 making a redemption idempotent: retries replay the journaled outcome." },
+      { name: "--json", value: "boolean", summary: "Emit the coupon list or redemption result as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "Without --consume this is a read: remaining coupons and their validity windows.",
+      "The operation is journaled before the upstream call, so retrying the same --operation-id replays the recorded outcome instead of spending a second coupon.",
+    ],
+  },
+  {
     command: ["usage"],
     summary: "Token and estimated-cost report over a time range.",
     routes: [{ method: "GET", path: "/api/usage" }],
