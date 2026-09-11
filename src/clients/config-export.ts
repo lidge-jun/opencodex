@@ -42,7 +42,7 @@ export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } 
 
 import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
 import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, GAJAE_API_KEY_ENV, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV } from "./config-export/constants";
-import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, normalizeExportModels, inputModalitiesForClient, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
+import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./config-export/omp";
 import { buildDshClientConfig, summarizeDsh, buildDshContribution } from "./config-export/dsh";
 import { buildMcodeClientConfig, summarizeMcode, buildMcodeContribution } from "./config-export/mcode";
@@ -54,6 +54,14 @@ import { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } 
 export interface OpencodeModelEntry {
   name: string;
   limit?: { context: number; output: number };
+  /**
+   * opencode's own capability fields, derived from the catalog row's declared input
+   * modalities. Written only when the row declares at least one — an entry without them is
+   * what opencode already treats as text-only, and omitting them keeps an undeclared model
+   * byte-identical to what shipped before.
+   */
+  attachment?: boolean;
+  modalities?: { input: string[]; output: string[] };
 }
 
 /**
@@ -614,13 +622,30 @@ export function opencodeProviderBlocks(
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context) };
     }
+    // `attachment` / `modalities` are fields of opencode's V1 model schema — the shape its
+    // published config.json defines and the one its loader reads (verified against opencode
+    // 1.18.30, src/provider/provider.ts: `model.attachment ?? …` / `model.modalities?.input`).
+    // They ride on both generations anyway: the two blocks are two spellings of one model list,
+    // and the V2 model schema (capabilities.{tools,input,output}, which opencode fills by
+    // migrating this same `modalities` field) ignores keys it does not define — its loader
+    // decodes with `onExcessProperty: "ignore"`. Same values on both, so a merge cannot make
+    // the two entries disagree.
+    const capabilities = opencodeModelCapabilities(model.inputModalities);
+    if (capabilities) {
+      entry.attachment = capabilities.attachment;
+      entry.modalities = capabilities.modalities;
+    }
     v1Models[key] = entry;
     const variants = opencodeEffortVariants(model);
-    // Own `limit` object, not a shared reference: the two blocks are serialized and reasoned
-    // about separately, and an in-place edit of one must never move the other.
+    // Own `limit` and `modalities` objects, not shared references: the two blocks are
+    // serialized and reasoned about separately, and an in-place edit of one must never move
+    // the other.
     v2Models[key] = {
       ...entry,
       ...(entry.limit ? { limit: { ...entry.limit } } : {}),
+      ...(entry.modalities
+        ? { modalities: { input: [...entry.modalities.input], output: [...entry.modalities.output] } }
+        : {}),
       ...(variants ? { variants } : {}),
     };
   }

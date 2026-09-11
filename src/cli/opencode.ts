@@ -98,6 +98,8 @@ export interface OpencodeProxyModelRow {
   displayName?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
   contextWindow?: number;
+  /** Declared input modalities from `/api/models`; carried into opencode model capabilities. */
+  inputModalities?: string[];
   /** Declared effort ladder from `/api/models`; carried into opencode model variants. */
   reasoningEfforts?: string[];
   /** Declared default effort from `/api/models`. */
@@ -396,6 +398,9 @@ export function opencodeCatalogFromProxyRows(
       id: row.id,
       contextWindow: row.contextWindow,
       displayName: row.displayNameSource === "fallback" ? undefined : row.displayName,
+      ...(Array.isArray(row.inputModalities) && row.inputModalities.length > 0
+        ? { inputModalities: [...row.inputModalities] }
+        : {}),
       ...(typeof row.fastRowAvailable === "boolean" ? { fastRowAvailable: row.fastRowAvailable } : {}),
       ...(Array.isArray(row.reasoningEfforts) && row.reasoningEfforts.length > 0
         ? { reasoningEfforts: [...row.reasoningEfforts] }

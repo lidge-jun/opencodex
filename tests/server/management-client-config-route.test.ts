@@ -286,7 +286,15 @@ describe("GET /api/client-config", () => {
     const document = body.config as OpencodeGeneratedConfig;
     expect(document.$schema).toBe(OPENCODE_CONFIG_SCHEMA);
     const models = document.provider[OPENCODE_PROVIDER_ID].models;
-    expect(models["a/m1"]).toEqual({ name: "m1 (a)", limit: { context: 128_000, output: 32_000 } });
+    // The row's declared modalities now reach opencode's own capability fields; without them
+    // opencode gates attachments client-side and the image never leaves the TUI (#4286).
+    expect(models["a/m1"]).toEqual({
+      name: "m1 (a)", limit: { context: 128_000, output: 32_000 },
+      attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
+    });
+    // m2 declares text-only in `modelInputModalities`, which is exactly what routes it through
+    // the vision sidecar: the catalog advertises image so the attachment can reach the proxy.
+    expect(models["a/m2"]!.modalities).toEqual({ input: ["text", "image"], output: ["text"] });
     expect(models["b/no-context"]).toEqual({ name: "no-context (b)" });
   }, 15_000);
 

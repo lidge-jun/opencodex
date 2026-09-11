@@ -752,11 +752,16 @@ describe("hub-resolved Fast exports", () => {
       expect(block.models["z/sparse--fast"]).toEqual({ name: "z/sparse Fast (routed)" });
     }
     const expanded = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ fastRows: false }));
+    // A Fast row is a second selector for the same model, so it inherits the capabilities the
+    // base row declared. Without them opencode would gate images on exactly the row a user who
+    // turned Fast on selects (#4286).
     expect(expanded.v1.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
+      attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
     });
     expect(expanded.v2.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
+      attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
       variants: [
         { id: "high", settings: { reasoningEffort: "high" } },
         { id: "ultra", settings: { reasoningEffort: "ultra" } },
@@ -767,6 +772,12 @@ describe("hub-resolved Fast exports", () => {
     const remote = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ hostname: "0.0.0.0" }));
     expect(remote.v1.options).toEqual({ baseURL: BASE_URL, headers: { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF } });
     expect(remote.v2.settings).toEqual(remote.v1.options);
+  });
+
+  test("each generation owns its modalities map, so an edit to one cannot move the other", () => {
+    const blocks = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ fastRows: false }));
+    blocks.v1.models["remote/model"]!.modalities!.input.push("audio");
+    expect(blocks.v2.models["remote/model"]!.modalities!.input).toEqual(["text", "image"]);
   });
 
   test("both CLI projections retain hub true/false/absence despite conflicting local settings", () => {
@@ -804,6 +815,24 @@ describe("hub-resolved Fast exports", () => {
     const blocks = opencodeProviderBlocks(BASE_URL, opencodeCatalogFromProxyRows(rows, config), config);
     expect(Object.keys(blocks.v1.models)).toEqual(["remote/model"]);
     expect(Object.keys(blocks.v2.models)).toEqual(["remote/model"]);
+  });
+
+  test("a disabled duplicate cannot donate its modalities to the visible row", () => {
+    // `exportModelsFromProxyRows` used to re-join modalities from the RAW `/api/models` rows,
+    // keyed by `namespaced` with the first row winning — so a hidden or disabled duplicate
+    // could hand its modality list to the visible entry, the same donation the availability and
+    // ladder rules already refuse. The catalog entry carries them now, so the row that is
+    // exported is the row that declares.
+    const shadowed = { ...eligible, fastRowAvailable: false, inputModalities: ["text"] };
+    const rows = [
+      { ...eligible, fastRowAvailable: false, disabled: true, inputModalities: ["text", "image", "audio"] },
+      shadowed,
+    ];
+    const config = cfg({ fastRows: false });
+    expect(exportModelsFromProxyRows(rows, config)).toEqual([shadowed]);
+    const blocks = opencodeProviderBlocks(BASE_URL, opencodeCatalogFromProxyRows(rows, config), config);
+    expect(blocks.v1.models["remote/model"]!.modalities).toEqual({ input: ["text"], output: ["text"] });
+    expect(blocks.v2.models["remote/model"]!.modalities).toEqual({ input: ["text"], output: ["text"] });
   });
 });
 
