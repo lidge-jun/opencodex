@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, findWindowsCodexTargets, findWindowsWslCodexLaunchers, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../src/codex/shim";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
@@ -1998,6 +1998,49 @@ describe("WSL PATH interop guard", () => {
       ...fakeFs([`${dir}/codex`]),
     });
     expect(found).toBe(`${dir}/codex`);
+  });
+});
+
+describe("Codex Desktop WSL launcher discovery", () => {
+  test("finds the cached Linux app-server binary without treating it as a Windows shim target", () => {
+    const profile = String.raw`C:\Users\example`;
+    const root = String.raw`C:\Users\example\.codex\bin\wsl`;
+    const cached = root + String.raw`\hash-b\codex`;
+    const newer = root + String.raw`\hash-a\codex`;
+    const found = findWindowsWslCodexLaunchers({
+      platform: "win32",
+      userProfile: profile,
+      readdir: path => path === root ? ["hash-b", "hash-a"] : [],
+      exists: path => path === cached || path === newer,
+      isDirectory: () => false,
+    });
+
+    expect(found).toEqual([newer, cached]);
+  });
+
+  test("does not inspect the Desktop cache on non-Windows platforms", () => {
+    let inspected = false;
+    expect(findWindowsWslCodexLaunchers({
+      platform: "linux",
+      readdir: () => { inspected = true; return ["hash"]; },
+    })).toEqual([]);
+    expect(inspected).toBe(false);
+  });
+
+  test("suppresses Windows shim targets when the WSL launcher exists", () => {
+    const launcher = "/tmp/codex/.codex/bin/wsl/hash/codex";
+    const target = "/tmp/codex/npm/codex.cmd";
+    const result = findWindowsCodexTargets({
+      pathValue: "/tmp/codex/npm",
+      wslLaunchers: [launcher],
+      exists: path => path === target,
+      isShimFile: () => false,
+      isDirectory: () => false,
+    });
+
+    expect(result).toBeNull();
+    expect(lastCodexDiscoveryError()).toContain(launcher);
+    expect(lastCodexDiscoveryError()).toContain("skip the autostart shim");
   });
 });
 

@@ -183,6 +183,50 @@ checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
 the same config and auth files. Set `CODEX_HOME` explicitly to override this detection.
 
+### Windows Codex Desktop with WSL app-server
+
+This layout is supported when OpenCodex runs inside the same WSL distribution as the Desktop
+app-server. Install and run `ocx` in WSL, then point it at the Windows-side Codex home explicitly:
+
+```bash
+export CODEX_HOME=/mnt/c/Users/<windows-user>/.codex
+ocx init
+```
+
+If the Linux `~/.codex/config.toml` is absent and exactly one Windows profile contains a Codex
+config, the explicit variable is optional; setting it is still recommended because it makes the
+target unambiguous. Close Codex Desktop before `ocx init`, `ocx sync`, or `ocx restore` so the app
+does not hold `config.toml`, the catalog, or the SQLite state database open while OpenCodex updates
+them.
+
+Do not install the Codex autostart shim for this mode. Codex Desktop's Windows launcher starts a
+Linux binary from `%USERPROFILE%\.codex\bin\wsl\<hash>\codex`; that binary is not executable by
+Windows and must not be replaced by a Windows shim. If `ocx init` finds that layout on Windows, it
+reports it and skips the shim. The WSL-side app-server and proxy can use the default loopback bind
+because they run in the same Linux environment. If the proxy is instead run on Windows, WSL NAT
+localhost reachability is not guaranteed; use WSL mirrored networking and an explicitly configured
+non-loopback listener with the generated admission header, or run the proxy in WSL.
+
+Before the first mutation, make a private, no-clobber backup of the shared files. The timestamped
+directory makes repeated recovery attempts produce separate backups:
+
+```bash
+backup_dir="$CODEX_HOME/opencodex-backup-$(date +%Y%m%d-%H%M%S)"
+(umask 077; mkdir "$backup_dir")
+cp -pn -- "$CODEX_HOME/config.toml" "$backup_dir/config.toml"
+cp -pn -- "$CODEX_HOME/opencodex-catalog.json" "$backup_dir/opencodex-catalog.json" 2>/dev/null || true
+cp -pn -- "$CODEX_HOME/models_cache.json" "$backup_dir/models_cache.json" 2>/dev/null || true
+```
+
+Run `ocx doctor` and also copy the exact SQLite database path it reports, including any `-wal` and
+`-shm` sidecars that exist, into the new backup directory with `cp -pn`. Keep the database backup
+with the config/catalog backup; do not use a guessed filename because `sqlite_home` can point
+outside `CODEX_HOME`. `ocx restore` removes only OpenCodex-owned routing and catalog state. If a
+shared Windows-mounted home is locked or a sync is interrupted, stop the proxy and Desktop app,
+preserve the timestamped backup, then run `ocx doctor` and retry `ocx restore` or `ocx sync`; do not
+delete the Codex home or its history database. The history migration path is manifest-backed and
+fail-closed when state cannot be verified.
+
 Codex can keep SQLite-backed thread state in a separate directory. OpenCodex history operations use
 the same precedence as Codex: root `sqlite_home` in `config.toml`, then `CODEX_SQLITE_HOME`, then the
 effective `CODEX_HOME`. Relative SQLite homes resolve from the current working directory. When an

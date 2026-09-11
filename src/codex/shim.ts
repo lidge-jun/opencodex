@@ -584,13 +584,46 @@ export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
   return null;
 }
 
-function findWindowsCodexTargets(): ShimFileState[] | null {
+export type WindowsCodexTargetDeps = {
+  pathValue?: string;
+  wslLaunchers?: string[];
+  exists?: (path: string) => boolean;
+  isShimFile?: (path: string) => boolean;
+  isDirectory?: (path: string) => boolean;
+};
+
+export function findWindowsCodexTargets(deps: WindowsCodexTargetDeps = {}): ShimFileState[] | null {
   lastShimDiscoveryError = null;
-  for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
+  // Codex Desktop's cached WSL launcher is a Linux ELF binary. It must take
+  // precedence over every Windows PATH launcher so ocx init cannot install a
+  // Windows shim for a Desktop installation that uses the WSL app-server.
+  const wslLaunchers = deps.wslLaunchers ?? findWindowsWslCodexLaunchers();
+  if (wslLaunchers.length > 0) {
+    const launcher = wslLaunchers[0]!;
+    lastShimDiscoveryError = truncateRetainedUtf8(
+      "Found Codex Desktop's WSL app-server binary at " + launcher + ". " +
+      "It is a Linux binary and cannot be wrapped by the Windows Codex shim. " +
+      "Run OpenCodex inside WSL with CODEX_HOME set to the Windows .codex directory, " +
+      "inject the config there, and skip the autostart shim.",
+      MAX_DIAGNOSTIC_VALUE_BYTES,
+    );
+    return null;
+  }
+
+  const exists = deps.exists ?? existsSync;
+  const shimFile = deps.isShimFile ?? isShim;
+  const isDirectory = deps.isDirectory ?? ((path: string) => {
+    try {
+      return lstatSync(path).isDirectory();
+    } catch {
+      return true;
+    }
+  });
+  for (const dir of (deps.pathValue ?? process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
     const exe = join(dir, "codex.exe");
-    if (existsSync(exe) && !isShim(exe)) {
+    if (exists(exe) && !shimFile(exe)) {
       try {
-        if (!lstatSync(exe).isDirectory()) {
+        if (!isDirectory(exe)) {
           lastShimDiscoveryError = truncateRetainedUtf8(
             `Found codex.exe at ${exe}. Refusing to rename a real .exe because exact codex.exe invocations would break; ` +
             "install a codex.cmd/codex.ps1 launcher or use `ocx service install` for autostart.",
@@ -608,9 +641,9 @@ function findWindowsCodexTargets(): ShimFileState[] | null {
     const gitBashLauncher = join(dir, "codex");
     const targets: ShimFileState[] = [];
     for (const path of [cmd, ps1, gitBashLauncher]) {
-      if (!existsSync(path) || isShim(path)) continue;
+      if (!exists(path) || shimFile(path)) continue;
       try {
-        if (!lstatSync(path).isDirectory()) {
+        if (!isDirectory(path)) {
           targets.push({ wrapperPath: path, originalPath: path, backupPath: backupPathFor(path) });
         }
       } catch { /* keep scanning */ }
@@ -618,6 +651,47 @@ function findWindowsCodexTargets(): ShimFileState[] | null {
     if (targets.length > 0) return targets;
   }
   return null;
+}
+
+export type WindowsWslCodexLauncherDeps = {
+  platform?: NodeJS.Platform;
+  userProfile?: string;
+  readdir?: (path: string) => string[];
+  exists?: (path: string) => boolean;
+  isDirectory?: (path: string) => boolean;
+};
+
+/**
+ * Find the Linux Codex binary cached by Codex Desktop for its WSL app-server.
+ *
+ * This is discovery-only. The binary is intentionally not a Windows shim target:
+ * replacing it would break the Desktop-to-WSL launch contract, and Windows cannot
+ * execute the Linux ELF file directly. The current layout is USERPROFILE/.codex/bin/wsl/hash/codex.
+ */
+export function findWindowsWslCodexLaunchers(deps: WindowsWslCodexLauncherDeps = {}): string[] {
+  if ((deps.platform ?? process.platform) !== "win32") return [];
+  const profile = (deps.userProfile ?? process.env.USERPROFILE ?? "").trim();
+  if (!profile) return [];
+  const readdir = deps.readdir ?? readdirSync;
+  const exists = deps.exists ?? existsSync;
+  const isDirectory = deps.isDirectory ?? ((path: string) => {
+    try {
+      return lstatSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  const wslRoot = win32.join(profile, ".codex", "bin", "wsl");
+  let hashes: string[];
+  try {
+    hashes = readdir(wslRoot).filter(name => name !== "." && name !== "..");
+  } catch {
+    return [];
+  }
+  return hashes
+    .map(hash => win32.join(wslRoot, hash, "codex"))
+    .filter(path => exists(path) && !isDirectory(path))
+    .sort();
 }
 
 function backupPathFor(path: string): string {
