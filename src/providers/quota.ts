@@ -1239,6 +1239,27 @@ function tagNativeMainReport(
   return value;
 }
 
+/**
+ * Test-only seam: publish exactly as a credential-bound producer does, and hand back the
+ * routing evidence the publication actually attached.
+ *
+ * Live producers all pass a projection today, so no probe fixture can prove the OTHER half
+ * of the contract: that omitting it stays display-only. Routing an omitted argument through
+ * the real helper keeps that provable, and a re-introduced `= quota` default would be
+ * observed here (a defaulted parameter also fires for an explicitly undefined argument).
+ */
+export function publishKeyReportForTests(
+  provider: string,
+  source: string,
+  quota: ProviderQuota,
+  config: OcxProviderConfig,
+  probedCredential: string,
+  inferenceQuota?: ProviderQuota,
+): { report: ProviderQuotaReport | null; routing: ProviderQuotaRoutingEvidence | undefined } {
+  const result = keyReport(provider, source, quota, config, probedCredential, inferenceQuota);
+  return { report: result, routing: result ? routingEvidence.get(result) : undefined };
+}
+
 function isProviderQuotaReportCurrent(value: ProviderQuotaReport): boolean {
   const generation = nativeMainReportGenerations.get(value);
   return (generation === undefined || isMainAccountIdentityGenerationLive(generation))

@@ -18,6 +18,7 @@ import {
   parseXaiCreditsResponse,
   QUOTA_RESPONSE_MAX_BYTES,
   readProviderQuotaJsonForTests,
+  publishKeyReportForTests,
   setAntigravityAccountQuotaTransportForTests,
   setProviderQuotaBeforePublishForTests,
 } from "../../src/providers/quota";
@@ -759,6 +760,26 @@ describe("fetchProviderQuotaReports", () => {
     const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1"));
     await fetchProviderQuotaReports(config, true);
     expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test("keyReport publishes routing evidence only for an explicit inference projection", () => {
+    // The MiniMax case above rides the display-only `report()` path, so it would still pass if
+    // `keyReport`'s projection were quietly defaulted back to the display quota. This drives the
+    // credential-bound helper directly: the binding resolves for BOTH calls (same single-key
+    // provider and probed credential), so the only variable left is the projection itself.
+    const provider = keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1").providers.openrouter!;
+    const exhausted = { monthlyPercent: 100 };
+
+    const omitted = publishKeyReportForTests("openrouter", "openrouter:key-info", exhausted, provider, "openrouter-secret");
+    expect(omitted.report?.quota.monthlyPercent).toBe(100);
+    expect(omitted.routing).toBeUndefined();
+
+    const projected = { monthlyPercent: 100 };
+    const explicit = publishKeyReportForTests(
+      "openrouter", "openrouter:key-info", exhausted, provider, "openrouter-secret", projected,
+    );
+    expect(explicit.routing?.quota).toBe(projected);
+    expect(typeof explicit.routing?.binding).toBe("string");
   });
 
   test("routing quota scope does not apply a probed key cap to an Authorization override", async () => {
