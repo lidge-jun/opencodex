@@ -39,8 +39,6 @@ still depends on upstream support for your account.
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
 | `agentTaskRecovery?` | `object` | — | Experimental opt-in recovery for backend-encrypted v2 tasks sent to routed providers. Disabled unless `enabled: true`; see [Encrypted v2 task recovery](#encrypted-v2-task-recovery). |
 
-Configured effort caps apply to eligible native Chat Completions turns even without a model effort pin. Qualifying v2 main turns use `effortCap`; marked spawned-child turns use the lower applicable main/child ceiling. Explicit `multiAgentMode: "v1"` and compaction maintenance bypass caps. A cap only lowers or omits explicit effort, and provider wire mapping runs when a pin is applied or a cap changes the value. Native caller values retain their original wire spelling when no pin is applied and no cap rewrite occurs.
-
 Manage the surface with the dashboard or
 `ocx v2 status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`.
 Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /api/v2` field, not a
@@ -256,6 +254,8 @@ no effort control or no supported rung fits, opencodex removes the effort and le
 apply. `max` and `ultra` are accepted, while the dashboard offers `low` through `xhigh`.
 
 For a beginner-oriented explanation of v1, default, and v2 behavior, see
+Configured caps also apply to eligible native Chat Completions turns that carry no model effort pin. Provider wire mapping runs when a pin is applied or when a cap changes the value; a native caller value keeps its original wire spelling when neither happens.
+
 [Sub-agent surfaces](/guides/sub-agent-surface/).
 
 ## Global model effort pins

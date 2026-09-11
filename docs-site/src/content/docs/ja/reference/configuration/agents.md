@@ -22,8 +22,6 @@ description: マルチエージェント サーフェス、委任ガイダンス
 | `effortCap?` | `string` | — | v2 のメイン ターンとマークされた子ターンの条件を満たすためのハード シーリング。 `low` ～ `ultra` を受け入れます。 |
 | `subagentEffortCap?` | `string` | — |スポーンされた子のターンのみの追加の上限。両方の上限が適用される場合は、低い方が優先されます。 |
 
-モデルの effort pin がなくても、対象のネイティブ Chat Completions ターンには設定された上限が適用されます。対象の v2 メインターンには `effortCap`、生成された子ターンのマーカーがある場合には適用可能なメインと子の上限のうち低い方を使用します。明示的な `multiAgentMode: "v1"` と compaction の保守処理は上限の対象外です。上限は明示された effort を下げるか省略するだけで、pin を適用した場合、または上限で値を変更した場合にプロバイダーの送信値へ変換します。pin の適用も上限による書き換えもない呼び出し元の値は元の表記を維持します。
-
 ダッシュボードまたは `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` でサーフェスを管理します。モードの変更は新しいセッションに適用されます。 `maxConcurrentThreadsPerSession` は `PUT /api/v2` フィールドであり、`config.json` キーではありません。 `ocx v2 threads <n>` は、v2 が有効になった後、Codex の `$CODEX_HOME/config.toml` の `[features.multi_agent_v2]` の下に `max_concurrent_threads_per_session` を書き込みます。
 
 管理 API は、`GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models`、および `/api/subagent-model-fallback` を公開します。インジェクションモデルの更新は部分的です。カスタム プロンプトは、その API の `prompt` フィールドです。
@@ -88,5 +86,7 @@ opencodex は、無効、ルーティング不能、異常、冷却期間、ま�
 キャップは v2 コラボレーション機能にのみ適用されます。メイン ターンは、そのツールが v2 を公開するときに資格を持ちますが、子ターンは、リーフ ツールがコラボレーションを公開しなくなった場合でも、`x-codex-turn-metadata` に正確な codex-rs `x-openai-subagent: collab_spawn` または `"subagent_kind": "thread_spawn"` マーカーが含まれるときに資格を持ちます。 V1 メイン ターン、`multiAgentMode: "v1"`、圧縮、レビュー、およびメモリ統合ターンはバイパス キャップです。
 
 キャップは労力を軽減するだけです。これらは、キャップまたはキャップの下で宣伝されている最も高い段にスナップします。モデルにエフォート制御がない場合、またはサポートされているラングフィットがない場合、opencodex はエフォートを削除し、プロバイダーのデフォルトを適用します。 `max` および `ultra` が受け入れられますが、ダッシュボードでは `low` から `xhigh` が提供されます。
+
+モデルの effort pin がなくても、対象のネイティブ Chat Completions ターンには設定された上限が適用されます。pin を適用した場合、または上限で値を変更した場合にプロバイダーの送信値へ変換し、どちらも起きない呼び出し元の値は元の表記を維持します。
 
 v1、デフォルト、および v2 の動作に関する初心者向けの説明については、「[サブエージェントサーフェス](/guides/sub-agent-surface/)」を参照してください。

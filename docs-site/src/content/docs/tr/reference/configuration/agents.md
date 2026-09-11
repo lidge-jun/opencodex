@@ -259,7 +259,7 @@ hiçbir basamak uymuyorsa opencodex çabayı kaldırır ve sağlayıcı varsayı
 uygulanmasına izin verir. `max` ve `ultra` kabul edilirken kontrol paneli `low`
 ile `xhigh` arasını sunar.
 
-Yapılandırılmış effort sınırları, model effort sabitlemesi olmasa da uygun yerel Chat Completions turlarına uygulanır. Sağlayıcının iletim değerine eşleme, sabitleme uygulandığında veya sınır değeri değiştirdiğinde yapılır. Sabitleme uygulanmayan ve sınır tarafından yeniden yazılmayan yerel çağıran değerleri özgün yazımını korur.
-
 v1, varsayılan ve v2 davranışının yeni başlayanlara yönelik açıklaması için [Alt
+Yapılandırılmış sınırlar, model effort sabitlemesi olmayan uygun yerel Chat Completions turlarına da uygulanır. Sağlayıcının iletim değerine eşleme yalnızca sabitleme uygulandığında veya sınır değeri değiştirdiğinde yapılır; aksi hâlde yerel çağıran değeri özgün yazımını korur.
+
 ajan yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
