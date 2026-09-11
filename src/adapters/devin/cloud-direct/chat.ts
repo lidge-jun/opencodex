@@ -1113,10 +1113,13 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // model and explains the likely cause rather than re-passing
     // Cognition's opaque text. The cloud's original message is appended in
     // parens so users (and bug reports) still have it verbatim.
-    const isOpaquePermissionDenial =
-      trailerError.code === 'permission_denied' &&
+    // Measured on 2026-09-12: a free-tier account gets this shape with
+    // `invalid_argument`, not `permission_denied`. Keying only on the latter
+    // meant the explanation never fired for the one account that needed it.
+    const isOpaqueDenial =
+      (trailerError.code === 'permission_denied' || trailerError.code === 'invalid_argument') &&
       /an internal error occurred/i.test(trailerError.message);
-    if (isOpaquePermissionDenial) {
+    if (isOpaqueDenial) {
       const enriched =
         `Cognition denied this request for model "${req.modelUid}" with the opaque ` +
         `"an internal error occurred" message. The catalog listed this model as ` +

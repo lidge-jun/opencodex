@@ -461,7 +461,7 @@ describe("registry-derived routed tool conformance", () => {
       if (!driver?.streamingToolCall) {
         // OpenAI Responses is a normal passthrough here and only parses routed compaction;
         // Cursor's proprietary runTurn stream has focused parser coverage elsewhere.
-        expect(["openai-responses", "cursor", "devin-cli"]).toContain(contract.wire);
+        expect(["openai-responses", "cursor"]).toContain(contract.wire);
         continue;
       }
       expect(await restoredStreamInput(adapterId, contract.wire), adapterId).toBe(PATCH);
@@ -473,7 +473,7 @@ describe("registry-derived routed tool conformance", () => {
       if (TOOL_LESS_ADAPTERS.has(adapterId)) continue;
       if (RUN_TURN_ONLY_WIRES.has(effectiveAdapterContract(adapterId).wire)) continue;
       const contract = effectiveAdapterContract(adapterId);
-      if (contract.wire === "openai-responses" || contract.wire === "cursor" || contract.wire === "devin-cli") {
+      if (contract.wire === "openai-responses" || contract.wire === "cursor") {
         // Native Responses passthrough and Cursor's protobuf transport do not use the routed
         // adapter tool declaration surface exercised by this registry-wide check.
         continue;
@@ -489,7 +489,7 @@ describe("registry-derived routed tool conformance", () => {
       if (TOOL_LESS_ADAPTERS.has(adapterId)) continue;
       if (RUN_TURN_ONLY_WIRES.has(effectiveAdapterContract(adapterId).wire)) continue;
       const contract = effectiveAdapterContract(adapterId);
-      if (contract.wire === "openai-responses" || contract.wire === "cursor" || contract.wire === "devin-cli") continue;
+      if (contract.wire === "openai-responses" || contract.wire === "cursor") continue;
       const parsed = namespacedCollisionParsed(contract.wire);
       // parseRequest rejects this shape for real inbound traffic; keeping the policy mutation here
       // also proves each adapter remains fail-closed when a caller reaches it with a prebuilt AST.

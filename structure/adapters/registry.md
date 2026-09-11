@@ -18,6 +18,11 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   so `buildRequest` returns a placeholder and `parseStream` is disabled. Its registry `baseUrl` is a
   canonical identity URL rather than a destination anything connects to, which is what keeps the
   generated configuration loadable: `providerBaseUrlConfigError` accepts only `http(s)` schemes.
+- `devin` is the cloud half of the same family and is also direct. It streams Cognition's
+  `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
+  framing, so like Cursor and `devin-cli` it never travels the `buildRequest`/`parseStream` path.
+  The two share a name and nothing else: separate transports, separate credentials, separate
+  adapters.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
