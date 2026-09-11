@@ -105,7 +105,7 @@ Répertoriez et changez de compte de fournisseur et de pools de clés API via le
 la surface est :
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -117,6 +117,7 @@ remove <provider> <id> --yes  Remove a stored account or key after an existence 
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
 Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.
 A selection-order change applies from the next unbound request and never moves a bound thread.
 ```
@@ -284,6 +285,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 Inspectez Codex réinitialiser les crédits d'un compte. Consommer un crédit est destructeur et nécessite à la fois
 `--consume` et `--yes`.
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+Inspecte les coupons de réinitialisation restants ou en échange un pour un compte xAI / Grok.
+
+Sans `--consume`, la commande renvoie les jetons de coupon disponibles et leurs fenêtres de validité :
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+Échanger un coupon de réinitialisation modifie l'état de facturation et épuise définitivement un jeton de coupon. `--consume` exige strictement `--yes` :
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+Passez `--operation-id <uuid>` (doit être un UUIDv4 valide) pour garantir une règlement idempotent. En cas de coupure réseau ou de nouvelle tentative, des identifiants d'opération identiques rejouent le résultat enregistré de manière durable au lieu de consommer un second coupon.
 
 ### `ocx account main <subcommand>`
 

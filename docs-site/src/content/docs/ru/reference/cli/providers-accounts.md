@@ -94,7 +94,7 @@ ocx login anthropic
 Поставляемая help-surface выглядит так:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -106,6 +106,7 @@ remove <provider> <id> --yes  Remove a stored account or key after an existence 
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
@@ -271,6 +272,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 Проверить reset-credit'ы Codex для аккаунта. Расходование кредита разрушительно и требует сразу
 оба флага: и `--consume`, и `--yes`.
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+Показывает оставшиеся купоны сброса или обменивает один для аккаунта xAI / Grok.
+
+Без `--consume` команда возвращает доступные токены купонов и окна их действия:
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+Обмен купона сброса изменяет платежное состояние и безвозвратно расходует один токен купона. Для `--consume` строго требуется `--yes`:
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+Передайте `--operation-id <uuid>` (должен быть корректным UUIDv4), чтобы гарантировать идемпотентное завершение. При обрыве сети или повторном запуске команды одинаковые идентификаторы операции воспроизводят сохраненный результат вместо расходования второго купона.
 
 ### `ocx account main <subcommand>`
 

@@ -145,7 +145,7 @@ Luna 메타데이터임을 표시해 사용합니다. 목록에 보인다는 사
 실행 중인 프록시를 통해 제공자 계정과 API 키 풀을 나열하고 전환합니다. 제공되는 도움말 표면은 다음과 같습니다:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -157,6 +157,7 @@ remove <provider> <id> --yes  Remove a stored account or key after an existence 
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
@@ -277,6 +278,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
 계정의 Codex reset credits를 확인합니다. credit을 소비하는 동작은 파괴적이므로 `--consume`와 `--yes`를 둘 다 요구합니다.
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+xAI / Grok 계정의 남은 reset coupon을 확인하거나 하나를 교환합니다.
+
+`--consume` 없이 실행하면 사용 가능한 쿠폰 토큰과 유효 기간을 반환합니다:
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+reset coupon을 교환하면 billing 상태가 변경되고 쿠폰 토큰 하나를 영구적으로 소진합니다. `--consume`에는 `--yes`가 엄격하게 요구됩니다:
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+`--operation-id <uuid>`(유효한 UUIDv4여야 함)를 전달하면 멱등한 정산이 보장됩니다. 네트워크가 끊기거나 명령이 재시도되더라도 동일한 operation id는 쿠폰을 다시 소진하는 대신 저장된 결과를 재생합니다.
 
 ### `ocx account main <subcommand>`
 

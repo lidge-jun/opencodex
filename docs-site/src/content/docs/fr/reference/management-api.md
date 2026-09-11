@@ -78,6 +78,8 @@ résultats propres à chaque route, sans répéter ce tableau.
 | `GET /api/grok` | Lire l'état de la configuration Grok gérée et les modèles candidats | 400 échec de lecture de l'état |
 | `PUT /api/grok/selection` | Persister les modèles Grok exclus | 400 sélection invalide ou surdimensionnée |
 | `POST /api/grok/apply` | Appliquer la configuration Grok persistante par la synchronisation gérée | 409 `grok_apply_busy` ; 400/500 échec de l'application |
+| `GET /api/grok/reset-coupons?accountId=...` | Lire les jetons de réinitialisation de facturation Grok restants et leurs fenêtres de validité pour le compte xAI actif ou spécifié | 400 compte manquant ; 401 non authentifié ; 502 erreur gRPC-Web en amont |
+| `POST /api/grok/reset-coupons/consume` | Échanger un coupon de réinitialisation éligible. Corps `{ accountId?, tokenId?, operationId? }`. L'`operationId` facultatif (UUIDv4) rend l'échange idempotent : répéter le même identifiant rejoue le résultat durable sans double échange. | 400 JSON/UUID invalide ; 401 non authentifié ; 409 `identity_mismatch` ; 502 erreur en amont ; 503 capacité du registre |
 | `GET, PUT /api/claude-desktop` | Lire ou enregistrer le profil Claude Desktop routé ou natif | 400 affectation invalide ou indisponible |
 | `POST /api/claude-desktop/apply` | Écrire le profil enregistré dans la configuration gérée de Claude Desktop | 400/500 échec d'écriture |
 | `GET /api/claude-desktop/status` | Inspecter le profil enregistré par rapport à celui appliqué et l'état du bureau | 400 échec de lecture de l'état |

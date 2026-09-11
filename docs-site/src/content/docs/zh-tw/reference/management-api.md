@@ -64,6 +64,8 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/grok` | 讀取 Grok 受管設定狀態與候選模型 | 400 狀態讀取失敗 |
 | `PUT /api/grok/selection` | 持久化排除的 Grok 模型 | 400 無效或過大選擇 |
 | `POST /api/grok/apply` | 透過受管同步套用持久化的 Grok 設定 | 409 `grok_apply_busy`；400/500 套用失敗 |
+| `GET /api/grok/reset-coupons?accountId=...` | 讀取活躍或指定 xAI 帳號剩餘的 Grok 計費重置 token 與有效期間 | 400 缺失帳號；401 未認證；502 上游 gRPC-Web 錯誤 |
+| `POST /api/grok/reset-coupons/consume` | 兌換一個合格的 reset coupon。請求主體為 `{ accountId?, tokenId?, operationId? }`。選用的 `operationId`（UUIDv4）可讓兌換具備冪等性：重複相同 id 會重播持久化結果，而不會重複兌換。 | 400 無效的 JSON/UUID；401 未認證；409 `identity_mismatch`；502 上游錯誤；503 ledger 容量 |
 | `GET, PUT /api/claude-desktop` | 讀取或持久化 Claude Desktop 路由／原生設定檔 | 400 無效或不可用指派 |
 | `POST /api/claude-desktop/apply` | 將儲存的設定檔寫入 Claude Desktop 的受管設定 | 400/500 寫入失敗 |
 | `GET /api/claude-desktop/status` | 檢查已儲存 vs 已套用設定檔與 Desktop 健康 | 400 狀態讀取失敗 |

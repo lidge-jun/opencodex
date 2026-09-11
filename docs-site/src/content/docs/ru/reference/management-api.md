@@ -79,6 +79,8 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET /api/grok` | Прочитать статус управляемой конфигурации Grok и кандидатные модели | 400 status read failure |
 | `PUT /api/grok/selection` | Сохранить список исключённых моделей Grok | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Применить сохранённую конфигурацию Grok через managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
+| `GET /api/grok/reset-coupons?accountId=...` | Прочитать оставшиеся токены сброса биллинга Grok и окна их действия для активного или указанного аккаунта xAI | 400 отсутствует аккаунт; 401 без аутентификации; 502 ошибка upstream gRPC-Web |
+| `POST /api/grok/reset-coupons/consume` | Обменять подходящий купон сброса. Тело `{ accountId?, tokenId?, operationId? }`. Необязательный `operationId` (UUIDv4) делает обмен идемпотентным: повтор того же идентификатора воспроизводит сохраненный результат без повторного обмена. | 400 некорректные JSON/UUID; 401 без аутентификации; 409 `identity_mismatch`; 502 ошибка upstream; 503 емкость реестра |
 | `GET, PUT /api/claude-desktop` | Прочитать или сохранить routed/native-профиль Claude Desktop | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Записать сохранённый профиль в managed config Claude Desktop | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Проверить согласованность saved-vs-applied profile и здоровье Desktop | 400 status read failure |

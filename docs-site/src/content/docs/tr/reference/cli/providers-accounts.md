@@ -113,7 +113,7 @@ Bir sağlayıcı için saklanan OAuth kimlik bilgisini kaldırın.
 listeleyin ve değiştirin. Sağlanan yardım arayüzü şöyledir:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -125,6 +125,7 @@ remove <provider> <id> --yes  Remove a stored account or key after an existence 
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
 Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.
 A selection-order change applies from the next unbound request and never moves a bound thread.
 ```
@@ -328,6 +329,26 @@ anahtarı içermez.
 
 Bir hesap için Codex sıfırlama kredilerini inceleyin. Bir krediyi tüketmek
 yıkıcıdır ve hem `--consume` hem de `--yes` gerektirir.
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+Bir xAI / Grok hesabı için kalan sıfırlama kuponlarını inceler veya bir tanesini kullanır.
+
+`--consume` olmadan çağrıldığında, kullanılabilir kupon jetonlarını ve geçerlilik pencerelerini döndürür:
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+Bir sıfırlama kuponunu kullanmak faturalandırma durumunu değiştirir ve bir kupon jetonunu kalıcı olarak tüketir. `--consume` kesinlikle `--yes` gerektirir:
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+İdempotent sonuç garantisi için `--operation-id <uuid>` (geçerli bir UUIDv4 olmalıdır) iletin. Ağ kopması veya komutun yeniden denenmesi durumunda, özdeş işlem kimlikleri ikinci bir kupon tüketmek yerine kalıcı olarak kaydedilen sonucu yeniden oynatır.
 
 ### `ocx account main <alt-komut>`
 

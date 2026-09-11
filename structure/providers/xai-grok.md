@@ -41,3 +41,10 @@ to treat an explicit empty array as authoritative. Within this marked client-fac
 malformed, gapped, oversized, contradictory, failed, or incomplete streams stay fail-closed.
 
 > Decision record: [ADR-0059](../decisions/ADR-0059-xai-grok-hardening-official-grok-build-contract.md)
+
+### Grok Reset Coupons (Billing API Parity)
+
+- **Upstream RPCs:** `prod_mc_billing.ConsumerUiSvc/GetRemainingResets` (inspection) and `prod_mc_billing.ConsumerUiSvc/RedeemReset` (redemption).
+- **Transport:** Binary gRPC-Web over HTTP/1.1 or HTTP/2 with 5-byte frame envelope (`0x00` data / `0x80` trailers) and protobuf wire format. Plain JSON is rejected with empty responses upstream.
+- **Authentication:** `Authorization: Bearer <xai OIDC access token>` + `X-XAI-Token-Auth: xai-grok-cli`. No cookies required.
+- **Safety & Idempotency:** Managed via `src/grok/reset-coupon-ledger.ts` using UUIDv4 operation tracking before upstream dispatch to prevent duplicate consumption during network flakes.
