@@ -26,6 +26,7 @@ import * as crypto from 'crypto';
 import { encodeMessage, iterFields } from './wire.js';
 import { buildMetadata } from './metadata.js';
 import { anySignal } from '../../../lib/abort.js';
+import { validateDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
 
 const DEFAULT_HOST = 'https://server.codeium.com';
 
@@ -79,24 +80,41 @@ export async function mintUserJwt(
   // GetUserJwt mint would keep the network request alive for up to the
   // full 30s timeout.
   const timeoutSignal = AbortSignal.timeout(MINT_TIMEOUT_MS);
-  const combinedSignal: AbortSignal = signal
-    ? anySignal([signal, timeoutSignal])
-    : timeoutSignal;
+  const composed = signal ? anySignal([signal, timeoutSignal]) : undefined;
+  const combinedSignal: AbortSignal = composed?.signal ?? timeoutSignal;
 
-  const resp = await fetch(`${host.replace(/\/$/, '')}/exa.auth_pb.AuthService/GetUserJwt`, {
+  // The host arrives from RegisterUser via the credential store. It is checked
+  // again here because this request carries the long-lived api_key inside the
+  // protobuf body, and a host that slipped past persistence would exfiltrate it.
+  const base = validateDevinApiBaseUrl(host);
+  if (!base) {
+    throw new CloudAuthError(`Refusing to mint a user_jwt against a non-Cognition host.`);
+  }
+  let resp: Response;
+  try {
+    resp = await fetch(`${base}/exa.auth_pb.AuthService/GetUserJwt`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/proto',
       'Connect-Protocol-Version': '1',
     },
     body: new Uint8Array(req),
+    // A redirect would replay this POST - whose body holds the api_key - at
+    // whatever host Location names.
+    redirect: 'error',
     signal: combinedSignal,
-  });
+    });
+  } finally {
+    // The caller's signal belongs to a whole turn; do not keep a listener on it.
+    composed?.cleanup();
+  }
   const buf = Buffer.from(await resp.arrayBuffer());
 
   if (!resp.ok) {
-    const text = buf.toString('utf8');
-    throw new CloudAuthError(`GetUserJwt HTTP ${resp.status}: ${text.slice(0, 400)}`, resp.status);
+    // The body is not echoed. A Connect error here can quote the request, and
+    // the request contains the api_key; this message reaches CLI output, the
+    // adapter's error event, and /api/logs.
+    throw new CloudAuthError(`GetUserJwt failed (HTTP ${resp.status})`, resp.status);
   }
 
   // Response is GetUserJwtResponse { user_jwt: string } where user_jwt is
@@ -123,7 +141,9 @@ export async function mintUserJwt(
   }
   if (!jwt) {
     throw new CloudAuthError(
-      `GetUserJwt 200 but no field-1 JWT found (${buf.length} bytes): ${buf.toString('utf8').slice(0, 200)}`,
+      // Same reason: a 200 whose field-1 value failed the shape check may still
+      // be a live token, so only the size is reported.
+      `GetUserJwt returned 200 without a usable field-1 JWT (${buf.length} bytes)`,
     );
   }
 

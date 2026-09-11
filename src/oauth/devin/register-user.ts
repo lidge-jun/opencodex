@@ -17,6 +17,7 @@
 
 import type { OAuthLoginResult, WindsurfRegion } from './types.js';
 import { anySignal } from '../../lib/abort.js';
+import { validateDevinApiBaseUrl } from './api-base.js';
 
 interface RegisterUserResponseJson {
   api_key?: string;
@@ -48,6 +49,24 @@ export class WindsurfRegistrationError extends Error {
 const TRACE_ID_RE = /\(trace ID: ([0-9a-f]+)\)/i;
 
 /**
+ * Connect error codes that are safe to repeat to the user.
+ *
+ * The message body is not: a Connect error can echo the request, and the
+ * request here is the Firebase ID token. That message reaches CLI output and
+ * /api/logs, and redactSecretString does not recognise a bare JWT, so the code
+ * is the only part of an error body that leaves this function.
+ */
+const SAFE_CONNECT_CODES = new Set([
+  'canceled', 'unknown', 'invalid_argument', 'deadline_exceeded', 'not_found', 'already_exists',
+  'permission_denied', 'resource_exhausted', 'failed_precondition', 'aborted', 'out_of_range',
+  'unimplemented', 'internal', 'unavailable', 'data_loss', 'unauthenticated',
+]);
+
+function safeConnectCode(value: unknown): string | undefined {
+  return typeof value === 'string' && SAFE_CONNECT_CODES.has(value) ? value : undefined;
+}
+
+/**
  * Exchange the Firebase ID token for a Windsurf API key.
  *
  * `firebaseIdToken` is the `access_token` (or `firebase_id_token`) value the
@@ -63,7 +82,18 @@ export async function registerUser(
     throw new WindsurfRegistrationError('Empty firebase_id_token', 0, 'invalid_argument');
   }
 
-  const url = `${region.registerApiServerUrl.replace(/\/$/, '')}/exa.seat_management_pb.SeatManagementService/RegisterUser`;
+  // The register host reaches the network holding the Firebase ID token, so it
+  // passes the same allowlist as the api-server host rather than being trusted
+  // because it came from a config object.
+  const registerBase = validateDevinApiBaseUrl(region.registerApiServerUrl);
+  if (!registerBase) {
+    throw new WindsurfRegistrationError(
+      'Refusing to send the sign-in token to a non-Cognition register host.',
+      0,
+      'permission_denied',
+    );
+  }
+  const url = `${registerBase}/exa.seat_management_pb.SeatManagementService/RegisterUser`;
 
   // 30s internal timeout — RegisterUser responds in ~200ms in steady state.
   // CLI users on flaky networks need bounded waits or the sign-in command
@@ -72,11 +102,12 @@ export async function registerUser(
   // previous fallback `combinedSignal = abortSignal` would drop the
   // timeout entirely on those runtimes.
   const timeoutSignal = AbortSignal.timeout(30_000);
-  const combinedSignal: AbortSignal = abortSignal
-    ? anySignal([abortSignal, timeoutSignal])
-    : timeoutSignal;
+  const composed = abortSignal ? anySignal([abortSignal, timeoutSignal]) : undefined;
+  const combinedSignal: AbortSignal = composed?.signal ?? timeoutSignal;
 
-  const response = await fetch(url, {
+  let response: Response;
+  try {
+    response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -86,23 +117,32 @@ export async function registerUser(
       'Connect-Protocol-Version': '1',
     },
     body: JSON.stringify({ firebase_id_token: firebaseIdToken }),
+    // A 307/308 would replay this POST, and its body is the sign-in token, at
+    // whatever host Location names. Fail instead of following.
+    redirect: 'error',
     signal: combinedSignal,
-  });
+    });
+  } finally {
+    // Detach from the caller's signal; it can outlive this one exchange.
+    composed?.cleanup();
+  }
 
   const text = await response.text();
 
   if (!response.ok) {
     let connectCode: string | undefined;
-    let message = text || `RegisterUser failed with HTTP ${response.status}`;
+    let traceId: string | undefined;
     try {
       const errJson = JSON.parse(text) as ConnectErrorJson;
-      connectCode = errJson.code;
-      if (errJson.message) message = errJson.message;
+      connectCode = safeConnectCode(errJson.code);
+      // The trace id is an opaque server identifier and is the one part of the
+      // message worth keeping for a support conversation.
+      traceId = typeof errJson.message === 'string' ? errJson.message.match(TRACE_ID_RE)?.[1] : undefined;
     } catch {
-      // non-JSON error body — keep raw text in `message`
+      // Non-JSON error body. It stays unread; only the status is reported.
     }
-    const traceMatch = message.match(TRACE_ID_RE);
-    throw new WindsurfRegistrationError(message, response.status, connectCode, traceMatch?.[1]);
+    const message = `RegisterUser failed (HTTP ${response.status}${connectCode ? `, ${connectCode}` : ''}${traceId ? `, trace ${traceId}` : ''})`;
+    throw new WindsurfRegistrationError(message, response.status, connectCode, traceId);
   }
 
   let parsed: RegisterUserResponseJson;
@@ -110,7 +150,9 @@ export async function registerUser(
     parsed = JSON.parse(text) as RegisterUserResponseJson;
   } catch {
     throw new WindsurfRegistrationError(
-      `RegisterUser returned 200 but body is not JSON: ${text.slice(0, 200)}`,
+      // The body is not echoed: a 200 that fails to parse can still contain the
+      // key or the token that produced it.
+      `RegisterUser returned 200 with a body that is not JSON (${text.length} bytes)`,
       response.status,
       'internal',
     );

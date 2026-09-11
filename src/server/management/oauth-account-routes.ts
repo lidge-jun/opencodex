@@ -255,6 +255,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     clearAccountQuotaCache(provider);
+    if (provider === "devin") {
+      // The cached user_jwt's payload contains the api_key, and the catalog is
+      // keyed by that key. Without this they outlive the credential in process
+      // memory until the JWT's own ~24 minute expiry.
+      const { clearCachedUserJwt, clearCachedCatalog } = await import("../../adapters/devin/cloud-direct");
+      clearCachedUserJwt();
+      clearCachedCatalog();
+    }
     return jsonResponse({ success: true });
   }
 

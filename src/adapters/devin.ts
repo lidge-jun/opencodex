@@ -10,11 +10,22 @@ import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, Ocx
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import { getCachedCatalog } from "./devin/cloud-direct/catalog";
-import { DEVIN_DEFAULT_API_SERVER } from "../oauth/devin";
+import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
 
 export const DEVIN_API_SERVER = DEVIN_DEFAULT_API_SERVER;
 
 const EFFORT_SUFFIXES = new Set(["low", "medium", "high", "xhigh", "max", "none", "1m", "max-1m", "none-1m", "fast"]);
+
+/**
+ * Cognition's catalog spells model ids with hyphens (`swe-1-7`), but the same
+ * models appear elsewhere - other proxies, hand-written config - with the dotted
+ * version number (`swe-1.7`). Left alone, a dotted id misses every catalog
+ * lookup and then gets an effort suffix appended to a name the server does not
+ * know, which Cognition answers with an opaque permission_denied.
+ */
+export function normalizeDevinModelId(modelId: string): string {
+  return modelId.replace(/\./g, "-");
+}
 
 function hasEffortSuffix(modelId: string): boolean {
   const parts = modelId.split("-");
@@ -34,11 +45,12 @@ function hasEffortSuffix(modelId: string): boolean {
  * for any base id that doesn't already carry one, mirroring the catalog shape.
  */
 async function resolveWireModelUid(
-  modelId: string,
+  rawModelId: string,
   apiKey: string,
   host: string,
   reasoningEffort?: string,
 ): Promise<string> {
+  const modelId = normalizeDevinModelId(rawModelId);
   if (hasEffortSuffix(modelId)) return modelId;
   const catalog = await getCachedCatalog(apiKey, host);
   if (catalog) {
@@ -96,7 +108,11 @@ function assistantToolCalls(message: OcxAssistantMessage): Array<{ id: string; n
 
 function assistantText(message: OcxAssistantMessage): string {
   return message.content
-    .map((part) => (part.type === "text" ? part.text : part.type === "thinking" ? part.thinking : ""))
+    // Thinking stays out of the replayed content. Cognition has no reasoning
+    // replay field, and folding chain-of-thought into assistant text sends it
+    // back as visible prior output - which the model then treats as something
+    // it said to the user.
+    .map((part) => (part.type === "text" ? part.text : ""))
     .filter(Boolean)
     .join("\n");
 }
@@ -197,7 +213,10 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
       }
 
       const rawModelId = parsed.modelId.includes("/") ? parsed.modelId.slice(parsed.modelId.lastIndexOf("/") + 1) : parsed.modelId;
-      const host = (provider.baseUrl || DEVIN_API_SERVER).replace(/\/$/, "");
+      // The signed-in account's tenant decides the host, not the static registry
+      // entry: an EU or FedStart account that used provider.baseUrl would send
+      // every RPC to the US server it is not provisioned on.
+      const host = resolveDevinApiServer(provider.baseUrl);
       const modelUid = await resolveWireModelUid(rawModelId, apiKey, host, parsed.options.reasoning);
       let openToolId: string | undefined;
       let usage: OcxUsage | undefined;
@@ -212,14 +231,28 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
       try {
         for await (const event of streamChatEvents({
           apiKey,
-          apiServerUrl: provider.baseUrl || DEVIN_API_SERVER,
+          apiServerUrl: host,
           modelUid,
           messages: mapOcxMessagesToDevin(parsed),
           tools: mapOcxToolsToDevin(parsed.context.tools),
           cascadeId,
+          // Without these the cloud applies its own defaults (128k output,
+          // temperature 0.7), so a client that asked for a 4k cap never got one.
+          completionOpts: {
+            ...(typeof parsed.options.maxOutputTokens === "number" ? { maxOutputTokens: parsed.options.maxOutputTokens } : {}),
+            ...(typeof parsed.options.temperature === "number" ? { temperature: parsed.options.temperature } : {}),
+            ...(typeof parsed.options.topP === "number" ? { topP: parsed.options.topP } : {}),
+          },
           signal: incoming.abortSignal,
         })) {
-          if (incoming.abortSignal?.aborted) break;
+          if (incoming.abortSignal?.aborted) {
+            // Emitting nothing here left the bridge to synthesize adapter_eof.
+            // Say what happened instead, the way the other runTurn-only adapter
+            // does, and carry any usage already seen.
+            closeOpenTool();
+            emit({ type: "error", message: "Devin turn was aborted.", ...(usage ? { usage } : {}) });
+            return;
+          }
           if (event.kind === "text") {
             closeOpenTool();
             if (event.text) emit({ type: "text_delta", text: event.text });
@@ -241,7 +274,11 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
           }
           if (event.kind === "finish") {
             closeOpenTool();
-            stopReason = event.reason === "length" ? "max_tokens" : event.reason;
+            // A natural completion carries no stopReason: the bridge reads any
+            // truthy value as "this turn did not reach a final answer", so
+            // reporting "stop" costs every clean Devin turn its final_answer
+            // phase.
+            stopReason = event.reason === "length" ? "max_tokens" : event.reason === "stop" ? undefined : event.reason;
             continue;
           }
           if (event.kind === "usage") {
@@ -258,17 +295,24 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
           }
         }
         closeOpenTool();
-        if (!incoming.abortSignal?.aborted) {
+        if (incoming.abortSignal?.aborted) {
+          emit({ type: "error", message: "Devin turn was aborted.", ...(usage ? { usage } : {}) });
+        } else {
           emit({ type: "done", ...(usage ? { usage } : {}), ...(stopReason ? { stopReason } : {}) });
         }
       } catch (error) {
         closeOpenTool();
+        if (incoming.abortSignal?.aborted) {
+          emit({ type: "error", message: "Devin turn was aborted.", ...(usage ? { usage } : {}) });
+          return;
+        }
         const message = error instanceof CloudChatError
           ? ("Devin cloud error" + (error.code ? " " + error.code : "") + ": " + error.message)
           : error instanceof Error ? error.message : String(error);
-        emit({ type: "error", message });
+        // Usage that already arrived is still real; dropping it loses the
+        // accounting for a turn that did most of its work before failing.
+        emit({ type: "error", message, ...(usage ? { usage } : {}) });
       }
     },
   };
 }
-

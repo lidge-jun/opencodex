@@ -9,10 +9,27 @@ import { randomUUID } from "node:crypto";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { DEFAULT_REGION, type WindsurfRegion } from "./devin/types";
 import { registerUser } from "./devin/register-user";
+import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./devin/api-base";
+import { getCredential } from "./store";
 
-const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
-const DEFAULT_API_SERVER = "https://server.codeium.com";
-export const DEVIN_DEFAULT_API_SERVER = DEFAULT_API_SERVER;
+export { DEVIN_DEFAULT_API_SERVER } from "./devin/api-base";
+
+/**
+ * The api-server host this account must talk to.
+ *
+ * RegisterUser hands EU and FedStart tenants a host of their own and it is kept
+ * on the credential, so the signed-in account decides the destination. The
+ * configured provider baseUrl is the fallback, and the US default is the last
+ * resort; both are re-validated because neither is trusted more than the
+ * network value.
+ */
+export function resolveDevinApiServer(configuredBaseUrl?: string): string {
+  return (
+    validateDevinApiBaseUrl(getCredential("devin")?.apiBaseUrl) ??
+    validateDevinApiBaseUrl(configuredBaseUrl) ??
+    DEVIN_DEFAULT_API_SERVER
+  );
+}
 
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   const parts = token.split(".");
@@ -34,14 +51,24 @@ function identityFromApiKey(apiKey: string): { accountId?: string; email?: strin
   return { ...(email ? { email } : {}), ...(sub || authUid ? { accountId: sub ?? authUid } : {}) };
 }
 
-function credentialsFromApiKey(apiKey: string, source: OAuthCredentials["source"] = "oauth"): OAuthCredentials {
+function credentialsFromApiKey(
+  apiKey: string,
+  apiBaseUrl: string,
+  source: OAuthCredentials["source"] = "oauth",
+): OAuthCredentials {
   const identity = identityFromApiKey(apiKey);
   return {
     access: apiKey,
-    refresh: "",
-    expires: Date.now() + ONE_YEAR_MS,
+    // Cognition issues a durable key and exposes no refresh endpoint. Carrying
+    // the key here rather than "" is the house pattern for durable-key
+    // providers: an empty refresh makes detectOAuthWarning report
+    // stale_credentials for every Devin account from the moment it logs in.
+    refresh: apiKey,
+    // No expiry to model. A synthetic one-year deadline only produces a
+    // refresh attempt against an endpoint that does not exist.
+    expires: Number.MAX_SAFE_INTEGER,
     source,
-    apiBaseUrl: DEFAULT_API_SERVER,
+    apiBaseUrl,
     ...identity,
   };
 }
@@ -57,6 +84,43 @@ function buildSignInUrl(region: WindsurfRegion): string {
   return region.website + "/windsurf/signin?" + params.toString();
 }
 
+/** Shape of a Firebase / Auth0 ID token: three base64url segments. */
+const JWT_SHAPE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+$/;
+
+const TOKEN_PARAM_NAMES = ["firebase_id_token", "access_token", "id_token", "token"] as const;
+
+/**
+ * Turn whatever the user pasted into the Firebase ID token RegisterUser expects.
+ *
+ * The sign-in page shows a bare token, but a user who copies the address bar
+ * instead hands us a callback URL whose fragment carries it. Posting that URL
+ * as `firebase_id_token` produces an opaque server-side rejection, so pull the
+ * token out and refuse a paste that has none rather than sending something that
+ * cannot work.
+ */
+export function parseDevinAuthPaste(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error("No auth token pasted; cannot complete Devin sign-in.");
+  if (JWT_SHAPE.test(trimmed)) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) {
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      throw new Error("That paste is not a usable Devin auth token or sign-in URL.");
+    }
+    const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+    for (const params of [new URLSearchParams(hash), url.searchParams]) {
+      for (const name of TOKEN_PARAM_NAMES) {
+        const value = params.get(name)?.trim();
+        if (value && JWT_SHAPE.test(value)) return value;
+      }
+    }
+    throw new Error("That sign-in URL carries no auth token. Paste the token shown on the Windsurf page instead.");
+  }
+  throw new Error("That paste is not a Devin auth token. Copy the token shown on the Windsurf sign-in page.");
+}
+
 async function loginDevinBrowser(ctrl: OAuthController, region: WindsurfRegion): Promise<OAuthCredentials> {
   const url = buildSignInUrl(region);
   ctrl.onAuth?.({
@@ -66,12 +130,13 @@ async function loginDevinBrowser(ctrl: OAuthController, region: WindsurfRegion):
   ctrl.onProgress?.("Waiting for the pasted auth token...");
   const pasted = (await ctrl.onManualCodeInput?.())?.trim();
   if (!pasted) throw new Error("No auth token pasted; cannot complete Devin sign-in.");
-  const result = await registerUser(pasted, region);
-  return {
-    ...credentialsFromApiKey(result.apiKey, "oauth"),
-    ...(result.name ? { email: result.name } : {}),
-    apiBaseUrl: result.apiServerUrl || DEFAULT_API_SERVER,
-  };
+  const firebaseIdToken = parseDevinAuthPaste(pasted);
+  const result = await registerUser(firebaseIdToken, region, ctrl.signal);
+  const credentials = credentialsFromApiKey(result.apiKey, resolveDevinApiBaseUrl(result.apiServerUrl), "oauth");
+  // The display name is not an identity. Use it only when the key carried no
+  // email, otherwise reauth compares a label against an address and mismatches.
+  if (!credentials.email && result.name) credentials.email = result.name;
+  return credentials;
 }
 
 export async function loginDevin(ctrl: OAuthController): Promise<OAuthCredentials> {
@@ -81,14 +146,11 @@ export async function loginDevin(ctrl: OAuthController): Promise<OAuthCredential
 export async function refreshDevinToken(
   _refreshToken: string,
   _signal?: AbortSignal,
-  credential?: OAuthCredentials,
+  _credential?: OAuthCredentials,
 ): Promise<OAuthCredentials> {
-  if (credential?.access) {
-    return {
-      ...credential,
-      refresh: credential.refresh ?? "",
-      expires: Math.max(credential.expires, Date.now() + ONE_YEAR_MS),
-    };
-  }
-  throw new Error("Devin API keys do not refresh. Run ocx login devin again.");
+  // Cognition has no refresh endpoint. Extending the stored expiry here is what
+  // the carried implementation did, and it makes a revoked key look valid
+  // forever. Throwing lets the request path mark the account needsReauth the
+  // first time a forced refresh happens.
+  throw new Error("invalid_grant: Devin API keys do not refresh. Run ocx login devin again.");
 }

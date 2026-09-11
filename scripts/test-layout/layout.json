@@ -621,6 +621,7 @@
     "destination-policy-resolved.test.ts": "routing",
     "devin-cli-adapter.test.ts": "providers",
     "devin-adapter.test.ts": "providers",
+    "devin-hardening.test.ts": "providers",
     "digitalocean-scaleway-provider.test.ts": "providers",
     "docs-429-failover-claims.test.ts": "ci-workflows",
     "docs-bun-source-requirement.test.ts": "ci-workflows",

@@ -44,6 +44,7 @@ import * as crypto from 'crypto';
 import { buildMetadata } from './metadata.js';
 import { getCachedUserJwt } from './auth.js';
 import { encodeMessage, iterFields } from './wire.js';
+import { resolveDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
 
 /** 10 minutes — see header. */
 const CATALOG_TTL_MS = 10 * 60 * 1000;
@@ -147,15 +148,17 @@ async function fetchCatalog(apiKey: string, host: string): Promise<CacheEntry> {
 
   let resp: Response;
   try {
-    resp = await fetch(`${host}/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs`, {
+    resp = await fetch(`${resolveDevinApiBaseUrl(host)}/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/proto', 'Connect-Protocol-Version': '1' },
       body: new Uint8Array(reqBody),
+      // This body carries the api_key; a redirect would replay it elsewhere.
+      redirect: 'error',
       signal: ac.signal,
     });
     if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`GetCascadeModelConfigs HTTP ${resp.status}: ${text.slice(0, 200)}`);
+      // Status only: the error body can quote the api_key-bearing request.
+      throw new Error(`GetCascadeModelConfigs failed (HTTP ${resp.status})`);
     }
     // Read the body BEFORE clearing the timeout — fetch resolves on headers,
     // not body completion. A stalled body would otherwise block indefinitely.

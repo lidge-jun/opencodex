@@ -32,7 +32,8 @@ import {
 import { buildMetadata } from './metadata.js';
 import { getCachedUserJwt } from './auth.js';
 import { getCachedCatalog, ModelNotAvailableError } from './catalog.js';
-import { anySignal } from '../../../lib/abort.js';
+import { anySignal, cancelBodyOnAbort } from '../../../lib/abort.js';
+import { resolveDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
 
 /**
  * Connect-RPC streaming inactivity timeout. If the cloud sends zero bytes
@@ -58,6 +59,11 @@ interface SessionIds {
   sessionId: string;
   cascadeId: string;
 }
+/**
+ * Bounded the same way the adapter bounds its cascade-id map: a long-running
+ * proxy sees one entry per (host, api_key) pair, and nothing ever evicted them.
+ */
+const SESSION_CACHE_MAX = 256;
 const sessionCache = new Map<string, SessionIds>();
 function getOrAllocateSessionIds(apiKey: string, host: string, cascadeIdOverride?: string): SessionIds {
   const key = `${host}\x1f${apiKey}`;
@@ -67,6 +73,10 @@ function getOrAllocateSessionIds(apiKey: string, host: string, cascadeIdOverride
       sessionId: crypto.randomUUID(),
       cascadeId: cascadeIdOverride ?? allocateCascadeId(),
     };
+    if (sessionCache.size >= SESSION_CACHE_MAX) {
+      const oldest = sessionCache.keys().next().value;
+      if (oldest !== undefined) sessionCache.delete(oldest);
+    }
     sessionCache.set(key, ids);
   } else if (cascadeIdOverride && ids.cascadeId !== cascadeIdOverride) {
     // Caller explicitly requested a different cascadeId — honor it.
@@ -797,7 +807,10 @@ const TRACE_ID_RE = /\(trace ID: ([0-9a-f]+)\)/i;
  * CloudChatError with the cloud's `code` + `traceId` for diagnostics.
  */
 export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<CloudChatEvent> {
-  const host = (req.apiServerUrl ?? 'https://server.codeium.com').replace(/\/$/, '');
+  // The api-server host comes from RegisterUser through the credential store.
+  // Validate it here too: this request body carries the api_key, so an
+  // unallowlisted host is credential exfiltration rather than a wrong endpoint.
+  const host = resolveDevinApiBaseUrl(req.apiServerUrl);
   const userJwt = await getCachedUserJwt(req.apiKey, host, req.signal);
 
   // Pre-flight: consult the per-account model catalog. Cognition's cloud
@@ -858,7 +871,8 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // built-in is missing. The previous fallback `req.signal ?? ttfbSignal`
   // silently discarded one of the two signals (TTFB if caller passed
   // one), defeating the timeout guard. anySignal() is a real polyfill.
-  const initialSignal: AbortSignal = req.signal ? anySignal([req.signal, ttfbSignal]) : ttfbSignal;
+  const composed = req.signal ? anySignal([req.signal, ttfbSignal]) : undefined;
+  const initialSignal: AbortSignal = composed?.signal ?? ttfbSignal;
 
   let resp: Response;
   try {
@@ -871,19 +885,33 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         'Connect-Accept-Encoding': 'gzip',
       },
       body,
+      redirect: 'error',
       signal: initialSignal,
     });
   } finally {
     clearTimeout(ttfbTimer);
+    // The composed signal only guards the headers hop; the body is cancelled
+    // through cancelBodyOnAbort below. Detaching here keeps a long-lived caller
+    // signal from collecting one listener per turn.
+    composed?.cleanup();
   }
 
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new CloudChatError(`GetChatMessage HTTP ${resp.status}: ${text.slice(0, 300)}`, undefined);
+    // The body is not echoed into the message. This error reaches the adapter's
+    // error event and /api/logs, and a Connect error can quote the request that
+    // produced it - which is the request holding the api_key.
+    throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined);
   }
   if (!resp.body) {
     throw new CloudChatError('GetChatMessage response had no body stream');
   }
+
+  // Cancel the body when the client goes away. Without this the read loop never
+  // observes req.signal after headers arrive: the turn keeps draining until the
+  // idle timer fires, and the stream then ends without an EOS trailer, which
+  // this function would report as a truncated upstream response rather than as
+  // the cancellation it actually was.
+  const detachBodyCancel = cancelBodyOnAbort(resp.body, req.signal);
 
   // Incremental parsing. We previously did `pending = Buffer.concat([pending,
   // chunk])` per chunk — O(n²) over a long stream because every chunk copies
@@ -1017,8 +1045,16 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         let payload = raw;
         if (flags & 0x01) {
           try {
-            payload = zlib.gunzipSync(raw);
+            // MAX_FRAME_LEN caps the COMPRESSED frame, so without an output cap
+            // a 16 MiB gzip frame can still inflate to gigabytes. The inbound
+            // request path (src/server/request-decompress.ts) already bounds
+            // decompression the same way.
+            payload = zlib.gunzipSync(raw, { maxOutputLength: MAX_FRAME_LEN });
           } catch (gzipErr) {
+            const code = (gzipErr as NodeJS.ErrnoException).code;
+            if (code === 'ERR_BUFFER_TOO_LARGE') {
+              throw new CloudChatError(`Connect frame inflates past the ${MAX_FRAME_LEN} byte cap`, 'frame_too_large');
+            }
             // Corrupt compressed frame — surface as a CloudChatError instead
             // of falling through and re-parsing raw gzip bytes as proto
             // (which used to misparse silently downstream).
@@ -1104,6 +1140,12 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // garbage. Previously those leftover bytes were silently discarded and
   // the consumer saw a clean stop with no error — looked like the model
   // had finished. Now we surface it.
+  detachBodyCancel();
+  if (req.signal?.aborted) {
+    // The caller cancelled. The missing EOS trailer is the expected consequence
+    // of that cancellation, not evidence that the cloud dropped the response.
+    return;
+  }
   if (!sawEos) {
     throw new CloudChatError(
       `Cloud stream ended without EOS trailer (${queuedBytes} bytes orphaned). ` +
