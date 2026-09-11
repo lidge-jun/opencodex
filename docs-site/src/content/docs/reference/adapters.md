@@ -422,6 +422,30 @@ bare `exec_command` and `shell_command` names are reserved for non-freeform shel
 bridges. Namespace a custom freeform tool that uses either name. These schema
 declarations do not grant approval or change execution policy.
 
+## `devin-cli`
+
+**Targets:** the locally installed Devin CLI, over the Agent Client Protocol — `devin acp` speaking
+newline-delimited JSON-RPC on stdin and stdout.
+**Auth:** none held by opencodex. The CLI carries its own credentials from `devin auth login`, so
+this provider stores no key and asks for none.
+
+- Uses `runTurn`; a handshake over a child process has no fetch-shaped request for the generic wire
+  path, so `buildRequest` / `parseStream` are disabled.
+- One turn is one ACP session: `initialize`, `session/new`, `session/prompt`, with `session/update`
+  notifications streaming in between and a unary reply carrying the stop reason and usage. The
+  conversation is flattened into the single prompt string a session takes, with role labels fenced
+  so a message body cannot forge one.
+- The CLI's own tool calls stay internal. Devin executes them inside its session, so forwarding
+  them as client tools would either fail the turn — the bridge rejects a tool Codex never declared —
+  or ask Codex to run something the agent already ran.
+- **Permission requests are refused by default.** This provider runs an agent in the operator's own
+  tree, so `session/request_permission` is answered with `cancelled` unless
+  `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1` is set. The child also gets a scoped environment rather than
+  the proxy's, and `OPENCODEX_DEVIN_CLI_CWD` chooses where it runs.
+- Binary discovery prefers `OPENCODEX_DEVIN_CLI_BIN`, then the paths the official installer and the
+  Homebrew cask use, then `PATH`. Install with `curl -fsSL https://cli.devin.ai/install.sh | bash`
+  or `brew install --cask devin-cli`.
+
 ## `azure-openai` (alias: `azure`)
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).

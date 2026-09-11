@@ -1,6 +1,7 @@
 import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
 import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
+import { DEVIN_CLI_DEFAULT_MODEL, DEVIN_CLI_MODELS } from "../adapters/devin-cli/models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
@@ -1275,6 +1276,23 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
     // still advertises image for noVision members so Codex can attach (sidecar option B).
     noVisionModels: [...CURSOR_NO_VISION_MODELS],
+  },
+  {
+    // Drives the locally installed Devin CLI. The CLI owns its own credentials
+    // from `devin auth login`, so this provider takes no key and the proxy never
+    // holds one. Inference happens in the child process, which is why the
+    // destination is a stdio scheme rather than a URL.
+    id: "devin-cli",
+    label: "Devin CLI (local)",
+    adapter: "devin-cli",
+    baseUrl: "devin://acp/stdio",
+    authKind: "local",
+    featured: false,
+    dashboardPreset: false,
+    preserveCustomDestination: true,
+    note: "Drives the locally installed Devin CLI over the Agent Client Protocol (`devin acp`, newline-delimited JSON-RPC on stdio). Requires the CLI on PATH and a completed `devin auth login`; no API key is stored by opencodex. Set OPENCODEX_DEVIN_CLI_BIN to point at a specific build, and OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1 to let the CLI read and write files — the default is to refuse.",
+    models: [...DEVIN_CLI_MODELS],
+    defaultModel: DEVIN_CLI_DEFAULT_MODEL,
   },
   {
     id: "xai",

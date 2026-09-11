@@ -454,6 +454,7 @@
   "desktop-profile.test.ts": "clients",
   "desktop-remote-store.test.ts": "clients",
   "destination-policy-resolved.test.ts": "routing",
+  "devin-cli-adapter.test.ts": "providers",
   "digitalocean-scaleway-provider.test.ts": "providers",
   "docs-429-failover-claims.test.ts": "ci-workflows",
   "docs-bun-source-requirement.test.ts": "ci-workflows",

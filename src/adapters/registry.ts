@@ -6,6 +6,7 @@ import { createCodeBuddyAdapter } from "./codebuddy/adapter";
 import { createQoderAdapter } from "./qoder/adapter";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
+import { createDevinCliAdapter } from "./devin-cli/adapter";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
@@ -30,7 +31,8 @@ export type AdapterWire =
   | "openai-responses"
   | "google"
   | "kiro"
-  | "cursor";
+  | "cursor"
+  | "devin-cli";
 
 export type AdapterMutationContract =
   | "codex-owned"
@@ -111,6 +113,11 @@ export const ADAPTER_REGISTRY = {
     wire: "cursor",
     mutation: "codex-owned-with-gated-native-fallback",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createCursorAdapter(provider),
+  },
+  "devin-cli": {
+    wire: "devin-cli",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createDevinCliAdapter(provider),
   },
   "mimo-free": {
     contractParent: "openai-chat",
