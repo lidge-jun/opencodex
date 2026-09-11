@@ -22,6 +22,11 @@ describe("i18n locale contracts", () => {
     }
   });
 
+  test("Vietnamese locale is registered", () => {
+    expect(LOCALES.some(locale => locale.code === "vi")).toBe(true);
+    expect(DICTS.vi["lang.nativeName"]).toBe("Tiếng Việt");
+  });
+
   test("every locale has a catalog-backed display name", () => {
     for (const { code } of LOCALES) {
       const displayName = DICTS[code]["lang.nativeName"];

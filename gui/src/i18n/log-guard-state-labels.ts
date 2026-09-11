@@ -56,6 +56,11 @@ const LABELS: Record<Locale, StateLabels> = {
     protection: { off: "Kapalı", active: "Etkin", drifted: "Onarım gerekli", unsupported: "Desteklenmiyor", unknown: "Bilinmiyor" },
     mode: { off: "Kapalı", compat: "Uyumluluk", quiet: "Sessiz", collision: "Bilinmiyor" },
   },
+  vi: {
+    schema: { compatible: "Tương thích", missing: "Không tìm thấy cơ sở dữ liệu", unreadable: "Cơ sở dữ liệu không khả dụng", unsupported: "Không được hỗ trợ" },
+    protection: { off: "Tắt", active: "Đang hoạt động", drifted: "Cần sửa chữa", unsupported: "Không được hỗ trợ", unknown: "Không xác định" },
+    mode: { off: "Tắt", compat: "Tương thích", quiet: "Yên tĩnh", collision: "Không xác định" },
+  },
 };
 
 export function logGuardSchemaStateLabel(locale: Locale, state: LogGuardSchemaState): string {
