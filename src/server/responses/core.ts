@@ -46,6 +46,7 @@ import {
   previousResponseProviderState,
   previousResponseReplayFailure,
   previousResponseScopeMismatch,
+  previousResponseReplayPrefixLength,
   rememberResponseState,
 } from "../../responses/state";
 import {
@@ -384,6 +385,14 @@ import {
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
+import { isMultiAgentV2Enabled } from "../../codex/features";
+import {
+  createV2RoutedDelegationSseRewrite,
+  injectV2RoutedDelegationBridge,
+  rewriteV2RoutedDelegationCallsInJson,
+  type V2RoutedDelegationBridgeContext,
+} from "./v2-routed-delegation-bridge";
+import { decideV2RoutedDelegationBridge } from "./v2-routed-delegation-policy";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, storedPoolReplayDispatchNotifier, type ProviderFetchOptions } from "./fetch-helpers";
@@ -3502,6 +3511,7 @@ async function handleResponsesInner(
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   options.onRequestBodyRead?.();
+  let v2RoutedDelegationBridge: V2RoutedDelegationBridgeContext | undefined;
   const responseStateOptions = (force = false): { force?: boolean; clientThreadId?: string } => ({
     ...(force ? { force: true } : {}),
     ...(parsed._clientThreadId ? { clientThreadId: parsed._clientThreadId } : {}),
@@ -3546,6 +3556,7 @@ async function handleResponsesInner(
 
   let route: RouteResult;
   let credentialDomainWasRewritten = false;
+  let shadowIntercepted = false;
   try {
     // A `compaction_trigger` turn may name a bare native model the operator has
     // no canonical OpenAI route for (#2901). Only the initial compaction route
@@ -3567,6 +3578,7 @@ async function handleResponsesInner(
       } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
       const targetRoute = resolveRoute(_sci.model);
       if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute)) {
+        shadowIntercepted = true;
         credentialDomainWasRewritten = true;
         const _sciOriginal = parsed.modelId;
         parsed.modelId = _sci.model;
@@ -3897,6 +3909,51 @@ async function handleResponsesInner(
       "previous_response_not_found",
       "OpenAI forward continuation state is unavailable or expired; resend the full conversation without previous_response_id.",
     );
+  }
+
+  const bridgeDecision = decideV2RoutedDelegationBridge({
+    enabled: config.v2RoutedDelegationBridge === true,
+    inboundWire,
+    multiAgentMode: config.multiAgentMode,
+    upstreamV2Enabled: isMultiAgentV2Enabled(),
+    canonicalNativeRoute: isCanonicalOpenAiForwardProvider(route.provider),
+    hasSubagentMarker: req.headers.has("x-openai-subagent") || (() => {
+      const metadata = req.headers.get("x-codex-turn-metadata");
+      if (!metadata) return false;
+      try {
+        const parsedMetadata = JSON.parse(metadata) as { subagent_kind?: unknown };
+        return typeof parsedMetadata.subagent_kind === "string" && parsedMetadata.subagent_kind.length > 0;
+      } catch {
+        return false;
+      }
+    })(),
+    threadSpawn,
+    comboAttempt: options.comboAttempt === true,
+    compaction: parsed._compactionRequest === true,
+    shadowRoute: shadowIntercepted,
+    collaborationSurface: collabSurface(parsed),
+    body: parsed._rawBody,
+    replayPrefixLength: previousResponseReplayPrefixLength(parsed._rawBody),
+  });
+  if (config.v2RoutedDelegationBridge === true) {
+    Object.assign(logCtx, {
+      v2BridgeDecision: bridgeDecision.decision,
+      ...(bridgeDecision.active ? { v2BridgeScope: bridgeDecision.scope } : {}),
+    });
+  }
+  if (bridgeDecision.active) {
+    try {
+      v2RoutedDelegationBridge = injectV2RoutedDelegationBridge(parsed);
+      if (v2RoutedDelegationBridge) {
+        copyPreviousResponseReplayProvenance(
+          parsed._rawBody,
+          v2RoutedDelegationBridge.requestStateBody,
+        );
+        toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
+      }
+    } catch (error) {
+      return formatErrorResponse(400, "invalid_request_error", error instanceof Error ? error.message : String(error));
+    }
   }
 
   // Captured before normalization: whether the CLIENT asked for SSE. The
@@ -4700,7 +4757,7 @@ async function handleResponsesInner(
       && (!parsed.previousResponseId || parsed._previousResponseInputExpanded === true);
     const rememberPassthroughResponse = passthroughRecordEligible
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
-        rememberResponseState(parsed._rawBody, response, undefined, responseStateOptions(true))
+        rememberResponseState(v2RoutedDelegationBridge?.requestStateBody ?? parsed._rawBody, response, undefined, responseStateOptions(true))
       : undefined;
     if (parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
       console.warn(
@@ -5984,7 +6041,9 @@ async function handleResponsesInner(
       // injection at the block level, after payload rewrites. Defaults come
       // from the finalized OUTBOUND body — the normalized internal tool shapes
       // are not the Responses wire shapes the snapshot must mirror.
+      const bridgeSseRewrite = createV2RoutedDelegationSseRewrite(v2RoutedDelegationBridge);
       const blockRewrites = [
+        bridgeSseRewrite ? payloadRewriteAsBlockRewrite(bridgeSseRewrite) : undefined,
         payloadRewrites.length > 0
           ? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites))
           : undefined,
@@ -6235,8 +6294,12 @@ async function handleResponsesInner(
           restoredNamespace,
           authorizedBareNamespaceToolAliases,
         );
-        const restored = restoreRoutedCustomCallsInJson(
+        const bridgeNormalized = rewriteV2RoutedDelegationCallsInJson(
           restoredAuthorizedBareNamespace,
+          v2RoutedDelegationBridge,
+        );
+        const restored = restoreRoutedCustomCallsInJson(
+          bridgeNormalized,
           routedCustomToolNames,
           routedCustomToolRepairNames,
           declaredWireToolNames,
