@@ -214,20 +214,15 @@ export abstract class OAuthCallbackFlow {
       });
     }
 
+    // End the connection with the response. The preferred callback port is FIXED per provider,
+    // so a later login listens on the same number — but a keep-alive socket stays bound to the
+    // flow that served it, and stopping that listener does not close an already-established
+    // connection. A client reusing it would hand the NEXT login's callback to the RETIRED flow,
+    // which rejects the unknown state as a CSRF mismatch while the live flow keeps waiting.
+    // Nothing here benefits from connection reuse: exactly one callback is expected per flow.
     return new Response(ok ? SUCCESS_HTML : errorHtml(errMessage), {
       status: ok ? 200 : consumeFlow ? 500 : 400,
-      headers: {
-        "Content-Type": "text/html",
-        "Connection": "close",
-        // End the connection with the response. The preferred callback port is FIXED per
-        // provider, so a later login listens on the same number — but a keep-alive socket
-        // stays bound to the flow that served it, and stopping that listener does not close
-        // an already-established connection. A client reusing it would hand the NEXT login's
-        // callback to the RETIRED flow, which rejects the unknown state as a CSRF mismatch
-        // while the live flow keeps waiting. Nothing here benefits from connection reuse:
-        // exactly one callback is expected per flow.
-        
-      },
+      headers: { "Content-Type": "text/html", "Connection": "close" },
     });
   }
 
