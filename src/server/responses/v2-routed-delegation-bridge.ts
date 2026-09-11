@@ -1,9 +1,9 @@
 import type { OcxParsedRequest, OcxTool } from "../../types";
 import type { SsePayloadRewrite } from "../sse-payload-rewrite";
+import { MIRRORABLE_COLLABORATION_OPERATIONS, isRecord } from "./v2-routed-delegation-shared";
 
 const MIRROR_NAMESPACE = "ocx_agents";
 const NATIVE_NAMESPACE = "collaboration";
-const MIRRORED_NAMES = new Set(["spawn_agent", "send_message", "followup_task"]);
 const GUIDANCE = "Use this routed-child mirror for collaboration operations.";
 const MAX_SSE_BINDINGS = 128;
 const injectedGroups = new WeakSet<object>();
@@ -14,10 +14,6 @@ export interface V2RoutedDelegationBridgeContext {
   readonly names: ReadonlySet<string>;
   /** Request snapshot taken before mirror injection, for continuation-cache persistence. */
   readonly requestStateBody: unknown;
-}
-
-function isRecord(value: unknown): value is RecordValue {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function rawToolLists(body: unknown, replayPrefixLength: number): unknown[][] {
@@ -70,7 +66,7 @@ function mirrorTool(tool: RecordValue): RecordValue {
 function mirrorChildren(group: RecordValue): RecordValue[] {
   if (!Array.isArray(group.tools)) return [];
   return group.tools.filter((tool): tool is RecordValue => (
-    isRecord(tool) && tool.type === "function" && typeof tool.name === "string" && MIRRORED_NAMES.has(tool.name)
+    isRecord(tool) && tool.type === "function" && typeof tool.name === "string" && MIRRORABLE_COLLABORATION_OPERATIONS.has(tool.name)
   )).map(mirrorTool);
 }
 
@@ -139,12 +135,14 @@ export function injectV2RoutedDelegationBridge(
   }
   for (const { group } of nativeGroups) {
     if (Array.isArray(group.tools)) group.tools = group.tools.filter(tool => (
-      !isRecord(tool) || typeof tool.name !== "string" || !MIRRORED_NAMES.has(tool.name)
+      !isRecord(tool) || typeof tool.name !== "string" || !MIRRORABLE_COLLABORATION_OPERATIONS.has(tool.name)
     ));
   }
   if (mirrorTools.length > 0) {
     parsed.context.tools = (parsed.context.tools ?? []).filter(tool => (
-      tool.namespace !== NATIVE_NAMESPACE || !MIRRORED_NAMES.has(tool.name)
+      tool.namespace !== NATIVE_NAMESPACE
+      || tool.freeform === true
+      || !MIRRORABLE_COLLABORATION_OPERATIONS.has(tool.name)
     ));
     const present = new Set((parsed.context.tools ?? [])
       .filter(tool => tool.namespace === MIRROR_NAMESPACE)

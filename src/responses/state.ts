@@ -2314,6 +2314,12 @@ export function markBodyNonPersistable(body: unknown): void {
   if (body && typeof body === "object") nonPersistableBodies.add(body as object);
 }
 
+export function copyBodyNonPersistableMarker(source: unknown, target: unknown): void {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return;
+  if (!target || typeof target !== "object" || Array.isArray(target)) return;
+  if (nonPersistableBodies.has(source as object)) nonPersistableBodies.add(target as object);
+}
+
 export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },

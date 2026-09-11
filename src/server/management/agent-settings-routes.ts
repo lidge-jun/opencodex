@@ -384,11 +384,6 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           : "keepNativeChatGptOnV1 is stored but inactive until multi-agent mode is v2. Applies to new sessions.")
         : "ChatGPT-native models follow the selected v1/v2/base surface. Applies to new sessions.");
     }
-    if (wantsV2RoutedDelegationBridge) {
-      if (body.v2RoutedDelegationBridge === false) deleteConfigTopLevelKey(config, "v2RoutedDelegationBridge");
-      else config.v2RoutedDelegationBridge = true;
-      saveConfigPreservingClaudeCode(config);
-    }
     // New-key scalar writes: each writer is individually atomic, so apply them in
     // sequence after the transition. A failure here is a persistence failure (the
     // writers' ok:false result or a throw from the underlying atomic write helper),
@@ -397,6 +392,19 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // asserts this route file contains no direct write primitive, and matches on the
     // symbol name even inside a comment.
     const scalarWrites: Array<{ field: string; run: () => { ok: true; changed: boolean } | { ok: false; error: string } }> = [];
+    if (wantsV2RoutedDelegationBridge) scalarWrites.push({
+      field: "v2RoutedDelegationBridge",
+      run: () => {
+        try {
+          if (body.v2RoutedDelegationBridge === false) deleteConfigTopLevelKey(config, "v2RoutedDelegationBridge");
+          else config.v2RoutedDelegationBridge = true;
+          saveConfigPreservingClaudeCode(config);
+          return { ok: true, changed: true };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    });
     if (wantsAgentsEnabled) scalarWrites.push({ field: "agentsEnabled", run: () => setAgentsEnabled(body.agentsEnabled as boolean | null) });
     if (wantsMaxDepth) scalarWrites.push({ field: "agentsMaxDepth", run: () => setAgentsMaxDepth(body.agentsMaxDepth as number | null) });
     if (wantsSubagentInstructions) scalarWrites.push({ field: "subagentDeveloperInstructions", run: () => setSubagentDeveloperInstructions(body.subagentDeveloperInstructions as string | null) });

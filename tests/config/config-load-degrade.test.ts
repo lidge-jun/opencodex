@@ -139,3 +139,13 @@ test("Fast rows default on for fresh and omitted config; explicit false and malf
     expect(loaded.providers.xai.note).toBe("keep me");
   }
 });
+
+test("V2 routed delegation bridge degrades independently when hand edited", () => {
+  for (const [value, expected] of [[true, true], [false, false], ["invalid", undefined]] as const) {
+    const config = { ...candidate({}), v2RoutedDelegationBridge: value };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+    const loaded = loadConfig();
+    expect(loaded.v2RoutedDelegationBridge).toBe(expected);
+    expect(loaded.providers.xai.note).toBe("keep me");
+  }
+});

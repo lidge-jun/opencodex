@@ -41,6 +41,7 @@ import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/o
 import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
 import {
   copyPreviousResponseReplayProvenance,
+  copyBodyNonPersistableMarker,
   expandPreviousResponseInput,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -516,6 +517,18 @@ function readProviderContinuationOwner(
   const owner = state.__ocxOwner;
   if (!isValidProviderContinuationOwner(owner)) return { kind: "invalid" };
   return { kind: "valid", owner: { ...owner } };
+}
+
+function requestHasSubagentMarker(headers: Headers): boolean {
+  if (headers.has("x-openai-subagent")) return true;
+  const metadata = headers.get("x-codex-turn-metadata");
+  if (!metadata) return false;
+  try {
+    const parsedMetadata = JSON.parse(metadata) as { subagent_kind?: unknown };
+    return typeof parsedMetadata.subagent_kind === "string" && parsedMetadata.subagent_kind.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function providerContinuationPayload(
@@ -3911,22 +3924,14 @@ async function handleResponsesInner(
     );
   }
 
-  const bridgeDecision = decideV2RoutedDelegationBridge({
-    enabled: config.v2RoutedDelegationBridge === true,
+  const bridgeEnabled = config.v2RoutedDelegationBridge === true;
+  const bridgeDecision = bridgeEnabled ? decideV2RoutedDelegationBridge({
+    enabled: true,
     inboundWire,
     multiAgentMode: config.multiAgentMode,
     upstreamV2Enabled: isMultiAgentV2Enabled(),
     canonicalNativeRoute: isCanonicalOpenAiForwardProvider(route.provider),
-    hasSubagentMarker: req.headers.has("x-openai-subagent") || (() => {
-      const metadata = req.headers.get("x-codex-turn-metadata");
-      if (!metadata) return false;
-      try {
-        const parsedMetadata = JSON.parse(metadata) as { subagent_kind?: unknown };
-        return typeof parsedMetadata.subagent_kind === "string" && parsedMetadata.subagent_kind.length > 0;
-      } catch {
-        return false;
-      }
-    })(),
+    hasSubagentMarker: requestHasSubagentMarker(req.headers),
     threadSpawn,
     comboAttempt: options.comboAttempt === true,
     compaction: parsed._compactionRequest === true,
@@ -3934,14 +3939,14 @@ async function handleResponsesInner(
     collaborationSurface: collabSurface(parsed),
     body: parsed._rawBody,
     replayPrefixLength: previousResponseReplayPrefixLength(parsed._rawBody),
-  });
-  if (config.v2RoutedDelegationBridge === true) {
+  }) : undefined;
+  if (bridgeDecision) {
     Object.assign(logCtx, {
       v2BridgeDecision: bridgeDecision.decision,
       ...(bridgeDecision.active ? { v2BridgeScope: bridgeDecision.scope } : {}),
     });
   }
-  if (bridgeDecision.active) {
+  if (bridgeDecision?.active) {
     try {
       v2RoutedDelegationBridge = injectV2RoutedDelegationBridge(parsed);
       if (v2RoutedDelegationBridge) {
@@ -3949,6 +3954,7 @@ async function handleResponsesInner(
           parsed._rawBody,
           v2RoutedDelegationBridge.requestStateBody,
         );
+        copyBodyNonPersistableMarker(parsed._rawBody, v2RoutedDelegationBridge.requestStateBody);
         toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
       }
     } catch (error) {
