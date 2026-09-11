@@ -354,5 +354,30 @@ describe("model-aware failover and pre-dispatch integration", () => {
     const ranked = rankAccountsByHeadroom("google-antigravity", ring, "gemini-3.8-flash");
     expect(ranked).toEqual(ring);
   });
+
+  test("does not misclassify gemma as Gemini (no Gem prefix pollution)", () => {
+    const idGem = "antigravity-gem";
+    const idCla = "antigravity-cla";
+    const ring = [idGem, idCla];
+
+    setCachedProviderAccountQuotaForTests("google-antigravity", idGem, {
+      customWindows: [
+        { label: "Gem", percent: 10 },
+        { label: "Cla", percent: 90 },
+      ],
+      updatedAt: Date.now(),
+    });
+    setCachedProviderAccountQuotaForTests("google-antigravity", idCla, {
+      customWindows: [
+        { label: "Gem", percent: 90 },
+        { label: "Cla", percent: 10 },
+      ],
+      updatedAt: Date.now(),
+    });
+
+    // When requestedModelId is gemma, it should return undefined family and compare all windows (Math.max of 10 and 90 = 90 for both)
+    const ranked = rankAccountsByHeadroom("google-antigravity", ring, "gemma-2-9b-it");
+    expect(ranked).toEqual(ring);
+  });
 });
 

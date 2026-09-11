@@ -50,9 +50,9 @@ const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
  * Returns "Gem" for Gemini models, "Cla" for Claude/Opus/Sonnet, or undefined
  * for unknown models (which falls back to all-window ranking).
  */
-function classifyModelFamilyForQuota(modelId: string): string | undefined {
+function classifyModelFamilyForQuota(modelId: string): "Gem" | "Cla" | undefined {
   const lower = modelId.toLowerCase();
-  if (lower.includes("gemini") || lower.startsWith("gem")) return "Gem";
+  if (lower.includes("gemini") || lower === "gemini" || lower.startsWith("gemini-")) return "Gem";
   if (lower.includes("claude") || lower.includes("opus") || lower.includes("sonnet") || lower.includes("gpt-oss") || lower.includes("gpt_oss")) return "Cla";
   return undefined;
 }
