@@ -97,6 +97,7 @@ ocx login kiro         # 匯入 kiro-cli credential（或 token fallback）
 ocx login google-antigravity
 ocx login cursor       # 獨立 Cursor PKCE 登入
 ocx login command-code # Command Code browser OAuth（或匯入 ~/.commandcode/auth.json）
+ocx login devin       # Cognition/Devin 的 Auth0 瀏覽器登入
 ocx login github-copilot  # GitHub device flow → Copilot token（Copilot Pro/Business）
 ocx login codex        # Codex 帳號池（別名：chatgpt、openai；需要 proxy 正在執行）
 ocx logout <provider>
@@ -111,6 +112,7 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
+| `devin` | `devin` | `https://server.codeium.com` | **對話未經驗證。在實測的免費帳號上，登入與模型清單都能成功，但每次 `GetChatMessage` 都回傳不透明的 `invalid_argument`，一輪對話無法完成。付費帳號尚未測試。需要能跑完一輪的 Devin 路徑請使用 `devin-cli`。** 實驗性的非官方 Cognition/Devin 橋接。登入會開啟 Auth0 瀏覽器頁面，再以 `RegisterUser` 將權杖換成長期 API 金鑰。模型清單依帳號透過 `GetCascadeModelConfigs` 即時取得，串流僅走 Connect-RPC 上的 `runTurn` 路徑。預設不在儀表板預設集內，需手動啟用。 |
 | `devin-cli` | `devin-cli` | `https://cli.devin.ai` | 透過 Agent Client Protocol（`devin acp`，stdio 上的 JSON-RPC）驅動本機安裝的 Devin CLI。憑證由 CLI 以 `devin auth login` 自行保管，opencodex 不會儲存金鑰。可用 `OPENCODEX_DEVIN_CLI_BIN` 指定執行檔；要允許 CLI 讀寫檔案，必須明確設定 `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1`，預設為拒絕。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 

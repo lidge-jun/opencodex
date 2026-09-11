@@ -235,6 +235,16 @@ authorization.
   одобрений/песочницы Codex; устаревший `unsafeAllowNativeLocalExec: true` эквивалентен только
   если `nativeLocalExec` не задан.
 
+## `devin`
+
+**Назначение:** `exa.api_server_pb.ApiServerService/GetChatMessage` в Cognition, потоковая передача Connect на `server.codeium.com`.
+**Аутентификация:** ключ API Devin/Cognition из `provider.apiKey` или переданного заголовка authorization. Вход открывает страницу Auth0 в браузере, после чего токен обменивается через `SeatManagementService.RegisterUser` на долгоживущий ключ.
+
+- Используется `runTurn`, а не обычный путь fetch/parse. Запросы и серверные события кодируются вручную в `devin/cloud-direct/wire.ts`.
+- Модели запрашиваются для каждой учётной записи через `GetCascadeModelConfigs`; отсутствующие в тарифе отсеиваются в списке, а не падают в момент запроса.
+- Cognition ограничивает длину описаний инструментов и блокирует точные фразы. Адаптер переписывает известные формулировки и обрезает слишком длинные описания.
+- Ключи не обновляются. После истечения или отзыва выполните `ocx login devin` заново.
+
 ## `azure-openai` (алиас: `azure`)
 
 **Назначение:** **Azure OpenAI**. Обёртка над `openai-responses` (поэтому тоже
