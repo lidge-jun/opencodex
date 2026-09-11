@@ -110,6 +110,36 @@ describe("Responses V2 routed delegation bridge runtime", () => {
     }
   });
 
+  test("replays JSON continuation state with the restored collaboration namespace", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requests.push(body);
+      return Response.json({
+        id: requests.length === 1 ? "resp_bridge_json_replay" : "resp_bridge_json_followup",
+        status: "completed",
+        output: requests.length === 1 ? [{
+          type: "function_call", id: "fc_bridge_json_replay", call_id: "call_bridge_json_replay",
+          namespace: "ocx_agents", name: "spawn_agent", arguments: "{\"task\":\"continue\"}",
+        }] : [],
+      });
+    }) as typeof fetch;
+    try {
+      await handleResponses(request(rootBody()), config(), { model: "", provider: "" });
+      const followup = await handleResponses(request(rootBody({
+        previous_response_id: "resp_bridge_json_replay",
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "follow up" }] }],
+      })), config(), { model: "", provider: "" });
+
+      expect(followup.status).toBe(200);
+      expect(JSON.stringify(requests[1]?.input)).toContain('"namespace":"collaboration"');
+      expect(JSON.stringify(requests[1]?.input)).not.toContain('"namespace":"ocx_agents"');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("uses the same JSON normalization for the canonical websocket path", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({ id: "resp_ws", status: "completed", output: [{
@@ -467,6 +497,45 @@ describe("Responses V2 routed delegation bridge runtime", () => {
         expect(text).toContain('"encrypted_function_args":[]');
         expect(text).not.toContain('"namespace":"ocx_agents"');
       }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("replays SSE continuation state with the restored collaboration namespace", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requests.push(body);
+      if (requests.length === 1) {
+        return new Response([
+          `data: ${JSON.stringify({ type: "response.output_item.added", item: {
+            type: "function_call", id: "fc_bridge_sse_replay", call_id: "call_bridge_sse_replay",
+            namespace: "ocx_agents", name: "spawn_agent", arguments: "{}",
+          } })}\n\n`,
+          `data: ${JSON.stringify({ type: "response.completed", response: {
+            id: "resp_bridge_sse_replay", status: "completed", output: [{
+              type: "function_call", id: "fc_bridge_sse_replay", call_id: "call_bridge_sse_replay",
+              namespace: "ocx_agents", name: "spawn_agent", arguments: "{}",
+            }],
+          } })}\n\n`,
+        ].join(""), { headers: { "content-type": "text/event-stream" } });
+      }
+      return Response.json({ id: "resp_bridge_sse_followup", status: "completed", output: [] });
+    }) as typeof fetch;
+    try {
+      const streamed = await handleResponses(request(rootBody({ stream: true })), config(), { model: "", provider: "" });
+      expect(streamed.status).toBe(200);
+      await streamed.text();
+      const followup = await handleResponses(request(rootBody({
+        previous_response_id: "resp_bridge_sse_replay",
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "follow up" }] }],
+      })), config(), { model: "", provider: "" });
+
+      expect(followup.status).toBe(200);
+      expect(JSON.stringify(requests[1]?.input)).toContain('"namespace":"collaboration"');
+      expect(JSON.stringify(requests[1]?.input)).not.toContain('"namespace":"ocx_agents"');
     } finally {
       globalThis.fetch = originalFetch;
     }

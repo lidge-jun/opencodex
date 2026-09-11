@@ -135,7 +135,10 @@ export function injectV2RoutedDelegationBridge(
   }
   for (const { group } of nativeGroups) {
     if (Array.isArray(group.tools)) group.tools = group.tools.filter(tool => (
-      !isRecord(tool) || typeof tool.name !== "string" || !MIRRORABLE_COLLABORATION_OPERATIONS.has(tool.name)
+      !isRecord(tool)
+      || tool.type !== "function"
+      || typeof tool.name !== "string"
+      || !MIRRORABLE_COLLABORATION_OPERATIONS.has(tool.name)
     ));
   }
   if (mirrorTools.length > 0) {

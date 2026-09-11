@@ -5031,8 +5031,15 @@ async function handleResponsesInner(
       response: { id?: unknown; output?: unknown; status?: unknown; model?: unknown },
     ) => {
       if (inspectionSawUndeclaredTool) return;
+      const namespaceRestored = restoreRoutedNamespaceCalls(response, routedNamespaceToolAliases).value;
+      const bridgeRestored = v2RoutedDelegationBridge
+        ? JSON.parse(rewriteV2RoutedDelegationCallsInJson(
+          JSON.stringify(namespaceRestored),
+          v2RoutedDelegationBridge,
+        )) as typeof response
+        : namespaceRestored;
       const restored = restoreRoutedCustomCalls(
-        restoreAuthorizedBareNamespaceToolCalls(restoreRoutedNamespaceCalls(response, routedNamespaceToolAliases).value),
+        restoreAuthorizedBareNamespaceToolCalls(bridgeRestored),
         routedCustomToolNames,
         routedCustomToolRepairNames,
         declaredWireToolNames,
