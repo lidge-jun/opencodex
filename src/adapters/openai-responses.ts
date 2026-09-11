@@ -866,6 +866,21 @@ function promoteClientLoadedTools(body: unknown): unknown {
 }
 
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
+
+/**
+ * Whether the outgoing body still delivers tools through the responses-lite shape.
+ *
+ * Lite carries the client catalog as an `additional_tools` input item; the non-Lite wire shape
+ * expects top-level `tools`. Anything that flips the Lite advertisement has to agree with the
+ * shape actually being sent, or the destination silently loses the tool surface.
+ */
+function bodyCarriesLiteToolShape(body: Record<string, unknown>): boolean {
+  if (!Array.isArray(body.input)) return false;
+  return body.input.some(item =>
+    isPlainObject(item) && item.type === "additional_tools"
+    && Array.isArray(item.tools) && item.tools.length > 0
+  );
+}
 const REPAIRED_CALL_ID_PREFIX = "call_ocx_";
 const REPAIRED_CALL_ID_DIGEST_LENGTH = MAX_RESPONSES_CALL_ID_LENGTH - REPAIRED_CALL_ID_PREFIX.length;
 
@@ -2528,7 +2543,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (isCanonicalOpenAiForwardProvider(provider)) {
         // Select Spark's Lite compatibility from the final wire model, including aliases.
         // Explicit false also overrides native WS metadata; deleting the header leaves it enabled.
-        if (isPlainObject(finalBody) && finalBody.model === "gpt-5.3-codex-spark") {
+        //
+        // Only turns that do NOT carry the Lite tool shape may be downgraded. The synchronized
+        // catalog keeps `use_responses_lite: true` for Spark precisely because it selects tool
+        // delivery (`input[].additional_tools` instead of top-level `tools`), and
+        // stripSparkCompatibility filters that group in place rather than promoting it. Advertising
+        // non-Lite while the body still carries `additional_tools` would leave Spark unable to see
+        // the client tools, so the Lite stream fix stays scoped to tool-less turns.
+        if (isPlainObject(finalBody) && finalBody.model === "gpt-5.3-codex-spark"
+          && !bodyCarriesLiteToolShape(finalBody)) {
           for (const name of Object.keys(headers)) {
             if (name.toLowerCase() === CODEX_RESPONSES_LITE_HEADER) delete headers[name];
           }
