@@ -1,8 +1,8 @@
 # Rules for `structure/`
 
 This file applies to `structure/` and inherits the repository-wide rules in [`AGENTS.md`](../AGENTS.md).
-[`INDEX.md`](INDEX.md) is the reading order and the source-ownership table; it is generated, so it is
-never the thing you edit to record a decision.
+[`INDEX.md`](INDEX.md) is the reading order and the source-to-doc map; it is generated from
+[`manifest.json`](manifest.json), so it is never the file you edit to record something.
 
 ## What belongs here
 
@@ -20,31 +20,39 @@ structure doc.
 
 ## Layout rules
 
-- File names are kebab-case and at most one directory deep: `providers/google.md`, not
-  `providers/google/wire.md` and not `04_transports.md`.
-- **Ordering lives in `manifest.json`, never in a filename.** Numeric prefixes are banned. The old
-  `NN_topic.md` scheme produced two `09_` files and made splitting a doc cost a renumber, which is
-  how one file reached 1,860 lines.
-- A doc stays under the line budget in `manifest.json` (600). Over budget, split it along a topic
-  boundary and give each half its own manifest entry. A grace entry in `grace.oversizeDocs` is for a
-  split already planned, not for a doc you would rather not split.
-- Every path you name in backticks must exist. A path that is deliberately absent goes in
-  `absentPaths` and the gate then fails if somebody re-creates it.
+- File names are kebab-case, start with a letter, and sit at most one directory deep:
+  `providers/google.md`, not `providers/google/wire.md`, and not `04_transports.md` or `04-transports.md`.
+- **Ordering lives in `manifest.json`, never in a filename.** Leading digits are rejected outright.
+  The old `NN_topic.md` scheme produced two `09_` files and made splitting a doc cost a renumber, which
+  is how `04_transports-and-sidecars.md` reached 1,860 lines before this folder was reorganised.
+- A doc stays under the line budget in `manifest.json`. Over budget, split it along a topic boundary
+  and give each half its own manifest entry. A `grace.oversizeDocs` entry is for a split already
+  planned; the gate drops it again once the doc is back under budget.
+- Know what the budget does and does not do: it is a line count, so a doc written as a wide table can
+  carry far more prose per line than one written as paragraphs. It bounds the runaway-file failure,
+  not density.
 
-## Ownership and the sync obligation
+## The source-to-doc map
 
-Every source area has exactly one owning doc, declared in `manifest.json` and published in
-[`INDEX.md`](INDEX.md).
+Each doc lists the source areas it describes, in its `documents` array. [`INDEX.md`](INDEX.md) publishes
+the inverse.
 
-- **Changing an owned area obliges the same change to update its doc.** Not a follow-up, not a
-  cleanup pass later — the same change.
-- Two docs may not claim the same area. If a change does not fit under one owner, the boundary is
-  wrong; move the section, do not describe the behavior twice.
-- A new `src/<area>/` either joins a doc's `owns` list or is recorded in
-  `grace.unownedSourceAreas` with a reason. The gate rejects a new area that is neither.
+- **An area can be described by more than one doc, and usually is.** These docs are organised by
+  topic; `src/` is organised by module. `src/server/` is genuinely described by the management-API doc,
+  the Responses transport doc and the Images doc. An earlier revision of this folder demanded exactly
+  one owner per area, and that rule was simply false here — a false rule is worse than none, because
+  the gate reports green while the map sends a maintainer to the wrong doc.
+- **Changing an area obliges the same change to update every doc listed for it.** Not a follow-up,
+  not a later cleanup pass.
+- Describing an area means naming a path inside it. If a doc explains a subsystem without ever citing
+  a path, the map cannot see it, and the area lands in `grace.undocumentedSourceAreas` instead — which
+  is a signal to add the path reference, not a place to park work.
+- A new `src/<area>/` or top-level `src/*.ts` either joins a doc's `documents` list or is recorded in
+  `grace.undocumentedSourceAreas` with a reason. The gate rejects one that is neither.
 
-Duplication is the failure mode this folder is built against: two true-looking paragraphs that
-disagree cost more than one missing paragraph.
+What the map still does not do: it cannot tell you that two docs describe the same behavior in
+contradictory words. Avoiding that is a review judgement. Prefer one statement and a link over two
+statements that will drift apart.
 
 ## Decision records
 
@@ -52,22 +60,35 @@ disagree cost more than one missing paragraph.
 choice, why, and consequences.
 
 - One record has exactly one owning doc, which links it with a `> Decision record:` line.
-- Numbers are permanent and contiguous. A superseded record stays; it does not get deleted or
-  renumbered.
+- Numbers are permanent and unique. They are deliberately **not** required to be contiguous: two
+  branches that each add a record would otherwise both take the next number and collide on merge.
 - Records are historical. When the contract changes, edit the doc body and add a new record; do not
-  rewrite an old one to match.
+  rewrite an old one to match. For the same reason the gate does not validate the repository paths a
+  record names — a record describes a past tree, and holding it against the present one would force
+  you to falsify it.
+- Records extracted during the 2026-09-11 reorganisation are titled after the doc section they were
+  taken from, which is where they belonged, not necessarily what they decided. Read the body.
 
 ## Invariants
 
-[`overview.md`](overview.md) is the only place an invariant is declared. Each entry needs a stable
-`INV-<AREA>-NN` id and an `Enforced by` line naming one test path, and that test file must name the
-id back in a comment. Both directions are checked, so renaming or splitting the test without moving
-the marker fails the gate rather than quietly unbinding the invariant.
+[`overview.md`](overview.md) is the invariant index. Each entry needs a stable `INV-<AREA>-NN` id, and a
+bound entry adds an `Enforced by` line naming exactly one `tests/**.test.ts` path, with that id repeated
+in a comment inside the test.
+
+Be precise about the strength of that binding, because it is easy to overstate:
+
+- It proves the test file exists and claims the id. Deleting or renaming the file fails the gate.
+- It does **not** prove the assertions inside still cover the rule. Moving the assertions to another
+  file while leaving the comment behind passes. Only review catches that.
+
+An invariant with no honest test goes in the index **without** an `Enforced by` line and with an entry
+in `grace.unboundInvariants` explaining why. Naming a test that would pass while the rule was
+violated is worse than admitting the gap: it converts an open question into false assurance.
 
 ## Adding or changing a doc
 
 1. Write or move the file.
-2. Add or update its `manifest.json` entry: `path`, `tier`, `title`, `scope`, `owns`.
+2. Add or update its `manifest.json` entry: `path`, `tier`, `title`, `scope`, `documents`.
 3. `bun run structure:index` to regenerate [`INDEX.md`](INDEX.md).
 4. `bun run structure:check` until it is green.
 
@@ -77,11 +98,19 @@ the marker fails the gate rather than quietly unbinding the invariant.
 verifies that:
 
 - every doc on disk is in the manifest and every manifest doc exists, exactly once;
-- file names are kebab-case, at most one directory deep, and free of numeric prefixes;
-- no doc exceeds the line budget without a grace entry;
-- every relative link resolves and every backticked repository path exists;
-- no `[Decision Log]` block is left inline in a doc body;
-- every decision record is linked from exactly one doc, and numbering has no holes;
-- every invariant names an existing test, and that test names the invariant;
-- no two docs claim the same source area, and no `src/` area is silently unowned;
+- file names are kebab-case, letter-initial, and at most one directory deep;
+- no doc exceeds the line budget, and no grace entry outlives the split it promised;
+- every relative link resolves, including its `#anchor`;
+- every backticked repository path a doc names is real, checked against the **git index** rather than
+  the filesystem — `existsSync` cannot tell a tracked file from untracked local leftovers, and it is
+  case-insensitive on Windows and case-sensitive on Linux CI, which would make the gate mean
+  something different on each machine;
+- no doc body carries inline decision-log reasoning;
+- every decision record is linked from exactly one doc, and no number is reused;
+- every bound invariant names an existing test that names the id back, and every unbound one is
+  recorded with a reason;
+- every `src/` directory and top-level module is described by a doc or recorded as undescribed;
 - `INDEX.md` matches the manifest byte for byte.
+
+Checks are scanned with fenced code blocks removed, so an example inside a fence does not trip a rule
+it is only illustrating.

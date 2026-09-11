@@ -67,33 +67,39 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 
 ## Non-negotiable invariants
 
-Each invariant carries a stable id and names the test that holds it. The binding is checked from
-both sides: `bun run structure:check` fails when the named test is missing, and when that test file
-does not name the id back. An invariant nobody enforces is a wish, not an invariant.
+Each invariant carries a stable id. A bound invariant names one test, and that test names the id
+back, so deleting or renaming the test fails `bun run structure:check` instead of quietly unbinding the
+rule. The binding proves the test EXISTS and is claimed; it does not prove the assertions inside it
+still cover the rule, which is a judgement only review makes.
 
 - **INV-WS-01** — `websockets` defaults to `false`; only `true` advertises `supports_websockets`.
   Enforced by `tests/codex-integration/codex-catalog.test.ts`.
-- **INV-HOME-01** — `CODEX_HOME` wins over `~/.codex` when present and valid.
-  Enforced by `tests/codex-integration/codex-home-wsl.test.ts`.
 - **INV-TOML-01** — Root TOML keys such as `model_provider` and `model_catalog_json` must stay
   before any table.
   Enforced by `tests/codex-integration/codex-inject.test.ts`.
-- **INV-SLUG-01** — Routed model slugs use `provider/model`.
-  Enforced by `tests/routing/policy-execution.test.ts`.
 - **INV-OPENAI-01** — OpenAI has one `openai` Codex-login provider with Pool(default)/Direct modes
   and a separate `openai-apikey`; see [`openai-tiers.md`](providers/openai-tiers.md).
   Enforced by `tests/adapters/openai/openai-provider-option.test.ts`.
 - **INV-AGENT-01** — Codex `spawn_agent` visibility depends on the first five featured catalog
   entries.
-  Enforced by `tests/codex-integration/codex-catalog-model-picker-order.test.ts`.
+  Enforced by `tests/codex-integration/catalog-full-picker-order.test.ts`.
 - **INV-AUTH-01** — The management plane (`/api/*`) and the data plane (`/v1/*`) never share an
   admission credential.
-  Enforced by `tests/server/server-auth.test.ts`.
-- **INV-RESTORE-01** — `ocx stop`, `ocx restore`, and service stop/uninstall must leave native
-  Codex usable.
+  Enforced by `tests/server/server-management-auth.test.ts`.
+- **INV-RESTORE-01** — `ocx restore` returns the pristine Codex catalog, so a restored install is a
+  usable native Codex. The service-stop and uninstall paths of the same promise are covered
+  separately in `tests/cli/restore-completes-shared-teardown.test.ts` and are not bound to this id.
   Enforced by `tests/codex-integration/codex-catalog-restore.test.ts`.
 - **INV-TESTS-01** — `tests/` is organised by domain (`tests/<domain>/`, mirroring `src/`); the map
   is `scripts/test-layout/layout.json` and `tests/test-layout.test.ts` rejects a test outside its
   domain. Only the two layout guards sit at the root. Source-oracle tests reach the repository
   through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`.
   Enforced by `tests/test-layout.test.ts`.
+
+Two invariants are stated here without a binding, and `grace.unboundInvariants` in
+[`manifest.json`](manifest.json) carries the reason for each. They are true statements about the system;
+no test in this repository currently pins them, and saying so is more useful than naming a test that
+would pass while the rule was violated.
+
+- **INV-HOME-01** — `CODEX_HOME` wins over `~/.codex` when present and valid.
+- **INV-SLUG-01** — Routed model slugs use `provider/model`.
