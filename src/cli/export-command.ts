@@ -58,12 +58,8 @@ export interface ExportCommandDeps extends RuntimeApiDeps {
   configImpl?: () => OcxConfig;
 }
 
-/**
- * `/api/models` row plus the modality list Pi consumes. The launcher's row type predates
- * the Pi exporter and stops at the fields OpenCode needs.
- */
+/** `/api/models` row as every client exporter reads it. */
 type ExportProxyModelRow = OpencodeProxyModelRow & {
-  inputModalities?: string[];
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
 };
@@ -76,22 +72,13 @@ type ExportProxyModelRow = OpencodeProxyModelRow & {
  * here is the only thing keeping a disabled model out of a client's picker. It also carries
  * the effort ladder, so the ladder a client receives comes from the same filtered, deduped
  * row as the model itself: a second lookup over the raw rows would let a hidden or disabled
- * duplicate donate its ladder to the visible entry.
- *
- * Only modalities are re-joined by `namespaced`, because the catalog type does not carry them.
+ * duplicate donate its ladder to the visible entry. Input modalities ride the same row since
+ * the OpenCode serializer reads them too (#4286).
  */
 export function exportModelsFromProxyRows(
   rows: readonly ExportProxyModelRow[],
   config: OcxConfig,
 ): ExportModel[] {
-  const modalities = new Map<string, string[]>();
-  for (const row of rows) {
-    const namespaced = row.namespaced?.trim();
-    if (!namespaced || modalities.has(namespaced)) continue;
-    if (Array.isArray(row.inputModalities) && row.inputModalities.length > 0) {
-      modalities.set(namespaced, [...row.inputModalities]);
-    }
-  }
   return opencodeCatalogFromProxyRows(rows, config).map(entry => {
     const model: ExportModel = {
       namespaced: entry.namespaced,
@@ -106,8 +93,9 @@ export function exportModelsFromProxyRows(
       model.reasoningEfforts = [...entry.reasoningEfforts];
     }
     if (entry.defaultReasoningEffort) model.defaultReasoningEffort = entry.defaultReasoningEffort;
-    const input = modalities.get(entry.namespaced);
-    if (input) model.inputModalities = [...input];
+    if (entry.inputModalities && entry.inputModalities.length > 0) {
+      model.inputModalities = [...entry.inputModalities];
+    }
     return model;
   });
 }

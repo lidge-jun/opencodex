@@ -38,6 +38,12 @@ export interface OpencodeCatalogModel {
   id?: string;
   contextWindow?: number;
   displayName?: string;
+  /**
+   * Declared input modalities, verbatim from the catalog. The opencode serializer turns
+   * them into `attachment` / `modalities`; a model with nothing declared stays capability-
+   * free so the client keeps its own default instead of a guessed one.
+   */
+  inputModalities?: readonly string[];
   /** Declared effort ladder. Exported as opencode model variants where the client reads them. */
   reasoningEfforts?: readonly string[];
   /**

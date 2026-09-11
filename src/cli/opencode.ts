@@ -82,6 +82,8 @@ export interface OpencodeRoutedModel {
   contextWindow?: number;
   /** Authoritative display label (CatalogModel.displayName); optional. */
   displayName?: string;
+  /** Declared input modalities; exported as opencode capability fields when present. */
+  inputModalities?: readonly string[];
   /** Declared effort ladder; exported as opencode model variants when present. */
   reasoningEfforts?: readonly string[];
 }
@@ -98,6 +100,8 @@ export interface OpencodeProxyModelRow {
   displayName?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
   contextWindow?: number;
+  /** Declared input modalities from `/api/models`; carried into opencode capability fields. */
+  inputModalities?: string[];
   /** Declared effort ladder from `/api/models`; carried into opencode model variants. */
   reasoningEfforts?: string[];
   /** Declared default effort from `/api/models`. */
@@ -234,6 +238,9 @@ function opencodeLaunchCatalog(
       id: model.id,
       contextWindow: model.contextWindow,
       displayName: model.displayName,
+      ...(model.inputModalities && model.inputModalities.length > 0
+        ? { inputModalities: [...model.inputModalities] }
+        : {}),
       ...(model.reasoningEfforts && model.reasoningEfforts.length > 0
         ? { reasoningEfforts: [...model.reasoningEfforts] }
         : {}),
@@ -397,6 +404,9 @@ export function opencodeCatalogFromProxyRows(
       contextWindow: row.contextWindow,
       displayName: row.displayNameSource === "fallback" ? undefined : row.displayName,
       ...(typeof row.fastRowAvailable === "boolean" ? { fastRowAvailable: row.fastRowAvailable } : {}),
+      ...(Array.isArray(row.inputModalities) && row.inputModalities.length > 0
+        ? { inputModalities: [...row.inputModalities] }
+        : {}),
       ...(Array.isArray(row.reasoningEfforts) && row.reasoningEfforts.length > 0
         ? { reasoningEfforts: [...row.reasoningEfforts] }
         : {}),

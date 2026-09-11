@@ -142,6 +142,57 @@ describe("ocx opencode provider block", () => {
     expect(block.models["kiro/qwen3-coder-next"]?.name).toBe("qwen3-coder-next (kiro)");
   });
 
+  test("declared input modalities become opencode attachment and modalities fields (#4286)", () => {
+    const blocks = buildOpencodeProviderBlocksFromCatalog(10100, [
+      { namespaced: "kiro/vision", provider: "kiro", id: "vision", inputModalities: ["text", "image"] },
+      { namespaced: "kiro/text-only", provider: "kiro", id: "text-only", inputModalities: ["text"] },
+      { namespaced: "kiro/audio-only", provider: "kiro", id: "audio-only", inputModalities: ["audio"] },
+      { namespaced: "kiro/odd", provider: "kiro", id: "odd", inputModalities: ["telepathy"] },
+      { namespaced: "kiro/undeclared", provider: "kiro", id: "undeclared" },
+    ]);
+    for (const block of [blocks.v1, blocks.v2]) {
+      // Image-capable rows advertise attachments; opencode otherwise defaults the unknown
+      // `opencodex` provider to text-only and blocks images before any request is sent.
+      expect(block.models["kiro/vision"]?.attachment).toBe(true);
+      expect(block.models["kiro/vision"]?.modalities).toEqual({ input: ["text", "image"], output: ["text"] });
+      expect(block.models["kiro/text-only"]?.attachment).toBe(false);
+      expect(block.models["kiro/text-only"]?.modalities).toEqual({ input: ["text"], output: ["text"] });
+      // Modalities opencode's schema knows are carried verbatim, even without text.
+      expect(block.models["kiro/audio-only"]?.attachment).toBe(true);
+      expect(block.models["kiro/audio-only"]?.modalities).toEqual({ input: ["audio"], output: ["text"] });
+      // Only unknown values declared: text is the honest floor, no attachment.
+      expect(block.models["kiro/odd"]?.attachment).toBe(false);
+      expect(block.models["kiro/odd"]?.modalities).toEqual({ input: ["text"], output: ["text"] });
+      // Nothing declared: no capability fields, the client keeps its own default.
+      expect(block.models["kiro/undeclared"]).toEqual({ name: "undeclared (kiro)" });
+    }
+    // The two blocks own separate modality objects.
+    blocks.v1.models["kiro/vision"]!.modalities!.input.push("mutated");
+    expect(blocks.v2.models["kiro/vision"]?.modalities?.input).toEqual(["text", "image"]);
+  });
+
+  test("hand-assembled routed models carry inputModalities into the launch block", () => {
+    const block = buildOpencodeProviderBlock(10100, [], [
+      { provider: "kiro", id: "vision", inputModalities: ["text", "image"] },
+      { provider: "kiro", id: "plain" },
+    ]);
+    expect(block.models["kiro/vision"]?.attachment).toBe(true);
+    expect(block.models["kiro/vision"]?.modalities).toEqual({ input: ["text", "image"], output: ["text"] });
+    expect(block.models["kiro/plain"]?.attachment).toBeUndefined();
+  });
+
+  test("opencodeCatalogFromProxyRows carries inputModalities from /api/models rows", () => {
+    const config = cfg();
+    const catalog = opencodeCatalogFromProxyRows([
+      { namespaced: "kiro/vision", provider: "kiro", id: "vision", inputModalities: ["text", "image"] },
+      { namespaced: "kiro/plain", provider: "kiro", id: "plain", inputModalities: [] },
+      { namespaced: "kiro/none", provider: "kiro", id: "none" },
+    ], config);
+    expect(catalog.find(m => m.namespaced === "kiro/vision")?.inputModalities).toEqual(["text", "image"]);
+    expect(catalog.find(m => m.namespaced === "kiro/plain")?.inputModalities).toBeUndefined();
+    expect(catalog.find(m => m.namespaced === "kiro/none")?.inputModalities).toBeUndefined();
+  });
+
   test("duplicate keys keep the first entry instead of throwing", () => {
     const block = buildOpencodeProviderBlock(10100, [], [
       { provider: "kiro", id: "dup", displayName: "First" },

@@ -54,6 +54,33 @@ import { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } 
 export interface OpencodeModelEntry {
   name: string;
   limit?: { context: number; output: number };
+  /** opencode `attachment`: the client allows file/image attachments for this model. */
+  attachment?: boolean;
+  /** opencode `modalities`: declared input kinds; output is always text through the proxy. */
+  modalities?: { input: string[]; output: string[] };
+}
+
+/**
+ * Input modalities opencode's config schema accepts. `attachment` and
+ * `modalities.input` are read from the provider block; with the `opencodex` provider
+ * id absent from models.dev the client otherwise defaults both to "no", which blocks
+ * image attachments before a request reaches the proxy (#4286).
+ */
+const OPENCODE_INPUT_MODALITIES: ReadonlySet<string> = new Set(["text", "audio", "image", "video", "pdf"]);
+
+/** Capability fields for a model that declares its input modalities; nothing for one that does not. */
+function opencodeCapabilityFields(model: OpencodeCatalogModel): Pick<OpencodeModelEntry, "attachment" | "modalities"> {
+  const declared = model.inputModalities ?? [];
+  if (declared.length === 0) return {};
+  const input: string[] = [];
+  for (const value of declared) {
+    if (OPENCODE_INPUT_MODALITIES.has(value) && !input.includes(value)) input.push(value);
+  }
+  if (input.length === 0) input.push("text");
+  return {
+    attachment: input.some((value) => value !== "text"),
+    modalities: { input, output: ["text"] },
+  };
 }
 
 /**
@@ -659,13 +686,15 @@ export function opencodeProviderBlocks(
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context) };
     }
+    Object.assign(entry, opencodeCapabilityFields(model));
     v1Models[key] = entry;
     const variants = opencodeEffortVariants(model);
-    // Own `limit` object, not a shared reference: the two blocks are serialized and reasoned
-    // about separately, and an in-place edit of one must never move the other.
+    // Own `limit` / `modalities` objects, not shared references: the two blocks are serialized
+    // and reasoned about separately, and an in-place edit of one must never move the other.
     v2Models[key] = {
       ...entry,
       ...(entry.limit ? { limit: { ...entry.limit } } : {}),
+      ...(entry.modalities ? { modalities: { input: [...entry.modalities.input], output: [...entry.modalities.output] } } : {}),
       ...(variants ? { variants } : {}),
     };
   }
