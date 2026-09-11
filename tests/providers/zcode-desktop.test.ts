@@ -9,7 +9,9 @@ import { readZcodeModels } from "../../src/adapters/zcode/settings";
 import { parseNativeOAuthEvent, nativeOAuthCommand } from "../../src/adapters/zcode/native-oauth";
 import { resolveDesktopNode } from "../../src/adapters/zcode/desktop-node";
 
-const { normalizeDesktopConfig, desktopModelCatalog } = createRequire(import.meta.url)("../../src/adapters/zcode/desktop-bootstrap.cjs");
+const require = createRequire(import.meta.url);
+const { normalizeDesktopConfig, desktopModelCatalog } = require("../../src/adapters/zcode/desktop-bootstrap.cjs");
+const { materializeSession, subjectHash } = require("../../src/adapters/zcode/oauth-bootstrap.cjs");
 let root: string;
 let previousHome: string | undefined;
 let previousSandbox: string | undefined;
@@ -85,6 +87,15 @@ describe("managed ZCode Desktop", () => {
     const managed = join(linkedConfig, "zcode-desktop", "workspace");
     expect(validateDesktopWorkspace(managed)).toBe(join(realConfig, "zcode-desktop", "workspace"));
   });
+  test("sandbox allows only the matching account-managed workspace below the config root", async () => {
+    const { allocateAccount } = await import("../../src/adapters/zcode/accounts");
+    const account = allocateAccount("Personal");
+    const managed = join(process.env.OPENCODEX_HOME!, "zcode-accounts", account.id, "workspace");
+    expect(validateDesktopWorkspace(managed, account.id)).toBe(managed);
+    expect(() => validateDesktopWorkspace(managed)).toThrow("workspace_invalid");
+    const other = allocateAccount("Work");
+    expect(() => validateDesktopWorkspace(managed, other.id)).toThrow("workspace_invalid");
+  });
   test("disconnect persists revocation instead of falling back to operator env", async () => {
     expect(loadDesktopSettings()).toBeUndefined();
     await disconnectDesktop();
@@ -140,6 +151,18 @@ test("native OAuth emits only bounded public events, never tokens or vendor erro
   }
   expect(() => parseNativeOAuthEvent({ type: "authenticated", subjectHash: "not-an-identity" })).toThrow("native_oauth_failed");
   expect(() => parseNativeOAuthEvent({ type: "tokens", accessToken: "secret" })).toThrow("native_oauth_failed");
+});
+
+test("refresh validates restored identity before model-provider profile mutation", async () => {
+  const profile = join(root, "refresh-profile"); mkdirSync(profile, { mode: 0o700 });
+  const sentinel = join(profile, "sentinel"); writeFileSync(sentinel, "unchanged");
+  const result = { kind: "session", provider: "zai", userInfo: { id: "different-user" } };
+  const calls: string[] = [];
+  const models = { call: async (method: string) => { calls.push(method); writeFileSync(sentinel, "mutated"); } };
+  await expect(materializeSession(result, models, "a".repeat(64))).rejects.toThrow("account_identity_mismatch");
+  expect(calls).toEqual([]);
+  expect(readFileSync(sentinel, "utf8")).toBe("unchanged");
+  expect(subjectHash(result)).toMatch(/^[a-f0-9]{64}$/);
 });
 
 test("native OAuth sandbox refuses the live HOME and symlink profiles", () => {

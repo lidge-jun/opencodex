@@ -11,6 +11,18 @@ const parent = new EventEmitter();
 parent.postMessage = () => {};
 process.parentPort = parent;
 const timer = setTimeout(() => { send({ type: "error", code: "login_expired" }); process.exit(1); }, 300_000);
+const subjectHash = result => {
+  if (result?.kind !== "session" || result.provider !== "zai" || typeof result.userInfo?.id !== "string" || !result.userInfo.id) throw new Error();
+  return createHash("sha256").update("zai\0" + result.userInfo.id).digest("hex");
+};
+/** Validate identity before the official model provider can mutate this profile. */
+async function materializeSession(result, models, expectedSubjectHash) {
+  const identity = subjectHash(result);
+  if (expectedSubjectHash && identity !== expectedSubjectHash) throw new Error("account_identity_mismatch");
+  await models.call("getAll", []);
+  await models.call("refreshCodingPlanApiKey", ["builtin:zai-coding-plan"]);
+  return identity;
+}
 async function main() {
   fs.mkdirSync((process.env.ZCODE_DATA_BASE_DIR || process.env.HOME) + "/.zcode/v2", { recursive: true, mode: 0o700 });
   const dir = (process.argv[3] || "/zcode") + "/resources/app.asar/out/host";
@@ -38,21 +50,25 @@ async function main() {
     if (!providers.some(p => (p.id ?? p.providerId) === "zai" && p.enabled)) throw new Error();
     send({ type: "capabilities", supported: true }); return;
   }
-  const publish = async result => {
+  const publish = async (result, expectedSubjectHash) => {
     stage = "session_restore_failed";
-    if (result?.kind !== "session" || result.provider !== "zai" || typeof result.userInfo?.id !== "string" || !result.userInfo.id) throw new Error();
-    // Official service materializes/refreshes built-in provider credentials and model config.
     stage = "model_setup_failed";
     const models = client.getChannel("model-provider");
-    await models.call("getAll", []);
-    await models.call("refreshCodingPlanApiKey", ["builtin:zai-coding-plan"]);
-    send({ type: "authenticated", subjectHash: createHash("sha256").update("zai\0" + result.userInfo.id).digest("hex") });
+    let identity;
+    try { identity = await materializeSession(result, models, expectedSubjectHash); }
+    catch (error) {
+      if (error?.message === "account_identity_mismatch") stage = "account_identity_mismatch";
+      throw error;
+    }
+    send({ type: "authenticated", subjectHash: identity });
   };
   if (process.argv[2] === "refresh") {
     stage = "session_restore_failed";
     const session = await oauth.call("restoreCachedSessionState", []);
     if (session?.status !== "authenticated") throw new Error();
-    await publish({ kind: "session", provider: "zai", userInfo: session.userInfo }); return;
+    const expected = process.argv[4];
+    if (!/^[a-f0-9]{64}$/.test(expected || "")) { stage = "account_identity_mismatch"; throw new Error(); }
+    await publish({ kind: "session", provider: "zai", userInfo: session.userInfo }, expected); return;
   }
   if (process.argv[2] !== "login") throw new Error();
   const flow = await oauth.call("startOAuthWithPolling", ["zai"]);
@@ -68,6 +84,8 @@ async function main() {
     return;
   }
 }
-main().then(() => { clearTimeout(timer); process.exit(0); }).catch(() => {
+module.exports = { materializeSession, subjectHash };
+if (require.main === module) main().then(() => { clearTimeout(timer); process.exit(0); }).catch(() => {
   send({ type: "error", code: stage }); process.exit(1);
 });
+else clearTimeout(timer);

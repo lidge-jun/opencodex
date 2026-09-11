@@ -17,10 +17,15 @@ export async function refreshAccount(id: string): Promise<void> {
   if (!status.connected) throw new Error("account_login_required");
   const promise = (async () => {
     let identity: string | undefined;
-    await runNativeOAuth({ runtime: status.runtime, profileHome: accountProfile(id), mode: "refresh",
-      signal: AbortSignal.timeout(30_000), onEvent: event => {
+    let nativeError: string | undefined;
+    try { await runNativeOAuth({ runtime: status.runtime, profileHome: accountProfile(id), mode: "refresh",
+      expectedSubjectHash: account.subjectHash, signal: AbortSignal.timeout(30_000), onEvent: event => {
         if (event.type === "authenticated") identity = event.subjectHash;
-      } });
+        if (event.type === "error") nativeError = event.code;
+      } }); } catch (error) {
+      if (nativeError === "account_identity_mismatch") throw new Error(nativeError);
+      throw error;
+    }
     if (identity !== account.subjectHash) throw new Error("account_identity_mismatch");
     refreshed.set(id, Date.now() + 60_000);
   })();

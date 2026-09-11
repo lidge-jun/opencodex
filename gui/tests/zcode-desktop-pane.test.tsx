@@ -179,7 +179,7 @@ test("explicit sandbox mode shows its filesystem boundary", async () => {
     connected: false, sandbox: true, runtimes: [], runtime: "", workspace: "/project", models: [],
   }) });
   await mountPane();
-  expect(host.querySelector('[role="note"]')?.textContent).toContain("Only the selected workspace");
+  expect(host.querySelector('[role="note"]')?.textContent).toContain("Selected system and runtime paths");
   expect(host.querySelector('[role="note"]')?.textContent).not.toContain("without an OpenCodex sandbox");
 });
 

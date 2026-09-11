@@ -19,7 +19,7 @@ export const zhTW: Record<TKey, string> = {
   "zcodeDesktop.restartNotice": "若 Codex 未顯示新模型，請於任務結束後重新啟動 Codex。不會自動重新啟動任何程序。",
   "zcodeDesktop.dashboardRequired": "此操作需要綁定至迴路位址的儀表板或已配對 Hub 的瀏覽器工作階段。僅管理員權杖無法授權 Desktop 設定。",
   "zcodeDesktop.hostAccess": "ZCode 預設不使用 OpenCodex 沙箱，可讀寫作業系統使用者與 harness 允許存取的任何檔案。工作目錄不是存取邊界。升級後現有連線也適用。如需隔離，請在代理上設定 OCX_ZCODE_SANDBOX=1 並重新啟動 OpenCodex。",
-  "zcodeDesktop.sandboxAccess": "已啟用選用的 Bubblewrap 隔離。僅掛載選定的工作目錄，無法存取其他主機路徑。",
+  "zcodeDesktop.sandboxAccess": "選用的 Bubblewrap 隔離已啟用。選定的系統與執行階段路徑，以及存在的設定檔與憑證檔案會以唯讀方式掛載。私有家目錄和掛載於 /workspace 的所選工作區可寫入，並提供暫存檔案系統。其他主機路徑不會掛載。",
   "zcodeAccounts.title": "已儲存的 ZCode 帳戶",
   "zcodeAccounts.help": "每個帳戶擁有獨立的官方登入、模型與額度。請在 Codex 中手動選擇模型；不使用帳戶池或自動切換。Desktop 連線保持獨立。",
   "zcodeAccounts.name": "帳戶名稱",

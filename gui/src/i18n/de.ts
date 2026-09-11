@@ -22,7 +22,7 @@ export const de: Record<TKey, string> = {
   "zcodeDesktop.restartNotice": "Falls Codex die Modelle nicht zeigt, starten Sie Codex nach Abschluss Ihrer Aufgaben neu. Kein automatischer Prozessneustart.",
   "zcodeDesktop.dashboardRequired": "Diese Aktion erfordert eine Browsersitzung über ein an Loopback gebundenes Dashboard oder einen gekoppelten Hub. Ein Admin-Token allein erlaubt keine Desktop-Einrichtung.",
   "zcodeDesktop.hostAccess": "ZCode läuft ohne OpenCodex-Sandbox und kann alle Dateien lesen oder ändern, die Benutzerrechte und Harness erlauben. Der Arbeitsordner ist keine Zugriffsgrenze. Dies gilt nach Updates auch für bestehende Verbindungen. Für Isolation OCX_ZCODE_SANDBOX=1 am Proxy setzen und OpenCodex neu starten.",
-  "zcodeDesktop.sandboxAccess": "Die optionale Bubblewrap-Isolation ist aktiv. Nur der gewählte Arbeitsordner ist eingebunden; andere Hostpfade sind nicht zugänglich.",
+  "zcodeDesktop.sandboxAccess": "Die optionale Bubblewrap-Isolation ist aktiv. Ausgewählte System- und Laufzeitpfade sowie vorhandene Profil- und Anmeldedateien werden schreibgeschützt eingebunden. Ein privates Home und der gewählte Arbeitsordner unter /workspace sind beschreibbar; temporäre Dateisysteme sind verfügbar. Andere Hostpfade werden nicht eingebunden.",
   "zcodeAccounts.title": "Gespeicherte ZCode-Konten",
   "zcodeAccounts.help": "Jedes Konto hat eine eigene offizielle Anmeldung, Modelle und Quote. Modell manuell in Codex wählen; kein Pool oder automatischer Wechsel. Die Desktop-Verbindung bleibt separat.",
   "zcodeAccounts.name": "Kontoname",

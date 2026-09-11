@@ -96,9 +96,9 @@ export function detectDesktopRuntimes(): string[] {
   return [...found].slice(0, 8);
 }
 
-export function validateDesktopWorkspace(path: string): string {
+export function validateDesktopWorkspace(path: string, accountId?: string): string {
   if (!path || !isAbsolute(path) || path.includes("\0") || path.length > 4096) return fail("workspace_invalid");
-  const defaultPath = defaultDesktopWorkspace();
+  const defaultPath = defaultDesktopWorkspace(accountId);
   if (resolve(path) === resolve(defaultPath)) mkdirSync(path, { recursive: true, mode: 0o700 });
   let workspace: string;
   try { workspace = realpathSync(path); if (!statSync(workspace).isDirectory()) return fail("workspace_invalid"); }
@@ -106,7 +106,7 @@ export function validateDesktopWorkspace(path: string): string {
   if (!desktopSandboxEnabled()) return workspace;
   const home = realpathSync(homedir());
   if (workspace === home || home.startsWith(workspace.endsWith(sep) ? workspace : workspace + sep)) return fail("workspace_invalid");
-  const configRoot = canonicalExistingOrResolved(root());
+  const configRoot = canonicalExistingOrResolved(getConfigDir());
   const managedDefault = canonicalExistingOrResolved(defaultPath);
   const isManagedDefault = workspace === managedDefault && managedDefault.startsWith(configRoot + sep);
   if (!isManagedDefault) {
@@ -153,7 +153,7 @@ export function desktopProfile(accountId?: string): { config: string; credential
 function settingsFor(connection: Connection, accountId?: string): ZcodeSettings {
   const { bwrap, node } = prerequisites();
   const runtime = resolveDesktopRuntime(connection.runtime);
-  const workspace = validateDesktopWorkspace(connection.workspace);
+  const workspace = validateDesktopWorkspace(connection.workspace, accountId);
   const profile = desktopProfile(accountId);
   // Do not carry a native conversation across Desktop login/profile changes. Metadata-only
   // fencing is conservative (a refresh may start a new session) and never reads credential bytes.
@@ -207,7 +207,7 @@ export function desktopStatus(accountId?: string) {
   try { connection = readConnection(accountId); } catch { issue = "connection_invalid"; }
   const runtimes = detectDesktopRuntimes();
   if (connection?.connected) {
-    try { resolveDesktopRuntime(connection.runtime); validateDesktopWorkspace(connection.workspace); }
+    try { resolveDesktopRuntime(connection.runtime); validateDesktopWorkspace(connection.workspace, accountId); }
     catch (e) { issue = e instanceof DesktopSetupError ? e.code : "connection_invalid"; }
   }
   return { ...(accountId ? { accountId } : {}), connected: connection?.connected === true && !issue, issue, runtimes,
@@ -222,7 +222,7 @@ export async function connectDesktop(runtime: string, workspace: string, account
   connecting.add(accountId ?? "desktop");
   try {
     const connection: Connection = { version: 1, connected: true, generation: randomUUID(),
-      runtime: resolveDesktopRuntime(runtime), workspace: validateDesktopWorkspace(workspace), models: [] };
+      runtime: resolveDesktopRuntime(runtime), workspace: validateDesktopWorkspace(workspace, accountId), models: [] };
     const settings = settingsFor(connection, accountId);
     const client = new ZcodeClient(settings);
     try {

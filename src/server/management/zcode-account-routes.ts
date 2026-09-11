@@ -63,11 +63,11 @@ export async function handleZcodeAccountRoutes(ctx: ManagementContext, deps = se
     if (path === "/api/zcode-accounts/login") {
       if ([...jobs.values()].filter(job => !["failed", "finished"].includes(job.phase)).length >= 8) return jsonResponse({ error: "account_busy" }, 409);
       if (typeof body.label !== "string" || typeof body.runtime !== "string" || typeof body.workspace !== "string") return fail("account_invalid");
-      const runtime = resolveDesktopRuntime(body.runtime), workspace = validateDesktopWorkspace(body.workspace);
       if (body.accountId !== undefined && typeof body.accountId !== "string") return fail("account_invalid");
       const replaceId = typeof body.accountId === "string" ? readAccount(body.accountId).id : undefined;
+      const runtime = resolveDesktopRuntime(body.runtime), workspace = validateDesktopWorkspace(body.workspace, replaceId);
       if (replaceId && (accountRuntimeBusy(replaceId) || pendingFor(replaceId))) return fail("account_busy");
-      const account = allocateAccount(body.label);
+      const account = allocateAccount(body.label, replaceId);
       const job: Job = { id: randomUUID(), accountId: account.id, replaceId, runtime, workspace,
         phase: "waiting", controller: new AbortController(), timer: undefined! };
       job.timer = setTimeout(() => {

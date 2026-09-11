@@ -10,7 +10,7 @@ export type NativeOAuthEvent =
   | { type: "capabilities"; supported: true }
   | { type: "authorization"; url: string }
   | { type: "authenticated"; subjectHash: string }
-  | { type: "error"; code: "login_expired" | "native_oauth_failed" | "session_restore_failed" | "model_setup_failed" };
+  | { type: "error"; code: "login_expired" | "native_oauth_failed" | "session_restore_failed" | "model_setup_failed" | "account_identity_mismatch" };
 
 /** Strict projection even if a vendor/bootstrap version emits unexpected fields. */
 export function parseNativeOAuthEvent(value: unknown): NativeOAuthEvent {
@@ -26,13 +26,13 @@ export function parseNativeOAuthEvent(value: unknown): NativeOAuthEvent {
     return { type: "authenticated", subjectHash: row.subjectHash };
   }
   if (row.type === "error") return { type: "error", code:
-    row.code === "login_expired" || row.code === "session_restore_failed" || row.code === "model_setup_failed"
+    row.code === "login_expired" || row.code === "session_restore_failed" || row.code === "model_setup_failed" || row.code === "account_identity_mismatch"
       ? row.code : "native_oauth_failed" };
   throw new Error("native_oauth_failed");
 }
 
 /** The caller supplies a newly allocated private profile, never the user's Desktop home. */
-export function nativeOAuthCommand(runtime: string, profileHome: string, mode: "login" | "capabilities" | "refresh"): string[] {
+export function nativeOAuthCommand(runtime: string, profileHome: string, mode: "login" | "capabilities" | "refresh", expectedSubjectHash?: string): string[] {
   if (process.platform !== "linux") throw new Error("platform_unsupported");
   const profile = realpathSync(profileHome), st = lstatSync(profileHome);
   if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || (st.mode & 0o077) || profile === realpathSync(homedir())) {
@@ -40,8 +40,9 @@ export function nativeOAuthCommand(runtime: string, profileHome: string, mode: "
   }
   const runtimeRoot = dirname(dirname(dirname(resolveDesktopRuntime(runtime))));
   if (!lstatSync(join(runtimeRoot, "zcode")).isFile()) throw new Error("desktop_missing");
+  if (mode === "refresh" && !/^[a-f0-9]{64}$/.test(expectedSubjectHash ?? "")) throw new Error("account_identity_mismatch");
   if (!desktopSandboxEnabled()) return [join(runtimeRoot, "zcode"),
-    fileURLToPath(new URL("./oauth-bootstrap.cjs", import.meta.url)), mode, runtimeRoot];
+    fileURLToPath(new URL("./oauth-bootstrap.cjs", import.meta.url)), mode, runtimeRoot, ...(expectedSubjectHash ? [expectedSubjectHash] : [])];
   const bwrap = Bun.which("bwrap", { PATH: process.env.PATH });
   if (!bwrap) throw new Error("sandbox_missing");
   verifyDesktopSandbox(bwrap);
@@ -54,16 +55,18 @@ export function nativeOAuthCommand(runtime: string, profileHome: string, mode: "
   args.push("--ro-bind", runtimeRoot, "/zcode", "--bind", profile, homedir(),
     "--ro-bind", fileURLToPath(new URL("./oauth-bootstrap.cjs", import.meta.url)), "/bridge.cjs",
     "--clearenv", "--setenv", "HOME", homedir(), "--setenv", "PATH", "/usr/bin:/bin",
-    "--setenv", "ELECTRON_RUN_AS_NODE", "1", "--chdir", homedir(), "/zcode/zcode", "/bridge.cjs", mode);
+    "--setenv", "ELECTRON_RUN_AS_NODE", "1", "--chdir", homedir(), "/zcode/zcode", "/bridge.cjs", mode, "/zcode",
+    ...(expectedSubjectHash ? [expectedSubjectHash] : []));
   return args;
 }
 
 export async function runNativeOAuth(options: {
   runtime: string; profileHome: string; mode: "login" | "capabilities" | "refresh";
+  expectedSubjectHash?: string;
   signal: AbortSignal; onEvent: (event: NativeOAuthEvent) => void;
 }): Promise<void> {
   if (options.signal.aborted) throw new Error("login_cancelled");
-  const [executable, ...args] = nativeOAuthCommand(options.runtime, options.profileHome, options.mode);
+  const [executable, ...args] = nativeOAuthCommand(options.runtime, options.profileHome, options.mode, options.expectedSubjectHash);
   const child = spawn(executable!, args, { env: desktopSandboxEnabled() ? { PATH: "/usr/bin:/bin" } : {
     PATH: "/usr/bin:/bin", HOME: homedir(), ELECTRON_RUN_AS_NODE: "1", ZCODE_DATA_BASE_DIR: options.profileHome,
   }, stdio: ["ignore", "pipe", "pipe"] });

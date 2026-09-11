@@ -23,7 +23,7 @@ export const en = {
   "zcodeDesktop.restartNotice": "If Codex does not show the new models, restart Codex when your tasks finish. No processes will be restarted automatically.",
   "zcodeDesktop.dashboardRequired": "This action requires a browser session on a loopback-bound dashboard or a paired hub. An admin token alone cannot authorize Desktop setup.",
   "zcodeDesktop.hostAccess": "ZCode runs without an OpenCodex sandbox and can read or modify any file your operating-system user and harness allow. The workspace is only a working directory. This also applies to existing connections after upgrading. To enable isolation, set OCX_ZCODE_SANDBOX=1 on the proxy and restart OpenCodex.",
-  "zcodeDesktop.sandboxAccess": "Optional Bubblewrap isolation is enabled. Only the selected workspace is mounted; host absolute paths outside it are unavailable.",
+  "zcodeDesktop.sandboxAccess": "Optional Bubblewrap isolation is enabled. Selected system and runtime paths, plus profile and credential files when present, are mounted read-only. A private home and the selected workspace at /workspace are writable, and temporary filesystems are available. Other host paths are not mounted.",
   "zcodeAccounts.title": "Saved ZCode accounts",
   "zcodeAccounts.help": "Each account has its own official login, models and quota. Choose its model manually in Codex; there is no pool or automatic account switch. Existing Desktop connection stays separate.",
   "zcodeAccounts.name": "Account name",

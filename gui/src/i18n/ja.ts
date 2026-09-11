@@ -21,7 +21,7 @@ export const ja: Record<TKey, string> = {
   "zcodeDesktop.restartNotice": "Codex にモデルが表示されない場合は、作業終了後に Codex を再起動してください。自動再起動は行いません。",
   "zcodeDesktop.dashboardRequired": "この操作にはループバックにバインドされたダッシュボードまたはペアリング済みハブのブラウザーセッションが必要です。管理トークンだけでは Desktop を設定できません。",
   "zcodeDesktop.hostAccess": "ZCode は OpenCodex のサンドボックスなしで実行され、OS ユーザーとハーネスが許可するファイルを読み書きできます。作業ディレクトリはアクセス制限ではありません。更新後の既存接続にも適用されます。隔離するにはプロキシで OCX_ZCODE_SANDBOX=1 を設定し、OpenCodex を再起動してください。",
-  "zcodeDesktop.sandboxAccess": "任意の Bubblewrap 隔離が有効です。選択した作業ディレクトリのみがマウントされ、それ以外のホストパスにはアクセスできません。",
+  "zcodeDesktop.sandboxAccess": "任意の Bubblewrap 隔離が有効です。選択されたシステムおよびランタイムのパスと、存在するプロファイル・認証情報ファイルは読み取り専用でマウントされます。プライベートホームと /workspace の選択した作業ディレクトリは書き込み可能で、一時ファイルシステムも利用できます。その他のホストパスはマウントされません。",
   "zcodeAccounts.title": "保存済み ZCode アカウント",
   "zcodeAccounts.help": "各アカウントは公式ログイン、モデル、利用枠を個別に持ちます。Codex でモデルを手動選択します。プールや自動切替はありません。Desktop 接続は別です。",
   "zcodeAccounts.name": "アカウント名",

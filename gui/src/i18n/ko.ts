@@ -21,7 +21,7 @@ export const ko: Record<TKey, string> = {
   "zcodeDesktop.restartNotice": "Codex에 모델이 표시되지 않으면 작업 완료 후 Codex를 다시 시작하세요. 프로세스를 자동으로 다시 시작하지 않습니다.",
   "zcodeDesktop.dashboardRequired": "이 작업에는 루프백에 바인딩된 대시보드 또는 페어링된 허브의 브라우저 세션이 필요합니다. 관리자 토큰만으로는 Desktop을 설정할 수 없습니다.",
   "zcodeDesktop.hostAccess": "ZCode는 OpenCodex 샌드박스 없이 실행되며 OS 사용자와 하네스가 허용하는 파일을 읽거나 수정할 수 있습니다. 작업 폴더는 접근 경계가 아닙니다. 업데이트 후 기존 연결에도 적용됩니다. 격리하려면 프록시에 OCX_ZCODE_SANDBOX=1을 설정하고 OpenCodex를 재시작하세요.",
-  "zcodeDesktop.sandboxAccess": "선택적 Bubblewrap 격리가 활성화되었습니다. 선택한 작업 폴더만 마운트되며 다른 호스트 경로에는 접근할 수 없습니다.",
+  "zcodeDesktop.sandboxAccess": "선택적 Bubblewrap 격리가 활성화되었습니다. 선택한 시스템 및 런타임 경로와 존재하는 프로필·자격 증명 파일은 읽기 전용으로 마운트됩니다. 비공개 홈과 /workspace의 선택한 작업 폴더는 쓰기 가능하며 임시 파일 시스템도 사용할 수 있습니다. 그 밖의 호스트 경로는 마운트되지 않습니다.",
   "zcodeAccounts.title": "저장된 ZCode 계정",
   "zcodeAccounts.help": "계정마다 공식 로그인, 모델, 할당량이 분리됩니다. Codex에서 모델을 직접 선택하세요. 풀이나 자동 계정 전환은 없습니다. Desktop 연결은 별도입니다.",
   "zcodeAccounts.name": "계정 이름",

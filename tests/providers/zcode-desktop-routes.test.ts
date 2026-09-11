@@ -243,6 +243,25 @@ test("duplicate identity is rejected and reconnect preserves provider settings a
   expect(listAccounts()).toHaveLength(1);
   expect(f.ctx.config.providers[ready.providerName].contextWindow).toBe(64000);
 });
+test("reconnect reserves a hidden draft when twenty accounts are already saved", async () => {
+  const f = accountFixture();
+  let firstId = "";
+  for (let i = 0; i < 20; i++) {
+    f.hash(i.toString(16).padStart(64, "0"));
+    const account = await f.login({ label: `Account ${i}` });
+    await f.call("complete", { jobId: account.jobId });
+    firstId ||= account.accountId;
+  }
+  expect(listAccounts()).toHaveLength(20);
+  f.hash("0".repeat(64));
+  const reconnect = await f.login({ accountId: firstId });
+  expect(reconnect).not.toHaveProperty("error");
+  expect(listAccounts()).toHaveLength(20);
+  expect(await (await f.call("complete", { jobId: reconnect.jobId })).json()).toMatchObject({ activation: "ready", accountId: firstId });
+  expect(listAccounts()).toHaveLength(20);
+  expect(await (await f.call("login", { label: "Overflow", runtime: "/runtime", workspace: "/project" })).json())
+    .toMatchObject({ error: "account_limit" });
+});
 test("partial catalog activation retries without login; busy and referenced accounts cannot be removed", async () => {
   const f = accountFixture(), a = await f.login();
   f.failCatalog(true);
@@ -309,11 +328,12 @@ test("failed official OAuth has a safe error and cancel removes the draft only",
 test("concurrent completions cannot register the same identity twice", async () => {
   const f = accountFixture(), a = await f.login(), b = await f.login();
   const connect = f.deps.connectDesktop;
-  let release!: () => void;
+  let release!: () => void, entered!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  f.deps.connectDesktop = async (...args) => { await gate; return connect(...args); };
+  const firstEntered = new Promise<void>(resolve => { entered = resolve; });
+  f.deps.connectDesktop = async (...args) => { entered(); await gate; return connect(...args); };
   const first = f.call("complete", {jobId:a.jobId});
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await firstEntered;
   expect(await (await f.call("complete", {jobId:b.jobId})).json()).toMatchObject({error:"account_busy"});
   release();
   expect(await (await first).json()).toMatchObject({activation:"ready"});
