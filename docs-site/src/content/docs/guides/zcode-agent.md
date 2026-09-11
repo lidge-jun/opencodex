@@ -249,3 +249,27 @@ These bars are informational and do not enable quota-based automatic rerouting.
 The native session app-server's token accounting remains unavailable; subscription
 quota is a distinct measurement. See [ZCode Usage Stats](https://zcode.z.ai/en/docs/usage-stats)
 for the distinction between App Usage and Coding Plan statistics.
+
+### Desktop Node compatibility
+
+Managed Desktop setup requires **Node.js 24.0.0 or newer**, with working
+node:sqlite, on the **OpenCodex process PATH**. This is the bridge's supported
+floor, not a claim that every earlier Node version is incompatible with every
+ZCode release. Selection checks each absolute PATH directory in order and skips
+incompatible Node binaries, including an older npm/nvm prefix ahead of a modern
+installation. Relative and empty PATH entries are not searched. It does not
+assume that the Node which launched OpenCodex is the Node resolved by Bun.
+
+If no suitable executable is found, setup reports node_incompatible (or
+node_missing when none exists) before reading the Desktop profile or starting
+the app server. Add a compatible Node directory to the PATH used by your terminal
+**or systemd service**, restart that process, and choose **Detect again**.
+No global Node replacement is required. Capability checks discard stderr and
+inherit neither credentials nor NODE_OPTIONS. Connection still requires explicit
+consent and a successful official workspace/readState protocol check; the
+bootstrap's model catalog alone does not prove readiness.
+
+The quota reader launches Desktop's own Electron executable with
+ELECTRON_RUN_AS_NODE, not the external Node selected from PATH. Managed account
+settings still pass the same Desktop prerequisites; advanced quota reads do not
+use this external Node selection.

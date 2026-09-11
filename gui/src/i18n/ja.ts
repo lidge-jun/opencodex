@@ -39,6 +39,7 @@ export const ja: Record<TKey, string> = {
   "zcodeDesktop.missing": "プロキシのコンピューターで ZCode Desktop を開いて再検出するか、インストールまたは展開先を選択してください。",
   "zcodeDesktop.sandboxMissing": "隔離には Bubblewrap が必要です。Linux のパッケージマネージャーでインストールして再検出してください。",
   "zcodeDesktop.nodeMissing": "ZCode 対応の Node.js をインストールして再検出してください。",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop には SQLite 対応の Node.js 24 以降が必要です。OpenCodex が使う PATH に対応版を追加し、サービスまたはターミナルを再起動して再検出してください。",
   "zcodeDesktop.platformUnsupported": "管理された Desktop 接続は現在 Linux のみ対応です。他の環境では詳細な隔離ランチャー設定を使用してください。",
   "zcodeDesktop.loginNeeded": "ZCode Desktop にサインインして Z.AI モデルを設定し、再接続してください。",
   "zcodeDesktop.workspaceInvalid": "ホーム、システム、認証情報のフォルダーではなく、既存のプロジェクトフォルダーを選択してください。",

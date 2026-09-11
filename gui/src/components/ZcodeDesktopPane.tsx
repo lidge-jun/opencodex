@@ -58,6 +58,7 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
   const problem = error === "desktop_missing" ? t("zcodeDesktop.missing")
     : error === "sandbox_missing" ? t("zcodeDesktop.sandboxMissing")
     : error === "node_missing" ? t("zcodeDesktop.nodeMissing")
+    : error === "node_incompatible" ? t("zcodeDesktop.nodeIncompatible")
     : error === "platform_unsupported" ? t("zcodeDesktop.platformUnsupported")
     : error === "profile_missing" || error === "models_missing" ? t("zcodeDesktop.loginNeeded")
     : error === "workspace_invalid" ? t("zcodeDesktop.workspaceInvalid")

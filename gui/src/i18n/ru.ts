@@ -39,6 +39,7 @@ export const ru: Record<TKey, string> = {
   "zcodeDesktop.missing": "Откройте ZCode Desktop на компьютере прокси и повторите поиск либо выберите папку установки или распаковки.",
   "zcodeDesktop.sandboxMissing": "Для изоляции установите bubblewrap через менеджер пакетов Linux и повторите поиск.",
   "zcodeDesktop.nodeMissing": "Установите совместимую с ZCode версию Node.js и повторите поиск.",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop требует Node.js 24 или новее с SQLite. Добавьте совместимую версию в PATH OpenCodex, перезапустите службу или терминал и повторите обнаружение.",
   "zcodeDesktop.platformUnsupported": "Управляемое подключение Desktop пока поддерживает только Linux. Для других платформ используйте расширенную настройку изолированного запуска.",
   "zcodeDesktop.loginNeeded": "Войдите и настройте модель Z.AI в ZCode Desktop, затем подключитесь снова.",
   "zcodeDesktop.workspaceInvalid": "Выберите существующую папку проекта, а не домашнюю, системную или папку с учётными данными.",

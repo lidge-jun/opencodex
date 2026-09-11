@@ -37,6 +37,7 @@ export const zhTW: Record<TKey, string> = {
   "zcodeDesktop.missing": "請在代理所在電腦開啟 ZCode Desktop 後重新偵測，或選取安裝或解壓縮目錄。",
   "zcodeDesktop.sandboxMissing": "隔離需要 Bubblewrap。請透過 Linux 套件管理員安裝 bubblewrap 後重新偵測。",
   "zcodeDesktop.nodeMissing": "請安裝與 ZCode 相容的 Node.js 版本後重新偵測。",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop 需要支援 SQLite 的 Node.js 24 或更新版本。請將相容版本加入 OpenCodex 使用的 PATH，重新啟動服務或終端機後再次偵測。",
   "zcodeDesktop.platformUnsupported": "受管理的 Desktop 連接目前僅支援 Linux。其他平台可使用進階隔離啟動器設定。",
   "zcodeDesktop.loginNeeded": "請在 ZCode Desktop 登入並設定 Z.AI 模型，然後重新連接。",
   "zcodeDesktop.workspaceInvalid": "請選取現有專案目錄，而非家目錄、系統目錄或憑證設定目錄。",

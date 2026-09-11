@@ -39,6 +39,7 @@ export const zh: Record<TKey, string> = {
   "zcodeDesktop.missing": "请在代理所在计算机上打开 ZCode Desktop 后重新检测，或选择其安装或解压目录。",
   "zcodeDesktop.sandboxMissing": "隔离需要 Bubblewrap。请通过 Linux 包管理器安装 bubblewrap 后重新检测。",
   "zcodeDesktop.nodeMissing": "请安装与 ZCode 兼容的 Node.js 版本后重新检测。",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop 需要支持 SQLite 的 Node.js 24 或更新版本。请将兼容版本加入 OpenCodex 使用的 PATH，重启服务或终端后重新检测。",
   "zcodeDesktop.platformUnsupported": "托管 Desktop 连接目前仅支持 Linux。其他平台可以使用高级隔离启动器配置。",
   "zcodeDesktop.loginNeeded": "请在 ZCode Desktop 中登录并配置 Z.AI 模型，然后重新连接。",
   "zcodeDesktop.workspaceInvalid": "请选择现有项目目录，而非主目录、系统目录或凭据配置目录。",

@@ -39,6 +39,7 @@ export const ko: Record<TKey, string> = {
   "zcodeDesktop.missing": "프록시 컴퓨터에서 ZCode Desktop을 열고 다시 감지하거나 설치 또는 압축 해제 폴더를 선택하세요.",
   "zcodeDesktop.sandboxMissing": "격리를 위해 Linux 패키지 관리자로 bubblewrap을 설치한 뒤 다시 감지하세요.",
   "zcodeDesktop.nodeMissing": "ZCode와 호환되는 Node.js를 설치한 뒤 다시 감지하세요.",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop에는 SQLite를 지원하는 Node.js 24 이상이 필요합니다. OpenCodex의 PATH에 호환 버전을 추가하고 서비스 또는 터미널을 다시 시작한 후 다시 감지하세요.",
   "zcodeDesktop.platformUnsupported": "관리형 Desktop 연결은 현재 Linux만 지원합니다. 다른 플랫폼에서는 고급 격리 실행기 설정을 사용하세요.",
   "zcodeDesktop.loginNeeded": "ZCode Desktop에서 로그인하고 Z.AI 모델을 설정한 뒤 다시 연결하세요.",
   "zcodeDesktop.workspaceInvalid": "홈, 시스템 또는 인증 정보 폴더가 아닌 기존 프로젝트 폴더를 선택하세요.",

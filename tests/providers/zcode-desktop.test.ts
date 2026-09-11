@@ -3,8 +3,10 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { disconnectDesktop, loadDesktopSettings, resolveDesktopRuntime, validateDesktopWorkspace } from "../../src/adapters/zcode/desktop";
+import { desktopStatus, disconnectDesktop, loadDesktopSettings, resolveDesktopRuntime, validateDesktopWorkspace } from "../../src/adapters/zcode/desktop";
 import { readZcodeModels } from "../../src/adapters/zcode/settings";
+
+import { resolveDesktopNode } from "../../src/adapters/zcode/desktop-node";
 
 const { normalizeDesktopConfig, desktopModelCatalog } = createRequire(import.meta.url)("../../src/adapters/zcode/desktop-bootstrap.cjs");
 let root: string;
@@ -71,4 +73,29 @@ describe("managed ZCode Desktop", () => {
     expect(result[0]?.id).toBe("builtin:zai/model");
     expect(result[0]?.runtimeModel).toEqual({});
   });
+});
+
+test("Node selection skips an incompatible nvm prefix and fails safely", () => {
+  const oldPath = process.env.PATH;
+  const old = join(root, "old/bin"), modern = join(root, "modern/bin");
+  mkdirSync(old, { recursive: true }); mkdirSync(modern, { recursive: true });
+  // Executable fixtures exercise selection independently of host Node installations.
+  writeFileSync(join(old, "node"), "#!/bin/sh\necho private-vendor-diagnostic >&2\nexit 1\n", { mode: 0o755 });
+  writeFileSync(join(modern, "node"), "#!/bin/sh\nprintf compatible\n", { mode: 0o755 });
+  try {
+    expect(resolveDesktopNode(old + ":" + modern)).toBe(join(modern, "node"));
+    expect(() => resolveDesktopNode(old)).toThrow("node_incompatible");
+    expect(() => resolveDesktopNode(join(root, "absent"))).toThrow("node_missing");
+    expect(() => resolveDesktopNode(".")).toThrow("node_missing");
+    const bwrap = Bun.which("bwrap");
+    if (bwrap) {
+      symlinkSync(bwrap, join(old, "bwrap"));
+      process.env.PATH = old;
+      expect(desktopStatus().issue).toBe("node_incompatible");
+    }
+    writeFileSync(join(modern, "node"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    expect(() => resolveDesktopNode(modern)).toThrow("node_incompatible");
+  } finally {
+    if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+  }
 });

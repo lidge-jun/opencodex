@@ -93,3 +93,17 @@ test("one-request test is a separate explicit quota-spending action", async () =
   expect(requests.find(r => r.path.endsWith("/test"))?.body).toEqual({ model: "builtin:zai/model", consent: true });
   expect(host.textContent).toContain("ZCode answered successfully.");
 });
+
+test("incompatible Node preflight shows safe actionable guidance without connecting", async () => {
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => Response.json({
+    connected: false, issue: "node_incompatible", runtimes: [], runtime: "", workspace: "/project", models: [],
+  }) });
+  await mountPane();
+  const alert = host.querySelector('[role="alert"]')!;
+  expect(alert.textContent).toContain("Node.js 24");
+  expect(alert.textContent).toContain("PATH");
+  expect(alert.textContent).toContain("restart");
+  expect(alert.textContent).not.toContain("runtime_failed");
+  expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
+  expect(button("Connect Desktop").disabled).toBe(true);
+});

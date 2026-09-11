@@ -40,6 +40,7 @@ export const tr: Record<TKey, string> = {
   "zcodeDesktop.missing": "Proxy bilgisayarında ZCode Desktop açıp yeniden algılayın veya kurulum ya da çıkarılmış uygulama klasörünü seçin.",
   "zcodeDesktop.sandboxMissing": "Yalıtım için Linux paket yöneticisiyle bubblewrap kurup yeniden algılayın.",
   "zcodeDesktop.nodeMissing": "ZCode ile uyumlu Node.js sürümünü kurup yeniden algılayın.",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop, SQLite destekli Node.js 24 veya üzerini gerektirir. Uyumlu sürümü OpenCodex PATH ortamına ekleyin, hizmeti veya terminali yeniden başlatıp tekrar algılayın.",
   "zcodeDesktop.platformUnsupported": "Yönetilen Desktop bağlantısı şu anda yalnızca Linux destekler. Diğer platformlarda gelişmiş yalıtılmış başlatıcıyı kullanın.",
   "zcodeDesktop.loginNeeded": "ZCode Desktop içinde oturum açıp bir Z.AI modeli yapılandırın, ardından yeniden bağlanın.",
   "zcodeDesktop.workspaceInvalid": "Ev, sistem veya kimlik bilgileri klasörü yerine mevcut bir proje klasörü seçin.",

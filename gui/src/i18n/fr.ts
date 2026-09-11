@@ -39,6 +39,7 @@ export const fr: Record<TKey, string> = {
   "zcodeDesktop.missing": "Ouvrez ZCode Desktop sur l’ordinateur du proxy, puis relancez la détection, ou indiquez son dossier installé ou extrait.",
   "zcodeDesktop.sandboxMissing": "Installez bubblewrap avec le gestionnaire de paquets Linux pour activer l’isolation, puis relancez la détection.",
   "zcodeDesktop.nodeMissing": "Installez une version de Node.js compatible avec ZCode, puis relancez la détection.",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop nécessite Node.js 24 ou ultérieur avec SQLite. Ajoutez une version compatible au PATH utilisé par OpenCodex, redémarrez le service ou le terminal, puis relancez la détection.",
   "zcodeDesktop.platformUnsupported": "La connexion Desktop gérée prend actuellement en charge Linux uniquement. Les autres plateformes nécessitent le lanceur isolé avancé.",
   "zcodeDesktop.loginNeeded": "Connectez-vous et configurez un modèle Z.AI dans ZCode Desktop, puis reconnectez le fournisseur.",
   "zcodeDesktop.workspaceInvalid": "Choisissez un dossier de projet existant, pas le dossier personnel, système ou des identifiants.",

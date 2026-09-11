@@ -41,6 +41,7 @@ export const en = {
   "zcodeDesktop.missing": "Open ZCode Desktop on the proxy computer, then detect again. You can also select its installed or extracted application folder.",
   "zcodeDesktop.sandboxMissing": "Bubblewrap is required for isolation. Install bubblewrap using your Linux package manager, then detect again.",
   "zcodeDesktop.nodeMissing": "Node.js is required by the ZCode runtime. Install a compatible Node.js version, then detect again.",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop requires Node.js 24 or newer with SQLite support. Add a compatible Node.js to the PATH used by OpenCodex, restart its service or terminal, then detect again.",
   "zcodeDesktop.platformUnsupported": "Managed Desktop connection currently supports Linux only. Other platforms can use the advanced isolated-launcher setup.",
   "zcodeDesktop.loginNeeded": "Sign in and configure a Z.AI model in ZCode Desktop, then detect and connect again.",
   "zcodeDesktop.workspaceInvalid": "Choose an existing project folder, not your home, a system folder or a credentials/configuration directory.",

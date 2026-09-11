@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { getConfigDir } from "../../config/paths";
 import { closeZcodeDesktopClients, ZcodeClient } from "./client";
 import type { ZcodeSettings } from "./settings";
+import { resolveDesktopNode } from "./desktop-node";
 
 export interface DesktopModel { id: string; providerId: string; modelId: string; label: string; contextWindow?: number }
 interface Connection {
@@ -104,7 +105,9 @@ export function desktopFolders(path?: string) {
 function prerequisites(): { bwrap: string; node: string } {
   if (process.platform !== "linux") return fail("platform_unsupported");
   const bwrap = Bun.which("bwrap"); if (!bwrap) return fail("sandbox_missing");
-  const node = Bun.which("node"); if (!node) return fail("node_missing");
+  let node: string;
+  try { node = resolveDesktopNode(); }
+  catch (error) { return fail(error instanceof Error && error.message === "node_missing" ? "node_missing" : "node_incompatible"); }
   return { bwrap: realpathSync(bwrap), node: realpathSync(node) };
 }
 

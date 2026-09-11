@@ -40,6 +40,7 @@ export const de: Record<TKey, string> = {
   "zcodeDesktop.missing": "Öffnen Sie ZCode Desktop auf dem Proxy-Computer und starten Sie die Erkennung erneut, oder wählen Sie den Installationsordner.",
   "zcodeDesktop.sandboxMissing": "Installieren Sie bubblewrap mit dem Linux-Paketmanager für die Isolation und starten Sie die Erkennung erneut.",
   "zcodeDesktop.nodeMissing": "Installieren Sie eine mit ZCode kompatible Node.js-Version und starten Sie die Erkennung erneut.",
+  "zcodeDesktop.nodeIncompatible": "ZCode Desktop benötigt Node.js 24 oder neuer mit SQLite-Unterstützung. Fügen Sie eine kompatible Version zum PATH von OpenCodex hinzu, starten Sie den Dienst oder das Terminal neu und wiederholen Sie die Erkennung.",
   "zcodeDesktop.platformUnsupported": "Die verwaltete Desktop-Verbindung unterstützt derzeit nur Linux. Andere Plattformen benötigen den erweiterten isolierten Starter.",
   "zcodeDesktop.loginNeeded": "Melden Sie sich in ZCode Desktop an und richten Sie ein Z.AI-Modell ein. Verbinden Sie danach erneut.",
   "zcodeDesktop.workspaceInvalid": "Wählen Sie einen vorhandenen Projektordner, nicht den Home-, System- oder Zugangsdatenordner.",
