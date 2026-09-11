@@ -42,6 +42,8 @@ import {
   resolveCodexModelEntitlements,
   type CodexModelEntitlementSnapshot,
 } from "../model-entitlements";
+import { isAccountNeedsReauth } from "../account-runtime-state";
+import { codexAccountLogLabel, fallbackCodexAccountLogLabel } from "../account-label";
 
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readCodexCatalogPathForHome, readConfiguredAutoReviewModel, readNativeBaseline } from "./parsing";
@@ -1709,6 +1711,75 @@ export function finalizeAutoReviewModelOverride(
 }
 
 /**
+ * Why an account-gated native model stopped being offered, but only when the answer is one the
+ * operator can act on.
+ *
+ * Suppression is an omission: the row is never built, so there is no catalog entry for a reason
+ * to ride on and no downstream consumer that could explain it later. #4212's reporter watched
+ * their models disappear and reasonably concluded the proxy was broken, because every surface
+ * that changed said nothing about the account that caused it.
+ *
+ * Returns `undefined` for the ordinary case — an account that is simply not entitled to a gated
+ * model. That is the default state for most installations, it is not news, and warning about it
+ * on every sync would bury the one case that matters. A credential the operator must repair is
+ * the case that matters, so that is the only one this speaks up about.
+ *
+ * Accounts are named with the durable `p`-prefixed log label, the same identifier the dashboard
+ * shows, never the raw pool id or the email.
+ */
+export function gatedNativeReauthSuppressionReason(args: {
+  snapshot: CodexModelEntitlementSnapshot;
+  slug: string;
+  eligibleAccountIds?: ReadonlySet<string>;
+  needsReauth: (accountId: string) => boolean;
+  label: (accountId: string) => string;
+}): string | undefined {
+  const observed = [...args.snapshot.modelsByAccount.keys()]
+    .filter(accountId => !args.eligibleAccountIds || args.eligibleAccountIds.has(accountId))
+    // Only accounts that could actually have served THIS model. An account upstream positively
+    // denied is not why the model is missing, and blaming it would send the operator to repair a
+    // credential that was never going to help. `unknown` has to stay in: an account whose roster
+    // could not be confirmed reports `unknown` rather than `granted`, and a credential stuck on
+    // a failed refresh is exactly that account.
+    .filter(accountId => (
+      codexModelEntitlementStateForAccount(args.snapshot, accountId, args.slug) !== "denied"
+    ));
+  const stuck = observed.filter(accountId => args.needsReauth(accountId));
+  if (stuck.length === 0) return undefined;
+  const names = stuck.map(accountId => args.label(accountId)).sort().join(", ");
+  return stuck.length === observed.length
+    ? `every Codex account that could serve it needs reauthentication (${names})`
+    : `${stuck.length} of ${observed.length} Codex accounts that could serve it need reauthentication (${names})`;
+}
+
+/** Durable, operator-facing label for a pool account id; never the raw id or the email. */
+function gatedNativeAccountLabel(config: OcxConfig, accountId: string): string {
+  // Direct mode narrows eligibility to the native main credential, so this is the account most
+  // likely to be named here. `codexAuthContextLogLabel` calls it "main" everywhere else; hashing
+  // it into a `p`-prefixed digest would name the one account the operator cannot look up.
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) return "main";
+  const account = (config.codexAccounts ?? []).find(candidate => candidate.id === accountId);
+  return account ? codexAccountLogLabel(account) : fallbackCodexAccountLogLabel(accountId);
+}
+
+const warnedGatedNativeSuppression = new Set<string>();
+
+/** Test seam: the warn-once memory is process-global, so a case needs to be able to clear it. */
+export function resetGatedNativeSuppressionWarningsForTests(): void {
+  warnedGatedNativeSuppression.clear();
+}
+
+function warnGatedNativeSuppressedOnce(slug: string, reason: string): void {
+  const signature = `${slug}\u0000${reason}`;
+  if (warnedGatedNativeSuppression.has(signature)) return;
+  warnedGatedNativeSuppression.add(signature);
+  console.warn(
+    `[opencodex] catalog sync: ${slug} is not being offered because ${reason}. `
+      + "Sign in again to restore it.",
+  );
+}
+
+/**
  * Mescla o catálogo retido com os modelos visíveis e as configurações atuais,
  * incluindo os nomes nativos. Tenta preservar o backup original e usa a permissão
  * de escrita para publicar o resultado apenas se os bytes mudarem, retornando
@@ -1777,6 +1848,20 @@ function writeRetainedCatalogSync({
   const unavailableGatedNativeSlugs = new Set([...ACCOUNT_GATED_NATIVE_OPENAI_MODELS].filter(slug => (
     !availableBareGatedNativeSlugs.has(slug)
   )));
+  // #4212: this set is the whole record of a model vanishing, and it is a set of strings that
+  // nothing downstream ever asks a question of. Explain it here, while the entitlement snapshot
+  // that produced it is still in scope, because after this point the model is simply absent and
+  // no later surface can tell "never entitled" apart from "the account broke this morning".
+  for (const slug of unavailableGatedNativeSlugs) {
+    const reason = gatedNativeReauthSuppressionReason({
+      snapshot: modelEntitlements,
+      slug,
+      eligibleAccountIds: bareEligibleAccountIds,
+      needsReauth: isAccountNeedsReauth,
+      label: accountId => gatedNativeAccountLabel(config, accountId),
+    });
+    if (reason) warnGatedNativeSuppressedOnce(slug, reason);
+  }
   const suppressedBareNativeSlugs = new Set([
     ...desktopAllowlistSuppressedNativeSlugs(config),
     ...unavailableGatedNativeSlugs,

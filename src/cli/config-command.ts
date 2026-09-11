@@ -171,7 +171,16 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       // Imported here rather than at module scope: `./connect` pulls the whole client lifecycle
       // in, and `ocx config get/set` has no use for it.
       const { collectClientConnectionStatus } = await import("./connect");
-      const note = remoteHubConfigNote(diagnostics.config, () => collectClientConnectionStatus());
+      // The readiness probe is declined explicitly. `collectClientConnectionStatus` observes the
+      // local Codex ladder for a connected client, and observing it spawns `codex debug models`
+      // under a 45s budget. `ocx config show` reads only `state`, `reason` and `token` from the
+      // result, so paying for a subprocess here would buy nothing and would quietly turn a
+      // read-only config dump into a runtime probe. Returning no ladder resolves readiness to
+      // `unverified`, which is the honest answer for a caller that never asked.
+      const note = remoteHubConfigNote(
+        diagnostics.config,
+        () => collectClientConnectionStatus(undefined, undefined, { supportedEfforts: () => null }),
+      );
       // First key, not last: it has to be read before the empty `providers` map that misled a
       // reader into concluding nothing was configured anywhere.
       const config = note && redacted && typeof redacted === "object" && !Array.isArray(redacted)

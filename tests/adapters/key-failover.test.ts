@@ -18,6 +18,10 @@ import {
   rotateProviderTransportOn429,
   rotateProviderTransportOn401,
 } from "../../src/providers/key-failover";
+import {
+  forgetApiKeyRotationCursor,
+  selectProactiveApiKey,
+} from "../../src/providers/key-failover";
 import { resolveOpenCodeGoTransport } from "../../src/providers/opencode-go-transport";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { routeModel, routedProviderConfig } from "../../src/router";
@@ -448,5 +452,70 @@ describe("rotateKeyOn401", () => {
     const rotated = rotateProviderTransportOn401(config, "p", routed, { now });
     expect(rotated?.apiKey).toBe("key-beta-444555666777");
     expect(getKeyCooldownUntil("p", "k1", now)).toBe(now + 10 * 60_000);
+  });
+
+  describe("proactive key selection", () => {
+    const now = 2_000_000;
+
+    test("does nothing without a configured strategy", () => {
+      const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+      forgetApiKeyRotationCursor("p");
+      rotateKeyOn429(config, "p", null, now);
+      expect(selectProactiveApiKey(config, "p", now)).toBeNull();
+    });
+
+    test("keeps a healthy committed key instead of rotating off an operator choice", () => {
+      const config = makeConfig({
+        apiKey: "key-alpha-000111222333",
+        apiKeyPool: pool3(),
+        apiKeyPoolStrategy: "round-robin",
+      });
+      forgetApiKeyRotationCursor("p");
+      // No cooldown recorded, so the committed key is healthy and must survive untouched.
+      expect(selectProactiveApiKey(config, "p", now)).toBeNull();
+      expect(config.providers.p.apiKey).toBe("key-alpha-000111222333");
+    });
+
+    test("moves off a committed key that is already cooling", () => {
+      const config = makeConfig({
+        apiKey: "key-alpha-000111222333",
+        apiKeyPool: pool3(),
+        apiKeyPoolStrategy: "round-robin",
+      });
+      forgetApiKeyRotationCursor("p");
+      // Cool the committed key, then persist it back as active so the next request starts on
+      // it. Writing only the in-memory copy is not enough: the selector re-reads under the
+      // persistence lock, which is the guard that stops it clobbering a healthy choice.
+      rotateKeyOn429(config, "p", null, now);
+      setActiveProviderApiKey(config, "p", "k1");
+      const picked = selectProactiveApiKey(config, "p", now);
+      expect(picked).not.toBeNull();
+      expect(picked?.apiKey).not.toBe("key-alpha-000111222333");
+      expect(getKeyCooldownUntil("p", "k1", now)).toBeGreaterThan(now);
+    });
+
+    test("returns null when every key is cooling", () => {
+      const config = makeConfig({
+        apiKey: "key-alpha-000111222333",
+        apiKeyPool: pool3(),
+        apiKeyPoolStrategy: "round-robin",
+      });
+      forgetApiKeyRotationCursor("p");
+      rotateKeyOn429(config, "p", null, now);
+      rotateKeyOn429(config, "p", null, now);
+      rotateKeyOn429(config, "p", null, now);
+      config.providers.p.apiKey = "key-alpha-000111222333";
+      expect(selectProactiveApiKey(config, "p", now)).toBeNull();
+    });
+
+    test("a single-key pool is a no-op", () => {
+      const config = makeConfig({
+        apiKey: "key-alpha-000111222333",
+        apiKeyPool: [{ id: "k1", key: "key-alpha-000111222333" }],
+        apiKeyPoolStrategy: "round-robin",
+      });
+      forgetApiKeyRotationCursor("p");
+      expect(selectProactiveApiKey(config, "p", now)).toBeNull();
+    });
   });
 });

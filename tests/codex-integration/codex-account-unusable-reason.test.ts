@@ -130,7 +130,25 @@ describe("native main refresh refusal", () => {
     expect(response.headers.get("Retry-After")).toBe("1");
     const message = ((await response.json()) as { error: { message: string } }).error.message;
     expect(message).toContain("Codex main credential refresh did not complete");
-    expect(message).toContain("reauthentication");
+    expect(message).toContain("sign in to the main Codex account again");
+  });
+
+  // The regression this pins is not the sentence, it is the CLASSIFICATION the sentence causes.
+  // `classifyError` runs `isAuthenticationMessage` before the `status === 503` arm, and that check
+  // is status-blind on the bare substring "authentication" -- which "reauthentication" contains.
+  // A retryable refusal that says that word is served as `authentication_error` /
+  // `invalid_api_key` while still returning 503, and Codex keys its retry-after backoff on
+  // `server_is_overloaded`, so the client reads a transient refresh as a bad API key and stops
+  // retrying. The previous version of the test above asserted only the status and the word, which
+  // is exactly why the reclassification shipped unnoticed.
+  test("the retryable refusal is served as an overload, not as a bad key", async () => {
+    const response = nativeMainRefreshFailureResponse(new MainAccountTokenRefreshError("transient"));
+    const error = ((await response.json()) as { error: { type: string; code: string; message: string } }).error;
+    expect(response.status).toBe(503);
+    expect(error.type).toBe("server_error");
+    expect(error.code).toBe("server_is_overloaded");
+    // Load-bearing: the substring, not the phrasing, is what reclassifies the body.
+    expect(error.message.toLowerCase()).not.toContain("authentication");
   });
 
   test("a terminal reauth failure still refuses with 401 rather than a retry promise", async () => {

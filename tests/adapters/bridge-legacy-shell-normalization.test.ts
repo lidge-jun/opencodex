@@ -87,6 +87,16 @@ describe("bridge normalizes code-mode helper names against the declared catalog"
     expect(sse).toContain("await tools.apply_patch");
   });
 
+  test("default.view_image echoes are normalized back to declared bare view_image (#4176)", async () => {
+    const sse = await drain(bridgeToResponsesSSE(
+      toolTurn("default.view_image", "{\"path\":\"image.png\"}"), "deepseek-x", undefined, undefined, undefined, undefined, 50_000,
+      { declaredToolNames: new Set(["view_image"]) },
+    ));
+    expect(sse).not.toContain("undeclared client tool");
+    expect(sse).toContain("\"name\":\"view_image\"");
+    expect(sse).toContain("image.png");
+  });
+
   test("a catalog that declares exec_command itself is never rewritten", async () => {
     const sse = await drain(bridgeToResponsesSSE(
       toolTurn("exec_command"), "deepseek-x", undefined, undefined, undefined, undefined, 50_000,

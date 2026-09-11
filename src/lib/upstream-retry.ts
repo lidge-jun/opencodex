@@ -16,6 +16,39 @@
  */
 import { clearableDeadline } from "./abort";
 
+/**
+ * Responses the origin may already be executing. RFC 9110 §9.2.2 forbids an intermediary
+ * from automatically repeating a non-idempotent request; when a post-send transport (the
+ * Codex WebSocket relay) settles a gateway status because the origin never acknowledged the
+ * turn, the request body must not be sent again by this process — not by the transient-5xx
+ * layer below, not by a pool account rotation, not by a combo hop. The status is returned
+ * to the caller so the user agent can apply its own retry policy, exactly as it does on the
+ * direct path. The WeakSet is the in-process marker; the structured error codes are the
+ * marker that survives body re-wrapping (combo failure consumption re-parses the JSON).
+ */
+const nonReplayableResponses = new WeakSet<Response>();
+
+export function markResponseNonReplayable(response: Response): void {
+  nonReplayableResponses.add(response);
+}
+
+export function isNonReplayableResponse(response: Response): boolean {
+  return nonReplayableResponses.has(response);
+}
+
+/** Origin never produced a response event; the turn may still be executing. */
+export const UPSTREAM_NO_RESPONSE_CODE = "upstream_no_response";
+/** Transport closed after the send, before any response event. */
+export const UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE = "upstream_closed_before_response";
+const NON_REPLAYABLE_UPSTREAM_CODES: ReadonlySet<string> = new Set([
+  UPSTREAM_NO_RESPONSE_CODE,
+  UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+]);
+
+export function isNonReplayableUpstreamCode(code: unknown): boolean {
+  return typeof code === "string" && NON_REPLAYABLE_UPSTREAM_CODES.has(code);
+}
+
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
 const RESET_RETRY_MAX_ATTEMPTS = 3;
 const RESET_RETRY_BASE_DELAY_MS = 150;
@@ -395,7 +428,9 @@ export async function fetchWithTransientRetry(
   let attemptStart = Date.now();
   let res = await fetchWithResetRetry(countedFetch, { ...opts, attempts: remaining() });
   for (let attempt = 0; sent < budget; attempt++) {
-    if (res.ok || !isTransientUpstreamStatus(res.status)) return res;
+    // A non-replayable gateway status was settled after the request body had already left
+    // for the origin; retrying it here is the automatic resend the marker exists to forbid.
+    if (res.ok || !isTransientUpstreamStatus(res.status) || isNonReplayableResponse(res)) return res;
     // Checked before cancelResponseBodyBestEffort so an already-aborted caller never receives
     // a response whose body we just cancelled.
     if (opts.abortSignal?.aborted) return res;

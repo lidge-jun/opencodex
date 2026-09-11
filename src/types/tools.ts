@@ -66,22 +66,52 @@ const CODE_MODE_HELPER_TOOL_NAMES = [
  */
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 
+/**
+ * Normalizes provider-emitted tool names against declared tool catalogs.
+ *
+ * Rewrites invented `default.<name>` prefixes back to a declared bare tool when that bare tool
+ * is declared and neither `default.<name>` nor `default__<name>` was explicitly declared (#4176).
+ * Also normalizes legacy helper names (`exec_command`, `shell_command`, `apply_patch`) to
+ * `exec` when code-mode `exec` is declared in the request catalog.
+ *
+ * @param name - The tool name emitted on the wire by the provider.
+ * @param declared - All wire tool names declared in the request catalog, including aliases.
+ * @param declaredBare - Explicitly declared bare tool names without namespace provenance.
+ *                       When omitted, falls back to `declared`.
+ * @returns The normalized tool name to expose downstream.
+ */
 export function normalizeDeclaredToolName(
   name: string,
   declared: ReadonlySet<string> | undefined,
+  declaredBare?: ReadonlySet<string>,
 ): string {
-  if (!declared || !declared.has(CODE_MODE_EXEC_TOOL_NAME)) return name;
+  if (!declared) return name;
   if (declared.has(name)) return name;
-  if (name === "apply_patch") return CODE_MODE_EXEC_TOOL_NAME;
+  let candidate = name;
+  if (name.startsWith("default.")) {
+    const bare = name.slice("default.".length);
+    const bareDeclared = declaredBare ?? declared;
+    if (
+      bare.length > 0
+      && bareDeclared.has(bare)
+      && !declared.has("default." + bare)
+      && !declared.has("default__" + bare)
+    ) {
+      candidate = bare;
+    }
+  }
+  if (!declared.has(CODE_MODE_EXEC_TOOL_NAME)) return candidate;
+  if (declared.has(candidate)) return candidate;
+  if (candidate === "apply_patch") return CODE_MODE_EXEC_TOOL_NAME;
   // When the catalog explicitly declares any legacy shell bridge name, the environment
   // genuinely exposes that tool — turn normalization off so a call is never mis-routed
   // to `exec`.
   if ((LEGACY_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).some(legacy => declared.has(legacy))) {
-    return name;
+    return candidate;
   }
-  return (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(name)
+  return (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(candidate)
     ? CODE_MODE_EXEC_TOOL_NAME
-    : name;
+    : candidate;
 }
 
 /**

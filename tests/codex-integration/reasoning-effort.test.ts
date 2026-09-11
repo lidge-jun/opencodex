@@ -194,11 +194,11 @@ describe("provider-specific reasoning effort mapping", () => {
           adapter: "openai-chat",
           baseUrl: "https://api.deepseek.com",
           apiKey: "key",
-          models: ["deepseek-v4-pro"],
+          models: ["deepseek-flash"],
         },
       },
     };
-    const route = routeModel(config, "deepseek/deepseek-v4-pro");
+    const route = routeModel(config, "deepseek/deepseek-flash");
 
     const req = createOpenAIChatAdapter(route.provider).buildRequest({
       modelId: route.modelId,
@@ -271,7 +271,8 @@ describe("provider-specific reasoning effort mapping", () => {
     });
     const body = JSON.parse(req.body as string) as { messages: Record<string, unknown>[] };
 
-    expect(route.provider.preserveReasoningContentModels).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+    expect(route.provider.preserveReasoningContentModels)
+      .toEqual(["deepseek-flash", "deepseek-v4-flash"]);
     expect(body.messages[1].reasoning_content).toBeUndefined();
   });
 

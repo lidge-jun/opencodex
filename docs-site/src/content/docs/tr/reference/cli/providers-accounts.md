@@ -75,10 +75,12 @@ kabul edilen OAuth ve API anahtarı sağlayıcı kimliklerini yazdırır.
 `ocx status` / `ocx doctor` yeniden kimlik doğrulama gerektiğini veya bir
 terminal yenileme hatasını bildirdikten sonra **yeniden kimlik doğrulaması
 yapmak** için aynı komutu kullanın (veya kontrol panelinde Yeniden Kimlik
-Doğrula'yı kullanın). Codex havuz hesapları genel bir `ocx login` sağlayıcısı
-değildir — bunun yerine kontrol paneli Codex hesap havuzu (Yeniden Kimlik
-Doğrula) veya başsız `ocx account reauth` akışı aracılığıyla yeniden kimlik
-doğrulaması yapın.
+Doğrula'yı kullanın). Codex havuz hesapları yukarıdaki OAuth veya API anahtarı
+sağlayıcılarından biri değildir, ancak `ocx login codex` onlara ulaşır: komut
+hesap havuzu girişine yönlendirilir, bu yüzden `ocx login codex --reauth` ile
+`ocx account reauth codex` aynı şeydir. Kontrol panelindeki Codex hesap havuzu
+(Yeniden Kimlik Doğrula) da aynısını yapar. Bu yol proxy içinde çalışır, bu
+nedenle çalışan bir proxy gerektirir.
 
 ```bash
 ocx login xai
@@ -450,4 +452,3 @@ kapalı bir enum olarak ayrıştırır ve başka herhangi bir değer içeren tü
 kataloğu reddeder, bu nedenle `add`, `edit` ve yönetim API'si katalog
 yazıcısının daha sonra çıkarması gereken bir şeyi saklamak yerine hatalı değeri
 reddeder (#759).
-

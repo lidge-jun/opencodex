@@ -152,6 +152,7 @@ import {
   decodeRequestErrorResponse,
   handleResponses,
   preAuthUpstreamHostCircuitKey,
+  poolCredentialRefreshIncompleteResponse,
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
@@ -317,6 +318,13 @@ async function refreshPoolCompactContext(args: {
   authCtx: CodexAuthContext & { kind: "pool" };
   provider: OcxProviderConfig;
   codexAccountMode?: CodexAccountMode;
+  /**
+   * Public selector for the account this refresh is for, when the request carried one. The
+   * caller has it and this function does not, because compact takes no `RouteResult` — which
+   * is the whole reason the refusal here used to be less specific than the one core returns
+   * for the identical failure.
+   */
+  codexAccountNamespace?: string;
   substituteMainCredential: boolean;
   options: HandleResponsesCompactOptions;
 }): Promise<
@@ -377,14 +385,15 @@ async function refreshPoolCompactContext(args: {
     if (isTerminalCompactPoolRefreshFailure(error)) {
       return { ok: false, quarantine: true, response: reauthResponse() };
     }
-    const response = formatErrorResponse(
-      503,
-      "server_busy",
-      "Codex credential refresh did not complete; retry this request",
-    );
-    const headers = new Headers(response.headers);
-    headers.set("Retry-After", "1");
-    return { ok: false, quarantine: false, response: new Response(response.body, { status: response.status, headers }) };
+    return {
+      ok: false,
+      quarantine: false,
+      response: poolCredentialRefreshIncompleteResponse({
+        authCtx,
+        config,
+        accountSelector: args.codexAccountNamespace,
+      }),
+    };
   }
 }
 
@@ -917,6 +926,7 @@ export async function handleResponsesCompact(
           authCtx: poolAuthCtx,
           provider: compactProvider,
           codexAccountMode: route.codexAccountMode,
+          codexAccountNamespace: route.codexAccountNamespace,
           substituteMainCredential,
           options,
         })

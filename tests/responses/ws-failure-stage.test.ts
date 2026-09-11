@@ -86,6 +86,8 @@ function stage(overrides: Partial<CodexWsFailureStage> = {}): CodexWsFailureStag
     relayedEvents: 0,
     firstFrameMs: null,
     elapsedMs: 90_003,
+    pings: 0,
+    pongs: 0,
     ...overrides,
   };
 }
@@ -98,6 +100,20 @@ async function failureMessage(script: (ws: FakeWebSocket) => void): Promise<stri
     noFallback as unknown as typeof fetch,
     BOUNDED_WS_RUNTIME,
   );
+  return failureMessageOf(response);
+}
+
+/**
+ * A failure before the first response event is an honest gateway status whose JSON body
+ * carries the message; a failure after the response started is still an errored 200 body.
+ * Both shapes carry the same stage detail, which is what these cases read.
+ */
+async function failureMessageOf(response: Response): Promise<string> {
+  if (response.status >= 500) {
+    const body = await response.json() as { error?: { message?: unknown } };
+    if (typeof body.error?.message !== "string") throw new Error("expected a gateway failure body");
+    return body.error.message;
+  }
   try {
     await response.text();
   } catch (error) {
@@ -136,12 +152,14 @@ describe("codex WS failure classification", () => {
   test("renders every field, with n/a for the durations that do not exist yet", () => {
     expect(codexWsFailureDetail(stage({ upstreamFrames: 2, controlFrames: 2, firstFrameMs: 41 }))).toBe(
       " [cause=no-response-event request=812B sent=yes frames=2 control=2 relayed=0"
-      + " first-frame=41ms elapsed=90003ms]",
+      + " first-frame=41ms elapsed=90003ms pings=0 pongs=0]",
     );
     expect(codexWsFailureDetail(stage({ sent: false, elapsedMs: null }))).toBe(
       " [cause=before-send request=812B sent=no frames=0 control=0 relayed=0"
-      + " first-frame=n/a elapsed=n/a]",
+      + " first-frame=n/a elapsed=n/a pings=0 pongs=0]",
     );
+    // A peer that answered pings but never started a response is named as such.
+    expect(codexWsFailureDetail(stage({ upstreamFrames: 0, pings: 6, pongs: 6 }))).toContain(" pings=6 pongs=6]");
   });
 });
 
@@ -219,7 +237,8 @@ describe("codexWsUpstreamFetch failure reporting", () => {
       await opened.promise;
       jest.advanceTimersByTime(CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS);
       const response = await pending;
-      await expect(response.text()).rejects.toThrow(
+      expect(response.status).toBe(504);
+      expect(await failureMessageOf(response)).toMatch(
         /prelude timed out \[cause=no-upstream-frame request=\d+B sent=yes frames=0 control=0 relayed=0/,
       );
     } finally {
@@ -227,4 +246,3 @@ describe("codexWsUpstreamFetch failure reporting", () => {
     }
   });
 });
-

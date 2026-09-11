@@ -315,14 +315,30 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
 }
 
 export function clearCodexUpstreamHealth(): void {
+  // Operator preferences are routing state, not health, but they live and die with the same
+  // reset points. Leaving them behind lets a selection from one context suppress the
+  // automatic cursor in the next one.
+  manualPreference.clear();
   upstreamHealth.clear();
   quotaScopedHealth.clear();
   runtimeActiveCodexAccountId = undefined;
+  // The reconcile watermark is part of this state, not something that outlives it. Keeping
+  // it across a full reset is incoherent: there is no health left to protect, yet
+  // recordCodexUpstreamOutcome would still drop a writer whose generation predates the
+  // watermark for any account missing from the equally stale live set. Left behind, it also
+  // leaks between test files, which is how it was found.
+  lastReconciledGeneration = 0;
+  liveHealthAccountIds = new Set();
 }
 
 export function clearCodexUpstreamHealthForAccount(accountId: string): void {
   upstreamHealth.delete(accountId);
   quotaScopedHealth.delete(accountId);
+  // Deletion is the third operator exit, next to pause and exclusion, and it is the one
+  // with no reconcile path behind it: once the account is gone nothing can succeed on it,
+  // so an unspent preference naming it would suppress the automatic cursor for every other
+  // account until the process restarts.
+  forgetManualPreference(accountId);
 }
 
 export function reconcileCodexRoutingHealth(context: GenerationContext): number {
@@ -337,6 +353,14 @@ export function reconcileCodexRoutingHealth(context: GenerationContext): number 
     if (context.codexAccountIds.has(accountId)) continue;
     quotaScopedHealth.delete(accountId);
     removed += 1;
+  }
+  // Sweep preferences the same way, for the account set this generation actually has. The
+  // delete path above is the direct route; this is the one that catches an account removed
+  // by an edit the runtime never saw. Deliberately not counted in `removed`, which reports
+  // health rows.
+  for (const [poolKey, preferred] of manualPreference) {
+    if (context.codexAccountIds.has(preferred)) continue;
+    manualPreference.delete(poolKey);
   }
   liveHealthAccountIds = new Set(context.codexAccountIds);
   lastReconciledGeneration = context.generation;
@@ -871,6 +895,14 @@ export function resetCodexRoutingForManualSelection(accountId: string): void {
   clearThreadAccountMap();
   // Manual selection is the operator source of truth — drop any automatic runtime cursor.
   runtimeActiveCodexAccountId = undefined;
+  // Record the pick as an unspent one-shot on the SHARED scope only. An independent scope
+  // gets no entry on purpose: every write site the guard protects is already skipped for
+  // independent scopes, so an entry there would be state nothing reads — and state nothing
+  // reads is what the next reader mistakes for a rule.
+  //
+  // Seeding happens ONLY here. A pool-driven promote must never create or move a preference,
+  // or the pool would manufacture an operator intent nobody expressed.
+  manualPreference.set(POOL_KEY_CODEX, accountId);
   // Seed the RR ring so the next unbound new session honors the manually selected account
   // under round-robin (affinity-cleared threads / null threadId). Fill-first already follows
   // config.activeCodexAccountId, which the caller persists before invoking this.
@@ -1467,7 +1499,10 @@ function pickUnboundStrategyAccount(
     picked = pickRoundRobinAccount(poolKey, eligible, limit);
     if (!picked) return null;
     if (commitSharedActive) {
-      if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
+      if (!isIndependentCodexQuotaScope(quotaScope)
+        && !manualPreferenceBlocks(codexPoolKeyForScope(quotaScope), picked)) {
+        rememberActiveCodexAccount(config, picked);
+      }
     }
     if (commitAffinity && threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
     notePoolRotationSuccess(poolKey, picked, limit);
@@ -1478,7 +1513,10 @@ function pickUnboundStrategyAccount(
     picked = pickFillFirstCodexAccount(config, now, quotaScope, selectionOptions);
     if (!picked) return null;
     if (commitSharedActive) {
-      if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
+      if (!isIndependentCodexQuotaScope(quotaScope)
+        && !manualPreferenceBlocks(codexPoolKeyForScope(quotaScope), picked)) {
+        rememberActiveCodexAccount(config, picked);
+      }
     }
     if (commitAffinity && threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
     return picked;
@@ -1622,6 +1660,53 @@ export function pickAlternateCodexAccount(
 }
 
 /** Effective active: automatic runtime cursor, else operator/persisted selection. */
+/**
+ * Unspent operator selections, keyed by pool scope.
+ *
+ * Codex has no account-side equivalent of the Anthropic `selectionRevision`, so staleness
+ * cannot be detected by comparing values: a pool-driven promote legitimately moves the
+ * persisted active account, and reading that as staleness would silently spend the
+ * operator's one-shot. Invalidation is keyed to the OPERATOR path instead — another manual
+ * selection, the account leaving the pool, or a successful dispatch on it.
+ */
+const manualPreference = new Map<string, string>();
+
+/**
+ * Spend the one-shot for a pool scope once a dispatch on that account actually succeeded.
+ * This is the Codex analogue of `commitAnthropicSelectionRouting`, which Codex lacks.
+ *
+ * Wiring this BEFORE the guard below is not a style choice. Measured: with the guard in
+ * place and no consume site, the first manual selection freezes the automatic cursor
+ * permanently and 15 of 69 rotation tests fail.
+ */
+function consumeManualPreference(accountId: string, poolKey: string): void {
+  if (manualPreference.get(poolKey) === accountId) manualPreference.delete(poolKey);
+}
+
+/**
+ * Drop an account's preference in every scope. Pause and exclusion do not route through
+ * `resetCodexRoutingForManualSelection`, so without this a preference could outlive the
+ * account it names and keep suppressing the automatic cursor.
+ */
+function forgetManualPreference(accountId: string): void {
+  for (const [poolKey, preferred] of manualPreference) {
+    if (preferred === accountId) manualPreference.delete(poolKey);
+  }
+}
+
+/**
+ * True while an unspent operator selection for this scope names a DIFFERENT account than
+ * the automatic pick about to be recorded.
+ *
+ * Callers pass their own scope: an independent quota scope keeps its own entry and must
+ * never read the shared one. The failover promote does NOT consult this — see its call
+ * site for why.
+ */
+function manualPreferenceBlocks(poolKey: string, accountId: string): boolean {
+  const preferred = manualPreference.get(poolKey);
+  return preferred !== undefined && preferred !== accountId;
+}
+
 export function getEffectiveActiveCodexAccountId(config: OcxConfig): string | undefined {
   return runtimeActiveCodexAccountId ?? config.activeCodexAccountId;
 }
@@ -1690,6 +1775,10 @@ export function reconcileCodexActiveAfterExclusion(
   now = Date.now(),
 ): string | null {
   const wasEffective = (getEffectiveActiveCodexAccountId(config) ?? MAIN_CODEX_ACCOUNT_ID) === excludedAccountId;
+  // Exclusion does not route through resetCodexRoutingForManualSelection, so the one-shot is
+  // revoked here too. A preference naming an account that can no longer serve would keep
+  // suppressing the automatic cursor with no way to clear it.
+  forgetManualPreference(excludedAccountId);
   if (config.activeCodexAccountId === excludedAccountId) {
     config.activeCodexAccountId = undefined;
   }
@@ -2210,6 +2299,13 @@ export function resolveCodexAccountForThreadDetailed(
       && !preserveSharedSelectionForModelDetour
       && !isIndependentCodexQuotaScope(quotaScope)
     ) {
+      // NOT guarded by manualPreferenceBlocks, unlike preemption below. Measured: guarding
+      // it fails 8 cases in tests/codex-integration/codex-routing.test.ts, because a model
+      // detour is not the pool exercising discretion — the operator's account cannot serve
+      // this model at all. Under a rotating strategy this promote only moves the
+      // process-local cursor to whoever is actually serving and releases the pin; the
+      // operator's persisted activeCodexAccountId is left untouched either way, which is
+      // the thing the preference exists to protect.
       promoteActiveCodexAccount(config, strategyPick);
     }
     return { status: "selected", accountId: strategyPick };
@@ -2283,7 +2379,10 @@ export function resolveCodexAccountForThreadDetailed(
       !preserveSharedSelectionForModelDetour
       && !isIndependentCodexQuotaScope(quotaScope)
     ) {
-      rememberActiveCodexAccount(config, preempted);
+      // Preemption is an automatic pick competing with the operator, so it yields.
+      if (!manualPreferenceBlocks(POOL_KEY_CODEX, preempted)) {
+        rememberActiveCodexAccount(config, preempted);
+      }
     }
     active = preempted;
   }
@@ -2354,6 +2453,9 @@ export function recordCodexUpstreamOutcome(
    */
   dropSpentCredentialFailure(accountId);
   if (outcomeClass === "success") {
+    // The operator's one-shot is spent by a dispatch that actually worked, and only by that.
+    // A failed lookup leaves it unspent so the intent survives the failure.
+    consumeManualPreference(accountId, codexPoolKeyForScope(quotaScope));
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)
       : undefined;

@@ -149,6 +149,14 @@ export type CliStatusJson = {
     catalog?: "present" | "missing" | "unsafe";
     catalogAgeSeconds?: number;
     credentialFile: "owned" | "missing" | "changed" | "unsafe";
+    /**
+     * #4207: whether the selected local Codex CLI can consume the catalog this client
+     * installed. Absent unless a client connection exists. `connected` alone proved only the
+     * hub and the credential, and a reader who stopped there saw a healthy connection while
+     * `codex exec` was exiting before its first request.
+     */
+    readiness?: "ready" | "unverified" | "incompatible";
+    readinessReason?: string;
   };
   service: { summary: string };
   codexShim: { summary: string };
@@ -678,6 +686,8 @@ export async function collectStatus(): Promise<CliStatusView> {
         catalog: clientConnection.catalog,
         ...(clientConnection.catalogAgeSeconds !== undefined ? { catalogAgeSeconds: clientConnection.catalogAgeSeconds } : {}),
         credentialFile: clientConnection.token,
+        ...(clientConnection.readiness ? { readiness: clientConnection.readiness } : {}),
+        ...(clientConnection.readinessReason ? { readinessReason: clientConnection.readinessReason } : {}),
       },
       service: { summary: serviceSummary },
       codexShim: { summary: codexShimSummary },

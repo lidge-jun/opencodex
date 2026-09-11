@@ -59,7 +59,7 @@ describe("Phase 100 Codex-native parity smoke", () => {
       adapter: "openai-chat",
       baseUrl: "https://routed.example/v1",
       apiKey: "routed-key",
-      noVisionModels: ["deepseek-v4-pro"],
+      noVisionModels: ["deepseek-v4-flash"],
     };
     const forwardProvider: OcxProviderConfig = {
       adapter: "openai-responses",
@@ -76,9 +76,9 @@ describe("Phase 100 Codex-native parity smoke", () => {
     };
 
     const catalog = buildCatalogEntries(nativeTemplate(), ["gpt-5.5"], [
-      { provider: "opencode-go", id: "deepseek-v4-pro" },
+      { provider: "opencode-go", id: "deepseek-v4-flash" },
     ], undefined, false);
-    const routed = catalog.find(entry => entry.slug === "opencode-go/deepseek-v4-pro");
+    const routed = catalog.find(entry => entry.slug === "opencode-go/deepseek-v4-flash");
     expect(routed).toMatchObject({
       web_search_tool_type: "text_and_image",
       supports_search_tool: true,
@@ -90,7 +90,7 @@ describe("Phase 100 Codex-native parity smoke", () => {
     expect(routed).not.toHaveProperty("supports_websockets");
 
     const parsed = parseRequest({
-      model: "opencode-go/deepseek-v4-pro",
+      model: "opencode-go/deepseek-v4-flash",
       stream: true,
       input: "Search current docs, then answer.",
       tools: [
@@ -106,7 +106,7 @@ describe("Phase 100 Codex-native parity smoke", () => {
       parsed,
       false,
       routedProvider,
-      "deepseek-v4-pro",
+      "deepseek-v4-flash",
       {
         providerName: "openai",
         provider: forwardProvider,
@@ -125,7 +125,7 @@ describe("Phase 100 Codex-native parity smoke", () => {
 
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "error", message: "Your input exceeds the context window" },
-    ]), "deepseek-v4-pro"));
+    ]), "deepseek-v4-flash"));
     const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
     expect(failed.error).toMatchObject({
       code: "context_length_exceeded",

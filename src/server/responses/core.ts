@@ -210,6 +210,7 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
+  isNonReplayableResponse,
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
 import {
@@ -424,10 +425,13 @@ import {
   type RoutedNamespaceToolAliases,
 } from "../../responses/namespace-tool-compat";
 import {
+  collectDeclaredBareWireToolNames,
   collectDeclaredNamelessClientCallTypes,
   collectDeclaredWireToolNames,
   collectProviderExecutedCallTypes,
   createUndeclaredToolCallGuardBlockRewrite,
+  normalizeDefaultNamespaceInJson,
+  normalizeDefaultNamespaceInResponse,
   currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
   undeclaredToolCallMessage,
@@ -827,7 +831,8 @@ async function opaqueBlobRejectionBodyForRecovery(
   signal: AbortSignal,
 ): Promise<string | undefined> {
   if (
-    response.status < 400
+    isNonReplayableResponse(response)
+    || response.status < 400
     || (response.status >= 500 && response.status !== 502)
     || adapterName !== "openai-responses"
     || alreadyAttempted
@@ -1121,6 +1126,9 @@ export async function shouldRetryCodexPoolAccountQuota(
   response: Response,
   signal?: AbortSignal,
 ): Promise<boolean> {
+  // A post-send WebSocket gateway status must not become a second account's send; the
+  // body carries no quota evidence either, but the marker is the contract, not the prose.
+  if (isNonReplayableResponse(response)) return false;
   if (response.status === 402 || response.status === 429) return true;
   if (response.status < 500 || response.status >= 600) return false;
   try {
@@ -2263,6 +2271,50 @@ function isTerminalPoolRefreshFailure(error: unknown): boolean {
 }
 
 /**
+ * The refusal an operator meets when a stored pool credential's forced refresh does not complete.
+ *
+ * A bare "retry this request" reads as a transient fault in the proxy, which is how #4212's
+ * reporter spent an afternoon concluding OpenCodex had broken while one of their own accounts was
+ * the thing that needed them. It stays a retryable 503 and stays non-quarantining, because the
+ * refresh genuinely may succeed and a token-endpoint 5xx must not retire a healthy account
+ * (#2887). What it adds is the account and the exit: when retrying stops helping, that account
+ * has to be signed in again.
+ *
+ * The label is a public account selector when the request carried one, otherwise the durable
+ * `p`-prefixed log label — never the raw pool id and never the email. Those are the identifiers
+ * `responses-compaction-routing.test.ts` and `codex-auth-context.test.ts` already assert must not
+ * reach an operator-facing surface, and an error body travels further than a log line, not less.
+ * When neither is resolvable the sentence degrades to "the selected Codex pool account" rather
+ * than naming something opaque, because a wrong name is worse than no name.
+ *
+ * The wording says "sign in to that account again" and deliberately does NOT say
+ * "reauthentication". `classifyError` runs `isAuthenticationMessage` before it reaches the
+ * `status === 503` arm, and that check is status-blind on the bare substring "authentication",
+ * which "reauthentication" contains. A body carrying that word is reclassified to
+ * `authentication_error` / `invalid_api_key` even though the HTTP status stays 503 — and Codex
+ * applies retry-after backoff only for `server_is_overloaded`, so the friendlier sentence would
+ * have quietly disabled the retry this refusal exists to ask for. `options.code` cannot buy the
+ * classification back; only the wording can.
+ */
+export function poolCredentialRefreshIncompleteResponse(args: {
+  authCtx: CodexAuthContext;
+  config: Pick<OcxConfig, "codexAccounts">;
+  accountSelector?: string;
+}): Response {
+  const label = args.accountSelector ?? codexAuthContextLogLabel(args.authCtx, args.config);
+  const account = label ? `Codex pool account ${label}` : "the selected Codex pool account";
+  const response = formatErrorResponse(
+    503,
+    "server_busy",
+    `Codex credential refresh did not complete for ${account}; retry this request. `
+      + "If it keeps failing, sign in to that account again.",
+  );
+  const headers = new Headers(response.headers);
+  headers.set("Retry-After", "1");
+  return new Response(response.body, { status: response.status, headers });
+}
+
+/**
  * One forced refresh and one same-account rebuild for a stored pool credential that
  * upstream rejected with a pre-stream 401. `quarantine` distinguishes a dead grant,
  * which must retire the account, from a transient failure, which must not.
@@ -2332,14 +2384,15 @@ async function refreshPoolForwardAuth(args: {
         response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
       };
     }
-    const response = formatErrorResponse(
-      503,
-      "server_busy",
-      "Codex credential refresh did not complete; retry this request",
-    );
-    const headers = new Headers(response.headers);
-    headers.set("Retry-After", "1");
-    return { ok: false, quarantine: false, response: new Response(response.body, { status: response.status, headers }) };
+    return {
+      ok: false,
+      quarantine: false,
+      response: poolCredentialRefreshIncompleteResponse({
+        authCtx,
+        config,
+        accountSelector: route.codexAccountNamespace,
+      }),
+    };
   }
 }
 
@@ -4672,6 +4725,7 @@ async function handleResponsesInner(
     );
     const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(clientToolAuthorizationBody);
     const clientDeclaredWireToolNames = collectDeclaredWireToolNames(clientToolAuthorizationBody);
+    const clientDeclaredBareWireToolNames = collectDeclaredBareWireToolNames(clientToolAuthorizationBody);
     const clientDeclaredNamelessCallTypes = collectDeclaredNamelessClientCallTypes(
       clientToolAuthorizationBody,
     );
@@ -4747,6 +4801,7 @@ async function handleResponsesInner(
     };
     let outboundRequestBody: Record<string, unknown> | undefined;
     const declaredWireToolNames = new Set<string>();
+    const declaredBareWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
     // `buildToolBridgeMaps` creates a bare alias only when the caller selected exactly one
     // namespaced tool through a bare tool_choice. Restore that request-bounded identity before
@@ -4796,12 +4851,17 @@ async function handleResponsesInner(
       // aliases are authoritative. A continuation's outbound body still contains historical
       // catalogs (and may promote historical tool-search definitions), so it can never widen the
       // current caller snapshot captured above.
+      declaredBareWireToolNames.clear();
       if (replayedInputPrefixLength === 0) {
         for (const name of collectDeclaredWireToolNames(outboundRequestBody)) {
           declaredWireToolNames.add(name);
         }
+        for (const name of collectDeclaredBareWireToolNames(outboundRequestBody)) {
+          declaredBareWireToolNames.add(name);
+        }
       }
       for (const name of clientDeclaredWireToolNames) declaredWireToolNames.add(name);
+      for (const name of clientDeclaredBareWireToolNames) declaredBareWireToolNames.add(name);
       declaredNamelessClientCallTypes.clear();
       if (replayedInputPrefixLength === 0) {
         for (const callType of collectDeclaredNamelessClientCallTypes(outboundRequestBody)) {
@@ -4894,6 +4954,7 @@ async function handleResponsesInner(
         declaredWireToolNames,
         declaredNamelessClientCallTypes,
         providerExecutedCallTypes,
+        declaredBareWireToolNames,
       ) !== undefined) {
         inspectionSawUndeclaredTool = true;
       }
@@ -4931,11 +4992,19 @@ async function handleResponsesInner(
           declaredWireToolNames,
           declaredNamelessClientCallTypes,
           providerExecutedCallTypes,
+          declaredBareWireToolNames,
         ) !== undefined
       ) {
         return;
       }
-      rememberPassthroughResponse?.(replayResponse);
+      const normalizedReplayResponse = (undeclaredToolGuardActive
+        ? normalizeDefaultNamespaceInResponse(
+            replayResponse,
+            declaredWireToolNames,
+            declaredBareWireToolNames,
+          ).value
+        : replayResponse) as typeof replayResponse;
+      rememberPassthroughResponse?.(normalizedReplayResponse);
       const firstCompletion = !inspectedCompletionSeen;
       inspectedCompletionSeen = true;
       if (firstCompletion && (inspectedTerminal === null || firstTerminalAllowsRecall)) {
@@ -5956,6 +6025,7 @@ async function handleResponsesInner(
             declaredWireToolNames,
             declaredNamelessClientCallTypes,
             providerExecutedCallTypes,
+            declaredBareWireToolNames,
           )
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
@@ -6156,7 +6226,7 @@ async function handleResponsesInner(
       }
       const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
-      const clientJson = (() => {
+      let clientJson = (() => {
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(
           scrubSelfNamedToolCallNamespaceInJson(
             restoreImageGenCallsInJson(text, imageGenCallAliases),
@@ -6202,6 +6272,7 @@ async function handleResponsesInner(
               declaredWireToolNames,
               declaredNamelessClientCallTypes,
               providerExecutedCallTypes,
+              declaredBareWireToolNames,
             );
           } catch {
             return undefined;
@@ -6210,6 +6281,11 @@ async function handleResponsesInner(
         if (undeclared !== undefined) {
           return formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared));
         }
+        clientJson = normalizeDefaultNamespaceInJson(
+          clientJson,
+          declaredWireToolNames,
+          declaredBareWireToolNames,
+        );
       }
       commitReasoningReplayServingRoute();
       try {

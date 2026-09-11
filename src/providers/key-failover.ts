@@ -101,6 +101,84 @@ export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
 }
 
 /**
+ * Process-local round-robin cursor per provider, deliberately parallel to `keyCooldowns`
+ * rather than borrowing the Codex pool-rotation state: an API key is not an OAuth account
+ * and must not share a quota scope key. Multi-process desync is the same accepted limit
+ * the cooldown map already carries.
+ */
+const keyRotationCursor = new Map<string, string>();
+
+/** Forget a provider's cursor so an operator's manual key selection is not second-guessed. */
+export function forgetApiKeyRotationCursor(providerName: string): void {
+  keyRotationCursor.delete(providerName);
+}
+
+/**
+ * Pick a better key BEFORE the first attempt when the committed one is already cooling.
+ *
+ * This is intentionally narrow. It never overrides a healthy key: if the committed
+ * `apiKey` is not in cooldown it returns null, so an operator's manual selection stands
+ * and no config write happens. It only acts when the committed key is known-cooled (or
+ * missing from the pool), which is exactly the case where the first request would
+ * otherwise be spent earning a 429 the runtime could already predict.
+ *
+ * Returning null is the common path, so the persisted-selection transaction is not on
+ * the per-request hot path.
+ */
+export function selectProactiveApiKey(
+  config: OcxConfig,
+  providerName: string,
+  now = Date.now(),
+): OcxProviderConfig | null {
+  const provider = config.providers?.[providerName];
+  if (!provider) return null;
+  const strategy = provider.apiKeyPoolStrategy;
+  if (!strategy) return null;
+  if (!hasKeyPoolFailover(provider)) return null;
+  const pool = provider.apiKeyPool ?? [];
+
+  const activeEntry = pool.find(entry => entry.key === provider.apiKey);
+  // A healthy committed key wins, whether the operator chose it or a previous rotation did.
+  if (activeEntry && !isKeyInCooldown(providerName, activeEntry.id, now)) return null;
+
+  const eligible = pool.filter(entry => !isKeyInCooldown(providerName, entry.id, now));
+  if (eligible.length === 0) return null;
+
+  let chosen = eligible[0]!;
+  if (strategy === "round-robin") {
+    const lastId = keyRotationCursor.get(providerName);
+    const lastIndex = lastId ? pool.findIndex(entry => entry.id === lastId) : -1;
+    for (let offset = 1; offset <= pool.length; offset += 1) {
+      const candidate = pool[(lastIndex + offset) % pool.length]!;
+      if (isKeyInCooldown(providerName, candidate.id, now)) continue;
+      chosen = candidate;
+      break;
+    }
+  }
+  if (chosen.key === provider.apiKey) return null;
+
+  const outcome = commitProviderApiKeySelection<string | null>(config, providerName, freshProvider => {
+    const freshPool = freshProvider.apiKeyPool ?? [];
+    const target = freshPool.find(entry => entry.id === chosen.id);
+    if (!target) return { changed: false, value: null };
+    if (freshProvider.apiKey === target.key) return { changed: false, value: null };
+    const freshActive = freshPool.find(entry => entry.key === freshProvider.apiKey);
+    // Re-check under the lock: a concurrent manual selection may have landed a healthy key.
+    if (freshActive && !isKeyInCooldown(providerName, freshActive.id, now)) {
+      return { changed: false, value: null };
+    }
+    freshProvider.apiKey = target.key;
+    return { changed: true, value: target.id };
+  });
+  if (outcome.status !== "committed" || outcome.value === null) return null;
+
+  keyRotationCursor.set(providerName, outcome.value);
+  const committed = structuredClone(outcome.provider);
+  config.providers[providerName] = committed;
+  return structuredClone(committed);
+}
+
+/**
  * Normalize a provider's `retryOn429` policy, or return null when the knob is absent,
  * explicitly disabled, or the provider is not key-auth (OAuth/forward credentials must not be
  * replayed on the same token, forward passthrough never reaches the recovery loop anyway, and

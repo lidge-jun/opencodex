@@ -84,8 +84,9 @@ ChatGPT passthrough catalog 也會加入 GPT-5.6 Sol/Terra/Luna 的裸 slug：`g
 ## 2. 帳號登入（OAuth）
 
 有八個 provider preset 使用 OAuth 登入，另加透過實驗性非官方 device-flow bridge 的 GitHub Copilot。
-opencodex 會把 credential 存在 `~/.opencodex/auth.json` 並自動 refresh。登入 CLI 也接受 `chatgpt`；
-它會取得 ChatGPT credential，同時建立 `forward` 模式的 provider 條目。
+opencodex 會把 credential 存在 `~/.opencodex/auth.json` 並自動 refresh。登入 CLI 也接受 `ocx login codex`，
+但它不是上面的 provider：它會轉到 Codex 帳號池登入（與 `ocx account login codex` 相同的流程）。該帳號池
+有獨立的帳號 ledger，這條路徑需要 proxy 正在執行。`chatgpt` 與 `openai` 是同一條路徑的別名。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -97,7 +98,7 @@ ocx login google-antigravity
 ocx login cursor       # 獨立 Cursor PKCE 登入
 ocx login command-code # Command Code browser OAuth（或匯入 ~/.commandcode/auth.json）
 ocx login github-copilot  # GitHub device flow → Copilot token（Copilot Pro/Business）
-ocx login chatgpt      # 獨立 ChatGPT OAuth 登入
+ocx login codex        # Codex 帳號池（別名：chatgpt、openai；需要 proxy 正在執行）
 ocx logout <provider>
 ```
 
@@ -184,7 +185,8 @@ credential。caller 沒有送出時，opencodex **不會**捏造官方 client id
 **診斷與重新認證。** 一般 `ocx status` 會印出 OAuth health 區塊，只顯示遮蔽後 account id，不含 token。
 `ocx doctor` 會新增 OAuth reliability 區段，包含 writable-store／single-flight check，以及帶 recovery
 Action 的 WARN row。OAuth provider 帳號需要重新認證時，執行 `ocx login <provider>`，或在儀表板使用
-Reauthenticate。Codex pool 帳號不是 `ocx login` provider，請透過儀表板 Codex account pool 重新認證。
+Reauthenticate。Codex pool 帳號不是那些 provider 之一，但 `ocx login codex --reauth` 會轉到它們的帳號池
+重新認證，儀表板的 Codex account pool 也做同一件事。
 相關命令請參見 CLI 參考的 [`ocx status` / `ocx doctor`](/zh-tw/reference/cli/)。
 
 ### Kiro credential 匯入
@@ -318,7 +320,7 @@ incomplete 關閉，不會被誤報為成功。
 > pay-as-you-go 費用。preset 使用 curated static model catalog，因為 Ark `/models` 也包含 embedding、
 > image、video 與 3D resource，Coding gateway 會回傳相同 broad catalog，而 Agent Plan gateway 沒有
 > `/models` resource。Pay-as-you-go 預設 `doubao-seed-2-1-pro-260628`，curated catalog 也包含目前的
-> DeepSeek 與 GLM text model。Coding Plan 預設 `ark-code-latest`；Agent Plan 預設 `deepseek-v4-pro`。
+> DeepSeek 與 GLM text model。Coding Plan 預設 `ark-code-latest`；Agent Plan 預設 `deepseek-v4-flash`。
 
 > **Volcengine Plan 使用限制：** Volcengine 文件指出 Coding Plan 與 Agent Plan quota 只能在受支援的
 > AI coding tool 內使用，並警告把 plan key 用於一般 API call 可能導致訂閱停權或帳號封鎖。透過
@@ -505,7 +507,7 @@ key 來自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。openco
 REST API（`POST /api/chat`）連線，而非 OpenAI-compatible 介面，並向 provider 動態探索模型清單，
 因此新的 Ollama Cloud 模型不需改設定就會出現。opencodex 依 vision capability 分類其
 cloud lineup，讓 [vision sidecar](/zh-tw/guides/sidecars/) 只對純文字模型生效。純文字模型，例如
-`glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`，會列在
+`glm-5.2`、`deepseek-v4-flash`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`，會列在
 `noVisionModels`；原生 vision 模型，例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、
 `gemini-3-flash-preview`，不會列入。matching 可容忍 Ollama 的 `:size` tag，因此 `gpt-oss` 同時涵蓋
 `gpt-oss:120b` 與 `gpt-oss:20b`。

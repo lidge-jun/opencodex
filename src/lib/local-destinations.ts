@@ -7,7 +7,7 @@
  * 1. `localManagementOrigin` — authenticated management discovery/state (`/api/*`). It is
  *    served by the public listener and, on a hub, additionally by the loopback-only
  *    `hub.managementIngress`. Callers must still send a management credential: management
- *    authentication has no loopback bypass (structure/05), and the unauthenticated loopback
+ *    authentication has no loopback bypass (structure/gui-and-management-api.md), and the unauthenticated loopback
  *    listener deliberately does not serve `/api/*` at all.
  * 2. `localInferenceDestination` — the data plane a client wire actually speaks.
  *

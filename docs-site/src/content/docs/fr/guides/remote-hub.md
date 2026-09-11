@@ -24,13 +24,31 @@ Le jeton admin permet la gestion ordinaire mais ne peut jamais créer une sessio
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
-ocx config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
 ocx config set corsAllowOrigins '["http://localhost:10100"]'
+
+# Une configuration standalone neuve n'a ni objet `hub` ni objet `remoteGui`, et
+# `ocx config set` ne crée pas un parent manquant : un chemin imbriqué échoue avec
+# `config parent path not found: hub`. Définir `runtimeRole` ne le crée pas non plus.
+# Créez d'abord chaque objet, puis définissez ses champs.
+ocx config set hub '{}'
+ocx config set remoteGui '{}'
+ocx config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
 ocx config set hub.managementIngress '{"enabled":true,"port":10101}'
 ocx config set remoteGui.allowedTailscaleUsers '["operator@example.com"]'
 export OPENCODEX_API_AUTH_TOKEN="$(openssl rand -hex 32)"
 ocx service install
 ```
+
+Sur une configuration réellement vide, vous pouvez écrire chaque objet en un seul appel :
+
+```bash
+ocx config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.net","managementIngress":{"enabled":true,"port":10101}}'
+ocx config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
+```
+
+N'utilisez cette forme que si l'objet n'existe pas encore. Affecter l'objet entier le **remplace** au lieu de fusionner : exécutée sur une configuration qui contenait déjà `hub.managementIngress`, la ligne ci-dessus supprime silencieusement cette entrée. Pour adapter une configuration existante, le parent est déjà là : définissez un champ à la fois, la forme imbriquée fonctionne et ne touche à rien d'autre.
+
+Deux détails décident qu'une ligne passe. La valeur est d'abord interprétée comme du JSON et retombe sur la chaîne brute, d'où l'écriture d'une URL en `'"https://…"'` : objets, tableaux, booléens et nombres doivent être du JSON valide. Ensuite, `hub` et `remoteGui` sont stricts : une clé mal orthographiée comme une valeur non conforme sont rejetées à l'écriture par une erreur `schema_invalid`, au lieu de devenir un réglage sans effet. `managementPublicOrigin` doit être une origine nue, sans chemin, requête ni fragment.
 
 Le service lit le secret depuis `service-api-token`; le plist ou l’unité systemd ne contient pas sa valeur.
 
@@ -42,6 +60,39 @@ tailscale serve status
 ```
 
 `/healthz` ne prouve que la vie du processus. Validez aussi `/readyz`, `GET /v1/catalog` authentifié et une vraie réponse routée. Le port de gestion doit écouter uniquement sur `127.0.0.1`. Pour un proxy TLS privé, utilisez `tailscale cert hub-name.tailnet-name.ts.net` et ne fabriquez jamais d’en-têtes `Tailscale-User-*`; utilisez l’association à usage unique.
+
+### Donner du TLS à l'écoute de données
+
+Le mappage Serve ci-dessus ne publie que l'entrée de **gestion**. Celle-ci ne sert jamais `/v1/*`, `/healthz` ni `/readyz` : à elle seule, elle ne donne donc à un client distant aucun plan de données utilisable. opencodex ne termine par ailleurs aucun TLS : l'écoute est en HTTP clair et le HTTPS vient toujours d'un frontal détenu par l'opérateur.
+
+Serve peut aussi être ce frontal pour le plan de données, sur un second port HTTPS. Sur macOS, il faut un saut supplémentaire : Tailscale Serve ne relaie que vers `127.0.0.1` et ne peut donc pas viser l'écoute liée à l'adresse tailnet du nœud, tandis que la version App Store du client macOS refuse purement et simplement une destination distante. Lancez un relais local sur le hub et pointez Serve dessus :
+
+```bash
+# N'importe quel relais TCP local convient; socat en est un. Choisissez un port que le hub
+# n'utilise pas déjà : avec le companion de loopback activé, 127.0.0.1:10100 appartient à opencodex.
+socat TCP-LISTEN:10110,bind=127.0.0.1,fork,reuseaddr TCP:100.64.0.10:10100 &
+
+tailscale serve --bg --https=8443 http://127.0.0.1:10110
+tailscale serve status   # les deux mappages attendus : 443 -> 10101 et 8443 -> 10110
+```
+
+Serve n'accepte qu'un jeu limité de ports HTTPS; confirmez avec `tailscale serve status` que le mappage a bien été créé plutôt que de supposer le port autorisé. Donnez au relais la même durée de vie qu'au hub : une tâche shell en arrière-plan meurt au redémarrage alors que le service revient, ce qui laisse un hub actif et injoignable en TLS. Lancez-le depuis launchd ou systemd, aux côtés de `ocx service install`.
+
+Connectez-vous ensuite en énonçant les deux origines séparément. L'URL positionnelle est l'origine **de données** — c'est là que sont récupérés `/readyz` et `/v1/catalog` — et `--management-url` est l'origine du tableau de bord, utilisée pour l'association et l'émission de clé. Elles ne partagent pas nécessairement le même port :
+
+```bash
+ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --admin-token-stdin
+```
+
+Quand `--management-url` est omis, il est repris de la réponse `/readyz`, qui rapporte `hub.managementPublicOrigin`. L'indiquer explicitement est plus clair lorsque les deux origines diffèrent.
+
+**Ne contournez pas cela en liant l'écoute de données à `127.0.0.1`.** Une liaison loopback est précisément ce à quoi opencodex reconnaît un déploiement purement local : il cesse d'exiger un identifiant de données et se met à exiger que l'en-tête `Host` de la requête soit lui aussi loopback. Un frontal TLS transmet `Host: hub-name.tailnet-name.ts.net`, donc `/v1/catalog` répond `403 origin_rejected` tandis que `/readyz`, qui n'applique pas ce contrôle, renvoie toujours `200`. Le déploiement paraît sain et ne peut servir aucun modèle. Rien dans le chemin de requête ne lit `X-Forwarded-Host`, le frontal ne peut donc pas corriger cela. Gardez l'écoute sur l'adresse tailnet : l'admission par identifiant y reste active et le contrôle `Host` ne s'applique pas.
+
+Lier `0.0.0.0` fonctionne aussi et supprime le besoin de relais, puisque l'écoute devient alors joignable en loopback. Cela publie le port de données sur toutes les interfaces : réservez-le aux hôtes dont les autres réseaux vous importent peu.
+
+Une fois Serve en place, rejouez les contrôles d'acceptation sur l'origine de données HTTPS : `/readyz`, `GET /v1/catalog` authentifié et une vraie réponse routée.
 
 ## OAuth, rotation et déconnexion
 
@@ -103,6 +154,7 @@ Le conteneur s’exécute avec l’utilisateur non-root `bun`, un système de fi
 - Récupération `.prev` : conservez les deux fichiers et relancez la rotation avec une autorité transitoire.
 - `hub-too-new`/`hub-too-old` : mettez à niveau le côté indiqué avant toute écriture locale.
 - Code d’association perdu ou épuisé : créez-en un nouveau; les essais sont limités avec 429.
-- HTTP non local exige `--allow-insecure-http`; un jeton admin n’est jamais envoyé en HTTP.
+- HTTP non local : l'association est refusée d'emblée et aucun indicateur ne permet d'y déroger. Placez l'origine de gestion derrière HTTPS, ou associez en loopback. Un jeton admin n’est jamais envoyé en HTTP.
+- `403 origin_rejected` sur `/v1/catalog` alors que `/readyz` renvoie `200` : l'écoute de données est liée au loopback derrière un frontal TLS. Voir « Donner du TLS à l'écoute de données » ci-dessus.
 - Déconnexion/expiration de session navigateur n’affecte pas la clé de données.
 - Avant `tailscale serve reset`, inspectez `tailscale serve status`, car reset supprime tous les mappages.

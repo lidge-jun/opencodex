@@ -580,6 +580,10 @@ const modelPinnedEffortsSchema = z.unknown().superRefine((value, ctx) => {
 const providerConfigSchema = z.object({
   pinnedReasoningEffort: pinnedReasoningEffortSchema.optional(),
   modelPinnedReasoningEfforts: modelPinnedEffortsSchema.optional(),
+  // Validated rather than left to passthrough: an unrecognized strategy would otherwise
+  // load silently and then be ignored at selection time, which reads as a broken feature
+  // rather than a rejected setting.
+  apiKeyPoolStrategy: z.enum(["round-robin", "fill-first"]).optional(),
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
   alias: z.string().optional(),
@@ -620,6 +624,9 @@ const providerConfigSchema = z.object({
   upstreamWebsocket: z.boolean().optional(),
   directGeminiWireRenames: z.boolean().optional(),
   noStructuredOutputModels: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .optional(),
+  noJsonSchemaModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
   retainModels: z.array(z.string().min(1))
@@ -1610,6 +1617,17 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "noStructuredOutputModels"],
         message: structuredOutputOptOutError,
+      });
+    }
+    const jsonSchemaOptOutError = nonBlankStringArrayConfigError(
+      (provider as { noJsonSchemaModels?: unknown }).noJsonSchemaModels,
+      "noJsonSchemaModels",
+    );
+    if (jsonSchemaOptOutError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "noJsonSchemaModels"],
+        message: jsonSchemaOptOutError,
       });
     }
     const retainModelsError = nonBlankStringArrayConfigError(

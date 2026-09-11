@@ -44,7 +44,7 @@ ocx models live --provider ark --json
 
 啟動供應商已註冊的登入流程。OAuth 供應商會開啟瀏覽器並在 `~/.opencodex/` 下儲存自動重新整理的憑證；API-key 登入供應商會開啟其金鑰儀表板、提示輸入金鑰、在可能時驗證它，並儲存產生的供應商設定。當名稱缺失或未知時，指令會印出目前接受的 OAuth 與 API-key 供應商 id。
 
-在 `ocx status` / `ocx doctor` 回報需要重新認證或終端 refresh 失敗後，請使用相同指令**重新認證**（或在儀表板中使用 Reauthenticate）。Codex pool 帳號不是公開的 `ocx login` 供應商——請改由儀表板 Codex 帳號池（Reauthenticate）或無頭的 `ocx account reauth` 流程重新認證。
+在 `ocx status` / `ocx doctor` 回報需要重新認證或終端 refresh 失敗後，請使用相同指令**重新認證**（或在儀表板中使用 Reauthenticate）。Codex pool 帳號不是上面那些 OAuth／API key 供應商，但 `ocx login codex` 可以到達：它會轉到帳號池登入，所以 `ocx login codex --reauth` 等同於 `ocx account reauth codex`。儀表板的 Codex 帳號池（Reauthenticate）也可以。這條路徑跑在 proxy 內部，需要 proxy 正在執行。
 
 ```bash
 ocx login xai
