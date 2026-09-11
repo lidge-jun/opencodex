@@ -1176,5 +1176,8 @@
   "zhipu-bigmodel-responses-quota.test.ts": "providers",
   "zz-ci-api-usage-isolation.test.ts": "ci-workflows",
   "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
-  "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
+  "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
+  "zcode-adapter.test.ts": "providers",
+  "zcode-transport.test.ts": "providers",
+  "zcode-routing.test.ts": "providers"
 }

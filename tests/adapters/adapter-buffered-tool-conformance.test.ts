@@ -24,6 +24,7 @@ const WIRE_MODELS: Record<AdapterWire, string> = {
   "openai-responses": "deepseek-v4-flash",
   cursor: "cursor/auto",
   codebuddy: "glm-5.3",
+  zcode: "test/model",
 };
 
 function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfig {
@@ -37,6 +38,7 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
     "openai-responses": "https://api.deepseek.com",
     cursor: "https://api2.cursor.sh",
     codebuddy: "https://www.codebuddy.ai",
+    zcode: "https://zcode.z.ai",
   };
   const baseUrl = adapterId === "mimo-free"
     ? "https://api.xiaomimimo.com/api/free-ai/openai/chat"

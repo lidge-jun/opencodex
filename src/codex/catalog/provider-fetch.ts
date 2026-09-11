@@ -1,3 +1,4 @@
+import { discoverZcodeModels } from "../../adapters/zcode/settings";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { execFileSync } from "node:child_process";
@@ -1655,6 +1656,21 @@ async function fetchProviderModelsWithAuth(
       ? [...models, vertexDefaultSeed]
       : models
   );
+  if (prov.adapter === "zcode") {
+    try {
+      const models = discoverZcodeModels().map(model => ({
+        id: model.id, provider: name,
+        ...catalogHintsFromProviderConfig(name, prov, model.id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        displayName: model.label,
+        ...(model.contextWindow ? { contextWindow: typeof contextCap === "number" && contextCap > 0
+          ? Math.min(model.contextWindow, contextCap) : model.contextWindow } : {}),
+        inputModalities: ["text"],
+      } as CatalogModel));
+      return observed(withConfiguredRetention(models), "authoritative");
+    } catch {
+      return observed([], "degraded");
+    }
+  }
   if (prov.adapter === "qoder") {
     if (!apiKey) return observed(configured, "degraded");
     const profile = resolveQoderProfile(prov.baseUrl);

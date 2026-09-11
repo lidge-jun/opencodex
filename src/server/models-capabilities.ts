@@ -105,6 +105,8 @@ export function predictCursorEffort(
 }
 
 export interface ModelCapabilityInput {
+  /** False for agent-owned transports that cannot execute the caller's tool catalog. */
+  supportsToolUse?: boolean;
   reasoningEfforts?: readonly string[];
   contextWindow?: number;
   /**
@@ -126,7 +128,7 @@ export interface ModelCapabilityFields {
     /** Cursor's extended-row filter REQUIRES this to contain "text"; every route emits text. */
     output_modalities: string[];
     input_modalities?: string[];
-    supports_tool_use: true;
+    supports_tool_use: boolean;
     supports_streaming: true;
     supports_reasoning: boolean;
     supports_vision?: boolean;
@@ -168,7 +170,7 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
       // include "text"; omitting the key drops the row from the extended catalog.
       output_modalities: ["text"],
       ...(modalities !== undefined && modalities.length > 0 ? { input_modalities: [...modalities] } : {}),
-      supports_tool_use: true,
+      supports_tool_use: input.supportsToolUse !== false,
       supports_streaming: true,
       supports_reasoning: efforts.length > 0,
       ...(supportsVision !== undefined ? { supports_vision: supportsVision } : {}),

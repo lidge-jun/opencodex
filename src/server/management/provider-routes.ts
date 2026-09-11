@@ -1,3 +1,4 @@
+import { discoverZcodeModels } from "../../adapters/zcode/settings";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -1352,6 +1353,16 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         models: live.models.length,
         message: `Connected. ${live.models.length} models.`,
       });
+    }
+    if (prov.adapter === "zcode") {
+      try {
+        const models = discoverZcodeModels();
+        return jsonResponse({ ok: models.length > 0, models: models.length, latencyMs: 0,
+          message: "Local catalog loaded. Account inference is validated only by an explicit agent turn." });
+      } catch {
+        return jsonResponse({ ok: false, latencyMs: 0,
+          error: "ZCode isolated launcher, opt-in or model settings are unavailable. See the ZCode provider setup guide." });
+      }
     }
     if (prov.adapter === "qoder") {
       const started = Date.now();

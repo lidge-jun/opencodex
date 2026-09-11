@@ -4485,8 +4485,11 @@ async function handleResponsesInner(
   }
 
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
-  const needsOpenAiVision = shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
-  const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
+  // Opt-in native agents own the entire execution path. Do not turn an unsupported attachment
+  // into a separate direct-API inference (or resolve helper credentials) before their adapter.
+  const nativeAgentOwnsExecution = adapter.allowExternalSidecars === false;
+  const needsOpenAiVision = !nativeAgentOwnsExecution && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
+  const needsOpenAiSearch = !nativeAgentOwnsExecution && shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
       // Preserve explicit OpenAI helper auth across route changes without returning it to
@@ -4535,7 +4538,7 @@ async function handleResponsesInner(
   // surface (whose bridge rebuilds headers) or as the raw header for native
   // Responses callers. Marked + text-only routed model → strip, depth cap 1.
   const visionDescribeTerminal = options.visionDescribeTerminal === true;
-  const visionPlan = visionDescribeTerminal
+  const visionPlan = visionDescribeTerminal || nativeAgentOwnsExecution
     ? undefined
     : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
@@ -4550,7 +4553,7 @@ async function handleResponsesInner(
       recordSidecarOutcome,
       translatorBudget,
     );
-  } else if (isModelTextOnly(route.provider, route.modelId)) {
+  } else if (!nativeAgentOwnsExecution && isModelTextOnly(route.provider, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
     // disabled): fail closed — never forward raw images to a text-only upstream.
     stripImagesInPlace(parsed, translatorBudget);
@@ -6346,13 +6349,13 @@ async function handleResponsesInner(
   //   - non-runTurn: web-search wins over image when both eligible (documented priority)
   //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
   //     can proceed for web-search-only turns
-  const wsPlan = !routedCompaction
+  const wsPlan = !routedCompaction && !nativeAgentOwnsExecution
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
     })
     : undefined;
-  const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
-  const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
+  const imgPlan = !routedCompaction && !nativeAgentOwnsExecution ? await planImageBridge(config, parsed, route.provider) : undefined;
+  const vidPlan = !routedCompaction && !nativeAgentOwnsExecution ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
   const rotateSidecarProviderOn429 = async (
     retryAfter: string | null,
@@ -6652,6 +6655,7 @@ async function handleResponsesInner(
   // intentionally outside this guard and retain their existing one-send wire behavior.
   const emptyCompletionGuardEnabled =
     emptyCompletionRetryEnabled(config)
+    && adapter.replaySafe !== false
     && !options.comboAttempt
     && !routedCompaction;
 
