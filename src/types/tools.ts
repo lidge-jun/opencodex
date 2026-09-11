@@ -66,22 +66,69 @@ const CODE_MODE_HELPER_TOOL_NAMES = [
  */
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 
+/**
+ * Wire prefixes that mean 'no namespace'.
+ *
+ * Some routed providers qualify a bare tool with a default namespace on the
+ * way back (observed: muse-spark via opencode-go emits 'default.view_image'
+ * for the Codex client bare 'view_image'). 'default' carries no tool identity
+ * of its own, and the reserved 'functions' group likewise has no wire prefix,
+ * so fold that spelling back to the bare name, but only while the catalog
+ * declares no tools under that namespace. A genuinely declared full name
+ * always wins over the fold, so a real namespaced identity can never be
+ * misrouted to bare.
+ */
+const DEFAULT_NAMESPACE_PREFIXES = [
+  { namespace: 'default', prefixes: ['default.', 'default__'] },
+  { namespace: 'functions', prefixes: ['functions.', 'functions__'] },
+] as const;
+
+export function hasDeclaredNamespaceTools(
+  declared: ReadonlySet<string>,
+  namespace: string,
+): boolean {
+  const dot = namespace + '.';
+  const flat = namespace + '__';
+  for (const name of declared) {
+    if (name.startsWith(dot) || name.startsWith(flat)) return true;
+  }
+  return false;
+}
+
+export function stripDefaultNamespacePrefix(
+  name: string,
+  declared: ReadonlySet<string> | undefined,
+): string {
+  if (!declared || declared.has(name)) return name;
+  for (const entry of DEFAULT_NAMESPACE_PREFIXES) {
+    for (const prefix of entry.prefixes) {
+      if (name.startsWith(prefix) && name.length > prefix.length) {
+        if (hasDeclaredNamespaceTools(declared, entry.namespace)) return name;
+        return name.slice(prefix.length);
+      }
+    }
+  }
+  return name;
+}
+
 export function normalizeDeclaredToolName(
   name: string,
   declared: ReadonlySet<string> | undefined,
 ): string {
-  if (!declared || !declared.has(CODE_MODE_EXEC_TOOL_NAME)) return name;
-  if (declared.has(name)) return name;
-  if (name === "apply_patch") return CODE_MODE_EXEC_TOOL_NAME;
+  if (!declared) return name;
+  const unprefixed = stripDefaultNamespacePrefix(name, declared);
+  if (!declared.has(CODE_MODE_EXEC_TOOL_NAME)) return unprefixed;
+  if (declared.has(unprefixed)) return unprefixed;
+  if (unprefixed === 'apply_patch') return CODE_MODE_EXEC_TOOL_NAME;
   // When the catalog explicitly declares any legacy shell bridge name, the environment
   // genuinely exposes that tool — turn normalization off so a call is never mis-routed
   // to `exec`.
   if ((LEGACY_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).some(legacy => declared.has(legacy))) {
-    return name;
+    return unprefixed;
   }
-  return (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(name)
+  return (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(unprefixed)
     ? CODE_MODE_EXEC_TOOL_NAME
-    : name;
+    : unprefixed;
 }
 
 /**

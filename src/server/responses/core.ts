@@ -430,6 +430,8 @@ import {
   createUndeclaredToolCallGuardBlockRewrite,
   currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
+  createDefaultNamespacePrefixStripRewrite,
+  normalizeDefaultNamespacePrefixInJson,
   undeclaredToolCallMessage,
   undeclaredToolCallName,
   undeclaredToolCallNameInResponse,
@@ -5938,6 +5940,10 @@ async function handleResponsesInner(
         : undefined;
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
+        // Fold a provider-added default namespace ('default.view_image' for a
+        // declared bare 'view_image') back to bare before the undeclared-tool
+        // guard compares names the client will actually receive.
+        createDefaultNamespacePrefixStripRewrite(new Set(declaredWireToolNames)),
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
         createSelfNamedToolCallNamespaceScrubRewrite(selfNamedNamespaceScrubAuthorization),
@@ -6220,7 +6226,11 @@ async function handleResponsesInner(
           restored,
           routedToolSearchNames,
         );
-        const repaired = normalizeFunctionCompletionJson(restoredToolSearch);
+        const restoredDefaultPrefix = normalizeDefaultNamespacePrefixInJson(
+          restoredToolSearch,
+          declaredWireToolNames,
+        );
+        const repaired = normalizeFunctionCompletionJson(restoredDefaultPrefix);
         const modelRewritten = parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId
           ? rewriteResponsesModelJson(repaired, parsed._responseModelId)
           : repaired;

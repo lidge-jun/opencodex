@@ -3,7 +3,7 @@ import {
   normalizeApplyPatchDelimiters,
   unwrapFreeformToolInput,
 } from "./apply-patch-envelope";
-import { declaresCodeModeExec } from "../types/tools";
+import { declaresCodeModeExec, stripDefaultNamespacePrefix } from "../types/tools";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -80,7 +80,7 @@ export function resolveCodeModeHelperName(
   namespace?: string,
   declaredNames?: ReadonlySet<string>,
 ): string | undefined {
-  if (codeModeHelperName) return codeModeHelperName;
+  if (codeModeHelperName) return stripDefaultNamespacePrefix(codeModeHelperName, declaredNames);
   if (toolName !== "exec" || namespace !== undefined) return undefined;
   // `exec` is a name, not a guarantee. Without a catalog that is genuinely code mode, a
   // caller-defined `exec` could legitimately take patch text, and handing it generated

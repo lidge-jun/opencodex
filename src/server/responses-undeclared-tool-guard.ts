@@ -5,7 +5,8 @@ import {
   namespacedToolName,
   normalizeDeclaredToolName,
 } from "../types";
-import { sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
+import { hasDeclaredNamespaceTools, stripDefaultNamespacePrefix } from "../types/tools";
+import { sseDataPayload, type SseBlockRewrite, type SsePayloadRewrite } from "./sse-payload-rewrite";
 
 /** Item types the client executes through a request-declared wire name. */
 const CLIENT_EXECUTED_CALL_TYPES = new Set(["function_call", "custom_tool_call"]);
@@ -319,6 +320,12 @@ function undeclaredNameInItem(
       dottedAliasIsUnambiguous(item.namespace, name)
       && declared.has(dottedToolName(item.namespace, name))
     ) return undefined;
+    // A routed provider may attach a default namespace to a bare tool, e.g. a
+    // 'default' namespace around 'view_image' when only bare 'view_image' was
+    // declared. Fold it only while that namespace is not genuinely in use.
+    if ((item.namespace === 'default' || item.namespace === 'functions')
+      && declared.has(name)
+      && !hasDeclaredNamespaceTools(declared, item.namespace)) return undefined;
     return name;
   }
   const effectiveName = normalizeDeclaredToolName(name, declared);
@@ -411,4 +418,70 @@ export function createUndeclaredToolCallGuardBlockRewrite(
     tripped = true;
     return failedBlocks(name, block.includes("\r\n") ? "\r\n" : "\n");
   };
+}
+
+const DEFAULT_STRIP_CALL_TYPES = new Set(['function_call', 'custom_tool_call']);
+const DEFAULT_STRIP_NAMESPACES = new Set(['default', 'functions']);
+
+function normalizeDefaultPrefixedToolCallNode(
+  node: unknown,
+  declared: ReadonlySet<string>,
+): { value: unknown; changed: boolean } {
+  if (Array.isArray(node)) {
+    let changed = false;
+    const out = node.map((entry) => {
+      const result = normalizeDefaultPrefixedToolCallNode(entry, declared);
+      changed = changed || result.changed;
+      return result.value;
+    });
+    return changed ? { value: out, changed: true } : { value: node, changed: false };
+  }
+  if (!isPlainObject(node)) return { value: node, changed: false };
+  let changed = false;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(node)) {
+    const result = normalizeDefaultPrefixedToolCallNode(node[key], declared);
+    out[key] = result.value;
+    changed = changed || result.changed;
+  }
+  if (DEFAULT_STRIP_CALL_TYPES.has(out.type as string) && typeof out.name === 'string') {
+    if (typeof out.namespace === 'string' && DEFAULT_STRIP_NAMESPACES.has(out.namespace)) {
+      const namespace = out.namespace;
+      const bare = out.name;
+      if (!declared.has(namespace + '__' + bare) && !declared.has(namespace + '.' + bare)
+        && declared.has(bare)
+        && !hasDeclaredNamespaceTools(declared, namespace)) {
+        delete out.namespace;
+        changed = true;
+      }
+    } else if (!('namespace' in out)) {
+      const stripped = stripDefaultNamespacePrefix(out.name, declared);
+      if (stripped !== out.name && declared.has(stripped)) {
+        out.name = stripped;
+        changed = true;
+      }
+    }
+  }
+  return changed ? { value: out, changed: true } : { value: node, changed: false };
+}
+
+export function normalizeDefaultNamespacePrefixInJson(
+  text: string,
+  declared: ReadonlySet<string>,
+): string {
+  if (text.indexOf('default') === -1 && text.indexOf('functions') === -1) return text;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  const result = normalizeDefaultPrefixedToolCallNode(payload, declared);
+  return result.changed ? JSON.stringify(result.value) : text;
+}
+
+export function createDefaultNamespacePrefixStripRewrite(
+  declared: ReadonlySet<string>,
+): SsePayloadRewrite {
+  return (payload) => normalizeDefaultNamespacePrefixInJson(payload, declared);
 }
