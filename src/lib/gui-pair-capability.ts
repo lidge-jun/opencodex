@@ -38,6 +38,33 @@ export function canonicalGuiBrowserOrigin(value: unknown): string | null {
   }
 }
 
+/**
+ * A bare http(s) origin, or null.
+ *
+ * Stricter than {@link canonicalGuiBrowserOrigin}: that one also accepts non-HTTP schemes
+ * (a packaged app's custom scheme can be a browser origin), while this is the rule for an
+ * origin that will be DIALLED — the hub's management and data origins, and the `serverOrigin`
+ * a pairing grant is bound to. Credentials, a path, a query or a fragment are all rejected
+ * rather than silently dropped, because every caller goes on to print or compare the result.
+ *
+ * Exported here, beside the browser-origin canonicaliser, because this file is the only
+ * module the CLI pairing path and the hub command already share. `src/config.ts` and
+ * `src/server/gui-session.ts` still hold byte-identical private copies; folding those in
+ * would pull a heavy config import into a server security-boundary file, so it is its own
+ * change rather than a drive-by in a token-UX PR.
+ */
+export function canonicalHttpOrigin(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
 function capabilityPayload(
   nonce: string,
   method: string,

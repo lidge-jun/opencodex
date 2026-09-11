@@ -92,6 +92,58 @@ export function cachedProviderQuotaIsExhausted(
   return false;
 }
 
+/**
+ * Why a catalog row is offered but cannot currently serve a request (#1711).
+ *
+ * Only one reason exists today. It is a string rather than a boolean so a later cause — a
+ * cooldown, a revoked key — can be told apart by a consumer that already reads the field.
+ */
+export type QuotaInactiveReason = "no_credit";
+
+/**
+ * `"no_credit"` when every USABLE target of a catalog row has positive exhaustion evidence
+ * (#1711), otherwise undefined.
+ *
+ * This deliberately reuses the runtime rules in `targetProviderIsUsable` above rather than the
+ * Dashboard's `quotaStateFromReport`, which is harsher: it treats `remaining <= 0` as exhausted
+ * without requiring `percent >= 100` and ignores an elapsed `resetAt`. A catalog row marked
+ * inactive on the harsher rule would contradict the router, which would still happily send the
+ * request.
+ *
+ * Three rules carry the correctness, all inherited rather than restated:
+ *
+ * - A target the operator has removed or disabled is not usable and is not evidence either way;
+ *   it drops out before the vote. If nothing is left, the row is unavailable for an operator
+ *   reason rather than a quota one, so this returns undefined.
+ * - The canonical ChatGPT forward provider is exempt. Native account selection owns model-scoped
+ *   quota, and a provider-level summary cannot veto it.
+ * - A stale cache is NOT exhaustion. `getCachedProviderQuota` returns null past its 30-minute
+ *   window, and a null reading ends the vote rather than counting as evidence, so an unprobed
+ *   provider is never marked inactive.
+ *
+ * "Every" is the bar on purpose: one target that can still serve makes the row serviceable, which
+ * is exactly what the combo loop concludes at request time.
+ */
+export function quotaInactiveReason(
+  config: OcxConfig,
+  targets: readonly { provider: string }[],
+  now = Date.now(),
+): QuotaInactiveReason | undefined {
+  const usable = targets.filter(target => {
+    if (!Object.hasOwn(config.providers, target.provider)) return false;
+    const provider = config.providers[target.provider];
+    return !!provider && provider.disabled !== true;
+  });
+  if (usable.length === 0) return undefined;
+  for (const target of usable) {
+    const provider = config.providers[target.provider]!;
+    if (isCanonicalOpenAiForwardProvider(provider)) return undefined;
+    const quota = getCachedProviderQuota(target.provider, now);
+    if (!quota || !cachedProviderQuotaIsExhausted(quota, now)) return undefined;
+  }
+  return "no_credit";
+}
+
 function smoothWeightedIndex(
   targets: Required<OcxComboTarget>[],
   state: SelectionState,

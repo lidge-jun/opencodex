@@ -427,13 +427,47 @@ function sameRuntimeCommand(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
-/** True when a persisted clamp diagnostic still applies to the currently selected runtime. */
+/**
+ * Rungs OpenCodex no longer lets the observed-runtime intersection remove, so a persisted
+ * diagnostic naming only these describes a policy that is gone rather than a live restriction.
+ * This is the single copy of the exemption: `catalog/effort.ts` imports it for the clamp
+ * predicate, and a leftover file written before the exemption must not keep warning about
+ * rungs the next sync will stop removing.
+ */
+export const UNCLAMPABLE_REASONING_EFFORTS: ReadonlySet<string> = new Set(["max", "ultra"]);
+
+/** Removals that still describe a real restriction, ignoring rungs nothing clamps any more. */
+export function liveRemovedEfforts(
+  diagnostic: EffortClampDiagnostic | null | undefined,
+): readonly string[] {
+  if (!diagnostic) return [];
+  return diagnostic.removedEfforts.filter(effort => !UNCLAMPABLE_REASONING_EFFORTS.has(effort));
+}
+
+/**
+ * True when a persisted clamp diagnostic still applies to the currently selected runtime.
+ *
+ * Two ways a stored diagnostic stops describing reality:
+ *
+ * 1. Every rung it names is one nothing clamps any more, so the file is inert until the next
+ *    sync unlinks it.
+ * 2. The binary at that path was upgraded in place. Windows updates Codex without moving the
+ *    executable, so path equality alone kept a 0.135.0 observation "current" for a 0.154.0
+ *    runtime whose own bundled catalog carried the rungs the diagnostic claimed were missing.
+ *    A known version mismatch therefore wins over a path match; an unknown version on either
+ *    side stays conservative, because absence of a version is not evidence of an upgrade.
+ */
 export function effortClampAppliesToRuntime(
   diagnostic: EffortClampDiagnostic | null | undefined,
   runtime: Pick<ResolvedCodexRuntime, "command" | "version">,
 ): boolean {
-  if (!diagnostic || diagnostic.removedEfforts.length === 0) return false;
-  if (sameRuntimeCommand(diagnostic.runtimePath, runtime.command)) return true;
+  if (!diagnostic || liveRemovedEfforts(diagnostic).length === 0) return false;
+  if (sameRuntimeCommand(diagnostic.runtimePath, runtime.command)) {
+    if (diagnostic.runtimeVersion && runtime.version) {
+      return diagnostic.runtimeVersion === runtime.version;
+    }
+    return true;
+  }
   return Boolean(
     diagnostic.runtimeVersion
     && runtime.version

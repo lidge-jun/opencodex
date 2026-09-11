@@ -693,6 +693,10 @@ test("already-running ensure leaves Raycast untouched when saved host and listen
     loadConfig: () => savedConfig,
     codexAutoStartEnabled: () => true,
     syncModelsToCodex: async () => ({ status: "skipped" }),
+    // handleEnsure reports a skipped sync through this helper (the hub gate and the Codex
+    // toggle produce different sentences). This harness supplies every free identifier the
+    // extracted body reads, so it supplies that one too.
+    startupLeftCodexNativeLine: () => "",
     refreshOwnedRaycastCatalog: async () => {
       refreshCalls += 1;
       writeFileSync(configPath, "wrong saved destination");

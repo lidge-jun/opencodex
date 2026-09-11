@@ -260,8 +260,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, []);
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
-    if (completion.catalogRefreshPending) {
-      setStatus(t("codexAuth.catalogRefreshPending"));
+    if (completion.validationPending || completion.catalogRefreshPending) {
+      setStatus(t(completion.validationPending ? "pws.healthLabel.validationPending" : "codexAuth.catalogRefreshPending"));
       setStatusOk(false);
       setStatusTone("warn");
       setStatusRevision(revision => revision + 1);
@@ -419,7 +419,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     const configured = config?.providers[provider];
     const mode = configured?.authMode;
     const readAccounts = configured && isAccountProvider(provider, configured)
-      ? () => codexPool.load(true)
+      ? () => codexPool.load(true, { validatePending: true })
       : mode === "oauth"
         ? () => fetchAccountSets([provider], true)
         : mode === "forward" || mode === "local"
@@ -710,7 +710,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onCodexAdded={(completion) => {
           setCodexLoginOpen(false);
           notifyCodexCompletion(completion);
-          modelsNotice.open("openai", !config.providers.openai, completion.catalogRefreshPending);
+          if (!completion.validationPending) modelsNotice.open("openai", !config.providers.openai, completion.catalogRefreshPending);
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

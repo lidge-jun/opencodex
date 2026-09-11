@@ -451,9 +451,20 @@ describe("provider registry parity", () => {
     expect(glm53Entry?.default_reasoning_level).toBe("max");
   });
 
-  test("BigModel Responses exports only the officially documented static Codex models", () => {
-    // Independent oracle: https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md,
-    // local models.json example checked 2026-09-07; not an authenticated /models response.
+  test("BigModel Responses exports the documented Coding Plan roster for the Codex endpoint", () => {
+    // Independent oracle, all checked 2026-09-11 and none of them an authenticated /models
+    // response. The earlier version of this test read the models.json sample on
+    // https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md as the endpoint's whole roster and
+    // hard-locked two models. It is a starter catalog, and three other upstream pages contradict
+    // that reading (#4201):
+    //   - coding-plan/latest-model.md binds Codex to https://open.bigmodel.cn/api/v1 and states
+    //     GLM-5.3 and GLM-5.3-Flash are available to every plan tier.
+    //   - coding-plan/overview.md states GLM-5-Turbo calls are auto-switched to GLM-5.3-Flash,
+    //     so this preset was already reaching Flash through the Turbo id it does list.
+    //   - guide/models/vlm/glm-5.3-flash.md gives native multimodal input, a 1M window, and text
+    //     parameters "consistent with GLM-5.3".
+    // What stays locked is the part no document supports: there is still no HTTP /models
+    // contract here, so liveModels and apiKeyValidation must not drift.
     const id = "zhipu-bigmodel-responses";
     const registry = PROVIDER_REGISTRY.find(entry => entry.id === id)!;
     expect(registry).toMatchObject({
@@ -461,17 +472,24 @@ describe("provider registry parity", () => {
       baseUrl: "https://open.bigmodel.cn/api/v1",
       authKind: "key",
       defaultModel: "glm-5.3",
-      models: ["glm-5.3", "glm-5-turbo"],
+      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
       liveModels: false,
       preserveCustomDestination: true,
       preserveResponsesReasoningContent: true,
     });
     expect(registry.modelDiscovery).toBeUndefined();
     expect(registry.preserveReasoningContentModels).toBeUndefined();
-    const upstreamModalities = { "glm-5.3": ["text"], "glm-5-turbo": ["text"] };
+    // Flash is the one row upstream documents as natively multimodal; the other two are text.
+    // Pinned separately from the global VLM rule above so that copying glm-5.3's ["text"] onto
+    // Flash fails here, naming this preset, rather than only in a loop over every provider.
+    const upstreamModalities = {
+      "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"],
+    };
     expect(registry.modelInputModalities).toEqual(upstreamModalities);
+    expect(registry.modelInputModalities?.["glm-5.3-flash"]).toContain("image");
+    expect(registry.noVisionModels ?? []).not.toContain("glm-5.3-flash");
     expect(KEY_LOGIN_PROVIDERS[id]).toMatchObject({
-      models: ["glm-5.3", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
+      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
     });
     const provider = providerConfigSeed(registry);
     enrichProviderFromRegistry(id, provider);
@@ -480,11 +498,15 @@ describe("provider registry parity", () => {
     const models = provider.models!.map(modelId => applyProviderConfigHints(id, provider, {
       provider: id, id: modelId,
     }));
-    // The official upstream declaration stays text-only. Catalog hints add image for the
-    // existing vision sidecar (vision/eligibility.ts), not native BigModel image support.
+    // glm-5.3 and glm-5-turbo stay text-only upstream and get image back from the existing
+    // vision sidecar (vision/eligibility.ts). Flash already declares image, so its catalog
+    // modality is the model's own capability rather than a sidecar detour — the rows look
+    // alike below, and this assertion is what keeps the reason for them different.
     expect(provider.modelInputModalities).toEqual(upstreamModalities);
     expect(models).toMatchObject([
       { id: "glm-5.3", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
+        defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
+      { id: "glm-5.3-flash", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
         defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
       { id: "glm-5-turbo", contextWindow: 204_800, reasoningEfforts: [],
         defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
@@ -492,6 +514,7 @@ describe("provider registry parity", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
     for (const [modelId, window, efforts] of [
       ["glm-5.3", 1_048_576, ["low", "high", "max", "ultra"]],
+      ["glm-5.3-flash", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5-turbo", 204_800, []],
     ] as const) {
       const entry = entries.find(row => row.slug === `${id}/${modelId}`);
@@ -505,7 +528,9 @@ describe("provider registry parity", () => {
       expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(row => row.effort))
         .toEqual([...efforts]);
     }
-    expect(entries.some(entry => String(entry.slug).includes("glm-5.3-flash"))).toBe(false);
+    // The reported gap: Flash reaches the exported catalog for this preset, once, under its
+    // own slug rather than only as the Turbo alias upstream silently redirects.
+    expect(entries.filter(entry => String(entry.slug) === `${id}/glm-5.3-flash`)).toHaveLength(1);
   });
 
   test("BigModel Responses key login does not probe an undocumented models endpoint", async () => {

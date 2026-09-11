@@ -5,6 +5,17 @@ import type { AdapterEvent } from "../../types";
 export const PROVIDER_INPUT_TOO_LARGE_MESSAGE =
   "The provider rejected this turn because its input exceeds the provider size or context limit. Reduce the current input or compact the conversation before retrying.";
 
+/** Preserve non-streaming HTTP failure semantics without exposing an upstream body. */
+export function jsonContextOverflowResponse(): Response {
+  return Response.json({
+    error: {
+      message: PROVIDER_INPUT_TOO_LARGE_MESSAGE,
+      type: "invalid_request_error",
+      code: "context_length_exceeded",
+    },
+  }, { status: 413, headers: { "Cache-Control": "no-store" } });
+}
+
 async function* contextOverflowEvents(): AsyncGenerator<AdapterEvent> {
   yield {
     type: "error",

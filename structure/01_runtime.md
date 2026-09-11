@@ -58,12 +58,23 @@ uninstall still restore.
 
 `startServer` composes up to three sockets in one synchronous startup transaction: the public data
 listener, the optional unauthenticated data-loopback listener, and the optional hub-management
-listener. The hub-management socket is enabled only by `runtimeRole: "hub"` plus
-`hub.managementIngress.enabled`, always binds `127.0.0.1`, and default-denies everything except GUI,
-session bootstrap/exchange, and `/api/*`. A failed optional bind initiates rollback of every earlier
-socket; normal stop joins all bound sockets before lifecycle release. The existing launchd/systemd
-installer remains the service owner and continues loading the data token from `service-api-token`;
-hub mode adds no service-manager fork and no token-bearing unit/plist field.
+listener.
+
+The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
+the native search relay, the standalone Images POSTs, `GET /v1/models`, the realtime voice shapes,
+and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,
+`POST /v1/messages/count_tokens`, and `POST /v1/chat/completions`. It never serves `/api/*`,
+`/healthz`, `/readyz`, or GUI routes, so local management discovery has to use an authenticated
+surface with a management credential.
+
+The hub-management socket is enabled only by `runtimeRole: "hub"` plus
+`hub.managementIngress.enabled`, always binds `127.0.0.1`, and default-denies everything except
+GUI, session bootstrap/exchange, and `/api/*`.
+
+A failed optional bind initiates rollback of every earlier socket; normal stop joins all bound
+sockets before lifecycle release. The existing launchd/systemd installer remains the service owner
+and continues loading the data token from `service-api-token`; hub mode adds no service-manager
+fork and no token-bearing unit/plist field.
 
 [Decision Log]
 - 목적과 의도: Give a headless hub a browser management ingress without widening its data plane or trusting spoofable forwarding headers on the public listener.
@@ -191,4 +202,4 @@ not an authentication or entitlement decision.
 
 ## Remote Hub hardening ownership
 
-`src/remote/protocol.ts` owns pure interval/feature negotiation. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption and key-id probes. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.
+`src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.

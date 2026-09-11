@@ -1232,6 +1232,33 @@ describe("codexWsUpstreamFetch", () => {
     expect(FakeWebSocket.instances[0].sent).toHaveLength(1);
   });
 
+  test("a response beginning after 30 seconds completes without resending", async () => {
+    jest.useFakeTimers();
+    const opened = Promise.withResolvers<void>();
+    installFake(ws => { ws.emit("open", {}); opened.resolve(); });
+    let http = 0;
+    try {
+      const pending = codexWsUpstreamFetch(CODEX_URL, streamingInit(), (async () => {
+        http++;
+        return new Response("must not resend");
+      }) as typeof fetch);
+      await opened.promise;
+      const ws = FakeWebSocket.instances[0];
+      jest.advanceTimersByTime(28_000);
+      ws.emit("message", { data: JSON.stringify({ type: "codex.rate_limits" }) });
+      ws.emit("message", { data: JSON.stringify({ type: "codex.response.metadata", headers: {} }) });
+      jest.advanceTimersByTime(3_000);
+      ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
+      const response = await pending;
+      expect(await response.text()).toContain("event: response.completed");
+      expect(ws.sent).toHaveLength(1);
+      expect(http).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test("the first-response deadline settles a sent request through the outer retry wrapper without resending", async () => {
     const { fetchWithTransientRetry } = await import("../../src/lib/upstream-retry");
     jest.useFakeTimers();

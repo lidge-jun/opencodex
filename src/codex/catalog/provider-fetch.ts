@@ -60,6 +60,7 @@ import {
   comboModelId,
   getCombo,
   listComboIds,
+  quotaInactiveReason,
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
@@ -79,6 +80,7 @@ import {
   type ProviderModelsApiItem,
   type ResolvedProviderModelDiscovery,
 } from "../../providers/model-discovery";
+import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
@@ -1400,6 +1402,51 @@ function modelInputModalities(
   return undefined;
 }
 
+/**
+ * A per-token rate exactly as a /models row publishes it, or undefined when the value is not a
+ * usable non-negative number. Providers ship these both as JSON numbers and as decimal strings —
+ * OpenRouter encodes free as the string `"0.00000000"` — so both shapes are accepted and nothing
+ * else is. The explicit numeric-shape test has to run BEFORE any coercion: `Number("")` and
+ * `Number(" ")` are both 0 and `Number(true)` is 1, so a bare `Number(value)` would classify a
+ * row with an empty price string as free.
+ */
+const DISCOVERED_PRICING_RATE_PATTERN = /^-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?$/;
+
+function discoveredPricingRate(value: unknown): number | undefined {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && DISCOVERED_PRICING_RATE_PATTERN.test(value.trim())
+      ? Number(value.trim())
+      : undefined;
+  if (numeric === undefined || !Number.isFinite(numeric) || numeric < 0) return undefined;
+  return numeric;
+}
+
+/**
+ * Cost class for one discovered row, read from the provider's own `pricing` object (#3666).
+ *
+ * Fail closed. Only a complete pair of non-negative numeric rates classifies at all; a missing,
+ * one-sided, non-numeric, or negative rate is "unknown" and therefore excluded from a free-only
+ * filter. Showing a paid model under a Free filter spends the user's money, while hiding a free
+ * one costs a click.
+ *
+ * Two things that look like evidence and are not. A `:free` id suffix is an OpenRouter naming
+ * convention, not a price — Nous ships `:free` slugs on a provider whose `freeTier` is false on
+ * purpose. And the operator's own `modelCosts` overlay is an estimate they typed, not something
+ * the provider published, so a zeroed overlay never reaches this field either.
+ *
+ * Classification is on numeric zero and never on a unit conversion: OpenRouter quotes USD per
+ * token while the cost overlays and the jawcode bundle quote per 1M, and zero is zero in both.
+ */
+export function discoveredPricingStatus(item: ProviderModelsApiItem): "free" | "paid" | "unknown" {
+  const pricing = plainRecord(item.pricing) ?? plainRecord(plainRecord(item.metadata)?.pricing);
+  if (!pricing) return "unknown";
+  const prompt = discoveredPricingRate(pricing.prompt ?? pricing.input);
+  const completion = discoveredPricingRate(pricing.completion ?? pricing.output);
+  if (prompt === undefined || completion === undefined) return "unknown";
+  return prompt === 0 && completion === 0 ? "free" : "paid";
+}
+
 export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
   const metadata = plainRecord(item.metadata);
   const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
@@ -1464,6 +1511,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       : undefined;
   const capabilities = modelCapabilities(item);
   const inputModalities = modelInputModalities(item, capabilities);
+  const pricingStatus = discoveredPricingStatus(item);
   return {
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
@@ -1471,6 +1519,11 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(capabilities ? { capabilities } : {}),
+    // Omitted when the classification is "unknown", following this function's existing
+    // contract that an unknown property is absent rather than present-and-empty. Callers
+    // that need to tell "provider published no prices" from "this build does not classify"
+    // call discoveredPricingStatus directly.
+    ...(pricingStatus !== "unknown" ? { pricingStatus } : {}),
   };
 }
 
@@ -1871,7 +1924,14 @@ async function fetchProviderModelsWithAuth(
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    const extracted = extractProviderModelItems(bounded.value, discovery);
+    const googleAiStudio = effectiveGoogleMode(name, prov) === "ai-studio"
+      ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
+      : undefined;
+    // Native /v1beta/models wins; a google row served by an OpenAI-compatible
+    // gateway keeps the generic data[] / top-level-array contract.
+    const extracted = googleAiStudio?.ok
+      ? googleAiStudio
+      : extractProviderModelItems(bounded.value, discovery);
     if (!extracted.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {
@@ -2622,7 +2682,16 @@ async function gatherRoutedModelsUncached(
   return {
     models: models.map(model => {
       const displayName = aliasDisplayNames.get(`${model.provider}/${model.id}`);
-      return displayName && !model.displayName ? { ...model, displayName } : model;
+      // #1711: one stamping point for every row this gather produces — routed, combo, and custom
+      // alike — because it is the only place that has both the finished list and the config the
+      // quota rules need. A combo votes over its own targets; anything else votes over the single
+      // provider that would serve it.
+      const targets = model.provider === COMBO_NAMESPACE
+        ? config.combos?.[model.id]?.targets ?? []
+        : [{ provider: model.provider }];
+      const inactive = quotaInactiveReason(config, targets);
+      const named = displayName && !model.displayName ? { ...model, displayName } : model;
+      return inactive ? { ...named, quotaInactiveReason: inactive } : named;
     }),
     comboOmissions: localOmissions,
     providerAuthOutcomes: localProviderAuthOutcomes,

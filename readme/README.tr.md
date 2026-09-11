@@ -1,11 +1,9 @@
-# opencodex
-
 <h3 align="center">make codex open!</h3>
-<p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build için Evrensel Sağlayıcı Proxy'si</b><br>
-İki komut ile yönlendirdiğiniz her LLM'i çalıştırın.</p>
+<p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop ve Grok Build için evrensel sağlayıcı proxy'si</b><br>
+İki komut, ve hepsi işaret ettiğiniz LLM ile çalışır.</p>
 
 <p align="center">
-  <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X üzerinde @claudeebum takip edin"></a>
+  <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X üzerinde @claudeebum hesabını takip et"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm sürümü"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="lisans"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node sürümü">
@@ -13,143 +11,377 @@
 
 ```bash
 npm install -g @bitkyc08/opencodex
-ocx start        # localhost:10100 üzerinde proxy + panel
+ocx start
 ```
 
-<table align="center">
-  <tr>
-    <td width="50%" align="center">
-      <img src="../assets/claude-code-models.gif" alt="opencodex üzerinden yönlendirilen model ile çalışan Claude Code" width="410"><br>
-      <sub><b>Claude Code, herhangi bir modeli çalıştırıyor.</b><br>Seçici standart Claude Code'dur, arkasındaki beyin ise sizinki.</sub>
-    </td>
-    <td width="50%" align="center">
-      <img src="../assets/demo.gif" alt="opencodex demosu" width="410"><br>
-      <sub><b>Codex, herhangi bir modeli çalıştırıyor.</b><br>Bir sağlayıcı seçin ve başlayın — aynı iş akışı, farklı beyin.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
-      <img src="../assets/claude-desktop-subagent.gif" alt="Claude Desktop demosu" width="410"><br>
-      <sub><b>Claude Desktop, herhangi bir modeli çalıştırıyor.</b><br>Opus yanıt verir, ardından görevi GPT-5.6 Sol alt ajanına devreder.</sub>
-    </td>
-    <td width="50%" align="center">
-      <img src="../assets/grok-build-subagent.gif" alt="Grok Build demosu" width="410"><br>
-      <sub><b>Grok Build, herhangi bir modeli çalıştırıyor.</b><br>Sol oturumu yönetir ve Kimi K3 alt ajanını çağırır.</sub>
-    </td>
-  </tr>
+<table>
+<tr>
+<td width="50%" valign="middle">
+
+### Claude Code, istediğiniz modelle
+
+Seçici Claude Code'un kendi seçicisi. Arkasındaki beyin değil.
+
+</td>
+<td width="50%">
+  <img src="../assets/claude-code-models.gif" alt="opencodex üzerinden yönlendirilen bir modeli çalıştıran Claude Code — durum çubuğunda etkin model olarak gpt-5.6-luna-medium görünüyor" width="100%">
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Codex, istediğiniz modelle
+
+Bir sağlayıcı seçin ve başlayın — aynı iş akışı, farklı beyin.
+
+</td>
+<td width="50%">
+  <img src="../assets/demo.gif" alt="opencodex demosu — Codex uygulamasında OpenAI dışı bir yönlendirilmiş modelle görev çalıştırma" width="100%">
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Claude Desktop, istediğiniz modelle
+
+Opus yanıtlıyor, sonra görevi bir GPT-5.6 Sol alt ajanına devrediyor.
+
+</td>
+<td width="50%">
+  <img src="../assets/claude-desktop-subagent.gif" alt="Claude Opus 4.8 olarak yanıtlayan, ardından opencodex üzerinden bir GPT-5.6 Sol alt ajanı başlatan Claude Desktop" width="100%">
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Grok Build, istediğiniz modelle
+
+Sol oturumu yürütüyor ve bir Kimi K3 alt ajanını çağırıyor.
+
+</td>
+<td width="50%">
+  <img src="../assets/grok-build-subagent.gif" alt="opencodex üzerinden GPT-5.6 Sol çalıştıran ve bir Kimi K3 alt ajanı çağıran Grok Build" width="100%">
+</td>
+</tr>
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <b>Türkçe</b> · 📖 <a href="https://opencodex.me/"><b>Tam dokümantasyon →</b></a>
+  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <b>Türkçe</b> · 📖 <a href="https://opencodex.me/tr/"><b>Tüm dokümantasyon →</b></a>
 </p>
 
-opencodex, Codex'in Responses API'sini sağlayıcınızın desteklediği formata (streaming, araç çağrıları, reasoning jetonları, görseller) her iki yönde çeviren hafif bir yerel proxy'dir. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama veya diğer tüm LLM'leri Codex, Claude Code, Claude Desktop ve Grok Build ile kullanın. Ayrıca Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** yönetebilir: hesap ekleyin, panelden kotaları yenileyin ve mevcut iş parçacıkları başlayan hesaba sabit kalırken yeni oturumların en az kullanılan sağlıklı hesaba otomatik yönlendirilmesini sağlayın.
+opencodex, Codex'in Responses API'sini sağlayıcınızın konuştuğu protokole çeviren hafif bir yerel
+proxy'dir — akış, araç çağrıları, akıl yürütme belirteçleri ve görseller, iki yönde de. Claude, Gemini,
+Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ya da başka herhangi bir LLM'i Codex, Claude Code, Claude
+Desktop ve Grok Build ile kullanın. Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da
+yönetebilir: hesapları ekleyin, kotalarını kontrol panelinden tazeleyin ve yeni oturumlar en az
+kullanılan sağlıklı hesaba kendiliğinden gitsin; mevcut dizilerse onları başlatan hesaba bağlı kalsın.
 
 ## Hızlı başlangıç
 
-### İnsanlar için
+### Kişisel kurulum
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; Bun çalışma zamanı otomatik olarak paketlenmiştir
-ocx start                            # veya arka planda çalıştırmak için `ocx service`
+npm install -g @bitkyc08/opencodex   # Node 18+; Bun çalışma zamanı otomatik olarak paketlenir
+ocx start                         # proxy + kontrol paneli, localhost:10100
 ```
 
-**http://localhost:10100** adresini açın ve web panelinde her şeyi yapılandırın — sağlayıcılar ekleyin (40+ hazır sağlayıcı veya herhangi bir OpenAI uyumlu uç nokta), modeller seçin, hesapları yönetin. `ocx gui` paneli istediğiniz zaman tekrar açar.
+Arka planda çalıştırmak için `ocx service` kullanın.
 
-### Ajanlar için
+**http://localhost:10100** adresini açın ve her şeyi web kontrol panelinden yapılandırın: sağlayıcı
+ekleyin (40'tan fazla hazır sağlayıcı ya da herhangi bir OpenAI uyumlu uç nokta), model seçin, hesap
+yönetin. `ocx gui` paneli istediğiniz zaman yeniden açar.
+Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da yönetebilir. Birden fazla ChatGPT / Codex
+hesabı ekleyin, 5 saatlik / haftalık / 30 günlük kotalarını panelden tazeleyin. Kota yönlendirmesinde
+yeni oturumlar en az kullanılan sağlıklı hesabı kullanabilir; round-robin ve fill-first kendi
+politikalarını izler. Mevcut Codex dizileri normalde onları başlatan hesaba bağlı kalır, böylece uzun
+SSH, tmux ya da mobil oturumlar konuşmanın ortasında hesap değiştirmez — ancak kota yeniden
+değerlendirmesi, failover, hesabın devre dışı bırakılması, bağlılığın süresinin dolması ya da 401/403 ve
+429 toparlanması bu bağı yeniden kurabilir. Yalnızca diğerleri tükendiğinde kullanılmasını istediğiniz
+bir hesap varsa — genellikle Codex Desktop girişiniz — hesaplara bir seçim sırası verin.
+
+### Sponsorlar
+
+Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilmesi sponsorlar sayesinde.
+İlgileniyor musunuz? [SPONSORS.md](../SPONSORS.md) dosyasına bakın.
+
+<!-- sponsors:main — one banner, model developers only; empty until a Main sponsor signs -->
+
+<!-- sponsors:standard — one row per sponsor, in order of signing -->
+<table>
+<tbody>
+<tr>
+<td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="../assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
+<td>Bu projeye sponsor olduğu için <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a>'a teşekkürler! OrcaRouter, üretimdeki yapay zekâ için tek bir OpenAI uyumlu yapay zekâ ağ geçidi: her istemi puanlayıp çıtanızı geçen modele gönderen uyarlanabilir yönlendirme, otomatik failover, kod olarak yazılan yönlendirme kuralları, istem önbelleğiyle birlikte sıfır marjlı sağlayıcı fiyatlandırması ve 200'den fazla modeldeki her çağrıda koruma kuralları, bir ajan güvenlik duvarı ve istek günlükleri. Add provider seçicisinden <code>OrcaRouter</code> seçin ya da <code>ocx provider add orcarouter</code> çalıştırın; uyarlanabilir yönlendirici <code>orcarouter/auto</code>.</td>
+</tr>
+<tr>
+<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
+<td>Bu projeye sponsor olduğu için <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a>'a teşekkürler! PackyCode, Claude Code, Codex, Gemini ve daha fazlası için aktarma hizmeti sunan istikrarlı ve yüksek başarımlı bir API aktarma sağlayıcısıdır. Otomatik failover, akıllı yönlendirme ve sınırsız eşzamanlılıkla yapay zekâyı gerçek bir üretkenlik aracına dönüştürür. <a href="https://www.packyapi.com/register?aff=k5KT">Bu bağlantıdan kaydolun</a> ve hemen başlayın! Add provider seçicisinden <code>PackyCode</code> seçin ya da <code>ocx provider add packycode</code> çalıştırın.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
+</tr>
+</tbody>
+</table>
+
+---
+
+<details>
+<summary>Docker Compose</summary>
+
+Depo, digest ile sabitlenmiş, root olmayan bir Compose derlemesi içerir. Ana makinede Git ve Bun kuruluysa,
+her imaj derlemesinden önce standart uyumluluk manifestosunu üretin, ardından veri düzlemi belirtecini
+stdin üzerinden bir kez ilklendirip hub'ı başlatın:
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+curl --fail --silent http://127.0.0.1:10100/healthz
+curl --fail --silent http://127.0.0.1:10100/readyz
+```
+
+Varsayılan ana makine bağlaması `127.0.0.1:10100`. Uzaktan erişime açmak için
+`OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d` gerekir; `0.0.0.0` tüm ana
+makine arayüzlerini açar. Erişimi bir güvenlik duvarı ve kimlik doğrulamalı bir TLS/tailnet ön yüzüyle
+kısıtlayın. Üretilen JSON izlenmez; imaja `.git` olmadan kopyalanır. Kaynak değiştiğinde yeniden
+üretin ve üretimle derleme arasında kaynağa dokunmayın. Derleme; eski manifestoları, eksik ya da uyuşmayan
+dosyaları, fazladan kaynak dosyalarını ve sembolik bağlantıları reddeder. Kayıtlı her SHA-256 değerini
+derleme bağlamıyla ve kopyalanan çalışma zamanı dosyalarıyla karşılaştırır: `package.json`,
+`bun.lock` ve özellikle dahil edilen `scripts/model-metadata.source.json`.
+
+Belirteç ve değişken durum `ocx-state` adlı volume içinde kalır; imaja, Compose dosyasına, ortama ya da
+kabuk argümanlarına hiçbir kimlik bilgisi konmaz. Sağlayıcı kurulumu, kimlik doğrulamalı kabul kontrolleri,
+uzaktan yönetim ve geri alma için
+[Remote Hub dağıtım kılavuzuna](https://opencodex.me/tr/guides/remote-hub/) bakın.
+
+</details>
+
+<details>
+<summary>Kaynaktan kurulum (en güncel dev)</summary>
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run src/cli/index.ts start
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm bun.sh/install.ps1 | iex
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex; bun install
+bun run src/cli/index.ts start
+```
+
+Kaynaktan kurulum en güncel `dev` dalını çalıştırır. Bellek sahipliği yamaları, çalışma zamanı GC
+iyileştirmeleri ve henüz yayımlanmamış düzeltmeler npm paketine ulaşmadan önce burada bulunur.
+
+</details>
+
+<details>
+<summary>Ajanlar için</summary>
 
 ```bash
 npm install -g @bitkyc08/opencodex
-ocx start     # veya `ocx service`
+ocx start     # ya da `ocx service`
 ocx init      # etkileşimli kurulum: ~/.opencodex/config.json yazar ve Codex'i bağlar
 ```
 
-`ocx init` proxy'yi asla başlatmaz; önce başlatın (veya sonra — her iki sıra da çalışır, ancak `ocx provider add` ve `ocx combo set` gibi headless komutlar **canlı** proxy ile konuşur ve ulaşılamadığında sıfır dışı kodla çıkar). `ocx status` / `ocx doctor` / `ocx health` çalışan durumu raporlar.
+`ocx init` proxy'yi hiçbir zaman başlatmaz; önce onu başlatın (ya da sonra — sıra fark etmez, ancak
+`ocx provider add` ve `ocx combo set` gibi başsız komutlar **çalışan** proxy ile konuşur ve ona
+ulaşamadıklarında sıfırdan farklı bir kodla çıkar). `ocx status` / `ocx doctor` / `ocx health`
+çalışma durumunu bildirir.
 
-> **opencodex yükleyen veya çalıştıran ajanlar:** [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md) dosyasını okuyun. Etkileşimli bir `ocx start` bu depoya yıldız verilip verilmeyeceğini bir kez sorabilir — bu kullanıcının kararıdır, asla ajanın değil. CLI, ajan kaynaklı çalıştırmalarda istemi bastırır ve API bunları `403 agent_consent_required` ile reddeder.
+> **opencodex'i kuran ya da çalıştıran ajanlar:**
+> [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md) dosyasını okuyun. Etkileşimli bir `ocx start` bu depoya
+> yıldız verip vermeyeceğinizi bir kez sorabilir — bu kullanıcının kararıdır, hiçbir zaman bir ajanın
+> değil. CLI, ajan tarafından yürütülen çalışmalarda bu soruyu bastırır ve API bunları
+> `403 agent_consent_required` ile reddeder.
 
-Sponsorlar: iki kademe (model geliştiricileri için Main, relay ve gateway'ler için Standard), fiyat için iletişime geçin — bkz. [SPONSORS.md](../SPONSORS.md).
+</details>
 
 ## Desteklenen platformlar
 
-| İşletim Sistemi | Durum | Servis Yöneticisi |
+| İşletim sistemi | Durum | Servis yöneticisi |
 |---|---|---|
 | macOS (arm64 / x64) | Tam destekleniyor | launchd |
-| Linux (x64 / arm64) | Tam destekleniyor | systemd (user unit) |
+| Linux (x64 / arm64) | Tam destekleniyor | systemd (kullanıcı birimi) |
 | Windows (x64) | Tam destekleniyor | Görev Zamanlayıcı (gizli) / isteğe bağlı yerel servis (`--native`, WinSW) |
 
-[Node](https://nodejs.org) 18+ gerektirir. Bun çalışma zamanı `npm install` sırasında paketlenmiş olarak gelir — ayrı bir Bun kurulumu veya Windows'ta WSL gerekmez. npm paketlenmiş çalışma zamanının yükleme betiklerini engellediyse [kurulum dokümantasyonuna](https://opencodex.me/getting-started/installation/) bakın.
+[Node](https://nodejs.org) 18 veya üzeri gerekir. Bun çalışma zamanı `npm install` sırasında paketlenir —
+ayrıca Bun kurmanıza gerek yok, Windows'ta WSL de gerekmez. npm, paketlenmiş çalışma zamanının kurulum
+betiklerini engellediyse [kurulum belgelerine](https://opencodex.me/tr/getting-started/installation/) bakın.
 
-## Öne Çıkan Özellikler
+## Öne çıkanlar
 
-- **Codex, Claude Code, Claude Desktop ve Grok Build ile herhangi bir LLM kullanın** — Kutudan çıktığı haliyle 40+ sağlayıcı, her biri kendi yerel arayüzünü korur.
-- **ChatGPT hesaplarını güvenle havuzlayın** — İş parçacığı bağlılığı (thread affinity), kota duyarlı otomatik geçiş, soğuma süresi ve hatada kapalı yetkilendirme yönetimi.
-- **Kombolar (Combos)** — Sağlayıcılar arasında yedekli (failover) veya ağırlıklı round-robin ile çalışan tek bir sanal model kimliği. [Kombo rehberine](https://opencodex.me/guides/combos/) bakın.
-- **Herhangi bir modelde alt ajanlar** — v1/v2 yüzey kontrolü ve yedekleme zincirleriyle Codex'in alt ajan seçicisinde yönlendirilen modelleri öne çıkarın. [Alt ajan rehberine](https://opencodex.me/guides/sub-agent-surface/) bakın.
-- **Bir kez giriş yapın, API anahtarını atlayın** — xAI, Anthropic ve Kimi için OAuth; veya `codex login` iletme, anahtar yapıştırma veya `${ENV_VAR}` referansları kullanma.
-- **Web araması ve görsel yan araçları (sidecars)** — OpenAI dışı modeller, ChatGPT girişiniz üzerinden bir sidecar aracılığıyla gerçek web araması ve görsel anlama yeteneği kazanır.
-- **Ne olduğunu görün** — Panel; sağlayıcıları, OAuth durumunu, model seçimini ve önbellek jeton sayılarıyla canlı istek günlüğünü gösterir.
-- **Temiz çıkış, sıfır kalıntı** — `ocx stop` Codex'i orijinal yapılandırmasına geri döndürür.
+- **Codex, Claude Code, Claude Desktop ve Grok Build ile istediğiniz LLM** — kutudan çıktığı gibi 40'tan
+  fazla sağlayıcı, her biri kendi yerel arayüzünü korur.
+- **ChatGPT hesaplarını havuzlayın** — dizi bağlılığı, kota farkındalıklı otomatik geçiş, bekleme süresi ve
+  fail-closed kimlik doğrulama davranışı.
+
+  > **Sağlayıcı politikası notu:** Hesap havuzu yalnızca yönlendirme ve işletimsel dayanıklılık içindir;
+  > sağlayıcının hız sınırlarından, yaptırımlarından, askıya almalarından ya da diğer hesap işlemlerinden
+  > korunmayı garanti etmez. OpenCodex, sağlayıcı sınırlarını aşmak için ek hesap kullanılmasını ya da hesap
+  > kimlik bilgilerinin kişiler arasında paylaşılmasını onaylamaz. Her sağlayıcının güncel koşullarına
+  > uymak sizin sorumluluğunuzdadır. Bkz.
+  > [Codex Auth hesap havuzu rehberi](https://opencodex.me/tr/guides/web-dashboard/)
+  > ve [OpenAI'nin güncel Kullanım Koşulları](https://openai.com/policies/terms-of-use/).
+- **Kombolar** — sağlayıcılar arasında failover ya da ağırlıklı round-robin yapan tek bir sanal model
+  kimliği. [Kombo rehberine](https://opencodex.me/tr/guides/combos/) bakın.
+- **Her modelde alt ajanlar** — yönlendirilmiş modelleri Codex'in alt ajan seçicisinde gösterin, v1/v2
+  yüzey denetimi ve yedek zincirleriyle birlikte.
+  [Alt ajan rehberine](https://opencodex.me/tr/guides/sub-agent-surface/) bakın.
+<!-- sponsors:main-first-mention -->
+- **Bir kez giriş yapın, API anahtarını atlayın** — xAI, Anthropic ve Kimi için OAuth; ya da
+  `codex login` oturumunu iletin, bir anahtar yapıştırın veya `${ENV_VAR}` referansları kullanın.
+- **Web araması ve görü yardımcıları** — OpenAI dışı modeller, ChatGPT girişiniz üzerinden çalışan bir
+  yardımcı süreç sayesinde gerçek web araması ve görsel anlama kazanır.
+- **Ne olup bittiğini görün** — kontrol paneli sağlayıcıları, OAuth durumunu, model seçimini ve önbellek
+  belirteç sayılarını içeren canlı bir istek günlüğünü gösterir.
+- **Temiz çıkış, sıfır artık** — `ocx stop` Codex'i özgün yapılandırmasına geri döndürür.
+- **Sınırlı bellek sahipliği** — uzun ömürlü her önbelleğin, halka arabelleğinin ve protokol çevirisi
+  deposunun sonlu bir üst sınırı, bayt bütçesi ya da etkin bir uzlaştırması vardır. Yapılandırma yeniden
+  yüklendiğinde sınırsız hiçbir `Map` ya da `Set` hayatta kalmaz.
+
+<details>
+<summary>Bellek sahipliği ayrıntıları</summary>
+
+OpenCodex, süreçte tutulan durumu 36 kategoride izler. Her birinin belgelenmiş bir sınırı vardır:
+
+- **12 tutulan depo** (istek günlüğü, hata ayıklama halkaları, görsel önbelleği, model önbelleği, görü
+  açıklamaları, imleç blob'ları, responses devamlılığı vb.) bayt olarak hesaplanır ve uygulamanın sahip
+  olduğu bellek bütçesiyle (varsayılan 256 MiB) tahliye edilir.
+- **4 gözlenen arabellek** (çevirici biriktiricileri, görsel/OAuth/Grok kuyrukları) tahliye edilmeden,
+  yalnızca uçuştaki bayt baskısı için izlenir.
+- **24 state-store kaydı**, süre dolumu taramalarını (60 sn aralık) ve yapılandırma kuşağı uzlaştırmasını
+  yürüterek eski sağlayıcı/hesap anahtarlarını kaldırır.
+- **Yol ve parmak izi notları** (çalışma alanı meta verileri, sağlamlaştırılmış kimlikler, kurulum
+  tuzları, mod ipucu yetenekleri) ekleme sıralı LRU sınırları kullanır (8–128 girdi).
+- **Model önbelleği kuşak mezar taşları** uzlaştırmadan sonra silinir; genel bir kuşak artışı, uçuştaki
+  eski keşiflerin kaldırılmış sağlayıcıları yeniden doldurmasını engeller.
+- **Lab olay kimliği yinelenme ayıklaması** diskten alınan bir defter kilidi altında çalışır; süreç
+  düzeyinde RAM dizini yoktur.
+
+Canlı tutulan baytları, tahliye sayaçlarını ve gözcü örneklerini incelemek için yönetici belirteciyle
+`GET /api/system/memory` çağrısını yapın.
+
+</details>
 
 ## Model yönlendirme
 
-`sağlayıcı/model` sözdizimi ile yapılandırılmış herhangi bir sağlayıcıyı ve modeli hedefleyin:
+`provider/model` söz dizimiyle yapılandırılmış herhangi bir sağlayıcıyı ve modeli hedefleyin:
 
 ```bash
-codex -m "anthropic/claude-opus-5" "Bu hatayı açıkla"
+codex -m "anthropic/claude-opus-5" "Bu yığın izini açıkla"
 codex -m "google/gemini-3-pro" "auth.ts için birim testleri yaz"
-codex -m "ollama/llama3" "Bu fonksiyonu refactor et"
+codex -m "ollama/llama3" "Bu fonksiyonu yeniden düzenle"
 ```
 
-Varsayılan sağlayıcıyı kullanmak veya model adı desenine göre otomatik eşleştirmek için `sağlayıcı/` ön ekini çıkarın. `/` içeren sağlayıcı model kimlikleri iç takma adlarla `-` olarak sunulur; ham tam eğik çizgili form da çalışmaya devam eder. Detaylar: [model yönlendirme dokümantasyonu](https://opencodex.me/guides/model-routing/).
+Varsayılan sağlayıcıyı kullanmak ya da model adı desenine göre otomatik eşleştirmek için `provider/`
+önekini atlayın. İçinde `/` bulunan sağlayıcı model kimlikleri, iç eğik çizgileri `-` ile
+değiştirilmiş biçimde sunulur; eğik çizgili tam biçim de çalışmaya devam eder. Ayrıntılar:
+[model yönlendirme belgeleri](https://opencodex.me/tr/guides/model-routing/).
 
 ## Sağlayıcılar ve adaptörler
 
-OpenAI (ChatGPT girişi veya API anahtarı), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama (yerel + Bulut), Cursor (deneysel) ve tüm OpenAI uyumlu uç noktalar — ayrıca DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen Cloud, SiliconFlow ve daha fazlası. Tam liste: `ocx init` veya [sağlayıcı dokümantasyonu](https://opencodex.me/guides/providers/).
+<!-- sponsors:main-first-mention -->
+OpenAI (ChatGPT girişi ya da API anahtarı), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
+(yerel + Cloud), Cursor (deneysel) ve her OpenAI uyumlu uç nokta — ayrıca DeepSeek, Groq, OpenRouter,
+Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen Cloud, Qoder Global ve CN
+(resmî PAT + CLI), SiliconFlow ve daha fazlası. Tam liste: `ocx init` ya da
+[sağlayıcı belgeleri](https://opencodex.me/tr/guides/providers/).
 
 ## CLI
 
 ```bash
-ocx init                       # etkileşimli kurulum (yapılandırma yazar, Codex'i bağlar, shim sunar)
-ocx start [--port 10100]       # proxy'yi ön planda başlatır
-ocx stop                       # durdurur + yerel Codex'i geri yükler
-ocx service [install|start|stop|status|uninstall|remove]  # arka plan servisi
-ocx codex-shim install         # `codex` her başlatıldığında proxy'yi isteğe bağlı başlatır
+ocx init                       # etkileşimli kurulum (config yazar, Codex'i bağlar, shim önerir)
+ocx start [--port 10100]       # proxy'yi ön planda başlat
+ocx stop                       # durdur + yerel Codex'i geri yükle
+ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # arka plan servisi
+ocx codex-shim install         # `codex` her başladığında proxy'yi isteğe bağlı başlat
+ocx health [--json]            # proxy'nin şu an ayakta olup olmadığını kontrol et
+ocx ready [--json] [--wait [--timeout <seconds>]]  # eşitleme sonrası hazırlığı kontrol et
 ocx status                     # proxy çalışıyor mu?
-ocx gui                        # web panelini açar
-ocx provider <...>             # sağlayıcıları yönetir (listele/ekle/düzenle/test et/sil)
-ocx account <...>              # ChatGPT hesaplarını ve API anahtar havuzlarını yönetir
-ocx combo <...>                # failover / round-robin kombolarını yönetir
-ocx v2 <...>                   # çoklu ajan v1/v2 yüzey kontrolleri
-ocx update [--tag preview]     # opencodex'i günceller
+ocx gui                        # web kontrol panelini aç
+ocx provider <...>             # sağlayıcıları yönet (list/add/edit/test/remove)
+ocx account <...>              # ChatGPT hesaplarını ve API anahtarı havuzlarını yönet
+ocx combo <...>                # failover / round-robin kombolarını yönet
+ocx v2 <...>                   # çoklu ajan v1/v2 yüzey denetimleri
+ocx update [--tag preview]     # opencodex'i güncelle
 ```
 
-Bağlantı noktası açıkça belirtilmeden başlatılırsa, tercih edilen bağlantı noktası meşgul olduğunda başka bir boş bağlantı noktası seçilebilir; `--port` açıkça belirtilirse başka bir bağlantı noktasına geçilmez. Tam referans: [CLI dokümantasyonu](https://opencodex.me/reference/cli/).
+Sabitlenmemiş başlatmalar, tercih edilen bağlantı noktası meşgulse başka bir boş bağlantı noktasına
+geçebilir; açıkça verilen bir `--port` asla değişmez. Tam başvuru:
+[CLI belgeleri](https://opencodex.me/tr/reference/cli/).
 
-### Otomatik başlatma: servis mi shim mi?
+### Sağlık ve hazırlık
 
-Çökme durumunda yeniden başlayan ve her zaman açık bir proxy için **servisi** (`ocx service`) kullanın. Arka planda sürekli çalışan bir daemon olmadan hafif, isteğe bağlı başlatma için **shim**'i (`ocx codex-shim install`) kullanın. `ocx service uninstall` / `ocx codex-shim uninstall` ile kaldırın.
+`GET /healthz` proxy'nin o anki canlılığını bildirir. Kimlik doğrulaması gerektirmeyen `GET /readyz`
+uç noktası, eşitleme sonrası hazırlığı arındırılmış `{service, version, uptime, pid, port, status}` JSON
+kimliğiyle bildirir. `status` değeri `ready` olduğunda `200` döner; `pending` ve nihai
+`failed` durumları `Retry-After: 1` ile `503` döner.
+
+`ocx ready [--json] [--wait [--timeout <seconds>]]` varsayılan olarak tek bir yoklama yapar. `--wait`
+varsayılan olarak 45 saniyeye kadar yoklar, ancak nihai `failed` durumunu gördüğü anda çıkar;
+`--timeout <seconds>` 1–300 saniyelik bir sınır koyar, `--wait` gerektirir ve yalnızca pozitif tam
+sayı kabul eder. CLI `--json` çıktısı `{ready, status, pid, port}` biçimindedir; `status` değeri
+`ready`, `pending`, `failed` ya da `unreachable` olur.
+
+| Çıkış | Sonuç |
+| --- | --- |
+| `0` | Hazır |
+| `1` | Hazır değil: pending, failed, zaman aşımı ya da ulaşılamıyor |
+| `64` | Geçersiz argüman |
+
+`/readyz` içermeyen eski bir proxy `unreachable` olarak fail-closed davranır ve 1 koduyla çıkar;
+`ocx health` ise uyumlu kalır.
+
+### Otomatik başlatma: servis mi shim mi
+
+Çökme sonrası yeniden başlayan, sürekli açık bir proxy için **servisi** (`ocx service`) kullanın. Arka
+plan artalan süreci olmadan hafif, isteğe bağlı başlatma için **shim**'i
+(`ocx codex-shim install`) kullanın. Kaldırmak için `ocx service uninstall` /
+`ocx codex-shim uninstall`.
 
 ### Kaldırma
 
 ```bash
-ocx uninstall                  # durdurur, servis/shim kaldırır, yerel Codex'i geri yükler, durumu temizler
+ocx uninstall                  # durdur, servis/shim kaldır, yerel Codex'i geri yükle, durumu temizle
 npm uninstall -g @bitkyc08/opencodex
 ```
 
 ## Uzaktan erişim
 
-Varsayılan olarak opencodex `127.0.0.1` adresine bağlanır ve ekstra kimlik doğrulaması gerektirmez. Loopback ötesine bağlanmak (`"hostname": "0.0.0.0"`), bir taşıyıcı jeton (bearer token) **gerektirir** — proxy `OPENCODEX_API_AUTH_TOKEN` olmadan başlamayı reddeder ve her istemci isteği bunu `x-opencodex-api-key` olarak taşımalıdır. Detaylar: [yapılandırma referansı](https://opencodex.me/reference/configuration/).
+opencodex varsayılan olarak `127.0.0.1` adresine bağlanır ve ek bir kimlik doğrulaması gerektirmez.
+Geri döngünün dışına bağlanmak (`"hostname": "0.0.0.0"`) bir bearer belirteci **gerektirir**: proxy
+`OPENCODEX_API_AUTH_TOKEN` olmadan başlamayı reddeder ve her istemci isteği bu belirteci
+`x-opencodex-api-key` olarak taşımalıdır. Ayrıntılar:
+[yapılandırma başvurusu](https://opencodex.me/tr/reference/configuration/).
 
-## Dokümantasyon
+## Belgeler
 
-Halka açık dokümanlar — kurulum, sağlayıcılar, yönlendirme, kombolar, alt ajanlar, sidecar'lar, entegrasyonlar ve CLI/yapılandırma/yönetim API referansları — [`docs-site/`](../docs-site) klasöründen oluşturulur ve **[opencodex.me](https://opencodex.me/)** üzerinde yayınlanır.
+Herkese açık belgeler — kurulum, sağlayıcılar, yönlendirme, kombolar, alt ajanlar, yardımcı süreçler,
+entegrasyonlar ve CLI/yapılandırma/yönetim API'si başvuruları — [`docs-site/`](../docs-site) içinden
+derlenir ve **[opencodex.me](https://opencodex.me/tr/)** adresinde yayımlanır.
 
-Maintainer temel doğruluk notları [`structure/`](../structure) altında, katkıda bulunan kurulum rehberi [`CONTRIBUTING.md`](../CONTRIBUTING.md) dosyasında ve güvenlik raporlama [`SECURITY.md`](../SECURITY.md) dosyasındadır. Açıklanmamış güvenlik açıklarını herkese açık bir issue yerine [GitHub özel güvenlik açığı raporlaması](https://github.com/lidge-jun/opencodex/security/advisories/new) aracılığıyla gizlice bildirin.
+Bakımcılar için doğruluk kaynağı notları [`structure/`](../structure) altında, katkıda bulunan kurulumu
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) içinde, güvenlik bildirimi ise
+[`SECURITY.md`](../SECURITY.md) içindedir. Açıklanmamış güvenlik açıklarını herkese açık bir issue
+yerine [GitHub özel güvenlik açığı bildirimi](https://github.com/lidge-jun/opencodex/security/advisories/new)
+üzerinden gizlice bildirin.
+Teknik kanal yalnızca bu formdur; ayrı bir güvenlik e-posta adresi yoktur. Sonraki yazışmalar özel
+bildirimin içinde kalır; herkese açık bir issue yalnızca koordinasyon taşıyabilir, güvenlik açığının
+ayrıntılarını asla. Bildirimin alındığını onaylamak onu incelemekle aynı şey değildir ve ilk yanıt
+için bir süre taahhüt edilmez.
 
 ## Geliştirme
 
-Kaynak kod geliştirmesi `PATH` dizininizde `bun` CLI'ını gerektirir. Bu, yalnızca yüklü `ocx` komutları tarafından kullanılan yayınlanmış npm paketinin paketlenmiş Bun çalışma zamanından ayrıdır.
+Kaynak geliştirmesi `PATH` üzerinde `bun` CLI gerektirir. Bu, yalnızca kurulu `ocx` komutlarının
+kullandığı, yayımlanmış npm paketiyle gelen Bun çalışma zamanından ayrıdır.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
@@ -159,13 +391,16 @@ bun run typecheck
 bun run test
 ```
 
-Bkz. **[Katkıda Bulunma (Contributing)](../CONTRIBUTING.md)**.
+**[Katkıda bulunma](../CONTRIBUTING.md)** belgesine bakın.
 
-## Sorumluluk Reddi (Disclaimer)
+Bir bakımcının devralması ya da yeniden uygulamasıyla gelen ve commit'inde özgün yazarı anılmayan katkılar
+**[CREDITS.md](../CREDITS.md)** içinde kayıt altına alınır.
 
-opencodex bağımsız, topluluk tarafından sürdürülen bir projedir ve **OpenAI, Anthropic veya başka herhangi bir sağlayıcı ile bağlı değildir veya onlar tarafından onaylanmamıştır**.
+## Sorumluluk reddi
 
-Bazı sağlayıcılar — özellikle Anthropic (Claude) — API trafiğini üçüncü taraf proxy'ler üzerinden yönlendiren hesapları askıya alabilir veya kısıtlayabilir. **Kullanım riski tamamen size aittir (UAYOR).** Bir sağlayıcıyı bağlamadan önce, proxy tabanlı erişime izin verildiğini doğrulamak için Hizmet Şartlarını inceleyin. opencodex maintainer'ları, yukarı akış sağlayıcıları tarafından alınan herhangi bir hesap işleminden sorumlu değildir.
+opencodex bağımsız, toplulukça sürdürülen bir projedir ve **OpenAI, Anthropic ya da başka herhangi bir sağlayıcıyla bağlantılı değildir, onlar tarafından onaylanmamıştır**.
+
+Bazı sağlayıcılar — özellikle Anthropic (Claude) — API trafiğini üçüncü taraf bir proxy üzerinden geçiren hesapları askıya alabilir ya da kısıtlayabilir. **Kullanım riski size aittir (UAYOR).** Bir sağlayıcıyı bağlamadan önce, proxy tabanlı erişime izin verildiğini doğrulamak için hizmet koşullarını inceleyin. opencodex bakımcıları, yukarı akış sağlayıcılarının aldığı hesap kararlarından sorumlu değildir.
 
 ## Lisans
 

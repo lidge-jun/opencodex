@@ -16,7 +16,12 @@ import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import type { OwnedIntegrationRefreshOutcome } from "../integrations/owned-refresh";
 import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
-import { setIntegrationEnabled, shouldSyncCodexOnStart } from "../codex/desired-state";
+import {
+  HUB_GATED_SKIP_MESSAGE,
+  localClientSkipMessage,
+  setIntegrationEnabled,
+  shouldSyncCodexOnStart,
+} from "../codex/desired-state";
 import { syncModelsToCodex } from "../codex/sync";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { restoreNativeCodexAsync } from "../codex/inject";
@@ -53,6 +58,24 @@ export interface CliDispatchDeps {
 }
 
 type CommandRunner = (deps: CliDispatchDeps) => Promise<number>;
+
+/**
+ * The hub's management ingress is deliberately loopback-only. Prefer it for
+ * a browser opened on the hub itself: the proxy listener may be restricted to
+ * a Tailscale address, while the ingress is the local authenticated dashboard.
+ */
+export function selectDefaultGuiUrl(
+  config: Pick<OcxConfig, "port" | "hostname" | "runtimeRole" | "hub">,
+  live: Pick<LiveProxy, "port" | "hostname"> | null,
+  probeHostname: (hostname: string | undefined) => string,
+): string {
+  const ingress = config.runtimeRole === "hub" ? config.hub?.managementIngress : undefined;
+  if (ingress?.enabled) return `http://localhost:${ingress.port}`;
+
+  const guiHost = probeHostname(live?.hostname ?? config.hostname);
+  const hostname = guiHost === "127.0.0.1" ? "localhost" : guiHost;
+  return `http://${hostname}:${live?.port ?? config.port ?? 10100}`;
+}
 
 const commandRunners: Record<string, CommandRunner> = {
   init: async () => {
@@ -105,7 +128,17 @@ const commandRunners: Record<string, CommandRunner> = {
       }
       const synced = await syncModelsToCodex(live.port);
       if (synced.status === "skipped") {
-        return emitBack(false, "Codex integration is OFF; restore back did not change Codex. Retry after the competing integration change finishes.", 2);
+        // `setIntegrationEnabled` above just committed ON, so a skip here is NOT the toggle and
+        // is not a competing writer either — on a hub it is the role gate. Telling the operator
+        // to "retry after the competing integration change finishes" sent them waiting for a
+        // writer that does not exist (#4236).
+        return emitBack(
+          false,
+          synced.skippedReason === "hub-gated"
+            ? `${HUB_GATED_SKIP_MESSAGE} restore back did not change Codex.`
+            : "Codex integration is OFF; restore back did not change Codex. Retry after the competing integration change finishes.",
+          2,
+        );
       }
       if (!synced.ok) {
         return emitBack(false, "Plain `codex` was not switched back to opencodex. Fix the reported Codex config issue and retry.", 1);
@@ -372,7 +405,9 @@ const commandRunners: Record<string, CommandRunner> = {
     );
     let code = 0;
     if (synced.status === "skipped") {
-      console.log("Codex integration is OFF; sync skipped and no Codex files changed.");
+      console.log(synced.skippedReason === "hub-gated"
+        ? `${HUB_GATED_SKIP_MESSAGE} sync skipped and no Codex files changed.`
+        : "Codex integration is OFF; sync skipped and no Codex files changed.");
     } else if (synced.status === "catalog-only") {
       // Explicit sync with the integration OFF still refreshes the catalog/cache
       // for side profiles that consume the proxy without injection.
@@ -448,7 +483,8 @@ const commandRunners: Record<string, CommandRunner> = {
     const { readCodexCatalogPathForHome } = await import("../codex/catalog/parsing");
     const { existsSync } = await import("node:fs");
     const owningCodexHome = getCodexHome();
-    const desiredDisabled = !shouldSyncCodexOnStart(deps.loadConfig());
+    const cacheGateSnapshot = deps.loadConfig();
+    const desiredDisabled = !shouldSyncCodexOnStart(cacheGateSnapshot);
     const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
       invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, { allowWhenDesiredDisabled: true }));
     const cacheJson = cacheArgs.includes("--json");
@@ -462,7 +498,11 @@ const commandRunners: Record<string, CommandRunner> = {
     } else if (desiredDisabled && !cacheJson) {
       // Worth saying in the human path, because it explains why nothing was written.
       // Under --json this belongs on the envelope, not as a second stdout line.
-      console.log("Codex integration is OFF; no catalog or cache write resulted.");
+      console.log(localClientSkipMessage(
+        cacheGateSnapshot,
+        "Codex integration is OFF; no catalog or cache write resulted.",
+        "No catalog or cache write resulted.",
+      ));
     }
     // `completed` with a falsy value means the cache was NOT rewritten. Previously every
     // outcome exited 0, so a script could not tell a refreshed cache from a skipped one.
@@ -535,15 +575,19 @@ const commandRunners: Record<string, CommandRunner> = {
             return 1;
           }
         }
-        // Open the host the proxy actually binds — `localhost` only answers for
-        // loopback/wildcard binds, not a concrete LAN/IPv6 hostname.
-        const guiHost = deps.probeHostname(live?.hostname ?? config.hostname);
-        const guiUrl = `http://${guiHost === "127.0.0.1" ? "localhost" : guiHost}:${live?.port ?? config.port}`;
+        const guiUrl = selectDefaultGuiUrl(config, live, deps.probeHostname);
         console.log(`Opening ${guiUrl}`);
         const { openUrl } = await import("../lib/open-url");
         openUrl(guiUrl);
         return 0;
       },
+    });
+  },
+  hub: async deps => {
+    const { runHubCommand } = await import("./hub");
+    return runHubCommand(deps.args.slice(1), {
+      loadConfig: deps.loadConfig,
+      findLiveProxy: deps.findLiveProxy,
     });
   },
   service: async deps => {

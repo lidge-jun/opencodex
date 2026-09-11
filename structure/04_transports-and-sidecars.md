@@ -537,7 +537,10 @@ Control frames remain bounded, and provider credential/cookie headers are not
 forwarded. Once a WS create may have been sent, a missing prelude, overflow or
 disconnect settles as an errored SSE body rather than a retryable fetch failure,
 so HTTP fallback cannot duplicate that inference. A standalone no-response
-exchange has a 30-second prelude deadline in addition to the upgrade deadline.
+exchange has a 90-second prelude deadline in addition to the upgrade deadline.
+That prelude deadline is a ceiling, not a floor: the exchange runs under the
+caller's abort signal, so a `connectTimeoutMs` shorter than 90 seconds cancels
+an already-sent create before the prelude timer fires.
 These are transport-fidelity guarantees, not a provider-billing guarantee.
 
 Eligible complete-input creates can retain a canonical upstream socket within
@@ -845,7 +848,13 @@ recognizes that terminal contract, marks the context as full, and can run its ow
 on the next turn. Combo routing treats 413 as a stop condition and performs the conversion only at
 the outer client boundary, so the failed target is never recorded as a successful combo attempt.
 
-Non-streaming callers retain the original 413 status/body contract. The proxy never silently drops
+Non-streaming Responses callers retain HTTP 413 and receive a JSON `error` with
+`type: invalid_request_error` and `code: context_length_exceeded`, including routed synthetic
+compaction. The upstream body is replaced with the same bounded, proxy-owned message used by SSE.
+Combo attempts retain their existing internal failure accounting; classification happens only at
+the outer client boundary. Local admission and configured outbound-byte refusals keep their own
+distinct codes. Classification does not shrink input or automatically retry compaction.
+The proxy never silently drops
 prompts or images: it does not own the client's transcript, and deleting input would hide data that
 was never analyzed. The streaming error message is proxy-owned and bounded instead of relaying the
 upstream 413 body, which may echo request content.
@@ -858,8 +867,8 @@ upstream 413 body, which may echo request content.
   Codex's persisted transcript safely.
 - 검토한 주요 대안: Relay 413 unchanged; return HTTP 400 JSON; silently remove media or old turns;
   synthesize a successful assistant warning.
-- 선택한 방식: Preserve 413 for non-streaming clients, but map the final streaming 413 to one
-  redacted non-retryable Responses failure at the outer request boundary.
+- 선택한 방식: Preserve HTTP 413 with typed JSON for non-streaming clients, and map the final
+  streaming 413 to one redacted non-retryable Responses failure at the outer request boundary.
 - 다른 대안 대신 이 방식을 선택한 이유: Raw 413 causes a retry loop, HTTP JSON does not enter
   Codex's context-window path, and silent deletion or fake success loses user intent without fixing
   transcript ownership.

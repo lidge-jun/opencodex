@@ -110,8 +110,8 @@ export interface VisionPlan {
   anthropicSidecar?: AnthropicVisionProvider;
   /** Namespaced "provider/model" describer for the routed backend (roadmap 180). */
   routedModel?: string;
-  /** Loopback dispatch inputs for the routed backend. */
-  routedConfig?: Pick<OcxConfig, "port" | "apiKeys">;
+  /** Loopback dispatch inputs for the routed backend (the listener decides WHICH local port). */
+  routedConfig?: Pick<OcxConfig, "port" | "hostname" | "apiKeys" | "unauthenticatedLoopbackListener">;
   settings: VisionSettings;
   maxDescriptionsPerTurn: number;
 }
@@ -153,7 +153,17 @@ export function planVisionSidecar(
         return {
           backend: "routed",
           routedModel,
-          routedConfig: { port: config.port, ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}) },
+          routedConfig: {
+            port: config.port,
+            ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}),
+            // The self-fetch has to honor the unauthenticated loopback listener AND, with no
+            // listener, the bind address — so BOTH fields the destination resolver reads have to
+            // survive the narrowing or it silently resolves to the wrong local socket (#4236).
+            ...(config.hostname ? { hostname: config.hostname } : {}),
+            ...(config.unauthenticatedLoopbackListener
+              ? { unauthenticatedLoopbackListener: config.unauthenticatedLoopbackListener }
+              : {}),
+          },
           settings: {
             model: routedModel,
             reasoning: DEFAULT_REASONING,

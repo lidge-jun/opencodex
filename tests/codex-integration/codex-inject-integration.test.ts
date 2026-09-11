@@ -934,7 +934,33 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(message).not.toContain("Codex routing NOT injected");
     expect(message).not.toContain("remove your openai_base_url line");
     expect(message).toContain("left exactly as you set it");
-    expect(message).toContain("follow your own root openai_base_url, not the proxy");
+    expect(message).toContain("follow your configured root openai_base_url");
+    expect(message).not.toContain("not the proxy");
+    expect(message).not.toContain("Remove that line");
+  });
+
+  test("client compaction does not mistake a user-owned proxy URL for a foreign destination (#4110)", () => {
+    // The URL equals the target but lacks our marker: keep ownership separate from destination.
+    const rootLine = 'openai_base_url = "http://127.0.0.1:10100/v1"';
+    writeFileSync(join(codexHome, "config.toml"), `${rootLine}\nmodel = "gpt-5.5"\n`, "utf8");
+
+    const enabled = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+    expect(enabled.status).toBe(0);
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain(rootLine);
+    expect(config.match(/openai_base_url/g)?.length).toBe(1);
+    expect(config).toContain('model_provider = "opencodex"');
+    expect(config).toContain("[model_providers.opencodex]");
+    const journal = JSON.parse(readFileSync(join(codexHome, "opencodex-journal.json"), "utf8"));
+    expect(journal.injectedOpenaiBaseUrl).toBeNull();
+
+    const message = String(JSON.parse(enabled.stdout).message);
+    expect(message).toContain("Injected opencodex as default provider");
+    expect(message).toContain("left exactly as you set it");
+    expect(message).toContain("follow your configured root openai_base_url");
+    expect(message).not.toContain("not the proxy");
+    expect(message).not.toContain("Remove that line");
+    expect(message).not.toContain("Codex routing NOT injected");
   });
 
   test("the managed override keeps reporting proxy routing for existing threads", () => {

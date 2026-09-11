@@ -31,6 +31,7 @@ let host: HTMLElement;
 let root: Root | null;
 let requests: Array<{ path: string; method: string }>;
 let catalogRefreshPending: boolean;
+let validationPending: boolean;
 
 function pathCount(path: string): number {
   return requests.filter(request => request.path.startsWith(`${API_BASE}${path}`)).length;
@@ -63,6 +64,7 @@ beforeEach(() => {
 
   requests = [];
   catalogRefreshPending = true;
+  validationPending = false;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -110,6 +112,7 @@ beforeEach(() => {
         return Response.json({
           status: "done",
           catalogRefreshPending,
+          validationPending,
           privateDetail: "private-account-detail",
         });
       }
@@ -222,6 +225,15 @@ test("pending Codex completion stays amber, private, dismissible, and refreshes 
   expect(dismiss?.getAttribute("aria-label")).toBe("Close");
   await act(async () => { dismiss!.click(); });
   expect(testWindow.document.querySelector(".toast-notice")).toBeNull();
+});
+
+test("quota-pending registration stays amber and does not offer model selection", async () => {
+  validationPending = true;
+  await completeCodexLogin();
+  const warning = testWindow.document.querySelector<HTMLElement>(".toast-notice.notice-warn");
+  expect(warning?.textContent).toContain("Validation pending");
+  expect(host.querySelector('[role="dialog"]')?.textContent ?? "").not.toContain("Choose models");
+  expect(testWindow.document.body.textContent).not.toContain("private-account-detail");
 });
 
 test("completed Codex catalog convergence reports clean success without sync advice", async () => {

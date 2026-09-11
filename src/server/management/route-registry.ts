@@ -95,6 +95,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PATCH", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts/clear-cooldown", module: "codex/auth-api", mutates: true },
+  { method: "POST", path: "/api/codex-auth/accounts/refresh", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/login", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/login/cancel", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/login/code", module: "codex/auth-api", mutates: true },
@@ -148,9 +149,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/client-integrations/aside/profiles/{profileId}", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
   { method: "PUT", path: "/api/client-integrations/aside/profiles/{profileId}", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode" },
   { method: "GET", path: "/api/client-integrations/aside/profiles/journal", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
-  { method: "DELETE", path: "/api/client-integrations/aside/profiles/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode", exempt: { reason: "deferred-verb", why: "Aside history deletion uses the dashboard journal cleanup; the CLI has history and restore but no deletion verb yet.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_plan/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
+  { method: "DELETE", path: "/api/client-integrations/aside/profiles/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode", exempt: { reason: "deferred-verb", why: "Aside history deletion uses the dashboard journal cleanup; the CLI has history and restore but no deletion verb yet.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_fin/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
   { method: "GET", path: "/api/client-integrations/aside/profiles/{profileId}/journal", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
-  { method: "DELETE", path: "/api/client-integrations/aside/profiles/{profileId}/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode", exempt: { reason: "deferred-verb", why: "Aside profile history deletion uses the dashboard journal cleanup; the CLI has scoped history and restore but no deletion verb yet.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_plan/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
+  { method: "DELETE", path: "/api/client-integrations/aside/profiles/{profileId}/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode", exempt: { reason: "deferred-verb", why: "Aside profile history deletion uses the dashboard journal cleanup; the CLI has scoped history and restore but no deletion verb yet.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_fin/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
   { method: "POST", path: "/api/client-integrations/aside/profiles/{profileId}/restore", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode" },
   // server/management/codex-prompt-routes
   { method: "GET", path: "/api/codex-prompt", module: "server/management/codex-prompt-routes", mutates: false },
@@ -186,7 +187,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/integration-routes
   { method: "GET", path: "/api/client-integrations", module: "server/management/integration-routes", mutates: false },
   { method: "GET", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: false },
-  { method: "DELETE", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Retiring one rollback row is a dashboard-local cleanup; the CLI verb that would drive it is owed by a later work-phase and is not implemented here.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_plan/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
+  { method: "DELETE", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Retiring one rollback row is a dashboard-local cleanup; the CLI verb that would drive it is owed by a later work-phase and is not implemented here.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_fin/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
   { method: "POST", path: "/api/client-integrations/restore", module: "server/management/integration-routes", mutates: true },
   // server/management/lab-automation-routes
   { method: "GET", path: "/api/lab/automation", module: "server/management/lab-automation-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
@@ -292,7 +293,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PATCH", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers/test", module: "server/management/provider-routes", mutates: true },
-  { method: "PUT", path: "/api/providers", module: "server/management/provider-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Issue #3280 scopes this atomic batch endpoint to the GUI JSON editor; a matching CLI verb is outside wp5 and remains owed.", owner: "wp5-followup", ownerDoc: "devlog/_plan/260903_bug_drawdown_bcda/050_phase5.md" } },
+  { method: "PUT", path: "/api/providers", module: "server/management/provider-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Issue #3280 scopes this atomic batch endpoint to the GUI JSON editor; a matching CLI verb is outside wp5 and remains owed.", owner: "wp5-followup", ownerDoc: "devlog/_fin/260903_bug_drawdown_bcda/050_phase5.md" } },
   { method: "PUT", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: true },
   // server/management/quota-reset-routes
   { method: "GET", path: "/api/quota-resets", module: "server/management/quota-reset-routes", mutates: false, mechanism: "negated-guard" },

@@ -231,6 +231,10 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 **OpenCode Zen**（`opencode-zen`）とキー不要の **OpenCode Free** プリセットは
 `https://opencode.ai/zen/v1` を共有します。このゲートウェイ上の無料モデルは、しばしばおおよそ毎分 15–20 リクエストの短時間レート制限に当たります（コミュニティ計測。OpenCode は RPM を公表しません）。Zen は `Retry-After` / `X-RateLimit-*` ヘッダーなしの汎用 429 を返すことがあります。これはキー不要デスクトップ枠（`opencode-free` で Big Pickle/無料モデル約 200 回 / 5 時間）とは別です。Zen がそのような 429 で `Retry-After` を省略した場合、opencodex はクライアント向けエラーに案内を足し、合成 `Retry-After` を付けます（上流の `Retry-After` があればそれが優先されます）。同一キーの待機再試行は [`retryOn429`](/ja/reference/configuration/) でオプトインします。
 
+**キー不要の `opencode-free` 枠は、現在サードパーティのクライアントに閉じられています。** Zen は `x-opencode-session` ヘッダーを伴わないリクエストをすべて拒否し、エラータイプ `MissingSessionID` と "OpenCode's free tier can only be used in OpenCode" というメッセージを返します。関門はヘッダーの有無だけを見るため、プロキシは値をでっち上げれば通過できますが、opencodex はそうしません。セッション識別子とバージョン付きの `opencode/<version>` User-Agent を作って送ることは、自分が OpenCode クライアントであると主張することであり、OpenCode はこのキー不要の枠についてサードパーティ連携の契約を公開していません。その方法で得た HTTP 200 は許可ではなく、突破された関門にすぎません。そこで opencodex は回避せずに制限を報告します。`opencode-free` へのリクエストは、上流の関門を説明するエラーを返します。
+
+同じモデルに至るサポートされた経路は、[opencode.ai/auth](https://opencode.ai/auth) で発行した OpenCode Zen API キーを使う **`opencode-zen`** プリセットです。OpenCode が後にキー不要の枠へのサードパーティ経路を公開すれば、opencodex もそれに従えます。それまでこのプリセットは制限を記録する役割を担います。上流の規約: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
+
 大半は bearer キーと共に `openai-chat` アダプターを使い、Anthropic 互換エンドポイントのみを公開する一部
 (例: **Xiaomi MiMo**)は `anthropic` アダプター(`x-api-key`)を使います。
 Volcengine Agent Plan は `openai-responses` アダプターでネイティブ Responses エンドポイントを使用します。

@@ -21,6 +21,58 @@ import type { TranslatorBudget } from "../lib/translator-budget";
  */
 export const MAX_DECOMPRESSED_BODY_BYTES = 256 * 1024 * 1024;
 
+/**
+ * Hard ceiling on the opt-in `maxInboundBodyBytes` (#3573).
+ *
+ * The opt-in exists because a 922k-token session serializes past the 256 MiB default, and the
+ * request that crosses it is the compaction request itself — so the session can no longer
+ * shrink and is stuck. An UNBOUNDED inbound cap is not an acceptable answer: this admission
+ * limit is the only thing standing between one request and the process heap, and
+ * `readBoundedJsonRequestBody` materializes the body several times over (retained wire bytes,
+ * decoded bytes, the decoded string, the re-encoded measurement copies, and the parsed object
+ * graph), so peak RSS is a MULTIPLE of whatever is admitted here. 512 MiB is the largest value
+ * that keeps that multiple survivable on an ordinary machine, and it is what #3573 asked for.
+ */
+export const MAX_CONFIGURABLE_INBOUND_BODY_BYTES = 512 * 1024 * 1024;
+
+/** Floor for the opt-in. Below this an ordinary multi-image turn cannot be admitted at all. */
+export const MIN_CONFIGURABLE_INBOUND_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Resolve the configured inbound admission limit, clamped to the supported range.
+ *
+ * Pure and total on purpose: the schema in `src/config.ts` degrades an invalid hand edit to
+ * `undefined` rather than failing the parse, so the schema cannot be the place the ceiling is
+ * enforced. Every caller resolves through here, which makes this the single auditable bound
+ * regardless of how the config object was produced.
+ *
+ * Omitted, zero, or non-finite = the 256 MiB default, so an unconfigured proxy admits exactly
+ * what it admits today.
+ */
+export function resolveInboundBodyLimitBytes(configured: number | undefined): number {
+  if (configured === undefined || !Number.isFinite(configured) || configured <= 0) {
+    return MAX_DECOMPRESSED_BODY_BYTES;
+  }
+  return Math.min(
+    Math.max(Math.floor(configured), MIN_CONFIGURABLE_INBOUND_BODY_BYTES),
+    MAX_CONFIGURABLE_INBOUND_BODY_BYTES,
+  );
+}
+
+/**
+ * Render a byte count, or nothing at all. `DecompressedBodyTooLargeError` accepts non-finite
+ * and untyped values from legacy callers and deliberately keeps them out of its own message;
+ * the client-facing message inherits that rule rather than printing `NaN MB`.
+ */
+function megabytes(bytes: number): string | null {
+  return Number.isFinite(bytes) && bytes >= 0 && bytes <= Number.MAX_SAFE_INTEGER
+    ? (bytes / (1024 * 1024)).toFixed(1)
+    : null;
+}
+
+const INBOUND_CEILING_MB = (MAX_CONFIGURABLE_INBOUND_BODY_BYTES / (1024 * 1024)).toFixed(1);
+
+
 export class UnsupportedContentEncodingError extends Error {
   constructor(readonly encoding: string) {
     super(`Unsupported content-encoding: ${encoding}`);
@@ -52,6 +104,33 @@ export class DecompressedBodyTooLargeError extends Error {
     super(`Decompressed request body exceeds ${Number.isFinite(limit) ? limit : "unknown"} bytes${suffix}`);
     this.measurement = category;
   }
+}
+
+/**
+ * Name OpenCodex as the refuser, and name the lever.
+ *
+ * #4112 gave the UPSTREAM context refusal on `/v1/responses` its own HTTP 413 with
+ * `context_length_exceeded`. That makes the two 413s on this surface look alike to a client
+ * while having opposite remedies: the upstream one means the provider will not take the turn,
+ * this one means the proxy never read it and a config key would have let it through. The
+ * wording deliberately avoids "context window"/"context length", which `classifyError` treats
+ * as evidence of an upstream context verdict.
+ */
+export function describeInboundBodyRefusal(error: DecompressedBodyTooLargeError): string {
+  // A lower-bound measurement stopped counting at the cap; reporting it as exact would be a lie.
+  const approximate = error.measurement === "declared_wire" || error.measurement === "decoded_exact"
+    ? "" : "at least ";
+  const observed = megabytes(error.bytes);
+  const limit = megabytes(error.limit);
+  const sizes = limit === null
+    ? "the body is above the inbound admission limit"
+    : observed === null
+      ? `the body is above the ${limit} MB inbound admission limit`
+      : `the body is ${approximate}${observed} MB, above the ${limit} MB inbound admission limit`;
+  return `OpenCodex refused this request before reading it: ${sizes}. `
+    + "This is a local proxy limit, not a provider refusal. Raise \"maxInboundBodyBytes\" in "
+    + `config.json (ceiling ${INBOUND_CEILING_MB} MB) and restart the proxy, or compact the `
+    + "conversation earlier.";
 }
 
 function assertBodySizeWithinLimit(
@@ -259,7 +338,16 @@ export async function readBoundedJsonRequestBody(
   }
 }
 
-/** Parse a JSON data-plane body using the shared 256 MiB admission cap. */
-export function readJsonRequestBody(req: Request, budget?: TranslatorBudget): Promise<unknown> {
-  return readBoundedJsonRequestBody(req, MAX_DECOMPRESSED_BODY_BYTES, budget);
+/**
+ * Parse a JSON data-plane body using the shared admission cap.
+ *
+ * `maxBytes` is the resolved per-deployment limit from `resolveInboundBodyLimitBytes()`;
+ * omitting it keeps the 256 MiB default for callers with no config in scope.
+ */
+export function readJsonRequestBody(
+  req: Request,
+  budget?: TranslatorBudget,
+  maxBytes: number = MAX_DECOMPRESSED_BODY_BYTES,
+): Promise<unknown> {
+  return readBoundedJsonRequestBody(req, maxBytes, budget);
 }

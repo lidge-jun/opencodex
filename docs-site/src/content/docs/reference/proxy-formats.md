@@ -81,6 +81,13 @@ With `stream: true`, the response is `text/event-stream`. The bridge emits Respo
 With `stream: false` or no `stream`, the same adapter events are collected into one Responses JSON
 object. Both forms preserve the selected model, output items, terminal status, and usage.
 
+On the pending `dev` implementation for #4112, a final upstream HTTP 413 on this surface
+is classified as `invalid_request_error` / `context_length_exceeded`. Non-streaming callers
+retain HTTP 413 with a JSON `error`; streaming callers retain the terminal SSE failure.
+Both use a fixed message instead of exposing the upstream error body. Routed synthetic
+compaction propagates the classified failure; this does not shrink input or retry compaction.
+Native compact passthrough and local admission-limit errors retain their separate contracts.
+
 For native HTTP/SSE passthrough, a client cancellation without an observed upstream terminal is
 logged as `499` with `closeReason: "client_cancel"` and does not penalize the account pool.
 This applies to both tee inspection and eager relay, including Windows rewrite traffic,

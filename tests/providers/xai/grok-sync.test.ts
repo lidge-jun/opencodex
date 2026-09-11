@@ -274,6 +274,34 @@ describe("syncGrokConfig", () => {
     }
   });
 
+  test("the companion form writes the PUBLIC port on loopback, matching the one-port hub (#4236)", async () => {
+    const { root, grokHome } = tempGrokHome();
+    try {
+      const config = {
+        ...baseConfig,
+        runtimeRole: "hub",
+        hostname: "100.64.0.10",
+        // No port: the listener shares the proxy port on 127.0.0.1, so the fence grok writes is
+        // the same origin `ocx claude` and Claude Desktop hardcode.
+        unauthenticatedLoopbackListener: { enabled: true },
+      } as OcxConfig;
+      const result = await syncGrokConfig(10100, config, {
+        grokHome,
+        hostname: "100.64.0.10",
+      }, {
+        fetchAllModels: async () => [],
+        injectGrokConfig,
+      });
+
+      expect(result).toMatchObject({ ok: true, changed: true });
+      const content = readFileSync(join(grokHome, "config.toml"), "utf8");
+      expect(content).toContain('base_url = "http://127.0.0.1:10100/v1"');
+      expect(content).not.toContain("100.64.0.10");
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  });
+
   test("catalog failure surfaces ok:false without touching the config", async () => {
     const { root, grokHome } = tempGrokHome();
     try {

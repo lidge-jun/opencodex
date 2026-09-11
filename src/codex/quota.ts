@@ -407,7 +407,20 @@ export function flushQuotaObservationsForTests(): Promise<void> {
   return pendingObservation;
 }
 
-export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQuota, "updatedAt"> | null {
+/** Wire marker shared by Spark-family models, whose upstream limit family is model-specific. */
+const SPARK_MODEL_MARKER = "codex-spark";
+/**
+ * Custom-window label for the Spark 5h window. The WHAM parser and the response-header path
+ * must write the SAME label so a header refresh replaces the WHAM reading instead of doubling it.
+ */
+const SPARK_SHORT_WINDOW_LABEL = "GPT-5.3-Codex-Spark 5h";
+
+/** True when the routed model belongs to the Spark family, which carries its own rate limit. */
+function isCodexSparkModel(modelId: string | undefined): boolean {
+  return typeof modelId === "string" && modelId.includes(SPARK_MODEL_MARKER);
+}
+
+export function parseUpstreamQuotaHeaders(headers: Headers, options?: { modelId?: string }): Omit<StoredAccountQuota, "updatedAt"> | null {
   const primaryRaw = headers.get("x-codex-primary-used-percent");
   const secondaryRaw = headers.get("x-codex-secondary-used-percent");
   const tertiaryRaw = headers.get("x-codex-tertiary-used-percent");
@@ -430,6 +443,10 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
   // it into weeklyPercent both discards the real weekly reading and leaves the account looking
   // exhausted long after the burst window resets. Duration decides, exactly as parseUsageQuota
   // already does for the WHAM payload — the two parsers must not disagree about the same data.
+  // One more attribution layer (#4122): on a Spark-family model response the sub-day primary is
+  // the MODEL-SPECIFIC limit, not an account window. Filing it as the account short tuple made
+  // one pool account display a 5h bar its identically-limited peers did not have, and fed a
+  // model limit to the account-policy readers (main-account hard lock, five-hour auto-refresh).
   const primaryIsShort = isExplicitShortWindowMinutes(primaryWindowMinutes);
 
   if (primaryIsMonthly) {
@@ -446,10 +463,21 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
       if (secondaryResetAt !== undefined) quota.weeklyResetAt = secondaryResetAt;
     }
   } else if (primaryIsShort) {
-    if (primaryPercent !== undefined) quota.shortPercent = primaryPercent;
-    if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
-    const minutes = windowMinutes_(primaryWindowMinutes);
-    if (minutes !== undefined) quota.shortWindowSeconds = Math.round(minutes * 60);
+    if (isCodexSparkModel(options?.modelId)) {
+      if (primaryPercent !== undefined) {
+        const sparkWindow: { label: string; percent: number; resetAt?: number } = {
+          label: SPARK_SHORT_WINDOW_LABEL,
+          percent: primaryPercent,
+        };
+        if (primaryResetAt !== undefined) sparkWindow.resetAt = primaryResetAt;
+        quota.customWindows = [sparkWindow];
+      }
+    } else {
+      if (primaryPercent !== undefined) quota.shortPercent = primaryPercent;
+      if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
+      const minutes = windowMinutes_(primaryWindowMinutes);
+      if (minutes !== undefined) quota.shortWindowSeconds = Math.round(minutes * 60);
+    }
     // The burst window vacates the primary slot, so the weekly reading is the secondary — which
     // is where it was all along. Without this the true weekly value is silently dropped.
     if (secondaryPercent !== undefined) {
@@ -480,13 +508,31 @@ export function applyAccountQuotaFromUpstreamHeaders(
   headers: Headers,
   writerGeneration = captureConfigGeneration(),
   mainWriter?: MainQuotaWriter,
+  options?: { modelId?: string },
 ): void {
-  const quota = parseUpstreamQuotaHeaders(headers);
+  const quota = parseUpstreamQuotaHeaders(headers, options);
   if (!quota) return;
   const policyQuota = [
     "x-codex-primary-used-percent", "x-codex-secondary-used-percent", "x-codex-tertiary-used-percent",
   ].some(name => isInvalidPolicyUsagePercent(headers.get(name))) ? null : filterMainPolicyMonthlyQuota(quota);
-  setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter, policyQuota);
+  // A header-observed Spark window is a partial update against the WHAM-recorded custom windows:
+  // merge by label so the weekly Spark entry survives, and hydrate first so the first call in a
+  // process does not merge against an empty map. The merged list goes only to the legacy
+  // snapshot — the identity-bound policy evidence keeps exactly what this response said.
+  let legacyQuota = quota;
+  if (quota.customWindows !== undefined) {
+    hydrateAccountQuotasFromDisk();
+    const existing = accountQuota.get(accountId)?.customWindows;
+    if (existing !== undefined) {
+      const incoming = new Map(quota.customWindows.map(window => [window.label, window]));
+      const merged = existing.map(window => incoming.get(window.label) ?? window);
+      for (const window of quota.customWindows) {
+        if (!existing.some(entry => entry.label === window.label)) merged.push(window);
+      }
+      legacyQuota = { ...quota, customWindows: merged };
+    }
+  }
+  setAccountQuotaFromParsed(accountId, legacyQuota, writerGeneration, mainWriter, policyQuota);
 }
 
 export function updateAccountQuota(
@@ -812,7 +858,7 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   });
   const sparkCustomWindows: Array<{ label: string; percent: number; resetAt?: number }> = [];
   for (const [label, window] of [
-    ["GPT-5.3-Codex-Spark 5h", sparkShort],
+    [SPARK_SHORT_WINDOW_LABEL, sparkShort],
     ["GPT-5.3-Codex-Spark Weekly", sparkWeekly],
   ] as const) {
     const percent = normalizeUsagePercent(window?.used_percent);

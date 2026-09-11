@@ -137,11 +137,12 @@ function json(body: unknown, status = 200): Response {
 
 async function mockManagementApi(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  const body = req.method === "PUT" || req.method === "POST" ? await req.json() : undefined;
+  const body = req.method === "PUT" || req.method === "POST" ? await req.json().catch(() => undefined) : undefined;
   requests.push({ method: req.method, path: url.pathname, search: url.search, body });
 
-  if (req.method === "GET" && url.pathname === "/api/codex-auth/accounts") {
-    if (url.searchParams.get("refresh") === "1" && codexRefreshFailure) {
+  if ((req.method === "GET" && url.pathname === "/api/codex-auth/accounts")
+    || (req.method === "POST" && url.pathname === "/api/codex-auth/accounts/refresh")) {
+    if ((url.searchParams.get("refresh") === "1" || req.method === "POST") && codexRefreshFailure) {
       return json({ error: codexRefreshFailure.error }, codexRefreshFailure.status);
     }
     if (lastDeletedType === "codex" && postDeleteReadFailure) {
@@ -585,6 +586,24 @@ afterEach(() => {
 });
 
 describe("ocx account CLI (issue #180 matrix)", () => {
+  test.each([100, 12])("pending validation stays visible at %s percent usage without exposing raw health details", async weeklyPercent => {
+    codexAccounts = [{ id: "pending", email: "p***@example.test", quota: { weeklyPercent },
+      health: { status: "warning", reason: "validation_pending", message: RAW_SENTINEL } }];
+    for (const command of [["list", "openai"], ["refresh", "openai"]]) {
+      const human = await run(command);
+      expect(human.code).toBe(0);
+      expect(human.stdout).toContain("validation-pending");
+      expect(human.output).not.toContain(RAW_SENTINEL);
+      const machine = await run([...command, "--json"]);
+      expect(JSON.parse(machine.stdout).accounts[0].validationPending).toBe(true);
+      expect(machine.output).not.toContain(RAW_SENTINEL);
+    }
+    codexAccounts = [{ id: "pending", quota: { weeklyPercent: 12 }, health: { status: "healthy" } }];
+    const recovered = await run(["refresh", "openai", "--json"]);
+    expect(JSON.parse(recovered.stdout).accounts[0]).not.toHaveProperty("validationPending");
+    expect((await run(["refresh", "openai"])).stdout).not.toContain("validation-pending");
+  });
+
   test("main quota diagnostics survive opt-in JSON without copying upstream data", async () => {
     codexAccounts = [{ id: "__main__", isMain: true, quota: null,
       quotaRefresh: { status: "http_error", httpStatus: 503, message: RAW_SENTINEL } }];
@@ -907,7 +926,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     expect(human.code).toBe(0);
     expect(requests.some(request =>
-      request.path === "/api/codex-auth/accounts" && request.search === "?refresh=1"
+      request.path === "/api/codex-auth/accounts/refresh" && request.method === "POST"
     )).toBe(true);
     expect(human.stdout).toContain("weekly 42%");
     expect(human.stdout).toContain("monthly 17%");
@@ -2104,6 +2123,24 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(result.stdout).toContain("1 imported, 0 updated, 1 failed, 1 unsupported");
     expect(result.stdout).toContain("#2 failed (credential_rejected)");
     expect(result.stdout).toContain("#3 unsupported (unsupported_format)");
+  });
+
+  test("quota-pending login reports registration and recovery instead of ready model guidance", async () => {
+    codexLoginStatus = { status: "done", validationPending: true };
+    const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {});
+    try {
+      const human = await run(["login", "openai"]);
+      expect(human.code).toBe(0);
+      expect(human.stdout).toContain("validation pending (routing disabled)");
+      expect(human.stdout).toContain("ocx gui");
+      expect(human.stdout).not.toContain("Logged in");
+      expect(human.stdout).not.toContain("ocx models");
+      const machine = await run(["login", "openai", "--json"]);
+      expect(JSON.parse(machine.stdout)).toMatchObject({ validationPending: true, recoveryCommand: "ocx gui" });
+      expect(JSON.parse(machine.stdout)).not.toHaveProperty("modelSelection");
+    } finally {
+      sleepSpy.mockRestore();
+    }
   });
 
   test("pending Codex login keeps success and prints generic recovery guidance", async () => {

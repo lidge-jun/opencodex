@@ -60,6 +60,26 @@ describe("codex-account-store CRUD", () => {
   beforeEach(() => { installScratchHome(); });
   afterEach(async () => { await removeScratchHome(); });
 
+  test("pending validation survives credential refresh and cannot be cleared by a stale probe", async () => {
+    const store = await import("../../src/codex/account-store");
+    const { codexCredentialMutationEpoch } = await import("../../src/codex/credential-mutation-epoch");
+    const cred = { accessToken: "access-pending", refreshToken: "refresh-pending", expiresAt: Date.now() + 3600_000, chatgptAccountId: "acct-pending" };
+    store.saveCodexAccountCredential("pending", cred, { validationPending: true });
+    const generation = store.readCodexAccountRecord("pending")!.generation;
+    store.markCodexAccountValidated("pending");
+    expect(store.readCodexAccountRecord("pending")?.codexValidationPending).toBe(true);
+    expect(store.saveCodexAccountCredentialIfGeneration("pending", generation, { ...cred, accessToken: "refreshed-access" })).toBe(true);
+    expect(store.readCodexAccountRecord("pending")?.codexValidationPending).toBe(true);
+    store.markCodexAccountValidated("pending", Date.now(), generation);
+    expect(store.readCodexAccountRecord("pending")?.codexValidationPending).toBe(true);
+    expect(store.readCodexAccountRecord("pending")?.lastCodexValidatedAt).toBeUndefined();
+    const beforeValidation = codexCredentialMutationEpoch();
+    store.markCodexAccountValidated("pending", Date.now(), generation + 1);
+    expect(codexCredentialMutationEpoch()).toBe(beforeValidation + 1);
+    expect(store.readCodexAccountRecord("pending")?.codexValidationPending).toBeUndefined();
+    expect(store.readCodexAccountRecord("pending")?.lastCodexValidationStatus).toBe("ok");
+  });
+
   test("save and load credential round-trip", async () => {
     const { saveCodexAccountCredential, getCodexAccountCredential } = await import("../../src/codex/account-store");
     const cred = { accessToken: "tk_a", refreshToken: "rf_a", expiresAt: Date.now() + 3600_000, chatgptAccountId: "acc_a" };
@@ -292,6 +312,76 @@ describe("codex-account-store CRUD", () => {
     expect(record.lastCodexValidationStatus).toBe("failed");
     expect(record.lastCodexValidationError).toBe("http_status:401");
     expect(JSON.stringify(record)).not.toContain("sensitive-access revoked");
+  });
+
+  test("a generation-fenced validation failure is declined once the credential has been replaced", async () => {
+    const {
+      markCodexAccountValidated,
+      markCodexAccountValidationFailed,
+      readCodexAccountRecord,
+      saveCodexAccountCredential,
+    } = await import("../../src/codex/account-store");
+    saveCodexAccountCredential("fenced", { accessToken: "a1", refreshToken: "r1", expiresAt: 1, chatgptAccountId: "acc" });
+    markCodexAccountValidated("fenced", 1234);
+    const stale = readCodexAccountRecord("fenced")!.generation;
+
+    // The operator re-authenticates while a probe of the previous credential is still in flight.
+    saveCodexAccountCredential("fenced", { accessToken: "a2", refreshToken: "r2", expiresAt: 2, chatgptAccountId: "acc" });
+
+    expect(markCodexAccountValidationFailed("fenced", "refresh_revoked", {
+      expectedGeneration: stale,
+      terminal: true,
+    })).toBe(false);
+
+    const record = readCodexAccountRecord("fenced")!;
+    expect(record.lastCodexValidationStatus).toBe("ok");
+    expect(record.lastCodexValidationTerminal).toBeUndefined();
+
+    // The same verdict against the CURRENT generation is accepted.
+    expect(markCodexAccountValidationFailed("fenced", "refresh_revoked", {
+      expectedGeneration: record.generation,
+      terminal: true,
+    })).toBe(true);
+    expect(readCodexAccountRecord("fenced")!.lastCodexValidationTerminal).toBe(true);
+  });
+
+  test("a terminal verdict is cleared by a completed validation and by any credential write", async () => {
+    const {
+      markCodexAccountValidated,
+      markCodexAccountValidationFailed,
+      readCodexAccountRecord,
+      saveCodexAccountCredential,
+      saveCodexAccountCredentialIfGeneration,
+    } = await import("../../src/codex/account-store");
+    const dead = { accessToken: "dead", refreshToken: "dead-r", expiresAt: 1, chatgptAccountId: "acc" };
+    const fresh = { accessToken: "fresh", refreshToken: "fresh-r", expiresAt: 2, chatgptAccountId: "acc" };
+    const rotated = { accessToken: "rotated", refreshToken: "rotated-r", expiresAt: 3, chatgptAccountId: "acc" };
+
+    saveCodexAccountCredential("terminal", dead);
+    markCodexAccountValidationFailed("terminal", "refresh_revoked", { terminal: true });
+    expect(readCodexAccountRecord("terminal")!.lastCodexValidationTerminal).toBe(true);
+
+    // A transient failure afterwards must neither clear nor re-assert the terminal marker.
+    markCodexAccountValidationFailed("terminal", "http_status:500");
+    expect(readCodexAccountRecord("terminal")!.lastCodexValidationTerminal).toBe(true);
+
+    // A completed validation refutes it outright.
+    markCodexAccountValidated("terminal", 4321);
+    expect(readCodexAccountRecord("terminal")!.lastCodexValidationTerminal).toBeUndefined();
+
+    // So does a re-login: the verdict belonged to the grant that was replaced.
+    markCodexAccountValidationFailed("terminal", "refresh_revoked", { terminal: true });
+    saveCodexAccountCredential("terminal", fresh);
+    expect(readCodexAccountRecord("terminal")!.lastCodexValidationTerminal).toBeUndefined();
+
+    // And so does a successful CAS refresh, which proves the grant is still alive.
+    markCodexAccountValidationFailed("terminal", "refresh_revoked", { terminal: true });
+    const generation = readCodexAccountRecord("terminal")!.generation;
+    expect(saveCodexAccountCredentialIfGeneration("terminal", generation, rotated)).toBe(true);
+    const record = readCodexAccountRecord("terminal")!;
+    expect(record.lastCodexValidationTerminal).toBeUndefined();
+    // The non-terminal half of the verdict is still preserved metadata.
+    expect(record.lastCodexValidationStatus).toBe("failed");
   });
 
   test("successful refresh returns bumped generation and persists rotated refresh token", async () => {
