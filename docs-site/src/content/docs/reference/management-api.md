@@ -331,7 +331,8 @@ outcome fields from an older server do not establish successful recovery.
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | List masked accounts or remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Read or update Anthropic OAuth pool policy | 400 non-Anthropic provider or invalid policy |
+| `GET, PUT, PATCH /api/pool/settings` | Read or update pool policy for any kind (codex, anthropic, generic); answers with the same keys for all three and declares in `supported` which the kind honours | 400 unknown provider, a field the kind does not support, or an invalid value |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Legacy per-pool policy for Anthropic and generic OAuth providers; superseded by `/api/pool/settings` and kept for existing clients | 400 codex or api-key provider, or invalid policy |
 | `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider/account |
 | `PUT /api/oauth/accounts/alias` | Set or clear an OAuth account alias | 400 invalid provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |

@@ -168,7 +168,7 @@ describe("ocx account strategy / sticky", () => {
     const out = capture();
     try {
       await cmdStrategy(["openai"], deps(() => ({
-        json: { accountPoolStrategy: "round-robin", accountPoolStickyLimit: 4 },
+        json: { strategy: "round-robin", stickyLimit: 4 },
       }), calls));
     } finally { out.restore(); }
     expect(calls.every(call => call.method === "GET")).toBe(true);
@@ -180,14 +180,16 @@ describe("ocx account strategy / sticky", () => {
     const stickyCalls: Captured[] = [];
     const out = capture();
     try {
-      await cmdStrategy(["openai", "fill-first"], deps(() => ({ json: { accountPoolStrategy: "fill-first", accountPoolStickyLimit: 1 } }), strategyCalls));
-      await cmdSticky(["openai", "7"], deps(() => ({ json: { accountPoolStrategy: "fill-first", accountPoolStickyLimit: 7 } }), stickyCalls));
+      await cmdStrategy(["openai", "fill-first"], deps(() => ({ json: { strategy: "fill-first", stickyLimit: 1 } }), strategyCalls));
+      await cmdSticky(["openai", "7"], deps(() => ({ json: { strategy: "fill-first", stickyLimit: 7 } }), stickyCalls));
     } finally { out.restore(); }
-    expect(strategyCalls[0]?.path).toBe("/api/codex-auth/pool-strategy");
-    expect(stickyCalls[0]?.path).toBe("/api/codex-auth/pool-strategy");
-    expect(strategyCalls[0]?.body).toEqual({ strategy: "fill-first" });
+    expect(strategyCalls[0]?.path).toBe("/api/pool/settings");
+    expect(stickyCalls[0]?.path).toBe("/api/pool/settings");
+    // Every kind now carries `provider`, including Codex. The bare-field body was the other
+    // half of the asymmetry the unified route removes.
+    expect(strategyCalls[0]?.body).toEqual({ provider: "openai", strategy: "fill-first" });
     // Sent as a number so the server sees the type it validates.
-    expect(stickyCalls[0]?.body).toEqual({ stickyLimit: 7 });
+    expect(stickyCalls[0]?.body).toEqual({ provider: "openai", stickyLimit: 7 });
   });
 
   test("the APPLIED value is echoed, not the requested one", async () => {
@@ -195,7 +197,7 @@ describe("ocx account strategy / sticky", () => {
     // should see.
     const out = capture();
     try {
-      await cmdSticky(["openai", "9"], deps(() => ({ json: { accountPoolStrategy: "quota", accountPoolStickyLimit: 3 } }), []));
+      await cmdSticky(["openai", "9"], deps(() => ({ json: { strategy: "quota", stickyLimit: 3 } }), []));
     } finally { out.restore(); }
     expect(out.lines.join("\n")).toContain("3");
     expect(out.lines.join("\n")).not.toContain("9");
@@ -257,7 +259,7 @@ describe("ocx account strategy / sticky on the anthropic pool", () => {
       await cmdStrategy(["anthropic"], anthropicDeps(() => ({ json: { strategy: "round-robin", stickyLimit: 5 } }), calls));
     } finally { out.restore(); }
     expect(calls[0]?.method).toBe("GET");
-    expect(calls[0]?.path).toBe("/api/oauth/accounts/pool?provider=anthropic");
+    expect(calls[0]?.path).toBe("/api/pool/settings?provider=anthropic");
     // Unprefixed keys: this route spells the same settings without `accountPool`.
     expect(out.lines.join("\n")).toContain("round-robin");
   });
@@ -269,7 +271,7 @@ describe("ocx account strategy / sticky on the anthropic pool", () => {
       await cmdSticky(["anthropic", "6"], anthropicDeps(() => ({ json: { ok: true, strategy: "quota", stickyLimit: 6 } }), calls));
     } finally { out.restore(); }
     expect(calls[0]?.method).toBe("PUT");
-    expect(calls[0]?.path).toBe("/api/oauth/accounts/pool");
+    expect(calls[0]?.path).toBe("/api/pool/settings");
     // Omitting `provider` here earns a 400 from the real route, so it is asserted exactly.
     expect(calls[0]?.body).toEqual({ provider: "anthropic", stickyLimit: 6 });
     expect(out.lines.join("\n")).toContain("6");
@@ -286,7 +288,7 @@ describe("ocx account strategy / sticky on the anthropic pool", () => {
   test("the codex pool keeps its own prefixed keys mapped onto the same neutral output", async () => {
     const out = capture();
     try {
-      await cmdStrategy(["openai", "--json"], deps(() => ({ json: { accountPoolStrategy: "quota", accountPoolStickyLimit: 1 } }), []));
+      await cmdStrategy(["openai", "--json"], deps(() => ({ json: { strategy: "quota", stickyLimit: 1 } }), []));
     } finally { out.restore(); }
     expect(JSON.parse(out.lines.join("\n"))).toMatchObject({ provider: "openai", strategy: "quota", stickyLimit: 1 });
   });
@@ -342,7 +344,7 @@ describe("generic OAuth pool-settings contract (#695)", () => {
     try {
       await cmdStrategy(["google-antigravity", "round-robin"], genericDeps(() => ({ json: { ok: true, strategy: "round-robin", stickyLimit: null } }), calls));
     } finally { out.restore(); }
-    expect(calls[0]).toMatchObject({ method: "PUT", path: "/api/oauth/accounts/pool", body: { provider: "google-antigravity", strategy: "round-robin" } });
+    expect(calls[0]).toMatchObject({ method: "PUT", path: "/api/pool/settings", body: { provider: "google-antigravity", strategy: "round-robin" } });
   });
 
   test("auto-switch on a generic provider writes autoSwitchThreshold through the pool route", async () => {

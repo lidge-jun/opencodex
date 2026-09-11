@@ -58,7 +58,7 @@ import {
 import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { clearKeyCooldowns } from "../../providers/key-failover";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
@@ -839,6 +839,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
     clearAccountQuotaCache(name);
     clearKeyCooldowns(name);
+    // The rotation cursor describes a pool this edit just changed; keeping it would let a
+    // stale position steer the next proactive pick.
+    forgetApiKeyRotationCursor(name);
     clearModelCache(name);
     if (name === "openai") (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
     const catalogRefresh = await convergeCodexCatalog();
@@ -938,6 +941,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
     clearAccountQuotaCache();
     clearKeyCooldowns();
+    // Cursors too, for the same reason the cooldown clear above takes no name: this PUT
+    // replaces the whole roster, and a cursor that outlives it still names a real id, so
+    // round-robin would resume after the pre-edit position instead of the new roster head.
+    forgetApiKeyRotationCursor();
     clearModelCache();
     (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
     const catalogRefresh = await convergeCodexCatalog();

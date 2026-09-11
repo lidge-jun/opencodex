@@ -337,10 +337,9 @@ export const CAPABILITIES: readonly Capability[] = [
     // Both pools, because both have the setting. The Codex pool reads its applied values
     // from the active payload; the Anthropic pool has its own GET.
     routes: [
-      { method: "GET", path: "/api/codex-auth/active" },
-      { method: "PUT", path: "/api/codex-auth/pool-strategy" },
-      { method: "GET", path: "/api/oauth/accounts/pool" },
-      { method: "PUT", path: "/api/oauth/accounts/pool" },
+      { method: "GET", path: "/api/pool/settings" },
+      { method: "PUT", path: "/api/pool/settings" },
+      { method: "PATCH", path: "/api/pool/settings" },
     ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the applied strategy and sticky limit as JSON." }],
     mutates: true,
@@ -349,23 +348,45 @@ export const CAPABILITIES: readonly Capability[] = [
       "A bare invocation reads and never writes.",
       "The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.",
       "Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.",
-      "`anthropic` owns the full pool contract. Other OAuth providers reach the same endpoint with a generic subset (enabled/strategy/autoSwitchThreshold/sticky); those settings steer selection only while `pool.kernel` is on, which is what the `inert` field reports. `quotaWindow` is still refused for them.",
+      "One route answers for every pool kind and declares which fields that kind honours in `supported`, so an unsupported field is a stated null rather than an absence. `anthropic` alone carries `quotaWindow`. Generic-provider settings steer selection only while `pool.kernel` is on. The legacy per-pool paths still work and are unchanged.",
     ],
   },
   {
     command: ["account", "sticky"],
     summary: "Show or set how many consecutive requests stay on one account.",
     routes: [
-      { method: "GET", path: "/api/codex-auth/active" },
-      { method: "PUT", path: "/api/codex-auth/pool-strategy" },
-      { method: "GET", path: "/api/oauth/accounts/pool" },
-      { method: "PUT", path: "/api/oauth/accounts/pool" },
+      { method: "GET", path: "/api/pool/settings" },
+      { method: "PUT", path: "/api/pool/settings" },
+      { method: "PATCH", path: "/api/pool/settings" },
     ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the applied strategy and sticky limit as JSON." }],
     mutates: true,
     json: "envelope",
     details: ["Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting."],
   },
+  {
+    command: ["account", "auto-switch"],
+    summary: "Show or set the usage percentage at which a pool moves to another account.",
+    // Declared here rather than riding on `account strategy`, which is what it did before the
+    // unified route existed. `auto-switch` genuinely drives these three: the Codex pool reads
+    // its applied threshold from the active payload and writes through its own route, and a
+    // generic OAuth pool reads and writes the per-provider pool settings.
+    routes: [
+      { method: "GET", path: "/api/codex-auth/active" },
+      { method: "PUT", path: "/api/codex-auth/auto-switch" },
+      { method: "GET", path: "/api/oauth/accounts/pool" },
+      { method: "PUT", path: "/api/oauth/accounts/pool" },
+    ],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the stored threshold and whether it is applied." }],
+    mutates: true,
+    json: "envelope",
+    details: [
+      "A bare invocation reads and never writes.",
+      "`on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0-100.",
+      "For a generic OAuth pool, `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability.",
+    ],
+  },
+
   {
     command: ["logs"],
     summary: "Recent request log rows, filterable by provider, model, conversation, account, and status.",

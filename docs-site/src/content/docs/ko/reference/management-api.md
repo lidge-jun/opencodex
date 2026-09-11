@@ -173,7 +173,8 @@ Authorization: Bearer <admin-token>
 | `POST /api/oauth/logout` | 선택된 provider 자격 증명을 제거합니다 | 400 알 수 없는 provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | 마스킹된 계정을 나열하거나 계정 하나를 제거합니다 | 400 잘못된 provider/id; 404 계정 없음; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | 활성 OAuth 계정을 선택합니다 | 400 잘못된 provider/account; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth pool policy를 읽거나 업데이트합니다 | 400 Anthropic이 아닌 provider 또는 잘못된 policy |
+| `GET, PUT, PATCH /api/pool/settings` | 모든 pool 종류(codex, anthropic, generic)의 policy를 읽거나 업데이트합니다. 세 종류 모두 같은 키로 응답하고, 해당 종류가 실제로 적용하는 필드는 `supported`에 나옵니다 | 400 알 수 없는 provider, 해당 종류가 지원하지 않는 필드, 잘못된 값 |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic과 일반 OAuth provider의 기존 pool policy입니다. `/api/pool/settings`로 대체되었고 기존 클라이언트를 위해 유지합니다 | 400 codex 또는 API 키 provider, 잘못된 policy |
 | `POST /api/oauth/accounts/clear-cooldown` | OAuth 계정 하나의 런타임 cooldown을 지웁니다 | 400 잘못된 provider/account |
 | `PUT /api/oauth/accounts/alias` | OAuth 계정 alias를 설정하거나 지웁니다 | 400 잘못된 provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | 마스킹된 provider key를 나열, 추가/활성화, 또는 제거합니다 | 400 잘못된 입력; 404 provider/key 없음 |

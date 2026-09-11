@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../i18n/shared";
+import { getPoolSettings, putPoolSettings } from "../../pool-settings";
 import {
   ACCOUNT_POOL_QUOTA_WINDOWS,
   DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW,
@@ -60,16 +61,11 @@ export default function AnthropicAccountPoolSettings({
     // mount-then-unmount dropped the request entirely. The abort controller already covers
     // in-flight cancellation, which is the part that actually needs to be cancellable.
     void Promise.resolve()
-      .then(() => fetch(`${apiBase}/api/oauth/accounts/pool?provider=anthropic`, { signal: ac.signal }))
-      .then(res => {
-        if (!res.ok) throw new Error("load");
-        return res.json() as Promise<{
-          enabled?: boolean;
-          autoSwitchThreshold?: number;
-          strategy?: unknown;
-          stickyLimit?: unknown;
-          quotaWindow?: unknown;
-        }>;
+      // Through the shared pool client, which speaks the one contract every kind answers on.
+      .then(() => getPoolSettings(apiBase, "anthropic", (input, init) => fetch(input, init), { signal: ac.signal }))
+      .then(settings => {
+        if (!settings) throw new Error("load");
+        return settings;
       })
       .then(json => {
         if (cancelled) return;
@@ -114,24 +110,16 @@ export default function AnthropicAccountPoolSettings({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts/pool`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          provider: "anthropic",
-          enabled: next.enabled,
-          autoSwitchThreshold: next.threshold,
-          strategy: next.strategy,
-          stickyLimit: next.stickyLimit,
-          quotaWindow: next.quotaWindow,
-        }),
+      // The client owns the field mapping: `threshold` becomes `autoSwitchThreshold` and the
+      // provider is always sent, so no call site can forget either.
+      const json = await putPoolSettings(apiBase, "anthropic", {
+        enabled: next.enabled,
+        threshold: next.threshold,
+        strategy: next.strategy,
+        stickyLimit: next.stickyLimit,
+        quotaWindow: next.quotaWindow,
       });
-      if (!res.ok) throw new Error("save");
-      const json = await res.json().catch(() => null) as {
-        strategy?: unknown;
-        stickyLimit?: unknown;
-        quotaWindow?: unknown;
-      } | null;
+      if (!json) throw new Error("save");
       const savedStrategy = normalizeAccountPoolStrategy(json?.strategy ?? next.strategy);
       const savedSticky = normalizeAccountPoolStickyLimit(json?.stickyLimit ?? next.stickyLimit);
       const savedWindow = normalizeAccountPoolQuotaWindow(json?.quotaWindow ?? next.quotaWindow);

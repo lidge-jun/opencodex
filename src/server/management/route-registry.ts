@@ -107,7 +107,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/codex-auth/active", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/auto-switch", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/failover", module: "codex/auth-api", mutates: true },
-  { method: "PUT", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api", mutates: true },
+  { method: "PUT", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api", mutates: true, exempt: { reason: "compatibility-alias", why: "Superseded by PUT /api/pool/settings, which the CLI now drives. Kept working for existing clients and pinned by exact-body goldens in tests/server/account-pool-management-api.test.ts; no CLI verb targets it any more." } },
   // codex/native-profile-api
   { method: "GET", path: "/api/native-main-profiles", module: "codex/native-profile-api", mutates: false },
   { method: "GET", path: "/api/native-main-profiles/doctor", module: "codex/native-profile-api", mutates: false },
@@ -271,6 +271,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/oauth/accounts", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/accounts/events", module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "gui-invalidation", why: "Dashboard selection invalidation stream; CLI account commands read the authoritative account/key resources directly rather than subscribing to browser refresh notifications." } },
   { method: "GET", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: false },
+  { method: "GET", path: "/api/pool/settings", module: "server/management/oauth-account-routes", mutates: false },
+  { method: "PUT", path: "/api/pool/settings", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PATCH", path: "/api/pool/settings", module: "server/management/oauth-account-routes", mutates: true },
   { method: "GET", path: "/api/oauth/providers", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/status", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: false },

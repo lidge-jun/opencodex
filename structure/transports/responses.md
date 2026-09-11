@@ -102,6 +102,37 @@ state. `openai-apikey` uses its configured key and canonical API base URL. Missi
 within their route; neither route falls through to the other. See
 [`openai-tiers.md`](../providers/openai-tiers.md).
 
+### Pre-dispatch API-key pool pick
+
+Key-auth routes with a configured `apiKeyPoolStrategy` and two or more pool entries pick a
+warm key before the first send (`selectProactiveApiKeyTransport` in
+`src/providers/key-failover.ts`). The pick is inert unless that strategy is set and the
+committed key is already cooling or missing from the pool: a healthy committed key, including
+a manual selection, is left alone and the common path returns null without a config write.
+`forgetApiKeyRotationCursor` drops the process-local round-robin cursor when the operator
+edits the pool, so a later pick cannot second-guess that choice.
+
+On the shared Responses path the assignment lands in `src/server/responses/core.ts`
+immediately before `resolveProviderTransport`. `route.provider` is copied into
+`adapterProvider` on the next lines, and later `providerFetch` consumers (the HTTP send,
+the image bridge, web search) read that pinned object with no stale-selection re-read. A
+pick after the pin would leave the first attempt on the cooled key.
+
+Native Chat Completions is a separate entry path: `src/server/chat-completions.ts` routes
+eligible `openai-chat` requests to `src/server/chat-native.ts` and never through Responses
+core, so that file repeats the same call before it binds the adapter. Native compact
+(`src/server/responses/compact.ts`) and the keyed Images relay (`src/server/images.ts`)
+do the same for the same reason. Request paths assign the Transport variant, not the bare
+`selectProactiveApiKey` snapshot: the snapshot is the persisted row, so it carries none of the
+backfills `routedProviderConfig` merges in at request time and none of the route's explicit
+runtime transport state. The load-bearing one is the credential -- a stored `\${VAR}` or
+keychain reference is resolved in `routedProviderConfig` and nowhere in the adapter, so a
+wholesale assignment sends the literal reference as the bearer token. `adapter` and `baseUrl`
+are not at risk on a stored row, because the config schema requires both.
+
+Reactive 429 rotation (`rotateProviderTransportOn429`) remains the recovery path after a
+send has already earned a throttle.
+
 ### Routed service-tier capability
 
 OpenAI-compatible service-tier support is resolved only after the final provider/model wire is

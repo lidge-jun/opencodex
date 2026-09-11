@@ -847,21 +847,15 @@ export async function cmdPauseExhausted(args: string[], deps: AccountDeps): Prom
 }
 
 /**
- * Two pools expose strategy and sticky, and they are NOT reached the same way:
+ * One transport, because there is now one contract.
  *
- * |  | Codex pool | Anthropic pool |
- * |---|---|---|
- * | read | `GET /api/codex-auth/active` | `GET /api/oauth/accounts/pool?provider=` |
- * | write | `PUT /api/codex-auth/pool-strategy` | `PUT /api/oauth/accounts/pool` |
- * | keys | `accountPoolStrategy`/`accountPoolStickyLimit` | `strategy`/`stickyLimit` |
- * | body | bare field | field **plus** a mandatory `provider` |
+ * This used to be a table of the differences between the Codex and Anthropic pools -- different
+ * read path, different write path, different response keys, and a `provider` field mandatory on
+ * one body and forbidden on the other. That table existed only because the two contracts
+ * disagreed; `/api/pool/settings` answers with the same keys for every kind, so the table
+ * collapses to a single shape and the asymmetry it encoded is gone rather than relocated.
  *
- * Omitting `provider` from the Anthropic write body earns a 400
- * (`oauth-account-routes.ts:344`), so the asymmetry has to be encoded somewhere. Encoding it
- * here keeps ONE verb pair working on both pools. The alternative the plan left open -- a second
- * `provider-strategy`/`provider-sticky` pair -- would double the surface an operator must learn
- * to express one idea, and a CLI that can steer one pool and not the other is exactly the trap
- * this unit exists to remove.
+ * The legacy paths still work and still have their own goldens. Nothing here reads them.
  */
 interface PoolTransport {
   readPath: string;
@@ -873,18 +867,10 @@ interface PoolTransport {
   writeBody: (field: "strategy" | "stickyLimit", value: unknown) => Record<string, unknown>;
 }
 
-const CODEX_POOL_TRANSPORT: PoolTransport = {
-  readPath: "/api/codex-auth/active",
-  writePath: "/api/codex-auth/pool-strategy",
-  strategyKey: "accountPoolStrategy",
-  stickyKey: "accountPoolStickyLimit",
-  writeBody: (field, value) => ({ [field]: value }),
-};
-
-function anthropicPoolTransport(provider: string): PoolTransport {
+function unifiedPoolTransport(provider: string): PoolTransport {
   return {
-    readPath: `/api/oauth/accounts/pool?provider=${encodeURIComponent(provider)}`,
-    writePath: "/api/oauth/accounts/pool",
+    readPath: `/api/pool/settings?provider=${encodeURIComponent(provider)}`,
+    writePath: "/api/pool/settings",
     strategyKey: "strategy",
     stickyKey: "stickyLimit",
     writeBody: (field, value) => ({ provider, [field]: value }),
@@ -900,8 +886,7 @@ function poolTransportFor(
   classified: { type: "codex" | "oauth" | "api-key" },
   name: string,
 ): PoolTransport | string {
-  if (classified.type === "codex") return CODEX_POOL_TRANSPORT;
-  if (classified.type === "oauth") return anthropicPoolTransport(name);
+  if (classified.type === "codex" || classified.type === "oauth") return unifiedPoolTransport(name);
   return `pool settings apply to OAuth account pools, not the API-key provider "${name}"`;
 }
 

@@ -27,7 +27,11 @@ one bounded event. EOF with an unterminated event and an event above the transla
 upstream failures, never successful partial completions. Provider-controlled structured error
 messages are redacted before either JSON or SSE reaches the client. The native path uses the same
 request-attempt logging, reset retry, same-key 429 replay, key rotation, usage extraction, and
-request-signal cancellation contracts as routed Responses transport.
+request-signal cancellation contracts as routed Responses transport. Because
+`src/server/chat-completions.ts` never enters Responses core,
+`src/server/chat-native.ts` repeats the pre-dispatch `selectProactiveApiKeyTransport`
+call before it binds the adapter; the pick remains inert unless a strategy is configured
+and the committed key is cooling. See [`responses.md`](../transports/responses.md).
 
 ## Chat streaming client with a JSON upstream result
 

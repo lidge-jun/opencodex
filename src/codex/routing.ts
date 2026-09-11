@@ -2007,7 +2007,9 @@ function previewReusableAffinityAccount(
         getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions),
       now,
       );
-      if (!isUnknownUsage(usage) && usage >= threshold) {
+      // Preview must agree with resolve: this is the second copy of the same rule, and the
+      // suite asserts the two answer identically.
+      if (mayRebindAffinityForQuota(config, entry.accountId, usage, threshold, selectionOptions)) {
         const best = pickLowerUsageAccount(
           config,
           entry.accountId,
@@ -2022,6 +2024,32 @@ function previewReusableAffinityAccount(
     }
   }
   return entry.accountId;
+}
+
+/**
+ * May a LIVE binding be moved for quota reasons?
+ *
+ * Default: yes once usage crosses `autoSwitchThreshold`, which is the historical rule.
+ *
+ * With `pool.cacheAffinity` on, the bar becomes genuine exhaustion. Moving a bound
+ * conversation discards the prompt cache warmed on its account, so a threshold crossing -- a
+ * hint that the account is getting busy -- does not justify paying that cost; the account has
+ * to be unable to serve. Deliberately NOT `hasCodexQuotaHeadroom`, which reads
+ * `usage < autoSwitchThreshold` and would reproduce the old rule under a new name.
+ */
+function mayRebindAffinityForQuota(
+  config: OcxConfig,
+  accountId: string,
+  usage: number,
+  threshold: number,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): boolean {
+  const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
+  if (config.pool?.cacheAffinity !== true) return overThreshold;
+  // The usable half is already guaranteed by both callers, which gate on
+  // isCodexAccountSelectable; kept explicit so the predicate reads correctly on its own.
+  return !isCodexAccountUsable(config, accountId, selectionOptions)
+    || (!isUnknownUsage(usage) && usage >= 100);
 }
 
 /**
@@ -2044,15 +2072,18 @@ function reevaluateAffinityQuota(
       now,
       )
     : 0;
-  const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
+  // One bar, used for BOTH the rebind decision and the re-score interval. Keying the short
+  // circuit off the old threshold while the rebind bar moved would re-score a bound thread on
+  // every request through the whole 80-99% band instead of once a minute.
+  const mayRebind = mayRebindAffinityForQuota(config, entry.accountId, usage, threshold, selectionOptions);
   if (
-    !overThreshold
+    !mayRebind
     && now - entry.lastReevalAt < CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS
   ) {
     return null;
   }
   entry.lastReevalAt = now;
-  if (!overThreshold) return null;
+  if (!mayRebind) return null;
   const best = pickLowerUsageAccount(
     config,
     entry.accountId,

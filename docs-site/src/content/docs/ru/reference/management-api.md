@@ -192,7 +192,8 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | `POST /api/oauth/logout` | Удалить сохранённый credential выбранного провайдера | 400 unknown provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | Показать список masked-аккаунтов или удалить один аккаунт | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Выбрать активный OAuth-аккаунт | 400 invalid provider/account; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Прочитать или обновить policy Anthropic OAuth pool | 400 non-Anthropic provider or invalid policy |
+| `GET, PUT, PATCH /api/pool/settings` | Прочитать или обновить policy пула любого вида (codex, anthropic, generic); все три отвечают одинаковыми ключами, а поля, которые вид действительно применяет, перечислены в `supported` | 400 неизвестный provider, поле, которое вид не поддерживает, или недопустимое значение |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Прежняя policy пула для Anthropic и обычных OAuth-провайдеров; заменена на `/api/pool/settings` и сохранена для существующих клиентов | 400 codex или api-key provider, либо недопустимая policy |
 | `POST /api/oauth/accounts/clear-cooldown` | Очистить runtime cooldown одного OAuth-аккаунта | 400 invalid provider/account |
 | `PUT /api/oauth/accounts/alias` | Задать или очистить alias OAuth-аккаунта | 400 invalid provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | Показать список masked provider-key'ов, добавить/активировать один или удалить один | 400 invalid input; 404 provider/key missing |

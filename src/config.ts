@@ -583,7 +583,7 @@ const providerConfigSchema = z.object({
   // Validated rather than left to passthrough: an unrecognized strategy would otherwise
   // load silently and then be ignored at selection time, which reads as a broken feature
   // rather than a rejected setting.
-  apiKeyPoolStrategy: z.enum(["round-robin", "fill-first"]).optional(),
+  apiKeyPoolStrategy: z.enum(["round-robin", "fill-first", "quota"]).optional(),
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
   alias: z.string().optional(),
@@ -1312,7 +1312,10 @@ const configSchema = z.object({
   }).optional().catch(undefined),
   // Same degrade-to-off rule as the flags above: a hand-edited typo in an opt-in pool
   // feature must never cost the operator their providers.
-  pool: z.object({ kernel: z.boolean().optional() }).optional().catch(undefined),
+  pool: z.object({
+    kernel: z.boolean().optional(),
+    cacheAffinity: z.boolean().optional(),
+  }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole

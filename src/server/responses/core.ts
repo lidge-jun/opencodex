@@ -267,6 +267,7 @@ import type { AdapterRequest, ProviderAdapter } from "../../adapters/base";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import {
   hasKeyPoolFailover,
+  selectProactiveApiKeyTransport,
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
@@ -4447,6 +4448,26 @@ async function handleResponsesInner(
       return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
     }
   }
+  // Key-auth twin of the OAuth preference above: pick a warm key BEFORE the first attempt when
+  // the committed one is already cooling, instead of spending the request earning a 429 the
+  // runtime could already predict. The picker refuses to override a healthy committed key and
+  // returns null without a configured strategy, so an ordinary install evaluates one predicate.
+  //
+  // It RETURNS a rebuilt route rather than mutating one, and the assignment has to land here --
+  // ahead of the transport pin below, the adapterProvider copy that follows it, and the request
+  // the HTTP path bakes later. The image bridge and web search read route.provider directly and
+  // have no stale-selection re-read to save them, so ordering is the whole correctness argument.
+  //
+  // The Transport variant, not the bare picker: the picker answers with the PERSISTED row, and
+  // a built-in provider stored in its valid minimal form would lose the adapter id, base URL
+  // and static headers registry backfill supplies, throwing `Unknown adapter: undefined`.
+  const proactiveKeyProvider = selectProactiveApiKeyTransport(
+    config,
+    route.providerName,
+    route.provider,
+    parsed.options.promptCacheKey,
+  );
+  if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
   route.provider = resolveProviderTransport(
     route.providerName,
     route.provider,

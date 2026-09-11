@@ -839,7 +839,20 @@ export interface OcxConfig {
    * Off restores the pre-kernel path exactly, which is why the DTO keeps reporting
    * `inert: true` until this is on. A malformed value reads as off.
    */
-  pool?: { kernel?: boolean };
+  pool?: {
+    kernel?: boolean;
+    /**
+     * Opt-in cache-affinity ordering, off by default.
+     *
+     * With it on, a bound Codex thread keeps its account until that account genuinely cannot
+     * serve, instead of moving the moment usage crosses `autoSwitchThreshold`. Moving a live
+     * conversation throws away the prompt cache warmed on that account, and a threshold
+     * crossing is a hint rather than evidence the account is spent. Separate from `kernel`
+     * on purpose: that one governs the generic OAuth strategy consumer, and one switch
+     * carrying two unrelated meanings cannot be turned on alone.
+     */
+    cacheAffinity?: boolean;
+  };
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */

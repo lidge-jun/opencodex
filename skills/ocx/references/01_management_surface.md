@@ -547,10 +547,9 @@ Show or set how an account pool picks the next account.
 
 | Method | Route |
 |---|---|
-| GET | `/api/codex-auth/active` |
-| PUT | `/api/codex-auth/pool-strategy` |
-| GET | `/api/oauth/accounts/pool` |
-| PUT | `/api/oauth/accounts/pool` |
+| GET | `/api/pool/settings` |
+| PUT | `/api/pool/settings` |
+| PATCH | `/api/pool/settings` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -561,7 +560,7 @@ JSON mode: `envelope`.
 - A bare invocation reads and never writes.
 - The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.
 - Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.
-- `anthropic` owns the full pool contract. Other OAuth providers reach the same endpoint with a generic subset (enabled/strategy/autoSwitchThreshold/sticky); those settings steer selection only while `pool.kernel` is on, which is what the `inert` field reports. `quotaWindow` is still refused for them.
+- One route answers for every pool kind and declares which fields that kind honours in `supported`, so an unsupported field is a stated null rather than an absence. `anthropic` alone carries `quotaWindow`. Generic-provider settings steer selection only while `pool.kernel` is on. The legacy per-pool paths still work and are unchanged.
 
 ### `ocx account sticky`
 
@@ -569,10 +568,9 @@ Show or set how many consecutive requests stay on one account.
 
 | Method | Route |
 |---|---|
-| GET | `/api/codex-auth/active` |
-| PUT | `/api/codex-auth/pool-strategy` |
-| GET | `/api/oauth/accounts/pool` |
-| PUT | `/api/oauth/accounts/pool` |
+| GET | `/api/pool/settings` |
+| PUT | `/api/pool/settings` |
+| PATCH | `/api/pool/settings` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -581,6 +579,27 @@ Show or set how many consecutive requests stay on one account.
 JSON mode: `envelope`.
 
 - Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting.
+
+### `ocx account auto-switch`
+
+Show or set the usage percentage at which a pool moves to another account.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/active` |
+| PUT | `/api/codex-auth/auto-switch` |
+| GET | `/api/oauth/accounts/pool` |
+| PUT | `/api/oauth/accounts/pool` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the stored threshold and whether it is applied. |
+
+JSON mode: `envelope`.
+
+- A bare invocation reads and never writes.
+- `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0-100.
+- For a generic OAuth pool, `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability.
 
 ### `ocx storage cleanup`
 
@@ -750,6 +769,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 40
-- of those, state-changing: 19
+- declared capabilities: 41
+- of those, state-changing: 20
 - head-resolved invocations: 2
