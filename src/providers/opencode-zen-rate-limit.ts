@@ -175,3 +175,25 @@ export function enrichOpenCodeZenUpstreamMessage(
 ): string {
   return enrichOpenCodeZenFreeTierMessage(enrichOpenCodeZenRateLimitMessage(message, opts), opts);
 }
+
+/**
+ * Console Go transient upload rejection.
+ *
+ * Both Go and Zen hand the request to OpenCode's Console gateway, which intermittently answers
+ * a body it accepts moments later with a 400 invalid_request_error / "Invalid upload request." —
+ * a rejection naming an upload step the caller never invoked (the request is plain JSON).
+ *
+ * Live evidence (2026-09-12, usage ledger, conversation a016a2a76ee921d9300342e56bf5824d):
+ * request ocx-ce696fa4a554e4f3e375cf120904b0da failed 400, while ocx-ed78f47b96f7d1bb7c —
+ * sent 22s later with the same model, the same inline-image history and the same tool output —
+ * answered 200. The rejection is therefore an upstream flap, not a verdict on the payload, so
+ * callers replay the byte-identical request once instead of failing the turn.
+ * Upstream tracker: anomalyco/opencode#47237.
+ */
+export function isTransientConsoleGoUploadRejection(opts: {
+  status: number;
+  errorBody: string | undefined;
+}): boolean {
+  if (opts.status !== 400 || !opts.errorBody) return false;
+  return /invalid upload request/i.test(opts.errorBody);
+}

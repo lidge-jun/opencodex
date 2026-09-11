@@ -6,6 +6,7 @@ import {
   enrichOpenCodeZenFreeTierMessage,
   enrichOpenCodeZenRateLimitMessage,
   enrichOpenCodeZenUpstreamMessage,
+  isTransientConsoleGoUploadRejection,
   isOpenCodeZenFreeTierLockIn,
   isOpenCodeZenRateLimitProvider,
 } from "../../src/providers/opencode-zen-rate-limit";
@@ -230,3 +231,41 @@ describe("opencode-free keyless tier lock-in (#4121)", () => {
     expect(lockedOut).not.toContain(OPENCODE_ZEN_OBSERVED_RPM_HINT);
   });
 });
+
+describe("Console Go transient upload refusal", () => {
+  // The exact body Console Go returns for a payload it accepts moments later.
+  const UPLOAD_REFUSAL = JSON.stringify({
+    model: "muse-spark-1.3-contributor",
+    error: {
+      param: null,
+      type: "invalid_request_error",
+      message: "Error from provider (Console Go): Upstream request failed: [invalid_request_error] Invalid upload request.",
+    },
+  });
+
+  test("accepts the 400 upload refusal regardless of casing", () => {
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: UPLOAD_REFUSAL })).toBe(true);
+    expect(isTransientConsoleGoUploadRejection({
+      status: 400,
+      errorBody: '{"error":"INVALID UPLOAD REQUEST."}',
+    })).toBe(true);
+  });
+
+  test("rejects every other status and error body", () => {
+    // Status is part of the identity: only the gateway's 400 is the flap.
+    expect(isTransientConsoleGoUploadRejection({ status: 200, errorBody: UPLOAD_REFUSAL })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({ status: 500, errorBody: UPLOAD_REFUSAL })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: undefined })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: "" })).toBe(false);
+    // Other 400s on the same wire are deterministic verdicts on the request, not flaps.
+    expect(isTransientConsoleGoUploadRejection({
+      status: 400,
+      errorBody: '{"error":{"param":"reasoning.effort","type":"invalid_request_error","message":"Error from provider (Console Go): Upstream request failed: [invalid_request_error] reasoning_effort max requires an active Muse Code subscription for model muse-spark-1.3-contributor."}}',
+    })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({
+      status: 400,
+      errorBody: '{"type":"error","error":{"type":"MissingSessionID","message":"Request is missing x-opencode-session"}}',
+    })).toBe(false);
+  });
+});
+

@@ -102,7 +102,10 @@ import {
 } from "../../lib/errors";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
-import { enrichOpenCodeZenUpstreamMessage } from "../../providers/opencode-zen-rate-limit";
+import {
+  enrichOpenCodeZenUpstreamMessage,
+  isTransientConsoleGoUploadRejection,
+} from "../../providers/opencode-zen-rate-limit";
 import { CODE_MODE_EXEC_TOOL_NAME, modelInList, namespacedToolName } from "../../types";
 import type {
   AdapterEvent,
@@ -213,6 +216,7 @@ import {
   fetchWithTransientRetry,
   isNonReplayableResponse,
   prepareSameTarget429Wait,
+  sleepWithAbort,
 } from "../../lib/upstream-retry";
 import {
   ForwardAdmissionCredentialError,
@@ -840,6 +844,33 @@ async function opaqueBlobRejectionBodyForRecovery(
     || alreadyAttempted
     || !outboundResponsesBodyCarriesOpaqueBlob(outboundBody)
   ) return undefined;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    return body.displaySafe && !body.truncated ? body.text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Console Go transient-400 retry delay. A short pause lets a momentary gateway state clear
+ * before the single byte-identical replay; it is imperceptible inside a turn that already
+ * waits seconds for the model.
+ */
+const CONSOLE_GO_UPLOAD_RETRY_DELAY_MS = 800;
+
+/**
+ * Peek the upstream error body for the Console Go transient-400 recovery. Only a complete,
+ * display-safe body may drive a retry decision (same contract as
+ * opaqueBlobRejectionBodyForRecovery), and reading a clone leaves the original response intact
+ * for the caller's own error surface when no retry is taken.
+ */
+async function consoleGoUploadRejectionBody(
+  response: Response,
+  alreadyAttempted: boolean,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (response.status !== 400 || alreadyAttempted) return undefined;
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal });
     return body.displaySafe && !body.truncated ? body.text : undefined;
@@ -5231,6 +5262,9 @@ async function handleResponsesInner(
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     let oauth401ReplayAttempted = false;
     let codex401ReplayKind: "main" | "stored" | null = null;
+    // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
+    // moments later; at most one byte-identical replay is allowed per request.
+    const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
     const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
     let rateLimitRetries = 0;
     const rebuildAndRefetch = async (
@@ -5776,6 +5810,34 @@ async function handleResponsesInner(
         logCtx.terminalHttpStatus = preflightLog.terminalHttpStatus;
         logCtx.terminalErrorCode = preflightLog.terminalErrorCode;
         logCtx.terminalIncompleteReason = preflightLog.terminalIncompleteReason;
+      }
+    }
+    // Console Go (opencode-zen / opencode-go) intermittently rejects a body it accepts seconds
+    // later with 400 invalid_request_error / "Invalid upload request." Replay the byte-identical
+    // request once: the same conversation re-sent 22s later answered 200, so surfacing this flap
+    // would fail a turn the upstream would have served. Single-shot guard.
+    if (!consoleGoUploadRetryGuard.attempted) {
+      const uploadRejectionBody = await consoleGoUploadRejectionBody(
+        upstreamResponse,
+        consoleGoUploadRetryGuard.attempted,
+        upstream.signal,
+      );
+      if (uploadRejectionBody !== undefined
+        && isTransientConsoleGoUploadRejection({
+          status: upstreamResponse.status,
+          errorBody: uploadRejectionBody,
+        })) {
+        consoleGoUploadRetryGuard.attempted = true;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        if (!upstream.signal.aborted) {
+          try {
+            await sleepWithAbort(CONSOLE_GO_UPLOAD_RETRY_DELAY_MS, upstream.signal);
+          } catch { /* client aborted: the replay below settles through the normal abort path */ }
+        }
+        const result = await rebuildAndRefetch("console-go-upload-retry");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+        continue passthroughRecovery;
       }
     }
     break;
@@ -7267,6 +7329,9 @@ async function handleResponsesInner(
     // 413→429 rotation cannot silently undo the tightening.
     let imageRetryAttempted = false;
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
+    // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
+    // moments later; at most one byte-identical replay is allowed per request.
+    const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
     let oauth401ReplayAttempted = false;
     /**
      * Rebuild the request from the current parsed input (and any image-tier bias) and refetch
@@ -7650,6 +7715,35 @@ async function handleResponsesInner(
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
         continue recovery;
+      }
+      // Console Go (opencode-zen / opencode-go) intermittently rejects a body it accepts seconds
+      // later with 400 invalid_request_error / "Invalid upload request." Replay the
+      // byte-identical request once: the same conversation re-sent 22s later answered 200, so
+      // surfacing this flap would fail a turn the upstream would have served. Single-shot guard.
+      if (!consoleGoUploadRetryGuard.attempted) {
+        const uploadRejectionBody = await consoleGoUploadRejectionBody(
+          upstreamResponse,
+          consoleGoUploadRetryGuard.attempted,
+          upstream.signal,
+        );
+        if (uploadRejectionBody !== undefined
+          && isTransientConsoleGoUploadRejection({
+            status: upstreamResponse.status,
+            errorBody: uploadRejectionBody,
+          })) {
+          consoleGoUploadRetryGuard.attempted = true;
+          invalidateSameTargetRequest();
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          if (!upstream.signal.aborted) {
+            try {
+              await sleepWithAbort(CONSOLE_GO_UPLOAD_RETRY_DELAY_MS, upstream.signal);
+            } catch { /* client aborted: the replay below settles through the normal abort path */ }
+          }
+          const result = await rebuildAndRefetch("console-go-upload-retry");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+          continue recovery;
+        }
       }
       break;
     }
