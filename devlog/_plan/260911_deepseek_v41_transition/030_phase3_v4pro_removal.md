@@ -29,6 +29,22 @@
 | 정적 `models:` 로스터 | alibaba-token-plan, alibaba-token-plan-intl, volcengine ark/coding/agent, ollama, nvidia-nim | 행 삭제 — 실제로 사라진다 |
 | 라이브 디스커버리 | cline-pass, orcarouter, baseten, commandcode, command-code, digitalocean, qoder | `ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS`(`src/codex/catalog/parsing.ts:180`)에 슬러그 등록 — 이게 실제로 카탈로그에서 빼는 유일한 수단이다. 그 위에서 정적 메타데이터 행도 함께 정리한다 |
 
+### 제외 슬러그 형식 (확인됨)
+
+`catalogModelSlug`(`parsing.ts:842`)는 `model.alias ?? routedSlug(provider, id)`이고, 모델 id 안의 슬래시는 하이픈이 된다. 실제 예시가 테스트에 박혀 있다: `commandcode/deepseek-deepseek-v4-pro`(`tests/codex-integration/codex-catalog.test.ts:2230`).
+
+따라서 등록할 슬러그는 다음 형태다. **각각 실제 카탈로그 출력으로 확인한 뒤 넣는다 — 형식이 틀리면 제외가 조용히 아무 일도 하지 않는다.**
+
+| 프로바이더 | 모델 id | 슬러그 |
+| --- | --- | --- |
+| `commandcode` | `deepseek/deepseek-v4-pro` | `commandcode/deepseek-deepseek-v4-pro` |
+| `command-code` | `deepseek/deepseek-v4-pro` | `command-code/deepseek-deepseek-v4-pro` |
+| `orcarouter` | `deepseek/deepseek-v4-pro` | `orcarouter/deepseek-deepseek-v4-pro` |
+| `cline-pass` | `cline-pass/deepseek-v4-pro` | `cline-pass/cline-pass-deepseek-v4-pro` |
+| `baseten` | `deepseek-ai/DeepSeek-V4-Pro` | `baseten/deepseek-ai-DeepSeek-V4-Pro` |
+| `digitalocean` | (확인 필요) | (확인 필요) |
+| `qoder` | (확인 필요) | (확인 필요) |
+
 ## 감사가 잡은 나머지
 
 - `registry.ts:2864` volcengine-agent-plan `defaultModel`이 `deepseek-v4-pro`다. 같은 커밋에서 로스터 내 다른 id로 교체한다.
