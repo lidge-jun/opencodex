@@ -1,3 +1,4 @@
+// Holds INV-AUTH-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";

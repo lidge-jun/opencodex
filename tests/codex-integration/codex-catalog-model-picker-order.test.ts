@@ -1,3 +1,4 @@
+// Holds INV-AGENT-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { describe, expect, test } from "bun:test";
 import {
   buildCatalogEntriesFromObservedState,

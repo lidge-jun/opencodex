@@ -1,3 +1,4 @@
+// Holds INV-WS-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
