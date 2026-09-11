@@ -179,6 +179,7 @@ ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
+ocx login devin       # Cognition/Devin Auth0 browser sign-in
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login codex        # Codex account pool (aliases: chatgpt, openai; needs a running proxy)
 ocx logout <provider>
@@ -194,6 +195,8 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
+| `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login opens Auth0 browser sign-in, then exchanges the token via Cognition's `RegisterUser` for a long-lived API key; models are discovered per account with `GetCascadeModelConfigs`. Not shown in the dashboard preset by default. Chat and usage reporting are verified against a live account across three models. |
+| `devin-cli` | `devin-cli` | `https://cli.devin.ai` | Drives the locally installed Devin CLI over the Agent Client Protocol (`devin acp`, newline-delimited JSON-RPC on stdio). The CLI holds its own credentials from `devin auth login`, so opencodex stores no key for it. Point `OPENCODEX_DEVIN_CLI_BIN` at a specific build; letting the CLI read and write files requires setting `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1` explicitly, because the default is to refuse. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 Google Antigravity account and provider quota probes use fixed Google accounting endpoints, including the models fallback. They support transparent Fake-IP DNS for those destinations while retaining TLS verification, redirect rejection and private-address checks. A custom provider base URL changes model requests, not quota destinations; `NO_PROXY` continues to select the direct-route policy.
@@ -454,7 +457,7 @@ routing or defaults changes.
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
-| Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
+| Z.AI (GLM Coding) | `https://api.z.ai` — Responses at `/api/v1/responses` by default; Chat Completions at `/api/coding/paas/v4/chat/completions` per model through `modelAdapters` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
 | BigModel Coding Plan (Responses, static roster) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan (default): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |

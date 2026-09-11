@@ -381,6 +381,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
       ? { responsesPath: registryEntry.responsesPath }
       : {}),
+    ...(provider.chatCompletionsPath === undefined && registryEntry.chatCompletionsPath !== undefined
+      ? { chatCompletionsPath: registryEntry.chatCompletionsPath }
+      : {}),
     ...(provider.requiresAdjacentResponsesToolResults === undefined
       && registryEntry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: registryEntry.requiresAdjacentResponsesToolResults }

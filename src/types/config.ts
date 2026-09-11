@@ -831,6 +831,15 @@ export interface OcxConfig {
    * spends a second credit. A malformed value reads as off.
    */
   resetCreditAutoRedeem?: { enabled?: boolean; leadTimeMinutes?: number };
+  /**
+   * Shared account-pool kernel, opt-in and off by default.
+   *
+   * `kernel: true` is what makes a generic OAuth provider's stored `strategy` and
+   * `autoSwitchThreshold` actually select an account instead of merely being persisted.
+   * Off restores the pre-kernel path exactly, which is why the DTO keeps reporting
+   * `inert: true` until this is on. A malformed value reads as off.
+   */
+  pool?: { kernel?: boolean };
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */

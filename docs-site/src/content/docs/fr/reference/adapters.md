@@ -144,6 +144,16 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 - Envoie les niveaux ordinaires de `cursor/grok-4.5` avec les identifiants de protocole exacts issus de la découverte en direct de Cursor (`cursor-grok-4.5-low`, `-medium` ou `-high`). `cursor/grok-4.5-fast` reste sélectionnable, mais le modèle canonique `grok-4.5` est envoyé avec des paramètres distincts `effort` et `fast=true`.
 - L’exécution locale native de commandes sur le système de fichiers, le shell ou le réseau par Cursor est refusée par défaut. Les intégrations explicites `mcpServers` et `desktopExecutor` disposent d’activations distinctes ; `nativeLocalExec: "on"` active l’exécuteur intégré plus large et contourne la sémantique d’approbation et de bac à sable de Codex. L’ancien réglage `unsafeAllowNativeLocalExec: true` reste équivalent uniquement lorsque `nativeLocalExec` n’est pas défini.
 
+## `devin`
+
+**Cible :** `exa.api_server_pb.ApiServerService/GetChatMessage` de Cognition, en streaming Connect sur `server.codeium.com`.
+**Authentification :** clé d'API Devin/Cognition issue de `provider.apiKey` ou de l'en-tête authorization transmis. La connexion ouvre l'authentification Auth0 dans le navigateur, puis échange le jeton via `SeatManagementService.RegisterUser` contre une clé durable.
+
+- Utilise `runTurn` plutôt que le chemin fetch/parse ordinaire. Les requêtes et les événements serveur passent par le cadrage protobuf manuel de `devin/cloud-direct/wire.ts`.
+- Les modèles sont découverts par compte avec `GetCascadeModelConfigs` ; ceux qui ne figurent pas dans l'offre disparaissent de la liste au lieu d'échouer au moment de la requête.
+- Cognition impose une limite de longueur sur les descriptions d'outils et une liste de phrases interdites. L'adaptateur réécrit les formulations connues et tronque les descriptions trop longues.
+- Les clés ne se renouvellent pas. Relancez `ocx login devin` lorsqu'une clé expire ou est révoquée.
+
 ## `azure-openai` (alias : `azure`)
 
 **Cibles :** **Azure OpenAI**. Encapsule `openai-responses` (et utilise donc également `passthrough: true`).

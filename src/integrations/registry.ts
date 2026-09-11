@@ -26,6 +26,8 @@ import {
   kimiHomeDir,
   mcodeConfigPath,
   mcodeHomeDir,
+  omoAgentDir,
+  omoConfigPath,
   ompAgentDir,
   ompModelsConfigPath,
   opencodeGlobalConfigPath,
@@ -279,6 +281,23 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
      * other providers in place across that re-render.
      */
     detectDir: (env = process.env, home = homedir()) => raycastAiDir(env, home),
+  },
+  omo: {
+    id: "omo",
+    configPath: (env = process.env, home = homedir()) => omoConfigPath(env, home),
+    /*
+     * The AGENT directory, not `~/.omo`. The v4 launcher wrapper creates
+     * `~/.omo` to hold `binary-runtime` without ever creating `agent/`, so
+     * detecting on the parent reports an omo v5 install that is not there --
+     * and `installed` is what stops apply from writing a catalog for an engine
+     * that will never read it. Prime's agent directory and Aside's account
+     * directory are the same shape; Pi's parent-directory check is the odd one.
+     *
+     * No `sourcePreservingYaml` (JSON), no `writerLock` (single writer), and no
+     * `resolvePaths` -- unlike Aside, both omo paths are a pure function of env
+     * and home, so reading them in sequence cannot straddle a state change.
+     */
+    detectDir: (env = process.env, home = homedir()) => omoAgentDir(env, home),
   },
 };
 

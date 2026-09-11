@@ -210,6 +210,16 @@ discovery에 모두 적용됩니다.
   더 넓은 내장 executor를 켜며 Codex 승인/샌드박스 규칙을 우회합니다. 예전 설정인
   `unsafeAllowNativeLocalExec: true`는 `nativeLocalExec`을 지정하지 않았을 때만 같은 뜻입니다.
 
+## `devin`
+
+**대상:** Cognition의 `exa.api_server_pb.ApiServerService/GetChatMessage`(`server.codeium.com`, Connect 스트리밍).
+**인증:** `provider.apiKey` 또는 전달된 authorization 헤더의 Devin/Cognition API 키. 로그인은 Auth0 브라우저 사인인을 연 뒤 `SeatManagementService.RegisterUser`로 장기 키를 받습니다.
+
+- 일반 fetch/parse 대신 `runTurn`을 씁니다. 요청과 서버 이벤트는 `devin/cloud-direct/wire.ts`의 수동 protobuf 프레이밍으로 다룹니다.
+- `GetCascadeModelConfigs`로 계정별 모델을 조회하고, 플랜에 없는 모델은 요청 시점이 아니라 목록에서 걸러집니다.
+- Cognition은 도구 설명 길이 제한과 정확 문구 차단 목록을 적용합니다. 어댑터가 알려진 문구를 바꾸고 긴 설명을 잘라냅니다.
+- 키는 갱신되지 않습니다. 만료되거나 폐기되면 `ocx login devin`을 다시 실행하세요.
+
 ## `azure-openai` (별칭: `azure`)
 
 **대상:** **Azure OpenAI**. `openai-responses`를 감싸므로 마찬가지로 `passthrough: true`입니다.

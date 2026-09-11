@@ -124,6 +124,7 @@ ocx login kiro         # kiro-cli kimlik bilgilerini içe aktarın (veya belirte
 ocx login google-antigravity
 ocx login cursor       # bağımsız Cursor PKCE girişi
 ocx login command-code # Command Code tarayıcı OAuth (veya ~/.commandcode/auth.json içe aktarma)
+ocx login devin       # Cognition/Devin için Auth0 tarayıcı girişi
 ocx login github-copilot  # GitHub cihaz akışı → Copilot belirteci (Copilot Pro/Business)
 ocx login codex        # Codex hesap havuzu (takma adlar: chatgpt, openai; çalışan bir proxy gerekir)
 ocx logout <saglayici>
@@ -138,6 +139,8 @@ ocx logout <saglayici>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | İlk oturum açma, kurulu ve oturum açılmış `kiro-cli` oturumunu içe aktarır (Unix'te `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` ile kurun; Windows PowerShell'de `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` kullanın; ardından `kiro-cli login` çalıştırın). **Hesap ekle**, `kiro-cli` oturumunu kapatır, `kiro-cli` tarafından kullanılan hesabı değiştiren yeni bir tarayıcı girişi başlatır ve hesap kapsamlı profil meta verilerini saklar. Mevcut OpenCodex hesapları korunur ve iptal veya başarısızlık önceki `kiro-cli` oturumunu geri yükler. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Cloud Code Assist hattı üzerinden Google OAuth. Canlı keşif CCA'nın kimlik doğrulamalı `v1internal:fetchAvailableModels` uç noktasını kullanır ve oturum açmış hesap için kullanılabilir olan ajan modellerini yayınlar; sürdürülen katalog geri dönüş olarak kalır. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Deneysel PKCE girişi, canlı HTTP/2 aktarımı ve hesap filtreli model keşfi. |
+| `devin` | `devin` | `https://server.codeium.com` | Deneysel, resmi olmayan Cognition/Devin köprüsü. Giriş tarayıcıda Auth0 oturumunu açar, ardından belirteci `RegisterUser` ile uzun ömürlü bir API anahtarına dönüştürür. Modeller hesaba göre `GetCascadeModelConfigs` ile keşfedilir; akış yalnızca Connect-RPC üzerindeki `runTurn` yolunu kullanır. Panel ön ayarında varsayılan olarak yer almaz. |
+| `devin-cli` | `devin-cli` | `https://cli.devin.ai` | Yerelde kurulu Devin CLI'yi Agent Client Protocol ile (`devin acp`, stdio üzerinde JSON-RPC) çalıştırır. Kimlik bilgilerini `devin auth login` sonrası CLI'nin kendisi taşır, bu yüzden opencodex hiçbir anahtar saklamaz. Çalıştırılabilir dosya `OPENCODEX_DEVIN_CLI_BIN` ile belirtilir; CLI'nin dosya okuyup yazmasına izin vermek için `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1` açıkça ayarlanmalıdır, varsayılan reddetmektir. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Deneysel. GitHub cihaz akışı + `copilot_internal` değişimi (VS Code OAuth istemcisi). Aktif bir Copilot aboneliği gerektirir; resmi bir üçüncü taraf API değildir. |
 
 Google Antigravity hesap ve sağlayıcı kota sorguları, model listesine geri dönüş dahil sabit Google uç noktalarını kullanır. Bu hedefler için şeffaf Fake-IP DNS desteklenirken TLS doğrulaması, yönlendirme reddi ve özel adres kontrolleri korunur. Özel base URL yalnızca model isteklerini değiştirir; `NO_PROXY` doğrudan bağlantı politikasını korur.

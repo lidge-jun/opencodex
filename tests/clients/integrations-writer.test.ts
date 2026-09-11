@@ -549,6 +549,29 @@ describe("apply", () => {
     if (!result.ok) expect(result.reason).toBe("conflict");
   });
 
+  test("a hand-edited ZCode provider kind stays a hard conflict (#4295)", () => {
+    // The export moved from `openai-compatible` to `openai` so ZCode dials the proxy's
+    // native Responses route. `kind` is not a refreshable path, so a user who sets it
+    // back by hand must keep owning that decision instead of having it silently
+    // rewritten — the same protection `options` already has above.
+    const configPath = installZcode();
+    const request = input({ clientId: "zcode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { kind: string }>;
+    };
+    expect(document.provider.opencodex!.kind).toBe("openai");
+    document.provider.opencodex!.kind = "openai-compatible";
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    const status = readIntegrationState(request);
+    expect(status).toMatchObject({ state: "conflict", reason: "foreign-edit" });
+    const result = applyIntegration(request);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("conflict");
+  });
+
   test("a malformed recorded ZCode policy cannot widen refreshable drift (#2389)", () => {
     const configPath = installZcode();
     const request = input({ clientId: "zcode" });

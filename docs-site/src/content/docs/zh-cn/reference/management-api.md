@@ -64,6 +64,8 @@ Authorization: Bearer <admin-token>
 | `GET /api/grok` | 读取 Grok 托管配置状态和候选模型 | 400 状态读取失败 |
 | `PUT /api/grok/selection` | 持久化被排除的 Grok 模型 | 400 选择无效或超出大小限制 |
 | `POST /api/grok/apply` | 通过托管同步应用已持久化的 Grok 配置 | 409 `grok_apply_busy`；400/500 应用失败 |
+| `GET /api/grok/reset-coupons?accountId=...` | 读取活跃或指定 xAI 账号剩余的 Grok 计费重置 token 及有效期窗口 | 400 缺少账号；401 未认证；502 上游 gRPC-Web 错误 |
+| `POST /api/grok/reset-coupons/consume` | 兑换一个符合条件的重置优惠券。请求体为 `{ accountId?, tokenId?, operationId? }`。可选的 `operationId`（UUIDv4）让兑换具备幂等性：重复相同 id 会重放持久化结果，而不会重复兑换。 | 400 无效的 JSON/UUID；401 未认证；409 `identity_mismatch`；502 上游错误；503 ledger 容量 |
 | `GET, PUT /api/claude-desktop` | 读取或持久化 Claude Desktop 的路由/原生配置文件 | 400 分配无效或不可用 |
 | `POST /api/claude-desktop/apply` | 将已保存的配置文件写入 Claude Desktop 的托管配置 | 400/500 写入失败 |
 | `GET /api/claude-desktop/status` | 检查已保存与已应用的配置文件以及 Desktop 健康状态 | 400 状态读取失败 |

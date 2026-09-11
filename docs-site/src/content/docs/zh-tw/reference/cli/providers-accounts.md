@@ -62,7 +62,7 @@ ocx login anthropic
 透過執行中的代理列出並切換供應商帳號與 API-key 池。隨附的說明介面如下：
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex 帳號池、OAuth 帳號與 API 金鑰（識別碼依 API 回傳遮罩顯示）。
 current <provider>  顯示現用帳號或金鑰。
@@ -73,6 +73,7 @@ remove <provider> <id> --yes  在存在檢查後移除已儲存的帳號或金�
 add-key <provider> [--label <label>]  僅從 piped stdin 讀取並新增金鑰。
 login/reauth/code/cancel  從無頭 shell 執行瀏覽器或手動 code 認證。
 reset-credits <id|main> [--consume --yes]  檢查或消耗 Codex reset credits。
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  檢查或兌換 Grok reset coupons。
 Codex 池選擇套用於清除既有親和性後的下一個請求；進行中的請求保留其擷取的帳號。
 ```
 
@@ -132,11 +133,11 @@ Codex 池選擇套用於清除既有親和性後的下一個請求；進行中�
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-控制 `openai` Codex 帳戶池閾值，或儲存通用 OAuth 帳戶池閾值。`on` 儲存 80%，`off` 儲存 0%，`threshold <n>` 接受 0–100。通用池的閾值目前不參與執行；儲存閾值不會啟用閾值切換、改變供應商啟用設定或停用 429 錯誤後的輪替。通用池的查詢與修改結果使用伺服器確認值。通用池的 `poolEnabled` 是已儲存的供應商設定，`null` 表示未指定，並不代表繼承後的實際狀態。`inert: true` 表示閾值未套用；能力未知時也不會回報 `enabled: true`。API 金鑰供應商、Anthropic 與無效值會被拒絕。
+控制 `openai` Codex 帳戶池閾值，或儲存通用 OAuth 帳戶池閾值。`on` 儲存 80%，`off` 儲存 0%，`threshold <n>` 接受 0–100。通用池的閾值只有在 `pool.kernel` 開啟且 `strategy: "fill-first"` 時才參與選擇；旗標關閉時，儲存閾值不會啟用閾值切換。兩種情況下都不會改變供應商啟用設定或停用 429 錯誤後的輪替。通用池的查詢與修改結果使用伺服器確認值。通用池的 `poolEnabled` 是已儲存的供應商設定，`null` 表示未指定，並不代表繼承後的實際狀態。`inert: true` 表示閾值已儲存但未套用，`inert: false` 表示帳戶池正在套用它。沒有 `inert` 欄位表示能力未知，此時同樣不會回報 `enabled: true`。API 金鑰供應商、Anthropic 與無效值會被拒絕。
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }
-generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: true | null }
+generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
 ### `ocx account login|reauth|code|cancel ...`
@@ -166,6 +167,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
 檢查帳號的 Codex reset credits。消耗 credit 是破壞性的，需要同時提供 `--consume` 與 `--yes`。
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+檢查或兌換 xAI / Grok 帳號剩餘的 reset coupons。
+
+未加上 `--consume` 呼叫時，回傳可用的 coupon token 與其有效期間：
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+兌換 reset coupon 會改變計費狀態，並永久消耗一個 coupon token。`--consume` 嚴格要求同時提供 `--yes`：
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+傳入 `--operation-id <uuid>`（必須是有效的 UUIDv4）可保證結算具備冪等性。當網路中斷或命令重試時，相同的 operation id 會重播已持久化的結果，而不會再消耗一個 coupon。
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 

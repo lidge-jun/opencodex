@@ -152,7 +152,7 @@ override, но файлы на диске никогда не меняются. 
 
 ## Экспорт client config
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
 
 Печатает client config, направленный на работающий прокси. Команда сериализует блок
 провайдера `opencodex` в нативном формате выбранного клиента: base URL, список моделей и,
@@ -163,7 +163,7 @@ override, но файлы на диске никогда не меняются. 
 
 | Флаг | Действие |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast>` | Обязателен. Выбирает формат конфигурации клиента. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Обязателен. Выбирает формат конфигурации клиента. |
 | `--json` | Печатать только JSON-конфиг в stdout, чтобы redirect сохранял побайтно точный вывод. Вся диагностика, включая заметку о записи через `--out`, идёт в stderr. |
 | `--out <path>` | Записать конфиг в `<path>`. Перезаписывать существующий файл не позволит. |
 | `--force` | Разрешить `--out` заменить существующий файл. |
@@ -193,7 +193,9 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`, затем устаревшая `MAVIS_DATA_DIR`, имеют приоритет, если заданы; относительное значение отклоняется) | `mcode-config.yaml` | нет — loopback placeholder |
 | `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` имеет приоритет, если задана; относительное значение отклоняется) | `config.json` | нет — loopback placeholder |
 | `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` имеет приоритет, если задана; относительное значение отклоняется) | `prime-models.json` | нет — loopback placeholder |
+| `aside` | `~/.aside/u/<account>/models.json` для аккаунта, который `accounts.json` самого Aside называет текущим; нечитаемый манифест отклоняется, а не подменяется произвольным аккаунтом | `aside-models.json` | нет — loopback placeholder |
 | `raycast` | `~/.config/raycast/ai/providers.yaml` одинаково на macOS и Windows (Raycast не учитывает `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | нет — только loopback, запись `api_keys` не создаётся |
+| `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, затем `SENPI_CODING_AGENT_DIR`, затем `PI_CODING_AGENT_DIR` имеют приоритет в этом порядке, если заданы; относительное значение отклоняется) | `omo-models.json` | нет — loopback placeholder |
 
 Экспорт для Raycast — это отдельный документ `providers.yaml` с одним элементом `id: opencodex` в
 последовательности `providers`: `name: OpenCodex`, базовый URL прокси с `/v1` и каждая маршрутизируемая
@@ -222,8 +224,8 @@ MCP-записи.
 env-reference, либо несекретную loopback-заглушку. Loopback-прокси (`127.0.0.1`, по умолчанию) вообще не
 требует admission key. Если прокси слушает не на loopback, задайте соответствующую переменную
 `OPENCODEX_OPENCODE_API_KEY`, `OPENCODEX_HERMES_API_KEY` или `OPENCODEX_OPENCLAW_API_KEY`.
-`OPENCODEX_GAJAE_API_KEY` передаёт provider credential Gajae через окружение, но не позволяет
-отправить remote admission header, поэтому сгенерированная интеграция Gajae
+`OPENCODEX_GAJAE_API_KEY` передаёт provider credential gjc через окружение, но не позволяет
+отправить remote admission header, поэтому сгенерированная интеграция gjc
 работает только через loopback. Как выдаются admission key, описано в
 [Удалённом доступе](/reference/configuration/#remote-access). Ключи upstream-провайдеров — это совсем
 отдельная история и настраиваются в [Провайдерах](/guides/providers/).

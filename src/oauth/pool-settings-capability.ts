@@ -37,24 +37,37 @@ export function parseGenericAutoSwitchThreshold(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100 ? value : null;
 }
 
+export function parseGenericStickyLimit(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 100 ? value : null;
+}
+
 export interface GenericPoolSettingsDto {
   provider: string;
   kind: "generic";
   enabled: boolean | null;
   strategy: GenericPoolStrategy | null;
   autoSwitchThreshold: number | null;
+  stickyLimit: number | null;
   /**
-   * Slice-1 marker for `strategy` and `autoSwitchThreshold` only: persisted, not yet consumed
-   * by the selector.
+   * Marker for `strategy`, `autoSwitchThreshold` and `stickyLimit` only: true while they are
+   * persisted but not consumed by the selector, false once `pool.kernel` is on and they
+   * actually choose an account.
    *
    * It deliberately does NOT describe `enabled`, which governs the pre-dispatch preference.
    * Widening it to the whole DTO would tell a dashboard that `enabled` changes nothing, which
    * has been false since reactive and proactive activation were split.
+   *
+   * Computed, never a literal: the flag is reversible, so a DTO that hard-codes either answer
+   * would be lying in one of the two states.
    */
-  inert: true;
+  inert: boolean;
 }
 
-export function genericPoolSettingsDto(name: string, provider: OcxProviderConfig): GenericPoolSettingsDto {
+export function genericPoolSettingsDto(
+  name: string,
+  provider: OcxProviderConfig,
+  kernelEnabled = false,
+): GenericPoolSettingsDto {
   const failover = provider.oauthAccountFailover ?? {};
   return {
     provider: name,
@@ -62,6 +75,7 @@ export function genericPoolSettingsDto(name: string, provider: OcxProviderConfig
     enabled: typeof failover.enabled === "boolean" ? failover.enabled : null,
     strategy: parseGenericPoolStrategy(failover.strategy),
     autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
-    inert: true,
+    stickyLimit: parseGenericStickyLimit(failover.stickyLimit),
+    inert: kernelEnabled !== true,
   };
 }

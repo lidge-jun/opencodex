@@ -109,6 +109,7 @@ ocx login kiro         # импорт учётных данных kiro-cli (с �
 ocx login google-antigravity
 ocx login cursor       # отдельный PKCE-вход Cursor
 ocx login command-code # браузерный OAuth Command Code (или импорт ~/.commandcode/auth.json)
+ocx login devin       # Вход в Cognition/Devin через браузер (Auth0)
 ocx login github-copilot  # device flow GitHub → токен Copilot (Copilot Pro/Business)
 ocx login codex        # пул аккаунтов Codex (псевдонимы: chatgpt, openai; нужен запущенный прокси)
 ocx logout <provider>
@@ -123,6 +124,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Первый вход импортирует существующую сессию после установки Kiro CLI (в Unix: `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; в Windows PowerShell: `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; затем выполните `kiro-cli login`). **Добавить аккаунт** выполняет выход из `kiro-cli`, запускает новый вход через браузер, переключает аккаунт самого `kiro-cli` и сохраняет метаданные профиля отдельно для каждого аккаунта. Существующие аккаунты OpenCodex сохраняются; при отмене или сбое восстанавливается предыдущая сессия `kiro-cli`. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth поверх протокола Cloud Code Assist. Живое обнаружение использует аутентифицированный CCA-эндпоинт `v1internal:fetchAvailableModels` и публикует только agent-модели, доступные текущему аккаунту; поддерживаемый каталог остаётся резервным вариантом. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Экспериментальный PKCE-вход, живой транспорт HTTP/2 и обнаружение моделей с фильтрацией по аккаунту. |
+| `devin` | `devin` | `https://server.codeium.com` | Экспериментальный неофициальный мост к Cognition/Devin. Вход открывает страницу Auth0 в браузере, затем токен обменивается через `RegisterUser` на долгоживущий API-ключ. Список моделей запрашивается для каждой учётной записи через `GetCascadeModelConfigs`; потоковая передача идёт только по пути `runTurn` поверх Connect-RPC. В пресете панели по умолчанию отсутствует. |
+| `devin-cli` | `devin-cli` | `https://cli.devin.ai` | Управляет локально установленным Devin CLI по Agent Client Protocol (`devin acp`, JSON-RPC поверх stdio). Учётные данные хранит сам CLI после `devin auth login`, поэтому opencodex не сохраняет ключ. Путь к исполняемому файлу задаётся через `OPENCODEX_DEVIN_CLI_BIN`; чтобы разрешить CLI читать и писать файлы, нужно явно выставить `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1` — по умолчанию запрос отклоняется. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Экспериментально. Device flow GitHub + обмен `copilot_internal` (OAuth-клиент VS Code). Требуется активная подписка Copilot; это не официальный сторонний API. |
 
 Проверки квот аккаунтов и провайдера Google Antigravity используют фиксированные адреса Google, включая резервный запрос списка моделей. Для этих адресов поддерживается прозрачный Fake-IP DNS с сохранением проверки TLS, запрета перенаправлений и проверки частных адресов. Пользовательский base URL меняет только запросы моделей; `NO_PROXY` сохраняет политику прямого подключения.

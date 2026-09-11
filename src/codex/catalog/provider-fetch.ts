@@ -55,6 +55,7 @@ import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
+import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -1714,6 +1715,50 @@ async function fetchProviderModelsWithAuth(
     return observed(withConfiguredRetention(
       stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
     ), "degraded");
+  }
+  if (prov.adapter === "devin") {
+    if (!apiKey) return observed(configured, "degraded");
+    const cachedDevin = getFreshCached(name, ttlMs);
+    if (cachedDevin) {
+      return observed(
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedDevin)),
+        "authoritative",
+      );
+    }
+    if (isModelsFetchCoolingDown(name)) {
+      const cooling = getStaleCached(name);
+      return observed(
+        withConfiguredRetention(
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured,
+        ),
+        "degraded",
+      );
+    }
+    const liveResult = await fetchDevinUsableModels({ apiKey, baseUrl: prov.baseUrl });
+    if (liveResult.ok) {
+      // Live catalog is the source of truth — use the discovered base models
+      // directly, not a filtered subset of the static seed.
+      const result = liveResult.models.map((id) => ({
+        id,
+        provider: name,
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      }) as CatalogModel);
+      const forCache = withConfiguredRetention(result, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, liveResult.models.length);
+      return observed(withConfiguredRetention(forCache), "authoritative");
+    }
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name);
+      markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
+    }
+    const stale = getStaleCached(name);
+    return observed(
+      withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured),
+      "degraded",
+    );
   }
   if (prov.adapter === "cursor") {
     if (!apiKey) return observed(configured, "degraded");

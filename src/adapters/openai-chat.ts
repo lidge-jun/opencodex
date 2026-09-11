@@ -96,7 +96,14 @@ function openAIChatTransport(provider: OcxProviderConfig): {
   };
   if (hasCredential) headers.Authorization = `Bearer ${provider.apiKey}`;
   if (provider.headers) Object.assign(headers, provider.headers);
-  return { url: openaiChatCompletionsUrl(provider.baseUrl), headers, hasCredential };
+  // A configured relative path wins, mirroring how the Responses adapter honours
+  // `responsesPath`. An upstream can serve both wires under different prefixes, and a
+  // per-model wire override only swaps the adapter, so without this the opted-in Chat
+  // request would be sent to the Responses base with `/chat/completions` appended.
+  const url = provider.chatCompletionsPath === undefined
+    ? openaiChatCompletionsUrl(provider.baseUrl)
+    : `${provider.baseUrl.replace(/\/$/, "")}${provider.chatCompletionsPath}`;
+  return { url, headers, hasCredential };
 }
 
 /**

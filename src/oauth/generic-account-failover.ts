@@ -16,7 +16,21 @@
  */
 import { getAccountSet } from "./store";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
-import { exhaustedCooldownMs, hasHeadroomEvidence, isAccountQuotaExhausted, rankAccountsByHeadroom } from "./account-quota-rank";
+import {
+  accountHeadroomPercent,
+  exhaustedCooldownMs,
+  hasHeadroomEvidence,
+  isAccountQuotaExhausted,
+  rankAccountsByHeadroom,
+} from "./account-quota-rank";
+import {
+  genericPoolKey,
+  normalizeAccountPoolStickyLimit,
+  notePoolRotationSuccess,
+  peekRoundRobinAccount,
+  pickRoundRobinAccount,
+  seedPoolRotationAccount,
+} from "./pool-kernel";
 import { parseRetryAfterMs } from "../combos/failover";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -169,6 +183,113 @@ export function eligibleFailoverAccounts(providerName: string, now = Date.now())
     .map(account => account.id);
 }
 
+/** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */
+type ActiveGenericStrategy = "round-robin" | "fill-first";
+
+/** Matches the Codex and Anthropic pools; the DTO still reports `null` for "not stored". */
+const DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD = 80;
+
+/**
+ * The strategy this provider's pool actually runs, or null for today's behaviour.
+ *
+ * Three different inputs answer null and they all mean the same thing to a caller: the flag is
+ * off, no strategy is stored, or the stored strategy is `quota` — which is precisely what the
+ * unflagged code already does. Collapsing them here is what keeps every call site a two-way
+ * branch instead of a four-way one.
+ */
+function activeGenericStrategy(config: OcxConfig, providerName: string): ActiveGenericStrategy | null {
+  if (config.pool?.kernel !== true) return null;
+  const raw = config.providers?.[providerName]?.oauthAccountFailover?.strategy;
+  return raw === "round-robin" || raw === "fill-first" ? raw : null;
+}
+
+function genericStickyLimit(config: OcxConfig, providerName: string): number {
+  return normalizeAccountPoolStickyLimit(config.providers?.[providerName]?.oauthAccountFailover?.stickyLimit);
+}
+
+/**
+ * The FULL roster in a stable order, not the eligible subset.
+ *
+ * Two load-bearing reasons. The store holds accounts in LOGIN order, so two operators who added
+ * the same accounts in a different sequence would otherwise rotate differently; sorting makes
+ * the ring a property of the accounts rather than of the history. And walking the eligible
+ * subset instead of the full roster changes the wrap order whenever an ineligible id sits
+ * between two eligible ones — the bug the Codex and Anthropic copies carry a `stableAll`
+ * argument to avoid.
+ */
+function stableGenericRoster(providerName: string): string[] {
+  const set = getAccountSet(providerName);
+  if (!set) return [];
+  return set.accounts.map(account => account.id).sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Has this account spent enough of its allowance for fill-first to move on?
+ *
+ * An unmeasured account reads as UNDER the threshold, matching the Codex pool: a threshold is a
+ * statement about observed usage, and treating "no observation" as "spent" would evacuate every
+ * quota-less provider off its active account on the very first request.
+ */
+function isOverAutoSwitchThreshold(providerName: string, accountId: string, threshold: number): boolean {
+  const headroom = accountHeadroomPercent(providerName, accountId);
+  if (headroom === null) return false;
+  return 100 - headroom >= threshold;
+}
+
+/**
+ * Fill-first: stay on the active account until it crosses its threshold, then take the next
+ * eligible account in the stable ring. Null means "keep the active account".
+ */
+function pickFillFirstGenericAccount(
+  config: OcxConfig,
+  providerName: string,
+  activeId: string | undefined,
+  now: number,
+): string | null {
+  const stableAll = stableGenericRoster(providerName);
+  if (stableAll.length < 2) return null;
+  const eligible = new Set(eligibleFailoverAccounts(providerName, now));
+  const stored = config.providers?.[providerName]?.oauthAccountFailover?.autoSwitchThreshold;
+  const threshold = typeof stored === "number" && Number.isInteger(stored) && stored >= 0 && stored <= 100
+    ? stored
+    : DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD;
+  if (activeId && eligible.has(activeId) && !isOverAutoSwitchThreshold(providerName, activeId, threshold)) {
+    return null;
+  }
+  const start = activeId ? stableAll.indexOf(activeId) : -1;
+  const ring = start >= 0 ? [...stableAll.slice(start + 1), ...stableAll.slice(0, start)] : stableAll;
+  for (const id of ring) {
+    if (id !== activeId && eligible.has(id)) return id;
+  }
+  return null;
+}
+
+/**
+ * Advance the round-robin cursor once a dispatch has actually been admitted on this account.
+ *
+ * The early return is the whole safety story for the core path: this is reached on EVERY
+ * generic first dispatch, including quota pools and the fallback after a preferred account was
+ * dropped, so anything but round-robin must leave the cursor untouched.
+ *
+ * The live pick belongs here rather than in the proposal, and that is not stylistic.
+ * `peekRoundRobinAccount` never creates the pool state and `notePoolRotationSuccess` returns
+ * immediately when there is none, so a peek-only path would leave the ring with nothing to
+ * advance and round-robin would propose the same account forever. This is the same shape
+ * `commitAnthropicSelectionRouting` already commits with.
+ */
+export function noteGenericPoolSelection(config: OcxConfig, providerName: string, accountId: string): void {
+  if (activeGenericStrategy(config, providerName) !== "round-robin") return;
+  const poolKey = genericPoolKey(providerName);
+  const limit = genericStickyLimit(config, providerName);
+  const picked = pickRoundRobinAccount(poolKey, eligibleFailoverAccounts(providerName), limit);
+  // The resolver may have admitted a different account than the ring proposed: a removal, a
+  // reauth verdict or a manual selection can land during credential resolution. Realign the
+  // cursor onto what actually served rather than leaving it on a road not taken.
+  if (picked !== accountId) seedPoolRotationAccount(poolKey, accountId);
+  notePoolRotationSuccess(poolKey, accountId, limit);
+}
+
+
 /**
  * Cool the account that actually 429'd and name the next eligible one, or null.
  *
@@ -212,6 +333,30 @@ export function rotateGenericOAuthAccountOn429(
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
   const candidates = ring.filter(id => id !== failedAccountId && eligible.includes(id));
   if (candidates.length === 0) return null;
+  // The 429 path branches too. Leaving it on the quota ranking would make a configured
+  // strategy inert in practice the moment anything actually failed, which is the case the
+  // operator chose the strategy for.
+  const strategy = activeGenericStrategy(config, providerName);
+  if (strategy === "round-robin") {
+    // PICK here, not peek: the failure already happened and this answer is the one being used,
+    // so the ring genuinely advances.
+    return pickRoundRobinAccount(
+      genericPoolKey(providerName),
+      candidates,
+      genericStickyLimit(config, providerName),
+    );
+  }
+  if (strategy === "fill-first") {
+    // Not "keep the active account": the one that just 429'd is cooled, so fill-first takes
+    // the next eligible account in the stable ring rather than its usual hold.
+    const stableAll = stableGenericRoster(providerName);
+    const from = stableAll.indexOf(failedAccountId);
+    const walk = from >= 0 ? [...stableAll.slice(from + 1), ...stableAll.slice(0, from)] : stableAll;
+    for (const id of walk) {
+      if (id !== failedAccountId && candidates.includes(id)) return id;
+    }
+    return null;
+  }
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
   return rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
@@ -258,6 +403,29 @@ export function preferredInitialAccount(
   const active = selected.activeAccountId;
   const order = selected.accounts.filter(account => account.needsReauth !== true).map(account => account.id);
   if (order.length < 2) return null;
+
+  // A configured strategy answers this question itself. Both guards below exist to protect the
+  // QUOTA answer, and both are fatal to the other two: hasHeadroomEvidence refuses every
+  // provider with no quota data, which is exactly where round-robin is the point, and the
+  // healthy-active return fires before autoSwitchThreshold can ever be read, so fill-first
+  // would never reach its own test. Cooldowns and reauth are still honoured inside each pick.
+  const strategy = activeGenericStrategy(config, providerName);
+  if (strategy === "round-robin") {
+    const eligibleNow = eligibleFailoverAccounts(providerName, now);
+    if (eligibleNow.length === 0) return null;
+    // PEEK, not pick: this proposal is discardable, and advancing the ring for an account the
+    // resolver then rejects would skip a turn for nothing. noteGenericPoolSelection commits.
+    const picked = peekRoundRobinAccount(
+      genericPoolKey(providerName),
+      eligibleNow,
+      genericStickyLimit(config, providerName),
+    );
+    return picked && picked !== active ? picked : null;
+  }
+  if (strategy === "fill-first") {
+    const picked = pickFillFirstGenericAccount(config, providerName, active, now);
+    return picked && picked !== active ? picked : null;
+  }
 
   const activeRow = selected.accounts.find(account => account.id === active);
   if (activeRow && activeRow.needsReauth !== true

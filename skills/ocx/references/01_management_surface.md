@@ -472,6 +472,28 @@ JSON mode: `payload`.
 
 - CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary.
 
+### `ocx account grok-reset-coupons`
+
+Inspect or redeem Grok billing reset coupons; redemption is journaled and idempotent.
+
+| Method | Route |
+|---|---|
+| GET | `/api/grok/reset-coupons` |
+| POST | `/api/grok/reset-coupons/consume` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--consume` | boolean | Redeem one reset coupon; requires --yes. |
+| `--yes` | boolean | Explicit confirmation required by --consume. |
+| `--token-id` | string | Redeem a specific reset token instead of the default selection. |
+| `--operation-id` | string | UUIDv4 making a redemption idempotent: retries replay the journaled outcome. |
+| `--json` | boolean | Emit the coupon list or redemption result as JSON. |
+
+JSON mode: `payload`.
+
+- Without --consume this is a read: remaining coupons and their validity windows.
+- The operation is journaled before the upstream call, so retrying the same --operation-id replays the recorded outcome instead of spending a second coupon.
+
 ### `ocx account pause`
 
 Stop routing new requests to one account in the Codex pool.
@@ -539,7 +561,7 @@ JSON mode: `envelope`.
 - A bare invocation reads and never writes.
 - The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.
 - Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.
-- `anthropic` owns the full pool contract. Other OAuth providers reach the same endpoint with a generic subset (enabled/strategy/autoSwitchThreshold) whose settings persist but do not yet steer selection; `sticky` and `quotaWindow` are refused for them.
+- `anthropic` owns the full pool contract. Other OAuth providers reach the same endpoint with a generic subset (enabled/strategy/autoSwitchThreshold/sticky); those settings steer selection only while `pool.kernel` is on, which is what the `inert` field reports. `quotaWindow` is still refused for them.
 
 ### `ocx account sticky`
 
@@ -728,6 +750,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 39
-- of those, state-changing: 18
+- declared capabilities: 40
+- of those, state-changing: 19
 - head-resolved invocations: 2

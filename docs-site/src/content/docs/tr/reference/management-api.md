@@ -83,6 +83,8 @@ hatalar" sütunu bu tabloyu tekrarlamak yerine rotaya özgü ek sonuçları list
 | `GET /api/grok` | Grok yönetilen yapılandırma durumunu ve aday modelleri okuyun | 400 durum okuma hatası |
 | `PUT /api/grok/selection` | Hariç tutulan Grok modellerini kalıcı hale getirin | 400 geçersiz veya aşırı büyük seçim |
 | `POST /api/grok/apply` | Kalıcı hale getirilen Grok yapılandırmasını yönetilen senkronizasyon aracılığıyla uygulayın | 409 `grok_apply_busy`; 400/500 uygulama hatası |
+| `GET /api/grok/reset-coupons?accountId=...` | Aktif veya belirtilen xAI hesabı için kalan Grok faturalandırma sıfırlama jetonlarını ve geçerlilik pencerelerini okuyun | 400 eksik hesap; 401 kimlik doğrulaması yok; 502 yukarı akış gRPC-Web hatası |
+| `POST /api/grok/reset-coupons/consume` | Uygun bir sıfırlama kuponunu kullanın. Gövde `{ accountId?, tokenId?, operationId? }`. İsteğe bağlı `operationId` (UUIDv4) kullanımı idempotent yapar: aynı kimliği yinelemek, çift kullanım olmadan kalıcı sonucu yeniden oynatır. | 400 geçersiz JSON/UUID; 401 kimlik doğrulaması yok; 409 `identity_mismatch`; 502 yukarı akış hatası; 503 kayıt defteri kapasitesi |
 | `GET, PUT /api/claude-desktop` | Claude Desktop yönlendirilen/yerel profilini okuyun veya kalıcı hale getirin | 400 geçersiz veya kullanılamaz atama |
 | `POST /api/claude-desktop/apply` | Kaydedilen profili Claude Desktop'ın yönetilen yapılandırmasına yazın | 400/500 yazma hatası |
 | `GET /api/claude-desktop/status` | Kaydedilen ve uygulanan profili ve Desktop sağlığını inceleyin | 400 durum okuma hatası |

@@ -804,6 +804,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   fastWire: "editor",
   baseUrl: "editor",
   responsesPath: "editor",
+  chatCompletionsPath: "editor",
   commandCodeVersion: "editor",
   statelessResponses: "editor",
   requiresAdjacentResponsesToolResults: "editor",

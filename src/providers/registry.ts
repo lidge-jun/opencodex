@@ -1,6 +1,8 @@
 import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
 import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
+import { DEVIN_CLI_DEFAULT_MODEL, DEVIN_CLI_MODELS } from "../adapters/devin-cli/models";
+import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
@@ -230,6 +232,19 @@ export interface ProviderRegistryEntry {
    */
   responsesPath?: string;
   /**
+   * Relative send path for the `openai-chat` wire, seeded into saved config exactly like
+   * `responsesPath`. Needed when one upstream serves both wires under different prefixes,
+   * because a per-model wire override changes the adapter and not the base URL.
+   */
+  chatCompletionsPath?: string;
+  /**
+   * Endpoints this entry used to live at, kept so a saved custom provider that still points
+   * at one keeps receiving this row's metadata through `registryEntryForProviderDestination`.
+   * Destination matching is by adapter plus normalized base URL, so moving a row's wire or
+   * prefix would otherwise orphan every config a user wrote against the old address.
+   */
+  destinationAliases?: readonly { readonly baseUrl: string; readonly adapter: string }[];
+  /**
    * Responses upstream that stores nothing server-side. Stateful request parameters
    * are dropped and `store` is pinned false, and orphaned tool results left by a
    * replay miss are repaired rather than forwarded.
@@ -360,7 +375,7 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
-  "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
+  "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "chatCompletionsPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelDisplayNames"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
@@ -443,6 +458,30 @@ const ZAI_GLM_5X_MODELS = [...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
  * `preserveReasoningContentModels`, where flash DOES belong.
  */
 const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => id !== "glm-5.3-flash");
+/**
+ * Positive input-modality declaration for the Chat-path GLM rows.
+ *
+ * `noVisionModels` already keeps Flash out of the vision sidecar, but that is a NEGATIVE
+ * statement: it stops a detour without telling the catalog what the model can read. With
+ * no `modelInputModalities` entry, `configuredInputModalities` returns undefined and the
+ * catalog falls through to the `["text"]` floor, so every client export (ZCode, Pi, OMP)
+ * listed a native VLM as text-only and its picker refused to attach an image.
+ *
+ * The Responses sibling row below already declares this positively, so the same model was
+ * described two different ways in one registry.
+ *
+ * Authoritative source: `GET https://api.z.ai/api/v1/models` returns `input_modalities:
+ * ["text"]` for glm-5.3 and `["text", "image"]` for glm-5.3-flash (captured in
+ * devlog/_plan/260912_zcode_protocol_and_catalog/evidence/zai-responses-models.json).
+ * docs.z.ai/devpack/latest-model says the same in prose: "GLM-5.3 is a text-only model...
+ * GLM-5.3-FLASH is a multimodal model". Upstream also lists video and file for Flash;
+ * neither the internal vocabulary nor the export vocabulary can express them, so `image`
+ * is where this stops.
+ */
+const ZAI_GLM_5X_INPUT_MODALITIES: Record<string, string[]> = {
+  ...Object.fromEntries(ZAI_GLM_5X_SIDECAR_VISION_MODELS.map(id => [id, ["text"]])),
+  "glm-5.3-flash": ["text", "image"],
+};
 const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /**
  * GLM-5.3 does NOT share 5.2's five-tier ladder. docs.z.ai/devpack/latest-model folds every
@@ -1275,6 +1314,41 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
     // still advertises image for noVision members so Codex can attach (sidecar option B).
     noVisionModels: [...CURSOR_NO_VISION_MODELS],
+  },
+  {
+    // Drives the locally installed Devin CLI. The CLI owns its own credentials
+    // from `devin auth login`, so this provider takes no key and the proxy never
+    // holds one. Inference happens in the child process, which is why the
+    // destination is a stdio scheme rather than a URL.
+    id: "devin-cli",
+    label: "Devin CLI (local)",
+    adapter: "devin-cli",
+    // A canonical identity URL, not a transport. The CLI performs the real
+    // transport over stdio; this is the destination the config records, and it
+    // has to be an http(s) URL because providerBaseUrlConfigError rejects any
+    // other scheme — a `devin://` destination made the generated config
+    // unloadable. Same shape as the other CLI-backed providers.
+    baseUrl: "https://cli.devin.ai",
+    authKind: "local",
+    featured: false,
+    dashboardPreset: false,
+    note: "Drives the locally installed Devin CLI over the Agent Client Protocol (`devin acp`, newline-delimited JSON-RPC on stdio). Requires the CLI on PATH and a completed `devin auth login`; no API key is stored by opencodex. Set OPENCODEX_DEVIN_CLI_BIN to point at a specific build, and OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1 to let the CLI read and write files — the default is to refuse.",
+    models: [...DEVIN_CLI_MODELS],
+    defaultModel: DEVIN_CLI_DEFAULT_MODEL,
+  },
+  {
+    id: "devin",
+    label: "Cognition (Devin/Windsurf)",
+    adapter: "devin",
+    baseUrl: "https://server.codeium.com",
+    authKind: "oauth",
+    featured: false,
+    dashboardPreset: false,
+    note: "Experimental unofficial Cognition/Devin bridge. ocx login devin opens Auth0 browser sign-in, then exchanges the token via Cognition's RegisterUser for a long-lived API key.",
+    models: ["swe-1-7", "swe-1-7-lightning", "gpt-5-6-sol", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "claude-fable-5-1", "claude-sonnet-5", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    liveModels: true,
+    defaultModel: "swe-1-7",
+    modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
   },
   {
     id: "xai",
@@ -2580,19 +2654,43 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // exact 131_072 every other source in this repo uses for that model. Coding Plan pricing stays
   // unpublished, so no cost entry is asserted.
   {
-    id: "zai", label: "Z.AI — GLM Coding Plan", baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat", authKind: "key",
+    id: "zai", label: "Z.AI — GLM Coding Plan", baseUrl: "https://api.z.ai", adapter: "openai-responses", authKind: "key",
+    // One subscription and one key, three protocols. docs.z.ai/guides/llm/glm-5.3 lists them:
+    // Chat Completions at /api/coding/paas/v4, Responses at /api/v1, Anthropic Messages at
+    // /api/anthropic. docs.z.ai/devpack/latest-model points Codex-family clients at /api/v1,
+    // and the Chat path is the one that misbehaves in practice.
+    //
+    // Responses is the default and Chat stays reachable per model through `modelAdapters`.
+    // The two wires sit under different prefixes, and a wire override swaps the adapter
+    // without touching baseUrl, so each wire carries its own relative send path.
+    //
+    // Measured 2026-09-12 against a live key: every roster id answers 200 on
+    // /api/v1/responses, and every one also answers 200 on the Chat prefix, so no model
+    // needs a `modelWireDefaults` pin. /api/v1/chat/completions returns 403
+    // model_access_denied, which is why the Chat path cannot simply hang off the new base.
+    responsesPath: "/api/v1/responses",
+    chatCompletionsPath: "/api/coding/paas/v4/chat/completions",
+    // The address this row occupied before the move. A saved custom provider still pointing
+    // at the Chat endpoint keeps receiving this row's metadata (#1100).
+    destinationAliases: [{ baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat" }],
     dashboardUrl: "https://z.ai/manage-apikey/apikey-list", defaultModel: "glm-5.3",
     note: "GLM-5.3 coding subscription",
     models: ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
-    modelContextWindows: { "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
-    // Z.AI's OpenAI path returns 400 code 1211 for bracketed model ids.
+    // The upstream catalog reports 1_048_576 for the 5.3 family, which is what the domestic
+    // Responses row already carries. Both are documented as "1M"; this is that number.
+    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    // Z.AI returns 400 for bracketed model ids on both wires; the aliases are local.
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
+    modelInputModalities: ZAI_GLM_5X_INPUT_MODALITIES,
     modelReasoningEfforts: ZAI_GLM_5X_REASONING_EFFORTS,
     modelDefaultReasoningEfforts: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, "max"])),
     modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, 131_072])),
     modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_5X_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: ZAI_GLM_5X_MODELS,
+    // Responses replay uses this provider-level flag; the model list above still covers a
+    // caller who opts back into Chat.
+    preserveResponsesReasoningContent: true,
   },
   // Zhipu's domestic BigModel platform: OpenAI-compatible pay-as-you-go on open.bigmodel.cn — a
   // different host and billing product from the `zai` coding-plan subscription above.
@@ -2669,6 +2767,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: { "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
+    modelInputModalities: ZAI_GLM_5X_INPUT_MODALITIES,
     modelReasoningEfforts: ZAI_GLM_5X_REASONING_EFFORTS,
     modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_5X_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: ZAI_GLM_5X_MODELS,
@@ -3459,12 +3558,22 @@ export function registryEntryForProviderDestination(
   if (typeof provider.baseUrl !== "string" || !provider.baseUrl) return undefined;
   if (provider.authMode !== undefined && provider.authMode !== "key") return undefined;
   const endpoint = normalizedProviderEndpoint(provider.baseUrl);
-  return PROVIDER_REGISTRY.find(entry =>
+  const eligible = (entry: ProviderRegistryEntry): boolean =>
     entry.authKind === "key"
     && !entry.allowBaseUrlOverride
-    && !/\{[^}]*\}/.test(entry.baseUrl)
+    && !/\{[^}]*\}/.test(entry.baseUrl);
+  const direct = PROVIDER_REGISTRY.find(entry =>
+    eligible(entry)
     && entry.adapter === provider.adapter
     && normalizedProviderEndpoint(entry.baseUrl) === endpoint);
+  if (direct) return direct;
+  // A row that moved keeps answering for the address it used to occupy, so an existing
+  // custom provider written against the old endpoint does not silently lose its metadata.
+  return PROVIDER_REGISTRY.find(entry =>
+    eligible(entry)
+    && (entry.destinationAliases ?? []).some(alias =>
+      alias.adapter === provider.adapter
+      && normalizedProviderEndpoint(alias.baseUrl) === endpoint));
 }
 
 /**

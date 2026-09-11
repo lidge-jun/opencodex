@@ -237,7 +237,7 @@ export async function syncEnabledClientIntegrations(
     },
     config,
     port,
-  }, ["mcode", "pi", "aside", "raycast"]));
+  }, ["mcode", "pi", "aside", "raycast", "omo"]));
 
   return out;
 }

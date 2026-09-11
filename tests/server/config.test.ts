@@ -325,6 +325,20 @@ function writeResponsesPathConfig(responsesPath: string): void {
   });
 }
 
+function writeChatCompletionsPathConfig(chatCompletionsPath: string): void {
+  writeConfig({
+    port: 12345,
+    providers: {
+      custom: {
+        adapter: "openai-chat",
+        baseUrl: "https://example.test",
+        chatCompletionsPath,
+      },
+    },
+    defaultProvider: "custom",
+  });
+}
+
 function writeAccountNamespaceConfig(
   codexAccountNamespaces: unknown,
   overrides: Record<string, unknown> = {},
@@ -1498,6 +1512,40 @@ describe("opencodex config defaults", () => {
       ["/responses#section", "responsesPath must not include query strings or fragments"],
     ] as const) {
       writeResponsesPathConfig(responsesPath);
+
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("fallback");
+      expect(diagnostics.error).toContain(expectedError);
+    }
+  });
+
+  // chatCompletionsPath is the openai-chat mirror of responsesPath and shares its shape
+  // rules, so the same three cases have to hold on that side too.
+  test("accepts a relative chatCompletionsPath", () => {
+    writeChatCompletionsPathConfig("/api/coding/paas/v4/chat/completions");
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.config.providers.custom.chatCompletionsPath).toBe("/api/coding/paas/v4/chat/completions");
+  });
+
+  test("rejects chatCompletionsPath without a leading slash", () => {
+    writeChatCompletionsPathConfig("chat/completions");
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain("chatCompletionsPath must start with /");
+  });
+
+  test("rejects chatCompletionsPath containing a URL scheme, query, or fragment", () => {
+    for (const [chatCompletionsPath, expectedError] of [
+      ["https://other-origin.example/chat/completions", "chatCompletionsPath must be a relative path without a URL scheme"],
+      ["/https://other-origin.example/chat/completions", "chatCompletionsPath must be a relative path without a URL scheme"],
+      ["/chat/completions?api-version=v1", "chatCompletionsPath must not include query strings or fragments"],
+      ["/chat/completions#section", "chatCompletionsPath must not include query strings or fragments"],
+    ] as const) {
+      writeChatCompletionsPathConfig(chatCompletionsPath);
 
       const diagnostics = readConfigDiagnostics();
       expect(diagnostics.source).toBe("fallback");

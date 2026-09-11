@@ -275,6 +275,17 @@ export interface OcxProviderConfig {
    */
   responsesPath?: string;
   /**
+   * Optional relative send path for the `openai-chat` wire, mirroring `responsesPath`.
+   * Same shape rules: must start with `/`, no URL scheme, query string, or fragment.
+   * When omitted the adapter keeps `openaiChatCompletionsUrl(baseUrl)`.
+   *
+   * This exists because a per-model wire override swaps `adapter` and leaves `baseUrl`
+   * alone, so an upstream that serves Chat Completions and Responses under different
+   * path prefixes cannot be reached by the adapter swap by itself. Z.AI is that case:
+   * `/api/v1/responses` and `/api/coding/paas/v4/chat/completions` on one host and one key.
+   */
+  chatCompletionsPath?: string;
+  /**
    * Command Code protocol version sent as `x-command-code-version` on /alpha/generate requests.
    * The internal endpoint's schema drifts with the CLI version; operators can pin a known-good
    * version here instead of waiting for a code change. Absent uses the adapter's current default.
@@ -523,11 +534,21 @@ export interface OcxProviderConfig {
     enabled?: boolean;
     /**
      * Generic OAuth pool selection strategy (#695). Persisted through the pool-settings
-     * contract; the selector does not consume it yet, so omitted keeps today's behavior.
+     * contract. Consumed by the selector only while `pool.kernel` is on; with the flag off
+     * it is still merely persisted, so omitted and set behave the same.
      */
     strategy?: "quota" | "round-robin" | "fill-first";
-    /** 0-100 usage percent at which a proactive switch may be considered (#695); inert today. */
+    /**
+     * 0-100 usage percent at which fill-first advances off the active account (#695).
+     * Read only under `pool.kernel` with `strategy: "fill-first"`; 80 when unset, matching
+     * the Codex and Anthropic pools.
+     */
     autoSwitchThreshold?: number;
+    /**
+     * Successful dispatches retained on one round-robin selection. Default 1; range 1..100.
+     * Read only under `pool.kernel` with `strategy: "round-robin"`.
+     */
+    stickyLimit?: number;
   };
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;

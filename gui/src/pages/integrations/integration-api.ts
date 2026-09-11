@@ -15,6 +15,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "prime",
   "aside",
   "raycast",
+  "omo",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];

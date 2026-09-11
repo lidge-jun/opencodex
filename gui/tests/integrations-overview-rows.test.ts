@@ -290,7 +290,7 @@ test("every client counts toward the summary, not just the file clients", () => 
 
 test("an unsettled file list renders unknown rows instead of dropping them", () => {
   const built = buildOverviewRows(sources({ clients: [], clientsSettled: false }));
-  expect(built.rows).toHaveLength(18);
+  expect(built.rows).toHaveLength(19);
   expect(rowById(built, "omp").state).toBe("unknown");
   expect(rowById(built, "mcode").state).toBe("unknown");
   expect(rowById(built, "zcode").state).toBe("unknown");

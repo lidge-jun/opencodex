@@ -255,6 +255,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     clearAccountQuotaCache(provider);
+    if (provider === "devin") {
+      // The cached user_jwt's payload contains the api_key, and the catalog is
+      // keyed by that key. Without this they outlive the credential in process
+      // memory until the JWT's own ~24 minute expiry.
+      const { clearCachedUserJwt, clearCachedCatalog } = await import("../../adapters/devin/cloud-direct");
+      clearCachedUserJwt();
+      clearCachedCatalog();
+    }
     return jsonResponse({ success: true });
   }
 
@@ -331,6 +339,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
     const { forgetGenericFailoverRoster } = await import("../../oauth/generic-account-failover");
     forgetGenericFailoverRoster(provider);
+    // Seed the rotation cursor on the operator's pick, or a sticky round-robin ring hands the
+    // very next dispatch back to whatever the pool had chosen. forgetGenericFailoverRoster
+    // only drops the presence count; it has never touched the cursor. Same defect the Codex
+    // side carries resetCodexRoutingForManualSelection for.
+    const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
+    seedPoolRotationAccount(genericPoolKey(provider), body.accountId);
     if (provider === "anthropic") {
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);
@@ -357,7 +371,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {
         return jsonResponse({ error: "pool config is only supported for anthropic and generic OAuth providers" }, 400);
       }
-      return jsonResponse(genericPoolSettingsDto(provider, prov));
+      return jsonResponse(genericPoolSettingsDto(provider, prov, config.pool?.kernel === true));
     }
     const pool = config.anthropicAccountPool ?? {};
     return jsonResponse({
@@ -387,13 +401,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (provider !== "anthropic") {
       const {
         poolSettingsCapability, genericPoolSettingsDto, parseGenericPoolStrategy, parseGenericAutoSwitchThreshold,
+        parseGenericStickyLimit,
       } = await import("../../oauth/pool-settings-capability");
       const prov = config.providers[provider];
       if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {
         return jsonResponse({ error: "pool config is only supported for anthropic and generic OAuth providers" }, 400);
       }
-      if (body.stickyLimit !== undefined || body.quotaWindow !== undefined) {
-        return jsonResponse({ error: "stickyLimit and quotaWindow are not part of the generic pool contract yet" }, 400);
+      if (body.quotaWindow !== undefined) {
+        return jsonResponse({ error: "quotaWindow is not part of the generic pool contract yet" }, 400);
       }
       const next = { ...(prov.oauthAccountFailover ?? {}) };
       if (body.enabled !== undefined) {
@@ -416,10 +431,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           next.autoSwitchThreshold = parsed;
         }
       }
+      if (body.stickyLimit !== undefined) {
+        if (body.stickyLimit === null) delete next.stickyLimit;
+        else {
+          const parsed = parseGenericStickyLimit(body.stickyLimit);
+          if (parsed === null) return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
+          next.stickyLimit = parsed;
+        }
+      }
       if (Object.keys(next).length > 0) prov.oauthAccountFailover = next;
       else delete prov.oauthAccountFailover;
       saveConfigPreservingClaudeCode(config);
-      return jsonResponse({ ok: true, ...genericPoolSettingsDto(provider, prov) });
+      return jsonResponse({ ok: true, ...genericPoolSettingsDto(provider, prov, config.pool?.kernel === true) });
     }
     let enabled = config.anthropicAccountPool?.enabled === true;
     if (body.enabled !== undefined) {

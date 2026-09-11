@@ -98,6 +98,7 @@ ocx login kiro         # kiro-cli 자격 증명 가져오기(토큰 폴백 지�
 ocx login google-antigravity
 ocx login cursor       # Cursor 전용 PKCE 로그인
 ocx login command-code # Command Code 브라우저 OAuth (또는 ~/.commandcode/auth.json 가져오기)
+ocx login devin       # Cognition/Devin Auth0 브라우저 로그인
 ocx login github-copilot  # GitHub 디바이스 플로우 → Copilot 토큰 (Copilot Pro/Business)
 ocx login codex        # Codex 계정 풀 (별칭: chatgpt, openai / 프록시가 실행 중이어야 함)
 ocx logout <provider>
@@ -112,6 +113,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 설치하고 로그인한 `kiro-cli` 세션을 가져옵니다(Unix에서는 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`로 설치한 뒤 `kiro-cli login` 실행). **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 OpenCodex 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. 실시간 탐색은 인증된 CCA `v1internal:fetchAvailableModels` 엔드포인트를 사용하며 로그인한 계정에서 사용할 수 있는 agent 모델만 게시합니다. 유지 관리되는 카탈로그는 폴백으로 남습니다. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 실험적 PKCE 로그인, HTTP/2 전송, 계정별 모델 탐색을 지원합니다. |
+| `devin` | `devin` | `https://server.codeium.com` | 실험적인 비공식 Cognition/Devin 브리지. 로그인은 Auth0 브라우저 사인인을 열고, 받은 토큰을 `RegisterUser`로 교환해 장기 API 키를 얻습니다. 모델 목록은 `GetCascadeModelConfigs`로 계정마다 조회하며, 스트리밍은 Connect-RPC 위에서 `runTurn` 경로만 씁니다. 대시보드 프리셋에는 기본으로 없으니 직접 추가하세요. |
+| `devin-cli` | `devin-cli` | `https://cli.devin.ai` | 로컬에 설치된 Devin CLI를 Agent Client Protocol(`devin acp`, stdio 위 JSON-RPC)로 구동합니다. CLI가 `devin auth login` 자격증명을 직접 들고 있어 opencodex는 키를 저장하지 않습니다. 실행 파일은 `OPENCODEX_DEVIN_CLI_BIN`으로 지정할 수 있고, CLI가 파일을 읽고 쓰도록 허용하려면 `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1`을 명시해야 합니다. 기본값은 거부입니다. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 실험적. GitHub 디바이스 플로우 + `copilot_internal` 교환(VS Code OAuth 클라이언트). 활성 Copilot 구독 필요; 공식 서드파티 API가 아닙니다. |
 
 Google Antigravity 계정·제공자 할당량 확인은 모델 목록 폴백을 포함해 고정된 Google 회계 엔드포인트를 사용합니다. 해당 목적지의 투명 Fake-IP DNS를 지원하며 TLS 검증, 리다이렉트 거부, 사설 주소 검사는 유지합니다. 사용자 지정 base URL은 모델 요청에만 적용되며 할당량 목적지는 바꾸지 않습니다. `NO_PROXY`는 기존 직접 연결 정책을 유지합니다.

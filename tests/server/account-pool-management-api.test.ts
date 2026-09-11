@@ -439,7 +439,13 @@ describe("Anthropic account pool strategy management API", () => {
     // reading `inert` as covering `enabled` would render a live control as decorative.
     const source = await Bun.file("src/oauth/pool-settings-capability.ts").text();
     const start = source.indexOf("autoSwitchThreshold: number | null;");
-    const marker = source.slice(start, source.indexOf("inert: true;", start));
+    // Anchored on the CURRENT literal. When this type read `inert: true;` and the field became
+    // `inert: boolean;`, indexOf returned -1 and slice(start, -1) handed back almost the whole
+    // file -- which still contains all three words, so every assertion below passed while the
+    // test had stopped checking anything. Fail closed on a missing anchor instead.
+    const end = source.indexOf("inert: boolean;", start);
+    expect(end).toBeGreaterThan(start);
+    const marker = source.slice(start, end);
     expect(marker).toContain("strategy");
     expect(marker).toContain("autoSwitchThreshold");
     expect(marker).toContain("enabled");
@@ -474,7 +480,10 @@ describe("generic OAuth pool-settings contract (#695)", () => {
     try {
       const absent = await fetch(new URL("/api/oauth/accounts/pool?provider=google-antigravity", server.url));
       expect(absent.status).toBe(200);
-      expect(await absent.json()).toEqual({ provider: "google-antigravity", kind: "generic", enabled: null, strategy: null, autoSwitchThreshold: null, inert: true });
+      expect(await absent.json()).toEqual({
+        provider: "google-antigravity", kind: "generic", enabled: null, strategy: null,
+        autoSwitchThreshold: null, stickyLimit: null, inert: true,
+      });
 
       const put = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
         method: "PUT", headers: { "Content-Type": "application/json" },
@@ -488,7 +497,8 @@ describe("generic OAuth pool-settings contract (#695)", () => {
       for (const body of [
         { provider: "google-antigravity", strategy: "weighted" },
         { provider: "google-antigravity", autoSwitchThreshold: 101 },
-        { provider: "google-antigravity", stickyLimit: 3 },
+        { provider: "google-antigravity", stickyLimit: 0 },
+        { provider: "google-antigravity", quotaWindow: "weekly" },
         { provider: "deepseek", strategy: "quota" },
       ]) {
         const bad = await fetch(new URL("/api/oauth/accounts/pool", server.url), {

@@ -145,6 +145,7 @@ import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
+  noteGenericPoolSelection,
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../../oauth/generic-account-failover";
@@ -4405,6 +4406,10 @@ async function handleResponsesInner(
         // whichever account is active by the time the response comes back (#2568).
         if (isGenericFailoverProvider(route.providerName, route.provider)) {
           genericFailoverAccountId = resolved.accountId;
+          // Advance the pool cursor only now that this account is actually admitted. The
+          // helper returns immediately unless the kernel is on AND the strategy is
+          // round-robin, so quota and fill-first pools reach it without being touched.
+          noteGenericPoolSelection(config, route.providerName, resolved.accountId);
         }
         // Anthropic is excluded from isGenericFailoverProvider -- its own pool owns affinity and
         // a fail-closed local-cli credential rule -- so without this stamp its identity is

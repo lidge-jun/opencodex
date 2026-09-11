@@ -65,7 +65,7 @@ describe("ocx sync fans out to enabled native clients and owned file integration
 
     expect(fn).toContain("grokIntegrationEnabled(config)");
     expect(fn).toContain("claudeDesktopIntegrationEnabled(config)");
-    expect(fn).toContain('["mcode", "pi", "aside", "raycast"]');
+    expect(fn).toContain('["mcode", "pi", "aside", "raycast", "omo"]');
     expect(fn).toContain("refreshOwnedCatalogIntegrations");
     // Native clients keep their catches; the owned catalog helper isolates file clients.
     expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
@@ -651,12 +651,12 @@ describe("owned Pi/Aside catalogs follow filtered model selections", () => {
   });
 });
 
-test("the direct ocx sync command refreshes MCode, Pi, Raycast and server-owned Aside", async () => {
+test("the direct ocx sync command refreshes MCode, Pi, Raycast, omo and server-owned Aside", async () => {
   const src = await Bun.file(new URL("../../src/cli/dispatch.ts", import.meta.url)).text();
   const start = src.indexOf("sync: async deps =>");
   const command = src.slice(start, src.indexOf("v2: async deps =>", start));
   expect(command).toContain("refreshOwnedCatalogIntegrations");
-  expect(command).toContain('["mcode", "pi", "raycast"]');
+  expect(command).toContain('["mcode", "pi", "raycast", "omo"]');
   expect(command).toContain("refreshAsideProfilesThroughServer");
   expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedCatalogIntegrations"));
   expect(command).toContain('synced.status !== "refused"');

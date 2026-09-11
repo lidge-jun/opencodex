@@ -6,8 +6,11 @@
 Completions endpoint. Route selection reads the raw Chat body and the native request keeps that body
 as its wire source; a Responses projection is constructed only after the native route is declined
 and is never converted back into Chat. Request construction remains owned by `src/adapters/openai-chat.ts`, including model
-normalization, credential and provider headers, capability-specific fields, and the canonical
-`openaiChatCompletionsUrl()` path. The passthrough builder uses an explicit Chat-field whitelist so
+normalization, credential and provider headers, capability-specific fields, and the send URL: the
+canonical `openaiChatCompletionsUrl()` path, or `chatCompletionsPath` when the provider declares one.
+That field is the `openai-chat` mirror of `responsesPath` and exists because a per-model wire
+override swaps the adapter without touching `baseUrl`, so an upstream serving the two wires under
+different prefixes cannot be reached by the swap alone. The passthrough builder uses an explicit Chat-field whitelist so
 messages (including `name` and separate `system`/`developer` entries), Chat token controls,
 sampling/logprob fields, caller identity/metadata, and caller stream options retain their wire
 shape. For streams, caller `stream_options` are merged with mandatory `include_usage: true`. On

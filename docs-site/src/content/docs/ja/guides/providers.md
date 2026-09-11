@@ -100,6 +100,7 @@ ocx login kiro         # kiro-cli 認証情報の取り込み(トークンフォ
 ocx login google-antigravity
 ocx login cursor       # Cursor 専用 PKCE ログイン
 ocx login command-code # Command Code のブラウザ OAuth (または ~/.commandcode/auth.json を取り込み)
+ocx login devin       # Cognition/Devin の Auth0 ブラウザサインイン
 ocx login github-copilot  # GitHub デバイスフロー → Copilot トークン (Copilot Pro/Business)
 ocx login codex        # Codex アカウントプール (別名: chatgpt, openai / プロキシの起動が必要)
 ocx logout <provider>
@@ -114,6 +115,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
+| `devin` | `devin` | `https://server.codeium.com` | 実験的な非公式 Cognition/Devin ブリッジ。ログインは Auth0 のブラウザサインインを開き、取得したトークンを `RegisterUser` で長期 API キーに交換します。モデル一覧は `GetCascadeModelConfigs` でアカウントごとに取得し、ストリーミングは Connect-RPC 上の `runTurn` 経路のみを使います。ダッシュボードのプリセットには既定で含まれません。 |
+| `devin-cli` | `devin-cli` | `https://cli.devin.ai` | ローカルにインストールされた Devin CLI を Agent Client Protocol（`devin acp`、stdio 上の JSON-RPC）で駆動します。CLI が `devin auth login` の資格情報を保持するため、opencodex 側はキーを保存しません。実行ファイルは `OPENCODEX_DEVIN_CLI_BIN` で指定でき、CLI にファイル操作を許可するには `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1` の明示が必要です（既定は拒否）。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的。GitHub デバイスフロー + `copilot_internal` 交換（VS Code OAuth クライアント）。有効な Copilot サブスクリプションが必要で、公式のサードパーティ API ではありません。 |
 
 Google Antigravity のアカウント・プロバイダーのクォータ確認は、モデル一覧へのフォールバックも含め、固定の Google エンドポイントを使用します。その宛先では透過 Fake-IP DNS に対応し、TLS 検証、リダイレクト拒否、プライベートアドレス検査を維持します。カスタム base URL はモデル要求にのみ適用されます。`NO_PROXY` は直接接続のポリシーを維持します。

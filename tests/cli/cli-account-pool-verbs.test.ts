@@ -391,8 +391,7 @@ describe("generic OAuth pool-settings contract (#695)", () => {
 
   test("generic missing or malformed capability stays unknown rather than enabled", async () => {
     for (const json of [null, [], {}, { enabled: "true", autoSwitchThreshold: "90", inert: "false" },
-      { enabled: true, autoSwitchThreshold: 90 }, { enabled: true, autoSwitchThreshold: 101, inert: false },
-      { enabled: true, autoSwitchThreshold: 90, inert: false }]) {
+      { enabled: true, autoSwitchThreshold: 90 }, { enabled: true, autoSwitchThreshold: 101, inert: false }]) {
       const out = capture();
       try {
         expect(await cmdAutoSwitch(["google-antigravity", "status", "--json"], genericDeps(() => ({ json }), []))).toBe(0);
@@ -401,6 +400,39 @@ describe("generic OAuth pool-settings contract (#695)", () => {
       expect(result.enabled).toBe(false);
       expect(result.autoSwitchThreshold === null || result.autoSwitchThreshold === 90).toBe(true);
     }
+  });
+
+  test("a generic pool that reports inert false is live, not unknown", async () => {
+    // `inert: false` used to be lumped in with the malformed bodies above, which made the CLI
+    // render a threshold the kernel is actually applying as "threshold support is unknown" --
+    // the opposite of the truth. The three states are distinct: true is stored-but-not-applied,
+    // false is applied, absent is a server that does not speak the field at all.
+    const out = capture();
+    try {
+      expect(await cmdAutoSwitch(
+        ["google-antigravity", "status", "--json"],
+        genericDeps(() => ({ json: { enabled: true, autoSwitchThreshold: 90, inert: false } }), []),
+      )).toBe(0);
+    } finally { out.restore(); }
+    expect(JSON.parse(out.lines.join("\n"))).toEqual({
+      provider: "google-antigravity", autoSwitchThreshold: 90, enabled: true, poolEnabled: true, inert: false,
+    });
+  });
+
+  test("a live generic pool with no stored threshold reports off, not on", async () => {
+    // `inert: false` alone is not enablement: the kernel is consuming settings, but there is
+    // no threshold to consume. Reporting "on" here would invent a value nobody set.
+    const out = capture();
+    try {
+      expect(await cmdAutoSwitch(
+        ["google-antigravity", "status", "--json"],
+        genericDeps(() => ({ json: { enabled: true, inert: false } }), []),
+      )).toBe(0);
+    } finally { out.restore(); }
+    const result = JSON.parse(out.lines.join("\n"));
+    expect(result.enabled).toBe(false);
+    expect(result.inert).toBe(false);
+    expect(result.autoSwitchThreshold).toBeNull();
   });
 
   test("a successful generic write with a null body reports unknown settings", async () => {

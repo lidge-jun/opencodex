@@ -91,7 +91,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(13);
+    expect(expected).toHaveLength(14);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -174,6 +174,10 @@ describe("every client survives a full lifecycle", () => {
     // Raycast's `providers` is a SEQUENCE keyed by `id`, so the user's entry is
     // a sibling element rather than a sibling map key.
     raycast: "providers:\n  - id: lmstudio\n    name: LM Studio\n    base_url: http://localhost:1234/v1\n    models: []\n",
+    // omo is senpi under an omo brand, and senpi reads Pi's models.json
+    // contract -- verified against senpi's own compiled validator, not assumed
+    // from the family resemblance (260912 plan unit, 001).
+    omo: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
   };
   /** Where the seed's user-owned entry lives when the seed is a sequence. */
   const USER_ELEMENT: Partial<Record<IntegrationClientId, readonly string[]>> = {

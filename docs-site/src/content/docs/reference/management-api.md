@@ -78,6 +78,8 @@ route-specific results rather than repeating this table.
 | `GET /api/grok` | Read Grok managed-config status and candidate models | 400 status read failure |
 | `PUT /api/grok/selection` | Persist the excluded Grok models | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
+| `GET /api/grok/reset-coupons?accountId=...` | Read remaining Grok billing reset tokens and validity windows for the active or specified xAI account | 400 missing account; 401 unauthenticated; 502 upstream gRPC-Web error |
+| `POST /api/grok/reset-coupons/consume` | Redeem an eligible reset coupon. Body `{ accountId?, tokenId?, operationId? }`. Optional `operationId` (UUIDv4) makes redemption idempotent: repeating the same ID replays the durable result without double-redemption. | 400 invalid JSON/UUID; 401 unauthenticated; 409 `identity_mismatch`; 502 upstream error; 503 ledger capacity |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |

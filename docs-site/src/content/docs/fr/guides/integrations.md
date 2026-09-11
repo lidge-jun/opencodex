@@ -1,10 +1,10 @@
 ---
 title: Intégrations
-description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside et Raycast depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
+description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast et omo depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
 ---
 
 L'onglet **Intégrations** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
-puis peut le retirer. Treize clients fonctionnent ainsi, chacun avec son propre commutateur :
+puis peut le retirer. Quatorze clients fonctionnent ainsi, chacun avec son propre commutateur :
 
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
 |---|---|---|---|---|
@@ -14,13 +14,14 @@ puis peut le retirer. Treize clients fonctionnent ainsi, chacun avec son propre 
 | Hermes | `~/.hermes/config.yaml` | YAML | dans les nouvelles sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immédiatement, sur une passerelle en cours d'exécution | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | au redémarrage ou avec `/reload` | valeur fictive de bouclage |
-| Gajae Code | `~/.gjc/agent/models.yml` | YAML | dans les nouvelles sessions ou à l'ouverture de `/model` |`OPENCODEX_GAJAE_API_KEY` |
+| gjc | `~/.gjc/agent/models.yml` | YAML | dans les nouvelles sessions ou à l'ouverture de `/model` |`OPENCODEX_GAJAE_API_KEY` |
 | DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (`~/.dsh/settings.yaml` par défaut) | YAML | rechargement à chaud | jeton porteur fictif et non secret pour le bouclage |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | dans les nouvelles sessions ou après l’ouverture du sélecteur de modèles | valeur fictive de bouclage |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | dans les nouvelles sessions | valeur fictive de bouclage |
 | ZCode | `~/.zcode/v2/config.json` | JSON | au redémarrage | valeur fictive de bouclage |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | après avoir quitté complètement puis rouvert Aside | valeur fictive de bouclage |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immédiatement à l'enregistrement — Raycast surveille le fichier | aucun — bouclage uniquement |
+| omo | `~/.omo/agent/models.json` | JSON | nouvelles sessions | espace réservé de bouclage |
 
 La prise en charge gérée de DSH exige au minimum **DSH 0.1.0-rc.6**. OpenCodex ne possède que le fragment
 `llm-pi-ai.providers.opencodex` : **Appliquer** et **Actualiser** remplacent ce fragment, **Désactiver** ne
@@ -128,7 +129,7 @@ niveaux. Dans ces cas, le commutateur est verrouillé afin que rien ne soit modi
 **OMP, DSH et Hermes** ne sont pas affectés non plus par les modifications voisines, mais pour une autre raison : leurs outils
 d'écriture ne modifient, octet par octet, que leur propre plage `providers.opencodex` ; le reste du fichier
 n'est jamais réécrit. Pour les autres formats susceptibles de contenir des commentaires (OpenClaw,
-Kimi Code, Gajae Code, MiniMax Code et Raycast — documents YAML, JSON5 et TOML réécrits en entier), ou lorsque les propres entrées
+Kimi Code, gjc, MiniMax Code et Raycast — documents YAML, JSON5 et TOML réécrits en entier), ou lorsque les propres entrées
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.
 
@@ -154,7 +155,7 @@ les convertirait en chaînes entre guillemets, y compris dans les tableaux et le
 tables en ligne. Les dates déjà écrites entre guillemets restent prises en charge.
 Pour conserver une date typée sans guillemets, modifiez manuellement la configuration.
 
-**Pi, Kimi Code, Gajae Code, MiniMax Code et l'intégration DSH gérée fonctionnent uniquement avec une adresse de
+**Pi, Kimi Code, gjc, MiniMax Code et l'intégration DSH gérée fonctionnent uniquement avec une adresse de
 bouclage.** Les quatre premiers n'ont aucun champ de configuration pour l'en-tête `x-opencodex-api-key`
 qu'exige une liaison hors bouclage. DSH possède une table d'en-têtes générique, mais rc.6 ne documente pas
 cet en-tête d'admission dédié comme contrat d'intégration pris en charge ; l'outil d'écriture géré échoue
@@ -205,8 +206,8 @@ ocx mcode
 ```
 
 Une fois l’intégration connectée, `ocx sync` et `POST /api/sync` actualisent les catalogues MCode,
-Pi, Aside et Raycast gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
-Les changements de visibilité, de fournisseur ou de préréglage actualisent Pi, Aside et Raycast.
+Pi, Aside, Raycast et omo gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
+Les changements de visibilité, de fournisseur ou de préréglage actualisent Pi, Aside, Raycast et omo.
 Les blocs absents, modifiés par un tiers, non sûrs ou supprimés manuellement restent intacts ;
 réactivez explicitement l’intégration lorsque vous souhaitez la reconnecter.
 

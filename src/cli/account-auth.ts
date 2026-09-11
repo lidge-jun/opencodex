@@ -37,6 +37,7 @@ const USAGE = `Usage:
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json]
   ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
+  ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <token-id>] [--operation-id <uuid>]] [--json]
 
 --device runs the OpenAI device-code login instead of the browser callback: use
 it when the proxy has no browser or nothing can reach localhost:1455, such as a
@@ -301,12 +302,53 @@ async function resetCredits(argv: string[], deps: RuntimeApiDeps): Promise<void>
   printData(result, wantsJson);
 }
 
+async function grokResetCoupons(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  // The account id is optional here (the server falls back to the selected xAI
+  // account), so a flag-shaped first token must not be swallowed as the id:
+  // `grok-reset-coupons --consume` has to reach the --yes gate, not become a
+  // read of account "--consume".
+  const rawId = args[0]?.startsWith("--") ? undefined : args.shift()?.trim();
+  const wantsJson = takeFlag(args, "--json");
+  const consume = takeFlag(args, "--consume");
+  const yes = takeFlag(args, "--yes");
+  // Before rejectArgs: takeOption splices its two tokens out of `args`.
+  const tokenId = takeOption(args, "--token-id");
+  const operationId = takeOption(args, "--operation-id");
+  if (consume && !yes) throw new CliUsageError("consuming a Grok reset coupon requires --yes", USAGE);
+  if (operationId !== undefined && !consume) {
+    throw new CliUsageError("--operation-id requires --consume", USAGE);
+  }
+  if (tokenId !== undefined && !consume) {
+    throw new CliUsageError("--token-id requires --consume", USAGE);
+  }
+  if (operationId !== undefined && !isCodexResetCreditOperationId(operationId)) {
+    throw new CliUsageError("--operation-id must be a UUIDv4", USAGE);
+  }
+  rejectArgs(args, USAGE);
+  const accountId = rawId ? (rawId === "main" ? "__main__" : rawId) : undefined;
+  const result = consume
+    ? await runtimeRequest("/api/grok/reset-coupons/consume", {
+      method: "POST",
+      // Spread, not `operationId: undefined`: the server distinguishes an absent
+      // key from a caller who asked for a stable idempotency identity.
+      body: JSON.stringify({ accountId, tokenId, ...(operationId === undefined ? {} : { operationId }) }),
+    }, deps)
+    : await runtimeRequest(
+      `/api/grok/reset-coupons${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`,
+      {},
+      deps,
+    );
+  printData(result, wantsJson);
+}
+
 export async function handleAccountAuthCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
   let action: (() => Promise<void>) | undefined;
   if (sub === "login" || sub === "reauth") action = () => login(sub === "reauth" ? [...argv, "--reauth"] : argv, deps);
   else if (sub === "code") action = () => code(argv, deps);
   else if (sub === "cancel") action = () => cancel(argv, deps);
   else if (sub === "reset-credits") action = () => resetCredits(argv, deps);
+  else if (sub === "grok-reset-coupons") action = () => grokResetCoupons(argv, deps);
   if (!action) return null;
   return runCliAction(action);
 }
