@@ -127,4 +127,7 @@ func TestSSEConversionsCRLFAndToolCalls(t *testing.T) {
 	if !strings.Contains(string(converted), "tool_calls") || !strings.Contains(string(converted), "finish_reason") {
 		t.Fatalf("converted tool stream = %s", converted)
 	}
+	if got := strings.Count(string(converted), "\"finish_reason\":\"tool_calls\""); got != 1 {
+		t.Fatalf("tool stream finish chunks = %d, want 1: %s", got, converted)
+	}
 }

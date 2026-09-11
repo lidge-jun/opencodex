@@ -1335,10 +1335,6 @@ func ConvertResponsesSSEToChat(data []byte) ([]byte, error) {
 		if err := sseWrite(&out, "", map[string]any{"id": id, "object": "chat.completion.chunk", "model": model, "choices": []any{}, "usage": usageValue}); err != nil {
 			return nil, err
 		}
-	} else if finish != "" {
-		if err := sseWrite(&out, "", chatChunk(id, model, map[string]any{}, &finish)); err != nil {
-			return nil, err
-		}
 	}
 	out.WriteString("data: [DONE]\n\n")
 	return out.Bytes(), nil
