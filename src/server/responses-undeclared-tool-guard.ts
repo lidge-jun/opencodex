@@ -469,7 +469,8 @@ export function normalizeDefaultNamespacePrefixInJson(
   text: string,
   declared: ReadonlySet<string>,
 ): string {
-  if (text.indexOf('default') === -1 && text.indexOf('functions') === -1) return text;
+  // No substring fast path here: JSON unicode escapes can hide a default-namespace
+  // prefix from byte matching, so every payload goes through the parser below.
   let payload: unknown;
   try {
     payload = JSON.parse(text);

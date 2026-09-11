@@ -1867,6 +1867,8 @@ describe("provider-added default namespace prefix", () => {
     ).toBeUndefined();
     expect(normalizeDeclaredToolName("default.view_image", declared)).toBe("view_image");
     expect(normalizeDeclaredToolName("default__view_image", declared)).toBe("view_image");
+    expect(normalizeDeclaredToolName("functions.view_image", declared)).toBe("view_image");
+    expect(normalizeDeclaredToolName("functions__view_image", declared)).toBe("view_image");
   });
 
   test("namespaced default shape resolves to the declared bare tool", () => {
