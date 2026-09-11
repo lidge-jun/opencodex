@@ -20,6 +20,8 @@ export const fr: Record<TKey, string> = {
   "zcodeDesktop.retryActivation": "Réessayer l’activation",
   "zcodeDesktop.restartNotice": "Si Codex n’affiche pas les modèles, redémarrez-le après vos tâches. Aucun processus ne sera redémarré automatiquement.",
   "zcodeDesktop.dashboardRequired": "Cette action nécessite une session navigateur sur un tableau de bord lié à loopback ou un hub appairé. Le jeton administrateur seul ne permet pas la configuration Desktop.",
+  "zcodeDesktop.hostAccess": "ZCode fonctionne sans bac à sable OpenCodex et peut lire ou modifier tout fichier autorisé par votre utilisateur système et le harness. Le dossier de travail ne limite pas cet accès. Cela concerne aussi les connexions existantes après mise à jour. Pour activer l’isolation, définissez OCX_ZCODE_SANDBOX=1 sur le proxy et redémarrez OpenCodex.",
+  "zcodeDesktop.sandboxAccess": "L’isolation Bubblewrap optionnelle est active. Seul le dossier de travail choisi est monté ; les autres chemins de l’hôte sont inaccessibles.",
   "zcodeDesktop.intro": "Connectez ZCode Desktop pour activer son fournisseur local et publier ses modèles dans Codex. Les choix par défaut restent inchangés ; aucune inférence.",
   "zcodeDesktop.connected": "ZCode prêt · fournisseur activé · modèles publiés",
   "zcodeDesktop.notConnected": "Desktop non connecté",

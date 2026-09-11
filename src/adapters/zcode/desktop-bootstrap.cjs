@@ -1,4 +1,4 @@
-// Runs INSIDE the managed OS sandbox. Desktop credentials/configuration are mounted read-only.
+// Runs on the host by default, or inside an explicitly enabled OS sandbox. Desktop credentials/configuration are mounted read-only.
 // Only the official runtime consumes provider keys. The compatible settings file lives in tmpfs,
 // never in OpenCodex's data directory, management responses, logs or the Desktop profile.
 const fs = require("node:fs");
@@ -40,15 +40,31 @@ function desktopModelCatalog(config) {
 }
 module.exports = { normalizeDesktopConfig, desktopModelCatalog };
 if (require.main === module) {
+  let temporaryHome;
+  const cleanup = () => { if (temporaryHome) fs.rmSync(temporaryHome, { recursive: true, force: true }); };
+  process.on("exit", cleanup);
   try {
-    const path = "/desktop/config.json";
+    const args = process.argv.slice(2);
+    const host = args[0] === "--host";
+    if (host ? args.length !== 5 || args[4] !== "app-server" : args.length !== 1 || args[0] !== "app-server") throw new Error("unsupported command");
+    const path = host ? args[2] : "/desktop/config.json";
     if (fs.statSync(path).size > 4 * 1024 * 1024) throw new Error("oversized");
     const input = JSON.parse(fs.readFileSync(path, "utf8"));
     const config = normalizeDesktopConfig(input);
-    fs.writeFileSync(`${process.env.HOME}/.zcode/cli/config.json`, JSON.stringify(config), { mode: 0o600, flag: "wx" });
-    const args = process.argv.slice(2);
-    if (args.length !== 1 || args[0] !== "app-server") throw new Error("unsupported command");
-    const child = spawn("/usr/bin/node", ["/runtime/zcode.cjs", "app-server"], { stdio: ["pipe", "inherit", "inherit"], shell: false });
+    let env = process.env;
+    if (host) {
+      // Separate runtime state is not filesystem confinement: native tools retain host access.
+      const stableDb = require("node:path").join(process.env.HOME, ".zcode/cli/db");
+      temporaryHome = fs.mkdtempSync(require("node:path").join(process.env.HOME, "turn-"));
+      fs.mkdirSync(temporaryHome + "/.zcode/cli", { recursive: true, mode: 0o700 });
+      fs.symlinkSync(stableDb, temporaryHome + "/.zcode/cli/db", "dir");
+      env = { ...process.env, HOME: temporaryHome, XDG_CONFIG_HOME: temporaryHome + "/.config",
+        XDG_CACHE_HOME: temporaryHome + "/.cache" };
+    }
+    fs.writeFileSync(`${env.HOME}/.zcode/cli/config.json`, JSON.stringify(config), { mode: 0o600, flag: "wx" });
+    const child = spawn(host ? process.execPath : "/usr/bin/node", [host ? args[1] : "/runtime/zcode.cjs", "app-server"], {
+      stdio: ["pipe", "inherit", "inherit"], shell: false, env, ...(host ? { cwd: args[3] } : {}),
+    });
     const lines = require("node:readline").createInterface({ input: process.stdin });
     lines.on("line", line => {
       try {

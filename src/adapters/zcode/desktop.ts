@@ -97,6 +97,7 @@ export function validateDesktopWorkspace(path: string): string {
   let workspace: string;
   try { workspace = realpathSync(path); if (!statSync(workspace).isDirectory()) return fail("workspace_invalid"); }
   catch { return fail("workspace_invalid"); }
+  if (!desktopSandboxEnabled()) return workspace;
   const home = realpathSync(homedir());
   if (workspace === home || home.startsWith(workspace.endsWith(sep) ? workspace : workspace + sep)) return fail("workspace_invalid");
   if (workspace !== resolve(defaultDesktopWorkspace())) {
@@ -117,14 +118,17 @@ export function desktopFolders(path?: string) {
   return { current, parent: current === home ? null : dirname(current), folders };
 }
 
-function prerequisites(): { bwrap: string; node: string } {
+export const desktopSandboxEnabled = () => process.env.OCX_ZCODE_SANDBOX === "1";
+
+function prerequisites(): { bwrap?: string; node: string } {
   if (process.platform !== "linux") return fail("platform_unsupported");
-  const bwrap = Bun.which("bwrap"); if (!bwrap) return fail("sandbox_missing");
+  const bwrap = desktopSandboxEnabled() ? Bun.which("bwrap", { PATH: process.env.PATH }) : undefined;
+  if (desktopSandboxEnabled() && !bwrap) return fail("sandbox_missing");
   let node: string;
   try { node = resolveDesktopNode(); }
   catch (error) { return fail(error instanceof Error && error.message === "node_missing" ? "node_missing" : "node_incompatible"); }
-  try { verifyDesktopSandbox(bwrap); } catch { return fail("sandbox_unavailable"); }
-  return { bwrap: realpathSync(bwrap), node: realpathSync(node) };
+  try { if (bwrap) verifyDesktopSandbox(bwrap); } catch { return fail("sandbox_unavailable"); }
+  return { bwrap: bwrap ? realpathSync(bwrap) : undefined, node: realpathSync(node) };
 }
 
 function desktopProfile(): { config: string; credentials?: string } {
@@ -149,6 +153,12 @@ function settingsFor(connection: Connection): ZcodeSettings {
   const privateHome = join(root(), "home", connection.generation, profileStamp);
   const db = join(privateHome, ".zcode/cli/db");
   mkdirSync(db, { recursive: true, mode: 0o700 });
+  if (!bwrap) return {
+    command: [node, fileURLToPath(new URL("./desktop-bootstrap.cjs", import.meta.url)),
+      "--host", runtime, profile.config, workspace],
+    home: privateHome, workspace, settingsPath: "",
+    scope: `desktop:${connection.generation}:${profileStamp}:host`, desktopModels: connection.models,
+  };
   const sandboxHome = homedir(); // preserve the official credential cipher's HOME/username identity
   const args = ["--unshare-all", "--share-net", "--die-with-parent", "--new-session", "--ro-bind", "/usr", "/usr"];
   for (const path of ["/bin", "/lib", "/lib64", "/sbin"]) {
@@ -168,7 +178,7 @@ function settingsFor(connection: Connection): ZcodeSettings {
     "--setenv", "ZCODE_DATA_BASE_DIR", "/desktop", "--chdir", "/workspace",
     "/usr/bin/node", "/bridge/desktop-bootstrap.cjs");
   return { command: [bwrap, ...args], home: privateHome, workspace: "/workspace", settingsPath: "",
-    scope: `desktop:${connection.generation}:${profileStamp}`, desktopModels: connection.models };
+    scope: `desktop:${connection.generation}:${profileStamp}:sandbox`, desktopModels: connection.models };
 }
 
 /** Persisted GUI consent is separate from provider config; data-plane requests cannot set it. */
@@ -192,7 +202,7 @@ export function desktopStatus() {
   }
   return { connected: connection?.connected === true && !issue, issue, runtimes,
     runtime: connection?.runtime ?? runtimes[0] ?? "", workspace: connection?.workspace ?? defaultDesktopWorkspace(),
-    models: connection?.models ?? [], platform: process.platform };
+    models: connection?.models ?? [], sandbox: desktopSandboxEnabled(), platform: process.platform };
 }
 
 let connecting = false;
@@ -202,7 +212,8 @@ export async function connectDesktop(runtime: string, workspace: string): Promis
   try {
     const connection: Connection = { version: 1, connected: true, generation: randomUUID(),
       runtime: resolveDesktopRuntime(runtime), workspace: validateDesktopWorkspace(workspace), models: [] };
-    const client = new ZcodeClient(settingsFor(connection));
+    const settings = settingsFor(connection);
+    const client = new ZcodeClient(settings);
     try {
       const result = await client.request("opencodex/desktopModels", {}, 15_000);
       if (!Array.isArray(result.models) || !result.models.length || result.models.length > 1000) return fail("models_missing");
@@ -214,7 +225,7 @@ export async function connectDesktop(runtime: string, workspace: string): Promis
         }));
       if (!connection.models.length) return fail("models_missing");
       // Official protocol readiness only. This does not send a prompt or spend inference quota.
-      await client.request("workspace/readState", { workspace: { workspacePath: "/workspace", workspaceKey: "/workspace" } }, 15_000);
+      await client.request("workspace/readState", { workspace: { workspacePath: settings.workspace, workspaceKey: settings.workspace } }, 15_000);
     } finally { await client.close(); }
     await closeZcodeDesktopClients();
     persist(connection);

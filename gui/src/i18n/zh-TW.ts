@@ -18,6 +18,8 @@ export const zhTW: Record<TKey, string> = {
   "zcodeDesktop.retryActivation": "重試啟用",
   "zcodeDesktop.restartNotice": "若 Codex 未顯示新模型，請於任務結束後重新啟動 Codex。不會自動重新啟動任何程序。",
   "zcodeDesktop.dashboardRequired": "此操作需要綁定至迴路位址的儀表板或已配對 Hub 的瀏覽器工作階段。僅管理員權杖無法授權 Desktop 設定。",
+  "zcodeDesktop.hostAccess": "ZCode 預設不使用 OpenCodex 沙箱，可讀寫作業系統使用者與 harness 允許存取的任何檔案。工作目錄不是存取邊界。升級後現有連線也適用。如需隔離，請在代理上設定 OCX_ZCODE_SANDBOX=1 並重新啟動 OpenCodex。",
+  "zcodeDesktop.sandboxAccess": "已啟用選用的 Bubblewrap 隔離。僅掛載選定的工作目錄，無法存取其他主機路徑。",
   "zcodeDesktop.intro": "連接 ZCode Desktop 將啟用本機供應商並將模型發佈至 Codex。不變更預設設定，也不執行推論。",
   "zcodeDesktop.connected": "ZCode 已就緒 · 供應商已啟用 · 模型已發佈",
   "zcodeDesktop.notConnected": "Desktop 未連接",

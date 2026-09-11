@@ -1,6 +1,6 @@
 ---
 title: ZCode local agent provider
-description: Run the official ZCode app server as an explicitly enabled, isolated OpenCodex provider.
+description: Run the official ZCode app server as an explicitly enabled OpenCodex provider with optional isolation.
 ---
 
 ## Direction and tool ownership
@@ -50,7 +50,7 @@ Desktop conversations, or change its configuration. A saved disconnected state a
 an older environment-based setup from silently reactivating. Reconnect to refresh the model
 catalog after changing Desktop's model configuration.
 
-The proxy host needs **Bubblewrap** and a Node.js version compatible with the installed ZCode
+The proxy host needs a Node.js version compatible with the installed ZCode
 runtime. Missing prerequisites and unsupported platforms are shown in the panel. Managed setup
 is currently Linux-only; Windows/macOS need the advanced launcher flow below. A remote browser's
 local Desktop is not the proxy host's Desktop: detection and workspace selection operate on the
@@ -63,19 +63,38 @@ ZCode's app-server is a stdio child, not a public Desktop TCP endpoint. OpenCode
 configuration. It starts an owned native session; it does not attach to a conversation already
 open in Desktop. The original **Integrations → ZCode** configuration export remains separate.
 
-The managed sandbox exposes Desktop configuration and shared credentials **read-only**. A small
-bootstrap inside the sandbox adapts the Desktop configuration to the app-server's runtime-model
-protocol; provider keys are never returned to the proxy parent, model catalog or management API.
-The compatible config exists in a temporary filesystem; ZCode owns its private persistent
-session database. OpenCodex neither implements Z.AI authentication nor sends inference HTTP
-requests itself. Authentication/configuration changes in Desktop fence off previous native
-continuation state. If credentials need updating, do that in Desktop and reconnect.
+By default, the managed runtime runs **without an OpenCodex OS sandbox**, with the
+permissions of the proxy's operating-system user. It can read and modify files outside the
+selected working directory, including sensitive files accessible to that user. Absolute
+paths retain their host meaning. The selected workspace is a starting directory, not a
+filesystem boundary. This default also applies to previously connected installations after
+upgrading. No root elevation or permission-skipping flag is used.
 
-The workspace and private native home are writable; runtime/system files are read-only. The
-real user home and host sockets are not mounted. **Network access is shared**, not isolated:
-only use trusted prompts/projects, and apply separate egress controls if necessary. ZCode needs
-access to its own profile inside this execution context; this is not a guarantee that an agent
-can never read its own configuration. No permission-skipping flags are used.
+Any isolation must be applied by the harness/operator **where the native ZCode process
+executes**. A sandbox in a remote calling client does not automatically constrain this
+server-side process. Only use trusted callers and projects.
+
+OpenCodex still separates bridge-owned runtime state from the Desktop profile to avoid
+overwriting Desktop settings. Temporary compatible configs are private and removed when
+the child exits normally; the session database remains private and persistent. Separate
+state directories do not prevent native tools from accessing other host files. Only official
+ZCode handles account and inference traffic; no direct-API fallback is introduced.
+
+### Optional OpenCodex sandbox
+
+Set the following in the environment of the OpenCodex service or terminal, then restart
+OpenCodex at a safe time:
+
+```sh
+export OCX_ZCODE_SANDBOX=1
+```
+
+Bubblewrap is required only when this option is enabled. The existing restricted workspace
+mounts and real sandbox preflight apply; failure never falls back to host execution. In this
+mode the selected workspace appears as `/workspace`; other host files are not mounted.
+Unset the variable to restore the default host execution. Environment changes apply to
+existing managed connections without requiring another connection. They do not reconfigure
+an advanced operator-supplied launcher.
 
 Managed consent and installation/workspace paths are stored privately under
 `$OPENCODEX_HOME/zcode-desktop/`, separately from provider configuration. Data-plane requests
@@ -226,10 +245,10 @@ Quota comes from the **official ZCode Desktop host service**, not from locally
 counted tokens or a proxy-made Z.AI API request. OpenCodex starts the trusted
 Desktop executable in its Node runtime mode and calls its existing read-only
 entitlement RPC. Native ZCode owns authentication and network requests. This
-separate short-lived Bubblewrap sandbox has no writable project folder: Desktop
-configuration is mounted read-only and copied only into disposable tmpfs so the
-native service can perform its normal configuration normalization. Credential
-material never leaves that sandbox. No model prompt, quota-reset action, or
+separate short-lived host uses a disposable private profile copy so native normalization
+does not rewrite Desktop settings. The copy is removed after the process exits.
+When `OCX_ZCODE_SANDBOX=1` is enabled, this host additionally uses Bubblewrap and tmpfs.
+No credential material is returned in the quota response. No model prompt, quota-reset action, or
 purchase is requested. Tested with Desktop 3.10.2 on Linux; other private host
 protocol versions can return unavailable instead of a fabricated quota.
 
@@ -296,7 +315,7 @@ finish. OpenCodex does not terminate or restart Codex processes automatically.
 
 ### Sandbox policy and cold starts
 
-Detection runs a minimal Bubblewrap sandbox from the OpenCodex server itself, without
+When OCX_ZCODE_SANDBOX=1 is set, detection runs a minimal Bubblewrap sandbox from the OpenCodex server itself, without
 loading your profile or sending inference. If it reports `sandbox_unavailable`, ask
 your administrator to review user namespace and AppArmor policy for that service.
 A successful probe from a terminal or another application does not prove that the

@@ -28,9 +28,9 @@ sets `replaySafe: false`; accepted failures terminate incomplete rather than bec
 failover candidates. Launcher authority comes from either the operator environment or a separately persisted,
 GUI-consented Desktop connection. Data-plane requests and ordinary provider configuration cannot
 set command/workspace paths. The managed Desktop bootstrap keeps credential-bearing runtime
-descriptors inside its OS sandbox; the parent sees public model identities only.
+descriptors inside the official child process; the parent sees public model identities only.
 Subscription quota is separately read through the official Desktop host entitlement RPC in a
-short-lived tmpfs sandbox. Only numeric quota windows leave that process. An advanced launcher
+short-lived private profile copy, optionally inside Bubblewrap when enabled. Only numeric quota windows leave that process. An advanced launcher
 requires explicit `OCX_ZCODE_DESKTOP_RUNTIME` authority and reuses its own isolated model key;
 quota discovery must not silently import another Desktop account or affect routing policy.
 
@@ -54,3 +54,7 @@ request when a node carries both. Codex's own deferred tool catalog emits exactl
 so the schema is not something a user can fix from configuration (issue #2673).
 
 > Decision record: [ADR-0093](../decisions/ADR-0093-moonshot-ref-with-siblings-normalization.md)
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.

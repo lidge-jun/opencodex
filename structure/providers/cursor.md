@@ -82,3 +82,7 @@ constraints cannot widen the canonical shape. Bare shell bridge names are reject
 on the freeform path.
 Namespaced tools do not acquire bare-shell behavior. Regression coverage lives in
 `tests/providers/cursor/cursor-tool-definitions.test.ts`.
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.

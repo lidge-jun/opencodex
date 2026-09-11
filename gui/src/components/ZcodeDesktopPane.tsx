@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useT } from "../i18n/shared";
 
 interface Status {
-  connected: boolean; issue?: string; runtimes: string[]; runtime: string; workspace: string;
+  connected: boolean; sandbox?: boolean; issue?: string; runtimes: string[]; runtime: string; workspace: string;
   activation?: string; providerName?: string; error?: string;
   models: Array<{ id: string; label: string }>;
 }
@@ -77,6 +77,7 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
   return <section className="setup-guide" style={{ padding: 16, display: "grid", gap: 12 }} aria-label="ZCode Desktop">
     <strong>ZCode Desktop</strong>
     <p className="muted text-label">{t("zcodeDesktop.intro")}</p>
+    <p role="note">{t(status?.sandbox ? "zcodeDesktop.sandboxAccess" : "zcodeDesktop.hostAccess")}</p>
     <div role="status">{status?.connected ? status.activation === "ready" ? t("zcodeDesktop.connected")
       : status.activation === "provider_pending" ? t("zcodeDesktop.providerPending") : t("zcodeDesktop.catalogPending")
       : t("zcodeDesktop.notConnected")}</div>

@@ -37,7 +37,7 @@ export class ZcodeClient {
     // Discard vendor diagnostics: stderr may contain account or request data.
     this.child.stderr.resume();
     this.child.stdin.on("error", () => this.fail(new Error("ZCode protocol input closed.")));
-    this.child.once("error", () => this.fail(new Error("ZCode isolated launcher could not start.")));
+    this.child.once("error", () => this.fail(new Error("ZCode launcher could not start.")));
     this.child.once("exit", () => this.fail(new Error("ZCode app server exited before completing the turn.")));
     this.reading = this.read();
     this.detachShutdown = registerOptionalShutdownHook(`zcode-${crypto.randomUUID()}`, () => { void this.close(); });
@@ -74,7 +74,7 @@ export class ZcodeClient {
               } });
             } else if (message.method === "interaction/requestPermission") {
               // Permission decisions cannot be safely represented by all OpenCodex clients.
-              // Native non-interactive actions still run under ZCode's edit mode and OS sandbox.
+              // Native non-interactive actions still run under ZCode's edit mode and any operator/harness sandbox.
               this.write({ id: message.id, result: { decision: "deny", reason: "Interactive approval is unavailable through this bridge." } });
             } else if (message.method === "interaction/requestUserInput") {
               this.write({ id: message.id, result: { action: "cancel" } });

@@ -152,3 +152,20 @@ test("sandbox denial explains server policy and never reports complete success",
   expect(button("Connect Desktop").disabled).toBe(true);
   expect(closeCalls).toBe(0);
 });
+
+test("default host access is disclosed before connection consent", async () => {
+  await mountPane();
+  expect(host.querySelector('[role="note"]')?.textContent).toContain("without an OpenCodex sandbox");
+  expect(host.querySelector('[role="note"]')?.textContent).toContain("existing connections");
+  expect(host.querySelector('[role="note"]')?.textContent).toContain("OCX_ZCODE_SANDBOX=1");
+  expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
+});
+
+test("explicit sandbox mode shows its filesystem boundary", async () => {
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => Response.json({
+    connected: false, sandbox: true, runtimes: [], runtime: "", workspace: "/project", models: [],
+  }) });
+  await mountPane();
+  expect(host.querySelector('[role="note"]')?.textContent).toContain("Only the selected workspace");
+  expect(host.querySelector('[role="note"]')?.textContent).not.toContain("without an OpenCodex sandbox");
+});

@@ -21,6 +21,8 @@ export const de: Record<TKey, string> = {
   "zcodeDesktop.retryActivation": "Aktivierung wiederholen",
   "zcodeDesktop.restartNotice": "Falls Codex die Modelle nicht zeigt, starten Sie Codex nach Abschluss Ihrer Aufgaben neu. Kein automatischer Prozessneustart.",
   "zcodeDesktop.dashboardRequired": "Diese Aktion erfordert eine Browsersitzung über ein an Loopback gebundenes Dashboard oder einen gekoppelten Hub. Ein Admin-Token allein erlaubt keine Desktop-Einrichtung.",
+  "zcodeDesktop.hostAccess": "ZCode läuft ohne OpenCodex-Sandbox und kann alle Dateien lesen oder ändern, die Benutzerrechte und Harness erlauben. Der Arbeitsordner ist keine Zugriffsgrenze. Dies gilt nach Updates auch für bestehende Verbindungen. Für Isolation OCX_ZCODE_SANDBOX=1 am Proxy setzen und OpenCodex neu starten.",
+  "zcodeDesktop.sandboxAccess": "Die optionale Bubblewrap-Isolation ist aktiv. Nur der gewählte Arbeitsordner ist eingebunden; andere Hostpfade sind nicht zugänglich.",
   "zcodeDesktop.intro": "ZCode Desktop verbinden, um den lokalen Anbieter zu aktivieren und seine Modelle in Codex bereitzustellen. Standardwerte bleiben unverändert; keine Inferenz.",
   "zcodeDesktop.connected": "ZCode bereit · Anbieter aktiviert · Modelle veröffentlicht",
   "zcodeDesktop.notConnected": "Desktop nicht verbunden",

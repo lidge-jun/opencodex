@@ -57,3 +57,7 @@ does not cover ordinary requests, streaming, retries, or per-hop redirect review
 Caller-owned `provider.fetch` executors are also deferred: they receive literal/config checks and
 redirect blocking, but cannot inherit DNS classification or peer pinning without a verified-peer
 executor contract. Main-request migration must not treat that branch as fixed-transport equivalent.
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.

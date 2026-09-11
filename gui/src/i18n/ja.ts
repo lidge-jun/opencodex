@@ -20,6 +20,8 @@ export const ja: Record<TKey, string> = {
   "zcodeDesktop.retryActivation": "有効化を再試行",
   "zcodeDesktop.restartNotice": "Codex にモデルが表示されない場合は、作業終了後に Codex を再起動してください。自動再起動は行いません。",
   "zcodeDesktop.dashboardRequired": "この操作にはループバックにバインドされたダッシュボードまたはペアリング済みハブのブラウザーセッションが必要です。管理トークンだけでは Desktop を設定できません。",
+  "zcodeDesktop.hostAccess": "ZCode は OpenCodex のサンドボックスなしで実行され、OS ユーザーとハーネスが許可するファイルを読み書きできます。作業ディレクトリはアクセス制限ではありません。更新後の既存接続にも適用されます。隔離するにはプロキシで OCX_ZCODE_SANDBOX=1 を設定し、OpenCodex を再起動してください。",
+  "zcodeDesktop.sandboxAccess": "任意の Bubblewrap 隔離が有効です。選択した作業ディレクトリのみがマウントされ、それ以外のホストパスにはアクセスできません。",
   "zcodeDesktop.intro": "ZCode Desktop を接続するとローカルプロバイダーが有効になり、Codex にモデルを公開します。既定値は変更せず、推論も送信しません。",
   "zcodeDesktop.connected": "ZCode 準備完了 · プロバイダー有効 · モデル公開済み",
   "zcodeDesktop.notConnected": "Desktop 未接続",

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { desktopStatus, disconnectDesktop, loadDesktopSettings, resolveDesktopRuntime, validateDesktopWorkspace } from "../../src/adapters/zcode/desktop";
 import { readZcodeModels } from "../../src/adapters/zcode/settings";
@@ -11,12 +11,15 @@ import { resolveDesktopNode } from "../../src/adapters/zcode/desktop-node";
 const { normalizeDesktopConfig, desktopModelCatalog } = createRequire(import.meta.url)("../../src/adapters/zcode/desktop-bootstrap.cjs");
 let root: string;
 let previousHome: string | undefined;
+let previousSandbox: string | undefined;
 beforeEach(() => {
+  previousSandbox = process.env.OCX_ZCODE_SANDBOX; process.env.OCX_ZCODE_SANDBOX = "1";
   root = mkdtempSync(join(tmpdir(), "ocx-desktop-test-"));
   previousHome = process.env.OPENCODEX_HOME; process.env.OPENCODEX_HOME = join(root, "proxy");
 });
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+  if (previousSandbox === undefined) delete process.env.OCX_ZCODE_SANDBOX; else process.env.OCX_ZCODE_SANDBOX = previousSandbox;
   rmSync(root, { recursive: true, force: true });
 });
 const provider = () => ({ enabled: true, name: "Z.AI", kind: "anthropic", options: {
@@ -111,4 +114,71 @@ test("sandbox preflight executes a child and hides uid-map diagnostics", async (
   expect(() => verifyDesktopSandbox(executable)).not.toThrow();
   writeFileSync(executable, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   expect(() => verifyDesktopSandbox(executable)).toThrow("sandbox_unavailable");
+});
+
+test("host execution is the default; a workspace is not a filesystem boundary", async () => {
+  const { desktopSandboxEnabled } = await import("../../src/adapters/zcode/desktop");
+  delete process.env.OCX_ZCODE_SANDBOX;
+  expect(desktopSandboxEnabled()).toBe(false);
+  expect(validateDesktopWorkspace(homedir())).toBe(homedir());
+  process.env.OCX_ZCODE_SANDBOX = "1";
+  expect(desktopSandboxEnabled()).toBe(true);
+  expect(() => validateDesktopWorkspace(homedir())).toThrow("workspace_invalid");
+});
+
+test("host bootstrap reads and writes outside workspace without touching the source profile", async () => {
+  const { ZcodeClient } = await import("../../src/adapters/zcode/client");
+  const { fileURLToPath } = await import("node:url");
+  const home = join(root, "state"), workspace = join(root, "project");
+  mkdirSync(join(home, ".zcode/cli/db"), { recursive: true });
+  mkdirSync(workspace);
+  const external = join(root, "outside-report.txt");
+  writeFileSync(external, "report fixture");
+  const config = join(root, "desktop-config.json");
+  const original = JSON.stringify({ provider: { "builtin:zai-coding-plan": provider() } });
+  writeFileSync(config, original);
+  const runtime = join(root, "official-runtime-fixture.cjs");
+  writeFileSync(runtime, `
+    const fs=require("node:fs");
+    require("node:readline").createInterface({input:process.stdin}).on("line",line=>{
+      const r=JSON.parse(line);
+      const path=${JSON.stringify(external)};
+      const value=fs.readFileSync(path,"utf8");
+      fs.writeFileSync(path,value);
+      process.stdout.write(JSON.stringify({id:r.id,result:{read:value,written:true,cwd:process.cwd()}})+"\\n");
+    });
+  `);
+  const settings = { command: [resolveDesktopNode(), fileURLToPath(new URL("../../src/adapters/zcode/desktop-bootstrap.cjs", import.meta.url)),
+    "--host", runtime, config, workspace], home, workspace, settingsPath: "", scope: "desktop:test-host" };
+  // Repeated processes must not fail on an existing config, or overwrite Desktop's file.
+  for (let i = 0; i < 2; i++) {
+    const client = new ZcodeClient(settings);
+    try {
+      const models = await client.request("opencodex/desktopModels", {}, 3000);
+      expect(models.models).toHaveLength(1);
+      const state = await client.request("workspace/readState", {}, 3000);
+      expect(state).toEqual({ read: "report fixture", written: true, cwd: workspace });
+    } finally { await client.close(); }
+  }
+  expect(readFileSync(config, "utf8")).toBe(original);
+});
+
+test("missing or denied optional sandbox never falls back, while default host mode needs no bwrap", () => {
+  if (process.platform !== "linux") return;
+  const path = process.env.PATH;
+  const bin = join(root, "host-bin"); mkdirSync(bin);
+  writeFileSync(join(bin, "node"), "#!/bin/sh\nprintf compatible\n", { mode: 0o755 });
+  try {
+    process.env.PATH = bin;
+    delete process.env.OCX_ZCODE_SANDBOX;
+    expect(desktopStatus().issue).not.toBe("sandbox_missing");
+    expect(desktopStatus().sandbox).toBe(false);
+    process.env.OCX_ZCODE_SANDBOX = "1";
+    expect(desktopStatus().issue).toBe("sandbox_missing");
+    writeFileSync(join(bin, "bwrap"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    expect(desktopStatus().issue).toBe("sandbox_unavailable");
+    expect(desktopStatus().sandbox).toBe(true);
+  } finally {
+    if (path === undefined) delete process.env.PATH; else process.env.PATH = path;
+  }
 });

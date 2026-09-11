@@ -264,3 +264,7 @@ fragments are not guessed onto pending ID-only calls.
 parallel/colliding identities, distinct unsafe raw JSON index literals, the maximum
 safe-integer boundary, invalid index types, missing/null continuations and UTF-8
 byte-limit boundaries.
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.

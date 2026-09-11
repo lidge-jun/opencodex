@@ -1,13 +1,14 @@
 import { verifyDesktopSandbox } from "./desktop-sandbox";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { OcxProviderConfig } from "../../types";
 import type { ProviderQuota } from "../../providers/quota-types";
-import { desktopStatus, resolveDesktopRuntime } from "./desktop";
+import { getConfigDir } from "../../config/paths";
+import { desktopSandboxEnabled, desktopStatus, resolveDesktopRuntime } from "./desktop";
 import { loadZcodeSettings } from "./settings";
 
 export interface QuotaContext { identity: string; runtimeRoot: string; config: string; credentials?: string; sourceProvider: string; managed: boolean }
@@ -86,11 +87,26 @@ function command(c: QuotaContext): string[] {
 
 /** One short-lived official host, without a writable user workspace or persistent credentials. */
 async function probe(c: QuotaContext): Promise<ProviderQuota | null> {
-  const bwrap = Bun.which("bwrap");
-  if (!bwrap) return null;
-  try { verifyDesktopSandbox(bwrap); } catch { return null; }
-  return new Promise(resolve => {
-    const child = spawn(bwrap, command(c), { stdio: ["ignore", "pipe", "pipe"], env: { PATH: "/usr/bin:/bin" } });
+  const sandbox = desktopSandboxEnabled();
+  const bwrap = sandbox ? Bun.which("bwrap", { PATH: process.env.PATH }) : undefined;
+  if (sandbox && !bwrap) return null;
+  try { if (bwrap) verifyDesktopSandbox(bwrap); } catch { return null; }
+  let temporaryHome: string | undefined;
+  try {
+    if (!sandbox) {
+      const directory = join(getConfigDir(), "zcode-desktop", "quota");
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      temporaryHome = mkdtempSync(join(directory, "probe-"));
+    }
+    return await new Promise(resolve => {
+    const child = spawn(bwrap || join(c.runtimeRoot, "zcode"), bwrap ? command(c) : [
+      fileURLToPath(new URL("./quota-bootstrap.cjs", import.meta.url)), c.managed ? "managed" : "advanced", c.sourceProvider,
+    ], { stdio: ["ignore", "pipe", "pipe"], env: bwrap ? { PATH: "/usr/bin:/bin" } : {
+      PATH: "/usr/bin:/bin", HOME: homedir(), ELECTRON_RUN_AS_NODE: "1",
+      ZCODE_DATA_BASE_DIR: temporaryHome!, OCX_ZCODE_QUOTA_HOST: "1",
+      OCX_ZCODE_QUOTA_RUNTIME: c.runtimeRoot, OCX_ZCODE_QUOTA_CONFIG: c.config,
+      ...(c.credentials ? { OCX_ZCODE_QUOTA_CREDENTIALS: c.credentials } : {}),
+    } });
     let output = "";
     let invalid = false;
     const timer = setTimeout(() => { invalid = true; child.kill("SIGKILL"); }, 45_000);
@@ -106,7 +122,8 @@ async function probe(c: QuotaContext): Promise<ProviderQuota | null> {
       if (code || invalid) return resolve(null);
       try { resolve(parseZcodeQuota(JSON.parse(output))); } catch { resolve(null); }
     });
-  });
+    });
+  } finally { if (temporaryHome) rmSync(temporaryHome, { recursive: true, force: true }); }
 }
 
 let inflight: { identity: string; promise: Promise<ProviderQuota | null> } | undefined;

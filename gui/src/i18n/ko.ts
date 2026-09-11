@@ -20,6 +20,8 @@ export const ko: Record<TKey, string> = {
   "zcodeDesktop.retryActivation": "활성화 재시도",
   "zcodeDesktop.restartNotice": "Codex에 모델이 표시되지 않으면 작업 완료 후 Codex를 다시 시작하세요. 프로세스를 자동으로 다시 시작하지 않습니다.",
   "zcodeDesktop.dashboardRequired": "이 작업에는 루프백에 바인딩된 대시보드 또는 페어링된 허브의 브라우저 세션이 필요합니다. 관리자 토큰만으로는 Desktop을 설정할 수 없습니다.",
+  "zcodeDesktop.hostAccess": "ZCode는 OpenCodex 샌드박스 없이 실행되며 OS 사용자와 하네스가 허용하는 파일을 읽거나 수정할 수 있습니다. 작업 폴더는 접근 경계가 아닙니다. 업데이트 후 기존 연결에도 적용됩니다. 격리하려면 프록시에 OCX_ZCODE_SANDBOX=1을 설정하고 OpenCodex를 재시작하세요.",
+  "zcodeDesktop.sandboxAccess": "선택적 Bubblewrap 격리가 활성화되었습니다. 선택한 작업 폴더만 마운트되며 다른 호스트 경로에는 접근할 수 없습니다.",
   "zcodeDesktop.intro": "ZCode Desktop을 연결하면 로컬 공급자를 활성화하고 Codex에 모델을 게시합니다. 기본값은 유지되며 추론은 실행하지 않습니다.",
   "zcodeDesktop.connected": "ZCode 준비 완료 · 공급자 활성화 · 모델 게시 완료",
   "zcodeDesktop.notConnected": "Desktop 연결 안 됨",

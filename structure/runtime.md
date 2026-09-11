@@ -185,3 +185,7 @@ not an authentication or entitlement decision.
 ## Remote Hub hardening ownership
 
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.

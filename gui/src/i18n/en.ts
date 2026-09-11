@@ -22,6 +22,8 @@ export const en = {
   "zcodeDesktop.retryActivation": "Retry activation",
   "zcodeDesktop.restartNotice": "If Codex does not show the new models, restart Codex when your tasks finish. No processes will be restarted automatically.",
   "zcodeDesktop.dashboardRequired": "This action requires a browser session on a loopback-bound dashboard or a paired hub. An admin token alone cannot authorize Desktop setup.",
+  "zcodeDesktop.hostAccess": "ZCode runs without an OpenCodex sandbox and can read or modify any file your operating-system user and harness allow. The workspace is only a working directory. This also applies to existing connections after upgrading. To enable isolation, set OCX_ZCODE_SANDBOX=1 on the proxy and restart OpenCodex.",
+  "zcodeDesktop.sandboxAccess": "Optional Bubblewrap isolation is enabled. Only the selected workspace is mounted; host absolute paths outside it are unavailable.",
   "zcodeDesktop.intro": "Connect ZCode Desktop to enable its local provider and publish its models to Codex. Defaults stay unchanged; no inference is sent.",
   "zcodeDesktop.connected": "ZCode ready · provider enabled · models published",
   "zcodeDesktop.notConnected": "Desktop not connected",

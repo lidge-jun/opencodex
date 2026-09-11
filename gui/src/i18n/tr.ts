@@ -21,6 +21,8 @@ export const tr: Record<TKey, string> = {
   "zcodeDesktop.retryActivation": "Etkinleştirmeyi yeniden dene",
   "zcodeDesktop.restartNotice": "Modeller görünmüyorsa görevler bitince Codex’i yeniden başlatın. Hiçbir işlem otomatik yeniden başlatılmaz.",
   "zcodeDesktop.dashboardRequired": "Bu işlem, loopback’e bağlı panelde veya eşleştirilmiş hub’da tarayıcı oturumu gerektirir. Yalnızca yönetici jetonu Desktop kurulumuna yetki vermez.",
+  "zcodeDesktop.hostAccess": "ZCode, OpenCodex sanal alanı olmadan çalışır; işletim sistemi kullanıcınızın ve harness’in izin verdiği dosyaları okuyabilir veya değiştirebilir. Çalışma klasörü bir erişim sınırı değildir. Güncellemeden sonra mevcut bağlantılar için de geçerlidir. Yalıtım için proxy üzerinde OCX_ZCODE_SANDBOX=1 ayarlayıp OpenCodex’i yeniden başlatın.",
+  "zcodeDesktop.sandboxAccess": "İsteğe bağlı Bubblewrap yalıtımı açık. Yalnızca seçilen çalışma klasörü bağlanır; diğer ana makine yollarına erişilemez.",
   "zcodeDesktop.intro": "ZCode Desktop bağlantısı yerel sağlayıcıyı etkinleştirip modellerini Codex’e ekler. Varsayılanlar değişmez; çıkarım yapılmaz.",
   "zcodeDesktop.connected": "ZCode hazır · sağlayıcı etkin · modeller yayımlandı",
   "zcodeDesktop.notConnected": "Desktop bağlı değil",

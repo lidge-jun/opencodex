@@ -20,6 +20,8 @@ export const zh: Record<TKey, string> = {
   "zcodeDesktop.retryActivation": "重试启用",
   "zcodeDesktop.restartNotice": "若 Codex 未显示新模型，请在任务结束后重启 Codex。不会自动重启任何进程。",
   "zcodeDesktop.dashboardRequired": "此操作需要绑定到回环地址的仪表板或已配对 Hub 的浏览器会话。仅管理员令牌无法授权 Desktop 设置。",
+  "zcodeDesktop.hostAccess": "ZCode 默认不使用 OpenCodex 沙箱，可读写操作系统用户和 harness 允许访问的任何文件。工作目录不是访问边界。升级后现有连接也适用。如需隔离，请在代理上设置 OCX_ZCODE_SANDBOX=1 并重启 OpenCodex。",
+  "zcodeDesktop.sandboxAccess": "已启用可选的 Bubblewrap 隔离。仅挂载所选工作目录，无法访问其他主机路径。",
   "zcodeDesktop.intro": "连接 ZCode Desktop 将启用本地提供商并将模型发布到 Codex。不更改默认设置，也不执行推理。",
   "zcodeDesktop.connected": "ZCode 已就绪 · 提供商已启用 · 模型已发布",
   "zcodeDesktop.notConnected": "Desktop 未连接",

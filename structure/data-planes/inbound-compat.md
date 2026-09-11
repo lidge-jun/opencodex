@@ -82,3 +82,7 @@ copies an authoritative catalog context window into `limit.context` and a nonemp
 reasoning ladder into `thinking.effortOptions`. Missing capabilities stay absent instead of
 falling back to OpenCodex guesses, and the integration does not write the removed
 `thinking.effort` / `defaultEffort` fields because MCode owns the active effort per session.
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.
