@@ -4,16 +4,9 @@
 
 `noStructuredOutputModels`는 #1424로 들어왔지만 사용자 config / management API 전용이다. `ProviderRegistryEntry`에 필드 자체가 없어서(`src/providers/registry.ts:160-353`) 어떤 프리셋도 "이 게이트웨이의 이 모델은 `response_format`을 거절한다"를 표현할 수 없다. 그래서 Zen Go에서 DeepSeek를 쓰는 운영자는 매번 손으로 config를 고친다(#1338, #1415, 2026-09-11 커뮤니티 제보).
 
-## 파일 변경 지도
+## 선례
 
-| 파일 | 성격 | 내용 |
-| --- | --- | --- |
-| `src/providers/registry.ts` | MODIFY | `ProviderRegistryEntry`에 `noStructuredOutputModels?: string[]` 추가 (`noPenaltyModels` 옆, 321 부근). `ProviderConfigSeed` Pick 유니온(`355-362`)에 이름 추가 |
-| `src/providers/derive.ts` | MODIFY | 로컬 엔트리 타입(`38-44`)에 필드 추가. `providerConfigSeed`(`250` 부근)와 두 번째 시드 경로(`310` 부근)에 spread 추가. `510/563` 계열 merge 함수에 `if (!prov.noStructuredOutputModels && seed.noStructuredOutputModels) ...` 추가 |
-| `src/router.ts` | MODIFY | `347-353`에 `mergeStringArray(registryEntry.noStructuredOutputModels, provider.noStructuredOutputModels)`, `471-477`에 emit |
-| `src/providers/registry.ts` | MODIFY | opencode-go(`1695-1791`), opencode-zen(`3016-3039`), opencode-free(`3042-3079`) 프리셋에 시드 |
-| `tests/providers/provider-registry-parity.test.ts` | MODIFY | 세 프리셋의 시드 내용을 고정 |
-| `tests/providers/opencode-go-deepseek.test.ts` | MODIFY | 시드가 실제 요청에서 `response_format`을 지우는지 어댑터 경유로 확인 |
+`noPenaltyModels`가 같은 배선을 이미 완결해 두었다: 선언 `src/providers/registry.ts:323` → 병합 `src/router.ts:351` → emit `src/router.ts:475` → 소비 `src/adapters/openai-chat.ts:134`. 새 필드는 이 네 지점을 그대로 따른다. 아래 "배선 경로" 표가 확정 파일 지도다.
 
 ## 설계 수정 (아키텍트 반박 수용, 2026-09-11)
 
@@ -69,6 +62,10 @@ noJsonSchemaModels: [...OPENCODE_FREE_DEEPSEEK_MODELS],
 3. 같은 프로바이더로 `glm-5.3`(시드에 없음) + json_schema면 `response_format.type`이 `json_schema`로 **남는다** — 정확 일치 경계가 살아 있다는 반대 증거.
 4. 시드된 모델 + `json_object` 요청은 그대로 `json_object`다 — 낮추기가 json_object를 건드리지 않는다는 반대 증거.
 5. 같은 모델이 `noStructuredOutputModels`에도 있으면 `response_format`이 아예 없다 — 킬스위치 우선순위.
+
+### 분기 순서 (감사 지적 반영)
+
+네이티브 패스스루(`src/adapters/openai-chat.ts:142`)는 킬스위치가 `delete body.response_format`을 먼저 실행한다. 낮추기 분기는 반드시 **else-if**로 붙여, 지워진 필드를 다시 넣지 않게 한다. 번역 경로(`1580`)는 킬스위치가 블록 전체를 건너뛰므로 그 안에서 json_schema만 json_object로 바꾸면 된다. 수용 기준 5가 이 순서를 직접 관측한다.
 
 ## 검증
 
