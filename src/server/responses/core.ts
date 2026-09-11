@@ -2474,6 +2474,20 @@ async function resolveSubagentFallbackModelEligibility(args: {
 }
 
 /**
+ * Whether the client explicitly asked for hidden thinking (`reasoning.summary: "none"`).
+ *
+ * Pinned: parseRequest collapses "omitted" and "none" into one hideThinkingSummary
+ * flag, so the raw request body is the ONLY place that still distinguishes them.
+ * Provider opt-ins like showThinkingSummary must consult this — never the flag
+ * alone — or a future caller that copies only the flag would silently unlock an
+ * explicit opt-out.
+ */
+function clientExplicitlyHidThinking(parsed: OcxParsedRequest): boolean {
+  const rawReasoning = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning;
+  return typeof rawReasoning === "object" && rawReasoning !== null
+    && (rawReasoning as { summary?: unknown }).summary === "none";
+}
+/**
  * Apply every route-dependent request mutation against the final selected route.
  * Must run only after subagent fallback has settled the model/provider.
  */
@@ -2519,11 +2533,9 @@ async function applyFinalRouteRequestNormalization(args: {
   // serves genuine user-facing reasoning opts back into the summary channel here, so thought
   // parts (Gemini thought, content-channel reasoning_text) reach the client instead of only
   // the hidden replay envelopes. An explicit client reasoning.summary "none" still wins.
-  if (route.provider.showThinkingSummary === true && parsed.options.hideThinkingSummary === true) {
-    const rawReasoning = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning;
-    const explicitNone = typeof rawReasoning === "object" && rawReasoning !== null
-      && (rawReasoning as { summary?: unknown }).summary === "none";
-    if (!explicitNone) parsed.options.hideThinkingSummary = false;
+  if (route.provider.showThinkingSummary === true && parsed.options.hideThinkingSummary === true
+    && !clientExplicitlyHidThinking(parsed)) {
+    parsed.options.hideThinkingSummary = false;
   }
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = route.modelId;

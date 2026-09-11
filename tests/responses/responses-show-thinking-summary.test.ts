@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { handleResponses } from "../../src/server/responses/core";
@@ -90,5 +93,65 @@ describe("showThinkingSummary provider option", () => {
   test("google-antigravity preset opts in", () => {
     expect(providerConfigSeed(getProviderRegistryEntry("google-antigravity")!).showThinkingSummary).toBe(true);
     expect(providerConfigSeed(getProviderRegistryEntry("deepseek")!).showThinkingSummary).toBeUndefined();
+  });
+
+  test("CCA thought parts surface on the summary channel", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-show-thinking-"));
+    const prevHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      "google-antigravity": {
+        activeAccountId: "active",
+        accounts: [{
+          id: "active",
+          credential: {
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 3_600_000,
+            projectId: "project-id",
+          },
+        }],
+      },
+    }));
+    const seen: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(String(input));
+      return Response.json({
+        response: {
+          candidates: [{
+            content: { parts: [{ thought: true, text: "cca-think" }, { text: "OK" }] },
+            finishReason: "STOP",
+          }],
+          usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15, thoughtsTokenCount: 3 },
+        },
+      });
+    }) as typeof fetch;
+    try {
+      const seed = {
+        ...providerConfigSeed(getProviderRegistryEntry("google-antigravity")!),
+        liveModels: false,
+        models: ["gemini-3.8-flash"],
+      } as OcxProviderConfig;
+      const config = { providers: { "google-antigravity": seed } } as unknown as OcxConfig;
+      const response = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "google-antigravity/gemini-3.8-flash", input: "ping", stream: false, reasoning: { effort: "low" } }),
+        }),
+        config,
+        { model: "", provider: "" },
+        { abortSignal: AbortSignal.timeout(10_000) },
+      );
+      const text = await response.text();
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toContain("v1internal:generateContent");
+      expect(text).toContain('"summary":[{"type":"summary_text","text":"cca-think"}]');
+      expect(text).toContain("OK");
+    } finally {
+      if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = prevHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
