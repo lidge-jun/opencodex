@@ -1,7 +1,7 @@
 export interface StatusCodeInfo { label: string; description: string }
 
-type Locale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr";
-type LocalizedInfo = Record<Locale, StatusCodeInfo>;
+type Locale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi";
+type LocalizedInfo = Partial<Record<Locale, StatusCodeInfo>> & { en: StatusCodeInfo };
 
 const STATUS_CODES: Record<number, LocalizedInfo> = {
   400: {
@@ -220,12 +220,12 @@ const GENERIC_STATUS: { client: LocalizedInfo; server: LocalizedInfo } = {
 
 function normalizeLocale(locale: string): Locale {
   if (locale.toLowerCase().startsWith("fr")) return "fr";
-  return locale === "de" || locale === "ko" || locale === "zh" || locale === "zh-TW" || locale === "ru" || locale === "ja" || locale === "tr" ? locale : "en";
+  return locale === "de" || locale === "ko" || locale === "zh" || locale === "zh-TW" || locale === "ru" || locale === "ja" || locale === "tr" || locale === "vi" ? locale : "en";
 }
 
 export function statusCodeInfo(code: number, locale: string): StatusCodeInfo | null {
   if (code < 400) return null;
   const normalizedLocale = normalizeLocale(locale);
   const info = STATUS_CODES[Math.trunc(code)] ?? (code < 500 ? GENERIC_STATUS.client : GENERIC_STATUS.server);
-  return info[normalizedLocale];
+  return info[normalizedLocale] ?? info.en;
 }
