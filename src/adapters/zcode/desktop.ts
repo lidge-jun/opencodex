@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { getConfigDir } from "../../config/paths";
 import { closeZcodeDesktopClients, ZcodeClient } from "./client";
 import type { ZcodeSettings } from "./settings";
+import { verifyDesktopSandbox } from "./desktop-sandbox";
 import { resolveDesktopNode } from "./desktop-node";
 
 export interface DesktopModel { id: string; providerId: string; modelId: string; label: string; contextWindow?: number }
@@ -34,6 +35,20 @@ function readConnection(): Connection | undefined {
       return c;
     } finally { closeSync(fd); }
   } catch { return fail("connection_invalid"); }
+}
+
+/** Public native IDs only: routing must work before live discovery warms the cache.
+ * No profile reads, process launches, or config mutations on the routing path. */
+export function desktopRoutingModelIds(): string[] {
+  try {
+    const connection = readConnection();
+    if (!connection?.connected) return [];
+    return connection.models.flatMap(model =>
+      model && typeof model.id === "string" && typeof model.providerId === "string"
+      && model.providerId.startsWith("builtin:zai") && typeof model.modelId === "string"
+      && model.id === `${model.providerId}/${model.modelId}` && !/[\x00-\x20]/.test(model.id)
+        ? [model.id] : []);
+  } catch { return []; } // Invalid/revoked state is still rejected by the adapter.
 }
 
 function persist(connection: Connection): void {
@@ -108,6 +123,7 @@ function prerequisites(): { bwrap: string; node: string } {
   let node: string;
   try { node = resolveDesktopNode(); }
   catch (error) { return fail(error instanceof Error && error.message === "node_missing" ? "node_missing" : "node_incompatible"); }
+  try { verifyDesktopSandbox(bwrap); } catch { return fail("sandbox_unavailable"); }
   return { bwrap: realpathSync(bwrap), node: realpathSync(node) };
 }
 

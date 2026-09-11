@@ -42,6 +42,7 @@ export const en = {
   "zcodeDesktop.test": "Test with one request",
   "zcodeDesktop.testPassed": "ZCode answered successfully.",
   "zcodeDesktop.missing": "Open ZCode Desktop on the proxy computer, then detect again. You can also select its installed or extracted application folder.",
+  "zcodeDesktop.sandboxUnavailable": "Bubblewrap cannot create the required sandbox in the server’s security context. Ask your administrator to check user namespace and AppArmor policy, then detect again. Isolation will not be disabled.",
   "zcodeDesktop.sandboxMissing": "Bubblewrap is required for isolation. Install bubblewrap using your Linux package manager, then detect again.",
   "zcodeDesktop.nodeMissing": "Node.js is required by the ZCode runtime. Install a compatible Node.js version, then detect again.",
   "zcodeDesktop.nodeIncompatible": "ZCode Desktop requires Node.js 24 or newer with SQLite support. Add a compatible Node.js to the PATH used by OpenCodex, restart its service or terminal, then detect again.",

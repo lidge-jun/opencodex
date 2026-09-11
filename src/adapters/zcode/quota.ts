@@ -1,3 +1,4 @@
+import { verifyDesktopSandbox } from "./desktop-sandbox";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
@@ -87,6 +88,7 @@ function command(c: QuotaContext): string[] {
 async function probe(c: QuotaContext): Promise<ProviderQuota | null> {
   const bwrap = Bun.which("bwrap");
   if (!bwrap) return null;
+  try { verifyDesktopSandbox(bwrap); } catch { return null; }
   return new Promise(resolve => {
     const child = spawn(bwrap, command(c), { stdio: ["ignore", "pipe", "pipe"], env: { PATH: "/usr/bin:/bin" } });
     let output = "";

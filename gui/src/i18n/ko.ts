@@ -40,6 +40,7 @@ export const ko: Record<TKey, string> = {
   "zcodeDesktop.test": "요청 한 번으로 테스트",
   "zcodeDesktop.testPassed": "ZCode가 정상적으로 응답했습니다.",
   "zcodeDesktop.missing": "프록시 컴퓨터에서 ZCode Desktop을 열고 다시 감지하거나 설치 또는 압축 해제 폴더를 선택하세요.",
+  "zcodeDesktop.sandboxUnavailable": "서버 보안 컨텍스트에서 Bubblewrap 격리 환경을 만들 수 없습니다. 관리자에게 사용자 네임스페이스와 AppArmor 정책 확인을 요청한 뒤 다시 감지하세요. 격리는 비활성화되지 않습니다.",
   "zcodeDesktop.sandboxMissing": "격리를 위해 Linux 패키지 관리자로 bubblewrap을 설치한 뒤 다시 감지하세요.",
   "zcodeDesktop.nodeMissing": "ZCode와 호환되는 Node.js를 설치한 뒤 다시 감지하세요.",
   "zcodeDesktop.nodeIncompatible": "ZCode Desktop에는 SQLite를 지원하는 Node.js 24 이상이 필요합니다. OpenCodex의 PATH에 호환 버전을 추가하고 서비스 또는 터미널을 다시 시작한 후 다시 감지하세요.",

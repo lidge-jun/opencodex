@@ -139,3 +139,16 @@ test("admin-token setup refusal shows browser-session guidance, not success", as
   expect(closeCalls).toBe(0);
   expect(host.textContent).not.toContain("ZCode ready");
 });
+
+test("sandbox denial explains server policy and never reports complete success", async () => {
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => Response.json({
+    connected: false, issue: "sandbox_unavailable", runtimes: [], runtime: "", workspace: "/project", models: [],
+  }) });
+  await mountPane();
+  const alert = host.querySelector('[role="alert"]')!;
+  expect(alert.textContent).toContain("AppArmor");
+  expect(alert.textContent).toContain("server");
+  expect(alert.textContent).not.toContain("Permission denied");
+  expect(button("Connect Desktop").disabled).toBe(true);
+  expect(closeCalls).toBe(0);
+});

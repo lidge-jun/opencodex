@@ -41,6 +41,7 @@ export const tr: Record<TKey, string> = {
   "zcodeDesktop.test": "Bir istekle test et",
   "zcodeDesktop.testPassed": "ZCode başarıyla yanıt verdi.",
   "zcodeDesktop.missing": "Proxy bilgisayarında ZCode Desktop açıp yeniden algılayın veya kurulum ya da çıkarılmış uygulama klasörünü seçin.",
+  "zcodeDesktop.sandboxUnavailable": "Bubblewrap sunucunun güvenlik bağlamında yalıtım oluşturamıyor. Yöneticinizden kullanıcı ad alanı ve AppArmor politikasını kontrol etmesini isteyip yeniden algılayın. Yalıtım kapatılmayacaktır.",
   "zcodeDesktop.sandboxMissing": "Yalıtım için Linux paket yöneticisiyle bubblewrap kurup yeniden algılayın.",
   "zcodeDesktop.nodeMissing": "ZCode ile uyumlu Node.js sürümünü kurup yeniden algılayın.",
   "zcodeDesktop.nodeIncompatible": "ZCode Desktop, SQLite destekli Node.js 24 veya üzerini gerektirir. Uyumlu sürümü OpenCodex PATH ortamına ekleyin, hizmeti veya terminali yeniden başlatıp tekrar algılayın.",

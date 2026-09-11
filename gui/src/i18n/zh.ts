@@ -40,6 +40,7 @@ export const zh: Record<TKey, string> = {
   "zcodeDesktop.test": "发送一次测试请求",
   "zcodeDesktop.testPassed": "ZCode 已成功响应。",
   "zcodeDesktop.missing": "请在代理所在计算机上打开 ZCode Desktop 后重新检测，或选择其安装或解压目录。",
+  "zcodeDesktop.sandboxUnavailable": "Bubblewrap 无法在服务器的安全上下文中创建隔离环境。请管理员检查用户命名空间和 AppArmor 策略，然后重新检测。不会禁用隔离。",
   "zcodeDesktop.sandboxMissing": "隔离需要 Bubblewrap。请通过 Linux 包管理器安装 bubblewrap 后重新检测。",
   "zcodeDesktop.nodeMissing": "请安装与 ZCode 兼容的 Node.js 版本后重新检测。",
   "zcodeDesktop.nodeIncompatible": "ZCode Desktop 需要支持 SQLite 的 Node.js 24 或更新版本。请将兼容版本加入 OpenCodex 使用的 PATH，重启服务或终端后重新检测。",

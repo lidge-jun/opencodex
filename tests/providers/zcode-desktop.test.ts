@@ -99,3 +99,16 @@ test("Node selection skips an incompatible nvm prefix and fails safely", () => {
     if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
   }
 });
+
+test("sandbox preflight executes a child and hides uid-map diagnostics", async () => {
+  if (process.platform !== "linux") return;
+  const { verifyDesktopSandbox } = await import("../../src/adapters/zcode/desktop-sandbox");
+  const executable = join(root, "bwrap-probe");
+  writeFileSync(executable, "#!/bin/sh\necho 'bwrap: setting up uid map: Permission denied' >&2\nexit 1\n", { mode: 0o755 });
+  expect(() => verifyDesktopSandbox(executable)).toThrow("sandbox_unavailable");
+  // A failed probe is not cached: an operator correction can be retried immediately.
+  writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  expect(() => verifyDesktopSandbox(executable)).not.toThrow();
+  writeFileSync(executable, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  expect(() => verifyDesktopSandbox(executable)).toThrow("sandbox_unavailable");
+});

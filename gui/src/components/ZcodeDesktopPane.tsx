@@ -60,6 +60,7 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
     } catch { setError("workspace_invalid"); }
   };
   const problem = error === "desktop_missing" ? t("zcodeDesktop.missing")
+    : error === "sandbox_unavailable" ? t("zcodeDesktop.sandboxUnavailable")
     : error === "sandbox_missing" ? t("zcodeDesktop.sandboxMissing")
     : error === "dashboard_required" ? t("zcodeDesktop.dashboardRequired")
     : error === "node_missing" ? t("zcodeDesktop.nodeMissing")

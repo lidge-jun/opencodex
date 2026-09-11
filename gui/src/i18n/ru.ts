@@ -40,6 +40,7 @@ export const ru: Record<TKey, string> = {
   "zcodeDesktop.test": "Проверить одним запросом",
   "zcodeDesktop.testPassed": "ZCode успешно ответил.",
   "zcodeDesktop.missing": "Откройте ZCode Desktop на компьютере прокси и повторите поиск либо выберите папку установки или распаковки.",
+  "zcodeDesktop.sandboxUnavailable": "Bubblewrap не может создать изоляцию в контексте безопасности сервера. Попросите администратора проверить пользовательские пространства имён и AppArmor, затем повторите поиск. Изоляция не будет отключена.",
   "zcodeDesktop.sandboxMissing": "Для изоляции установите bubblewrap через менеджер пакетов Linux и повторите поиск.",
   "zcodeDesktop.nodeMissing": "Установите совместимую с ZCode версию Node.js и повторите поиск.",
   "zcodeDesktop.nodeIncompatible": "ZCode Desktop требует Node.js 24 или новее с SQLite. Добавьте совместимую версию в PATH OpenCodex, перезапустите службу или терминал и повторите обнаружение.",

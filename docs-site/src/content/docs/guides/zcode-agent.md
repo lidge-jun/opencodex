@@ -292,3 +292,18 @@ are preserved; if they hide the connected models, the catalog state remains inco
 
 If a running Codex instance does not pick up the models, restart it after its tasks
 finish. OpenCodex does not terminate or restart Codex processes automatically.
+
+
+### Sandbox policy and cold starts
+
+Detection runs a minimal Bubblewrap sandbox from the OpenCodex server itself, without
+loading your profile or sending inference. If it reports `sandbox_unavailable`, ask
+your administrator to review user namespace and AppArmor policy for that service.
+A successful probe from a terminal or another application does not prove that the
+server has the same permissions. OpenCodex never disables isolation or changes host
+security policy automatically. After a policy correction, select **Detect again**.
+
+Managed Desktop native model IDs also supply routing after a cold restart, before
+live discovery fills the cache. You do not need to add them manually to provider
+settings. Existing model filters and defaults remain unchanged; ambiguous aliases
+are still rejected instead of guessed.

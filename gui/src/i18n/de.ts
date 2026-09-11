@@ -41,6 +41,7 @@ export const de: Record<TKey, string> = {
   "zcodeDesktop.test": "Mit einer Anfrage testen",
   "zcodeDesktop.testPassed": "ZCode hat erfolgreich geantwortet.",
   "zcodeDesktop.missing": "Öffnen Sie ZCode Desktop auf dem Proxy-Computer und starten Sie die Erkennung erneut, oder wählen Sie den Installationsordner.",
+  "zcodeDesktop.sandboxUnavailable": "Bubblewrap kann im Sicherheitskontext des Servers keine Sandbox erstellen. Lassen Sie User-Namespaces und AppArmor prüfen und starten Sie die Erkennung erneut. Die Isolation bleibt aktiv.",
   "zcodeDesktop.sandboxMissing": "Installieren Sie bubblewrap mit dem Linux-Paketmanager für die Isolation und starten Sie die Erkennung erneut.",
   "zcodeDesktop.nodeMissing": "Installieren Sie eine mit ZCode kompatible Node.js-Version und starten Sie die Erkennung erneut.",
   "zcodeDesktop.nodeIncompatible": "ZCode Desktop benötigt Node.js 24 oder neuer mit SQLite-Unterstützung. Fügen Sie eine kompatible Version zum PATH von OpenCodex hinzu, starten Sie den Dienst oder das Terminal neu und wiederholen Sie die Erkennung.",

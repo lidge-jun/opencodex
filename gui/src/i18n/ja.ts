@@ -40,6 +40,7 @@ export const ja: Record<TKey, string> = {
   "zcodeDesktop.test": "1回のリクエストでテスト",
   "zcodeDesktop.testPassed": "ZCode が正常に応答しました。",
   "zcodeDesktop.missing": "プロキシのコンピューターで ZCode Desktop を開いて再検出するか、インストールまたは展開先を選択してください。",
+  "zcodeDesktop.sandboxUnavailable": "サーバーのセキュリティコンテキストで Bubblewrap の隔離環境を作成できません。管理者にユーザー名前空間と AppArmor の設定を確認してもらい、再検出してください。隔離は無効化されません。",
   "zcodeDesktop.sandboxMissing": "隔離には Bubblewrap が必要です。Linux のパッケージマネージャーでインストールして再検出してください。",
   "zcodeDesktop.nodeMissing": "ZCode 対応の Node.js をインストールして再検出してください。",
   "zcodeDesktop.nodeIncompatible": "ZCode Desktop には SQLite 対応の Node.js 24 以降が必要です。OpenCodex が使う PATH に対応版を追加し、サービスまたはターミナルを再起動して再検出してください。",
