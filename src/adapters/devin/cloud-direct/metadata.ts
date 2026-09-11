@@ -58,7 +58,10 @@ const DEVICE_FINGERPRINT_BYTES = 366;
 export interface MetadataInput {
   /** Persistent api_key from OAuth (`devin-session-token$<JWT>`). */
   apiKey: string;
-  /** Fresh user_jwt from GetUserJwt — required for chat methods. */
+  /**
+   * Fresh user_jwt from GetUserJwt. The catalog RPC uses it; the hosted chat
+   * path does not need it and only sends it when an operator opts in.
+   */
   userJwt?: string;
   /** UUID — one per opencode session is fine. */
   sessionId: string;

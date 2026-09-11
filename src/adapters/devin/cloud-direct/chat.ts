@@ -442,7 +442,11 @@ interface BuildArgs {
   modelUid: string;
   messages: ChatHistoryItem[];
   cascadeId: string;
-  promptId: string;
+  /**
+   * GetChatMessageRequest #22. Optional because it is omitted on a first turn;
+   * the working client only reuses one across a later tool loop.
+   */
+  promptId?: string;
   sessionId: string;
   requestId: bigint;
   triggerId: string;
@@ -898,7 +902,6 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     messages: req.messages,
     tools: req.tools,
     cascadeId: sessionIds.cascadeId,
-    promptId: crypto.randomUUID(),
     sessionId: sessionIds.sessionId,
     requestId: BigInt(Date.now()),
     triggerId: crypto.randomUUID(),
@@ -1168,22 +1171,23 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // model and explains the likely cause rather than re-passing
     // Cognition's opaque text. The cloud's original message is appended in
     // parens so users (and bug reports) still have it verbatim.
-    // Measured on 2026-09-12: a free-tier account gets this shape with
-    // `invalid_argument`, not `permission_denied`. Keying only on the latter
-    // meant the explanation never fired for the one account that needed it.
+    // Both codes carry this shape. Cognition uses `invalid_argument` for a
+    // request it could not accept and `permission_denied` for one it would not,
+    // and the message body is the same opaque sentence either way.
     const isOpaqueDenial =
       (trailerError.code === 'permission_denied' || trailerError.code === 'invalid_argument') &&
       /an internal error occurred/i.test(trailerError.message);
     if (isOpaqueDenial) {
       const enriched =
         `Cognition denied this request for model "${req.modelUid}" with the opaque ` +
-        `"an internal error occurred" message. The catalog listed this model as ` +
-        `enabled, so the denial is about entitlement rather than the model id: a ` +
-        `free-tier account whose only enabled model is a "slow" lane returns this ` +
-        `for every request. Verified on 2026-09-12 against a live free account — ` +
-        `client version, request framing, metadata and request fields were all ` +
-        `ruled out, so retrying with different options will not help. ` +
-        `See https://devin.ai/settings for the account's plan. ` +
+        `"an internal error occurred" message, which it uses for both a malformed ` +
+        `request and a refused one. In practice this has meant the request, not ` +
+        `the account: the same sentence came back for every turn until the ` +
+        `CompletionConfiguration tag map was corrected, and a temperature of ` +
+        `exactly 0 still produces it. Check the request before the plan — ` +
+        `tests/providers/devin-hardening.test.ts pins the field layout the ` +
+        `service accepts. If the request is unchanged and this is new, the ` +
+        `account's model access is the next thing to check. ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
       throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
     }

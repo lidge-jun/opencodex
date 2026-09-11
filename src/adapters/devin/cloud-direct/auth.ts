@@ -3,8 +3,10 @@
  * Copyright (c) 2026 Vedant. The full notice is in ./index.ts.
  */
 /**
- * Mint the short-lived `user_jwt` that every chat RPC needs alongside the
- * persistent OAuth-issued `api_key`.
+ * Mint the short-lived `user_jwt` that accompanies the persistent OAuth-issued
+ * `api_key`. The catalog RPC uses it. The hosted chat path does not need it and
+ * only sends it when an operator opts in, so a mint failure here cannot take
+ * down a turn.
  *
  *   POST https://server.codeium.com/exa.auth_pb.AuthService/GetUserJwt
  *   Content-Type: application/proto             ← unary, NOT streaming

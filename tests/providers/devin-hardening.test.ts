@@ -211,7 +211,7 @@ describe("devin cloud request shape", () => {
       modelUid: "swe-2-high",
       messages: [{ role: "user", content: "hi" }],
       ...(completionOpts ? { completionOpts } : {}),
-    } as never);
+    });
 
   test("the output cap lands in #2 and the context window in #3", () => {
     const outer = fields(build({ maxOutputTokens: 64, maxInputTokens: 200_000 }));

@@ -236,8 +236,9 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
           messages: mapOcxMessagesToDevin(parsed),
           tools: mapOcxToolsToDevin(parsed.context.tools),
           cascadeId,
-          // Without these the cloud applies its own defaults (128k output,
-          // temperature 0.7), so a client that asked for a 4k cap never got one.
+          // Without these the request falls back to the encoder's defaults
+          // (8192 output, a 128k context window, temperature 0.7), so a client
+          // that asked for a 4k cap never got one.
           completionOpts: {
             ...(typeof parsed.options.maxOutputTokens === "number" ? { maxOutputTokens: parsed.options.maxOutputTokens } : {}),
             ...(typeof parsed.options.temperature === "number" ? { temperature: parsed.options.temperature } : {}),
