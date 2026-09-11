@@ -1289,7 +1289,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "local",
     featured: false,
     dashboardPreset: false,
-    preserveCustomDestination: true,
     note: "Drives the locally installed Devin CLI over the Agent Client Protocol (`devin acp`, newline-delimited JSON-RPC on stdio). Requires the CLI on PATH and a completed `devin auth login`; no API key is stored by opencodex. Set OPENCODEX_DEVIN_CLI_BIN to point at a specific build, and OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1 to let the CLI read and write files — the default is to refuse.",
     models: [...DEVIN_CLI_MODELS],
     defaultModel: DEVIN_CLI_DEFAULT_MODEL,
