@@ -1,0 +1,48 @@
+# 030 — wp4: `deepseek-v4-pro` 퇴역 제거
+
+## 커밋 분리
+
+제거 근거의 강도가 프로바이더마다 다르므로 두 커밋으로 나눈다. 리뷰어가 뒤쪽만 떼어낼 수 있어야 한다.
+
+**커밋 A — DeepSeek 1st-party와 그것을 되파는 경로 (근거 강함)**
+
+| 대상 | 앵커 |
+| --- | --- |
+| `deepseek` 프리셋 | `registry.ts:2038-2078` — `modelContextWindows`, `modelWireDefaults`, `modelResponsesTerminalRepair`에서 제거 |
+| `DEEPSEEK_THINKING_MODELS` | `registry.ts:619` — v4-pro 제거. Zen 3종과 volcengine 플랜이 이 상수를 공유하므로 파급을 각 사용처에서 확인 |
+| `opencode-go` `noVisionModels` | `registry.ts:1793` |
+| `command-code` 계열 | `registry.ts:631, 1180-1190, 2305`, `command-code-efforts.ts`, `adapters/command-code.ts:498` |
+| `cline-pass` | `registry.ts:1144, 1199`, `adapters/cline-pass-deepseek-v4-tool-replay.ts:5` |
+| `orcarouter` | `registry.ts:1180-1190` |
+| `codebuddy` / `qoder` | `codebuddy-models.ts:38,124,145`, `qoder-models.ts:13` |
+| `router.ts:686` | 잔여 참조 |
+
+**커밋 B — 벤더 호스팅 (근거 약함, 분리)**
+
+`alibaba-token-plan`/`-intl`, `volcengine` ark/coding/agent (`deepseek-v4-pro-260425` 포함), `ollama`, `nvidia-nim`, `baseten`.
+
+이 벤더들은 자체 스냅샷과 일정으로 배포한다. DeepSeek 1st-party 퇴역 공지가 그들의 로스터를 끝내지 않는다. 지시는 전부 제거였으므로 실행하되, PR 본문에 이 구분과 되돌리는 방법을 명시한다.
+
+## 손대지 않는 것
+
+`scripts/model-metadata.source.json`과 `src/generated/model-metadata.ts`. 생성 파일이고, `src/usage/cost.ts`가 과거 사용량 원가를 이 표로 계산한다. 행을 지우면 이미 기록된 요청의 비용이 깨진다. 002 참조.
+
+## 수용 기준
+
+1. `rg "deepseek-v4-pro" src`가 생성 파일을 제외하고 0건이다.
+2. 레지스트리 멤버십을 고정하던 테스트가 갱신되고 통과한다.
+3. 반대 증거: `deepseek-v4-flash` 별칭은 남는다 — DeepSeek이 이름을 유지한다고 명시했고, 그걸 지우면 기존 사용자 config가 깨진다.
+4. `deepseek` 프리셋의 `defaultModel`이 퇴역 id를 가리키지 않는다.
+
+## 검증
+
+```
+bun test tests/providers tests/codex-integration/codex-catalog.test.ts
+bun test tests/gui/volcengine-providers.test.ts tests/providers/baseten-provider.test.ts
+bun run typecheck
+rg "deepseek-v4-pro" src --glob "!src/generated/**"
+```
+
+## 리스크
+
+영향 파일이 62개다. 전체 스위트를 로컬에서 돌리지 않으므로(사용자 지시) 놓친 참조는 CI가 잡는다. CI 실패 시 해당 파일만 좁혀 고친다.
