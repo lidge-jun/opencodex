@@ -1,4 +1,5 @@
 import { discoverZcodeModels } from "../../adapters/zcode/settings";
+import { zcodeReasoningContract } from "../../adapters/zcode/reasoning";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { execFileSync } from "node:child_process";
@@ -1659,14 +1660,22 @@ async function fetchProviderModelsWithAuth(
   );
   if (prov.adapter === "zcode") {
     try {
-      const models = discoverZcodeModels(prov.zcodeAccountId).map(model => ({
-        id: model.id, provider: name,
-        ...catalogHintsFromProviderConfig(name, prov, model.id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
-        displayName: model.label,
-        ...(model.contextWindow ? { contextWindow: typeof contextCap === "number" && contextCap > 0
-          ? Math.min(model.contextWindow, contextCap) : model.contextWindow } : {}),
-        inputModalities: ["text"],
-      } as CatalogModel));
+      const models = discoverZcodeModels(prov.zcodeAccountId).map(model => {
+        const hints = catalogHintsFromProviderConfig(
+          name, prov, model.id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias,
+        );
+        const reasoning = zcodeReasoningContract(model.id);
+        return {
+          id: model.id, provider: name, ...hints,
+          // The official Desktop catalog is authoritative for current GLM-5.3 levels. Unknown
+          // future models expose no generic picker unless the operator configured one explicitly.
+          ...(reasoning ?? (hints.reasoningEfforts === undefined ? { reasoningEfforts: [] } : {})),
+          displayName: model.label,
+          ...(model.contextWindow ? { contextWindow: typeof contextCap === "number" && contextCap > 0
+            ? Math.min(model.contextWindow, contextCap) : model.contextWindow } : {}),
+          inputModalities: ["text"],
+        } as CatalogModel;
+      });
       return observed(withConfiguredRetention(models), "authoritative");
     } catch {
       return observed([], "degraded");

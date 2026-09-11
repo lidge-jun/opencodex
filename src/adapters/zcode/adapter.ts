@@ -4,6 +4,7 @@ import type { OcxParsedRequest, OcxProviderConfig } from "../../types";
 import type { ProviderAdapter } from "../base";
 import { ZcodeClient } from "./client";
 import { loadZcodeSettings, readZcodeModels, record, type JsonObject, type ZcodeSettings } from "./settings";
+import { zcodeThoughtLevel } from "./reasoning";
 
 type Client = Pick<ZcodeClient, "request" | "close" | "onEvent" | "onFailure">;
 export interface ZcodeAdapterDeps {
@@ -112,6 +113,8 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
         const modelParams = settings.desktopModels
           ? { _zcodeModel: { providerId: model.providerId, modelId: model.modelId } }
           : { runtimeModel: model.runtimeModel };
+        const thoughtLevel = zcodeThoughtLevel(model.modelId, parsed.options.reasoning);
+        const thoughtParams = thoughtLevel ? { thoughtLevel } : {};
         const controller = Promise.withResolvers<void>();
         // Attach a handler immediately: failures can happen during session materialization.
         void controller.promise.catch(() => {});
@@ -147,11 +150,11 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
           }
         };
         if (sessionId) {
-          await active.request("session/resume", { sessionId, ...modelParams });
+          await active.request("session/resume", { sessionId, ...modelParams, ...thoughtParams });
         } else {
           const result = await active.request("session/create", {
             workspace: { workspacePath: settings.workspace, workspaceKey: settings.workspace },
-            mode: "edit", ...modelParams, titleGenerationEnabled: false,
+            mode: "edit", ...modelParams, ...thoughtParams, titleGenerationEnabled: false,
             mcpServers: [], toolDenylist: ["Task", "TaskOutput", "TaskStop"],
           });
           const id = record(result.session).sessionId;

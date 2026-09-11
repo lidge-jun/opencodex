@@ -287,3 +287,33 @@ test("ZCode catalog advertises sidecar-backed attachments for legacy and account
     expect(result.inputModalities).toContain("image");
   }
 });
+
+test("ZCode GLM-5.3 catalog exposes only real levels plus Codex ultra", async () => {
+  const { gatherRoutedModels } = await import("../../src/codex/catalog/provider-fetch");
+  const { buildCatalogEntries } = await import("../../src/codex/catalog/sync");
+  process.env.OCX_ZCODE_SANDBOX = "0";
+  const runtimeRoot = join(root, "app"), runtime = join(runtimeRoot, "resources/glm/zcode.cjs");
+  mkdirSync(join(runtimeRoot, "resources/glm"), { recursive: true });
+  writeFileSync(join(runtimeRoot, "resources/app.asar"), "fixture"); writeFileSync(runtime, "");
+  const workspace = join(root, "workspace"), connectionDir = join(process.env.OPENCODEX_HOME!, "zcode-desktop");
+  mkdirSync(workspace); mkdirSync(connectionDir, { recursive: true });
+  const ids = ["builtin:zai-coding-plan/GLM-5.3", "builtin:zai-coding-plan/GLM-5.3-Flash"];
+  writeFileSync(join(connectionDir, "connection.json"), JSON.stringify({
+    version: 1, connected: true, generation: crypto.randomUUID(), runtime, workspace,
+    models: ids.map(id => ({ id, providerId: "builtin:zai-coding-plan", modelId: id.split("/")[1], label: id })),
+  }), { mode: 0o600 });
+  const providerName = `zcode-fixture-${crypto.randomUUID()}`;
+  const models = await gatherRoutedModels({ port: 0, defaultProvider: providerName, providers: {
+    [providerName]: { adapter: "zcode", authMode: "local", baseUrl: "https://zcode.z.ai", liveModels: true },
+  } });
+  for (const modelId of ids) {
+    const model = models.find(row => row.provider === providerName && row.id === modelId);
+    expect(model?.reasoningEfforts).toEqual(["low", "high", "max"]);
+    const [entry] = buildCatalogEntries(null, [], [model!]);
+    const efforts = (entry?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort);
+    expect(efforts).toEqual(["low", "high", "max", "ultra"]);
+    expect(efforts).not.toContain("medium");
+    expect(efforts).not.toContain("xhigh");
+    expect(entry?.default_reasoning_level).toBe("max");
+  }
+});

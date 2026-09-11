@@ -86,6 +86,20 @@ describe("ZCode local agent", () => {
       expect(serialized).not.toContain("apiKey");
     }
   });
+  test("maps Codex effort labels to the official GLM-5.3 thought levels", async () => {
+    const settings = { ...fixture(), desktopModels: [{
+      id: "builtin:zai-coding-plan/GLM-5.3", providerId: "builtin:zai-coding-plan",
+      modelId: "GLM-5.3", label: "GLM-5.3",
+    }] };
+    for (const [requested, expected] of [["low", "low"], ["medium", "high"], ["high", "high"],
+      ["xhigh", "max"], ["max", "max"], ["ultra", "max"]] as const) {
+      const client = new FakeClient();
+      const parsed = request(); parsed.modelId = settings.desktopModels[0]!.id; parsed.options.reasoning = requested;
+      expect((await run(settings, client, parsed)).at(-1)?.type).toBe("done");
+      expect(client.calls.find(call => call.method === "session/create")?.params.thoughtLevel).toBe(expected);
+      expect(client.calls.find(call => call.method === "session/send")?.params.thoughtLevel).toBeUndefined();
+    }
+  });
   test("a revoked or changed managed connection cannot start a queued child", async () => {
     const settings = { ...fixture(), desktopModels: [{ id: "test/model", providerId: "test", modelId: "model", label: "Model" }] };
     let reads = 0; let children = 0;
