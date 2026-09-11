@@ -35,7 +35,29 @@ import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
 import { matchesOperationResult, newOpId, type JournalEntry } from "./journal";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
-import { patchYamlFragmentSource, sourcePrunableYamlContainers } from "./omp-yaml-source";
+import {
+  patchYamlFragmentSource,
+  sourcePrunableYamlContainers,
+  yamlFragmentUnsupportedStyle,
+} from "./omp-yaml-source";
+
+/**
+ * "comments or formatting" used to be the only refusal this path could report.
+ * For a flow-style container that names a cause which is not in the file, and
+ * DSH writes that shape itself, so the misdirection was routine rather than
+ * exotic: users went looking for a comment that was never there (#4260).
+ */
+function yamlRefusalReason(
+  source: string,
+  path: readonly string[],
+  configPath: string,
+  outcome: string,
+): string {
+  if (yamlFragmentUnsupportedStyle(source, path)) {
+    return `${configPath} writes ${path.join(".")} as a flow mapping or sequence, a YAML style opencodex will not re-render, so ${outcome}`;
+  }
+  return `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so ${outcome}`;
+}
 import { withIntegrationWriterLock, type IntegrationWriterLockSeams } from "./writer-lock";
 
 export type RefusalReason =
@@ -399,7 +421,7 @@ function applyOrRefreshIntegration(
           );
       if (patched === null) {
         return refuse(clientId, "unsafe", "unsafe",
-          `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so it was left alone`);
+          yamlRefusalReason(before, spec.sourcePreservingYaml.path, configPath, "it was left alone"));
       }
       text = patched;
     } else {
@@ -536,7 +558,7 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
     : recordedCreated;
   if (prunableCreated === null) {
     return refuse(clientId, "unsafe", "unsafe",
-      `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so nothing was removed`);
+      yamlRefusalReason(before ?? "", spec.sourcePreservingYaml!.path, configPath, "nothing was removed"));
   }
   let doc: unknown;
   let removed: boolean;
@@ -559,7 +581,7 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
       }, doc);
       if (patched === null) {
         return refuse(clientId, "unsafe", "unsafe",
-          `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so nothing was removed`);
+          yamlRefusalReason(before, spec.sourcePreservingYaml.path, configPath, "nothing was removed"));
       }
       text = patched;
     } else {
