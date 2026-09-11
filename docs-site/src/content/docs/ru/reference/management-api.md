@@ -270,7 +270,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Очистить runtime cooldown для одного аккаунта или для всех | 400 invalid id |
 | `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused/legacy-row conflict |
-| `PUT /api/codex-auth/auto-switch` | Задать глобальный порог через `{ threshold }` или порог аккаунта через `{ id, threshold }`; `null` возвращает наследование глобального значения | 400 invalid id/threshold; 404 missing account |
+| `PUT /api/codex-auth/auto-switch` | Задать глобальный порог через `{ threshold }` без `id` или переопределение аккаунта через `{ id, threshold }`; `id: '__main__'` выбирает аккаунт Codex Desktop. При указанном `id` значение `threshold: null` удаляет переопределение и восстанавливает наследование глобального порога | 400 invalid id/threshold; 404 missing account |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Обновить стратегию выбора в пуле аккаунтов Codex | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Задать порог failover аккаунтов | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Прочитать кэшированное состояние квоты по аккаунтам | — |

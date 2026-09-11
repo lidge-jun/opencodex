@@ -233,7 +233,7 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暫停配額耗盡的帳號 | 變更鎖失敗變為 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 清除一個或所有帳號的 runtime 冷卻 | 400 無效 id |
 | `GET, PUT /api/codex-auth/active` | 讀取或選擇現用帳號 | 400 無效或缺失帳號；409 暫停／舊列衝突 |
-| `PUT /api/codex-auth/auto-switch` | 使用 `{ threshold }` 設定全域閾值，或使用 `{ id, threshold }` 設定帳號閾值；`null` 恢復繼承全域值 | 400 ID/閾值無效；404 帳號不存在 |
+| `PUT /api/codex-auth/auto-switch` | 使用不含 `id` 的 `{ threshold }` 設定全域閾值，或使用 `{ id, threshold }` 設定帳號覆寫值；`id: '__main__'` 指定 Codex Desktop 帳號。指定 `id` 時，`threshold: null` 刪除該帳號的覆寫值並恢復繼承全域閾值 | 400 ID/閾值無效；404 帳號不存在 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | 更新 Codex 帳號池選擇策略 | 400 無效策略／設定 |
 | `PUT /api/codex-auth/failover` | 設定帳號容錯移轉閾值 | 400 無效閾值 |
 | `GET /api/codex-auth/quota` | 依帳號讀取快取配額狀態 | — |

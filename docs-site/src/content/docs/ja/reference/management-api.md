@@ -240,7 +240,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 1 つのアカウントまたはすべてのアカウントのランタイム クールダウンをクリアする | 400 無効な ID |
 | `GET, PUT /api/codex-auth/active` |アクティブなアカウントを読み取るか選択します | 400 アカウントが無効または欠落しています。 409 一時停止/レガシー行の競合 |
-| `PUT /api/codex-auth/auto-switch` | `{ threshold }` でグローバルしきい値、`{ id, threshold }` でアカウント別しきい値を設定する。`null` はグローバル値の継承に戻す | 400 無効な ID/しきい値、404 アカウントなし |
+| `PUT /api/codex-auth/auto-switch` | `id` を省略した `{ threshold }` でグローバルしきい値、`{ id, threshold }` でアカウント別の上書き値を設定する。`id: '__main__'` は Codex Desktop アカウントを指定する。`id` を指定した場合、`threshold: null` は上書き値を削除してグローバル値の継承に戻す | 400 無効な ID/しきい値、404 アカウントなし |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex アカウントプールの選択戦略を更新 | 400 無効な戦略/構成 |
 | `PUT /api/codex-auth/failover` |アカウントのフェイルオーバーしきい値を設定する | 400 無効なしきい値 |
 | `GET /api/codex-auth/quota` |キャッシュされたクォータ状態をアカウントごとに読み取る | — |

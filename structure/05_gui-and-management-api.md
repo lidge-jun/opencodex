@@ -190,8 +190,10 @@ when the value is omitted. Ordering invariants live in
 
 Per-account usage thresholds follow the same sidecar shape: `codexAccountAutoSwitchThresholds` maps
 added account ids or `__main__` to 0..100. Account cards expose a custom-threshold toggle without
-showing an inherited percentage; while enabled, they write an override through
-`/api/codex-auth/auto-switch`, and `null` removes the map entry. Quota bars and routing both use the
+showing an inherited percentage. Enabling it copies the current global threshold into a fixed
+account override through `/api/codex-auth/auto-switch`; that override, including `0`, takes precedence
+over later global changes. Disabling it sends `null`, removes the map entry, and restores inheritance
+of the current global threshold and subsequent global changes. Quota bars and routing both use the
 effective account value so the dashboard drain marker matches runtime.
 
 ## Sidebar stop button
