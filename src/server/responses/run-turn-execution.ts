@@ -214,6 +214,8 @@ export async function executeResponsesRunTurn(
         route.providerName,
         transportState.genericFailoverAccountId,
         null,
+        Date.now(),
+        route.modelId,
       );
       if (!nextAccountId) {
         hop.permit?.release();

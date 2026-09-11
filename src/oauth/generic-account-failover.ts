@@ -302,6 +302,7 @@ export function rotateGenericOAuthAccountOn429(
   failedAccountId: string,
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
+  requestedModelId?: string,
 ): string | null {
   if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
   const set = getAccountSet(providerName);
@@ -359,7 +360,7 @@ export function rotateGenericOAuthAccountOn429(
   }
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
-  return rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
+  return rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
 }
 
 /**
@@ -392,6 +393,7 @@ export function preferredInitialAccount(
   config: OcxConfig,
   providerName: string,
   now = Date.now(),
+  requestedModelId?: string,
 ): string | null {
   // The PROACTIVE predicate, not the reactive one: this steers a request upstream has not
   // refused, so `oauthAccountFailover.enabled: false` must still be able to refuse it.
@@ -430,14 +432,14 @@ export function preferredInitialAccount(
   const activeRow = selected.accounts.find(account => account.id === active);
   if (activeRow && activeRow.needsReauth !== true
     && !isCooled(providerName, activeRow.id, now)
-    && !isAccountQuotaExhausted(providerName, activeRow.id)) return null;
+    && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId)) return null;
 
   // Evidence is required BEFORE eligibility narrows the field. Without this, a provider
   // with no quota data at all could still be redirected: cool the active account with a
   // 429 and the eligible list collapses to one candidate, which any ranking returns
   // unchanged — an answer that looks ranked but was never measured. The no-op guarantee
   // for quota-less providers has to be checked on the full roster.
-  if (!hasHeadroomEvidence(providerName, order)) return null;
+  if (!hasHeadroomEvidence(providerName, order, requestedModelId)) return null;
 
   // Cooldowns are respected here, unlike in the presence count: this picks the account to
   // send to right now, and one inside its 429 window is the single candidate we hold
@@ -451,7 +453,7 @@ export function preferredInitialAccount(
   const candidates = ring.filter(id => eligible.includes(id));
   if (candidates.length === 0) return null;
 
-  const best = rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
+  const best = rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
   // Nothing to do when the ranking agrees with the account we would have used anyway.
   //
   // A proposal still needs guarded selection commit after credential resolution: a

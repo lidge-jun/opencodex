@@ -732,6 +732,8 @@ export async function prepareAdapterExchange(
           route.providerName,
           transportState.genericFailoverAccountId,
           upstreamResponse.headers.get("retry-after"),
+          Date.now(),
+          route.modelId,
         );
         if (!nextAccountId) {
           hop.permit?.release();
