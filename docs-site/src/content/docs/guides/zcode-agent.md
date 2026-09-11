@@ -35,7 +35,7 @@ or subscription terms; those remain the vendor's policy.
 4. Choose a **workspace folder** with the folder browser. The default is a private disposable
    folder. Do not select your entire home or a credentials/configuration directory.
 5. Review the native file/command execution notice, check the consent box and click
-   **Connect Desktop**. OpenCodex constructs the Bubblewrap launcher, verifies the protocol, enables the ZCode provider and updates the Codex catalog;
+   **Connect Desktop**. OpenCodex constructs the native launcher, verifies the protocol, enables the ZCode provider and updates the Codex catalog;
    no environment variables, API-key entry, token import or separate CLI login is required.
 6. Optionally select a model and click **Test with one request**. This sends one brief prompt
    through the official ZCode runtime and consumes account quota. Connecting alone checks the
@@ -55,6 +55,50 @@ runtime. Missing prerequisites and unsupported platforms are shown in the panel.
 is currently Linux-only; Windows/macOS need the advanced launcher flow below. A remote browser's
 local Desktop is not the proxy host's Desktop: detection and workspace selection operate on the
 computer running OpenCodex.
+
+### Add another account (manual selection)
+
+In **Providers → Add Provider → ZCode (local agent)**, or the existing provider's
+**Settings**, scroll to **Saved ZCode accounts**. This is separate from **Connect Desktop**:
+connecting Desktop continues to use its current local sign-in; saved accounts retain
+independent official ZCode profiles.
+
+1. Select the installed Desktop runtime and working directory above the accounts section.
+2. Give the account a recognizable name, such as **Personal** or **Work**.
+3. Read and check the saved-account consent, then choose **Add account**.
+4. Open the **Sign in with ZCode** link. Sign in to the intended account on ZCode's official
+   page; use a private browser window or switch accounts there when adding a second identity.
+5. Return to the panel. OpenCodex waits for ZCode's own OAuth polling, verifies the local
+   protocol, enables a separate provider and publishes its models automatically. It never
+   asks you to copy tokens or API keys. Do not close the panel before this finishes.
+6. Select the desired **account name / model** in your client's model picker. Adding an
+   account does **not** select it as the default and does not run inference. If an existing
+   Codex process still shows the old picker, restart Codex yourself after its tasks finish.
+
+Repeat for each account (up to 20). Accounts do not form a pool: there is no automatic
+rotation or fallback to another ZCode account or the Desktop profile. Combos may target
+explicit account providers if you configure those routes yourself. Quota bars remain
+specific to each provider/account.
+
+**Sign in again** replaces only the matching account's sign-in, retaining its provider ID
+and custom settings. A different identity is rejected; use **Add account** for it instead.
+Duplicate saved identities are rejected too. **Rename** updates generated picker labels,
+not customized model names. **Remove** deletes OpenCodex's saved profile and provider, not
+ZCode Desktop's original profile. Remove references from defaults/combos before removing an
+account, and wait for its active tasks. No task is stopped automatically.
+
+A protocol/registration/catalog failure is displayed as pending, not complete success.
+Use **Retry provider activation** for a saved connection whose catalog is pending. For a
+failed or expired login, cancel the draft and start again. Saved accounts and provider
+bindings persist across OpenCodex restarts; pending OAuth jobs do not. If a restart or
+closed panel leaves an unfinished account, remove that draft before trying again.
+
+Native OAuth and Coding Plan credential setup run in the official installed ZCode host.
+The bridge only carries a short-lived authorization URL and safe status codes to the
+browser. Profiles stay in the proxy's private configuration directory; they are not
+imported into the browser or pooled. The same host-access / optional-sandbox policy described
+below applies. Setup is Linux-only and needs a dashboard-session principal, not just an
+admin API token.
 
 ### What “connect Desktop” means
 

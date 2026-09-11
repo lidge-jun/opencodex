@@ -132,3 +132,7 @@ Binary detection decodes only the supplied buffer view; malformed UTF-8 can itse
 so the flag does not identify the peer responsible for corruption. Existing diagnostic files are
 not rewritten. Audio devices, WebRTC media negotiation, captions and spoken handoff delivery remain
 client responsibilities.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](../adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.

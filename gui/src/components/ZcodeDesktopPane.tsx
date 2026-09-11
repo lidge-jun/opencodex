@@ -1,3 +1,4 @@
+import ZcodeAccountsPane from "./ZcodeAccountsPane";
 import { useEffect, useState } from "react";
 import { useT } from "../i18n/shared";
 
@@ -126,5 +127,6 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
       </label>
       <button type="button" className="btn" disabled={busy || !model} onClick={() => void perform("test")}>{t("zcodeDesktop.test")}</button>
     </>}
+    <ZcodeAccountsPane apiBase={apiBase} runtime={runtime} workspace={workspace} />
   </section>;
 }

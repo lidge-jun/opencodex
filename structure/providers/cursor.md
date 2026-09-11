@@ -86,3 +86,7 @@ Namespaced tools do not acquire bare-shell behavior. Regression coverage lives i
 ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
 not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
 Bubblewrap workspace boundary; harness restrictions apply where the native process runs.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](../adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.

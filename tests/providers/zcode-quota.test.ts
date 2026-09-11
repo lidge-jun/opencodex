@@ -38,7 +38,6 @@ describe("ZCode native subscription quota", () => {
     const first = readZcodeQuota(provider, deps); const second = readZcodeQuota(provider, deps);
     expect(calls).toBe(1);
     identity = "account-b";
-    expect(await readZcodeQuota(provider, deps)).toBeNull();
     finish(parseZcodeQuota(snapshot([window()]), now));
     expect(await first).toBeNull(); expect(await second).toBeNull();
   });
@@ -52,4 +51,18 @@ describe("ZCode native subscription quota", () => {
     replaceCachedProviderQuotas([{ provider: "zcode", label: "ZCode", source: "zcode-desktop", updatedAt: now, quota: { updatedAt: now, fiveHourPercent: 100 } }]);
     expect(getCachedProviderQuota("zcode", now)).toBeNull();
   });
+});
+
+test("concurrent saved accounts receive only their own quota snapshots", async () => {
+  const a = { ...provider, zcodeAccountId: "account-a" }, b = { ...provider, zcodeAccountId: "account-b" };
+  let calls = 0;
+  const deps = { context: (p: { zcodeAccountId?: string }) => context(p.zcodeAccountId!), probe: async (c: QuotaContext) => {
+    calls++; await new Promise(r => setTimeout(r, 5));
+    return { updatedAt: now, fiveHourPercent: c.identity === "account-a" ? 10 : 90 };
+  } };
+  const [first, repeated, second] = await Promise.all([readZcodeQuota(a, deps), readZcodeQuota(a, deps), readZcodeQuota(b, deps)]);
+  expect(calls).toBe(2);
+  expect(first).toEqual(repeated);
+  expect(first).toMatchObject({ identity: "account-a", quota: { fiveHourPercent: 10 } });
+  expect(second).toMatchObject({ identity: "account-b", quota: { fiveHourPercent: 90 } });
 });

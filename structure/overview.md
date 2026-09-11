@@ -103,3 +103,7 @@ would pass while the rule was violated.
 
 - **INV-HOME-01** — `CODEX_HOME` wins over `~/.codex` when present and valid.
 - **INV-SLUG-01** — Routed model slugs use `provider/model`.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.

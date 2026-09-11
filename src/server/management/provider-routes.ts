@@ -705,6 +705,10 @@ function canonicalOpenAiBudgetPatchError(
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  if (url.pathname === "/api/zcode-accounts" || url.pathname.startsWith("/api/zcode-accounts/")) {
+    const { handleZcodeAccountRoutes } = await import("./zcode-account-routes");
+    return handleZcodeAccountRoutes(ctx);
+  }
   if (url.pathname === "/api/zcode-desktop" || url.pathname.startsWith("/api/zcode-desktop/")) {
     const { handleZcodeDesktopRoutes } = await import("./zcode-desktop-routes");
     return handleZcodeDesktopRoutes(ctx);
@@ -1374,7 +1378,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     if (prov.adapter === "zcode") {
       try {
-        const models = discoverZcodeModels();
+        const models = discoverZcodeModels(prov.zcodeAccountId);
         return jsonResponse({ ok: models.length > 0, models: models.length, latencyMs: 0,
           message: "Local catalog loaded. Account inference is validated only by an explicit agent turn." });
       } catch {

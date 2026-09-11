@@ -1,3 +1,4 @@
+import { refreshAccount } from "./account-runtime";
 import { verifyDesktopSandbox } from "./desktop-sandbox";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { OcxProviderConfig } from "../../types";
 import type { ProviderQuota } from "../../providers/quota-types";
 import { getConfigDir } from "../../config/paths";
-import { desktopSandboxEnabled, desktopStatus, resolveDesktopRuntime } from "./desktop";
+import { desktopProfile, desktopSandboxEnabled, desktopStatus, resolveDesktopRuntime } from "./desktop";
 import { loadZcodeSettings } from "./settings";
 
 export interface QuotaContext { identity: string; runtimeRoot: string; config: string; credentials?: string; sourceProvider: string; managed: boolean }
@@ -44,16 +45,16 @@ export function parseZcodeQuota(value: unknown, now = Date.now()): ProviderQuota
 
 function context(provider: OcxProviderConfig): QuotaContext {
   if (provider.adapter !== "zcode" || provider.authMode !== "local" || provider.disabled || process.platform !== "linux") throw new Error("unavailable");
-  const settings = loadZcodeSettings();
+  const settings = loadZcodeSettings(process.env, provider.zcodeAccountId);
   const managed = settings.desktopModels !== undefined;
-  const runtime = managed ? desktopStatus().runtime : process.env.OCX_ZCODE_DESKTOP_RUNTIME;
+  const runtime = managed ? desktopStatus(provider.zcodeAccountId).runtime : process.env.OCX_ZCODE_DESKTOP_RUNTIME;
   if (!runtime) throw new Error("unavailable");
   const runtimeRoot = dirname(dirname(dirname(resolveDesktopRuntime(runtime))));
-  const config = managed ? join(homedir(), ".zcode/v2/config.json") : settings.settingsPath;
+  const config = managed ? desktopProfile(provider.zcodeAccountId).config : settings.settingsPath;
   if (!lstatSync(config).isFile() || statSync(config).size > 4 * 1024 * 1024) throw new Error("unavailable");
   if (!managed && !realpathSync(config).startsWith(realpathSync(settings.home) + sep)) throw new Error("unavailable");
-  const credentialFile = join(homedir(), ".zcode/v2/credentials.json");
-  const credentials = managed && existsSync(credentialFile) ? credentialFile : undefined;
+  const credentialFile = managed ? desktopProfile(provider.zcodeAccountId).credentials : undefined;
+  const credentials = managed && credentialFile && existsSync(credentialFile) ? credentialFile : undefined;
   if (credentials && (!lstatSync(credentials).isFile() || statSync(credentials).size > 1024 * 1024)) throw new Error("unavailable");
   const sourceProvider = provider.defaultModel?.split("/")[0] || (managed ? "builtin:zai-coding-plan" : "zai");
   if (managed && sourceProvider !== "builtin:zai-coding-plan") throw new Error("unavailable");
@@ -126,18 +127,19 @@ async function probe(c: QuotaContext): Promise<ProviderQuota | null> {
   } finally { if (temporaryHome) rmSync(temporaryHome, { recursive: true, force: true }); }
 }
 
-let inflight: { identity: string; promise: Promise<ProviderQuota | null> } | undefined;
+const inflight = new Map<string, Promise<ProviderQuota | null>>();
 export async function readZcodeQuota(provider: OcxProviderConfig, deps: { context?: typeof context; probe?: typeof probe } = {}): Promise<{ identity: string; quota: ProviderQuota } | null> {
   let c: QuotaContext;
-  try { c = (deps.context ?? context)(provider); } catch { return null; }
-  // Never accumulate native hosts during repeated dashboard refreshes.
-  if (inflight && inflight.identity !== c.identity) return null;
-  if (!inflight) {
-    const request = { identity: c.identity, promise: (deps.probe ?? probe)(c).catch(() => null) };
-    inflight = request;
-    void request.promise.finally(() => { if (inflight === request) inflight = undefined; });
+  try { if (provider.zcodeAccountId && !deps.context) await refreshAccount(provider.zcodeAccountId); c = (deps.context ?? context)(provider); } catch { return null; }
+  // Coalesce per profile, without letting the first account starve every other account.
+  let pending = inflight.get(c.identity);
+  if (!pending) {
+    if (inflight.size >= 20) return null;
+    pending = (deps.probe ?? probe)(c).catch(() => null);
+    inflight.set(c.identity, pending);
+    void pending.finally(() => { if (inflight.get(c.identity) === pending) inflight.delete(c.identity); });
   }
-  const quota = await inflight.promise;
+  const quota = await pending;
   try { return quota && (deps.context ?? context)(provider).identity === c.identity ? { identity: c.identity, quota } : null; }
   catch { return null; }
 }

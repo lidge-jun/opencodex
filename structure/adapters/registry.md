@@ -58,3 +58,18 @@ so the schema is not something a user can fix from configuration (issue #2673).
 ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
 not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
 Bubblewrap workspace boundary; harness restrictions apply where the native process runs.
+
+## ZCode saved accounts
+
+`src/adapters/zcode/accounts.ts` stores private UUID-scoped metadata and official profiles.
+`src/adapters/zcode/native-oauth.ts` and `src/adapters/zcode/oauth-bootstrap.cjs` invoke only
+ZCode's installed host OAuth/credential services; authorization URLs and safe stage codes are
+projected to the browser, never tokens. The official cached-session restore and Coding Plan
+refresh run before account use. Disabled/unavailable vendor profiles remain unavailable.
+
+The provider's `zcodeAccountId` is an exact binding through routing, catalog discovery,
+app-server settings, session/DB scope and quota reads. An invalid or revoked binding fails
+closed, never to the legacy Desktop profile or another account. Legacy unbound `zcode`
+retains its previous profile. Account providers do not participate in an implicit pool.
+Native tools still run on the host by default; optional OS sandboxing is independent of
+profile separation and does not turn the latter into a security boundary.

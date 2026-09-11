@@ -41,3 +41,7 @@ to treat an explicit empty array as authoritative. Within this marked client-fac
 malformed, gapped, oversized, contradictory, failed, or incomplete streams stay fail-closed.
 
 > Decision record: [ADR-0059](../decisions/ADR-0059-xai-grok-hardening-official-grok-build-contract.md)
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](../adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.

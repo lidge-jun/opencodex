@@ -75,3 +75,7 @@ away from. Resolution stays a pure function of (env, platform, home) so the Wind
 testable on any host: stubbing `process.platform` does not propagate to `os.platform()` under Bun.
 
 > Decision record: [ADR-0046](../decisions/ADR-0046-claude-desktop-config-library-resolution.md)
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](../adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.

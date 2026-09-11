@@ -1,3 +1,4 @@
+import { readAccount } from "../../adapters/zcode/accounts";
 import { saveConfigPreservingClaudeCode, withConfigMutationLockSync } from "../../config";
 import { readCatalog, readCodexCatalogPath, catalogModelSlug, applyProviderConfigHints } from "../../codex/catalog";
 import { clearModelCache } from "../../codex/model-cache";
@@ -9,15 +10,15 @@ type DesktopStatus = ReturnType<typeof desktopStatus>;
 export const readDesktopCatalogSlugs = (): string[] => (readCatalog(readCodexCatalogPath())?.models ?? [])
   .filter(row => row.visibility === "list").map(row => String(row.slug));
 
-function providerName(ctx: ManagementContext): string | undefined {
-  const matches = Object.keys(ctx.config.providers).filter(name => ctx.config.providers[name]?.adapter === "zcode");
+function providerName(ctx: ManagementContext, accountId?: string): string | undefined {
+  const matches = Object.keys(ctx.config.providers).filter(name => ctx.config.providers[name]?.adapter === "zcode" && ctx.config.providers[name]?.zcodeAccountId === accountId);
   if (matches.includes("zcode")) return "zcode";
   return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** Read actual persisted catalog evidence, not just a successful protocol or cache flush. */
 export function desktopActivation(ctx: ManagementContext, status: DesktopStatus, readSlugs = readDesktopCatalogSlugs) {
-  const name = providerName(ctx);
+  const name = providerName(ctx, status.accountId);
   const provider = name ? ctx.config.providers[name] : undefined;
   const registered = !!provider && provider.disabled !== true && provider.authMode === "local";
   let catalogReady = false;
@@ -36,14 +37,14 @@ export async function activateDesktopProvider(ctx: ManagementContext, status: De
   let name: string;
   try {
     withConfigMutationLockSync(() => {
-      name = providerName(ctx) ?? "zcode";
+      name = providerName(ctx, status.accountId) ?? (status.accountId ? `zcode-${status.accountId}` : "zcode");
       const existing = ctx.config.providers[name];
-      if ((!providerName(ctx) && Object.values(ctx.config.providers).some(p => p.adapter === "zcode"))
-        || (existing && (existing.adapter !== "zcode" || existing.authMode !== "local"))) throw new Error("provider conflict");
+      if ((!providerName(ctx, status.accountId) && Object.values(ctx.config.providers).some(p => p.adapter === "zcode" && p.zcodeAccountId === status.accountId))
+        || (existing && (existing.adapter !== "zcode" || existing.authMode !== "local" || existing.zcodeAccountId !== status.accountId))) throw new Error("provider conflict");
       // Reconnection only enables the existing provider. Never replace its custom settings,
       // explicit model filters, pricing, alias or defaults with a form/preset payload.
       const next = existing ? { ...existing, disabled: false }
-        : { adapter: "zcode" as const, authMode: "local" as const, baseUrl: "https://zcode.z.ai", disabled: false };
+        : { adapter: "zcode" as const, authMode: "local" as const, baseUrl: "https://zcode.z.ai", disabled: false, ...(status.accountId ? { zcodeAccountId: status.accountId, modelDisplayNames: Object.fromEntries(status.models.map(m => [m.id, `${readAccount(status.accountId!).label} / ${m.label}`])) } : {}) };
       try {
         ctx.config.providers[name] = next;
         (ctx.deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(ctx.config);

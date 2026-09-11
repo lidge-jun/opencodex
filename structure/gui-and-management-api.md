@@ -504,3 +504,16 @@ converge the Codex catalog once and return its disposition. The Models UI owns a
 picker data resource so failure cannot erase the ordinary model inventory; Apply publishes through
 the resource's generation fence, and Most used reads usage only on explicit Apply. Stored mode
 survives availability drift, while complete/native custom orders await explicit replacement.
+
+## ZCode manual account lifecycle
+
+`gui/src/components/ZcodeAccountsPane.tsx` uses
+`src/server/management/zcode-account-routes.ts` for saved-account login, polling, completion,
+activation retry, rename and removal. These routes require a GUI-session principal; mutations
+require explicit consent. The official OAuth job uses a fresh private profile. Completion
+checks identity and protocol before registering an account-bound provider and converging the
+catalog; a partial result stays visible and retryable. No default selection or inference is
+part of this flow. Reconnect retains custom provider settings and rejects a different identity.
+Rename changes only generated labels; removal refuses busy/referenced accounts. In-progress
+OAuth jobs expire and do not survive restart; saved account profiles and bindings do.
+See [the ZCode account runtime contract](adapters/registry.md#zcode-saved-accounts).

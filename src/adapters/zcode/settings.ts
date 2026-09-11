@@ -1,3 +1,4 @@
+import { accountRoot } from "./accounts";
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, sep } from "node:path";
 import { createHash } from "node:crypto";
@@ -9,6 +10,7 @@ export function record(value: unknown): JsonObject {
 }
 
 export interface ZcodeSettings {
+  accountId?: string;
   command: string[];
   home: string;
   workspace: string;
@@ -18,10 +20,11 @@ export interface ZcodeSettings {
 }
 
 /** Execution authority is operator environment or persisted GUI consent, never data-plane input. */
-export function loadZcodeSettings(env: NodeJS.ProcessEnv = process.env): ZcodeSettings {
+export function loadZcodeSettings(env: NodeJS.ProcessEnv = process.env, accountId?: string): ZcodeSettings {
+  if (accountId !== undefined) accountRoot(accountId);
   // Explicit env fixtures remain hermetic. Production prefers the GUI's persisted connection.
   if (env === process.env) {
-    const desktop = loadDesktopSettings();
+    const desktop = loadDesktopSettings(accountId);
     if (desktop) return desktop;
   }
   if (env.OCX_ZCODE_NATIVE_TOOLS !== "1") {
@@ -135,6 +138,6 @@ function readModels(settings: ZcodeSettings): ZcodeModel[] {
 }
 
 /** Never include runtimeModel (which may contain a key) in discovery or management output. */
-export function discoverZcodeModels(): Array<{ id: string; label: string; contextWindow?: number }> {
-  return readZcodeModels(loadZcodeSettings()).map(({ id, label, contextWindow }) => ({ id, label, contextWindow }));
+export function discoverZcodeModels(accountId?: string): Array<{ id: string; label: string; contextWindow?: number }> {
+  return readZcodeModels(loadZcodeSettings(process.env, accountId)).map(({ id, label, contextWindow }) => ({ id, label, contextWindow }));
 }

@@ -169,3 +169,57 @@ test("explicit sandbox mode shows its filesystem boundary", async () => {
   expect(host.querySelector('[role="note"]')?.textContent).toContain("Only the selected workspace");
   expect(host.querySelector('[role="note"]')?.textContent).not.toContain("without an OpenCodex sandbox");
 });
+
+test("saved accounts offer separate manual login and never start OAuth without consent", async () => {
+  await mountPane();
+  expect(host.textContent).toContain("Saved ZCode accounts");
+  expect(host.textContent).toContain("no pool or automatic account switch");
+  expect(button("Add account").disabled).toBe(true);
+  expect(requests.some(r => r.path.endsWith("/zcode-accounts/login"))).toBe(false);
+});
+
+test("account activation failure stays partial and separate account labels remain visible", async () => {
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path === "/api/zcode-accounts") return Response.json({ accounts: [
+      { id: "a", label: "Personal fixture", activation: "ready", busy: false },
+      { id: "b", label: "Work fixture", activation: "catalog_pending", busy: false },
+    ] });
+    return Response.json({ connected: false, runtimes: [], runtime: "", workspace: "/project", models: [] });
+  } });
+  await mountPane();
+  expect(host.textContent).toContain("Personal fixture");
+  expect(host.textContent).toContain("Work fixture");
+  expect(host.textContent).toContain("Account setup incomplete");
+  expect(button("Add account").disabled).toBe(true);
+});
+
+test("saved account UI completes official login then shows provider/catalog readiness", async () => {
+  let complete = 0;
+  const prior = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, options?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (!url.pathname.startsWith("/api/zcode-accounts")) return prior(input, options);
+    requests.push({ path: url.pathname, body: options?.body ? JSON.parse(String(options.body)) : undefined });
+    if (url.pathname.endsWith("/login")) return Response.json({jobId:"fixture-job",accountId:"fixture-account",phase:options?.method === "POST" ? "waiting" : "authenticated"});
+    if (url.pathname.endsWith("/complete")) { complete++; return Response.json({activation:"ready"}); }
+    return Response.json({accounts:complete ? [{id:"fixture-account",label:"Personal fixture",activation:"ready",providerName:"zcode-fixture",busy:false}] : []});
+  } });
+  await mountPane();
+  const section = host.querySelector("h3")!.closest("section")!;
+  const input = section.querySelector('input:not([type="checkbox"])') as HTMLInputElement;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, "Personal fixture"); input.dispatchEvent(new win.Event("input", {bubbles:true}) as unknown as Event);
+    (section.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+  });
+  expect(button("Add account").disabled).toBe(false);
+  await act(async () => { button("Add account").click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 2200)); });
+  expect(complete).toBe(1);
+  expect(section.textContent).toContain("Personal fixture");
+  expect(section.textContent).toContain("provider enabled · models published");
+  expect(section.textContent).toContain("No processes will be restarted automatically");
+  expect(requests.some(r => r.path.endsWith("/test"))).toBe(false);
+  expect(requests.filter(r => r.body).every(r => r.body!.consent === true)).toBe(true);
+});

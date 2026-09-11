@@ -1,3 +1,4 @@
+import { refreshAccount } from "./account-runtime";
 import { createHash } from "node:crypto";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../types";
 import type { ProviderAdapter } from "../base";
@@ -77,8 +78,9 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
       let stop = () => {};
       const cancelled = () => stop();
       try {
+        if (provider.zcodeAccountId && !deps.settings) await refreshAccount(provider.zcodeAccountId);
         let settings: ZcodeSettings;
-        try { settings = (deps.settings ?? loadZcodeSettings)(); }
+        try { settings = (deps.settings ?? (() => loadZcodeSettings(process.env, provider.zcodeAccountId)))(); }
         catch { throw new Error("ZCode native execution is unavailable. Configure the isolated launcher, home, workspace and explicit opt-in."); }
         if (provider.authMode !== "local") throw new Error("ZCode requires local authentication mode; log in using the isolated ZCode client.");
         const model = readZcodeModels(settings).find(item => item.id === parsed.modelId);
@@ -88,7 +90,7 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
         }
         release = await lock(settings.scope, incoming.abortSignal);
         // A queued turn must not resurrect a revoked Desktop connection or old login.
-        if (settings.desktopModels && (deps.settings ?? loadZcodeSettings)().scope !== settings.scope) {
+        if (settings.desktopModels && (deps.settings ?? (() => loadZcodeSettings(process.env, provider.zcodeAccountId)))().scope !== settings.scope) {
           throw new Error("ZCode Desktop connection changed while this turn was queued.");
         }
         const scope = createHash("sha256").update(JSON.stringify([

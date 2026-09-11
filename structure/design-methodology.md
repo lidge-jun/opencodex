@@ -36,3 +36,7 @@ surfaces, run through all 3 stages in order.
 - Design methodology: Product-Personality-Selection (dev-uiux-design §1)
 - 6 design dials: mood, lightness, density, shape, typography, motion
 - 7 axes total: design → domain → feature/data/security/ops/cost (derived)
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.

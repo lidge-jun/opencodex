@@ -1,3 +1,5 @@
+import { handleZcodeAccountRoutes, resetZcodeAccountJobsForTests } from "../../src/server/management/zcode-account-routes";
+import { listAccounts, accountProfile } from "../../src/adapters/zcode/accounts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { handleZcodeDesktopRoutes } from "../../src/server/management/zcode-desktop-routes";
 import type { ManagementContext } from "../../src/server/management/context";
@@ -15,6 +17,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
 });
 afterEach(() => {
+  resetZcodeAccountJobsForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
   rmSync(home, { recursive: true, force: true });
 });
@@ -141,4 +144,149 @@ test("an existing renamed ZCode provider is reused without adding canonical zcod
   expect(result).toMatchObject({ activation: "ready", providerName: "desktop" });
   expect(ctx.config.providers.zcode).toBeUndefined();
   expect(ctx.config.providers.desktop?.note).toBe("keep");
+});
+
+function accountFixture() {
+  const ctx = context("/api/zcode-accounts/login", {}, "gui-session");
+  const connected = new Set<string>();
+  let hash = "a".repeat(64), failCatalog = false, active = false;
+  let slugs: string[] = [];
+  const deps = {
+    resolveDesktopRuntime: (path: string) => path,
+    validateDesktopWorkspace: (path: string) => path,
+    accountRuntimeBusy: () => active,
+    desktopStatus: (accountId?: string) => ({ ...status, sandbox: false, accountId, connected: !!accountId && connected.has(accountId) }),
+    connectDesktop: async (_r: string, _w: string, accountId?: string) => {
+      connected.add(accountId!); return { ...status, sandbox: false, accountId, connected: true };
+    },
+    disconnectDesktop: async (id?: string) => { connected.delete(id!); },
+    readDesktopCatalogSlugs: () => slugs,
+    runNativeOAuth: async (options: { onEvent: (e: any) => void }) => {
+      options.onEvent({ type: "authenticated", subjectHash: hash });
+    },
+  };
+  ctx.convergeCodexCatalog = async () => {
+    if (failCatalog) throw new Error("fixture catalog failure");
+    slugs = Object.entries(ctx.config.providers).filter(([, p]) => p.adapter === "zcode")
+      .flatMap(([name]) => models.map(m => name + "/" + m.id.replaceAll("/", "-")));
+    return { status: "committed", changed: true, degraded: false, notices: [] };
+  };
+  const call = async (action: string, body: object, principal: ManagementContext["principal"] = "gui-session") => {
+    const request = context("/api/zcode-accounts/" + action, { consent: true, ...body }, principal);
+    ctx.req = request.req; ctx.url = request.url; ctx.principal = principal;
+    return (await handleZcodeAccountRoutes(ctx, deps))!;
+  };
+  const login = async (extra = {}) => {
+    const result = await (await call("login", { label: "Personal", runtime: "/runtime", workspace: "/project", ...extra })).json();
+    await Promise.resolve(); await Promise.resolve();
+    return result;
+  };
+  return { ctx, deps, call, login, slugs: () => slugs, hash: (h: string) => { hash = h; },
+    failCatalog: (v: boolean) => { failCatalog = v; }, active: (v: boolean) => { active = v; } };
+}
+test("manual accounts require GUI consent; account login enables an independent provider/catalog", async () => {
+  const f = accountFixture(), originalDefault = f.ctx.config.defaultProvider;
+  expect((await f.call("login", {}, "admin-token")).status).toBe(403);
+  expect((await f.call("login", { consent: false })).status).toBe(400);
+  expect(listAccounts()).toHaveLength(0);
+  const a = await f.login();
+  expect(await (await f.call("complete", { jobId: a.jobId })).json()).toMatchObject({ activation: "ready", accountId: a.accountId });
+  f.hash("b".repeat(64));
+  const b = await f.login({ label: "Work" });
+  expect(await (await f.call("complete", { jobId: b.jobId })).json()).toMatchObject({ activation: "ready", accountId: b.accountId });
+  const providers = Object.values(f.ctx.config.providers).filter(p => p.adapter === "zcode");
+  expect(providers.map(p => p.zcodeAccountId).sort()).toEqual([a.accountId, b.accountId].sort());
+  expect(accountProfile(a.accountId)).not.toBe(accountProfile(b.accountId));
+  expect(f.slugs()).toHaveLength(4);
+  expect(f.ctx.config.defaultProvider).toBe(originalDefault);
+  expect(JSON.stringify(await (await f.call("complete", { jobId: a.jobId })).json())).not.toContain("subjectHash");
+});
+test("duplicate identity is rejected and reconnect preserves provider settings and account id", async () => {
+  const f = accountFixture(), a = await f.login();
+  const ready = await (await f.call("complete", { jobId: a.jobId })).json();
+  f.ctx.config.providers[ready.providerName].contextWindow = 64000;
+  const duplicate = await f.login();
+  expect(await (await f.call("complete", { jobId: duplicate.jobId })).json()).toMatchObject({ error: "account_duplicate", accountId: a.accountId });
+  await f.call("cancel", { jobId: duplicate.jobId });
+  const reconnect = await f.login({ accountId: a.accountId });
+  expect(await (await f.call("complete", { jobId: reconnect.jobId })).json()).toMatchObject({ activation: "ready", accountId: a.accountId });
+  expect(listAccounts()).toHaveLength(1);
+  expect(f.ctx.config.providers[ready.providerName].contextWindow).toBe(64000);
+});
+test("partial catalog activation retries without login; busy and referenced accounts cannot be removed", async () => {
+  const f = accountFixture(), a = await f.login();
+  f.failCatalog(true);
+  const partial = await (await f.call("complete", { jobId: a.jobId })).json();
+  expect(partial).toMatchObject({ activation: "catalog_pending", error: "catalog_update_failed" });
+  f.failCatalog(false);
+  expect(await (await f.call("activate", { accountId: a.accountId })).json()).toMatchObject({ activation: "ready" });
+  f.active(true);
+  expect(await (await f.call("remove", { accountId: a.accountId })).json()).toMatchObject({ error: "account_busy" });
+  f.active(false);
+  f.ctx.config.defaultProvider = partial.providerName;
+  expect(await (await f.call("remove", { accountId: a.accountId })).json()).toMatchObject({ error: "account_referenced" });
+});
+
+test("rename preserves custom model labels and saved accounts survive config reload", async () => {
+  const f = accountFixture(), a = await f.login();
+  const ready = await (await f.call("complete", { jobId: a.jobId })).json();
+  const provider = f.ctx.config.providers[ready.providerName];
+  provider.modelDisplayNames![models[1]!.id] = "Custom flash";
+  expect(await (await f.call("rename", { accountId: a.accountId, label: "Work" })).json()).toMatchObject({ activation: "ready" });
+  f.ctx.config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+  expect(listAccounts().map(a => a.label)).toEqual(["Work"]);
+  expect(f.ctx.config.providers[ready.providerName].modelDisplayNames).toEqual({
+    [models[0]!.id]: "Work / GLM-5.3", [models[1]!.id]: "Custom flash",
+  });
+  expect(await (await f.call("activate", { accountId: a.accountId })).json()).toMatchObject({ activation: "ready" });
+  expect(await (await f.call("remove", { accountId: a.accountId })).json()).toEqual({ ok: true });
+  expect(listAccounts()).toHaveLength(0);
+  expect(f.ctx.config.providers[ready.providerName]).toBeUndefined();
+  expect(f.slugs()).toHaveLength(0);
+});
+test("reconnecting a different identity or failed protocol preserves the original account", async () => {
+  const f = accountFixture(), a = await f.login();
+  const ready = await (await f.call("complete", { jobId: a.jobId })).json();
+  writeFileSync(join(accountProfile(a.accountId), "sentinel"), "original");
+  const before = structuredClone(f.ctx.config.providers);
+  f.hash("b".repeat(64));
+  const wrong = await f.login({ accountId: a.accountId });
+  expect(await (await f.call("complete", { jobId: wrong.jobId })).json()).toMatchObject({ error: "account_identity_mismatch" });
+  await f.call("cancel", { jobId: wrong.jobId });
+  f.hash("a".repeat(64));
+  const retry = await f.login({ accountId: a.accountId });
+  f.deps.connectDesktop = async () => { throw new Error("runtime_failed"); };
+  expect(await (await f.call("complete", { jobId: retry.jobId })).json()).toMatchObject({ error: "runtime_failed" });
+  expect(readFileSync(join(accountProfile(a.accountId), "sentinel"), "utf8")).toBe("original");
+  expect(f.ctx.config.providers).toEqual(before);
+  expect(f.ctx.config.providers[ready.providerName].zcodeAccountId).toBe(a.accountId);
+  await f.call("cancel", { jobId: retry.jobId });
+  expect(listAccounts()).toHaveLength(1);
+});
+test("failed official OAuth has a safe error and cancel removes the draft only", async () => {
+  const f = accountFixture();
+  f.deps.runNativeOAuth = async () => { throw new Error("private vendor token"); };
+  const a = await f.login();
+  const poll = context("/api/zcode-accounts/login?jobId=" + a.jobId, {}, "gui-session");
+  poll.req = new Request(poll.url);
+  const result = await (await handleZcodeAccountRoutes(poll, f.deps))!.json();
+  expect(result).toMatchObject({ phase: "failed", error: "native_oauth_failed" });
+  expect(JSON.stringify(result)).not.toContain("private vendor token");
+  expect(await (await f.call("cancel", { jobId: a.jobId })).json()).toEqual({ ok: true });
+  expect(listAccounts()).toHaveLength(0);
+});
+
+test("concurrent completions cannot register the same identity twice", async () => {
+  const f = accountFixture(), a = await f.login(), b = await f.login();
+  const connect = f.deps.connectDesktop;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  f.deps.connectDesktop = async (...args) => { await gate; return connect(...args); };
+  const first = f.call("complete", {jobId:a.jobId});
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(await (await f.call("complete", {jobId:b.jobId})).json()).toMatchObject({error:"account_busy"});
+  release();
+  expect(await (await first).json()).toMatchObject({activation:"ready"});
+  expect(await (await f.call("complete", {jobId:b.jobId})).json()).toMatchObject({error:"account_duplicate"});
+  expect(Object.values(f.ctx.config.providers).filter(p => p.adapter === "zcode")).toHaveLength(1);
 });

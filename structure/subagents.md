@@ -195,3 +195,7 @@ Claude ModelInfo ordering receives optional `{ modelPickerOrder, featured }` aft
 It orders routed output groups after alias deduplication, preserving the collision winner and
 base/1M/Fast siblings. Native groups and explicit Desktop profile ownership are unchanged.
 Native Codex advertisements still follow display priority; private guidance ranks do not freeze them.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.

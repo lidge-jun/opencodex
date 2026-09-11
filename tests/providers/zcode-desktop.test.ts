@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { desktopStatus, disconnectDesktop, loadDesktopSettings, resolveDesktopRuntime, validateDesktopWorkspace } from "../../src/adapters/zcode/desktop";
 import { readZcodeModels } from "../../src/adapters/zcode/settings";
 
+import { parseNativeOAuthEvent, nativeOAuthCommand } from "../../src/adapters/zcode/native-oauth";
 import { resolveDesktopNode } from "../../src/adapters/zcode/desktop-node";
 
 const { normalizeDesktopConfig, desktopModelCatalog } = createRequire(import.meta.url)("../../src/adapters/zcode/desktop-bootstrap.cjs");
@@ -103,6 +104,31 @@ test("Node selection skips an incompatible nvm prefix and fails safely", () => {
   }
 });
 
+test("native OAuth emits only bounded public events, never tokens or vendor errors", () => {
+  expect(parseNativeOAuthEvent({ type: "authenticated", subjectHash: "a".repeat(64), accessToken: "fixture-private-token" }))
+    .toEqual({ type: "authenticated", subjectHash: "a".repeat(64) });
+  expect(parseNativeOAuthEvent({ type: "error", code: "private-profile-detail", stack: "secret" }))
+    .toEqual({ type: "error", code: "native_oauth_failed" });
+  expect(parseNativeOAuthEvent({ type: "authorization", url: "https://chat.z.ai/api/oauth/authorize?state=fixture" }))
+    .toEqual({ type: "authorization", url: "https://chat.z.ai/api/oauth/authorize?state=fixture" });
+  const credentialUrl = new URL("https://chat.z.ai/"); credentialUrl.username = "fixture";
+  for (const url of ["http://chat.z.ai/", "https://chat.z.ai.evil.invalid/", credentialUrl.href, "not a url"]) {
+    expect(() => parseNativeOAuthEvent({ type: "authorization", url })).toThrow("native_oauth_failed");
+  }
+  expect(() => parseNativeOAuthEvent({ type: "authenticated", subjectHash: "not-an-identity" })).toThrow("native_oauth_failed");
+  expect(() => parseNativeOAuthEvent({ type: "tokens", accessToken: "secret" })).toThrow("native_oauth_failed");
+});
+
+test("native OAuth sandbox refuses the live HOME and symlink profiles", () => {
+  if (process.platform !== "linux") return;
+  expect(() => nativeOAuthCommand("/not/used", homedir(), "login")).toThrow("profile_invalid");
+  const privateHome = join(root, "private");
+  mkdirSync(privateHome, { mode: 0o700 });
+  symlinkSync(privateHome, join(root, "profile-link"));
+  expect(() => nativeOAuthCommand("/not/used", join(root, "profile-link"), "login")).toThrow("profile_invalid");
+});
+
+
 test("sandbox preflight executes a child and hides uid-map diagnostics", async () => {
   if (process.platform !== "linux") return;
   const { verifyDesktopSandbox } = await import("../../src/adapters/zcode/desktop-sandbox");
@@ -181,4 +207,29 @@ test("missing or denied optional sandbox never falls back, while default host mo
   } finally {
     if (path === undefined) delete process.env.PATH; else process.env.PATH = path;
   }
+});
+
+test("saved account routing and settings are explicit and never fall back to Desktop", async () => {
+  const { allocateAccount, accountRoot, accountProfile } = await import("../../src/adapters/zcode/accounts");
+  const { desktopRoutingModelIds } = await import("../../src/adapters/zcode/desktop");
+  const { loadZcodeSettings } = await import("../../src/adapters/zcode/settings");
+  const { knownModelIdsForProvider } = await import("../../src/router");
+  const a = allocateAccount("Personal"), b = allocateAccount("Work");
+  for (const [account, modelId] of [[a, "personal-model"], [b, "work-model"]] as const) {
+    writeFileSync(join(accountRoot(account.id), "connection.json"), JSON.stringify({
+      version: 1, connected: true, generation: crypto.randomUUID(), runtime: "/not-launched", workspace: root,
+      models: [{ id: "builtin:zai/" + modelId, providerId: "builtin:zai", modelId, label: modelId }],
+    }), { mode: 0o600 });
+  }
+  expect(desktopRoutingModelIds(a.id)).toEqual(["builtin:zai/personal-model"]);
+  expect(desktopRoutingModelIds(b.id)).toEqual(["builtin:zai/work-model"]);
+  expect(knownModelIdsForProvider("personal", { adapter: "zcode", baseUrl: "https://zcode.z.ai", zcodeAccountId: a.id }))
+    .not.toContain("builtin:zai/work-model");
+  expect(accountProfile(a.id)).not.toBe(accountProfile(b.id));
+  expect(() => loadZcodeSettings(process.env, "../escape")).toThrow();
+  expect(() => loadZcodeSettings(process.env, null as never)).toThrow();
+  expect(() => loadZcodeSettings(process.env, crypto.randomUUID())).toThrow();
+  await disconnectDesktop(a.id);
+  expect(desktopRoutingModelIds(a.id)).toEqual([]);
+  expect(desktopRoutingModelIds(b.id)).toEqual(["builtin:zai/work-model"]);
 });

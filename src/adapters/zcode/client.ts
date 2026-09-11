@@ -6,8 +6,9 @@ import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks"
 export type ZcodeSpawn = typeof spawn;
 type Pending = { resolve: (value: JsonObject) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 const desktopClients = new Set<ZcodeClient>();
+export const hasZcodeAccountClients = (id: string) => [...desktopClients].some(client => client.accountId === id);
 export async function closeZcodeDesktopClients(): Promise<void> {
-  await Promise.all([...desktopClients].map(client => client.disconnect()));
+  await Promise.all([...desktopClients].filter(client => !client.accountId).map(client => client.disconnect()));
 }
 
 /** ZCode 0.16.5 uses request/result NDJSON, without a jsonrpc field. */
@@ -23,7 +24,9 @@ export class ZcodeClient {
   onEvent: (message: JsonObject) => void = () => {};
   onFailure: (error: Error) => void = () => {};
 
+  readonly accountId?: string;
   constructor(settings: ZcodeSettings, spawnProcess: ZcodeSpawn = spawn) {
+    this.accountId = settings.accountId;
     const [command, ...args] = settings.command;
     this.child = spawnProcess(command!, [...args, "app-server"], {
       cwd: settings.home, shell: false, stdio: ["pipe", "pipe", "pipe"],

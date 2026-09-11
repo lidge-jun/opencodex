@@ -113,7 +113,7 @@ export function knownModelIdsForProvider(
   const ids = new Set<string>();
   for (const id of prov.models ?? []) ids.add(id);
   if (prov.adapter === "zcode") {
-    for (const id of desktopRoutingModelIds()) ids.add(id);
+    for (const id of desktopRoutingModelIds(prov.zcodeAccountId)) ids.add(id);
   }
   if (prov.defaultModel) ids.add(prov.defaultModel);
   const registry = providerMatchesRegistryTransportWithStaticGuards(provName, prov)

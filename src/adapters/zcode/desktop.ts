@@ -1,10 +1,11 @@
+import { accountRoot, accountProfile, readAccount } from "./accounts";
 import { constants, existsSync, lstatSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { getConfigDir } from "../../config/paths";
-import { closeZcodeDesktopClients, ZcodeClient } from "./client";
+import { hasZcodeAccountClients, closeZcodeDesktopClients, ZcodeClient } from "./client";
 import type { ZcodeSettings } from "./settings";
 import { verifyDesktopSandbox } from "./desktop-sandbox";
 import { resolveDesktopNode } from "./desktop-node";
@@ -18,12 +19,13 @@ export class DesktopSetupError extends Error {
   constructor(public code: string) { super(code); }
 }
 const fail = (code: string): never => { throw new DesktopSetupError(code); };
-const root = () => join(getConfigDir(), "zcode-desktop");
-const connectionPath = () => join(root(), "connection.json");
-export const defaultDesktopWorkspace = () => join(root(), "workspace");
+const root = (accountId?: string) => accountId ? accountRoot(accountId) : join(getConfigDir(), "zcode-desktop");
+const connectionPath = (accountId?: string) => join(root(accountId), "connection.json");
+export const defaultDesktopWorkspace = (accountId?: string) => join(root(accountId), "workspace");
 
-function readConnection(): Connection | undefined {
-  const path = connectionPath();
+function readConnection(accountId?: string): Connection | undefined {
+  if (accountId) readAccount(accountId);
+  const path = connectionPath(accountId);
   if (!existsSync(path)) return undefined;
   try {
     const st = lstatSync(path);
@@ -39,9 +41,9 @@ function readConnection(): Connection | undefined {
 
 /** Public native IDs only: routing must work before live discovery warms the cache.
  * No profile reads, process launches, or config mutations on the routing path. */
-export function desktopRoutingModelIds(): string[] {
+export function desktopRoutingModelIds(accountId?: string): string[] {
   try {
-    const connection = readConnection();
+    const connection = readConnection(accountId);
     if (!connection?.connected) return [];
     return connection.models.flatMap(model =>
       model && typeof model.id === "string" && typeof model.providerId === "string"
@@ -51,11 +53,11 @@ export function desktopRoutingModelIds(): string[] {
   } catch { return []; } // Invalid/revoked state is still rejected by the adapter.
 }
 
-function persist(connection: Connection): void {
-  mkdirSync(root(), { recursive: true, mode: 0o700 });
-  const temp = join(root(), `${randomUUID()}.tmp`);
+function persist(connection: Connection, accountId?: string): void {
+  mkdirSync(root(accountId), { recursive: true, mode: 0o700 });
+  const temp = join(root(accountId), `${randomUUID()}.tmp`);
   writeFileSync(temp, JSON.stringify(connection), { mode: 0o600, flag: "wx" });
-  renameSync(temp, connectionPath());
+  renameSync(temp, connectionPath(accountId));
 }
 
 /** Only an installed Desktop layout, never an arbitrary executable or shell command. */
@@ -131,8 +133,8 @@ function prerequisites(): { bwrap?: string; node: string } {
   return { bwrap: bwrap ? realpathSync(bwrap) : undefined, node: realpathSync(node) };
 }
 
-function desktopProfile(): { config: string; credentials?: string } {
-  const base = join(homedir(), ".zcode/v2");
+export function desktopProfile(accountId?: string): { config: string; credentials?: string } {
+  const base = join(accountId ? accountProfile(accountId) : homedir(), ".zcode/v2");
   const config = join(base, "config.json");
   try { if (!lstatSync(config).isFile() || statSync(config).size > 4 * 1024 * 1024) return fail("profile_missing"); }
   catch { return fail("profile_missing"); }
@@ -140,20 +142,20 @@ function desktopProfile(): { config: string; credentials?: string } {
   return { config, ...(existsSync(credentials) && lstatSync(credentials).isFile() ? { credentials } : {}) };
 }
 
-function settingsFor(connection: Connection): ZcodeSettings {
+function settingsFor(connection: Connection, accountId?: string): ZcodeSettings {
   const { bwrap, node } = prerequisites();
   const runtime = resolveDesktopRuntime(connection.runtime);
   const workspace = validateDesktopWorkspace(connection.workspace);
-  const profile = desktopProfile();
+  const profile = desktopProfile(accountId);
   // Do not carry a native conversation across Desktop login/profile changes. Metadata-only
   // fencing is conservative (a refresh may start a new session) and never reads credential bytes.
   const profileStamp = createHash("sha256").update(JSON.stringify([profile.config, profile.credentials].filter(Boolean).map(path => {
     const st = statSync(path!); return [st.dev, st.ino, st.size, st.mtimeMs, st.ctimeMs];
   }))).digest("hex");
-  const privateHome = join(root(), "home", connection.generation, profileStamp);
+  const privateHome = join(root(accountId), "home", connection.generation, profileStamp);
   const db = join(privateHome, ".zcode/cli/db");
   mkdirSync(db, { recursive: true, mode: 0o700 });
-  if (!bwrap) return {
+  if (!bwrap) return { accountId,
     command: [node, fileURLToPath(new URL("./desktop-bootstrap.cjs", import.meta.url)),
       "--host", runtime, profile.config, workspace],
     home: privateHome, workspace, settingsPath: "",
@@ -177,42 +179,43 @@ function settingsFor(connection: Connection): ZcodeSettings {
   args.push("--clearenv", "--setenv", "HOME", sandboxHome, "--setenv", "PATH", "/usr/bin:/bin",
     "--setenv", "ZCODE_DATA_BASE_DIR", "/desktop", "--chdir", "/workspace",
     "/usr/bin/node", "/bridge/desktop-bootstrap.cjs");
-  return { command: [bwrap, ...args], home: privateHome, workspace: "/workspace", settingsPath: "",
+  return { accountId, command: [bwrap, ...args], home: privateHome, workspace: "/workspace", settingsPath: "",
     scope: `desktop:${connection.generation}:${profileStamp}:sandbox`, desktopModels: connection.models };
 }
 
 /** Persisted GUI consent is separate from provider config; data-plane requests cannot set it. */
-export function loadDesktopSettings(): ZcodeSettings | undefined {
-  if (connecting) return fail("busy");
-  const connection = readConnection();
-  if (!connection) return undefined;
+export function loadDesktopSettings(accountId?: string): ZcodeSettings | undefined {
+  if (connecting.has(accountId ?? "desktop")) return fail("busy");
+  const connection = readConnection(accountId);
+  if (!connection) { if (accountId) return fail("disconnected"); return undefined; }
   if (!connection.connected) return fail("disconnected");
-  return settingsFor(connection);
+  return settingsFor(connection, accountId);
 }
 
-export function desktopStatus() {
+export function desktopStatus(accountId?: string) {
   let issue: string | undefined;
-  try { prerequisites(); desktopProfile(); } catch (e) { issue = e instanceof DesktopSetupError ? e.code : "connection_invalid"; }
+  try { prerequisites(); desktopProfile(accountId); } catch (e) { issue = e instanceof DesktopSetupError ? e.code : "connection_invalid"; }
   let connection: Connection | undefined;
-  try { connection = readConnection(); } catch { issue = "connection_invalid"; }
+  try { connection = readConnection(accountId); } catch { issue = "connection_invalid"; }
   const runtimes = detectDesktopRuntimes();
   if (connection?.connected) {
     try { resolveDesktopRuntime(connection.runtime); validateDesktopWorkspace(connection.workspace); }
     catch (e) { issue = e instanceof DesktopSetupError ? e.code : "connection_invalid"; }
   }
-  return { connected: connection?.connected === true && !issue, issue, runtimes,
-    runtime: connection?.runtime ?? runtimes[0] ?? "", workspace: connection?.workspace ?? defaultDesktopWorkspace(),
+  return { ...(accountId ? { accountId } : {}), connected: connection?.connected === true && !issue, issue, runtimes,
+    runtime: connection?.runtime ?? runtimes[0] ?? "", workspace: connection?.workspace ?? defaultDesktopWorkspace(accountId),
     models: connection?.models ?? [], sandbox: desktopSandboxEnabled(), platform: process.platform };
 }
 
-let connecting = false;
-export async function connectDesktop(runtime: string, workspace: string): Promise<ReturnType<typeof desktopStatus>> {
-  if (connecting) return fail("busy");
-  connecting = true;
+const connecting = new Set<string>();
+export async function connectDesktop(runtime: string, workspace: string, accountId?: string): Promise<ReturnType<typeof desktopStatus>> {
+  if (connecting.has(accountId ?? "desktop")) return fail("busy");
+  if (accountId && hasZcodeAccountClients(accountId)) return fail("busy");
+  connecting.add(accountId ?? "desktop");
   try {
     const connection: Connection = { version: 1, connected: true, generation: randomUUID(),
       runtime: resolveDesktopRuntime(runtime), workspace: validateDesktopWorkspace(workspace), models: [] };
-    const settings = settingsFor(connection);
+    const settings = settingsFor(connection, accountId);
     const client = new ZcodeClient(settings);
     try {
       const result = await client.request("opencodex/desktopModels", {}, 15_000);
@@ -227,16 +230,19 @@ export async function connectDesktop(runtime: string, workspace: string): Promis
       // Official protocol readiness only. This does not send a prompt or spend inference quota.
       await client.request("workspace/readState", { workspace: { workspacePath: settings.workspace, workspaceKey: settings.workspace } }, 15_000);
     } finally { await client.close(); }
-    await closeZcodeDesktopClients();
-    persist(connection);
-    return desktopStatus();
+    if (!accountId) await closeZcodeDesktopClients();
+    persist(connection, accountId);
+    return desktopStatus(accountId);
   } catch (e) { if (e instanceof DesktopSetupError) throw e; return fail("runtime_failed"); }
-  finally { connecting = false; }
+  finally { connecting.delete(accountId ?? "desktop"); }
 }
 
-export async function disconnectDesktop(): Promise<void> {
-  if (connecting) return fail("busy");
-  const previous = readConnection();
-  persist({ version: 1, connected: false, generation: randomUUID(), runtime: previous?.runtime ?? "", workspace: previous?.workspace ?? defaultDesktopWorkspace(), models: [] });
-  await closeZcodeDesktopClients();
+export async function disconnectDesktop(accountId?: string): Promise<void> {
+  if (connecting.has(accountId ?? "desktop")) return fail("busy");
+  if (accountId && hasZcodeAccountClients(accountId)) return fail("busy");
+  const previous = readConnection(accountId);
+  persist({ version: 1, connected: false, generation: randomUUID(), runtime: previous?.runtime ?? "", workspace: previous?.workspace ?? defaultDesktopWorkspace(), models: [] }, accountId);
+  if (!accountId) await closeZcodeDesktopClients();
 }
+
+export const desktopAccountBusy = (id: string) => connecting.has(id) || hasZcodeAccountClients(id);

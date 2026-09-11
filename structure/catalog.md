@@ -261,3 +261,7 @@ provider wire mapping; unpinned native requests retain their existing pass-throu
 > Decision record: [ADR-0025](decisions/ADR-0025-ultra-reasoning-level.md)
 
 > Decision record: [ADR-0026](decisions/ADR-0026-ultra-reasoning-level.md)
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.
