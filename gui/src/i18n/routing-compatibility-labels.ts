@@ -58,4 +58,9 @@ export const ROUTING_COMPATIBILITY_FIELD_LABELS: Record<Locale, CompatibilityFie
     unknownEvidence: "Bilinmeyen kanıt",
     degradedEvidence: "Bozulmuş kanıt",
   },
+  vi: {
+    maxEvidenceAgeMs: "Tuổi bằng chứng tối đa (ms)",
+    unknownEvidence: "Bằng chứng không xác định",
+    degradedEvidence: "Bằng chứng bị suy giảm",
+  },
 };

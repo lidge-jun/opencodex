@@ -121,6 +121,18 @@ const LABELS: Record<Locale, Record<LogGuardOperationLabelKey, string>> = {
     "error.auto_vacuum_not_incremental": "Bu Codex gunluk veritabani artimli vacuum icin yapilandirilmamis; tam yeniden olusturma olmadan alan geri kazanilamaz.",
     "error.integrity_check_failed": "Codex gunluk veritabani butunluk denetiminden gecemedi. Alan geri kazanilmadi.",
   },
+  vi: {
+    applying: "Đang áp dụng thay đổi Log Guard…",
+    "error.generic": "Không thể cập nhật lưu trữ nhật ký Codex.",
+    "error.codex_running": "Hãy thoát Codex trước khi thay đổi lưu trữ nhật ký Codex.",
+    "error.process_enumeration_failed": "Không thể xác minh rằng Codex đã dừng. Thao tác Log Guard chưa được bắt đầu.",
+    "error.busy": "Cơ sở dữ liệu nhật ký Codex đang bận. Hãy thoát Codex và thử lại.",
+    "error.unsupported_schema": "Lược đồ nhật ký Codex này không được hỗ trợ cho thao tác này.",
+    "error.unsafe_path": "Đường dẫn cơ sở dữ liệu nhật ký Codex không vượt qua được kiểm tra an toàn.",
+    "error.database_error": "Không thể cập nhật cơ sở dữ liệu nhật ký Codex.",
+    "error.auto_vacuum_not_incremental": "Cơ sở dữ liệu nhật ký Codex này không được định cấu hình cho tính năng incremental vacuum, do đó không thể thu hồi dung lượng nếu không xây dựng lại hoàn toàn.",
+    "error.integrity_check_failed": "Cơ sở dữ liệu nhật ký Codex không vượt qua được kiểm tra tính toàn vẹn. Không có dung lượng nào được thu hồi.",
+  },
 };
 
 export function logGuardOperationLabel(locale: Locale, key: LogGuardOperationLabelKey): string {

@@ -178,6 +178,8 @@ function bcp47(locale: Locale): string {
       return "ja-JP";
     case "tr":
       return "tr-TR";
+    case "vi":
+      return "vi-VN";
     default: {
       const _exhaustive: never = locale;
       return _exhaustive;
