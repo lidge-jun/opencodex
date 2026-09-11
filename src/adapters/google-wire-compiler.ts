@@ -130,12 +130,20 @@ function compileGenerationConfig(value: unknown): JsonObject | undefined {
     ))].slice(0, 5);
     if (stopSequences.length > 0) out.stopSequences = stopSequences;
   }
-  if (isObject(value.thinkingConfig) && typeof value.thinkingConfig.thinkingLevel === "string") {
-    const raw = value.thinkingConfig.thinkingLevel.toLowerCase();
-    const thinkingLevel = GOOGLE_THINKING_LEVELS.has(raw)
-      ? raw
-      : (["xhigh", "max", "ultra"].includes(raw) ? "high" : undefined);
-    if (thinkingLevel) out.thinkingConfig = { thinkingLevel };
+  if (isObject(value.thinkingConfig)) {
+    const thinking: JsonObject = {};
+    if (typeof value.thinkingConfig.thinkingLevel === "string") {
+      const raw = value.thinkingConfig.thinkingLevel.toLowerCase();
+      const thinkingLevel = GOOGLE_THINKING_LEVELS.has(raw)
+        ? raw
+        : (["xhigh", "max", "ultra"].includes(raw) ? "high" : undefined);
+      if (thinkingLevel) thinking.thinkingLevel = thinkingLevel;
+    }
+    // The one key that makes Google return `thought: true` text. Cloud Code Assist serves
+    // thinking either way (thoughtsTokenCount stays non-zero) but withholds the text unless the
+    // request opts in, so dropping it here silently reinstates the missing-thinking behavior.
+    if (value.thinkingConfig.includeThoughts === true) thinking.includeThoughts = true;
+    if (Object.keys(thinking).length > 0) out.thinkingConfig = thinking;
   }
   if (Array.isArray(value.responseModalities)) {
     const valid = value.responseModalities.filter((m): m is string => typeof m === "string" && ["TEXT", "IMAGE", "AUDIO"].includes(m));

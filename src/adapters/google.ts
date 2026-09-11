@@ -866,11 +866,27 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         );
         antigravityModel = wireModelId;
         antigravitySession = sessionId;
+        // Gemini returns no chain-of-thought TEXT unless the request opts in. Probed against CCA
+        // 2026-09-12: `gemini-3.8-flash-high` answered with thoughtsTokenCount=321 and zero
+        // `thought` parts, then 358-652 chars of genuine reasoning once includeThoughts was set.
+        // Scoped to Gemini wire ids — Claude-on-CCA accepts the flag but never returns thought
+        // parts, and gpt-oss rejects it outright (400 INVALID_ARGUMENT, which would break every
+        // gpt-oss turn). Gated on the provider's visible-thinking opt-in so a user who wants
+        // thinking hidden does not pay conversation-history tokens for text nobody renders;
+        // `hideThinkingSummary !== true` is the same per-request gate the response path uses, so
+        // a client that explicitly asked for hidden thinking is not billed for the text either.
+        const includeThoughts = provider.showThinkingSummary === true
+          && parsed.options.hideThinkingSummary !== true
+          && /^gemini-/.test(wireModelId)
+          && !isImageCapableModel(parsed.modelId);
         // Effort → thinkingConfig for CCA (CLIProxyAPI proven: request.generationConfig.thinkingConfig).
         // Suffix/compat IDs return thinkingLevel=undefined — the suffix IS the effort, no contradiction.
-        if (thinkingLevel) {
+        if (thinkingLevel || includeThoughts) {
           const gc = (body.generationConfig ?? {}) as Record<string, unknown>;
-          gc.thinkingConfig = { thinkingLevel };
+          gc.thinkingConfig = {
+            ...(thinkingLevel ? { thinkingLevel } : {}),
+            ...(includeThoughts ? { includeThoughts: true } : {}),
+          };
           body.generationConfig = gc;
         }
         // Reasoning continuity: Gemini models re-inject cached thoughtSignatures; Claude-on-Antigravity

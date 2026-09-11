@@ -583,3 +583,71 @@ describe("google adapter — direct -tiered wire renames", () => {
     }
   });
 });
+
+describe("google adapter — Antigravity thought-text opt-in", () => {
+  // CCA keeps generating thinking either way (thoughtsTokenCount stays non-zero) but returns
+  // NO `thought` text unless the request sets generationConfig.thinkingConfig.includeThoughts.
+  // Probed 2026-09-12: gemini-3.8-flash-high answered with 0 thought parts and 321 thoughts
+  // tokens, then 358-652 chars of reasoning once the key was present.
+  const ccaProvider = {
+    adapter: "google",
+    googleMode: "cloud-code-assist",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    apiKey: "key",
+    project: "proj-123",
+  } as const;
+  const optedIn = { ...ccaProvider, showThinkingSummary: true } as const;
+
+  function thoughtParsed(modelId: string, effort?: string, hideThinkingSummary?: boolean): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: { ...(effort ? { reasoning: effort } : {}), ...(hideThinkingSummary ? { hideThinkingSummary } : {}) },
+      context: { messages: [{ role: "user", content: "hi" }], tools: [] },
+    } as unknown as OcxParsedRequest;
+  }
+
+  async function thinkingConfig(
+    providerConfig: Record<string, unknown>,
+    modelId: string,
+    effort?: string,
+    hideThinkingSummary?: boolean,
+  ): Promise<Record<string, unknown> | undefined> {
+    const { body } = await createGoogleAdapter(providerConfig as never)
+      .buildRequest(thoughtParsed(modelId, effort, hideThinkingSummary));
+    const envelope = JSON.parse(body) as {
+      request: { generationConfig?: { thinkingConfig?: Record<string, unknown> } };
+    };
+    return envelope.request.generationConfig?.thinkingConfig;
+  }
+
+  test("asks CCA for thought text on the Gemini wire families", async () => {
+    // Suffix tier ids deliberately state no level — the suffix IS the effort — so the opt-in
+    // has to stand on its own for those.
+    expect(await thinkingConfig(optedIn, "gemini-3.8-flash", "high")).toEqual({ includeThoughts: true });
+    expect(await thinkingConfig(optedIn, "gemini-3.8-flash-medium")).toEqual({ includeThoughts: true });
+    expect(await thinkingConfig(optedIn, "gemini-3.7-flash", "high"))
+      .toEqual({ thinkingLevel: "high", includeThoughts: true });
+    expect(await thinkingConfig(optedIn, "gemini-3.1-pro", "high"))
+      .toEqual({ thinkingLevel: "high", includeThoughts: true });
+  });
+
+  test("never sends the flag to models that reject or ignore it", async () => {
+    // gpt-oss answers 400 INVALID_ARGUMENT with the key present, so it would break the turn.
+    expect(await thinkingConfig(optedIn, "gpt-oss-120b-medium")).toBeUndefined();
+    // Claude-on-CCA accepts the key but returns no thought parts, so it stays off that wire.
+    expect(await thinkingConfig(optedIn, "claude-sonnet-4-6", "high")).toEqual({ thinkingLevel: "high" });
+  });
+
+  test("a provider without the opt-in keeps the CCA wire unchanged", async () => {
+    expect(await thinkingConfig(ccaProvider, "gemini-3.8-flash", "high")).toBeUndefined();
+    expect(await thinkingConfig(ccaProvider, "gemini-3.7-flash", "high")).toEqual({ thinkingLevel: "high" });
+  });
+
+  test("an explicit client opt-out stops the thought text at the source", async () => {
+    // Same per-request gate the response path uses: hideThinkingSummary is set for an explicit
+    // reasoning.summary "none", and paying upstream for text the client refused is waste.
+    expect(await thinkingConfig(optedIn, "gemini-3.8-flash", "high", true)).toBeUndefined();
+    expect(await thinkingConfig(optedIn, "gemini-3.7-flash", "high", true)).toEqual({ thinkingLevel: "high" });
+  });
+});
