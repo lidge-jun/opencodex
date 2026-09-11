@@ -511,7 +511,7 @@ export function recordAdapterSideChatCache(logCtx: RequestLogContext, request: A
       logCtx.sideChatCache = metrics;
       if (logCtx.activeAttempt) logCtx.activeAttempt.sideChatCache = metrics;
     }
-  } catch { }
+  } catch { return; }
 }
 
 /** Copy the adapter's exact outbound reasoning parameter into the durable request log. */
