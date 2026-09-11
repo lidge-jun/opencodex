@@ -46,11 +46,15 @@ const DEEPSEEK_GATEWAY_THINKING_MODELS = ["deepseek-v4.1-flash", ...DEEPSEEK_V4_
 
 ## 갱신해야 하는 기존 테스트 (감사 열거)
 
-`tests/providers/provider-registry-parity.test.ts`: `309`(defaultModel), `73-80`(go noVision `toEqual`), `86-92`(3종 noJsonSchema `toEqual`), `1421-1453`(DeepSeek id 열거). `tests/providers/opencode-go-deepseek.test.ts:159-160`(noJsonSchema `toEqual`).
+`tests/providers/provider-registry-parity.test.ts`: `197`(deepseek preserveReasoningContentModels `toEqual`), `199-201`(deepseek noVisionModels `toEqual`), `309`(defaultModel), `73-80`(go noVision `toEqual`), `86-92`(3종 noJsonSchema `toEqual`), `1421-1453`(DeepSeek id 열거). `tests/providers/opencode-go-deepseek.test.ts:159-160`(noJsonSchema `toEqual`). `tests/codex-integration/reasoning-effort.test.ts:274`(동일 `toEqual`).
+
+`parity:184`는 `toContain`이라 안전하고, `model-metadata-sync.test.ts`는 `scripts/model-metadata.source.json`만 입력으로 재생성·바이트 비교하므로 레지스트리 추가로 깨지지 않는다.
 
 ## 기록해 두는 부수 사실
 
-`scripts/model-metadata.source.json`에 `deepseek-flash` 행이 없어 비용 추정이 빈다. 생성 파일은 손대지 않는 방침(002)이므로 다음 메타데이터 생성에서 채워진다. PR 본문에 명시한다.
+`scripts/model-metadata.source.json`에 `deepseek-flash`와 `deepseek-v4.1-flash` 행이 모두 없어 두 id의 비용 추정이 빈다. 생성 파일은 손대지 않는 방침(002)이므로 다음 메타데이터 생성에서 채워진다. PR 본문에 명시한다.
+
+`opencode-free`는 `liveModels: true`인데 게이트웨이 상수 전환이 `noJsonSchemaModels` 한 곳뿐이라 `deepseek-v4.1-flash`가 사다리와 replay를 받지 못한다. 기존 `deepseek-v4-pro`/`-flash`도 같은 비대칭이므로 신규 결함은 아니다. PR 본문에 한 줄 남긴다.
 
 ## 검증
 
