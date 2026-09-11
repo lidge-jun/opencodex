@@ -692,6 +692,10 @@ function canonicalOpenAiBudgetPatchError(
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  if (url.pathname === "/api/zcode-desktop" || url.pathname.startsWith("/api/zcode-desktop/")) {
+    const { handleZcodeDesktopRoutes } = await import("./zcode-desktop-routes");
+    return handleZcodeDesktopRoutes(ctx);
+  }
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";

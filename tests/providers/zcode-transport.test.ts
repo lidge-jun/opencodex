@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { ZcodeClient, type ZcodeSpawn } from "../../src/adapters/zcode/client";
+import { ZcodeClient, closeZcodeDesktopClients, type ZcodeSpawn } from "../../src/adapters/zcode/client";
 import type { JsonObject, ZcodeSettings } from "../../src/adapters/zcode/settings";
 
 const settings: ZcodeSettings = { command: ["/isolated/launcher", "argument with spaces"], home: "/isolated/home",
   workspace: "/workspace", settingsPath: "/isolated/config.json", scope: "test" };
-function fixture() {
+function fixture(managed = false) {
   const child = new EventEmitter() as EventEmitter & { stdin: Writable; stdout: PassThrough; stderr: PassThrough; kill: () => boolean };
   const writes: JsonObject[] = [];
   child.stdin = new Writable({ write(chunk, _encoding, callback) { writes.push(JSON.parse(chunk.toString())); callback(); } });
@@ -14,12 +14,23 @@ function fixture() {
   child.kill = () => { child.stdout.end(); child.stderr.end(); queueMicrotask(() => child.emit("exit", 0)); return true; };
   let invocation: unknown[] = [];
   const spawn = ((...args: unknown[]) => { invocation = args; return child; }) as ZcodeSpawn;
-  const client = new ZcodeClient(settings, spawn);
+  const client = new ZcodeClient(managed ? { ...settings, desktopModels: [] } : settings, spawn);
   return { child, client, writes, invocation: () => invocation };
 }
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
 
 describe("ZCode NDJSON transport", () => {
+  test("Desktop disconnect notifies an active turn even without pending RPCs", async () => {
+    const managed = fixture(true); const advanced = fixture();
+    let failures = 0; let advancedFailures = 0;
+    managed.client.onFailure = () => { failures++; };
+    advanced.client.onFailure = () => { advancedFailures++; };
+    await closeZcodeDesktopClients();
+    expect(failures).toBe(1);
+    expect(advancedFailures).toBe(0);
+    await expect(managed.client.request("session/create", {})).rejects.toThrow("disconnected");
+    await advanced.client.close();
+  });
   test("uses argv without shell and does not inherit provider secrets", async () => {
     const f = fixture(); const invocation = f.invocation();
     expect(invocation[0]).toBe("/isolated/launcher");

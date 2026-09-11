@@ -1,3 +1,5 @@
+import ZcodeUsageNotices from "../ZcodeUsageNotices";
+import { zcodeUsageScope } from "../../zcode-usage-schedule";
 /**
  * ProviderOverviewDashboard — aggregate overview when no provider is selected.
  * Shows summary cards, attention list, per-provider rate limits (QuotaBars stacked),
@@ -204,6 +206,7 @@ export default function ProviderOverviewDashboard({
           aria-busy={quotasLoading || undefined}
         >
           <h3 className="pws-dashboard-section-title">{t("pws.dashboard.rateLimits")}</h3>
+          {allItems.some(item => zcodeUsageScope(item)) && <ZcodeUsageNotices viaZcode={allItems.some(item => zcodeUsageScope(item) === "zcode")} />}
           {quotaProviders.length > 0 ? (
             <div className="pws-dashboard-rows">
               {quotaProviders.map(({ item, report }) => (

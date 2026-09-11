@@ -5,6 +5,10 @@ import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks"
 
 export type ZcodeSpawn = typeof spawn;
 type Pending = { resolve: (value: JsonObject) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+const desktopClients = new Set<ZcodeClient>();
+export async function closeZcodeDesktopClients(): Promise<void> {
+  await Promise.all([...desktopClients].map(client => client.disconnect()));
+}
 
 /** ZCode 0.16.5 uses request/result NDJSON, without a jsonrpc field. */
 export class ZcodeClient {
@@ -37,6 +41,12 @@ export class ZcodeClient {
     this.child.once("exit", () => this.fail(new Error("ZCode app server exited before completing the turn.")));
     this.reading = this.read();
     this.detachShutdown = registerOptionalShutdownHook(`zcode-${crypto.randomUUID()}`, () => { void this.close(); });
+    if (settings.desktopModels) desktopClients.add(this);
+  }
+
+  async disconnect(): Promise<void> {
+    this.fail(new Error("ZCode Desktop was disconnected or reconnected."));
+    await this.close();
   }
 
   private fail(error: Error): void {
@@ -106,6 +116,7 @@ export class ZcodeClient {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    desktopClients.delete(this);
     this.detachShutdown();
     for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error("ZCode client closed.")); }
     this.pending.clear();

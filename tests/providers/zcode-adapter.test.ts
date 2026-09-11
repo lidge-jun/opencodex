@@ -63,6 +63,24 @@ async function run(settings: ZcodeSettings, client: FakeClient, parsed = request
 }
 
 describe("ZCode local agent", () => {
+  test("managed requests select a public model without carrying Desktop secrets", async () => {
+    const settings = { ...fixture(), desktopModels: [{ id: "test/model", providerId: "test", modelId: "model", label: "Model" }] };
+    const client = new FakeClient();
+    expect((await run(settings, client)).at(-1)?.type).toBe("done");
+    for (const call of client.calls.filter(c => ["session/create", "session/send"].includes(c.method))) {
+      expect(call.params._zcodeModel).toEqual({ providerId: "test", modelId: "model" });
+      expect(call.params.runtimeModel).toBeUndefined();
+    }
+  });
+  test("a revoked or changed managed connection cannot start a queued child", async () => {
+    const settings = { ...fixture(), desktopModels: [{ id: "test/model", providerId: "test", modelId: "model", label: "Model" }] };
+    let reads = 0; let children = 0;
+    const adapter = createZcodeAdapter(provider, { settings: () => ({ ...settings, scope: ++reads === 1 ? "before" : "after" }), client: () => { children++; return new FakeClient(); } });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(request(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    expect(children).toBe(0);
+    expect(events.at(-1)?.type).toBe("error");
+  });
   test("has no direct HTTP inference path or client-tool capability", () => {
     const adapter = createZcodeAdapter(provider);
     expect(adapter.fetchResponse).toBeUndefined();

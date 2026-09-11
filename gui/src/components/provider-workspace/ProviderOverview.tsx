@@ -279,7 +279,7 @@ export default function ProviderOverview({
         )}
       </section>
 
-      <ProviderCurrentQuota key={`${item.name}:${connectionIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} onRefreshQuota={onRefreshQuota} />
+      <ProviderCurrentQuota item={item} key={`${item.name}:${connectionIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} onRefreshQuota={onRefreshQuota} />
       </aside>
     </div>
     </>

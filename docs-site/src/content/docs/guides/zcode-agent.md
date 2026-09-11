@@ -24,7 +24,68 @@ not replace an unsupported native operation with a direct API call. There is no 
 fallback. This describes the technical path, not a guarantee of promotion eligibility, billing
 or subscription terms; those remain the vendor's policy.
 
-## Isolate before enabling
+## Connect from the dashboard (Linux)
+
+1. Install the official **ZCode Desktop**, open it on the **same computer as the proxy**,
+   and sign in/configure your Z.AI models there. Keep Desktop open during initial detection.
+2. In OpenCodex, choose **Providers → Add Provider → ZCode (local agent)**.
+3. Click **Detect again** if needed. OpenCodex finds running Desktop installations and standard
+   installation folders. For portable/extracted installations, the advanced folder field lets
+   you select the application directory; it never accepts a shell command.
+4. Choose a **workspace folder** with the folder browser. The default is a private disposable
+   folder. Do not select your entire home or a credentials/configuration directory.
+5. Review the native file/command execution notice, check the consent box and click
+   **Connect Desktop**. OpenCodex constructs the Bubblewrap launcher and persists the connection;
+   no environment variables, API-key entry, token import or separate CLI login is required.
+6. Optionally select a model and click **Test with one request**. This sends one brief prompt
+   through the official ZCode runtime and consumes account quota. Connecting alone checks the
+   local protocol and catalog, **not** account entitlement or inference.
+7. Click **Use this provider**, then select a `zcode/builtin:zai-coding-plan/...` model in your
+   calling client. Only configured, enabled built-in Z.AI profiles are exposed by this workflow;
+   custom Desktop providers and routes back to OpenCodex are not imported.
+
+For an existing provider, the same panel is in **Settings**. **Disconnect** revokes the managed
+connection and closes its owned app-server children. It does not log out of Desktop, delete
+Desktop conversations, or change its configuration. A saved disconnected state also prevents
+an older environment-based setup from silently reactivating. Reconnect to refresh the model
+catalog after changing Desktop's model configuration.
+
+The proxy host needs **Bubblewrap** and a Node.js version compatible with the installed ZCode
+runtime. Missing prerequisites and unsupported platforms are shown in the panel. Managed setup
+is currently Linux-only; Windows/macOS need the advanced launcher flow below. A remote browser's
+local Desktop is not the proxy host's Desktop: detection and workspace selection operate on the
+computer running OpenCodex.
+
+### What “connect Desktop” means
+
+ZCode's app-server is a stdio child, not a public Desktop TCP endpoint. OpenCodex uses the
+**official runtime bundled with the selected Desktop installation** and its existing model
+configuration. It starts an owned native session; it does not attach to a conversation already
+open in Desktop. The original **Integrations → ZCode** configuration export remains separate.
+
+The managed sandbox exposes Desktop configuration and shared credentials **read-only**. A small
+bootstrap inside the sandbox adapts the Desktop configuration to the app-server's runtime-model
+protocol; provider keys are never returned to the proxy parent, model catalog or management API.
+The compatible config exists in a temporary filesystem; ZCode owns its private persistent
+session database. OpenCodex neither implements Z.AI authentication nor sends inference HTTP
+requests itself. Authentication/configuration changes in Desktop fence off previous native
+continuation state. If credentials need updating, do that in Desktop and reconnect.
+
+The workspace and private native home are writable; runtime/system files are read-only. The
+real user home and host sockets are not mounted. **Network access is shared**, not isolated:
+only use trusted prompts/projects, and apply separate egress controls if necessary. ZCode needs
+access to its own profile inside this execution context; this is not a guarantee that an agent
+can never read its own configuration. No permission-skipping flags are used.
+
+Managed consent and installation/workspace paths are stored privately under
+`$OPENCODEX_HOME/zcode-desktop/`, separately from provider configuration. Data-plane requests
+cannot choose an executable or override these paths. Connecting, disconnecting and the optional
+quota-spending test require the dashboard's authenticated GUI session, not a raw API/admin token.
+
+## Advanced: operator-supplied isolated launcher
+
+This remains available for existing deployments and environments without managed Linux setup.
+A saved managed connection takes precedence over these environment variables.
 
 Install/extract the official runtime from [ZCode](https://zcode.z.ai/en/docs/install) into a
 separate location. Do not replace your main ZCode or global OpenCodex installation.
@@ -94,8 +155,8 @@ rewritten. **Test connection** checks the local catalog only, not account entitl
 
 ## Safety and limitations
 
-- Native execution is off unless all four environment settings are present. Removing the
-  opt-in makes new requests fail before a process starts.
+- Native execution requires either a persisted, explicitly consented Desktop connection or all
+  four advanced environment settings. Disconnecting revokes managed execution.
 - Sessions use ZCode's `edit` permission mode. Interactive permissions are denied; user-input
   requests are cancelled rather than answered automatically. Continue such work in the isolated
   ZCode client. No permission-skipping flag is passed.
@@ -124,3 +185,32 @@ Start the isolated proxy bound to loopback on an unused port, then check `/healt
 `/v1/models`. Explicitly submit a short request to a `zcode/...` model before claiming that
 authentication works. Test a harmless file write in the disposable workspace and verify it
 on disk. Do not use private projects or publish account-bearing logs as fixtures.
+
+## Usage-time notices
+
+Providers → Usage / current account limits and the overview rate-limit section
+show time-based Coding Plan notices for ZCode. The browser's timezone is used
+(not the proxy server's timezone), including date changes and daylight saving.
+These notices never change routing, recorded usage, or estimated costs, and make
+no direct provider API calls.
+
+Official rules verified September 11, 2026:
+
+- [Coding Plan rates](https://docs.z.ai/devpack/overview): peak hours are Monday
+  through Friday, 14:00–18:00 Singapore (UTC+8). Other hours, including weekends,
+  receive 50% off the standard **model credit** rate, not necessarily MCP charges.
+- [Flash campaign](https://docs.z.ai/devpack/notice/event-glm-5.3-flash): September
+  3–20, 2026, daily 23:00–09:00 Singapore, including weekends. GLM-5.3-Flash via
+  ZCode 3.10+ has zero quota consumption for paid Coding Plan subscribers only
+  while **both** the 5-hour and weekly quotas have remaining allowance. An
+  exhausted quota must reset before participating. Other agents receive a
+  different benefit, not zero consumption; GLM-5.3 is excluded.
+
+The notice distinguishes an active time window from account eligibility:
+OpenCodex does not verify the subscription balance or Desktop version here.
+Campaign notices expire automatically. Since the announcement does not specify
+whether the final overnight window extends into September 21, OpenCodex
+conservatively stops advertising it at midnight ending September 20 Singapore.
+Source links and this boundary caveat are visible in the notice. Exact Z.AI
+Coding Plan HTTP endpoints also show peak/off-peak notices, but never the
+ZCode-only free-window alert; ordinary pay-as-you-go endpoints are excluded.

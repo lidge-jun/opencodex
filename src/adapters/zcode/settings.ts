@@ -1,6 +1,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, sep } from "node:path";
 import { createHash } from "node:crypto";
+import { loadDesktopSettings, type DesktopModel } from "./desktop";
 
 export type JsonObject = Record<string, unknown>;
 export function record(value: unknown): JsonObject {
@@ -13,10 +14,16 @@ export interface ZcodeSettings {
   workspace: string;
   settingsPath: string;
   scope: string;
+  desktopModels?: DesktopModel[];
 }
 
-/** Execution authority is operator environment, never a request header or model configuration. */
+/** Execution authority is operator environment or persisted GUI consent, never data-plane input. */
 export function loadZcodeSettings(env: NodeJS.ProcessEnv = process.env): ZcodeSettings {
+  // Explicit env fixtures remain hermetic. Production prefers the GUI's persisted connection.
+  if (env === process.env) {
+    const desktop = loadDesktopSettings();
+    if (desktop) return desktop;
+  }
   if (env.OCX_ZCODE_NATIVE_TOOLS !== "1") {
     throw new Error("ZCode native execution is disabled. Configure an isolated launcher and opt in with OCX_ZCODE_NATIVE_TOOLS=1.");
   }
@@ -53,6 +60,7 @@ export interface ZcodeModel {
 
 /** Local settings only: no credential import, cloud discovery or writes to ZCode Desktop. */
 export function readZcodeModels(settings: ZcodeSettings): ZcodeModel[] {
+  if (settings.desktopModels) return settings.desktopModels.map(model => ({ ...model, runtimeModel: {} }));
   try { return readModels(settings); }
   catch { throw new Error("ZCode isolated model settings are unavailable, invalid or exceed the size limit."); }
 }

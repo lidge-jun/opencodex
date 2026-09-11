@@ -87,6 +87,10 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
           throw new Error("ZCode owns its tools and does not support client tool_choice constraints.");
         }
         release = await lock(settings.scope, incoming.abortSignal);
+        // A queued turn must not resurrect a revoked Desktop connection or old login.
+        if (settings.desktopModels && (deps.settings ?? loadZcodeSettings)().scope !== settings.scope) {
+          throw new Error("ZCode Desktop connection changed while this turn was queued.");
+        }
         const scope = createHash("sha256").update(JSON.stringify([
           settings.scope, provider.baseUrl, parsed._reasoningReplayScope?.current?.providerName,
           parsed._cursorIdentityScope, parsed.modelId,
@@ -100,6 +104,11 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
         const content = textInput(parsed, Boolean(sessionId));
         client = (deps.client ?? (s => new ZcodeClient(s)))(settings);
         const active = client;
+        // The Desktop bootstrap resolves credentials INSIDE the sandbox. The parent only sends
+        // public model identity; it never receives Desktop API keys or synthesizes vendor auth.
+        const modelParams = settings.desktopModels
+          ? { _zcodeModel: { providerId: model.providerId, modelId: model.modelId } }
+          : { runtimeModel: model.runtimeModel };
         const controller = Promise.withResolvers<void>();
         // Attach a handler immediately: failures can happen during session materialization.
         void controller.promise.catch(() => {});
@@ -135,11 +144,11 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
           }
         };
         if (sessionId) {
-          await active.request("session/resume", { sessionId, runtimeModel: model.runtimeModel });
+          await active.request("session/resume", { sessionId, ...modelParams });
         } else {
           const result = await active.request("session/create", {
             workspace: { workspacePath: settings.workspace, workspaceKey: settings.workspace },
-            mode: "edit", runtimeModel: model.runtimeModel, titleGenerationEnabled: false,
+            mode: "edit", ...modelParams, titleGenerationEnabled: false,
             mcpServers: [], toolDenylist: ["Task", "TaskOutput", "TaskStop"],
           });
           const id = record(result.session).sessionId;
@@ -152,7 +161,7 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
         // accepted task that already changed files. Post-send failure is non-retryable incomplete.
         emit({ type: "text_delta", text: "[ZCode: running in the configured isolated workspace]\n", phase: "commentary" });
         sent = true;
-        await active.request("session/send", { sessionId, content, runtimeModel: model.runtimeModel });
+        await active.request("session/send", { sessionId, content, ...modelParams });
         await controller.promise;
         if (sessionKey) {
           if (sessions.size >= 128) sessions.delete(sessions.keys().next().value!);

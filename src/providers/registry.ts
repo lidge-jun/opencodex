@@ -2000,7 +2000,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "zcode", label: "ZCode (local agent)", adapter: "zcode",
     baseUrl: "https://zcode.z.ai", authKind: "local", liveModels: true, dashboardPreset: true,
     allowBaseUrlOverride: false,
-    note: "Opt-in local ZCode app-server agent, not the ZCode client integration. Requires an isolated launcher (OCX_ZCODE_COMMAND JSON argv), separate OCX_ZCODE_HOME, OCX_ZCODE_WORKSPACE and OCX_ZCODE_NATIVE_TOOLS=1. Log in using that isolated launcher. ZCode owns its tools; text input only. No automatic credential import or installation.",
+    note: "Connect the official runtime and Z.AI models configured in ZCode Desktop from the provider setup panel. On Linux, OpenCodex manages an isolated workspace after explicit consent; no API key or environment variables to paste. Desktop settings stay read-only. ZCode owns its tools; text input only. Advanced isolated launchers remain supported.",
   },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
