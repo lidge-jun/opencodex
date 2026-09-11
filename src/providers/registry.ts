@@ -1776,7 +1776,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, true])),
     },
     thinkingToggleModels: OPENCODE_GO_THINKING_TOGGLE_MODELS,
-    thinkingBudgetModels: THINKING_BUDGET_MODELS,
+    /*
+     * The Go-specific list, not the shared one. The shared `THINKING_BUDGET_MODELS` also
+     * carries Neuralwatt-only ids (`qwen3.5-397b`, `qwen3.6-35b`) that this preset never
+     * gives a ladder to, so a live roster serving one of them armed the thinking-budget
+     * wire path with nothing to advertise: the catalog showed no effort control while the
+     * adapter still translated effort into `thinking_budget`.
+     */
+    thinkingBudgetModels: OPENCODE_GO_THINKING_BUDGET_MODELS,
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     // Text-only Zen Go models (jawcode metadata) — the vision sidecar describes images for
     // every model listed here (and the catalog advertises image input on their behalf).
