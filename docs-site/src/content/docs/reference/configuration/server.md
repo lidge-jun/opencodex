@@ -574,7 +574,9 @@ commit, and dirty-patch digest. Separate processes exercise a shared store with 
 1 MiB synthetic user text; each fresh store's first call includes database creation. Subsequent calls
 cover new conversations, effort switches, and replay. Concurrent writers can intentionally fall back
 when SQLite is busy. Real proxy cells use concurrent HTTP and WebSocket clients with both HTTP/SSE
-and WebSocket upstream fixtures. Client latency includes the whole local request; timer delay measures
+and WebSocket upstream fixtures. `upstreamWebSocketAvailable` describes the fixture;
+`observedUpstreamTransports` records what the proxy actually used. Runtime capability gates can
+select HTTP fallback even when the fixture supports WebSockets, including on prerelease Bun builds. Client latency includes the whole local request; timer delay measures
 blocking in that fixture process. These are local costs, not production latency or upstream cache-hit
 proof. Synthetic token counts must never be interpreted as observed model cache savings.
 

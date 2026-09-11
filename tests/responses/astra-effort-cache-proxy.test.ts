@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { startAstraEffortProxy } from "../helpers/astra-effort-proxy";
 import { readRecentUsageEntries } from "../../src/usage/log";
+import { bunSupportsBoundedCodexWsRelay, currentBunRuntimeIdentity } from "../../src/server/responses/ws-upstream";
 
 const user = (content: string) => ({ role: "user", content });
 const body = (input: unknown[], effort = "medium", extra = {}) => ({ model: "gpt-6-astra", instructions: "Synthetic", input, reasoning: { effort }, stream: true, store: false, ...extra });
@@ -52,7 +53,8 @@ for (const native of [false, true]) {
       expect(rows.some(row => row.astraEffortCache?.stateOutcome === "busy")).toBe(true);
       expect(rows.some(row => row.attempts?.some(attempt => attempt.astraEffortCache?.status === "updated"))).toBe(true);
       expect(rows.filter(row => row.astraEffortCache).every(row => row.astraEffortCache!.durationMs >= 0)).toBe(true);
-      expect(fixture.captured.some(row => row.transport === (native ? "websocket" : "http"))).toBe(true);
+      const expectedTransport = native && bunSupportsBoundedCodexWsRelay(currentBunRuntimeIdentity()) ? "websocket" : "http";
+      expect(fixture.captured.filter(row => !row.compact).every(row => row.transport === expectedTransport)).toBe(true);
     } finally { ws.close(); await fixture.stop(); }
   }, 40_000);
 }

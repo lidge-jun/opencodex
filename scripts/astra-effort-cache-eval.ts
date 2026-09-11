@@ -68,7 +68,8 @@ if (mode === "--worker") {
     await Bun.sleep(10);
     const elapsedMs = performance.now() - started;
     const measurements = summarizeAstraEffortCache(readRecentUsageEntries(10_000, fixture.home));
-    console.log(JSON.stringify({ samples, elapsedMs, requestsPerSecond: samples.length / elapsedMs * 1000, maxTimerDelayMs, measurements }));
+    const observedUpstreamTransports = [...new Set(fixture.captured.map(row => row.transport))].sort();
+    console.log(JSON.stringify({ samples, elapsedMs, requestsPerSecond: samples.length / elapsedMs * 1000, maxTimerDelayMs, observedUpstreamTransports, measurements }));
   } finally { clearInterval(timer); await fixture.stop(); }
 } else {
   const outDir = mode;
@@ -124,11 +125,11 @@ if (mode === "--worker") {
     }
     for (const native of [false, true]) {
       for (const [arm, runtime] of [["treatment", undefined], ...(controlRoot ? [["control", resolve(controlRoot)]] : [])] as const) {
-        cells.push({ kind: "proxy", arm, nativeUpstreamWebSocket: native, inputTextBytes: 64 * 1024, workers: concurrency,
+        cells.push({ kind: "proxy", arm, upstreamWebSocketAvailable: native, inputTextBytes: 64 * 1024, workers: concurrency,
           ...await result(spawn(["--proxy", String(native), String(count), String(concurrency), String(64 * 1024), ...(runtime ? [runtime] : [])])) });
       }
     }
-    const report = { schemaVersion: 1, synthetic: true, platform: process.platform, arch: process.arch, bun: Bun.version, treatment: revision(root), ...(controlRoot ? { control: revision(resolve(controlRoot)) } : {}), cells };
+    const report = { schemaVersion: 1, synthetic: true, platform: process.platform, arch: process.arch, bun: Bun.version, bunVersionWithSha: Bun.version_with_sha, treatment: revision(root), ...(controlRoot ? { control: revision(resolve(controlRoot)) } : {}), cells };
     writeFileSync(join(outDir, "samples.jsonl"), cells.flatMap((cell, i) => cell.samples.map((sample: unknown) => JSON.stringify({ cell: i, sample }))).join("\n") + "\n");
     writeFileSync(join(outDir, "report.json"), JSON.stringify({ ...report, cells: cells.map(({ samples, ...cell }) => ({ ...cell, sampleCount: samples.length, ...(cell.kind === "proxy" ? { wallMs: distribution(samples.map((row: any) => row.wallMs)) } : {}) })) }, null, 2) + "\n");
     console.log("Synthetic benchmark complete: report.json and samples.jsonl");
