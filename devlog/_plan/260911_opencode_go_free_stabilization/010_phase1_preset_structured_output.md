@@ -15,31 +15,60 @@
 | `tests/providers/provider-registry-parity.test.ts` | MODIFY | 세 프리셋의 시드 내용을 고정 |
 | `tests/providers/opencode-go-deepseek.test.ts` | MODIFY | 시드가 실제 요청에서 `response_format`을 지우는지 어댑터 경유로 확인 |
 
+## 설계 수정 (아키텍트 반박 수용, 2026-09-11)
+
+초안은 `noStructuredOutputModels`를 세 프리셋에 그대로 시드하려 했다. 독립 아키텍트 자문이 이를 반박했고 main이 수용한다.
+
+반박 요지: 확인된 400은 `json_schema` **타입** 한정이다(`This response_format type is unavailable now`). 그런데 이 노브의 계약은 "`response_format` 필드를 통째로 생략"이라, 시드하면 `json_object`를 쓰던 클라이언트까지 같이 죽는다. 커뮤니티 제보는 운영자가 고른 무딘 킬스위치이지 "json_object도 거절된다"는 증거가 아니다. 그걸 기본값으로 올리면 앞으로 json_object가 실제로 거절되는지 여부를 관측할 신호까지 덮어버린다.
+
+수정된 설계: **확인된 사실만 표현하는 좁은 필드를 새로 만든다.**
+
+`noJsonSchemaModels` — "이 모델은 `response_format` `json_schema`를 거절한다. `json_object`에 대해서는 아무 주장도 하지 않는다."
+
+동작:
+
+| 요청 | 시드된 모델 | 시드되지 않은 모델 |
+| --- | --- | --- |
+| `json_schema` | `{"type":"json_object"}`로 낮춰 보낸다 | 그대로 `json_schema` |
+| `json_object` | 그대로 | 그대로 |
+| 사용자가 `noStructuredOutputModels`에 넣음 | 기존대로 필드 전체 생략(우선한다) | 동일 |
+
+낮추기를 택한 이유: 클라이언트가 원한 건 JSON이다. 필드를 지우면 산문이 돌아오고, `json_object`로 낮추면 최소한 JSON이 온다. Zen Go가 `json_object`를 수용하는지는 **unverified**이지만, 거절한다면 400이 다시 뜨고 그건 새로운 검증된 사실이 되어 시드를 넓힐 근거가 된다. 킬스위치로 덮으면 그 신호가 사라진다.
+
 ## 시드 내용
 
 ```ts
 // opencode-go
-noStructuredOutputModels: [...DEEPSEEK_THINKING_MODELS],
+noJsonSchemaModels: [...DEEPSEEK_THINKING_MODELS],
 // opencode-zen
-noStructuredOutputModels: [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
+noJsonSchemaModels: [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
 // opencode-free
-noStructuredOutputModels: [...OPENCODE_FREE_DEEPSEEK_MODELS],
+noJsonSchemaModels: [...OPENCODE_FREE_DEEPSEEK_MODELS],
 ```
 
-free는 무키 티어라 paid id를 시드하지 않는다. 그건 wp3의 G2에서 별도 판단한다.
+매칭은 기존 목록과 같은 정확 일치다. `deepseek-v4.1-flash` 같은 신규 id는 걸리지 않는다 — 의도적이다. 게이트웨이가 그 id를 서빙한다는 근거가 없다.
 
-## 주석에 반드시 남길 사실과 트레이드오프
+## 배선 경로 (최소 경로를 택한다)
 
-- 업스트림이 돌려준 문구는 `This response_format type is unavailable now`이고, 보고된 사례는 전부 `json_schema`다(#1415는 `Error from provider (Console Go)`를 그대로 인용한다).
-- 이 노브의 문서화된 의미는 "`response_format` 필드를 생략한다"이므로, `json_object`를 보내던 클라이언트도 같이 영향을 받는다. Zen Go가 `json_object`를 수용하는지는 **이 유닛에서 라이브로 확인하지 못했다(unverified)**. 운영자가 이미 손으로 적용하고 있는 바로 그 완화를 기본값으로 옮기는 것이며, management API PATCH로 모델 단위 해제가 가능하다.
-- 매칭은 정확 일치다(`src/adapters/openai-chat.ts:142,1580`). `deepseek-v4.1-flash` 같은 신규 id는 이 시드에 걸리지 않는다 — 의도적이다. 게이트웨이가 그 id를 서빙한다는 근거가 없다.
+라우터는 레지스트리 엔트리와 사용자 config를 요청 시점에 병합한다(`src/router.ts:346-358`의 `mergeStringArray`, `471-482`의 emit). 따라서 프리셋 값은 `providerConfigSeed`로 config.json에 **영속시키지 않아도** 요청 경로에 도달한다. 새 사용자 설정 화면이나 management PATCH는 이번 범위가 아니다.
+
+| 파일 | 성격 | 내용 |
+| --- | --- | --- |
+| `src/types/provider.ts` | MODIFY | `noStructuredOutputModels`(`639-643`) 바로 아래에 `noJsonSchemaModels?: string[]` + 계약 주석 |
+| `src/providers/registry.ts` | MODIFY | `ProviderRegistryEntry`에 같은 필드(`321` 부근), 세 프리셋에 시드 |
+| `src/router.ts` | MODIFY | `mergeStringArray` 한 줄 + emit 한 줄 |
+| `src/config.ts` | MODIFY | zod 스키마에 한 줄(`622` 패턴) — 사용자가 손으로 넣어도 검증을 통과하게 |
+| `src/adapters/openai-chat.ts` | MODIFY | `142`(네이티브 패스스루)와 `1580`(번역 경로) 두 지점 모두에 낮추기 분기 |
+| `tests/adapters/openai/openai-chat-hardening.test.ts` | MODIFY | 낮추기 동작과 경계 |
+| `tests/providers/provider-registry-parity.test.ts` | MODIFY | 세 프리셋 시드 고정 |
 
 ## 수용 기준
 
-1. `routeModel`을 거쳐 materialize한 opencode-go 프로바이더가 `noStructuredOutputModels`에 DeepSeek 두 id를 갖는다.
-2. 같은 프로바이더로 `textFormat: json_schema` 요청을 만들면 `body.response_format`이 **없다**. 활성 시나리오: `buildOpenAIChatRequest`에 `deepseek-v4-flash`와 json_schema를 넣고 직렬화 결과를 읽는다.
-3. 같은 프로바이더로 `glm-5.3`(시드에 없음) + json_schema면 `response_format`이 **남는다** — 정확 일치 경계가 살아 있다는 반대 증거.
-4. 사용자 config가 이 필드를 비우면(management PATCH null) 시드 값이 다시 덮어쓰지 않는다.
+1. `routeModel`을 거쳐 materialize한 opencode-go 프로바이더가 `noJsonSchemaModels`에 DeepSeek 두 id를 갖는다.
+2. 같은 프로바이더로 `deepseek-v4-flash` + `textFormat: json_schema` 요청을 만들면 직렬화된 `body.response_format`이 `{"type":"json_object"}`다. 활성 시나리오: 번역 경로는 `buildOpenAIChatRequest`, 네이티브 경로는 `buildOpenAIChatPassthroughRequest`에 각각 넣고 결과 본문을 읽는다.
+3. 같은 프로바이더로 `glm-5.3`(시드에 없음) + json_schema면 `response_format.type`이 `json_schema`로 **남는다** — 정확 일치 경계가 살아 있다는 반대 증거.
+4. 시드된 모델 + `json_object` 요청은 그대로 `json_object`다 — 낮추기가 json_object를 건드리지 않는다는 반대 증거.
+5. 같은 모델이 `noStructuredOutputModels`에도 있으면 `response_format`이 아예 없다 — 킬스위치 우선순위.
 
 ## 검증
 
@@ -52,5 +81,6 @@ bun run typecheck
 
 ## 리스크
 
-- `json_object` 동반 손실(위 트레이드오프). 완화: PATCH로 해제 가능, PR 본문에 명시.
-- `ProviderConfigSeed` 유니온 확장이 다른 프리셋의 스냅샷 테스트를 건드릴 수 있다. 확인: `tests/providers/provider-config-validation.test.ts`, `tests/config/client-config-export.test.ts`.
+- Zen Go가 `json_object`도 거절하면 낮추기는 400을 막지 못한다. 그건 감추지 않고 드러내는 선택이며, 그때는 검증된 사실로 `noStructuredOutputModels` 쪽으로 넓히면 된다.
+- 스키마를 요구한 클라이언트가 느슨한 JSON을 받는다. 필드를 지워 산문을 받는 기존 대안보다 낫고, 두 지점 모두 테스트로 고정한다.
+- 새 필드가 라우터 병합 목록에서 빠지면 프리셋 값이 요청에 도달하지 않는다. 수용 기준 1이 이걸 직접 관측한다.
