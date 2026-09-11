@@ -221,7 +221,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "account",
-    usage: "ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|main> ...",
+    usage: "ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons|main> ...",
     summary: "List and switch provider accounts and API-key pools (GUI parity).",
     details: [
       "list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).",
@@ -234,6 +234,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "add-key <provider> [--label <label>]  Add a key read only from piped stdin.",
       "login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.",
       "reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.",
+      "grok-reset-coupons [<id>] [--consume --yes] Inspect or redeem Grok reset coupons.",
       "main <subcommand>     Manage the physical native Codex login separately from Pool routing.",
       "Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.",
       "A selection-order change applies from the next unbound request and never moves a bound thread.",

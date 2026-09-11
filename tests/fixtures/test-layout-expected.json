@@ -532,6 +532,7 @@
   "grok-management-api.test.ts": "providers/xai",
   "grok-models-effort-list.test.ts": "providers/xai",
   "grok-orphan-adoption.test.ts": "providers/xai",
+  "grok-reset-coupon-cli.test.ts": "providers/xai",
   "grok-reset-coupons.test.ts": "providers/xai",
   "grok-selection.test.ts": "providers/xai",
   "grok-status.test.ts": "providers/xai",
