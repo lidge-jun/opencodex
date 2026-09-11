@@ -21,6 +21,7 @@ export const en = {
   "zcodeDesktop.catalogPending": "Provider enabled, but the Codex catalog is not ready. Retry activation; check custom model visibility filters if models remain missing.",
   "zcodeDesktop.retryActivation": "Retry activation",
   "zcodeDesktop.restartNotice": "If Codex does not show the new models, restart Codex when your tasks finish. No processes will be restarted automatically.",
+  "zcodeDesktop.dashboardRequired": "This action requires a browser session on a loopback-bound dashboard or a paired hub. An admin token alone cannot authorize Desktop setup.",
   "zcodeDesktop.intro": "Connect ZCode Desktop to enable its local provider and publish its models to Codex. Defaults stay unchanged; no inference is sent.",
   "zcodeDesktop.connected": "ZCode ready · provider enabled · models published",
   "zcodeDesktop.notConnected": "Desktop not connected",

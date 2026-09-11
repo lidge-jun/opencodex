@@ -20,6 +20,7 @@ export const tr: Record<TKey, string> = {
   "zcodeDesktop.catalogPending": "Sağlayıcı etkin, ancak Codex kataloğu hazır değil. Yeniden deneyin; eksik modeller için özel görünürlük filtrelerini kontrol edin.",
   "zcodeDesktop.retryActivation": "Etkinleştirmeyi yeniden dene",
   "zcodeDesktop.restartNotice": "Modeller görünmüyorsa görevler bitince Codex’i yeniden başlatın. Hiçbir işlem otomatik yeniden başlatılmaz.",
+  "zcodeDesktop.dashboardRequired": "Bu işlem, loopback’e bağlı panelde veya eşleştirilmiş hub’da tarayıcı oturumu gerektirir. Yalnızca yönetici jetonu Desktop kurulumuna yetki vermez.",
   "zcodeDesktop.intro": "ZCode Desktop bağlantısı yerel sağlayıcıyı etkinleştirip modellerini Codex’e ekler. Varsayılanlar değişmez; çıkarım yapılmaz.",
   "zcodeDesktop.connected": "ZCode hazır · sağlayıcı etkin · modeller yayımlandı",
   "zcodeDesktop.notConnected": "Desktop bağlı değil",

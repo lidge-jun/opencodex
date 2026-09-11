@@ -126,3 +126,16 @@ test("partial activation remains visible and retries without a second protocol c
   expect(requests.filter(r => r.path.endsWith("/connect") || r.path.endsWith("/test"))).toHaveLength(0);
   expect(host.textContent).toContain("No processes will be restarted automatically");
 });
+
+test("admin-token setup refusal shows browser-session guidance, not success", async () => {
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (_input: RequestInfo | URL, options?: RequestInit) =>
+    options?.method === "POST" ? Response.json({ error: "dashboard_required" }, { status: 403 }) :
+      Response.json({ connected: false, activation: "disconnected", runtimes: ["/installed/ZCode"], runtime: "/installed/ZCode", workspace: "/project", models: [] })
+  });
+  await mountPane();
+  await click(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+  await click(button("Connect Desktop"));
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("browser session");
+  expect(closeCalls).toBe(0);
+  expect(host.textContent).not.toContain("ZCode ready");
+});

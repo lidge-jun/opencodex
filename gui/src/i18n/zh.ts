@@ -19,6 +19,7 @@ export const zh: Record<TKey, string> = {
   "zcodeDesktop.catalogPending": "提供商已启用，但 Codex 目录尚未就绪。请重试；若模型仍缺失，请检查自定义可见性筛选。",
   "zcodeDesktop.retryActivation": "重试启用",
   "zcodeDesktop.restartNotice": "若 Codex 未显示新模型，请在任务结束后重启 Codex。不会自动重启任何进程。",
+  "zcodeDesktop.dashboardRequired": "此操作需要绑定到回环地址的仪表板或已配对 Hub 的浏览器会话。仅管理员令牌无法授权 Desktop 设置。",
   "zcodeDesktop.intro": "连接 ZCode Desktop 将启用本地提供商并将模型发布到 Codex。不更改默认设置，也不执行推理。",
   "zcodeDesktop.connected": "ZCode 已就绪 · 提供商已启用 · 模型已发布",
   "zcodeDesktop.notConnected": "Desktop 未连接",

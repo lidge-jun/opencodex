@@ -19,6 +19,7 @@ export const ru: Record<TKey, string> = {
   "zcodeDesktop.catalogPending": "Провайдер включён, но каталог Codex не готов. Повторите активацию и проверьте фильтры видимости отсутствующих моделей.",
   "zcodeDesktop.retryActivation": "Повторить активацию",
   "zcodeDesktop.restartNotice": "Если модели не появились, перезапустите Codex после завершения задач. Автоматического перезапуска процессов не будет.",
+  "zcodeDesktop.dashboardRequired": "Требуется сеанс браузера на панели, привязанной к loopback, или сопряжённом хабе. Одного токена администратора недостаточно для настройки Desktop.",
   "zcodeDesktop.intro": "Подключение ZCode Desktop включает локального провайдера и публикует модели в Codex. Значения по умолчанию сохраняются; генерация не запускается.",
   "zcodeDesktop.connected": "ZCode готов · провайдер включён · модели опубликованы",
   "zcodeDesktop.notConnected": "Desktop не подключён",

@@ -42,7 +42,7 @@ describe("ZCode Desktop management consent", () => {
   for (const principal of [undefined, "admin-token"] as const) {
     test(`rejects native execution configuration from ${principal ?? "missing"} principal`, async () => {
       const f = fixture();
-      for (const action of ["connect", "disconnect", "test"]) {
+      for (const action of ["connect", "activate", "disconnect", "test"]) {
         const response = await handleZcodeDesktopRoutes(context(`/api/zcode-desktop/${action}`, { consent: true, runtime: "/installed/ZCode", workspace: "/project" }, principal), f.deps);
         expect(response?.status).toBe(403);
       }
@@ -121,4 +121,24 @@ test("a different provider occupying zcode is never overwritten", async () => {
   const before = structuredClone(ctx.config.providers);
   expect((await activateDesktopProvider(ctx, { ...status, connected: true }, f.deps.readDesktopCatalogSlugs)).activation).toBe("provider_pending");
   expect(ctx.config.providers).toEqual(before);
+});
+
+test("activation retry is consent-gated and never repeats the protocol probe", async () => {
+  const f = fixture(), ctx = context("/api/zcode-desktop/activate", {
+    consent: true, runtime: "/installed/ZCode", workspace: "/project",
+  }, "gui-session");
+  f.deps.desktopStatus = () => ({ ...status, connected: true });
+  const response = await handleZcodeDesktopRoutes(ctx, f.deps);
+  expect(await response?.json()).toMatchObject({ activation: "ready" });
+  expect(f.calls()).toBe(0);
+});
+
+test("an existing renamed ZCode provider is reused without adding canonical zcode", async () => {
+  const ctx = context("/api/zcode-desktop/activate", {}, "gui-session");
+  ctx.config.providers.desktop = { adapter: "zcode", authMode: "local", baseUrl: "https://zcode.z.ai", note: "keep" };
+  const slugs = models.map(m => "desktop/" + m.id.replaceAll("/", "-"));
+  const result = await activateDesktopProvider(ctx, { ...status, connected: true }, () => slugs);
+  expect(result).toMatchObject({ activation: "ready", providerName: "desktop" });
+  expect(ctx.config.providers.zcode).toBeUndefined();
+  expect(ctx.config.providers.desktop?.note).toBe("keep");
 });

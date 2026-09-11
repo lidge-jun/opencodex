@@ -28,7 +28,7 @@ or subscription terms; those remain the vendor's policy.
 
 1. Install the official **ZCode Desktop**, open it on the **same computer as the proxy**,
    and sign in/configure your Z.AI models there. Keep Desktop open during initial detection.
-2. In OpenCodex, choose **Providers → Add Provider → ZCode (local agent)**.
+2. Use a browser session on a loopback-bound dashboard or a paired hub. An admin-token login on a public listener does not authorize Desktop setup. In OpenCodex, choose **Providers → Add Provider → ZCode (local agent)**.
 3. Click **Detect again** if needed. OpenCodex finds running Desktop installations and standard
    installation folders. For portable/extracted installations, the advanced folder field lets
    you select the application directory; it never accepts a shell command.

@@ -20,6 +20,7 @@ export const de: Record<TKey, string> = {
   "zcodeDesktop.catalogPending": "Anbieter aktiviert, Codex-Katalog noch nicht bereit. Aktivierung erneut versuchen und bei fehlenden Modellen eigene Sichtbarkeitsfilter prüfen.",
   "zcodeDesktop.retryActivation": "Aktivierung wiederholen",
   "zcodeDesktop.restartNotice": "Falls Codex die Modelle nicht zeigt, starten Sie Codex nach Abschluss Ihrer Aufgaben neu. Kein automatischer Prozessneustart.",
+  "zcodeDesktop.dashboardRequired": "Diese Aktion erfordert eine Browsersitzung über ein an Loopback gebundenes Dashboard oder einen gekoppelten Hub. Ein Admin-Token allein erlaubt keine Desktop-Einrichtung.",
   "zcodeDesktop.intro": "ZCode Desktop verbinden, um den lokalen Anbieter zu aktivieren und seine Modelle in Codex bereitzustellen. Standardwerte bleiben unverändert; keine Inferenz.",
   "zcodeDesktop.connected": "ZCode bereit · Anbieter aktiviert · Modelle veröffentlicht",
   "zcodeDesktop.notConnected": "Desktop nicht verbunden",

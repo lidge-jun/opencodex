@@ -19,6 +19,7 @@ export const ko: Record<TKey, string> = {
   "zcodeDesktop.catalogPending": "공급자는 활성화되었지만 Codex 카탈로그는 미완료입니다. 재시도하고 모델이 없으면 사용자 표시 필터를 확인하세요.",
   "zcodeDesktop.retryActivation": "활성화 재시도",
   "zcodeDesktop.restartNotice": "Codex에 모델이 표시되지 않으면 작업 완료 후 Codex를 다시 시작하세요. 프로세스를 자동으로 다시 시작하지 않습니다.",
+  "zcodeDesktop.dashboardRequired": "이 작업에는 루프백에 바인딩된 대시보드 또는 페어링된 허브의 브라우저 세션이 필요합니다. 관리자 토큰만으로는 Desktop을 설정할 수 없습니다.",
   "zcodeDesktop.intro": "ZCode Desktop을 연결하면 로컬 공급자를 활성화하고 Codex에 모델을 게시합니다. 기본값은 유지되며 추론은 실행하지 않습니다.",
   "zcodeDesktop.connected": "ZCode 준비 완료 · 공급자 활성화 · 모델 게시 완료",
   "zcodeDesktop.notConnected": "Desktop 연결 안 됨",

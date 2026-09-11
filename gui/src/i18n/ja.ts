@@ -19,6 +19,7 @@ export const ja: Record<TKey, string> = {
   "zcodeDesktop.catalogPending": "プロバイダーは有効ですが、Codex カタログは未完了です。再試行し、モデルが不足する場合は表示フィルターを確認してください。",
   "zcodeDesktop.retryActivation": "有効化を再試行",
   "zcodeDesktop.restartNotice": "Codex にモデルが表示されない場合は、作業終了後に Codex を再起動してください。自動再起動は行いません。",
+  "zcodeDesktop.dashboardRequired": "この操作にはループバックにバインドされたダッシュボードまたはペアリング済みハブのブラウザーセッションが必要です。管理トークンだけでは Desktop を設定できません。",
   "zcodeDesktop.intro": "ZCode Desktop を接続するとローカルプロバイダーが有効になり、Codex にモデルを公開します。既定値は変更せず、推論も送信しません。",
   "zcodeDesktop.connected": "ZCode 準備完了 · プロバイダー有効 · モデル公開済み",
   "zcodeDesktop.notConnected": "Desktop 未接続",

@@ -61,6 +61,7 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
   };
   const problem = error === "desktop_missing" ? t("zcodeDesktop.missing")
     : error === "sandbox_missing" ? t("zcodeDesktop.sandboxMissing")
+    : error === "dashboard_required" ? t("zcodeDesktop.dashboardRequired")
     : error === "node_missing" ? t("zcodeDesktop.nodeMissing")
     : error === "node_incompatible" ? t("zcodeDesktop.nodeIncompatible")
     : error === "platform_unsupported" ? t("zcodeDesktop.platformUnsupported")
