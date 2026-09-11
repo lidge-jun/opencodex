@@ -2956,7 +2956,8 @@ async function maybeFetchProviderQuota(
   try {
     if (provider.adapter === "zcode") {
       const result = await readZcodeQuota(provider);
-      if (!result) return AUTHORITATIVE_EMPTY_QUOTA;
+      if (!result) return null;
+      if (result.kind === "empty") return AUTHORITATIVE_EMPTY_QUOTA;
       const report: ProviderQuotaReport = { provider: name, label: "ZCode", source: "zcode-desktop",
         quota: result.quota, updatedAt: result.quota.updatedAt, reverseEngineered: true };
       accountReportCurrent.set(report, () => zcodeQuotaIdentity(provider) === result.identity);

@@ -14,15 +14,15 @@ let testing = false;
 export async function handleZcodeDesktopRoutes(ctx: ManagementContext, deps = services): Promise<Response | null> {
   const { req, url } = ctx;
   if (!url.pathname.startsWith("/api/zcode-desktop")) return null;
+  // Runtime/workspace paths are local-machine metadata. Every Desktop endpoint requires an
+  // actual GUI session; an admin token may manage providers but must not inspect host paths.
+  if (ctx.principal !== "gui-session") return jsonResponse({ error: "dashboard_required" }, 403);
   if (url.pathname === "/api/zcode-desktop" && req.method === "GET") return jsonResponse(desktopActivation(ctx, deps.desktopStatus(), deps.readDesktopCatalogSlugs));
   if (url.pathname === "/api/zcode-desktop/folders" && req.method === "GET") {
     try { return jsonResponse(desktopFolders(url.searchParams.get("path") ?? undefined)); }
     catch { return jsonResponse({ error: "workspace_invalid" }, 400); }
   }
   if (req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
-  // Executable/workspace selection and optional quota-spending tests require an actual GUI
-  // principal, not forgeable Origin headers or a data/admin token.
-  if (ctx.principal !== "gui-session") return jsonResponse({ error: "dashboard_required" }, 403);
   try {
     const raw = await readBoundedJsonRequestBody(req, 12_000, undefined, { signal: AbortSignal.any([req.signal, AbortSignal.timeout(5_000)]) });
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return jsonResponse({ error: "invalid_request" }, 400);

@@ -13,17 +13,20 @@ import { desktopProfile, desktopSandboxEnabled, desktopStatus, resolveDesktopRun
 import { loadZcodeSettings } from "./settings";
 
 export interface QuotaContext { identity: string; runtimeRoot: string; config: string; credentials?: string; sourceProvider: string; managed: boolean }
+export type ZcodeQuotaSnapshot = { kind: "quota"; quota: ProviderQuota } | { kind: "empty" };
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-/** Translate consumption into the existing shared quota contract. Missing is never zero. */
-export function parseZcodeQuota(value: unknown, now = Date.now()): ProviderQuota | null {
+/** Distinguish a valid empty entitlement from an unavailable or malformed probe. */
+export function parseZcodeQuotaSnapshot(value: unknown, now = Date.now()): ZcodeQuotaSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const v = value as { generatedAt?: unknown; limits?: unknown };
-  if (!finite(v.generatedAt) || v.generatedAt > now + 60_000 || now - v.generatedAt > 30 * 60_000 || !Array.isArray(v.limits)) return null;
+  if (!finite(v.generatedAt) || v.generatedAt > now + 60_000 || now - v.generatedAt > 30 * 60_000
+    || !Array.isArray(v.limits) || v.limits.length > 256) return null;
   const result: ProviderQuota = { updatedAt: v.generatedAt };
   const seen = new Set<string>();
-  for (const row of v.limits.slice(0, 16)) {
-    if (!row || typeof row !== "object" || !["CREDIT_LIMIT", "TOKENS_LIMIT"].includes(row.type)) continue;
+  for (const row of v.limits) {
+    if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.type !== "string") return null;
+    if (!["CREDIT_LIMIT", "TOKENS_LIMIT"].includes(row.type)) continue;
     const key = row.unit === 3 && row.number === 5 ? "fiveHour" : row.unit === 6 && row.number === 1 ? "weekly" : undefined;
     if (!key) continue;
     if (seen.has(key)) return null; // ambiguous windows are not interchangeable
@@ -34,13 +37,21 @@ export function parseZcodeQuota(value: unknown, now = Date.now()): ProviderQuota
     } else if (row.usage === undefined && row.remaining === undefined && finite(row.percentage) && row.percentage >= 0 && row.percentage <= 100) {
       percent = row.percentage;
     }
-    if (percent === undefined) continue;
+    if (percent === undefined) return null;
     result[`${key}Percent`] = percent;
     if (finite(row.nextResetTime) && row.nextResetTime > 0 && row.nextResetTime <= 8.64e15) {
       result[`${key}ResetAt`] = row.nextResetTime > 1e11 ? row.nextResetTime : row.nextResetTime * 1000;
     }
   }
-  return result.fiveHourPercent !== undefined || result.weeklyPercent !== undefined ? result : null;
+  return result.fiveHourPercent !== undefined || result.weeklyPercent !== undefined
+    ? { kind: "quota", quota: result }
+    : { kind: "empty" };
+}
+
+/** Translate consumption into the existing shared quota contract. Missing is never zero. */
+export function parseZcodeQuota(value: unknown, now = Date.now()): ProviderQuota | null {
+  const result = parseZcodeQuotaSnapshot(value, now);
+  return result?.kind === "quota" ? result.quota : null;
 }
 
 function context(provider: OcxProviderConfig): QuotaContext {
@@ -87,7 +98,7 @@ function command(c: QuotaContext): string[] {
 }
 
 /** One short-lived official host, without a writable user workspace or persistent credentials. */
-async function probe(c: QuotaContext): Promise<ProviderQuota | null> {
+async function probe(c: QuotaContext): Promise<ZcodeQuotaSnapshot | null> {
   const sandbox = desktopSandboxEnabled();
   const bwrap = sandbox ? Bun.which("bwrap", { PATH: process.env.PATH }) : undefined;
   if (sandbox && !bwrap) return null;
@@ -121,14 +132,14 @@ async function probe(c: QuotaContext): Promise<ProviderQuota | null> {
     child.once("close", code => {
       clearTimeout(timer);
       if (code || invalid) return resolve(null);
-      try { resolve(parseZcodeQuota(JSON.parse(output))); } catch { resolve(null); }
+      try { resolve(parseZcodeQuotaSnapshot(JSON.parse(output))); } catch { resolve(null); }
     });
     });
   } finally { if (temporaryHome) rmSync(temporaryHome, { recursive: true, force: true }); }
 }
 
-const inflight = new Map<string, Promise<ProviderQuota | null>>();
-export async function readZcodeQuota(provider: OcxProviderConfig, deps: { context?: typeof context; probe?: typeof probe } = {}): Promise<{ identity: string; quota: ProviderQuota } | null> {
+const inflight = new Map<string, Promise<ZcodeQuotaSnapshot | null>>();
+export async function readZcodeQuota(provider: OcxProviderConfig, deps: { context?: typeof context; probe?: typeof probe } = {}): Promise<({ identity: string } & ZcodeQuotaSnapshot) | null> {
   let c: QuotaContext;
   try { if (provider.zcodeAccountId && !deps.context) await refreshAccount(provider.zcodeAccountId); c = (deps.context ?? context)(provider); } catch { return null; }
   // Coalesce per profile, without letting the first account starve every other account.
@@ -139,7 +150,7 @@ export async function readZcodeQuota(provider: OcxProviderConfig, deps: { contex
     inflight.set(c.identity, pending);
     void pending.finally(() => { if (inflight.get(c.identity) === pending) inflight.delete(c.identity); });
   }
-  const quota = await pending;
-  try { return quota && (deps.context ?? context)(provider).identity === c.identity ? { identity: c.identity, quota } : null; }
+  const snapshot = await pending;
+  try { return snapshot && (deps.context ?? context)(provider).identity === c.identity ? { identity: c.identity, ...snapshot } : null; }
   catch { return null; }
 }

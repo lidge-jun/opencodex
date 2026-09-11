@@ -88,8 +88,11 @@ independent official ZCode profiles.
 
 Repeat for each account (up to 20). Accounts do not form a pool: there is no automatic
 rotation or fallback to another ZCode account or the Desktop profile. Combos may target
-explicit account providers if you configure those routes yourself. Quota bars remain
-specific to each provider/account.
+explicit account providers if you configure those routes yourself. A combo containing any
+ZCode target is advertised without caller-managed tool support, even when its other targets
+support tools. Quota bars remain specific to each provider/account; a temporary quota-probe
+failure preserves a recent valid reading, while a valid entitlement with no supported windows
+clears it.
 
 **Sign in again** replaces only the matching account's sign-in, retaining its provider ID
 and custom settings. A different identity is rejected; use **Add account** for it instead.
@@ -153,8 +156,9 @@ an advanced operator-supplied launcher.
 
 Managed consent and installation/workspace paths are stored privately under
 `$OPENCODEX_HOME/zcode-desktop/`, separately from provider configuration. Data-plane requests
-cannot choose an executable or override these paths. Connecting, disconnecting and the optional
-quota-spending test require the dashboard's authenticated GUI session, not a raw API/admin token.
+cannot choose an executable or override these paths. Status, folder browsing, connecting,
+disconnecting and the optional quota-spending test require the dashboard's authenticated GUI
+session, not a raw API/admin token.
 
 ## Advanced: operator-supplied isolated launcher
 

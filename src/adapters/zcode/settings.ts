@@ -43,7 +43,7 @@ export function loadZcodeSettings(env: NodeJS.ProcessEnv = process.env, accountI
     throw new Error("ZCode requires explicit absolute OCX_ZCODE_HOME and OCX_ZCODE_WORKSPACE paths.");
   }
   const realHome = realpathSync(home);
-  if (realHome === realpathSync(env.HOME ?? home)) throw new Error("ZCode must use a separate home, not the proxy home.");
+  if (env.HOME && realHome === realpathSync(env.HOME)) throw new Error("ZCode must use a separate home, not the proxy home.");
   if (!statSync(realHome).isDirectory()) throw new Error("ZCode home is not a directory.");
   const settingsPath = join(realHome, ".zcode", "cli", "config.json");
   return {

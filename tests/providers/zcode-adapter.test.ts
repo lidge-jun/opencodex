@@ -6,7 +6,7 @@ import { createZcodeAdapter } from "../../src/adapters/zcode/adapter";
 import { loadZcodeSettings, readZcodeModels, type JsonObject, type ZcodeSettings } from "../../src/adapters/zcode/settings";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
-import { modelCapabilityFields } from "../../src/server/models-capabilities";
+import { catalogRowSupportsToolUse, modelCapabilityFields } from "../../src/server/models-capabilities";
 import { deriveProviderPresets } from "../../src/providers/derive";
 
 const roots: string[] = [];
@@ -29,11 +29,22 @@ class FakeClient {
   onFailure: (error: Error) => void = () => {};
   calls: Array<{ method: string; params: JsonObject }> = [];
   closed = false;
-  constructor(private outcome: "ok" | "failed" | "hang" = "ok") {}
+  constructor(private outcome: "ok" | "failed" | "hang" | "session-noise" = "ok") {}
   async request(method: string, params: JsonObject): Promise<JsonObject> {
     this.calls.push({ method, params });
     if (method === "session/create") return { session: { sessionId: "sess_test-1" } };
     if (method === "session/send") {
+      if (this.outcome === "session-noise") {
+        queueMicrotask(() => {
+          this.onEvent({ method: "session/event", params: { type: "turn.completed", payload: { response: "wrong session" } } });
+          this.onEvent({ method: "session/event", params: { sessionId: "sess_other", type: "turn.completed", payload: { response: "wrong session" } } });
+        });
+        setTimeout(() => {
+          this.event("model.streaming", { kind: "text_delta", delta: "Hello" });
+          this.event("turn.completed", { response: "Hello" });
+        }, 5);
+        return {};
+      }
       queueMicrotask(() => {
         if (this.outcome === "hang") return;
         this.event("model.streaming", { kind: "reasoning_delta", delta: "Thinking" });
@@ -70,6 +81,9 @@ describe("ZCode local agent", () => {
     for (const call of client.calls.filter(c => ["session/create", "session/send"].includes(c.method))) {
       expect(call.params._zcodeModel).toEqual({ providerId: "test", modelId: "model" });
       expect(call.params.runtimeModel).toBeUndefined();
+      const serialized = JSON.stringify(call.params);
+      expect(serialized).not.toContain("never-log-this");
+      expect(serialized).not.toContain("apiKey");
     }
   });
   test("a revoked or changed managed connection cannot start a queued child", async () => {
@@ -90,11 +104,24 @@ describe("ZCode local agent", () => {
     expect(() => adapter.buildRequest(request(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }))
       .toThrow("not HTTP");
     expect(modelCapabilityFields({ supportsToolUse: false }).capabilities.supports_tool_use).toBe(false);
+    const comboSupportsTools = catalogRowSupportsToolUse(undefined, { targets: [{ provider: "zcode", model: "model" }] }, { zcode: provider });
+    expect(comboSupportsTools).toBe(false);
+    expect(modelCapabilityFields({ supportsToolUse: comboSupportsTools }).capabilities.supports_tool_use).toBe(false);
+    expect(catalogRowSupportsToolUse(undefined, { targets: [{ provider: "other", model: "model" }] }, {
+      other: { adapter: "openai-chat", baseUrl: "https://example.invalid" },
+    })).toBe(true);
     expect(deriveProviderPresets().find(p => p.id === "zcode")).toMatchObject({ auth: "local", adapter: "zcode" });
   });
   test("requires explicit operator opt-in and an argv launcher, never a shell string", () => {
     expect(() => loadZcodeSettings({})).toThrow("disabled");
     expect(() => loadZcodeSettings({ OCX_ZCODE_NATIVE_TOOLS: "1", OCX_ZCODE_COMMAND: "echo unsafe" })).toThrow("JSON argv");
+  });
+  test("advanced settings allow an isolated home when the proxy HOME is absent", () => {
+    const settings = fixture();
+    const env = { OCX_ZCODE_NATIVE_TOOLS: "1", OCX_ZCODE_COMMAND: JSON.stringify(["/isolated-launcher"]),
+      OCX_ZCODE_HOME: settings.home, OCX_ZCODE_WORKSPACE: settings.workspace };
+    expect(loadZcodeSettings(env)).toMatchObject({ home: settings.home, workspace: settings.workspace });
+    expect(() => loadZcodeSettings({ ...env, HOME: settings.home })).toThrow("separate home");
   });
   test("catalog excludes disabled/recursive entries and preserves canonical model identity", () => {
     const models = readZcodeModels(fixture());
@@ -119,6 +146,12 @@ describe("ZCode local agent", () => {
     expect(JSON.stringify(events)).not.toContain("never-log-this");
     expect(client.closed).toBe(true);
     expect(client.calls.map(c => c.method)).toEqual(["session/create", "session/subscribe", "session/send", "session/stop"]);
+  });
+  test("ignores terminal events without the active session identity", async () => {
+    const events = await run(fixture(), new FakeClient("session-noise"));
+    expect(events.filter(e => e.type === "text_delta" && e.text === "wrong session")).toHaveLength(0);
+    expect(events.filter(e => e.type === "text_delta" && e.text === "Hello")).toHaveLength(1);
+    expect(events.at(-1)?.type).toBe("done");
   });
   test("continuation resumes only owner-fenced state and sends the current delta", async () => {
     const settings = fixture();

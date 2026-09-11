@@ -85,3 +85,8 @@ including renamed/account-bound providers and Flash. The shared catalog predicat
 sidecar-backed image input and excludes these models from describer selection. Disabled or
 unavailable vision uses explicit omission markers; recursion protection and quota/cancellation
 bounds remain in the shared vision path. This does not implement native image support in ZCode.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths in
+optional sandbox mode, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.

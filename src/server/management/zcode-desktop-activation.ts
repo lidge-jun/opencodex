@@ -12,7 +12,6 @@ export const readDesktopCatalogSlugs = (): string[] => (readCatalog(readCodexCat
 
 function providerName(ctx: ManagementContext, accountId?: string): string | undefined {
   const matches = Object.keys(ctx.config.providers).filter(name => ctx.config.providers[name]?.adapter === "zcode" && ctx.config.providers[name]?.zcodeAccountId === accountId);
-  if (matches.includes("zcode")) return "zcode";
   return matches.length === 1 ? matches[0] : undefined;
 }
 

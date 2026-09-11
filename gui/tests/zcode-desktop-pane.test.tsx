@@ -94,6 +94,19 @@ test("one-request test is a separate explicit quota-spending action", async () =
   expect(host.textContent).toContain("ZCode answered successfully.");
 });
 
+test("a successful HTTP response with a failed inference shows the actionable error", async () => {
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path.endsWith("/test")) return Response.json({ ok: false, error: "inference_failed" });
+    return Response.json({ connected: true, activation: "ready", providerName: "zcode", runtimes: ["/installed/ZCode"],
+      runtime: "/installed/ZCode", workspace: "/project", models: [{ id: "builtin:zai/model", label: "Model" }] });
+  } });
+  await mountPane();
+  await click(button("Test with one request"));
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("did not complete the test");
+  expect(host.textContent).not.toContain("ZCode answered successfully.");
+});
+
 test("incompatible Node preflight shows safe actionable guidance without connecting", async () => {
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => Response.json({
     connected: false, issue: "node_incompatible", runtimes: [], runtime: "", workspace: "/project", models: [],

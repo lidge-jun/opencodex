@@ -45,7 +45,10 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
       });
       const result = await response.json();
       if (!response.ok) { setError(result.error ?? "runtime_failed"); return; }
-      if (action === "test") setTested(result.ok === true);
+      if (action === "test") {
+        setTested(result.ok === true);
+        if (result.ok !== true) setError(result.error ?? "inference_failed");
+      }
       else {
         applyStatus(result as Status); setConsent(false);
         if ((action === "connect" || action === "activate") && result.activation === "ready" && result.providerName) onConnected?.(result.providerName);

@@ -32,7 +32,7 @@ function normalizeDesktopConfig(input) {
 
 function desktopModelCatalog(config) {
   return Object.entries(config.provider).flatMap(([providerId, p]) =>
-    Object.entries(p.models).slice(0, 200).filter(([id, m]) => id && !/[\x00-\x20]/.test(id) && m && typeof m === "object").map(([modelId, m]) => ({
+    Object.entries(p.models).filter(([id, m]) => id && !/[\x00-\x20]/.test(id) && m && typeof m === "object").slice(0, 200).map(([modelId, m]) => ({
       id: `${providerId}/${modelId}`, providerId, modelId,
       label: `${p.name} / ${typeof m.name === "string" ? m.name : modelId}`.slice(0, 240),
       ...(Number.isFinite(m.limit?.context) && m.limit.context > 0 ? { contextWindow: m.limit.context } : {}),

@@ -22,6 +22,9 @@ const fail = (code: string): never => { throw new DesktopSetupError(code); };
 const root = (accountId?: string) => accountId ? accountRoot(accountId) : join(getConfigDir(), "zcode-desktop");
 const connectionPath = (accountId?: string) => join(root(accountId), "connection.json");
 export const defaultDesktopWorkspace = (accountId?: string) => join(root(accountId), "workspace");
+const canonicalExistingOrResolved = (path: string): string => {
+  try { return realpathSync(path); } catch { return resolve(path); }
+};
 
 function readConnection(accountId?: string): Connection | undefined {
   if (accountId) readAccount(accountId);
@@ -95,15 +98,20 @@ export function detectDesktopRuntimes(): string[] {
 
 export function validateDesktopWorkspace(path: string): string {
   if (!path || !isAbsolute(path) || path.includes("\0") || path.length > 4096) return fail("workspace_invalid");
-  if (resolve(path) === resolve(defaultDesktopWorkspace())) mkdirSync(path, { recursive: true, mode: 0o700 });
+  const defaultPath = defaultDesktopWorkspace();
+  if (resolve(path) === resolve(defaultPath)) mkdirSync(path, { recursive: true, mode: 0o700 });
   let workspace: string;
   try { workspace = realpathSync(path); if (!statSync(workspace).isDirectory()) return fail("workspace_invalid"); }
   catch { return fail("workspace_invalid"); }
   if (!desktopSandboxEnabled()) return workspace;
   const home = realpathSync(homedir());
   if (workspace === home || home.startsWith(workspace.endsWith(sep) ? workspace : workspace + sep)) return fail("workspace_invalid");
-  if (workspace !== resolve(defaultDesktopWorkspace())) {
-    for (const protectedPath of [join(home, ".zcode"), join(home, ".codex"), join(home, ".ssh"), join(home, ".config"), getConfigDir(), root()]) {
+  const configRoot = canonicalExistingOrResolved(root());
+  const managedDefault = canonicalExistingOrResolved(defaultPath);
+  const isManagedDefault = workspace === managedDefault && managedDefault.startsWith(configRoot + sep);
+  if (!isManagedDefault) {
+    for (const rawPath of [join(home, ".zcode"), join(home, ".codex"), join(home, ".ssh"), join(home, ".config"), getConfigDir(), root()]) {
+      const protectedPath = canonicalExistingOrResolved(rawPath);
       if (workspace === protectedPath || workspace.startsWith(protectedPath + sep) || protectedPath.startsWith(workspace + sep)) return fail("workspace_invalid");
     }
   }

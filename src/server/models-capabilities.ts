@@ -1,4 +1,5 @@
 import type { CursorEffortTable } from "../integrations/cursor-effort-table";
+import type { OcxComboConfig, OcxConfig, OcxProviderConfig } from "../types";
 
 /**
  * Extended capability advertisement for the OpenAI-shape `GET /v1/models` list.
@@ -140,6 +141,16 @@ export interface ModelCapabilityFields {
    * be carried without failing row validation (`cost.long_context` is rejected by that schema).
    */
   pricing?: { overrides: Array<{ min_prompt_tokens: number }> };
+}
+
+/** Agent-owned ZCode targets cannot execute the caller's tool catalog, directly or via a combo. */
+export function catalogRowSupportsToolUse(
+  provider: OcxProviderConfig | undefined,
+  combo: OcxComboConfig | undefined,
+  providers: OcxConfig["providers"],
+): boolean {
+  return provider?.adapter !== "zcode"
+    && combo?.targets.some(target => providers[target.provider]?.adapter === "zcode") !== true;
 }
 
 function positiveInt(value: unknown): number | undefined {

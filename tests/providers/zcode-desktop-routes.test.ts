@@ -24,8 +24,9 @@ afterEach(() => {
 const models = [{ id: "builtin:zai-coding-plan/glm-5.3", providerId: "builtin:zai-coding-plan", modelId: "glm-5.3", label: "GLM-5.3" },
   { id: "builtin:zai-coding-plan/glm-5.3-flash", providerId: "builtin:zai-coding-plan", modelId: "glm-5.3-flash", label: "GLM-5.3-Flash" }];
 const status = { connected: false, issue: undefined, runtimes: ["/installed/ZCode"], runtime: "/installed/ZCode", workspace: "/project", models, platform: "linux" as const };
-function context(path: string, body: unknown, principal?: ManagementContext["principal"]): ManagementContext {
-  const req = new Request(`http://localhost${path}`, { method: "POST", headers: { "content-type": "application/json", origin: "http://localhost", "x-opencodex-gui-session": "forged" }, body: JSON.stringify(body) });
+function context(path: string, body: unknown, principal?: ManagementContext["principal"], method = "POST"): ManagementContext {
+  const req = new Request(`http://localhost${path}`, { method, headers: { "content-type": "application/json", origin: "http://localhost", "x-opencodex-gui-session": "forged" },
+    ...(method === "GET" ? {} : { body: JSON.stringify(body) }) });
   const config = getDefaultConfig();
   const catalog = join(home, "catalog.json");
   return { req, url: new URL(req.url), principal, config,
@@ -51,7 +52,23 @@ describe("ZCode Desktop management consent", () => {
       }
       expect(f.calls()).toBe(0);
     });
+    test(`rejects Desktop path discovery from ${principal ?? "missing"} principal`, async () => {
+      const f = fixture();
+      for (const path of ["/api/zcode-desktop", "/api/zcode-desktop/folders"]) {
+        const response = await handleZcodeDesktopRoutes(context(path, {}, principal, "GET"), f.deps);
+        expect(response?.status).toBe(403);
+        expect(await response?.json()).toEqual({ error: "dashboard_required" });
+      }
+      expect(f.calls()).toBe(0);
+    });
   }
+  test("GUI sessions can inspect Desktop status without triggering native execution", async () => {
+    const f = fixture();
+    const response = await handleZcodeDesktopRoutes(context("/api/zcode-desktop", {}, "gui-session", "GET"), f.deps);
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({ connected: false, activation: "disconnected" });
+    expect(f.calls()).toBe(0);
+  });
   test("requires an explicit consent checkbox, not just a GUI session", async () => {
     const f = fixture(); const response = await handleZcodeDesktopRoutes(context("/api/zcode-desktop/connect", { runtime: "/installed/ZCode", workspace: "/project" }, "gui-session"), f.deps);
     expect(response?.status).toBe(400); expect(f.calls()).toBe(0);
@@ -123,6 +140,19 @@ test("a different provider occupying zcode is never overwritten", async () => {
   ctx.config.providers.zcode = { adapter: "openai-chat", baseUrl: "https://example.invalid" };
   const before = structuredClone(ctx.config.providers);
   expect((await activateDesktopProvider(ctx, { ...status, connected: true }, f.deps.readDesktopCatalogSlugs)).activation).toBe("provider_pending");
+  expect(ctx.config.providers).toEqual(before);
+});
+
+test("ambiguous legacy ZCode bindings are not collapsed or overwritten", async () => {
+  const f = fixture(), ctx = context("/api/zcode-desktop/connect", {}, "gui-session");
+  const first = { adapter: "zcode" as const, authMode: "local" as const, baseUrl: "https://zcode.z.ai", disabled: true, note: "canonical" };
+  const second = { ...first, note: "legacy alias" };
+  ctx.config.providers.zcode = first;
+  ctx.config.providers["zcode-legacy"] = second;
+  const before = structuredClone(ctx.config.providers);
+  expect(await activateDesktopProvider(ctx, { ...status, connected: true }, f.deps.readDesktopCatalogSlugs)).toMatchObject({
+    activation: "provider_pending", error: "provider_registration_failed",
+  });
   expect(ctx.config.providers).toEqual(before);
 });
 

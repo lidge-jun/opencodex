@@ -64,6 +64,7 @@ import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-st
 import { runModelRenameStartupMigration } from "../providers/model-rename-startup";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
+import { comboPublicModelId } from "../combos/identifiers";
 import type { StorageCleanupPolicy } from "../types";
 import {
   MAX_CONFIGURABLE_INBOUND_BODY_BYTES,
@@ -237,7 +238,7 @@ import {
 } from "../lib/package-tree-integrity";
 import { detectInstall } from "../update/index";
 import { readyProtocolMetadata } from "../remote/protocol";
-import { modelCapabilityFields } from "./models-capabilities";
+import { catalogRowSupportsToolUse, modelCapabilityFields } from "./models-capabilities";
 import { recordCursorSeen } from "../integrations/cursor-seen";
 import { detectCursorInstalls } from "../integrations/cursor-detect";
 import { loadCursorEffortTable } from "../integrations/cursor-effort-table";
@@ -1827,6 +1828,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const publicId = m.alias ?? `${m.provider}/${fastModelId ?? m.id}`;
           const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
           const provider = config.providers[m.provider];
+          const combo = isCombo ? Object.entries(config.combos ?? {}).find(([id, value]) =>
+            comboPublicModelId(id, value) === publicId)?.[1] : undefined;
           const effective = provider
             ? (await import("../providers/default-aliases")).effectiveModelAliases(
                 config,
@@ -1847,7 +1850,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             ...modelCapabilityFields({
               reasoningEfforts: m.reasoningEfforts,
-              supportsToolUse: provider?.adapter !== "zcode",
+              supportsToolUse: catalogRowSupportsToolUse(provider, combo, config.providers),
               // contextWindow is already the post-cap effective value; contextCap is the raw
               // operator knob and over-reports models whose real window sits below it.
               contextWindow: m.contextWindow,

@@ -43,6 +43,13 @@ describe("managed ZCode Desktop", () => {
     expect(JSON.stringify(catalog)).not.toContain("fixture-private-value");
     expect(JSON.stringify(catalog)).not.toContain("apiKey");
   });
+  test("filters invalid model entries before applying the public catalog cap", () => {
+    const invalid = Object.fromEntries(Array.from({ length: 210 }, (_, i) => [`invalid ${i}`, {}]));
+    const config = normalizeDesktopConfig({ provider: { "builtin:zai-coding-plan": {
+      ...provider(), models: { ...invalid, valid: { name: "Valid" } },
+    } } });
+    expect(desktopModelCatalog(config).map((model: { modelId: string }) => model.modelId)).toContain("valid");
+  });
   test("runtime selection requires a Desktop resources layout, not arbitrary commands", () => {
     expect(() => resolveDesktopRuntime("node -e malicious")).toThrow("desktop_missing");
     const glm = join(root, "app/resources/glm"); mkdirSync(glm, { recursive: true });
@@ -63,6 +70,21 @@ describe("managed ZCode Desktop", () => {
       expect(() => validateDesktopWorkspace(join(root, "alias"))).toThrow("workspace_invalid");
     }
   });
+  test("sandbox checks canonical config paths while allowing only its canonical managed workspace", () => {
+    if (process.platform === "win32") return;
+    const realConfig = join(root, "real-config");
+    const linkedConfig = join(root, "linked-config");
+    mkdirSync(join(realConfig, "zcode-desktop"), { recursive: true });
+    symlinkSync(realConfig, linkedConfig);
+    process.env.OPENCODEX_HOME = linkedConfig;
+    expect(() => validateDesktopWorkspace(linkedConfig)).toThrow("workspace_invalid");
+    expect(() => validateDesktopWorkspace(realConfig)).toThrow("workspace_invalid");
+    const protectedChild = join(realConfig, "zcode-desktop", "private");
+    mkdirSync(protectedChild);
+    expect(() => validateDesktopWorkspace(protectedChild)).toThrow("workspace_invalid");
+    const managed = join(linkedConfig, "zcode-desktop", "workspace");
+    expect(validateDesktopWorkspace(managed)).toBe(join(realConfig, "zcode-desktop", "workspace"));
+  });
   test("disconnect persists revocation instead of falling back to operator env", async () => {
     expect(loadDesktopSettings()).toBeUndefined();
     await disconnectDesktop();
@@ -80,6 +102,7 @@ describe("managed ZCode Desktop", () => {
 });
 
 test("Node selection skips an incompatible nvm prefix and fails safely", () => {
+  if (process.platform === "win32") return;
   const oldPath = process.env.PATH;
   const old = join(root, "old/bin"), modern = join(root, "modern/bin");
   mkdirSync(old, { recursive: true }); mkdirSync(modern, { recursive: true });

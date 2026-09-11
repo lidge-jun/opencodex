@@ -124,8 +124,8 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
         let textSeen = false;
         active.onEvent = message => {
           const params = record(message.params);
-          if (params.sessionId && params.sessionId !== sessionId) return;
           if (message.method !== "session/event") return;
+          if (typeof params.sessionId !== "string" || params.sessionId !== sessionId) return;
           const payload = record(params.payload);
           if (params.type === "model.streaming") {
             if ((payload.kind === "text_delta" || payload.kind === "text_start") && typeof payload.delta === "string") {
