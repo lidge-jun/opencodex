@@ -434,6 +434,84 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(profile).toContain("fast_mode = true");
   });
 
+  test("routed models without a Fast tier disable global fast mode", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "cursor/glm-5.2"\n', "utf8");
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "cursor/glm-5.2" }],
+    }), "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: true }));
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain('model = "cursor/glm-5.2"');
+    expect(config).toContain("fast_mode = false");
+    expect(config).not.toContain("fast_mode = true");
+
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(profile).toContain("fast_mode = false");
+    expect(profile).not.toContain("fast_mode = true");
+  });
+
+  test("a routed catalog disables global fast mode before the picker changes the root model", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [
+        { slug: "gpt-5.5", service_tiers: [{ id: "priority" }] },
+        { slug: "cursor/glm-5.2" },
+      ],
+    }), "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: true }));
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain('model = "gpt-5.5"');
+    expect(config).toContain("fast_mode = false");
+    expect(config).not.toContain("fast_mode = true");
+  });
+
+  test("routed models without a Fast tier repair a stale injected fast mode", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model = "cursor/glm-5.2"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "cursor/glm-5.2" }],
+    }), "utf8");
+
+    const r = runInject(codexHome, ocxHome);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("fast_mode = false");
+    expect(config).not.toContain("fast_mode = true");
+  });
+
+  test("routed models with an advertised Fast tier keep an explicit fast mode", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "openrouter/gpt-5.5"\n', "utf8");
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{
+        slug: "openrouter/gpt-5.5",
+        service_tiers: [{ id: "priority", name: "Fast" }],
+      }],
+    }), "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: true }));
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("fast_mode = true");
+    expect(config).not.toContain("fast_mode = false");
+  });
+
   test("fastMode unset preserves the user's existing fast_mode setting", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n\n[features]\nfast_mode = false\n', "utf8");
 

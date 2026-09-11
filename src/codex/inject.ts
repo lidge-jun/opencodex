@@ -73,6 +73,10 @@ import {
 } from "./paths";
 import { resolveEffectiveProjectModelProvider } from "./project-config-warnings";
 import {
+  catalogHasRoutedModelWithoutFastMode,
+  catalogModelSupportsFastMode,
+} from "./catalog/parsing";
+import {
   transformManagedSubagentDefaults,
   type ManagedSubagentDefaults,
 } from "./subagent-defaults";
@@ -792,6 +796,24 @@ function ensureFastModeFeature(content: string, fastMode?: boolean): string {
   return lines.join("\n");
 }
 
+function effectiveFastMode(
+  content: string,
+  catalogPath: string | null,
+  requested: boolean | undefined,
+): boolean | undefined {
+  const model = readRootTomlString(content, "model");
+  if (catalogHasRoutedModelWithoutFastMode(catalogPath)) {
+    const hasStaleFastMode = /^\s*fast_mode\s*=\s*true\s*(?:#.*)?$/m.test(content);
+    if (model?.includes("/") || requested === true || hasStaleFastMode) return false;
+    return requested;
+  }
+  if (!model?.includes("/")) return requested;
+  // Routed models are safe only when the selected catalog row explicitly advertises Fast.
+  // Force false even when requested is unset so a stale fast_mode=true from an older injector
+  // cannot make Codex switch the picker back to a native Fast-capable model.
+  return catalogModelSupportsFastMode(catalogPath, model) ? requested : false;
+}
+
 function isOpencodexCatalogPath(path: string): boolean {
   return path.replace(/\\/g, "/").split("/").pop() === "opencodex-catalog.json";
 }
@@ -1009,12 +1031,13 @@ export async function injectCodexConfig(
   content = stripExistingModelProvider(content);
   content = stripRootContextWindowOverrides(content);
   content = normalizeServiceTier(content);
-  content = ensureFastModeFeature(content, config?.fastMode);
 
   const catalogPath = chooseCatalogPathForInjection(
     content,
     options.catalogPath,
   );
+  const fastMode = effectiveFastMode(content, catalogPath, config?.fastMode);
+  content = ensureFastModeFeature(content, fastMode);
   content = catalogPath
     ? setRootModelCatalogPath(content, catalogPath)
     : stripOpencodexCatalogPath(content);
@@ -1086,7 +1109,7 @@ export async function injectCodexConfig(
     routingTarget,
     catalogPath,
     websocketsEnabled(config ?? {}),
-    config?.fastMode,
+    fastMode,
   );
   content = applyEol(content, eol);
 

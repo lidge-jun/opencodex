@@ -32,6 +32,8 @@ fast_mode = true
 Инжектируемый `fast_mode` следует трёхзначной настройке `fastMode`: `true` записывает
 `fast_mode = true`, `false` — `fast_mode = false`, а при отсутствии настройки существующий
 `fast_mode` сохраняется без изменений, и таблица `[features]` не добавляется.
+Если в каталоге есть маршрутизируемые записи без поддержки Fast/Priority, OpenCodex отключает глобальный Fast Mode,
+когда он явно включён или остался после старой инъекции. Это не даёт выбору маршрутизируемой модели откатиться к native.
 
 Прокси по умолчанию слушает порт `10100` и обслуживает `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,

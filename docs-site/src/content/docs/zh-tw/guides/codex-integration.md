@@ -29,6 +29,8 @@ fast_mode = true
 
 注入的 `fast_mode` 會遵循 `fastMode` 三態設定：`true` 寫入 `fast_mode = true`，`false` 寫入
 `fast_mode = false`；未設定時會保留既有 `fast_mode`，且不新增 `[features]` table。
+若 catalog 包含不支援 Fast/Priority tier 的路由項目，OpenCodex 會在 Fast Mode 被明確啟用或由舊注入
+遺留時關閉全域 Fast Mode，避免使用者選取路由模型後被切回 native 模型。
 
 proxy 預設監聽 `10100` 埠，提供 `POST /v1/responses`、`POST /v1/responses/compact`、
 `POST /v1/images/generations`、`POST /v1/images/edits`、`GET /v1/models`、`GET /healthz`

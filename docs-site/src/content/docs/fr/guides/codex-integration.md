@@ -32,6 +32,8 @@ fast_mode = true
 Le `fast_mode` injecté suit le réglage à trois états `fastMode` : `true` écrit `fast_mode = true`, `false`
 écrit `fast_mode = false`, et une valeur non définie laisse tout `fast_mode` existant intact sans ajouter de
 table `[features]`.
+Si le catalogue contient des entrées routées sans support Fast/Priority, OpenCodex désactive le Fast Mode global
+quand il est explicitement activé ou laissé par une ancienne injection, afin d'éviter un retour au modèle natif.
 
 Le proxy écoute sur le port `10100` par défaut et sert `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,

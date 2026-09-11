@@ -37,6 +37,8 @@ Enjekte edilen `fast_mode`, üç durumlu `fastMode` ayarını takip eder: `true`
 `fast_mode = true` yazar, `false`, `fast_mode = false` yazar ve ayarlanmamış
 durum, bir `[features]` tablosu eklemeden mevcut bir `fast_mode`'a dokunulmadan
 bırakır.
+Katalogda Fast/Priority tier desteği olmayan yönlendirilmiş girdiler varsa, global Fast Mode açıkça etkinleştirildiğinde
+veya eski bir enjeksiyondan kaldığında kapatılır; böylece seçilen yönlendirilmiş model native modele geri dönmez.
 
 Proxy varsayılan olarak `10100` portunu dinler ve `POST /v1/responses`, `POST
 /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,

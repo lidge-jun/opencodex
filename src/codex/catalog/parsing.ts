@@ -255,6 +255,38 @@ export function readCatalog(path: string): RawCatalog | null {
   } catch { return null; }
 }
 
+function catalogEntrySupportsFastMode(entry: RawEntry): boolean {
+  if (entry.service_tier === "fast" || entry.service_tier === "priority") return true;
+  if (entry.default_service_tier === "fast" || entry.default_service_tier === "priority") return true;
+  return Array.isArray(entry.service_tiers) && entry.service_tiers.some(tier => (
+    tier && typeof tier === "object"
+    && ((tier as Record<string, unknown>).id === "fast" || (tier as Record<string, unknown>).id === "priority")
+  ));
+}
+
+/** Read the serialized catalog's exact Fast/Priority capability for a Codex model. */
+export function catalogModelSupportsFastMode(catalogPath: string | null, model: string): boolean {
+  if (!catalogPath) return false;
+  const catalog = readCatalog(resolveCodexConfigPath(catalogPath));
+  const entry = catalog?.models?.find(candidate => candidate.slug === model || candidate.id === model);
+  return entry ? catalogEntrySupportsFastMode(entry) : false;
+}
+
+/**
+ * A global Codex fast_mode flag affects the model picker, so unsupported routed rows must be able
+ * to trigger a safety downgrade before the user selects one. Unknown or unreadable catalogs are
+ * left to the caller's existing tri-state behavior.
+ */
+export function catalogHasRoutedModelWithoutFastMode(catalogPath: string | null): boolean {
+  if (!catalogPath) return false;
+  const catalog = readCatalog(resolveCodexConfigPath(catalogPath));
+  if (!catalog) return false;
+  return (catalog.models ?? []).some(entry => {
+    const model = typeof entry.slug === "string" ? entry.slug : entry.id;
+    return typeof model === "string" && model.includes("/") && !catalogEntrySupportsFastMode(entry);
+  });
+}
+
 export function findNativeTemplate(catalog: RawCatalog | null): RawEntry | null {
   return catalog?.models?.find(
     m => typeof m.slug === "string"
