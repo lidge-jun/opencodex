@@ -159,6 +159,59 @@ describe("token guardian", () => {
     expect(mock.count()).toBeGreaterThan(0);
   });
 
+  test.each(["response.completed", "response.failed"])("a late guardian probe cannot change a replacement pending credential (%s)", async terminal => {
+    writeConfig({
+      tokenGuardian: { enabled: true, codexWarmupEnabled: true, tickSeconds: 60, leadSeconds: 60 },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
+    });
+    const credential = {
+      accessToken: "original", refreshToken: "rt-original", expiresAt: Date.now() + 3600_000, chatgptAccountId: "cg-pending",
+    };
+    saveCodexAccountCredential("acct-late", credential);
+    globalThis.fetch = (async () => {
+      saveCodexAccountCredential("acct-late", { ...credential, accessToken: "replacement" }, { validationPending: true });
+      return new Response(`data: ${JSON.stringify({ type: terminal })}\n\n`);
+    }) as typeof fetch;
+    await guardianSweep(Date.now());
+    expect(readCodexAccountRecord("acct-late")?.codexValidationPending).toBe(true);
+    expect(readCodexAccountRecord("acct-late")?.lastCodexValidatedAt).toBeUndefined();
+    expect(readCodexAccountRecord("acct-late")?.lastCodexValidationStatus).toBeUndefined();
+    expect(readCodexAccountRecord("acct-late")?.lastCodexValidationError).toBeUndefined();
+  });
+
+  test("guardian rechecks pending replacement after asynchronous token resolution", async () => {
+    const mock = mockWarmupFetch();
+    writeConfig({
+      tokenGuardian: { enabled: true, codexWarmupEnabled: true, tickSeconds: 60, leadSeconds: 60 },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
+    });
+    const credential = {
+      accessToken: "original", refreshToken: "rt-original", expiresAt: Date.now() + 3600_000, chatgptAccountId: "cg-pending",
+    };
+    saveCodexAccountCredential("acct-resolving", credential);
+    const sweep = guardianSweep(Date.now());
+    saveCodexAccountCredential("acct-resolving", { ...credential, accessToken: "replacement" }, { validationPending: true });
+    const result = await sweep;
+    expect(mock.calls()).toBe(0);
+    expect(result.warmed).toEqual([]);
+    expect(readCodexAccountRecord("acct-resolving")?.codexValidationPending).toBe(true);
+  });
+
+  test("guardian preserves deferred registration without probing an exhausted account", async () => {
+    const mock = mockWarmupFetch();
+    writeConfig({
+      tokenGuardian: { enabled: true, codexWarmupEnabled: true, tickSeconds: 60, leadSeconds: 60 },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
+    });
+    saveCodexAccountCredential("acct-pending", {
+      accessToken: "pending", refreshToken: "rt-pending", expiresAt: Date.now() + 3600_000, chatgptAccountId: "cg-pending",
+    }, { validationPending: true });
+    const res = await guardianSweep(Date.now());
+    expect(res.warmed).toEqual([]);
+    expect(mock.calls()).toBe(0);
+    expect(readCodexAccountRecord("acct-pending")?.codexValidationPending).toBe(true);
+  });
+
   test("codex pool warmup is opt-in even when validation is stale", async () => {
     const mock = mockWarmupFetch();
     writeConfig({
@@ -197,6 +250,85 @@ describe("token guardian", () => {
     expect(mock.body()).toMatchObject({ model: "gpt-5.4-mini", input: WARMUP_INPUT, stream: true, store: false });
     expect(readCodexAccountRecord("acct-warm")?.lastCodexValidationStatus).toBe("ok");
     expect(readCodexAccountRecord("acct-warm")?.lastCodexValidatedAt).toBeGreaterThan(Date.now() - 30_000);
+  });
+
+  // #4120: the pool branch used to compute `permanent` and then spend it only on the in-memory
+  // backoff delay. A revoked grant is the strongest terminal evidence available and was the one
+  // class excluded from the persisted verdict, so the record kept its login-time "ok" forever.
+  test("a revoked refresh grant persists a terminal verdict even with warmup disabled", async () => {
+    writeConfig({
+      tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
+    });
+    saveCodexAccountCredential("acct-revoked", {
+      accessToken: "old", refreshToken: "rt", expiresAt: Date.now() + 5_000, chatgptAccountId: "cg-1",
+    });
+    markCodexAccountValidated("acct-revoked", Date.now() - 120_000);
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "invalid_grant" }), {
+      status: 400, headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+
+    const res = await guardianSweep(Date.now());
+
+    expect(res.failed).toContain("codex:acct-revoked");
+    const record = readCodexAccountRecord("acct-revoked");
+    expect(record?.lastCodexValidationStatus).toBe("failed");
+    expect(record?.lastCodexValidationTerminal).toBe(true);
+    expect(record?.lastCodexValidationError).toBe("refresh_revoked");
+  });
+
+  test("a transient refresh failure leaves the stored verdict untouched", async () => {
+    writeConfig({
+      tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
+    });
+    saveCodexAccountCredential("acct-transient", {
+      accessToken: "old", refreshToken: "rt", expiresAt: Date.now() + 5_000, chatgptAccountId: "cg-1",
+    });
+    markCodexAccountValidated("acct-transient", Date.now() - 120_000);
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "server_error" }), {
+      status: 500, headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+
+    const res = await guardianSweep(Date.now());
+
+    expect(res.failed).toContain("codex:acct-transient");
+    const record = readCodexAccountRecord("acct-transient");
+    // An upstream blip is not evidence that the grant is dead, and warmup is off, so nothing
+    // about the recorded verdict may move.
+    expect(record?.lastCodexValidationStatus).toBe("ok");
+    expect(record?.lastCodexValidationTerminal).toBeUndefined();
+  });
+
+  test("a credential replaced mid-refresh is not branded by the previous credential's failure", async () => {
+    writeConfig({
+      tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
+    });
+    saveCodexAccountCredential("acct-replaced", {
+      accessToken: "old", refreshToken: "rt", expiresAt: Date.now() + 5_000, chatgptAccountId: "cg-1",
+    });
+    markCodexAccountValidated("acct-replaced", Date.now() - 120_000);
+    const staleGeneration = readCodexAccountRecord("acct-replaced")!.generation;
+
+    // Stand in for an operator re-authenticating the account while the sweep's refresh is in
+    // flight: the replacement lands before upstream answers with a dead grant.
+    globalThis.fetch = (async () => {
+      saveCodexAccountCredential("acct-replaced", {
+        accessToken: "reauthed", refreshToken: "rt-2", expiresAt: Date.now() + 3600_000, chatgptAccountId: "cg-1",
+      });
+      return new Response(JSON.stringify({ error: "invalid_grant" }), {
+        status: 400, headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await guardianSweep(Date.now());
+
+    const record = readCodexAccountRecord("acct-replaced")!;
+    expect(record.generation).toBeGreaterThan(staleGeneration);
+    expect(record.credential?.accessToken).toBe("reauthed");
+    expect(record.lastCodexValidationTerminal).toBeUndefined();
+    expect(record.lastCodexValidationStatus).toBe("ok");
   });
 
   test("direct mode warms main only and never enumerates the added-account store", async () => {

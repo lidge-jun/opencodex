@@ -865,7 +865,9 @@ describe("doctor version skew projection", () => {
       if (expected !== null) expect(output).toContain(expected);
       else expect(output).not.toContain("does not match the running proxy");
       if (cli !== "2.43.0" || proxy !== "2.43.0") expect(output).not.toContain("matches the running proxy");
-      if (expected === "the running proxy is older") expect(output).toContain("ocx service repair");
+      // A version skew leaves the service definition byte-identical, so `repair` would no-op over the
+      // old process; the advice names `restart`, which kickstarts an unchanged job.
+      if (expected === "the running proxy is older") expect(output).toContain("ocx service restart");
     } finally {
       for (const cleanup of restore.reverse()) cleanup();
       process.exitCode = previousExitCode;

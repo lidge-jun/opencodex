@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "../../src/codex/warmup";
+import {
+  CodexWarmupError,
+  codexWarmupFailureReason,
+  isCodexWarmupProvisioningFailure,
+  warmCodexAccount,
+} from "../../src/codex/warmup";
 
 const originalFetch = globalThis.fetch;
 
@@ -106,5 +111,81 @@ describe("codex warmup improvements", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(parsedBodies.map(body => body.model)).toEqual(["gpt-5.4-mini", "gpt-5.5"]);
+  });
+  test("warmCodexAccount retries FALLBACK_MODELS on HTTP 404 and falls through to gpt-5.6-luna", async () => {
+    const parsedBodies: Record<string, unknown>[] = [];
+    const fetchMock = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      parsedBodies.push(body);
+
+      if (body.model === "gpt-5.4-mini") {
+        return new Response(JSON.stringify({ detail: "model not found" }), { status: 404 });
+      }
+      if (body.model === "gpt-5.5") {
+        return new Response(JSON.stringify({ detail: "model not supported for free tier" }), { status: 400 });
+      }
+      if (body.model === "gpt-5.6-luna") {
+        return sseResponse();
+      }
+      return new Response("unexpected model", { status: 500 });
+    });
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchMock as unknown as typeof fetch);
+
+    try {
+      await warmCodexAccount({ accessToken: "access-test", chatgptAccountId: "acct-test" });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(parsedBodies.map(body => body.model)).toEqual(["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna"]);
+  });
+
+  test("warmCodexAccount does not retry on 401 and immediately fails", async () => {
+    const parsedBodies: Record<string, unknown>[] = [];
+    const fetchMock = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      parsedBodies.push(body);
+      return new Response(JSON.stringify({ detail: "unauthorized" }), { status: 401 });
+    });
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchMock as unknown as typeof fetch);
+
+    try {
+      await warmCodexAccount({ accessToken: "access-test", chatgptAccountId: "acct-test" });
+      expect.unreachable("expected warmCodexAccount to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CodexWarmupError);
+      expect((err as CodexWarmupError).status).toBe(401);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("codex warmup failure classification", () => {
+  test("an exhausted retryable status classifies as provisioning, not as a bad credential", () => {
+    for (const status of [400, 404]) {
+      expect(isCodexWarmupProvisioningFailure(
+        new CodexWarmupError("http_status", "Codex warmup was rejected", { status }),
+      )).toBe(true);
+    }
+  });
+
+  test("an authentication status still asks the operator to reauthenticate", () => {
+    for (const status of [401, 403, 429, 500]) {
+      expect(isCodexWarmupProvisioningFailure(
+        new CodexWarmupError("http_status", "Codex warmup was rejected", { status }),
+      )).toBe(false);
+    }
+  });
+
+  test("a stream or transport failure is never reported as a provisioning problem", () => {
+    expect(isCodexWarmupProvisioningFailure(new CodexWarmupError("transport"))).toBe(false);
+    expect(isCodexWarmupProvisioningFailure(new CodexWarmupError("no_terminal"))).toBe(false);
+    expect(isCodexWarmupProvisioningFailure(new CodexWarmupError("http_status"))).toBe(false);
+    expect(isCodexWarmupProvisioningFailure(new Error("boom"))).toBe(false);
+    expect(isCodexWarmupProvisioningFailure(undefined)).toBe(false);
   });
 });

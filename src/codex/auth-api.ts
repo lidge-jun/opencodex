@@ -12,6 +12,7 @@ import {
   isCodexAccountGenerationLive,
   forceRefreshCodexPoolToken,
   markCodexAccountValidated,
+  markCodexAccountValidationFailed,
   readCodexAccountRecord,
   saveCodexAccountCredential,
   CodexCredentialGenerationConflictError,
@@ -114,8 +115,8 @@ export { clearMainAccountInfoCache } from "./main-account-cache";
 import type { CodexQuotaRefreshOutcome } from "./quota-refresh-outcome";
 import { getMainAccountHardLockStatus, type MainAccountHardLockStatus } from "./main-account-hard-lock";
 import { observeMainReserveRevocation } from "./reserve-availability";
-import { maskEmail } from "../lib/privacy";
-import { codexWarmupFailureReason, warmCodexAccount } from "./warmup";
+import { emailMaskingEnabled, projectEmail } from "../lib/privacy";
+import { codexWarmupFailureReason, isCodexWarmupProvisioningFailure, warmCodexAccount } from "./warmup";
 export { maskEmail } from "../lib/privacy";
 import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../types";
 import type { CatalogDisposition } from "./convergence-types";
@@ -192,6 +193,7 @@ interface CodexLoginStateRow {
   code?: string;
   needsReauth?: boolean;
   catalogRefreshPending?: boolean;
+  validationPending?: boolean;
   doneAt?: number;
 }
 const codexAuthLoginState = new Map<string, CodexLoginStateRow>();
@@ -362,20 +364,46 @@ function mainQuotaWithCarriedResetCredits(
   };
 }
 
+/**
+ * Why an account needs the operator. `missing_credential`, `refresh_failed`, and
+ * `quota_unauthorized` are the three causes this surface tells apart on its own. `unauthorized`
+ * and `forbidden` exist because the shared health projection may return them; today
+ * `projectCodexAccountHealth` only ever produces `refresh_failed`, so accepting the full union
+ * keeps this field correct if that projection widens rather than silently dropping a reason.
+ */
+export type CodexAccountReauthReason =
+  | "missing_credential"
+  | "refresh_failed"
+  | "quota_unauthorized"
+  | "unauthorized"
+  | "forbidden";
+
 function poolAccountDto(
   account: CodexAccount,
   quotaResult: PoolQuotaResult,
   hasCredential: boolean,
   paused: boolean,
   priority: number,
+  maskEmails: boolean,
 ): CodexAuthAccountDto {
   const plan = codexPlanValue(account.plan);
   const quota = quotaForPlan(quotaResult.quota, plan);
-  const needsReauth = !hasCredential || quotaResult.needsReauth || isAccountNeedsReauth(account.id);
+  const runtimeReauth = isAccountNeedsReauth(account.id);
+  const needsReauth = !hasCredential || quotaResult.needsReauth || runtimeReauth;
   const health = projectCodexAccountHealth({ accountId: account.id, needsReauth });
+  // `needsReauth` is an OR of three independent causes plus a persisted verdict resolved inside the
+  // health projection. Emitting only the boolean is what left #4212's reporter guessing which
+  // account took their model away and why, so name the cause they actually have to act on.
+  const reauthReason: CodexAccountReauthReason | undefined = !hasCredential
+    ? "missing_credential"
+    : runtimeReauth
+      ? "refresh_failed"
+      : quotaResult.needsReauth
+        ? "quota_unauthorized"
+        : health.status === "reauth_required" ? health.reason : undefined;
   return {
     id: account.id,
-    email: maskEmail(account.email) ?? account.email,
+    email: projectEmail(account.email, maskEmails) ?? account.email,
     ...(account.alias !== undefined ? { alias: account.alias } : {}),
     ...(plan !== undefined ? { plan } : {}),
     logLabel: codexAccountLogLabel(account),
@@ -383,7 +411,8 @@ function poolAccountDto(
     paused,
     priority,
     quota: quota ? { ...quota } : null,
-    needsReauth,
+    needsReauth: needsReauth || health.status === "reauth_required",
+    ...(reauthReason !== undefined ? { reauthReason } : {}),
     hasCredential,
     ...(quotaResult.quotaProbeSkipped ? { quotaProbeSkipped: true as const } : {}),
     ...oauthAccountHealthFields("codex", account.id, health),
@@ -585,7 +614,11 @@ async function verifyCodexAccountWarmup(
     return {
       ok: false,
       response: jsonResponse({
-        error: "Codex account warmup failed. Reauthenticate the account and try again.",
+        // Every fallback model was refused for a provisioning reason, so telling the operator to
+        // reauthenticate sends them back through a login that already succeeded.
+        error: isCodexWarmupProvisioningFailure(err)
+          ? "Codex account warmup failed. Verify account model access or provisioning and try again."
+          : "Codex account warmup failed. Reauthenticate the account and try again.",
         code: "codex_warmup_failed",
         reason,
         accountId,
@@ -638,7 +671,7 @@ function saveRuntimeConfig(sourceConfig: OcxConfig, nextConfig: OcxConfig): void
 
 interface StagedNewCodexAccountState {
   credential: CodexAccountCredentials;
-  validatedAt: number;
+  validatedAt?: number;
 }
 
 type PersistNewCodexAccountOutcome =
@@ -691,8 +724,10 @@ function persistNewCodexAccount(
     }
 
     try {
-      saveCodexAccountCredential(addedAccount.id, staged.credential);
-      markCodexAccountValidated(addedAccount.id, staged.validatedAt);
+      const generation = saveCodexAccountCredential(addedAccount.id, staged.credential, {
+        validationPending: staged.validatedAt === undefined,
+      });
+      if (staged.validatedAt !== undefined) markCodexAccountValidated(addedAccount.id, staged.validatedAt, generation);
       clearAccountNeedsReauth(addedAccount.id);
     } catch {
       // Config is already durable. Return the failure outcome through the coordinator so its
@@ -1101,6 +1136,7 @@ interface PoolQuotaRefreshFlight {
     superseded?: boolean;
     startCredentialGeneration?: number;
     resolvedCredentialGeneration?: number;
+    validatePending?: boolean;
   };
   promise: Promise<PoolQuotaResult>;
 }
@@ -1151,6 +1187,11 @@ export interface CodexAuthAccountDto {
   priority: number;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
   needsReauth?: boolean;
+  /**
+   * Which of the independent causes behind `needsReauth` fired. Present only when the account
+   * needs the operator; `/api/oauth/accounts` already carries the same field name.
+   */
+  reauthReason?: CodexAccountReauthReason;
   hasCredential: boolean;
   health: OAuthAccountHealth;
   healthLabel: OAuthHealthLabel;
@@ -1480,11 +1521,12 @@ async function fetchFreshPoolAccountQuota(
   }
 }
 
-async function fetchPoolAccountQuota(
+export async function fetchPoolAccountQuota(
   accountId: string,
   forceRefresh = false,
   configuredPlan?: string,
   getValidToken: typeof getValidCodexToken = getValidCodexToken,
+  validatePending = false,
   afterDispatchSequence?: number,
 ): Promise<PoolQuotaResult> {
   const existing = getAccountQuota(accountId);
@@ -1507,7 +1549,11 @@ async function fetchPoolAccountQuota(
       && (afterDispatchSequence === undefined || (flight.state.dispatchSequence ?? 0) > afterDispatchSequence)
       && generation !== undefined && isCodexAccountGenerationLive(accountId, generation);
   });
-  if (current) return current.promise;
+  if (current) {
+    // A manual refresh joining a passive read must not lose its validation intent.
+    current.state.validatePending ||= validatePending;
+    return current.promise;
+  }
   if (poolQuotaFlightCount() >= MAX_POOL_QUOTA_FLIGHTS) throw new PoolQuotaProbeBusyError();
 
   // A post-reset request must not let an older same-account response overwrite its evidence.
@@ -1517,6 +1563,7 @@ async function fetchPoolAccountQuota(
   }
   const state: PoolQuotaRefreshFlight["state"] = {
     startCredentialGeneration: record?.generation,
+    validatePending,
   };
   const refresh = fetchFreshPoolAccountQuota(
     accountId,
@@ -1528,18 +1575,54 @@ async function fetchPoolAccountQuota(
       onDispatch: sequence => { state.dispatchSequence = sequence; },
       mayPublish: () => state.superseded !== true,
     },
-  );
+  ).then(async result => {
+    // A passive flight has consumed its validation decision. Remove it before
+    // promise settlement queues other continuations, so a late explicit caller
+    // starts fresh work instead of setting an intent nobody will read again.
+    if (!state.validatePending) {
+      releaseFlight();
+      return result;
+    }
+    // Only an explicit account-list refresh finishes deferred registration. Passive quota
+    // polls and startup priming remain read-only with respect to inference spending.
+    const generation = result.freshCredentialGeneration;
+    const record = state.validatePending ? readCodexAccountRecord(accountId) : null;
+    if (record?.codexValidationPending && record.credential && record.deletedAt == null
+      && generation !== undefined && record.generation === generation
+      && isCompleteCodexQuotaRecoverySnapshot(result.freshQuota ?? null, result.freshPlan ?? configuredPlan)) {
+      try {
+        await warmCodexAccount({
+          accessToken: record.credential.accessToken,
+          chatgptAccountId: record.credential.chatgptAccountId,
+        });
+        markCodexAccountValidated(accountId, Date.now(), generation);
+        clearAccountNeedsReauth(accountId, generation);
+      } catch (error) {
+        // Keep the durable restriction on any failed/partial inference response, even
+        // when WHAM just reported headroom. No raw upstream text enters diagnostics.
+        const reason = codexWarmupFailureReason(error);
+        if (reason === "http_status:401" || reason === "http_status:403") {
+          markCodexAccountValidationFailed(accountId, reason, { expectedGeneration: generation });
+          markAccountNeedsReauth(accountId, captureConfigGeneration(), generation);
+        }
+      }
+    }
+    return result;
+  });
   const flight: PoolQuotaRefreshFlight = { state, promise: refresh };
   const activeFlights = flights ?? new Set<PoolQuotaRefreshFlight>();
   activeFlights.add(flight);
   if (!flights) poolQuotaRefreshInFlight.set(accountId, activeFlights);
-  try {
-    return await refresh;
-  } finally {
+  const releaseFlight = () => {
     activeFlights.delete(flight);
     if (activeFlights.size === 0 && poolQuotaRefreshInFlight.get(accountId) === activeFlights) {
       poolQuotaRefreshInFlight.delete(accountId);
     }
+  };
+  try {
+    return await refresh;
+  } finally {
+    releaseFlight();
   }
 }
 
@@ -1594,8 +1677,10 @@ async function refreshAfterManualReset(
       }
       return { accessToken: auth.accessToken, chatgptAccountId: auth.chatgptAccountId, generation: auth.poolGeneration };
     };
+    // `validatePending` is false here: a manual reset settles cooldown, and finishing deferred
+    // registration stays reserved for an explicit dashboard account-list refresh.
     const result = await fetchPoolAccountQuota(accountId, true, account.plan, didReset ? resetToken : getValidCodexToken,
-      didReset ? afterDispatchSequence : undefined);
+      false, didReset ? afterDispatchSequence : undefined);
     const record = readCodexAccountRecord(accountId);
     const recovered = didReset && record?.credential?.chatgptAccountId === auth.chatgptAccountId
       && (result.quotaProbeAttempted?.dispatchSequence ?? 0) > afterDispatchSequence
@@ -1876,9 +1961,12 @@ export interface CodexAuthAccountsSnapshot {
 export async function listCodexAuthAccountsSnapshot(
   config: OcxConfig,
   forceRefresh = false,
+  options: { validatePending?: boolean } = {},
 ): Promise<CodexAuthAccountsSnapshot> {
   const runtimeConfig = getRuntimeConfig(config);
   const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
+  // One redaction decision for the whole snapshot, read once from the operator's config (#3859).
+  const maskEmails = emailMaskingEnabled(runtimeConfig);
   const mainResult = await fetchMainAccountInfoAttempt(forceRefresh, 1);
   const refreshedPool = await mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async account => {
     const cred = getCodexAccountCredential(account.id);
@@ -1887,7 +1975,7 @@ export async function listCodexAuthAccountsSnapshot(
       quotaResult = { quota: null, needsReauth: true };
     } else {
       try {
-        quotaResult = await fetchPoolAccountQuota(account.id, forceRefresh, account.plan);
+        quotaResult = await fetchPoolAccountQuota(account.id, forceRefresh, account.plan, getValidCodexToken, options.validatePending === true);
       } catch (error) {
         if (!(error instanceof PoolQuotaProbeBusyError)) throw error;
         quotaResult = {
@@ -1923,6 +2011,7 @@ export async function listCodexAuthAccountsSnapshot(
         false,
         isCodexAccountPaused(runtimeConfig, accountId),
         getCodexAccountPriority(runtimeConfig, accountId),
+        maskEmails,
       )];
     }
     const resultGeneration = quotaResult.credentialGeneration ?? quotaResult.freshCredentialGeneration;
@@ -1942,6 +2031,7 @@ export async function listCodexAuthAccountsSnapshot(
       true,
       isCodexAccountPaused(runtimeConfig, accountId),
       getCodexAccountPriority(runtimeConfig, accountId),
+      maskEmails,
     )];
   });
   const fetchedMainGeneration = mainResult.identityGeneration ?? captureMainAccountIdentityGeneration();
@@ -1950,15 +2040,23 @@ export async function listCodexAuthAccountsSnapshot(
   const hasMainCredential = mainSnapshotLive && mainResult.credentialChecked
     ? mainResult.hasCredential
     : getMainAccountCredentialPresence() ?? false;
-  const mainNeedsReauth = (mainSnapshotLive && mainResult.credentialChecked && !hasMainCredential)
-    || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+  const mainMissingCredential = mainSnapshotLive && mainResult.credentialChecked && !hasMainCredential;
+  const mainNeedsReauth = mainMissingCredential || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   const mainHealth = projectCodexAccountHealth({
     accountId: MAIN_CODEX_ACCOUNT_ID,
     needsReauth: mainNeedsReauth,
   });
+  // The main row carries the same attribution as a pool row. Reaching this point without
+  // `mainMissingCredential` means the runtime reauth flag is what set `mainNeedsReauth`, so the
+  // cause is a refresh that did not complete.
+  const mainReauthReason: CodexAccountReauthReason | undefined = mainMissingCredential
+    ? "missing_credential"
+    : mainNeedsReauth
+      ? "refresh_failed"
+      : mainHealth.status === "reauth_required" ? mainHealth.reason : undefined;
   const main: CodexAuthAccountDto = {
     id: MAIN_CODEX_ACCOUNT_ID,
-    email: maskEmail(mainInfo.email) ?? "Codex App login",
+    email: projectEmail(mainInfo.email, maskEmails) ?? "Codex App login",
     plan: mainInfo.plan,
     ...(mainSnapshotLive && mainResult.quotaRefresh && mainResult.quotaRefreshGeneration !== undefined
       && isMainAccountIdentityGenerationLive(mainResult.quotaRefreshGeneration)
@@ -1970,6 +2068,7 @@ export async function listCodexAuthAccountsSnapshot(
     priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     hasCredential: hasMainCredential,
     needsReauth: mainNeedsReauth,
+    ...(mainReauthReason !== undefined ? { reauthReason: mainReauthReason } : {}),
     quota: mainInfo.quota ? {
       ...quotaForPlan(mainQuotaWithCarriedResetCredits(mainInfo.quota), mainInfo.plan),
     } : null,
@@ -2019,8 +2118,12 @@ export async function refreshCodexQuotaForActivation(config: OcxConfig, accountI
   }
 }
 
-export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = false): Promise<CodexAuthAccountDto[]> {
-  return (await listCodexAuthAccountsSnapshot(config, forceRefresh)).accounts;
+export async function listCodexAuthAccounts(
+  config: OcxConfig,
+  forceRefresh = false,
+  options: { validatePending?: boolean } = {},
+): Promise<CodexAuthAccountDto[]> {
+  return (await listCodexAuthAccountsSnapshot(config, forceRefresh, options)).accounts;
 }
 
 interface PauseExhaustedResult {
@@ -2129,11 +2232,20 @@ export async function handleCodexAuthAPI(
   url: URL,
   config: OcxConfig,
   convergeCodexCatalog?: CodexAuthCatalogConvergence,
+  principal?: import("../server/management-auth").ManagementPrincipal,
 ): Promise<Response | null> {
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
     return jsonResponse({ accounts: await listCodexAuthAccounts(config, forceRefresh) });
+  }
+
+  if (url.pathname === "/api/codex-auth/accounts/refresh" && req.method === "POST") {
+    // Inference spends quota: only a dashboard session carries the consent
+    // required by AGENTS_INSTALL.md. Raw-admin/CLI refreshes remain observational.
+    return jsonResponse({ accounts: await listCodexAuthAccounts(config, true, {
+      validatePending: principal === "gui-session",
+    }) });
   }
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "POST") {
@@ -2313,6 +2425,9 @@ export async function handleCodexAuthAPI(
       const exists = (runtimeConfig.codexAccounts ?? [])
         .some(account => isSelectableCodexPoolAccount(account) && account.id === body.accountId);
       if (!exists) return jsonResponse({ error: "Account not found" }, 400);
+      if (readCodexAccountRecord(body.accountId)?.codexValidationPending) {
+        return jsonResponse({ error: "Account validation is pending. Refresh quota after recovery to validate it." }, 409);
+      }
     }
     runtimeConfig.activeCodexAccountId = body.accountId ?? undefined;
     // "Use this account now" outranks selection order until the account is spent:
@@ -2757,7 +2872,12 @@ export async function handleCodexAuthAPI(
                   break;
                 }
 
-                const warmup = await verifyCodexAccountWarmup(accountId, cred.access, oauthAccountId);
+                // A successful authenticated WHAM read can prove quota is exhausted without
+                // spending an inference request. Store the account, but defer inference validation
+                // and keep it unavailable to routing. Unknown/failed usage reads retain the gate.
+                const warmup = isCodexQuotaExhausted(quota, plan)
+                  ? { ok: true as const, validatedAt: undefined }
+                  : await verifyCodexAccountWarmup(accountId, cred.access, oauthAccountId);
                 if (!warmup.ok) {
                   const body = await warmup.response.json().catch(() => ({})) as { error?: string; reason?: string };
                   setCodexLoginState(flowId, {
@@ -2797,11 +2917,13 @@ export async function handleCodexAuthAPI(
                 };
 
                 if (existingIdx >= 0) {
-                  saveCodexAccountCredential(accountId, credential);
+                  const generation = saveCodexAccountCredential(accountId, credential, {
+                    validationPending: warmup.validatedAt === undefined,
+                  });
                   // A successful reauthentication replaces the credential generation. Do not let a
                   // failed optional WHAM probe make the replacement inherit quota from the old record.
                   if (reauth) clearAccountQuota(accountId);
-                  markCodexAccountValidated(accountId, warmup.validatedAt);
+                  if (warmup.validatedAt !== undefined) markCodexAccountValidated(accountId, warmup.validatedAt, generation);
                   clearAccountNeedsReauth(accountId);
                   if (quota) setAccountQuotaFromParsed(accountId, quota);
                   // Keep the pool id stable; refresh display metadata after a successful login/reauth.
@@ -2852,6 +2974,7 @@ export async function handleCodexAuthAPI(
                     status: "done",
                     accountId,
                     email,
+                    ...(warmup.validatedAt === undefined ? { validationPending: true } : {}),
                     ...(catalogRefreshPending ? { catalogRefreshPending: true } : {}),
                     doneAt: Date.now(),
                   });
@@ -2952,6 +3075,9 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/login-status" && req.method === "GET") {
     const flowId = url.searchParams.get("flowId");
     const accountId = url.searchParams.get("accountId")?.trim();
+    // Transient flow state carries the address of the account being added, so it follows the
+    // same operator policy as the stored accounts it is about to become.
+    const maskFlowEmails = emailMaskingEnabled(config);
     // Reauth always has a pre-existing credential; never treat "credential exists" as success
     // when the flow map entry is gone (would false-complete on lost/expired flow state).
     const reauthStatus = url.searchParams.get("reauth") === "1";
@@ -2964,13 +3090,15 @@ export async function handleCodexAuthAPI(
         && !isAccountNeedsReauth(accountId)
         && getCodexAccountCredential(accountId)
       ) {
-        return jsonResponse({ status: "done", accountId });
+        return jsonResponse({ status: "done", accountId,
+          ...(readCodexAccountRecord(accountId)?.codexValidationPending ? { validationPending: true } : {}),
+        });
       }
-      return jsonResponse(st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: "expired" });
+      return jsonResponse(st ? { ...st, email: projectEmail(st.email, maskFlowEmails) ?? undefined } : { status: "expired" });
     }
     // Legacy fallback: return latest pending flow
     for (const [, st] of codexAuthLoginState) {
-      if (st.status === "pending") return jsonResponse({ ...st, email: maskEmail(st.email) ?? undefined });
+      if (st.status === "pending") return jsonResponse({ ...st, email: projectEmail(st.email, maskFlowEmails) ?? undefined });
     }
     return jsonResponse({ status: "idle" });
   }

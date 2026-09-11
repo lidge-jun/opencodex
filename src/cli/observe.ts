@@ -17,7 +17,7 @@ import { redactSecretString } from "../lib/redact";
 
 const USAGE = `Usage:
   ocx observe logs [--provider <name>] [--model <id>] [--status <code>]
-      [--conversation <id>] [--limit <n>] [--follow] [--json|--jsonl]
+      [--conversation <id>] [--account <label>] [--limit <n>] [--follow] [--json|--jsonl]
   ocx logs explain <request-id> [--json]
   ocx logs rebuild-index
   ocx logs index-status
@@ -58,7 +58,14 @@ function formatLog(row: LogEntry): string {
   const conversation = typeof row.conversationId === "string" && row.conversationId.length > 0
     ? `conv=${row.conversationId}`
     : "";
-  return [time, String(status), route, duration, conversation].filter(Boolean).join("  ");
+  // The account label is printed for the same reason, and for one more: it is the answer to
+  // "which of my accounts served this?" (#4057). It is only ever the stable non-PII label the
+  // proxy already persists (`main`, `p<hex6>`, `o<hex6>`) — never an email, a key, or an
+  // upstream account id. Rows from a single-account provider carry no label and print none.
+  const account = typeof row.accountLogLabel === "string" && row.accountLogLabel.length > 0
+    ? `acct=${row.accountLogLabel}`
+    : "";
+  return [time, String(status), route, duration, account, conversation].filter(Boolean).join("  ");
 }
 
 async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -72,6 +79,9 @@ async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   // Both spellings, because the server accepts both (`request-log.ts:1032`) and an operator
   // should not have to remember which one this surface wanted.
   const conversationId = takeOption(args, "--conversation") ?? takeOption(args, "--conversationId");
+  // Server-side, so `--limit` caps the rows that MATCHED rather than the rows scanned; a
+  // client-side filter after a 200-row cap would silently hide older matches.
+  const account = takeOption(args, "--account");
   const limit = takeIntegerOption(args, "--limit", { min: 1 }) ?? 200;
   rejectArgs(args, USAGE);
   if (wantsJson && wantsJsonl) throw new CliUsageError("--json and --jsonl cannot be combined", USAGE);
@@ -80,7 +90,7 @@ async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   let seen = new Set<string>();
   do {
-    const data = await runtimeRequest(`/api/logs${query({ provider, model, status, conversationId, limit })}`, {}, deps);
+    const data = await runtimeRequest(`/api/logs${query({ provider, model, status, conversationId, account, limit })}`, {}, deps);
     const rows = logRows(data);
     if (!follow && wantsJson) printData(data, true);
     else {

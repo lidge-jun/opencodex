@@ -913,7 +913,7 @@ test("disabled-provider selections cannot delete a foreign row in either writer"
   expect(readFileSync(catalogPath, "utf8")).toBe(convergenceBytes);
 });
 
-test("convergence clamps native, routed, and account rows to observed runtime support", async () => {
+test("convergence clamps clampable rungs but keeps exempt max/ultra on native, routed, and account rows", async () => {
   grantGpt56NativeModels("main-chatgpt-account", "side-chatgpt-account");
   seedObservedRuntimeSupport();
   writeCatalog([nativeEntry()]);
@@ -931,6 +931,7 @@ test("convergence clamps native, routed, and account rows to observed runtime su
 
   const catalog = await convergeCatalog(nextConfig);
   const models = catalog.models ?? [];
+  const observed = ["low", "medium", "high", "xhigh"];
   for (const slug of [
     "gpt-5.6-sol",
     "static/reasoning-model",
@@ -940,8 +941,11 @@ test("convergence clamps native, routed, and account rows to observed runtime su
     const entry = models.find(model => model.slug === slug);
     const efforts = (entry?.supported_reasoning_levels ?? []) as Array<{ effort?: string }>;
     expect(entry).toBeDefined();
-    expect(efforts.map(level => level.effort)).not.toContain("max");
-    expect(efforts.map(level => level.effort)).not.toContain("ultra");
+    // Every surviving rung is either observed or one of the exempt top tiers; the exemption
+    // preserves the max/ultra a row already advertises but never adds new rungs.
+    for (const level of efforts) {
+      expect(observed.includes(level.effort!) || level.effort === "max" || level.effort === "ultra").toBe(true);
+    }
     if (typeof entry?.default_reasoning_level === "string") {
       expect(efforts.some(level => level.effort === entry.default_reasoning_level)).toBe(true);
     }
@@ -949,6 +953,12 @@ test("convergence clamps native, routed, and account rows to observed runtime su
   const cache = JSON.parse(readFileSync(join(codexHome, "models_cache.json"), "utf8")) as {
     models?: RawEntry[];
   };
+  // The routed row advertises the full ladder with an ultra default: both exempt rungs and
+  // the default survive verbatim, which is the observable proof the exemption ran.
+  const routed = models.find(model => model.slug === "static/reasoning-model");
+  expect((routed?.supported_reasoning_levels ?? []).map(level => (level as { effort?: string }).effort))
+    .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+  expect(routed?.default_reasoning_level).toBe("ultra");
   expect(cache.models).toEqual(models);
 });
 

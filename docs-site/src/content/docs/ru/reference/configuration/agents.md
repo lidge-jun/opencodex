@@ -105,7 +105,7 @@ native ChatGPT-target'ами и прямыми key-auth Responses-маршрут
 `allowEncryptedV2AgentTasks: true`. Если ни один из них не может обработать encrypted payload,
 запрос завершается ошибкой вместо отправки нечитаемого ciphertext наружу. Combo по-прежнему
 сначала выбирает доступную каноническую native-цель; если её нельзя выбрать и включён
-`agentTaskRecovery`, encrypted `NEW_TASK` восстанавливается один раз перед routed combo dispatch.
+или native-попытки исчерпаны, а `agentTaskRecovery` включён, encrypted `NEW_TASK` восстанавливается один раз перед routed combo dispatch. Combo-восстановление работает только на spawned child-турах; прямой routed-путь восстанавливает и смену модели в середине треда.
 
 ```json
 {

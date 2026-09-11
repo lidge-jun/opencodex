@@ -52,6 +52,81 @@ describe("Spark quota survives partial header updates", () => {
 });
 
 /**
+ * #4122 — a Spark response's 5h primary window is the MODEL's limit, not the account's.
+ *
+ * The header path has the routed model at every call site; without it, a Spark 5h primary was
+ * filed as the account-level short tuple, so one pool account showed a 5h bar its
+ * identically-limited peers did not have, and account-policy readers (main-account hard lock,
+ * five-hour auto-refresh) consumed a model-specific window. The weekly reading still arrives as
+ * the secondary window on the same response.
+ */
+describe("Spark-model header responses attribute the 5h window to the model limit", () => {
+  const SPARK_HEADERS = {
+    "x-codex-primary-used-percent": "4",
+    "x-codex-primary-window-minutes": "300",
+    "x-codex-primary-reset-at": "1788974652",
+    "x-codex-secondary-used-percent": "21",
+    "x-codex-secondary-window-minutes": "10080",
+    "x-codex-secondary-reset-at": "1789436116",
+  } as const;
+
+  it("files a Spark response's 5h primary under custom windows, not the account short slot", () => {
+    clearAccountQuota();
+    applyAccountQuotaFromUpstreamHeaders("spark-attr", new Headers(SPARK_HEADERS), undefined, undefined, {
+      modelId: "gpt-5.3-codex-spark",
+    });
+    const quota = getAccountQuota("spark-attr");
+    expect(quota?.shortPercent).toBeUndefined();
+    expect(quota?.shortResetAt).toBeUndefined();
+    expect(quota?.shortWindowSeconds).toBeUndefined();
+    expect(quota?.weeklyPercent).toBe(21);
+    expect(quota?.customWindows).toEqual([{ label: "GPT-5.3-Codex-Spark 5h", percent: 4, resetAt: 1788974652 }]);
+  });
+
+  it("replaces the Spark 5h entry by label and keeps the WHAM-recorded Spark weekly entry", () => {
+    clearAccountQuota();
+    setAccountQuotaFromParsed("spark-merge", {
+      customWindows: [
+        { label: "GPT-5.3-Codex-Spark 5h", percent: 2, resetAt: 1788970000 },
+        { label: "GPT-5.3-Codex-Spark Weekly", percent: 1, resetAt: 1789560000 },
+      ],
+    });
+    applyAccountQuotaFromUpstreamHeaders("spark-merge", new Headers(SPARK_HEADERS), undefined, undefined, {
+      modelId: "gpt-5.3-codex-spark",
+    });
+    expect(getAccountQuota("spark-merge")?.customWindows).toEqual([
+      { label: "GPT-5.3-Codex-Spark 5h", percent: 4, resetAt: 1788974652 },
+      { label: "GPT-5.3-Codex-Spark Weekly", percent: 1, resetAt: 1789560000 },
+    ]);
+  });
+
+  it("still writes the account-level short slot for a genuine 5h primary on a non-Spark model", () => {
+    clearAccountQuota();
+    applyAccountQuotaFromUpstreamHeaders("genuine-5h", new Headers({
+      "x-codex-primary-used-percent": "97",
+      "x-codex-primary-window-minutes": "300",
+      "x-codex-secondary-used-percent": "12",
+      "x-codex-secondary-window-minutes": "10080",
+    }), undefined, undefined, { modelId: "gpt-5.6-sol" });
+    const quota = getAccountQuota("genuine-5h");
+    expect(quota?.shortPercent).toBe(97);
+    expect(quota?.shortWindowSeconds).toBe(18_000);
+    expect(quota?.weeklyPercent).toBe(12);
+    expect(quota?.customWindows).toBeUndefined();
+  });
+
+  it("legacy callers without a routed model keep the previous account-level behavior", () => {
+    clearAccountQuota();
+    applyAccountQuotaFromUpstreamHeaders("legacy-5h", new Headers({
+      "x-codex-primary-used-percent": "97",
+      "x-codex-primary-window-minutes": "300",
+    }));
+    expect(getAccountQuota("legacy-5h")?.shortPercent).toBe(97);
+    expect(getAccountQuota("legacy-5h")?.shortWindowSeconds).toBe(18_000);
+  });
+});
+
+/**
  * The two quota parsers, pinned against each other.
  *
  * Codex reports the same account state twice: as response headers on every request, and as a

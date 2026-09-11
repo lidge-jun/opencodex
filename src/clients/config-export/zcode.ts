@@ -1,6 +1,7 @@
 // ZCode config export.
 import type { ExportContext, ManagedContribution } from "./contracts";
 import { normalizeExportModels, inputModalitiesForClient, exportModelLabel, authoritativeContextWindow, singleFragment } from "./model-metadata";
+import { sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { OPENCODE_PROVIDER_ID, LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
 
 
@@ -15,6 +16,16 @@ export interface ZcodeModelEntry {
   name?: string;
   limit?: { context: number; output?: number };
   modalities: { input: string[]; output: string[] };
+  /**
+   * On-disk Thought Level block. ZCode 3.x persists `variants`/`defaultVariant`
+   * and parses them into in-memory `levels`/`defaultLevel`. Omit the field when
+   * the catalog has no selectable ladder, so the picker stays hidden.
+   */
+  reasoning?: {
+    enabled: boolean;
+    variants: string[];
+    defaultVariant?: string;
+  };
 }
 
 export interface ZcodeProviderBlock {
@@ -60,6 +71,19 @@ export function buildZcodeClientConfig(ctx: ExportContext): ZcodeGeneratedConfig
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.limit = { context };
+    }
+    // `none` is a Codex omit-sentinel, not a ZCode picker option. Keep catalog
+    // `ultra` when present: ZCode forwards the selected variant as
+    // `reasoning_effort`. Set `defaultVariant` only when it survives that filter.
+    const efforts = sanitizeCodexReasoningEfforts(model.reasoningEfforts)
+      ?.filter(effort => effort !== "none");
+    if (efforts && efforts.length > 0) {
+      const defaultVariant = model.defaultReasoningEffort?.trim().toLowerCase();
+      entry.reasoning = {
+        enabled: true,
+        variants: efforts,
+        ...(defaultVariant && efforts.includes(defaultVariant) ? { defaultVariant } : {}),
+      };
     }
     models[model.namespaced] = entry;
   }

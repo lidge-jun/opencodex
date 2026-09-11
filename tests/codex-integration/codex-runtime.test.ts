@@ -23,6 +23,7 @@ import {
   compareCodexVersions,
   displayCodexRuntimePath,
   effortClampAppliesToRuntime,
+  liveRemovedEfforts,
   loadLastEffortClamp,
   loadPersistedCodexRuntime,
   parseCodexVersionOutput,
@@ -603,11 +604,11 @@ describe("resolveCodexRuntime", () => {
     persistEffortClamp({
       runtimePath: "C:\\Users\\Bob\\codex.exe",
       runtimeVersion: "0.133.0",
-      removedEfforts: ["max", "ultra"],
+      removedEfforts: ["xhigh"],
       affectedModels: ["gpt-5.6-sol"],
     }, { configDir });
     const loaded = loadLastEffortClamp({ configDir });
-    expect(loaded?.removedEfforts).toEqual(["max", "ultra"]);
+    expect(loaded?.removedEfforts).toEqual(["xhigh"]);
     expect(loaded?.affectedModels).toEqual(["gpt-5.6-sol"]);
     expect(effortClampAppliesToRuntime(loaded, {
       command: "C:\\Users\\Bob\\codex.exe",
@@ -619,6 +620,70 @@ describe("resolveCodexRuntime", () => {
     })).toBe(false);
     persistEffortClamp(null, { configDir });
     expect(loadLastEffortClamp({ configDir })).toBeNull();
+  });
+
+  // The binary that produced the diagnostic is upgraded in place. Windows does exactly this, so
+  // path equality alone kept a 0.135.0 observation alive for a 0.154.0 runtime whose own bundled
+  // catalog carried the rungs the file claimed were missing.
+  test("a same-path runtime at a different version no longer inherits the diagnostic", () => {
+    const configDir = tempConfigDir();
+    persistEffortClamp({
+      runtimePath: "C:\\Users\\Bob\\codex.exe",
+      runtimeVersion: "0.135.0",
+      removedEfforts: ["xhigh"],
+      affectedModels: ["gpt-6-astra"],
+    }, { configDir });
+    const loaded = loadLastEffortClamp({ configDir });
+    expect(effortClampAppliesToRuntime(loaded, {
+      command: "C:\\Users\\Bob\\codex.exe",
+      version: "0.154.0",
+    })).toBe(false);
+    // Same path, same version is still the runtime that produced it.
+    expect(effortClampAppliesToRuntime(loaded, {
+      command: "C:\\Users\\Bob\\codex.exe",
+      version: "0.135.0",
+    })).toBe(true);
+    // An unknown version on either side is not evidence of an upgrade: stay conservative.
+    expect(effortClampAppliesToRuntime(loaded, {
+      command: "C:\\Users\\Bob\\codex.exe",
+      version: null,
+    })).toBe(true);
+  });
+
+  // max and ultra are exempt from the observed-runtime intersection, so a file naming only those
+  // describes a policy that no longer exists and must not keep the warning alive until the next
+  // sync unlinks it.
+  test("a diagnostic naming only max and ultra is inert", () => {
+    const configDir = tempConfigDir();
+    persistEffortClamp({
+      runtimePath: "C:\\Users\\Bob\\codex.exe",
+      runtimeVersion: "0.135.0",
+      removedEfforts: ["max", "ultra"],
+      affectedModels: ["gpt-6-astra"],
+    }, { configDir });
+    const loaded = loadLastEffortClamp({ configDir });
+    expect(loaded?.removedEfforts).toEqual(["max", "ultra"]);
+    expect(liveRemovedEfforts(loaded)).toEqual([]);
+    expect(effortClampAppliesToRuntime(loaded, {
+      command: "C:\\Users\\Bob\\codex.exe",
+      version: "0.135.0",
+    })).toBe(false);
+  });
+
+  test("a mixed diagnostic still reports the rungs that are genuinely clamped", () => {
+    const configDir = tempConfigDir();
+    persistEffortClamp({
+      runtimePath: "C:\\Users\\Bob\\codex.exe",
+      runtimeVersion: "0.135.0",
+      removedEfforts: ["max", "ultra", "xhigh"],
+      affectedModels: ["gpt-6-astra"],
+    }, { configDir });
+    const loaded = loadLastEffortClamp({ configDir });
+    expect(liveRemovedEfforts(loaded)).toEqual(["xhigh"]);
+    expect(effortClampAppliesToRuntime(loaded, {
+      command: "C:\\Users\\Bob\\codex.exe",
+      version: "0.135.0",
+    })).toBe(true);
   });
 
   test("creates missing config directory on first runtime/clamp persist", () => {
@@ -940,6 +1005,44 @@ describe("resolveCodexRuntime", () => {
   test("clamp diagnostics include unsupported default_reasoning_level changes", async () => {
     const { clampCatalogModelsToCodexSupport } = await import("../../src/codex/catalog/effort");
     const diagnostics: Array<{ removedEfforts: string[]; affectedModels: string[] }> = [];
+    // A genuinely unsupported (and clampable) default rung: xhigh. The exempt rungs
+    // (max/ultra) are covered by the no-diagnostic case below.
+    const models = [{
+      slug: "openrouter/example",
+      supported_reasoning_levels: [
+        { effort: "low", description: "low" },
+        { effort: "medium", description: "medium" },
+        { effort: "high", description: "high" },
+      ],
+      default_reasoning_level: "xhigh",
+    }];
+    clampCatalogModelsToCodexSupport(models, {
+      commandCandidates: () => ["stub"],
+      execFileSync: () => JSON.stringify({
+        models: [{
+          slug: "gpt-5.5",
+          base_instructions: "x",
+          supported_reasoning_levels: [
+            { effort: "low", description: "low" },
+            { effort: "medium", description: "medium" },
+            { effort: "high", description: "high" },
+          ],
+          default_reasoning_level: "medium",
+        }],
+      }),
+      onEffortClamp: (diagnostic) => diagnostics.push(diagnostic),
+    });
+    expect(models[0]!.default_reasoning_level).toBe("high");
+    expect(diagnostics[0]?.removedEfforts).toContain("xhigh");
+    expect(diagnostics[0]?.affectedModels).toEqual(["openrouter/example"]);
+  });
+
+  // An exempt default only survives when the surviving ladder advertises it; an orphaned ultra
+  // default (no ultra rung in the ladder) is repaired down for catalog coherence, and because
+  // nothing was removed from the offering the repair produces no clamp diagnostic.
+  test("an orphaned ultra default is repaired without a clamp diagnostic", async () => {
+    const { clampCatalogModelsToCodexSupport } = await import("../../src/codex/catalog/effort");
+    const diagnostics: Array<{ removedEfforts: string[]; affectedModels: string[] }> = [];
     const models = [{
       slug: "openrouter/example",
       supported_reasoning_levels: [
@@ -966,8 +1069,7 @@ describe("resolveCodexRuntime", () => {
       onEffortClamp: (diagnostic) => diagnostics.push(diagnostic),
     });
     expect(models[0]!.default_reasoning_level).toBe("high");
-    expect(diagnostics[0]?.removedEfforts).toContain("ultra");
-    expect(diagnostics[0]?.affectedModels).toEqual(["openrouter/example"]);
+    expect(diagnostics).toEqual([]);
   });
 });
 

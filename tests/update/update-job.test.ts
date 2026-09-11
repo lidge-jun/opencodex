@@ -436,6 +436,55 @@ describe("GUI update execution decisions", () => {
     expect(cmd.args).toEqual(["/pkg/bin/ocx.mjs", "update", "--tag", "preview"]);
   });
 
+  test("pnpm worker uses the Node launcher update path", () => {
+    const cmd = updateExecutionCommand("pnpm", "latest", "/pkg/bin/ocx.mjs");
+    expect(cmd.bin).toMatch(/^node/);
+    expect(cmd.args).toEqual(["/pkg/bin/ocx.mjs", "update", "--tag", "latest"]);
+  });
+
+  test("pnpm GUI worker passes the verified active launcher into restart recovery", async () => {
+    const activeLauncher = "/pnpm/owner/global/v11/node_modules/@bitkyc08/opencodex/bin/ocx.mjs";
+    let restartLauncher = "";
+    let now = 0;
+    await runGuiUpdateWorker("pnpm-active-launcher", "latest", true, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "pnpm",
+        updateAvailable: true,
+        canUpdate: true,
+        command: "node /old/bin/ocx.mjs update --tag latest",
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      resolvePnpmOwnerFn: () => ({
+        ok: true as const,
+        owner: {
+          commandPath: "/pnpm/owner/bin/pnpm",
+          packagePath: "/pnpm/owner/global/v11/node_modules/@bitkyc08/opencodex",
+          globalDir: "/pnpm/owner/global",
+          globalRoot: "/pnpm/owner/global/v11",
+          globalBinDir: "/pnpm/owner/bin",
+        },
+      }),
+      resolvePnpmActiveLauncherFn: () => activeLauncher,
+      integrityFn: () => ({ ok: true as const, integrity: "sha512-testfixturevalue000000000" }),
+      runCommandFn: () => ({ status: 0, signal: null }),
+      restartIo: {
+        serviceInstalledFn: () => false,
+        restartAfterUpdateFn: async (_job, _captured, io) => {
+          restartLauncher = io?.packageLauncherPathFn?.() ?? "";
+        },
+        probeProxy: async () => true,
+        probeProxyIdentity: async () => ({ pid: 4242, version: "2.7.41" }),
+        now: () => now,
+        sleepMs: async ms => { now += ms; },
+      },
+    });
+    expect(restartLauncher).toBe(activeLauncher);
+    expect(readUpdateJob("pnpm-active-launcher")?.status).toBe("succeeded");
+  });
+
   test("restart command separates service and direct proxy modes", () => {
     expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs")).toMatchObject({
       mode: "service",
@@ -445,6 +494,55 @@ describe("GUI update execution decisions", () => {
       mode: "proxy",
       args: ["/pkg/bin/ocx.mjs", "start"],
     });
+    expect(restartCommand(true, "pnpm", "/pkg/bin/ocx.mjs")).toMatchObject({
+      mode: "service",
+      args: ["/pkg/bin/ocx.mjs", "service", "repair"],
+    });
+  });
+
+  test("restart recovery uses the verified active launcher for direct and service paths", async () => {
+    const activeLauncher = "/pnpm/owner/global/v11/node_modules/@bitkyc08/opencodex/bin/ocx.mjs";
+    const directJob: UpdateJobState = {
+      id: "restart-active-launcher-direct",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "pnpm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(directJob.id), JSON.stringify(directJob));
+    let directLauncher = "";
+    await restartAfterUpdateForTests(directJob, { port: 19001, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => false,
+      packageLauncherPathFn: () => activeLauncher,
+      listListenPidsFn: () => [],
+      waitForPort: async () => true,
+      spawnStart: (_job, _installer, _port, launcher) => { directLauncher = launcher ?? ""; },
+    });
+    expect(directLauncher).toBe(activeLauncher);
+
+    const serviceJob = { ...directJob, id: "restart-active-launcher-service" };
+    writeFileSync(updateJobPath(serviceJob.id), JSON.stringify(serviceJob));
+    let serviceArgs: string[] = [];
+    await restartAfterUpdateForTests(serviceJob, { port: 19002, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => true,
+      packageLauncherPathFn: () => activeLauncher,
+      listListenPidsFn: () => [],
+      waitForPort: async () => true,
+      runService: (_job, _bin, args) => {
+        serviceArgs = args;
+        return { status: 0 };
+      },
+      serviceViableFn: () => true,
+      probeProxy: async () => true,
+      serviceHealthTimeoutMs: 1_000,
+    });
+    expect(serviceArgs).toEqual([activeLauncher, "service", "repair"]);
   });
 
   test("service restart is not skipped when the listener scan fails", async () => {
@@ -1605,7 +1703,7 @@ describe("immutable update target (WP160)", () => {
   test("GUI worker gates integrity before spawning and fails the job on anomalous metadata", async () => {
     const source = await Bun.file(new URL("../../src/update/job.ts", import.meta.url)).text();
 
-    const gateAt = source.indexOf("const integrity = (io.integrityFn ?? checkUpdatePackageIntegrity)(check.latestVersion);");
+    const gateAt = source.indexOf("checkUpdatePackageIntegrity(check.latestVersion, spawnSync, check.installer, pnpmOwner)");
     const cacheGateAt = source.indexOf("const cachePreflight = (io.cachePreflightFn ?? runNpmCachePreflight)();");
     const trayStopAt = source.indexOf("handoffWindowsTrayForUpdate(tray");
     const failAt = source.indexOf('updateJob(job, { status: "failed", error: integrity.reason });');

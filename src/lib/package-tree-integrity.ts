@@ -16,7 +16,7 @@ export interface PackageTreeIntegrityGuard {
 }
 
 type ObservePackageTree = () => PackageTreeObservation | null;
-type PackageTreeRuntimeInstall = "bun" | "npm" | "source";
+type PackageTreeRuntimeInstall = "bun" | "npm" | "pnpm" | "source";
 
 const packageManifestUrl = new URL("../../package.json", import.meta.url);
 

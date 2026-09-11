@@ -352,6 +352,44 @@ describe("multiauth accounts API", () => {
     }
   });
 
+  test("GET reports an explicit null plan for an Anthropic account", async () => {
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      anthropic: {
+        activeAccountId: "aaaa1111",
+        accounts: [
+          {
+            id: "aaaa1111",
+            credential: {
+              access: "t1",
+              refresh: "r1",
+              expires: 9999999999999,
+              email: "first@example.com",
+              accountId: "acct-1",
+            },
+          },
+        ],
+      },
+    }), { mode: 0o600 });
+
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { accounts: Array<{ id: string; plan?: string | null }> };
+      const account = body.accounts[0]!;
+
+      // The key must be PRESENT and null, not omitted. A consumer weighting a pool by seat size
+      // has to tell "this version looked and upstream did not say" apart from "this proxy is too
+      // old to report a tier"; omitting the key collapses those and invites assuming a tier
+      // (#3777). Anthropic's usage endpoint carries no subscription field, so null is the only
+      // truthful answer available today.
+      expect("plan" in account).toBe(true);
+      expect(account.plan).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("PUT active switches; unknown account 404; unknown provider 400", async () => {
     const server = startServer(0);
     try {

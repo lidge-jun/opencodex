@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildClientContribution, type ExportModel } from "../../src/clients/config-export";
-import { fileIO, type IntegrationIO } from "../../src/integrations/config-io";
+import { assertIntegrationWriteOwnership, fileIO, type IntegrationIO } from "../../src/integrations/config-io";
 import { canonicalContribution, fingerprint } from "../../src/integrations/ownership";
 import { protectedContributionFingerprint } from "../../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
@@ -1406,5 +1406,50 @@ describe("overwriting a conflict on purpose", () => {
     expect(after.providers["opencodex-legacy"]).toBeUndefined();
     expect(after.providers.opencodex).toBeDefined();
     expect(store.readRecords().opencode!.fragmentPaths).not.toContainEqual(["providers", "opencodex-legacy"]);
+  });
+});
+
+describe("integration write ownership guard (#4197)", () => {
+  const target = "/srv/dsh-data/settings.yaml";
+
+  test("refuses to replace a file owned by another uid", () => {
+    expect(() => assertIntegrationWriteOwnership(target, {
+      effectiveUid: () => 1000,
+      ownerUid: () => 987,
+    })).toThrow(/belongs to uid 987 while opencodex runs as uid 1000/);
+  });
+
+  test("names the path and both uids so the operator can act on it", () => {
+    let message = "";
+    try {
+      assertIntegrationWriteOwnership(target, { effectiveUid: () => 1000, ownerUid: () => 987 });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain(target);
+    expect(message).toContain("transfer ownership");
+  });
+
+  test("allows a file this process already owns", () => {
+    expect(() => assertIntegrationWriteOwnership(target, {
+      effectiveUid: () => 1000,
+      ownerUid: () => 1000,
+    })).not.toThrow();
+  });
+
+  test("allows an absent target, which has no owner to dispossess", () => {
+    expect(() => assertIntegrationWriteOwnership(target, {
+      effectiveUid: () => 1000,
+      ownerUid: () => undefined,
+    })).not.toThrow();
+  });
+
+  test("skips the check where the runtime exposes no effective uid", () => {
+    // Windows reaches the write through hardenSecretPath instead; a uid comparison there would be
+    // a guess, and a guess that refuses is worse than no guard.
+    expect(() => assertIntegrationWriteOwnership(target, {
+      effectiveUid: () => undefined,
+      ownerUid: () => 987,
+    })).not.toThrow();
   });
 });

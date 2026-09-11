@@ -384,11 +384,11 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(body).toMatchObject({ ok: true, models: 390 });
   });
 
-  test("Google's models-array response shape is accepted (x-goog-api-key path)", async () => {
+  test("Google's models-array response counts only generateContent models", async () => {
     let requestedUrl = "";
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       requestedUrl = String(input);
-      return new Response(JSON.stringify({ models: [{ name: "models/gemini-3-pro" }, { name: "models/gemini-3-flash" }, { name: "models/gemini-3-lite" }] }), {
+      return new Response(JSON.stringify({ models: [{ name: "models/gemini-3-pro", supportedGenerationMethods: ["generateContent"] }, { name: "models/gemini-3-flash", supportedGenerationMethods: ["generateContent", "countTokens"] }, { name: "models/text-embedding-004", supportedGenerationMethods: ["embedContent"] }, { name: "models/gemini-missing-methods" }] }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -399,7 +399,41 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     const { body } = await probe(config, "google");
     expect(requestedUrl).toContain("/v1beta/models");
     expect(body.ok).toBe(true);
-    expect(body.models).toBe(3);
+    expect(body.models).toBe(2);
+  });
+
+  test("Google AI Studio probe skips malformed or toxic rows while counting valid models", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      models: [
+        null,
+        "invalid-row",
+        { name: "models/bad name", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/ padded ", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-valid", supportedGenerationMethods: ["generateContent"] },
+      ],
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const config = baseConfig({
+      google: { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "g-key" },
+    });
+    const { body } = await probe(config, "google");
+    expect(body.ok).toBe(true);
+    expect(body.models).toBe(1);
+  });
+
+  test("non-ai-studio providers preserve generic models[] connection-test fallback", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ models: [{ id: "m-1" }, { id: "m-2" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const config = baseConfig({
+      generic: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-x" },
+    });
+    const { body } = await probe(config, "generic");
+    expect(body.ok).toBe(true);
+    expect(body.models).toBe(2);
   });
 
   test("Together-style top-level /models array is accepted (#617)", async () => {

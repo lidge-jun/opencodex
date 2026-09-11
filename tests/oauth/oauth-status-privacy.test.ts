@@ -72,6 +72,34 @@ describe("OAuth status privacy", () => {
     expect(JSON.stringify(status)).not.toContain("refresh-token");
   });
 
+  /**
+   * #3859 — the operator running many accounts on their own machine had no way to read the
+   * addresses they own. The reveal is an explicit boolean argument rather than a config read
+   * inside getLoginStatus: coupling this module to config I/O to answer a redaction question
+   * is what the caller's request boundary is for.
+   */
+  test("an explicit unmask returns the full address, and tokens stay redacted either way", async () => {
+    await saveCredential("xai", {
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "person@example.test",
+      accountId: "acct-xai",
+      source: "local-cli",
+    });
+
+    const revealed = getLoginStatus("xai", false);
+    expect(revealed.email).toBe("person@example.test");
+    // The flag moves ONE field. A credential dump would also satisfy an email assertion, so the
+    // token checks are repeated on the unmasked path rather than assumed from the masked one.
+    expect(JSON.stringify(revealed)).not.toContain("access-token");
+    expect(JSON.stringify(revealed)).not.toContain("refresh-token");
+
+    // Omitted and explicit-true are both today's behaviour, unchanged.
+    expect(getLoginStatus("xai").email).toBe("p***n@example.test");
+    expect(getLoginStatus("xai", true).email).toBe("p***n@example.test");
+  });
+
   test("saveCredential persists only the credential allowlist", async () => {
     writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
       legacy: {

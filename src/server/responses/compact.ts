@@ -104,7 +104,12 @@ import { fastPolicyForModel } from "../../providers/service-tier";
 import { parseFastOnlyRowId } from "../fast-row";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
+import {
+  readJsonRequestBody,
+  resolveInboundBodyLimitBytes,
+  DecompressedBodyTooLargeError,
+  UnsupportedContentEncodingError,
+} from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -147,12 +152,13 @@ import {
   decodeRequestErrorResponse,
   handleResponses,
   preAuthUpstreamHostCircuitKey,
+  poolCredentialRefreshIncompleteResponse,
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
-import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { linkRequestSessionLane, sessionLaneIdFromRequest } from "../request-log-conversation";
 import { recallComboForLane } from "./combo-session-recall";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
@@ -312,6 +318,13 @@ async function refreshPoolCompactContext(args: {
   authCtx: CodexAuthContext & { kind: "pool" };
   provider: OcxProviderConfig;
   codexAccountMode?: CodexAccountMode;
+  /**
+   * Public selector for the account this refresh is for, when the request carried one. The
+   * caller has it and this function does not, because compact takes no `RouteResult` — which
+   * is the whole reason the refusal here used to be less specific than the one core returns
+   * for the identical failure.
+   */
+  codexAccountNamespace?: string;
   substituteMainCredential: boolean;
   options: HandleResponsesCompactOptions;
 }): Promise<
@@ -372,14 +385,15 @@ async function refreshPoolCompactContext(args: {
     if (isTerminalCompactPoolRefreshFailure(error)) {
       return { ok: false, quarantine: true, response: reauthResponse() };
     }
-    const response = formatErrorResponse(
-      503,
-      "server_busy",
-      "Codex credential refresh did not complete; retry this request",
-    );
-    const headers = new Headers(response.headers);
-    headers.set("Retry-After", "1");
-    return { ok: false, quarantine: false, response: new Response(response.body, { status: response.status, headers }) };
+    return {
+      ok: false,
+      quarantine: false,
+      response: poolCredentialRefreshIncompleteResponse({
+        authCtx,
+        config,
+        accountSelector: args.codexAccountNamespace,
+      }),
+    };
   }
 }
 
@@ -522,7 +536,7 @@ export async function handleResponsesCompact(
 ): Promise<Response> {
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req);
+    body = await readJsonRequestBody(req, undefined, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses-compact");
   }
@@ -912,6 +926,7 @@ export async function handleResponsesCompact(
           authCtx: poolAuthCtx,
           provider: compactProvider,
           codexAccountMode: route.codexAccountMode,
+          codexAccountNamespace: route.codexAccountNamespace,
           substituteMainCredential,
           options,
         })
@@ -1015,6 +1030,7 @@ export async function handleResponsesCompact(
             upstream.headers,
             authCtx.writerGeneration,
             authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined,
+            { modelId: route.modelId },
           );
         }
         recordCompactPoolOutcome(authCtx, upstream.status, {
@@ -1143,6 +1159,7 @@ export async function handleResponsesCompact(
     headers: internalHeaders,
     body: JSON.stringify(internalBody),
   });
+  linkRequestSessionLane(req, internalReq);
   const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, ...(admission ? { admission } : {}) });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };

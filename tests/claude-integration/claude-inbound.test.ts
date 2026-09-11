@@ -9,6 +9,23 @@ import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-res
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import type { OcxProviderConfig } from "../../src/types";
 
+// The translator returns an untyped wire body. These aliases name just the fields the
+// system-message cases assert on, so the assertions read as a contract instead of a cast.
+type TranslatedInputItem = {
+  type?: string;
+  role?: string;
+  content?: Array<{ type?: string; text?: string }>;
+};
+type TranslatedBody = {
+  instructions?: string;
+  prompt_cache_key?: string;
+  input: TranslatedInputItem[];
+};
+
+function translatedBody(raw: Record<string, unknown>): TranslatedBody {
+  return anthropicToResponsesBody(raw) as TranslatedBody;
+}
+
 // Full Claude Code-shaped request: system array, tool cycle, image, thinking, options.
 function claudeCodeRequest(): Record<string, unknown> {
   return {
@@ -310,8 +327,13 @@ describe("claude inbound translation", () => {
     expect(() => parseRequest(body)).not.toThrow();
   });
 
-  test("system role messages fold into instructions (real Claude Code sends them; native backend rejects system items)", () => {
-    const body = anthropicToResponsesBody({
+  // Claude Code sends role:"system" entries in `messages`. They used to be folded into
+  // `instructions` alongside the top-level system field; now each one becomes a
+  // chronological role:"developer" input item, so `instructions` belongs to the
+  // top-level Anthropic `system` field alone and the prompt head stops moving
+  // mid-conversation.
+  test("in-messages system role becomes a chronological developer item, never a system item", () => {
+    const body = translatedBody({
       model: "m", max_tokens: 10,
       system: "top-level",
       messages: [
@@ -319,14 +341,61 @@ describe("claude inbound translation", () => {
         { role: "system", content: [{ type: "text", text: "block form" }] },
         { role: "user", content: "hi" },
       ],
-    }) as any;
-    expect(body.instructions).toBe("top-level\n\nbe terse\n\nblock form");
-    // No system message items in input — native ChatGPT backend 400s on them.
-    expect((body.input as any[]).every(item => item.role !== "system")).toBe(true);
-    expect(body.input).toHaveLength(1);
-    expect(body.input[0].role).toBe("user");
+    });
+    // Only the top-level system reaches instructions now.
+    expect(body.instructions).toBe("top-level");
+    // Still no system message items in input — the native ChatGPT backend 400s on them.
+    expect(body.input.every(item => item.role !== "system")).toBe(true);
+    expect(body.input.map(item => item.role)).toEqual(["developer", "developer", "user"]);
+    expect(body.input[0]?.content).toEqual([{ type: "input_text", text: "be terse" }]);
+    expect(body.input[1]?.content).toEqual([{ type: "input_text", text: "block form" }]);
     expect(() => responsesRequestSchema.parse(body)).not.toThrow();
     expect(() => parseRequest(body)).not.toThrow();
+  });
+
+  // #4148: a client that injects a fresh reminder each turn used to rewrite the prompt
+  // head every time, which invalidates the upstream KV prefix and — with no
+  // metadata.user_id — rotated the Desktop prompt_cache_key fallback along with it.
+  test("a mid-conversation system message leaves the cache prefix and cache key alone", () => {
+    const turn = (messages: unknown[]) =>
+      translatedBody({ model: "m", max_tokens: 10, system: "S", messages });
+
+    const turn1 = turn([
+      { role: "user", content: "u1" },
+      { role: "system", content: "r1" },
+    ]);
+    const turn2 = turn([
+      { role: "user", content: "u1" },
+      { role: "system", content: "r1" },
+      { role: "assistant", content: "a1" },
+      { role: "user", content: "u2" },
+      { role: "system", content: "r2" },
+    ]);
+
+    // The prompt head is the whole point: identical across turns, and equal to the
+    // top-level system field on its own.
+    expect(turn1.instructions).toBe("S");
+    expect(turn2.instructions).toBe("S");
+
+    expect(turn1.input.map(item => item.role)).toEqual(["user", "developer"]);
+    expect(turn2.input.map(item => item.role))
+      .toEqual(["user", "developer", "assistant", "user", "developer"]);
+    expect(turn2.input.map(item => item.content?.[0]?.text))
+      .toEqual(["u1", "r1", "a1", "u2", "r2"]);
+    expect(turn2.input.every(item => item.role !== "system")).toBe(true);
+
+    // Turn 1's items are still a prefix of turn 2's, which is what the KV cache matches on.
+    expect(turn2.input.slice(0, 2)).toEqual(turn1.input);
+
+    // No metadata.user_id, so the Desktop cohort fallback applies. It hashes the
+    // post-translation system text, which no longer absorbs the injected reminders.
+    expect(turn1.prompt_cache_key).toBeDefined();
+    expect(turn2.prompt_cache_key).toBe(turn1.prompt_cache_key);
+
+    for (const body of [turn1, turn2]) {
+      expect(() => responsesRequestSchema.parse(body)).not.toThrow();
+      expect(() => parseRequest(body)).not.toThrow();
+    }
   });
 
   test("tool_result is_error and string content", () => {

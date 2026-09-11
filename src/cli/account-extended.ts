@@ -264,6 +264,7 @@ function refreshLine(row: FamilyRows["rows"][number]): string {
   const quotaText = row.quota ? quotaParts(row.quota).join(" ") : "";
   parts.push(quotaText.length > 0 ? quotaText : "quota: unknown");
   if (row.needsReauth) parts.push("needs-reauth");
+  if (row.validationPending) parts.push("validation-pending (routing disabled; open 'ocx gui' and click Refresh quotas after recovery)");
   return parts.filter(Boolean).join(" ");
 }
 
@@ -339,7 +340,7 @@ export async function cmdRefresh(args: string[], deps: AccountDeps): Promise<num
     } else console.log(`no quota report available for ${name}`);
     return 0;
   }
-  const result = await fetchCodexRows(deps, baseUrl, true);
+  const result = await fetchCodexRows(deps, baseUrl, true, true, { refreshAction: true });
   const failed = familyFailure(result, `failed to refresh ${name}`);
   if (failed !== null) return failed;
   if (wantsJson) console.log(JSON.stringify({ accounts: result.rows }, null, 2));

@@ -133,6 +133,34 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Reads /healthz plus local config; drives no management API route."],
   },
   {
+    command: ["hub", "invite"],
+    summary: "Mint a single-use pairing code on a hub and print the exact `ocx connect` line for one more machine.",
+    // Deliberately empty. The command DOES drive `POST /api/gui/pairing-grants` -- the attested
+    // local mint route `ocx gui pair` uses, authorized by a capability HMAC'd with the running
+    // proxy's own attestation secret rather than by the admin token, which is why it needs
+    // nothing exported in the shell. That route is answered in the composition root, ahead of
+    // `handleManagementAPI`, so it is not in MANAGEMENT_ROUTES; declaring it here would fail the
+    // capability/registry reconciliation rather than inform anyone. Widening the registry's scope
+    // to `src/server/index.ts` is its own change.
+    routes: [],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit code, expiresAt, dataUrl, managementUrl, and command." },
+      { name: "--data-url", value: "string", summary: "Advertise this data origin instead of hub.dataPublicOrigin or the bind address." },
+      { name: "--management-url", value: "string", summary: "Confirm the management origin; it must equal hub.managementPublicOrigin." },
+      { name: "--clients", value: "string", summary: "Pre-select codex and/or claude in the printed connect command." },
+    ],
+    mutates: true,
+    json: "envelope",
+    details: [
+      "Hub only: refuses when runtimeRole is not hub, and requires a running attested proxy.",
+      "The code is secret, single-use and short-lived; it is bound to hub.managementPublicOrigin and to the connecting machine's loopback browser origin.",
+      "The bound browser origin is always printed; when it is not http://localhost:10100 the warning names the port the connecting machine must use.",
+      "Refuses when the advertised data origin would be loopback (a loopback or wildcard bind with no hub.dataPublicOrigin and no --data-url) rather than printing a line that dials the other machine itself.",
+      "Prints no data-plane token. Remote machines receive their own revocable per-client key from the exchange.",
+      "Mints through the attested local pairing-grant route, the same one ocx gui pair uses; no admin token is read.",
+    ],
+  },
+  {
     command: ["connect", "rotate"],
     summary: "Rotate the connected client's data key against the hub, with commit and abort.",
     // One command drives all three: start returns the new secret once, commit promotes it,
@@ -218,6 +246,18 @@ export const CAPABILITIES: readonly Capability[] = [
       "STATUS names `paused` alongside `selected`: a paused-but-selected account still receives requests.",
       "`--quota` shows cached Codex windows (including 5h); `--refresh` bypasses the server TTL.",
     ],
+  },
+  {
+    command: ["account", "refresh"],
+    summary: "Refresh account quotas without model validation; pending Codex accounts require dashboard consent.",
+    routes: [
+      { method: "POST", path: "/api/codex-auth/accounts/refresh" },
+      { method: "GET", path: "/api/provider-quotas" },
+    ],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the refresh result as JSON." }],
+    mutates: true,
+    json: "payload",
+    details: ["CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary."],
   },
   {
     command: ["usage"],
@@ -307,12 +347,13 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["logs"],
-    summary: "Recent request log rows, filterable by provider, model, conversation, and status.",
+    summary: "Recent request log rows, filterable by provider, model, conversation, account, and status.",
     routes: [{ method: "GET", path: "/api/logs" }],
     flags: [
       { name: "--provider", value: "string", summary: "Restrict to one provider, matching failover attempts too." },
       { name: "--model", value: "string", summary: "Restrict to one model id, matching failover attempts too." },
       { name: "--conversation", value: "string", summary: "Restrict to one conversation id (`--conversationId` is accepted too)." },
+      { name: "--account", value: "string", summary: "Restrict to one account log label (`main`, `p<hex6>`, `o<hex6>`), matching failover attempts too." },
       { name: "--status", value: "string", summary: "An exact code (429) or a class (5xx)." },
       { name: "--limit", value: "number", summary: "Row cap; defaults to 200." },
       { name: "--follow", value: "boolean", summary: "Poll for new rows; add --jsonl to emit JSONL." },
@@ -324,6 +365,7 @@ export const CAPABILITIES: readonly Capability[] = [
     details: [
       "`--provider` and `--model` both match a failover attempt, so a request is findable by what actually served it, not only by what was asked for.",
       "Rows print `conv=<id>` when the entry carries one, so a conversation filter can be told apart from an empty result.",
+      "Rows print `acct=<label>` when the account is known, so an `--account` filter can be told apart from an empty result.",
       "`--follow` deduplicates by row id and cannot be combined with `--json`.",
     ],
   },

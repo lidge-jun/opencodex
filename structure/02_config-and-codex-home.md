@@ -360,6 +360,12 @@ explicitly runs legacy OpenAI recovery. A user-owned root `openai_base_url` is p
 overwritten, and that case also blocks managed sub-agent defaults rather than fighting the user for
 ownership.
 
+Client-compaction mode can retain that user-owned root URL alongside an injected provider table.
+Its status must distinguish ownership from destination: an unmarked user-owned line may already
+point to this proxy. Report that existing `openai` threads follow the configured root URL and new
+threads use the injected table, without inferring a foreign endpoint or prescribing URL removal.
+This diagnostic distinction does not change URL ownership, journal entries, or session history.
+
 **API auth header (non-loopback).** The built-in `openai` provider cannot carry the
 `x-opencodex-api-key` env header, so this form re-tags the root provider and appends the table:
 

@@ -344,6 +344,7 @@ function runTransactionScenario(
     const { connectClient, disconnectClient } = require("./src/client/connect");
     const { readClientConnectionState } = require("./src/client/state");
     const { serviceApiTokenFilePath } = require("./src/lib/service-secrets");
+    const { hubStateCachePath, writeCachedHubState } = require("./src/client/hub-state");
     const { DEFAULT_CATALOG_PATH } = require("./src/codex/paths");
     const stage = ${JSON.stringify(stage)};
     const { setPersistedConfigMutationBeforeCommitForTests } = require("./src/config");
@@ -388,6 +389,15 @@ function runTransactionScenario(
         }, lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
       } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
       const beforeDisconnect = readClientConnectionState();
+      // The hub-state cache is derived from THIS connection; disconnect has to take it with it.
+      let hubStateCacheBefore = false;
+      if (beforeDisconnect.kind === "connected") {
+        writeCachedHubState(beforeDisconnect.value, {
+          schemaVersion: 1, runtimeRole: "hub", hubVersion: "9.9.9", origin: null,
+          providers: [], oauth: [], subagentModels: [], truncated: false, claudeCode: { enabled: true },
+        }, "2026-08-28T00:00:00.000Z");
+        hubStateCacheBefore = existsSync(hubStateCachePath());
+      }
       const artifacts = {
         token: existsSync(serviceApiTokenFilePath()),
         catalog: existsSync(DEFAULT_CATALOG_PATH),
@@ -396,7 +406,8 @@ function runTransactionScenario(
       let disconnected = null;
       if ((stage === "success" || stage === "prior-catalog") && connected) disconnected = await disconnectClient({}, { lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
       const catalogAfter = existsSync(DEFAULT_CATALOG_PATH) ? readFileSync(DEFAULT_CATALOG_PATH, "utf8") : null;
-      console.log(JSON.stringify({ connected, error, beforeDisconnect, artifacts, disconnected, catalogAfter, after: readClientConnectionState(), calls, commitFaultTriggered }));
+      const hubStateCacheAfter = existsSync(hubStateCachePath());
+      console.log(JSON.stringify({ connected, error, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, after: readClientConnectionState(), calls, commitFaultTriggered }));
     })();
   `;
   const cleanup = () => {
@@ -521,6 +532,11 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.beforeDisconnect).toMatchObject({ kind: "connected", value: { apiKeyId: "issued-id" } });
       expect(run.parsed.artifacts).toEqual({ token: true, catalog: true, credentialZeroed: true });
       expect(run.parsed.disconnected).toMatchObject({ apiKeyId: "issued-id", tokenRemoved: true, catalogRemoved: true });
+      // The cached hub state goes with the connection (#4236). It is owner-stamped, so a reader
+      // would reject it anyway — but leaving it behind means `hub-state.json` keeps naming the
+      // former hub's providers and logins on a machine connected to nothing.
+      expect(run.parsed.hubStateCacheBefore).toBe(true);
+      expect(run.parsed.hubStateCacheAfter).toBe(false);
       expect(run.parsed.after).toEqual({ kind: "disconnected" });
       expect(run.parsed.calls.filter((call: any) => call.method === "DELETE")).toEqual([]);
     } finally { run.cleanup(); }

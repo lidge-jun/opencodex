@@ -13,6 +13,8 @@ import { stripGrokConfig, type GrokInjectResult } from "../grok/inject";
 import { removeDesktop3pStandardPivot } from "../claude/desktop-3p";
 import {
   claudeDesktopIntegrationEnabled,
+  grokIntegrationEnabled,
+  HUB_GATED_SKIP_MESSAGE,
   shouldSyncGrokOnStart,
 } from "../codex/desired-state";
 import type { OcxConfig } from "../types";
@@ -78,6 +80,14 @@ export async function ensureGrokFenceMatchesDesired(
 ): Promise<void> {
   const config = deps.loadConfig();
   const { log, error } = io(deps);
+  // A hub-gated skip is NOT "the user turned Grok off" (#4236). Stripping the managed block
+  // there deleted a fence the operator still wants — and `ocx ensure` reported it as the
+  // Grok toggle doing its job. Only an explicit OFF authorizes the strip; the gate just
+  // declines to write, and says which key would let it.
+  if (!shouldSyncGrokOnStart(config) && grokIntegrationEnabled(config)) {
+    log(`   ${HUB_GATED_SKIP_MESSAGE} ~/.grok/config.toml was left exactly as it is.`);
+    return;
+  }
   if (!shouldSyncGrokOnStart(config)) {
     try {
       const grok = deps.stripGrokConfig();

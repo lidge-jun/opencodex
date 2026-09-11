@@ -431,3 +431,211 @@ describe("GET /api/logs snapshot polling", () => {
     }
   });
 });
+
+/**
+ * #4057: the account label was persisted on the row and on every attempt long before anything
+ * could read it back. `requestLogDto` carries it only because it spreads the entry — the sibling
+ * projection `requestLogEntryFromPersistedUsage` rebuilds field by field and warns in its own
+ * comment that a field missing there never reaches usage.jsonl. These assertions pin the served
+ * contract so a future field-by-field rewrite of the DTO cannot drop the label silently.
+ */
+describe("GET /api/logs account identity", () => {
+  beforeEach(() => clearRequestLogsForTests());
+
+  test("serves the account label on the row and on each attempt, and filters on it", async () => {
+    addRequestLog(baseEntry({ requestId: "main-row", provider: "openai", accountLogLabel: "main" }));
+    addRequestLog(baseEntry({
+      requestId: "pool-row",
+      provider: "openai",
+      accountLogLabel: "p3f9a1",
+      attempts: [
+        { ordinal: 1, provider: "openai", model: "gpt-test", adapter: "openai-responses", status: 429, durationMs: 4, sendCount: 1, recoveryKinds: [], usageStatus: "unreported", accountLogLabel: "main" },
+        { ordinal: 2, provider: "openai", model: "gpt-test", adapter: "openai-responses", status: 200, durationMs: 6, sendCount: 1, recoveryKinds: [], usageStatus: "reported", accountLogLabel: "p3f9a1" },
+      ],
+    }));
+    addRequestLog(baseEntry({ requestId: "unlabelled-row", provider: "xai" }));
+
+    const all = await readLogPoll("limit=2000");
+    const pool = all.logs.find(row => row.requestId === "pool-row")!;
+    expect(pool.accountLogLabel).toBe("p3f9a1");
+    expect((pool.attempts as Array<Record<string, unknown>>).map(attempt => attempt.accountLogLabel))
+      .toEqual(["main", "p3f9a1"]);
+    expect(all.logs.find(row => row.requestId === "unlabelled-row")!.accountLogLabel).toBeUndefined();
+
+    // The pool row is reachable through the account that REFUSED it as well as the one that
+    // served it, which is what makes the filter usable for quota debugging.
+    expect((await readLogPoll("account=main")).logs.map(row => row.requestId)).toEqual(["main-row", "pool-row"]);
+    expect((await readLogPoll("account=p3f9a1")).logs.map(row => row.requestId)).toEqual(["pool-row"]);
+    expect((await readLogPoll("account=p000000")).logs).toEqual([]);
+  });
+});
+
+/**
+ * #4038 — Logs showed one rate that conflates first-token latency with delivery speed.
+ * `tokensPerSecond` never subtracted TTFT, and the MetricSource Pick did not even include
+ * `firstOutputMs`, so a decode-rate metric could not be computed at all.
+ *
+ * The history matters more than the arithmetic here. Contributor PR #4040 implemented this exact
+ * metric and was closed unmerged as an unreliable estimate: proxy TTFT is not the provider's
+ * generation window, and a small post-TTFT remainder makes the number explode. The issue stayed
+ * open, so the repository held both an acceptance criterion and a rejection of the same feature.
+ *
+ * MIN_DECODE_WINDOW_MS is what answers that rejection, and
+ * "a decode window under the floor yields no value" is the assertion that proves it. Everything
+ * else here is scaffolding around that one case.
+ */
+describe("estimated decode rate (#4038)", () => {
+  test("subtracts TTFT, and leaves the end-to-end rate exactly as it was", async () => {
+    addRequestLog(baseEntry({
+      durationMs: 10_000,
+      firstOutputMs: 2_000,
+      usage: { inputTokens: 1000, outputTokens: 240 },
+    }));
+    const [dto] = await readLogs();
+    // 240 tokens over the 8s AFTER the first token.
+    expect(dto!.displayMetrics.decodeTokPerSecond).toEqual({ kind: "value", value: 30, estimated: true });
+    // The e2e rate still divides by the whole 10s: 24. This metric is additive, not a correction.
+    expect(dto!.displayMetrics.tokPerSecond).toEqual({ kind: "value", value: 24, estimated: false });
+    // Derived at response time only, exactly like the metrics beside it.
+    expect(Object.hasOwn(getRequestLogEntries()[0]!, "displayMetrics")).toBe(false);
+  });
+
+  test("is always marked estimated, even on a long, clean window", async () => {
+    // Proxy TTFT is when the first byte reached the PROXY, never the provider's generation
+    // start, so no window length makes this an exact measurement.
+    addRequestLog(baseEntry({
+      durationMs: 60_000,
+      firstOutputMs: 1_000,
+      usage: { inputTokens: 10, outputTokens: 5900, estimated: false },
+    }));
+    const [dto] = await readLogs();
+    expect(dto!.displayMetrics.decodeTokPerSecond.kind).toBe("value");
+    expect(dto!.displayMetrics.decodeTokPerSecond.estimated).toBe(true);
+  });
+
+  test("a decode window under the floor yields no value rather than an absurd rate", async () => {
+    // THE #4040 case. 240 tokens over a 50 ms remainder is 4800 tok/s, which is not a fact about
+    // the model; it is a fact about clock granularity and proxy buffering. Refusing to print it
+    // is the whole point of the guard.
+    addRequestLog(baseEntry({
+      durationMs: 10_000,
+      firstOutputMs: 9_950,
+      usage: { inputTokens: 1000, outputTokens: 240 },
+    }));
+    const [dto] = await readLogs();
+    expect(dto!.displayMetrics.decodeTokPerSecond).toEqual({
+      kind: "unavailable",
+      reason: "decode_window_too_short",
+    });
+    expect(JSON.stringify(dto!.displayMetrics.decodeTokPerSecond)).not.toContain("4800");
+    // The end-to-end rate is unaffected and still reported.
+    expect(dto!.displayMetrics.tokPerSecond.kind).toBe("value");
+  });
+
+  test("a missing TTFT is its own reason, not a bad duration", async () => {
+    addRequestLog(baseEntry({
+      durationMs: 10_000,
+      usage: { inputTokens: 1000, outputTokens: 240 },
+    }));
+    const [dto] = await readLogs();
+    expect(dto!.displayMetrics.decodeTokPerSecond).toEqual({ kind: "unavailable", reason: "ttft_missing" });
+  });
+
+  test("a TTFT at or past the total duration is an invalid duration", async () => {
+    for (const firstOutputMs of [10_000, 12_000]) {
+      clearRequestLogsForTests();
+      addRequestLog(baseEntry({
+        durationMs: 10_000,
+        firstOutputMs,
+        usage: { inputTokens: 1000, outputTokens: 240 },
+      }));
+      const [dto] = await readLogs();
+      expect(dto!.displayMetrics.decodeTokPerSecond).toEqual({ kind: "unavailable", reason: "invalid_duration" });
+    }
+  });
+
+  test("no output tokens is output_missing, and unsupported usage stays unsupported", async () => {
+    clearRequestLogsForTests();
+    addRequestLog(baseEntry({
+      durationMs: 10_000,
+      firstOutputMs: 1_000,
+      usage: { inputTokens: 1000, outputTokens: 0 },
+    }));
+    expect((await readLogs())[0]!.displayMetrics.decodeTokPerSecond)
+      .toEqual({ kind: "unavailable", reason: "output_missing" });
+
+    clearRequestLogsForTests();
+    addRequestLog(baseEntry({
+      durationMs: 10_000,
+      firstOutputMs: 1_000,
+      usageStatus: "unsupported",
+      usage: { inputTokens: 1000, outputTokens: 240 },
+    }));
+    expect((await readLogs())[0]!.displayMetrics.decodeTokPerSecond)
+      .toEqual({ kind: "unavailable", reason: "usage_unsupported" });
+  });
+
+  test("each attempt measures its own window; the parent never borrows one", async () => {
+    // requestLogDto maps attempts separately on purpose. Copying a child's firstOutputMs onto the
+    // parent would report a window the parent never had.
+    clearRequestLogsForTests();
+    addRequestLog(baseEntry({
+      durationMs: 20_000,
+      usage: { inputTokens: 10, outputTokens: 400 },
+      attempts: [{
+        provider: "anthropic",
+        model: "claude-3-haiku-20240307",
+        durationMs: 10_000,
+        firstOutputMs: 2_000,
+        usageStatus: "reported",
+        usage: { inputTokens: 10, outputTokens: 240 },
+      }],
+    } as Partial<RequestLogEntry>));
+    const [dto] = await readLogs();
+    // The parent has no TTFT of its own, so it reports none rather than the attempt's.
+    expect(dto!.displayMetrics.decodeTokPerSecond).toEqual({ kind: "unavailable", reason: "ttft_missing" });
+    expect(dto!.attempts[0].displayMetrics.decodeTokPerSecond)
+      .toEqual({ kind: "value", value: 30, estimated: true });
+  });
+
+  test("request history opts out of the decode rate, parent and attempts alike", async () => {
+    // /api/request-history shares this DTO but not its contract. The value would be meaningful
+    // there — firstOutputMs does survive into a persisted-usage row — so the exclusion is a
+    // scope decision rather than a correctness one, and it has to be asserted or it silently
+    // reverses the first time someone touches the DTO.
+    const { requestLogDto } = await import("../../src/server/management/shared");
+    const entry = baseEntry({
+      durationMs: 10_000,
+      firstOutputMs: 2_000,
+      usage: { inputTokens: 10, outputTokens: 240 },
+      attempts: [{
+        provider: "anthropic",
+        model: "claude-3-haiku-20240307",
+        durationMs: 10_000,
+        firstOutputMs: 2_000,
+        usageStatus: "reported",
+        usage: { inputTokens: 10, outputTokens: 240 },
+      }],
+    } as Partial<RequestLogEntry>);
+
+    const history = requestLogDto(entry, { includeDecodeRate: false }) as Record<string, any>;
+    expect(Object.hasOwn(history.displayMetrics, "decodeTokPerSecond")).toBe(false);
+    expect(Object.hasOwn(history.attempts[0].displayMetrics, "decodeTokPerSecond")).toBe(false);
+    // Everything else the endpoint already returned is untouched.
+    expect(history.displayMetrics.tokPerSecond.kind).toBe("value");
+    expect(history.displayMetrics.cost).toBeDefined();
+
+    // The default is still to include it, so /api/logs is unaffected by the opt-out existing.
+    const logs = requestLogDto(entry) as Record<string, any>;
+    expect(logs.displayMetrics.decodeTokPerSecond).toEqual({ kind: "value", value: 30, estimated: true });
+  });
+
+  test("the request-history route actually passes the opt-out", async () => {
+    // The DTO assertion above proves the flag works; this proves the endpoint uses it. Without
+    // it, a correct flag and a route that never sets it would both look fine.
+    const source = await Bun.file("src/server/management/request-history-routes.ts").text();
+    const calls = [...source.matchAll(/requestLogDto\(/g)];
+    expect(calls.length).toBeGreaterThan(0);
+    expect([...source.matchAll(/includeDecodeRate: false/g)]).toHaveLength(calls.length);
+  });
+});

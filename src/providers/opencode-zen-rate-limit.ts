@@ -7,6 +7,11 @@
  * bodies and may omit `Retry-After` / `X-RateLimit-*`; when those headers are
  * present they still take precedence. Distinct from the keyless desktop
  * ~200 requests / 5h quota documented on `opencode-free`.
+ *
+ * The same module also owns the keyless free-tier admission explanation (#4121):
+ * Zen rejects a request that carries no `x-opencode-session` header with
+ * `MissingSessionID` / "OpenCode's free tier can only be used in OpenCode".
+ * opencodex does not synthesize that header — see {@link enrichOpenCodeZenFreeTierMessage}.
  */
 import { validateClientRetryAfterHeader } from "../lib/retry-after";
 import { registryEntryForProviderDestination } from "./registry";
@@ -99,4 +104,74 @@ export function enrichOpenCodeZenRateLimitMessage(
     + `${retryHint}`
     + paceHint
   );
+}
+
+/**
+ * Zen's keyless free tier admits only OpenCode's own client. A request without an
+ * `x-opencode-session` header is refused with error type `MissingSessionID` and the
+ * message "OpenCode's free tier can only be used in OpenCode" (#4121).
+ *
+ * Presence of the header is the whole gate — any value clears it — so opencodex could
+ * pass by minting one. It does not. Fabricating a session identifier and a versioned
+ * `opencode/<version>` User-Agent is a claim to *be* the OpenCode client, and no upstream
+ * contract authorizes a third-party agent to make it; an HTTP 200 obtained that way is a
+ * bypassed admission check, not permission. Until OpenCode publishes a third-party
+ * integration path for this exact keyless tier, the supported route is the keyed
+ * `opencode-zen` provider.
+ *
+ * Two markers are matched because the two request surfaces expose different parts of the
+ * upstream envelope: the Responses path forwards the bounded raw body (which carries the
+ * `MissingSessionID` type), while the native Chat path forwards only the parsed message.
+ */
+const OPENCODE_ZEN_FREE_TIER_LOCK_IN = /MissingSessionID|free tier can only be used in OpenCode/i;
+
+/** Idempotence marker — the appended guidance must not stack across enrichment layers. */
+const FREE_TIER_ENRICHMENT_MARKER = "does not send a fabricated OpenCode session header";
+
+/** True when an upstream error body is Zen's keyless free-tier admission refusal. */
+export function isOpenCodeZenFreeTierLockIn(message: string, upstreamErrorType?: string | null): boolean {
+  if (upstreamErrorType && OPENCODE_ZEN_FREE_TIER_LOCK_IN.test(upstreamErrorType)) return true;
+  return OPENCODE_ZEN_FREE_TIER_LOCK_IN.test(message);
+}
+
+/**
+ * Replace a raw `MissingSessionID` passthrough with an explanation of the upstream
+ * restriction and the supported alternative. No-op for every other provider and every
+ * other error, and idempotent so layered enrichment cannot append it twice.
+ */
+export function enrichOpenCodeZenFreeTierMessage(
+  message: string,
+  opts: {
+    providerName?: string;
+    baseUrl?: string;
+    adapter?: string;
+    /** Upstream `error.type`, when the caller parsed one out of the envelope. */
+    upstreamErrorType?: string | null;
+  },
+): string {
+  if (message.includes(FREE_TIER_ENRICHMENT_MARKER)) return message;
+  if (!isOpenCodeZenFreeTierLockIn(message, opts.upstreamErrorType)) return message;
+  if (!isOpenCodeZenRateLimitProvider(opts)) return message;
+  return (
+    `${message}`
+    + " OpenCode Zen's keyless free tier admits only OpenCode's own client: it refuses any"
+    + " request that arrives without an x-opencode-session header."
+    + ` opencodex ${FREE_TIER_ENRICHMENT_MARKER}, because presenting itself as the OpenCode`
+    + " client is a claim no upstream contract supports."
+    + " Use the keyed opencode-zen provider with an OpenCode Zen API key"
+    + " (https://opencode.ai/auth), or route this model through another provider."
+    + " Upstream terms: https://opencode.ai/docs/zen/."
+  );
+}
+
+/**
+ * Single entry point for Zen upstream-error guidance on the Responses wire: short-window
+ * rate limits first, then the keyless free-tier admission refusal. Each layer is a no-op
+ * outside its own case, so the composition is safe for every other upstream failure.
+ */
+export function enrichOpenCodeZenUpstreamMessage(
+  message: string,
+  opts: Parameters<typeof enrichOpenCodeZenRateLimitMessage>[1] & { upstreamErrorType?: string | null },
+): string {
+  return enrichOpenCodeZenFreeTierMessage(enrichOpenCodeZenRateLimitMessage(message, opts), opts);
 }

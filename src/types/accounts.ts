@@ -34,4 +34,22 @@ export interface CodexAccountCredentialRecord {
   lastCodexValidatedAt?: number;
   lastCodexValidationStatus?: "ok" | "failed";
   lastCodexValidationError?: string;
+  /** OAuth succeeded while quota was exhausted; never route until deferred validation succeeds. */
+  codexValidationPending?: boolean;
+  /**
+   * Set when the recorded failure is TERMINAL: the OAuth grant itself was revoked or has
+   * expired, so no retry can recover it and only a re-login will. It distinguishes a dead
+   * credential from a transient warmup or probe failure that may clear on its own.
+   *
+   * Deliberately a separate optional key rather than a third value in
+   * `lastCodexValidationStatus`: `isCredentialRecord` admits only `"ok" | "failed"`, so a
+   * record carrying an unrecognized status fails validation and is DROPPED from the store
+   * on load. An unknown extra key is carried through untouched instead, which keeps a
+   * downgrade from deleting the account entry and its credential.
+   *
+   * Cleared by `markCodexAccountValidated` and — because it is absent from
+   * `preservedValidationMetadata` — by every credential write. A refresh that succeeds
+   * disproves "the grant was revoked", so the verdict must not outlive it.
+   */
+  lastCodexValidationTerminal?: boolean;
 }

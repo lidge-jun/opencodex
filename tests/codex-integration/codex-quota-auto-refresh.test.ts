@@ -124,6 +124,41 @@ afterEach(() => {
 });
 
 describe("Codex quota window auto refresh", () => {
+  test("pending validation suppresses scheduled inference and completion markers", async () => {
+    const cfg = config();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pending-access", refreshToken: "pending-refresh", expiresAt: NOW + 3600_000, chatgptAccountId: "pool-a",
+    }, { validationPending: true });
+    let warmups = 0;
+    await runCodexQuotaAutoRefresh(cfg, NOW, {
+      getQuota: () => quota(), warmAccount: async () => { warmups++; }, persistCompleted: recordMarkers,
+    });
+    expect(warmups).toBe(0);
+    expect(cfg.codexQuotaAutoRefresh?.["pool-a"]).toEqual({ fiveHour: true, weekly: true });
+  });
+  test("replacement pending validation during metadata refresh suppresses scheduled inference", async () => {
+    const cfg = config();
+    writePoolCredential();
+    let observed: StoredAccountQuota | null = null;
+    let warmups = 0;
+    let refreshes = 0;
+    await runCodexQuotaAutoRefresh(cfg, NOW, {
+      getQuota: () => observed,
+      refreshQuota: async () => {
+        refreshes++;
+        saveCodexAccountCredential("pool-a", {
+          accessToken: "pending-access", refreshToken: "pending-refresh",
+          expiresAt: NOW + 3600_000, chatgptAccountId: "pool-a",
+        }, { validationPending: true });
+        observed = quota();
+      },
+      warmAccount: async () => { warmups++; },
+      persistCompleted: recordMarkers,
+    });
+    expect(refreshes).toBe(1);
+    expect(warmups).toBe(0);
+    expect(cfg.codexQuotaAutoRefresh?.["pool-a"]).toEqual({ fiveHour: true, weekly: true });
+  });
   test("regression: successive idle windows use completed response quota headers", async () => {
     const cfg = config();
     cfg.codexQuotaAutoRefresh = { "pool-a": { fiveHour: true } };

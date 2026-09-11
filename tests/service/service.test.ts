@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, posix, win32 } from "node:path";
@@ -9,7 +9,7 @@ import { saveConfig } from "../../src/config";
 import { windowsEnvIndirectBatchValue } from "../../src/lib/win-paths";
 import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml as buildWindowsTaskXmlProduction, buildWindowsTaskXmlDocument, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, expectedLaunchdCommand, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, reportServiceServing, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy as windowsTaskRegistrationHealthyProduction } from "../../src/service";
 import type { ServiceDiagnostic } from "../../src/service";
-import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../../src/service";
+import { definitionCarriesCredential, resolvedProxyEnv, writeServiceApiTokenFile, writeServiceDefinitionFile } from "../../src/service";
 import { buildWinswXml } from "../../src/lib/winsw";
 import { CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 import { serviceApiTokenFilePath } from "../../src/lib/service-secrets";
@@ -137,6 +137,11 @@ describe("systemd service unit", () => {
     const second = join(TEST_DIR, "second");
     const probes: string[] = [];
     const result = stableLauncherEntry({
+      // `state: null` is what keeps this a PATH-discovery test. The recorded install
+      // launcher now wins over discovery (#4236 defect 1g), and the default reads the real
+      // `~/.opencodex/service-state.json` through the legacy fallback path, so leaving it
+      // out would make this assert the developer's own install instead.
+      state: null,
       env: { PATH: [first, second].join(delimiter) },
       isExecutableFile: candidate => {
         probes.push(candidate);
@@ -160,6 +165,7 @@ describe("systemd service unit", () => {
     writeFileSync(join(executableEntry, "ocx"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     try {
       expect(stableLauncherEntry({
+        state: null,
         env: { PATH: [directoryEntry, nonExecutableEntry, executableEntry].join(delimiter) },
       })).toBe(join(executableEntry, "ocx"));
     } finally {
@@ -167,9 +173,80 @@ describe("systemd service unit", () => {
     }
   });
 
+  /**
+   * #4236 defect 1g: `ocx service repair` run from a context without `ocx` on PATH — a
+   * tray helper, `ocx update`'s child, a cron/ssh session — resolved null here, rewrote a
+   * working launcher-form plist into the version-pinned Bun + CLI pair, and then booted the
+   * healthy job out to load it. The launcher the install already recorded is what launchd
+   * is running, so repair must keep naming it.
+   */
+  test("a recorded launcher that still exists wins over an empty PATH", () => {
+    const recorded = join(TEST_DIR, "recorded", "ocx");
+    const state = { version: 2, backend: "scheduler", launcherPath: recorded } as never;
+
+    expect(stableLauncherEntry({
+      state,
+      env: { PATH: "" },
+      isExecutableFile: candidate => candidate === recorded,
+    })).toBe(recorded);
+
+    // A recorded launcher that has disappeared falls through to discovery rather than
+    // baking a path launchd cannot resolve.
+    const discovered = join(TEST_DIR, "discovered", "ocx");
+    expect(stableLauncherEntry({
+      state,
+      env: { PATH: join(TEST_DIR, "discovered") },
+      isExecutableFile: candidate => candidate === discovered,
+    })).toBe(discovered);
+
+    // A relative recorded value is refused for the same reason a bare `ocx` is: launchd
+    // would re-resolve it through PATH on every restart.
+    expect(stableLauncherEntry({
+      state: { version: 2, backend: "scheduler", launcherPath: "ocx" } as never,
+      env: { PATH: "" },
+      isExecutableFile: () => true,
+    })).toBe(null);
+  });
+
+  /**
+   * Review nit 8. `stableLauncherEntry` is shared: `installSystemd` resolves it too, so
+   * "the recorded launcher wins over a fresh PATH walk" is a LINUX change as well as a macOS
+   * one. The unit keeps the `ExecStart` the install recorded instead of rewriting it to the
+   * version-pinned Bun + CLI pair — the #2898 shape launcher mode exists to avoid — when a
+   * repair runs from a context without `ocx` on PATH.
+   */
+  test("a repair without ocx on PATH keeps the recorded launcher in the systemd unit too", async () => {
+    const recorded = join(TEST_DIR, "recorded-systemd", "ocx");
+    const launcher = stableLauncherEntry({
+      state: { version: 2, backend: "scheduler", launcherPath: recorded } as never,
+      env: { PATH: "" },
+      isExecutableFile: candidate => candidate === recorded,
+    });
+    expect(launcher).toBe(recorded);
+
+    const unit = buildUnit(resolvedProxyEnv(), { launcher });
+    expectTextToContainPath(unit, recorded);
+    // Launcher mode means the unit must NOT pin the package-local Bun + CLI pair.
+    expect(unit).not.toContain("OCX_BUN_RUNTIME_PATH");
+
+    // And the installer feeds exactly this resolver into exactly that builder, so the
+    // preference above is the one Linux gets.
+    const service = await readText("src/service.ts");
+    const installSystemd = service.slice(
+      service.indexOf("function installSystemd()"),
+      service.indexOf("function startSystemd()"),
+    );
+    expect(installSystemd).toContain("const launcher = stableLauncherEntry();");
+    expect(installSystemd).toContain("buildUnit(resolvedProxyEnv(), { launcher })");
+  });
+
   test("bare service installs only when absent and otherwise selects no-admin repair", async () => {
     expect(normalizeServiceSubcommand()).toBe("install");
-    expect(normalizeServiceSubcommand("restart")).toBe("repair");
+    // `restart` is NOT folded into `repair` any more (#4249). It shares the whole repair path
+    // and diverges only in `repairService`, which kickstarts the macOS job that repair's
+    // no-op deliberately leaves running — collapsing the verbs here made `ocx service
+    // restart` of a healthy service restart nothing.
+    expect(normalizeServiceSubcommand("restart")).toBe("restart");
     expect(normalizeServiceSubcommand("start")).toBe("start");
     expect(normalizeServiceSubcommand("nope")).toBe("nope");
 
@@ -216,11 +293,31 @@ describe("systemd service unit", () => {
     expect(explicitInstall).toMatchObject({ ok: true, command: "install" });
     expect(probes).toBe(0);
 
+    // An explicit `restart` survives planning as itself, and like every explicit subcommand
+    // it never probes for installation. A BARE invocation still chooses `repair`: it is an
+    // idempotent "make it current", not a request to bounce a healthy hub.
+    probes = 0;
+    const explicitRestart = planServiceCommand(["restart"], {
+      probeInstallation: () => { probes += 1; return { state: "installed" }; },
+    });
+    expect(explicitRestart).toMatchObject({ ok: true, command: "restart" });
+    expect(probes).toBe(0);
+    expect(selectServiceSubcommand(parseServiceArgs(["restart"]), {
+      hasExplicitSubcommand: true,
+      installed: true,
+    })).toBe("restart");
+
     const service = await readText("src/service.ts");
     const serviceCommand = service.slice(service.indexOf("export async function serviceCommand"));
     expect(serviceCommand).toContain("const plan = planServiceCommand(filteredArgs);");
     expect(serviceCommand).toContain("const { parsed, command } = plan;");
     expect(serviceCommand).toContain("switch (command)");
+    // Both verbs enter the shared repair branch, which hands the distinction to
+    // `repairService` rather than dispatching twice. Without the second half of the
+    // condition, `restart` would fall through to the usage error.
+    expect(serviceCommand).toContain('if (command === "repair" || command === "restart") {');
+    expect(serviceCommand).toContain('const verb: ServiceRepairVerb = command === "restart" ? "restart" : "repair";');
+    expect(serviceCommand).toContain("await repairService({ verb });");
   });
 
   test("Windows install presence distinguishes unknown queries from proven absence", () => {
@@ -393,7 +490,12 @@ describe("systemd service unit", () => {
 });
 
 describe("service install auth preflight", () => {
-  test("rejects non-loopback service install without a persisted API token", () => {
+  /**
+   * #4236. The preflight used to DEMAND OPENCODEX_API_AUTH_TOKEN here, which is what taught an
+   * operator to export the ADMIN token to make `install` proceed -- and then `repair` demanded it
+   * again. Nobody should have to export a token by hand to run a hub, so install provisions one.
+   */
+  test("a non-loopback install no longer demands the env token", () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
@@ -405,7 +507,163 @@ describe("service install auth preflight", () => {
       defaultProvider: "openai",
     } as OcxConfig);
 
-    expect(() => assertServiceAuthEnvironment()).toThrow("OPENCODEX_API_AUTH_TOKEN");
+    expect(() => assertServiceAuthEnvironment()).not.toThrow();
+  });
+
+  test("provisioning generates an owner-only token, then reuses it on repair and reinstall", () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    saveConfig({
+      port: 10100,
+      hostname: "0.0.0.0",
+      providers: { openai: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" } },
+      defaultProvider: "openai",
+    } as OcxConfig);
+
+    const first = writeServiceApiTokenFile();
+    expect(first).toEqual({ path: serviceApiTokenFilePath(), origin: "generated" });
+    const token = readFileSync(serviceApiTokenFilePath(), "utf8").trim();
+    // 32 random bytes, hex.
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    if (process.platform !== "win32") {
+      expect(statSync(serviceApiTokenFilePath()).mode & 0o777).toBe(0o600);
+    }
+
+    // Repair/reinstall must be idempotent: regenerating would silently invalidate every
+    // client key exchange already performed against the old value.
+    expect(writeServiceApiTokenFile()).toEqual({ path: serviceApiTokenFilePath(), origin: "file" });
+    expect(readFileSync(serviceApiTokenFilePath(), "utf8").trim()).toBe(token);
+    expect(() => assertServiceAuthEnvironment()).not.toThrow();
+  });
+
+  test("an env token still wins, and a loopback install generates nothing", () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.OPENCODEX_API_AUTH_TOKEN = "operator-chosen-data-key";
+    saveConfig({
+      port: 10100,
+      hostname: "0.0.0.0",
+      providers: { openai: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" } },
+      defaultProvider: "openai",
+    } as OcxConfig);
+    expect(writeServiceApiTokenFile()).toEqual({ path: serviceApiTokenFilePath(), origin: "env" });
+    expect(readFileSync(serviceApiTokenFilePath(), "utf8").trim()).toBe("operator-chosen-data-key");
+
+    // Loopback needs no data-plane credential, and on a machine connected to a hub the same
+    // file holds that hub's issued client key: a local install must not invent or clobber one.
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    saveConfig({
+      port: 10100,
+      hostname: "127.0.0.1",
+      providers: { openai: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" } },
+      defaultProvider: "openai",
+    } as OcxConfig);
+    expect(writeServiceApiTokenFile()).toBeNull();
+    expect(existsSync(serviceApiTokenFilePath())).toBe(false);
+  });
+
+  test("an unusable token file is reported by the preflight instead of failing mid-install", () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    saveConfig({
+      port: 10100,
+      hostname: "0.0.0.0",
+      providers: { openai: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" } },
+      defaultProvider: "openai",
+    } as OcxConfig);
+    writeFileSync(serviceApiTokenFilePath(), "\n", "utf8");
+
+    expect(() => assertServiceAuthEnvironment()).toThrow(/cannot be used/);
+    expect(() => assertServiceAuthEnvironment()).toThrow(/ocx service/);
+    expect(() => writeServiceApiTokenFile()).toThrow(/empty/);
+  });
+
+  test("the admin-token refusal tells the operator to unset, not to invent a key", () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.OPENCODEX_API_AUTH_TOKEN = `ocx_admin_${"f".repeat(40)}`;
+    saveConfig({
+      port: 10100,
+      hostname: "0.0.0.0",
+      providers: { openai: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" } },
+      defaultProvider: "openai",
+    } as OcxConfig);
+
+    expect(() => assertServiceAuthEnvironment()).toThrow(/unset OPENCODEX_API_AUTH_TOKEN/);
+    expect(() => assertServiceAuthEnvironment()).toThrow(/provisions/);
+    // The chokepoint refuses it too, so no caller can write the broken state (#2696).
+    expect(() => writeServiceApiTokenFile()).toThrow(/management \(admin\) token/);
+    expect(existsSync(serviceApiTokenFilePath())).toBe(false);
+  });
+
+  test("a reused token file that holds the ADMIN token is refused, not silently accepted", () => {
+    // The incident shape, and the gap the first round left: the `origin: "file"` branch never
+    // re-checked the collision, so a hand-pasted admin token on disk was reused, `ocx status`
+    // said `present (file)`, and the hub crash-looped at boot with nothing naming the cause.
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    saveConfig({
+      port: 10100,
+      hostname: "0.0.0.0",
+      providers: { openai: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" } },
+      defaultProvider: "openai",
+    } as OcxConfig);
+    const admin = `ocx_admin_${"f".repeat(43)}`;
+    writeFileSync(serviceApiTokenFilePath(), `${admin}\n`, "utf8");
+
+    // Install/repair stops at the preflight, where the operator can still act.
+    expect(() => assertServiceAuthEnvironment()).toThrow(/management \(admin\) token/);
+    expect(() => assertServiceAuthEnvironment()).toThrow(/ocx service repair/);
+    // `unset` is the WRONG remedy here: nothing is exported. Deleting the file is.
+    expect(() => assertServiceAuthEnvironment()).not.toThrow(/unset OPENCODEX_API_AUTH_TOKEN/);
+    // And the writer is still the last line of defence, whichever caller got there.
+    expect(() => writeServiceApiTokenFile()).toThrow(/not a data-plane token/);
+    // Refusing must not mutate the file; the operator deletes it deliberately.
+    expect(readFileSync(serviceApiTokenFilePath(), "utf8").trim()).toBe(admin);
+
+    // And a LOOPBACK install is refused too: `buildServiceShellCommand` cats the file into
+    // OPENCODEX_API_AUTH_TOKEN whenever it exists, whatever the hostname, so the management
+    // plane is fenced closed at boot there as well.
+    saveConfig({
+      port: 10100,
+      hostname: "127.0.0.1",
+      providers: { openai: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" } },
+      defaultProvider: "openai",
+    } as OcxConfig);
+    expect(() => assertServiceAuthEnvironment()).toThrow(/management \(admin\) token/);
+  });
+
+  test("reusing an existing token file makes 'owner-only' true rather than assumed", () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    saveConfig({
+      port: 10100,
+      hostname: "0.0.0.0",
+      providers: { openai: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" } },
+      defaultProvider: "openai",
+    } as OcxConfig);
+    // `readServiceApiTokenState` accepts any bounded regular file, so a reused token can be
+    // world-readable -- and `ocx status` calls that path "owner-only".
+    writeFileSync(serviceApiTokenFilePath(), `${"c".repeat(64)}\n`, { encoding: "utf8", mode: 0o644 });
+    if (process.platform !== "win32") chmodSync(serviceApiTokenFilePath(), 0o644);
+
+    expect(writeServiceApiTokenFile()).toEqual({ path: serviceApiTokenFilePath(), origin: "file" });
+    expect(readFileSync(serviceApiTokenFilePath(), "utf8").trim()).toBe("c".repeat(64));
+    if (process.platform !== "win32") {
+      expect(statSync(serviceApiTokenFilePath()).mode & 0o777).toBe(0o600);
+    }
   });
 
   test("allows non-loopback service install when the API token is in the service environment", () => {
@@ -3326,6 +3584,13 @@ describe("launchctl load verification", () => {
       })).toThrow(/service repair/);
     });
   });
+
+  /**
+   * `installLaunchd` coverage lives in `tests/service/launchd-repair.test.ts`. It moved
+   * out of this file when the repair protocol grew a no-op pre-check, a plist backup and
+   * a rollback: those cases need an injected plist path (os.homedir() ignores HOME, so
+   * the suite sandbox does not move `~/Library/LaunchAgents`) and a full fixture per case.
+   */
 });
 
 /**

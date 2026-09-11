@@ -80,6 +80,7 @@ export function CodexAccountPoolCards({
         const healthStatus = a.health?.status;
         const showReauth = Boolean(a.needsReauth) || oauthHealthShowsReauth(healthStatus);
         const inCooldown = oauthHealthIsCooldown(healthStatus);
+        const validationPending = a.health?.reason === "validation_pending";
         const healthLabel = formatOAuthHealthLabel(t, a.health);
         const healthSummary = formatOAuthHealthSummary(t, "codex", a.id, a.health);
         return (
@@ -101,13 +102,13 @@ export function CodexAccountPoolCards({
                 <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
               )}
               {showReauth && !healthLabel && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
-              {isNext(a) && !showReauth && !inCooldown && (
+              {isNext(a) && !showReauth && !inCooldown && !validationPending && (
                 <span className="badge badge-primary">
                   {t(accountModeState === "direct" ? "codexAuth.poolPrepared" : "codexAuth.nextSession")}
                 </span>
               )}
             </span>
-            {!a.paused && (!isNext(a) || pinnedId !== a.id) && !showReauth && !inCooldown && (
+            {!a.paused && (!isNext(a) || pinnedId !== a.id) && !showReauth && !inCooldown && !validationPending && (
               <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(a)}>
                 {switchActionLabel}
               </button>

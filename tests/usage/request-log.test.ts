@@ -941,6 +941,39 @@ describe("request log metadata", () => {
     expect(filterRequestLogs(logs, new URLSearchParams("model=grok-4.6&provider=xai")).map(entry => entry.requestId)).toEqual(["b", "c"]);
   });
 
+  /**
+   * #4057: the account label was already persisted on every row and every attempt, but nothing
+   * could select on it, so "which of my accounts served this?" could only be answered by
+   * grepping usage.jsonl. The non-matching assertion is the one that matters: an implementation
+   * that ignores `account` entirely passes the positive cases for free.
+   */
+  test("filters logs by account label, including the attempt that actually served a failover", () => {
+    const logs = [
+      log({ requestId: "a", provider: "openai", accountLogLabel: "main" }),
+      log({ requestId: "b", provider: "openai", accountLogLabel: "p3f9a1" }),
+      log({
+        requestId: "c",
+        provider: "openai",
+        accountLogLabel: "p3f9a1",
+        attempts: [
+          { ordinal: 1, provider: "openai", model: "gpt-test", adapter: "openai", status: 429, durationMs: 5, sendCount: 1, recoveryKinds: [], usageStatus: "unreported", accountLogLabel: "main" },
+          { ordinal: 2, provider: "openai", model: "gpt-test", adapter: "openai", status: 200, durationMs: 7, sendCount: 1, recoveryKinds: [], usageStatus: "reported", accountLogLabel: "p3f9a1" },
+        ],
+      }),
+      log({ requestId: "d", provider: "xai" }),
+    ];
+
+    // "c" matches on its FIRST attempt: the pool account that refused the request is part of
+    // that account's history, which is exactly what quota debugging needs to see.
+    expect(filterRequestLogs(logs, new URLSearchParams("account=main")).map(entry => entry.requestId)).toEqual(["a", "c"]);
+    expect(filterRequestLogs(logs, new URLSearchParams("account=p3f9a1")).map(entry => entry.requestId)).toEqual(["b", "c"]);
+    // The assertion an unfiltered implementation cannot pass.
+    expect(filterRequestLogs(logs, new URLSearchParams("account=p000000"))).toEqual([]);
+    // A row with no label is never swept into an account's history.
+    expect(filterRequestLogs(logs, new URLSearchParams("account=xai"))).toEqual([]);
+    expect(filterRequestLogs(logs, new URLSearchParams("account=main&provider=openai")).map(entry => entry.requestId)).toEqual(["a", "c"]);
+  });
+
   test("filters logs by offset and limit", () => {
     const logs = Array.from({ length: 5 }, (_, i) => log({ requestId: `r${i}`, provider: "openai", status: 200 }));
     expect(filterRequestLogs(logs, new URLSearchParams("limit=2")).map(entry => entry.requestId)).toEqual(["r3", "r4"]);
