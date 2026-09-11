@@ -23,6 +23,7 @@ runs helper features around provider requests.
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
+| `usageLedgerRetention?` | `UsageLedgerRetentionConfig` | disabled | Opt-in cap for the append-only `usage.jsonl` usage ledger. When enabled, the background scheduler compacts complete rows after the ledger exceeds `maxBytes`. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
@@ -313,6 +314,38 @@ either `target.reduceToBytes` or `target.removeOldestPercent`. `mode` defaults t
 `permanent` only as an explicit destructive choice. The policy persists `lastRun` and `nextRun`.
 Configure it on the Storage page or with `GET`/`PUT /api/storage/cleanup-policy`; trigger a manual run
 with `POST /api/storage/cleanup-policy/run`.
+
+## Usage-ledger retention
+
+`usageLedgerRetention` is disabled by default. It is an opt-in size ceiling for
+`$OPENCODEX_HOME/usage.jsonl`, the append-only usage ledger used by the Usage page and
+`GET /api/usage`. Enabling it lets the proxy compact older rows in a background Worker once
+the file exceeds the configured limit; normal request handling is not blocked by the scan.
+
+```json
+{
+  "usageLedgerRetention": {
+    "enabled": false
+  }
+}
+```
+
+The effective default is **Unlimited** (`enabled: false`). An unconfigured installation remembers
+**1 GiB** (`1073741824`) as `maxBytes`; that saved value becomes effective on first enable. Set
+`maxBytes` explicitly only when selecting a different ceiling. Any explicit value must be a safe
+integer of at least 1 MiB (`1048576`). A saved ceiling is retained when `enabled` is set to `false`,
+so an operator can pause retention without losing the selected limit. Unknown keys and malformed
+values fail closed and leave retention disabled.
+
+Compaction publishes a complete JSONL-row candidate only after the source revision and active-turn
+checks still match. An unterminated crash tail is discarded; a single row larger than the ceiling
+is dropped so the published ledger remains bounded. The derived request-history projection is
+recreated after a successful publish. A policy change invalidates an in-flight candidate, and a
+source append during scanning defers the commit for a later run.
+
+The dashboard exposes this control on the **Usage** page. For headless operation, use
+`ocx storage usage-limit` or the `GET`/`PUT` management routes below. Setting the policy is
+non-destructive; the background scheduler compacts older rows when the ceiling is exceeded.
 
 ## Quota-reset notifications (`quotaResetNotify`)
 

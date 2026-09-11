@@ -1,8 +1,8 @@
 /**
- * `ocx storage` — the archived-session cleanup, trash, and cleanup-policy surface (wp7).
+ * `ocx storage` — archived-session cleanup, trash, cleanup-policy, and usage-ledger controls.
  *
  * Every route here existed with no CLI caller, so reclaiming disk space was dashboard-only.
- * Three of them delete or move operator data, and the rules for those are deliberate:
+ * Destructive operations keep the original delegation boundary:
  *
  * 1. **Default to preview.** `ocx storage cleanup --percent N` runs the preview route and prints
  *    what WOULD be freed, then exits 0 having mutated nothing.
@@ -11,9 +11,8 @@
  * 3. **`--json` on the preview emits the candidate list**, so an agent can decide from data
  *    rather than from a sentence.
  *
- * This is the opposite of the GitHub star POST, which no flag can authorize: cleanup spends the
- * operator's DATA, which they can delegate, while starring spends their IDENTITY, which they
- * cannot delegate to an agent.
+ * Usage-limit policy writes are non-destructive; oversized ledgers are compacted by the
+ * automatic scheduler after the limit is enabled.
  */
 import {
   CliUsageError,
@@ -28,6 +27,8 @@ import {
   type RuntimeApiDeps,
 } from "./runtime-api";
 
+const MIB = 1024 * 1024;
+
 const USAGE = `Usage:
   ocx storage report [--json]
   ocx storage cleanup --percent <0-100> [--mode <quarantine|permanent>] [--yes] [--json]
@@ -37,8 +38,10 @@ const USAGE = `Usage:
   ocx storage policy set [--enabled <true|false>] [--percent <0-100>]
       [--mode <quarantine|permanent>] [--schedule <startup|daily|weekly|manual>] [--json]
   ocx storage policy run [--yes] [--json]
+  ocx storage usage-limit [show] [--json]
+  ocx storage usage-limit set [--enabled <true|false>] [--mib <N>] [--json]
 
-Cleanup and restore MUTATE operator data and require --yes.
+Cleanup, restore, and policy run MUTATE operator data and require --yes where noted.
 Without --yes, cleanup prints the preview and changes nothing.`;
 
 /** The digest binds a run to the preview it was authorized against. */
@@ -50,11 +53,13 @@ interface CleanupPreview {
   candidates?: { relPath?: string; bytes?: number }[];
 }
 
+/** Format a byte count for CLI summaries without changing the API representation. */
 function mib(bytes: number | undefined): string {
   if (typeof bytes !== "number" || !Number.isFinite(bytes)) return "unknown size";
-  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  return `${(bytes / MIB).toFixed(1)} MiB`;
 }
 
+/** Render the non-mutating archive-cleanup preview used before any confirmed deletion. */
 function previewLines(preview: CleanupPreview): string[] {
   const lines = [
     `Would remove ${preview.count ?? 0} archived session file(s), freeing ${mib(preview.bytes)}.`,
@@ -68,6 +73,7 @@ function previewLines(preview: CleanupPreview): string[] {
   return lines;
 }
 
+/** Preview or explicitly execute archived-session cleanup. */
 async function cleanup(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -110,6 +116,7 @@ async function cleanup(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, summaryLines(result));
 }
 
+/** List quarantine entries or explicitly restore one. */
 async function trash(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const action = argv[0] && !argv[0].startsWith("-") ? argv[0] : "list";
   const rest = argv[0] && !argv[0].startsWith("-") ? argv.slice(1) : argv;
@@ -146,6 +153,7 @@ async function trash(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, summaryLines(result));
 }
 
+/** Show, edit, or explicitly run archived-session cleanup policy. */
 async function policy(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const action = argv[0] && !argv[0].startsWith("-") ? argv[0] : "show";
   const rest = argv[0] && !argv[0].startsWith("-") ? argv.slice(1) : argv;
@@ -215,6 +223,53 @@ async function policy(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, summaryLines(result));
 }
 
+/** Show or edit the usage-history ceiling; enforcement is performed by the scheduler. */
+async function usageLimit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const action = argv[0] && !argv[0].startsWith("-") ? argv[0] : "show";
+  const rest = argv[0] && !argv[0].startsWith("-") ? argv.slice(1) : argv;
+
+  if (action === "show") {
+    const args = [...rest];
+    const wantsJson = takeFlag(args, "--json");
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest("/api/storage/usage-ledger-retention", {}, deps);
+    printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+
+  if (action === "set") {
+    const args = [...rest];
+    const wantsJson = takeFlag(args, "--json");
+    const enabled = takeOption(args, "--enabled");
+    const maxMiB = takeIntegerOption(args, "--mib", { min: 1 });
+    rejectArgs(args, USAGE);
+
+    if (enabled !== undefined && enabled !== "true" && enabled !== "false") {
+      throw new CliUsageError("--enabled must be true or false", USAGE);
+    }
+    if (maxMiB !== undefined && !Number.isSafeInteger(maxMiB * MIB)) {
+      throw new CliUsageError("--mib is too large", USAGE);
+    }
+    const body: Record<string, unknown> = {};
+    if (enabled !== undefined) body.enabled = enabled === "true";
+    if (maxMiB !== undefined) body.maxBytes = maxMiB * MIB;
+    if (Object.keys(body).length === 0) {
+      throw new CliUsageError("usage-limit set needs at least one of --enabled or --mib", USAGE);
+    }
+
+    const result = await runtimeRequest("/api/storage/usage-ledger-retention", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }, deps);
+    printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+
+  throw new CliUsageError(`unknown usage-limit action ${action}`, USAGE);
+}
+
+/** Dispatch `ocx storage` while preserving explicit confirmation boundaries for mutations. */
 export async function handleStorageCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   const hasSub = argv[0] !== undefined && !argv[0].startsWith("-");
   const sub = hasSub ? argv[0]! : "report";
@@ -236,6 +291,7 @@ export async function handleStorageCommand(argv: string[], deps: RuntimeApiDeps 
     else if (sub === "cleanup") await cleanup(rest, deps);
     else if (sub === "trash") await trash(rest, deps);
     else if (sub === "policy") await policy(rest, deps);
+    else if (sub === "usage-limit") await usageLimit(rest, deps);
     else throw new CliUsageError(`unknown storage command ${sub}`, USAGE);
   });
 }

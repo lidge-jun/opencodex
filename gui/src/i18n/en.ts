@@ -922,6 +922,16 @@ export const en = {
 
   // usage page
   "usage.title": "Usage",
+  "usage.retention.title": "Usage history size limit",
+  "usage.retention.help": "Optionally keep the newest complete usage records within a size limit. Older rows are removed automatically when the ledger exceeds it.",
+  "usage.retention.enabled": "Limit usage history size",
+  "usage.retention.current": "Current size",
+  "usage.retention.limit": "Maximum size",
+  "usage.retention.increase": "Increase maximum size",
+  "usage.retention.decrease": "Decrease maximum size",
+  "usage.retention.unlimited": "Unlimited",
+  "usage.retention.error": "Could not update the usage history limit.",
+  "usage.retention.disabled": "Unlimited — automatic history compaction is off.",
   "usage.subtitle": "Local token accounting from your proxy. Missing usage is never shown as zero.",
   "usage.loading": "Loading usage data…",
   "usage.empty": "No usage recorded yet. Send a request through the proxy to see activity here.",

@@ -35,9 +35,24 @@ beforeEach(() => {
   // The page also has a held memory cache: each test gets a distinct report identity.
   apiBase = `http://usage-custom-${++sequence}`;
   requests = [];
-  globalThis.fetch = ((input: RequestInfo | URL) => new Promise<Response>(resolve => {
-    requests.push({ url: String(input), resolve });
-  })) as typeof fetch;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    // Usage now mounts its compact retention control alongside the report. Keep that
+    // independent status read out of the report request gates so the range assertions
+    // continue to describe only `/api/usage` generation ordering.
+    if (url.includes("/api/storage/usage-ledger-retention")) {
+      return Promise.resolve(Response.json({
+        enabled: false,
+        maxBytes: 128 * 1024 * 1024,
+        currentBytes: 0,
+        overLimit: false,
+        job: { status: "idle" },
+      }));
+    }
+    return new Promise<Response>(resolve => {
+      requests.push({ url, resolve });
+    });
+  }) as typeof fetch;
 });
 
 afterEach(async () => {

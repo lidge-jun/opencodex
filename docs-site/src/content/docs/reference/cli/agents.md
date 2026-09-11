@@ -162,6 +162,21 @@ separately, and requests with no matching price row are counted as
 ocx usage --range today --provider xai
 ```
 
+### `ocx storage usage-limit`
+
+Inspect or change the opt-in `usage.jsonl` size ceiling. The setting is also available in the
+dashboard on the **Usage** page.
+
+```bash
+ocx storage usage-limit show --json
+ocx storage usage-limit set --enabled true --mib 512 --json
+```
+
+`set` sends only the fields supplied, so changing `--mib` preserves the saved enabled state.
+The minimum ceiling is 1 MiB. A bare `usage-limit` invocation is read-only. The background
+scheduler compacts complete JSONL rows after the ledger exceeds the configured ceiling. The
+command drives `GET`/`PUT /api/storage/usage-ledger-retention` on the running proxy.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Read or change runtime debug overrides through the running proxy's management API.

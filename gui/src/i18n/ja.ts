@@ -835,6 +835,16 @@ export const ja: Record<TKey, string> = {
 
   // usage page
   "usage.title": "使用量",
+  "usage.retention.title": "使用履歴のサイズ上限",
+  "usage.retention.help": "最新の完全な使用記録を、指定したサイズ以内に必要に応じて保持します。履歴が上限を超えると古い行が自動的に削除されます。",
+  "usage.retention.enabled": "使用履歴のサイズを制限",
+  "usage.retention.current": "現在のサイズ",
+  "usage.retention.limit": "最大サイズ",
+  "usage.retention.increase": "最大サイズを増やす",
+  "usage.retention.decrease": "最大サイズを減らす",
+  "usage.retention.unlimited": "無制限",
+  "usage.retention.error": "使用履歴のサイズ上限を更新できませんでした。",
+  "usage.retention.disabled": "無制限 — 使用履歴の自動圧縮はオフです。",
   "usage.subtitle": "プロキシからのローカルトークン会計です。欠損した使用量はゼロとして表示されることはありません。",
   "usage.loading": "使用量データを読み込み中…",
   "usage.empty": "まだ使用量が記録されていません。プロキシ経由でリクエストを送信するとここにアクティビティが表示されます。",

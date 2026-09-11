@@ -313,10 +313,12 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: starring spends the user's identity. Must never gain a CLI verb." } },
   // server/management/storage-log-guard-routes
   { method: "GET", path: "/api/storage/codex-logs", module: "server/management/storage-log-guard-routes", mutates: false },
+  { method: "GET", path: "/api/storage/usage-ledger-retention", module: "server/management/storage-log-guard-routes", mutates: false },
   { method: "POST", path: "/api/storage/codex-logs/compact", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/protect", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/repair", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
+  { method: "PUT", path: "/api/storage/usage-ledger-retention", module: "server/management/storage-log-guard-routes", mutates: true },
   // server/management/system-routes
   { method: "GET", path: "/api/system/health", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },

@@ -10,6 +10,12 @@ import {
   startStorageCleanupScheduler,
   stopStorageCleanupScheduler,
 } from "../storage/policy-scheduler";
+import { abortUsageLedgerRetentionJobAsync } from "../usage/ledger-retention-job";
+import {
+  scheduleUsageLedgerRetentionStartupRun,
+  startUsageLedgerRetentionScheduler,
+  stopUsageLedgerRetentionScheduler,
+} from "../usage/ledger-retention-scheduler";
 import { startQuotaResetPoller, stopQuotaResetPoller } from "../quota/reset-poller";
 import {
   cancelQueuedStorageWorkerSpawns,
@@ -47,11 +53,13 @@ const owners: LeaseOwner[] = [];
 let processLoops: ProcessLoops | null = null;
 let cleanupInProgress = false;
 
+/** Route cleanup-policy state updates to the newest live server owner, or detach the sink. */
 function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
   setStorageCleanupPolicyLiveSink(applyPolicy);
   setStorageCleanupPolicyJobLiveApply(applyPolicy);
 }
 
+/** Start the process-wide watchdogs, sweepers, schedulers, and optional quota background hooks. */
 function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
   let memoryWatchdog: MemoryWatchdog | null = null;
   let stateStoreSweeper: ReturnType<typeof startStateStoreSweeper> | null = null;
@@ -60,6 +68,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     stateStoreSweeper = startStateStoreSweeper();
     setLivePolicyOwner(applyPolicy);
     startStorageCleanupScheduler();
+    startUsageLedgerRetentionScheduler();
     // Opt-in: the tick itself is a no-op unless config.quotaResetNotify is enabled with a
     // sink, and the interval is unref'd, so a default install pays one dormant timer.
     startQuotaResetPoller();
@@ -84,31 +93,37 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     memoryWatchdog?.stop();
     stateStoreSweeper?.stop();
     stopStorageCleanupScheduler();
+    stopUsageLedgerRetentionScheduler();
     stopQuotaResetPoller();
     setLivePolicyOwner(null);
     throw error;
   }
 }
 
+/** Stop process-wide timer loops and detach the current live-policy sink. */
 function stopProcessLoops(): void {
   const loops = processLoops;
   processLoops = null;
   loops?.memoryWatchdog.stop();
   loops?.stateStoreSweeper.stop();
   stopStorageCleanupScheduler();
+  stopUsageLedgerRetentionScheduler();
   stopQuotaResetPoller();
   setLivePolicyOwner(null);
 }
 
+/** Cancel both storage Worker controllers, then join every shared storage Worker before exit. */
 async function stopStoragePolicyWorker(): Promise<void> {
   cancelQueuedStorageWorkerSpawns();
-  const abortResult = await Promise.allSettled([abortStorageCleanupPolicyJobAsync()]);
-  if (abortResult[0]?.status === "rejected") {
+  const abortResult = await Promise.allSettled([
+    abortStorageCleanupPolicyJobAsync(),
+    abortUsageLedgerRetentionJobAsync(),
+  ]);
+  for (const result of abortResult) {
+    if (result.status !== "rejected") continue;
     console.warn(
-      "[storage] policy worker abort during server stop failed:",
-      abortResult[0].reason instanceof Error
-        ? abortResult[0].reason.message
-        : abortResult[0].reason,
+      "[storage] worker abort during server stop failed:",
+      result.reason instanceof Error ? result.reason.message : result.reason,
     );
   }
   try {
@@ -121,6 +136,7 @@ async function stopStoragePolicyWorker(): Promise<void> {
   }
 }
 
+/** Remove one lifecycle owner by token and report whether it was still active. */
 function removeOwner(owner: LeaseOwner): boolean {
   const index = owners.findIndex(candidate => candidate.token === owner.token);
   if (index === -1) return false;
@@ -128,6 +144,7 @@ function removeOwner(owner: LeaseOwner): boolean {
   return true;
 }
 
+/** Release one owner synchronously and classify whether shared process resources remain. */
 function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "last" {
   if (!removeOwner(owner)) return "inactive";
   owner.resources.release();
@@ -177,6 +194,7 @@ export function acquireServerBackgroundLifecycle(
     scheduleStartupRun() {
       if (owners.some(candidate => candidate.token === owner.token)) {
         scheduleStorageCleanupStartupRun();
+        scheduleUsageLedgerRetentionStartupRun();
       }
     },
     release() {

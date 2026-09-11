@@ -180,6 +180,19 @@ export interface StorageCleanupPolicy {
   nextRun?: number;
 }
 
+/**
+ * Opt-in byte ceiling for the canonical `usage.jsonl` ledger.
+ * Persisted under `OcxConfig.usageLedgerRetention`; the feature is disabled by default.
+ * When enabled, older complete JSONL rows are dropped permanently so the file stays within
+ * `maxBytes`. The derived routing-history SQLite projection is disposable and rebuilt later.
+ */
+export interface UsageLedgerRetentionConfig {
+  /** When false/unset, the ledger is never rewritten. Default false. */
+  enabled?: boolean;
+  /** Keep the newest complete JSONL rows within this many bytes. Floor 1 MiB. */
+  maxBytes?: number;
+}
+
 /** 사용자가 대시보드에서 직접 추가한 커스텀 모델 정의. */
 export interface OcxCustomModel {
   /** 고유 ID (crypto.randomUUID()) */
@@ -728,6 +741,8 @@ export interface OcxConfig {
    * See `src/storage/policy.ts`.
    */
   storageCleanupPolicy?: StorageCleanupPolicy;
+  /** Opt-in cap for `usage.jsonl` and its disposable SQLite projection. Default OFF. */
+  usageLedgerRetention?: UsageLedgerRetentionConfig;
   /** Generated API keys for external access to the proxy's /v1/responses endpoint. */
   apiKeys?: OcxApiKeyEntry[];
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */

@@ -903,6 +903,16 @@ export const ko: Record<TKey, string> = {
 
   // usage page
   "usage.title": "사용량",
+  "usage.retention.title": "사용 기록 크기 제한",
+  "usage.retention.help": "최신의 완전한 사용 기록을 선택적으로 크기 제한 내에 보관합니다. 원장이 제한을 초과하면 오래된 행이 자동으로 삭제됩니다.",
+  "usage.retention.enabled": "사용 기록 크기 제한",
+  "usage.retention.current": "현재 크기",
+  "usage.retention.limit": "최대 크기",
+  "usage.retention.increase": "최대 크기 늘리기",
+  "usage.retention.decrease": "최대 크기 줄이기",
+  "usage.retention.unlimited": "제한 없음",
+  "usage.retention.error": "사용 기록 크기 제한을 업데이트할 수 없습니다.",
+  "usage.retention.disabled": "제한 없음 — 자동 사용 기록 압축이 꺼져 있습니다.",
   "usage.subtitle": "프록시의 로컬 토큰 집계입니다. 누락된 사용량은 0으로 표시하지 않습니다.",
   "usage.loading": "사용량 데이터를 불러오는 중…",
   "usage.empty": "아직 기록된 사용량이 없습니다. 프록시로 요청을 보내면 여기에 표시됩니다.",

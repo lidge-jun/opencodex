@@ -884,6 +884,16 @@ export const zh: Record<TKey, string> = {
 
   // usage page
   "usage.title": "用量",
+  "usage.retention.title": "用量历史大小限制",
+  "usage.retention.help": "可选择将最新的完整用量记录保留在指定大小以内。历史超过上限后，较旧条目会自动删除。",
+  "usage.retention.enabled": "限制用量历史大小",
+  "usage.retention.current": "当前大小",
+  "usage.retention.limit": "最大大小",
+  "usage.retention.increase": "增大最大大小",
+  "usage.retention.decrease": "减小最大大小",
+  "usage.retention.unlimited": "无限制",
+  "usage.retention.error": "无法更新用量历史大小限制。",
+  "usage.retention.disabled": "无限制 — 自动压缩用量历史已关闭。",
   "usage.subtitle": "代理本地的 Token 用量统计。缺失的用量不会显示为零。",
   "usage.loading": "正在加载用量数据…",
   "usage.empty": "尚无用量记录。通过代理发送请求后将在此显示。",

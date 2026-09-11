@@ -316,11 +316,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "storage",
-    usage: "ocx storage <report|cleanup|trash|policy> ...",
-    summary: "Storage report, archived-session cleanup, trash restore, and the cleanup policy.",
+    usage: "ocx storage <report|cleanup|trash|policy|usage-limit> ...",
+    summary: "Storage report, archived-session cleanup, trash restore, cleanup policy, and usage-ledger retention.",
     details: [
       "A bare `ocx storage` prints the report, as it did when this was an alias of `observe storage`.",
       "`cleanup` previews by default and only deletes under --yes; `trash restore` and `policy run` also require --yes.",
+      "`usage-limit` shows or changes the opt-in usage-history ceiling; oversized ledgers are compacted by the automatic scheduler.",
     ],
   },
   { name: "memory", usage: "ocx memory [--json]", summary: "Alias of ocx observe memory." },

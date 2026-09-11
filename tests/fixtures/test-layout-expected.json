@@ -1002,6 +1002,7 @@
   "settings-oauth-open-browser.test.ts": "config",
   "settings-startup-health-seam.test.ts": "config",
   "settings-stream-mode.test.ts": "config",
+  "settings-usage-ledger-retention.test.ts": "config",
   "shutdown-drain.test.ts": "service",
   "shutdown-launcher.test.ts": "service",
   "sidebar-routes.test.ts": "server",

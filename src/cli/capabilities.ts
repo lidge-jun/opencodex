@@ -440,6 +440,26 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["storage", "usage-limit"],
+    summary: "Show or change the usage-history size limit.",
+    routes: [
+      { method: "GET", path: "/api/storage/usage-ledger-retention" },
+      { method: "PUT", path: "/api/storage/usage-ledger-retention" },
+    ],
+    flags: [
+      { name: "--enabled", value: "string", summary: "true or false." },
+      { name: "--mib", value: "number", summary: "Maximum usage-ledger size in MiB; minimum 1." },
+      { name: "--json", value: "boolean", summary: "Emit the policy or status as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "The limit is opt-in; a bare invocation only reads status.",
+      "Changing the MiB value without `--enabled` preserves the saved enabled state.",
+      "Oversized ledgers are compacted by the automatic scheduler after the limit is enabled.",
+    ],
+  },
+  {
     command: ["inspect", "config"],
     summary: "The effective merged configuration the proxy is running.",
     routes: [{ method: "GET", path: "/api/config" }],

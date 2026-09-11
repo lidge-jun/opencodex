@@ -226,6 +226,16 @@ ocx storage trash restore <entry-id> --yes --json
 The preview runs in both paths because the mutating route requires the `digest` the preview returns
 and rejects a stale one with 409. So the two invocations agree about what is being authorized.
 
+For the append-only usage ledger, inspect the saved ceiling before changing it:
+
+```bash
+ocx storage usage-limit show --json
+ocx storage usage-limit set --enabled true --mib 512 --json
+```
+
+Changing the ceiling is non-destructive. The scheduler compacts complete `usage.jsonl` rows in the
+background once `maxBytes` is exceeded; there is no manual compaction command.
+
 ## 9. Read Muse Code usage, and know why it can be old
 
 `meta-muse` reports usage differently from every other provider, and the difference changes what

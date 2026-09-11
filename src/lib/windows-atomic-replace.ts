@@ -34,6 +34,7 @@ export type ReplacePublisher =
   | "lab-automation"
   | "lab-ledger"
   | "storage-cleanup"
+  | "usage-retention"
   | "tray";
 
 /** The Windows error codes this module treats as a momentary hold. */

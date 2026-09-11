@@ -1298,6 +1298,12 @@ const configSchema = z.object({
     enabled: z.boolean().optional(),
     leadTimeMinutes: z.number().int().min(1).max(60).optional(),
   }).optional().catch(undefined),
+  // Opt-in usage.jsonl byte ceiling. Reject unknown nested keys and degrade the
+  // whole optional section so a misspelled policy can never enable retention.
+  usageLedgerRetention: z.object({
+    enabled: z.boolean().optional(),
+    maxBytes: z.number().int().min(1024 * 1024).optional(),
+  }).strict().optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole

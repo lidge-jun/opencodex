@@ -61,6 +61,7 @@ export type {
   OcxClaudeDesktopAssignment,
   OcxClaudeDesktopProfile,
   StorageCleanupPolicy,
+  UsageLedgerRetentionConfig,
   OcxCustomModel,
   OcxApiKeyEntry,
   OcxClientIntegrationsConfig,
