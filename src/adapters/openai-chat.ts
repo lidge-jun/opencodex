@@ -204,7 +204,7 @@ export function buildOpenAIChatPassthroughRequest(
       messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
       toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
       hasCredential,
-      bodyBytes: new TextEncoder().encode(bodyJson).length,
+      bodyBytes: Buffer.byteLength(bodyJson, "utf8"),
     });
   }
 
@@ -1650,7 +1650,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           messageCount: Array.isArray(messages) ? messages.length : 0,
           toolCount: Array.isArray(tools) ? tools.length : 0,
           hasCredential,
-          bodyBytes: new TextEncoder().encode(bodyJson).length,
+          bodyBytes: Buffer.byteLength(bodyJson, "utf8"),
         });
       }
 
@@ -2080,7 +2080,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       if (Object.hasOwn(json, "service_tier")) {
         tierMetadata?.observeResponseServiceTier(json.service_tier);
       }
-      const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
+      const responseBytes = Buffer.byteLength(JSON.stringify(json), "utf8");
       budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
       try {
         const payload = unwrapChatCompletionPayload(json);

@@ -1,10 +1,77 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { appendDebugLogLine, debugBufferMetrics, getDebugLogEntries, resetDebugLogBufferForTests, subscribeDebugLogEntries } from "../../src/lib/debug-log-buffer";
-import { ResourceAdmissionError, RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes } from "../../src/lib/admission";
+import { ResourceAdmissionError, RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes, truncateRetainedUtf8 } from "../../src/lib/admission";
 import { getInjectionDebugLogEntries, injectionDebugLog, resetInjectionDebugLogBufferForTests } from "../../src/lib/injection-debug-log";
 import { markActivity, activityBreadcrumb } from "../../src/lib/sidecar-tracker";
 import { debugDroppedFrame, debugProviderDiagnostic } from "../../src/lib/debug";
 import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debug-settings";
+
+describe("retained UTF-8 sizing", () => {
+  test("preserves TextEncoder coercion for non-string runtime inputs", () => {
+    const encoder = new TextEncoder();
+    const inputs: unknown[] = [
+      undefined, null, true, 0, -0, 1e20, NaN, Infinity, 42n,
+      {}, ["中文", "\ud800"], new String("😀\udc00"),
+      new Uint8Array([1, 2]), Buffer.from([0xff]),
+      { [Symbol.toPrimitive](hint: string) { return hint === "string" ? "中\ud800" : 7; } },
+    ];
+    for (const value of inputs) {
+      const expected = Reflect.apply(encoder.encode, encoder, [value]).byteLength;
+      expect(retainedUtf8Bytes(value as string)).toBe(expected);
+    }
+  });
+
+  test("preserves TextEncoder rejection of Symbols and failed string coercion", () => {
+    const encoder = new TextEncoder();
+    for (const value of [Symbol("input"), Object(Symbol("input")), Object.create(null)]) {
+      expect(() => Reflect.apply(encoder.encode, encoder, [value])).toThrow(TypeError);
+      expect(() => retainedUtf8Bytes(value as string)).toThrow(TypeError);
+    }
+    const failure = new Error("string conversion failed");
+    const value = { toString() { throw failure; } };
+    expect(() => Reflect.apply(encoder.encode, encoder, [value])).toThrow(failure);
+    expect(() => retainedUtf8Bytes(value as unknown as string)).toThrow(failure);
+  });
+
+  test("keeps UTF-8 and truncation boundaries for multibyte and unpaired surrogate text", () => {
+    const encoder = new TextEncoder();
+    const markerBytes = encoder.encode(RETAINED_TRUNCATION_MARKER).byteLength;
+    const samples = ["", "plain", "é中😀", "\ud800x\udc00", "😀\ud800中éx".repeat(12)];
+    for (const value of samples) {
+      const bytes = encoder.encode(value).byteLength;
+      expect(retainedUtf8Bytes(value)).toBe(bytes);
+      for (const cap of [0, 1, 2, 3, 4, markerBytes - 1, markerBytes, markerBytes + 1, markerBytes + 4, markerBytes + 7, bytes]) {
+        const prefix = (text: string, limit: number) => {
+          const points = Array.from(text);
+          let end = 0;
+          let size = 0;
+          while (end < points.length && size + encoder.encode(points[end]!).byteLength <= limit) {
+            size += encoder.encode(points[end]!).byteLength;
+            end += 1;
+          }
+          return points.slice(0, end).join("");
+        };
+        const expected = bytes <= cap ? value
+          : cap < markerBytes ? prefix(RETAINED_TRUNCATION_MARKER, cap)
+          : prefix(value, cap - markerBytes) + RETAINED_TRUNCATION_MARKER;
+        expect(truncateRetainedUtf8(value, cap)).toBe(expected);
+      }
+    }
+  });
+
+  test("truncates large diagnostics without per-character encoded arrays", () => {
+    const value = "x".repeat(1024 * 1024);
+    const encode = spyOn(TextEncoder.prototype, "encode");
+    try {
+      const result = truncateRetainedUtf8(value, 16 * 1024);
+      expect(result.endsWith(RETAINED_TRUNCATION_MARKER)).toBe(true);
+      expect(Buffer.byteLength(result)).toBe(16 * 1024);
+      expect(encode).not.toHaveBeenCalled();
+    } finally {
+      encode.mockRestore();
+    }
+  });
+});
 
 describe("debug frame logging", () => {
   const previous = process.env.OCX_DEBUG;
