@@ -17,6 +17,10 @@ Native main reauthentication follows the [CLI JSON output contract](../runtime.m
 
 The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
 
+The account reference documents the [Orca source-owned import](../codex-home.md#orca-source-owned-account-import).
+Its local-only command is declared in `src/cli/capabilities.ts`, and the generated skill surface
+lists its required source/registry paths and preview/apply flags.
+
 ## Public docs
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is

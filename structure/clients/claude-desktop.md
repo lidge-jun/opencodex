@@ -19,6 +19,10 @@ Native main reauthentication follows the [CLI JSON output contract](../runtime.m
 
 The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
 
+Native OpenAI pool routing also accepts
+[Orca-linked accounts](../codex-home.md#orca-source-owned-account-import), whose source resolution
+belongs to the shared account store. The import CLI adds pool rows independently of Desktop profiles.
+
 ## Connected Claude Desktop profiles
 
 The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership); general status hands its resolved command to this check instead of probing the version twice.

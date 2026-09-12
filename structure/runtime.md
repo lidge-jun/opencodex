@@ -42,6 +42,10 @@ The prefilter is only an optimization, not final process-membership authority.
 `tests/clients/desktop-app-restart.test.ts` covers both mixed-slash directions through the adapter and runs the real PowerShell filter against synthetic CIM rows on Windows.
 `tests/clients/desktop-app-restart-posix.test.ts` keeps the POSIX separator contract covered; uid-dependent macOS/Linux cases skip on Windows.
 
+The local account CLI and pool credential resolver share the
+[Orca source-owned import contract](codex-home.md#orca-source-owned-account-import): importing
+does not perform OAuth, and runtime credential resolution rereads the owned source.
+
 ## Entrypoints
 
 | Path | Responsibility |

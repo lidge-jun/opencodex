@@ -12,6 +12,9 @@ Shared parsing and streaming follow the [request-copy](transports/byte-accountin
 
 `src/codex/catalog/remote.ts` permits loopback HTTP only when Bun fetch has no effective HTTP proxy or a matching NO_PROXY bypass. Its local matcher follows [Bun fetch semantics](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/dotenv/env_loader.rs#L369), including non-empty lowercase-variable priority, ASCII whitespace, literal host/port comparison and bracket-preserving IPv6. It does not normalize URL-shaped bypass entries, paths, wildcard prefixes, trailing dots or Unicode whitespace, and leaves the broader WebSocket proxy grammar unchanged. It refuses before authentication headers and fetch with a content-free `insecure_http_refused` error. ALL_PROXY and HTTPS-only settings do not affect HTTP acquisition; HTTPS and existing redirect, size, validation and coordinated-installation contracts are preserved. `tests/codex-integration/catalog-remote-pull.test.ts` covers these routing and non-disclosure boundaries.
 
+Accounts added through the [Orca import](codex-home.md#orca-source-owned-account-import) remain
+validation-pending. Import alone supplies no entitlement evidence for the model catalog.
+
 ## Shared catalog
 
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:

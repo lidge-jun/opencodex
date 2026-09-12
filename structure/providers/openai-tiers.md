@@ -5,6 +5,10 @@ Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remo
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](../runtime.md#lifecycle).
 
+[Orca-linked pool accounts](../codex-home.md#orca-source-owned-account-import) use the current
+source access token and leave refresh ownership with Orca. They enter the pool validation-pending;
+import deduplicates by ChatGPT account ID, including shared-workspace IDs.
+
 This current contract supersedes the provider-identity and account-selection sections of
 `devlog/_fin/260717_openai_hardening`; that archived unit remains historical evidence for the
 earlier three-tier implementation. The replacement contract and its verification evidence live in

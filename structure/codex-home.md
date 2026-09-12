@@ -6,6 +6,25 @@ A lock in the Codex credential store is governed by [descriptor identity and age
 
 CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
 
+## Orca source-owned account import
+
+`src/codex/orca-import.ts` reads only accounts listed in an explicitly selected Orca registry.
+Each host-managed home must match its UUID directory and ownership marker. Preview is offline
+and read-only; applying requires an initialized target and a stopped proxy. Existing main,
+configured and orphan credential identities participate in account-ID deduplication.
+Retry can complete an interrupted registration only for a sole, untouched importer-owned
+pending credential matching the registered source path and identity; it retains that record's ID.
+
+Imported pool records retain an access-token snapshot and a local source reference, with no
+refresh token. `src/codex/orca-auth-source.ts` bounds reads and rejects linked or nonlocal paths.
+`src/codex/account-store.ts` rereads the source before returning credentials, pins account and
+subject identity, and fails closed for missing, expired or changed-identity sources. Orca owns
+refresh; even forced refresh never exchanges its refresh token. A new source bearer advances
+the target generation while retaining validation state. New imports remain validation-pending.
+
+`src/codex/auth-api/pool-quota-probe.ts` also rechecks linked sources after asynchronous quota validation before
+issuing deferred inference warmups. Already dispatched requests retain their captured bearer.
+
 ## Codex home
 
 `src/codex/paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from
