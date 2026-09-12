@@ -1,5 +1,6 @@
 import type { OcxProviderConfig } from "./types";
 import { modelInList } from "./types";
+import { dropLearnedUnsupportedReasoningEfforts, ensureReasoningMetadataSnapshot, reasoningEffortsFromMetadata } from "./providers/reasoning-metadata";
 
 // Descriptions mirror the upstream bundled models.json canonical wording (openai/codex PR #31684).
 export const CODEX_REASONING_LEVELS: { effort: string; description: string }[] = [
@@ -148,8 +149,24 @@ export function sanitizeCodexReasoningEfforts(efforts: readonly string[] | undef
 export function configuredReasoningEfforts(provider: OcxProviderConfig, modelId: string): string[] | undefined {
   if (modelInList(provider.noReasoningModels, modelId)) return [];
   const modelEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId);
-  if (modelEfforts !== undefined) return healMappedTiers(provider, modelId, sanitizeCodexReasoningEfforts(modelEfforts) ?? []);
-  if (provider.reasoningEfforts !== undefined) return healMappedTiers(provider, modelId, sanitizeCodexReasoningEfforts(provider.reasoningEfforts) ?? []);
+  // Rungs this account actually had refused are removed for every ladder source (registry
+  // config or models.dev), so a learned refusal is honoured even when the ladder is pinned in
+  // code; otherwise a rejected pinned rung would replay-and-fail on every request.
+  if (modelEfforts !== undefined) {
+    return dropLearnedUnsupportedReasoningEfforts(provider, modelId, healMappedTiers(provider, modelId, sanitizeCodexReasoningEfforts(modelEfforts) ?? []));
+  }
+  if (provider.reasoningEfforts !== undefined) {
+    return dropLearnedUnsupportedReasoningEfforts(provider, modelId, healMappedTiers(provider, modelId, sanitizeCodexReasoningEfforts(provider.reasoningEfforts) ?? []));
+  }
+  // models.dev publishes the per-model ladder that routed providers never expose on /models.
+  // (OpenCode Zen Go answers ids only). Only consulted when nothing was configured for this
+  // model, so every hand-written contract stays authoritative. The snapshot refreshes itself in
+  // the background; no snapshot means the previous behaviour.
+  const fromMetadata = reasoningEffortsFromMetadata(provider, modelId);
+  if (fromMetadata !== undefined) {
+    ensureReasoningMetadataSnapshot();
+    return dropLearnedUnsupportedReasoningEfforts(provider, modelId, healMappedTiers(provider, modelId, fromMetadata));
+  }
   return undefined;
 }
 
