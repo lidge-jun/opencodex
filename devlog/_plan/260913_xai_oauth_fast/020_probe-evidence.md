@@ -19,6 +19,8 @@ Request-id tails (ocx logs, 2026-09-13 00:4x KST): fb8c252e (4.20-non-reasoning)
 
 Chat inbound (/v1/chat/completions, --fast): grok-4.6 and grok-4.5 both 200 (chatcmpl-95b4236e…, chatcmpl-cb33c39d…). These routed over openai-responses here (config modelAdapters), so the chat-upstream echo is covered by the openai-chat rows above; hermes-agent#89440 independently reports the echo on native chat completions over SuperGrok Heavy OAuth.
 
+Chat inbound direct relay probe (audit round 2): `xai/grok-4.3--fast` over /v1/chat/completions (openai-chat upstream, no modelAdapters override) — client body keys are exactly choices/created/id/model/object/usage with NO service_tier, while ocx telemetry for the same turn (request …6838b50b) records wireValue "priority", fastOutcome applied, confirmation confirmed, responseServiceTier "priority". The chat-inbound relay gap is therefore direct evidence, not code inference.
+
 ## Findings
 
 1. The user's Grok OAuth (subscription) gateway accepts service_tier "priority" on every probed model — zero 400s, zero "Argument not supported" (the stale rejection hermes#28490 worked around).
