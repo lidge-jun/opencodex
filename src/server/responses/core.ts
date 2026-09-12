@@ -291,6 +291,7 @@ import {
 } from "../lifecycle";
 import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isReasoningEffortRejection, planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import {
   ENCRYPTED_FUNCTION_OUTPUT_REJECTION,
   isRateLimitOrQuotaFailureMessage,
@@ -828,6 +829,28 @@ export function shouldAttemptOpaqueBlobRecovery(args: {
     && !args.alreadyAttempted
     && outboundResponsesBodyCarriesOpaqueBlob(args.outboundBody)
     && isSelfIdentifiedOpaqueBlobRejection(args.errorBody);
+}
+
+/**
+ * Peek the upstream error body for the reasoning-effort downgrade. Only 400/403 are considered
+ * and the body must be complete and display-safe, the same contract the other rejection peeks
+ * use. The match is deliberately narrow: the upstream has to name reasoning effort, so an
+ * unrelated 400 never triggers a replay.
+ */
+async function reasoningEffortRejectionText(
+  response: Response,
+  alreadyAttempted: boolean,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (alreadyAttempted) return undefined;
+  if (response.status !== 400 && response.status !== 403) return undefined;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    if (!body.displaySafe || body.truncated) return undefined;
+    return isReasoningEffortRejection(body.text) ? body.text : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function opaqueBlobRejectionBodyForRecovery(
@@ -5334,6 +5357,8 @@ async function handleResponsesInner(
     }
 
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
+    // At most one reasoning-effort downgrade per request.
+    const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
     let oauth401ReplayAttempted = false;
     let codex401ReplayKind: "main" | "stored" | null = null;
     const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
@@ -5885,6 +5910,35 @@ async function handleResponsesInner(
         logCtx.terminalHttpStatus = preflightLog.terminalHttpStatus;
         logCtx.terminalErrorCode = preflightLog.terminalErrorCode;
         logCtx.terminalIncompleteReason = preflightLog.terminalIncompleteReason;
+      }
+    }
+    // Reasoning-effort downgrade: a rung the catalog still advertises can be refused upstream --
+    // the metadata records the model's ladder, not this account's entitlement (a Muse Code
+    // subscription gates max on muse-spark-1.3-contributor, for example). Learn the refusal so
+    // later turns clamp before dispatch, then replay once at the next lower published rung
+    // instead of failing the turn; requestedEffort/effectiveEffort keep both values in usage.
+    if (!reasoningEffortDowngradeGuard.attempted) {
+      const rejectionText = await reasoningEffortRejectionText(
+        upstreamResponse,
+        reasoningEffortDowngradeGuard.attempted,
+        upstream.signal,
+      );
+      const downgrade = rejectionText === undefined
+        ? undefined
+        : planReasoningEffortDowngrade({
+            provider: route.provider,
+            modelId: parsed.modelId,
+            requested: parsed.options.reasoning,
+            rejectionText,
+          });
+      if (downgrade) {
+        reasoningEffortDowngradeGuard.attempted = true;
+        parsed.options.reasoning = downgrade.effort;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        const result = await rebuildAndRefetch("reasoning-effort-downgrade");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+        continue passthroughRecovery;
       }
     }
     break;
@@ -7482,6 +7536,8 @@ async function handleResponsesInner(
     };
     // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
     recovery: for (;;) {
+      // At most one reasoning-effort downgrade per request.
+      const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
       if (
         upstreamResponse.status === 401
         && isOAuth401ReplayProvider
@@ -7759,6 +7815,34 @@ async function handleResponsesInner(
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
         continue recovery;
+      }
+      // Reasoning-effort downgrade, mirroring the passthroughRecovery loop above: learn the
+      // refused rung, then replay once at the next published one.
+      if (!reasoningEffortDowngradeGuard.attempted) {
+        const rejectionText = await reasoningEffortRejectionText(
+          upstreamResponse,
+          reasoningEffortDowngradeGuard.attempted,
+          upstream.signal,
+        );
+        const downgrade = rejectionText === undefined
+          ? undefined
+          : planReasoningEffortDowngrade({
+              provider: route.provider,
+              modelId: parsed.modelId,
+              requested: parsed.options.reasoning,
+              rejectionText,
+            });
+        if (downgrade) {
+          reasoningEffortDowngradeGuard.attempted = true;
+          parsed.options.reasoning = downgrade.effort;
+          // The same-target cache keys on parsed identity, so a mutated effort needs a token bump.
+          invalidateSameTargetRequest();
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          const result = await rebuildAndRefetch("reasoning-effort-downgrade");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+          continue recovery;
+        }
       }
       break;
     }
