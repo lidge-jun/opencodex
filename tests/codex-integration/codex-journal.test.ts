@@ -167,7 +167,9 @@ describe("codex-journal", () => {
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout);
     expect(out.result.success).toBe(false);
-    expect(out.result.artifacts.config.state).toBe("failed");
+    for (const artifact of Object.values(out.result.artifacts)) {
+      expect(artifact).toMatchObject({state:"skipped",changed:false});
+    }
     expect(out.config).toBe(edited);
     expect(out.journalPreserved).toBe(true);
   });
@@ -511,11 +513,12 @@ describe("codex-journal", () => {
         }, { catalogPath: null });
         const marker = ${JSON.stringify(MANAGED_SUBAGENT_DEFAULT_MARKER)};
         const injected = fs.readFileSync(configPath, "utf8");
-        fs.writeFileSync(configPath, injected.replace(
+        const damaged = injected.replace(
           marker + '\\ndefault_subagent_model',
           marker + '\\n\\ndefault_subagent_model',
-        ), "utf8");
-        console.log(JSON.stringify(restoreNativeCodex()));
+        );
+        fs.writeFileSync(configPath, damaged, "utf8");
+        console.log(JSON.stringify({ ...restoreNativeCodex(), before: damaged }));
       })();
     `);
 
@@ -525,7 +528,7 @@ describe("codex-journal", () => {
     expect(result.message).toContain("could not be safely removed");
     expect(result.message).toContain("orphaned managed subagent default marker");
     const after = readFileSync(join(testDir, "config.toml"), "utf8");
-    expect(after).not.toContain("openai_base_url");
+    expect(after).toBe(result.before);
     expect(after).toContain("# Managed by opencodex: native subagent default");
     expect(after).toContain('default_subagent_model = "gpt-5.6-sol"');
     expect(existsSync(join(testDir, "opencodex-journal.json"))).toBe(true);

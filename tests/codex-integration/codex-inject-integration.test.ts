@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -59,7 +59,8 @@ describe("injectCodexConfig integration (Design B)", () => {
   let ocxHome: string;
 
   beforeEach(() => {
-    codexHome = mkdtempSync(join(tmpdir(), "ocx-inject-codex-"));
+    // Match paths.ts so Windows short TEMP aliases cannot change manifest identity or spy targets.
+    codexHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-codex-")));
     ocxHome = mkdtempSync(join(tmpdir(), "ocx-inject-home-"));
   });
 
@@ -116,16 +117,19 @@ describe("injectCodexConfig integration (Design B)", () => {
       const target = join(process.env.CODEX_HOME,"opencodex.config.toml");
       const configPath = join(process.env.CODEX_HOME,"config.toml");
       fs.writeFileSync(configPath,'model="test"');
+      const realRead = fs.readFileSync;
+      let denyProfileRead = false;
+      // Install before import so the injector's bound fs read sees the failure too.
+      const readSpy = spyOn(fs,"readFileSync").mockImplementation((path,...args)=>{
+        if (denyProfileRead && String(path)===target) throw Object.assign(new Error("fixture denied"),{code:"EACCES"});
+        return realRead(path,...args);
+      });
       const {injectCodexConfig,restoreNativeCodex,restoreNativeCodexAsync}=require("./src/codex/inject");
       const initial=await injectCodexConfig(10100,{});
       if(!initial.success) throw new Error("fixture injection failed");
       const watched=[configPath,target,join(process.env.CODEX_HOME,"opencodex-journal.json")];
       const original=watched.map(path=>fs.readFileSync(path,"utf8"));
-      const realRead = fs.readFileSync;
-      const readSpy = spyOn(fs,"readFileSync").mockImplementation((path,...args)=>{
-        if (String(path)===target) throw Object.assign(new Error("fixture denied"),{code:"EACCES"});
-        return realRead(path,...args);
-      });
+      denyProfileRead = true;
       const {captureCodexPreImages,restoreCodexPreImages}=require("./src/codex/inject-coordination");
       let captureCode;
       try { captureCodexPreImages(); } catch(error) { captureCode=error.code; }
