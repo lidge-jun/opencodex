@@ -87,5 +87,33 @@ describe("devin adapter", () => {
     // Descriptions without the trigger pass through unchanged
     expect(sanitizeToolDescriptionForCognitionForTests("A benign description.")).toBe("A benign description.");
   });
-});
 
+  test("rewrites the Codex built-in tool descriptions Cognition refuses", () => {
+    // These two are Codex's own exec_command and write_stdin descriptions,
+    // verbatim. Every Codex turn carries them, so leaving them intact made the
+    // cloud refuse every request from a Codex client, a bare "hi" included.
+    // Measured against a live account: the sentences below were refused, and
+    // the rewritten forms were accepted.
+    const execCommand = "Runs a command in a PTY, returning output or a session ID for ongoing interaction.";
+    expect(sanitizeToolDescriptionForCognitionForTests(execCommand))
+      .toBe("Executes a command in a PTY, returning output or a session ID for ongoing interaction.");
+
+    const writeStdin = "Writes characters to an existing unified exec session and returns recent output.";
+    expect(sanitizeToolDescriptionForCognitionForTests(writeStdin))
+      .toBe("Sends characters to an existing unified exec session and returns recent output.");
+
+    // Cognition matches these two case-insensitively and tolerates both a
+    // doubled interior space and a missing comma, so the rewrite has to reach
+    // every variant that still gets refused rather than only the exact bytes.
+    expect(sanitizeToolDescriptionForCognitionForTests(execCommand.toLowerCase()))
+      .toContain("Executes a command in a PTY");
+    expect(sanitizeToolDescriptionForCognitionForTests(
+      "Runs a command in a PTY  returning output or a session  ID for ongoing interaction.",
+    )).toContain("Executes a command in a PTY");
+
+    // Changing any single word already clears the filter, so a description that
+    // merely resembles these must survive untouched.
+    const nearMiss = "Runs a command in a terminal, returning output or a session ID for ongoing interaction.";
+    expect(sanitizeToolDescriptionForCognitionForTests(nearMiss)).toBe(nearMiss);
+  });
+});
