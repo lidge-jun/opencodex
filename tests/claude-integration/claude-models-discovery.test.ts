@@ -141,7 +141,7 @@ test("per-surface id style: ?ids= wins, claude-code UA gets readable, unknown UA
   }
 });
 
-test("Codex discovery bounds proven custom Astra before any disk sync and preserves a gateway namesake", async () => {
+test("Codex discovery bounds proven custom Astra before any disk sync including a gateway namesake", async () => {
   const config = configWithStaticModels();
   config.providers.openai = {
     adapter: "openai-responses",
@@ -164,8 +164,8 @@ test("Codex discovery bounds proven custom Astra before any disk sync and preser
     expect(canonical?.supported_reasoning_levels.map(level => level.effort)).toEqual(["low"]);
     expect(canonical?.default_reasoning_level).toBe("low");
     const gateway = catalog.models.find(row => row.slug === "YYLJ/gpt-6-astra");
-    expect(gateway?.supported_reasoning_levels.map(level => level.effort)).toEqual(["none", "minimal", "low", "max", "ultra"]);
-    expect(gateway?.default_reasoning_level).toBe("minimal");
+    expect(gateway?.supported_reasoning_levels.map(level => level.effort)).toEqual(["low"]);
+    expect(gateway?.default_reasoning_level).toBe("low");
   } finally {
     await server.stop(true);
   }

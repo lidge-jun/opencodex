@@ -1,5 +1,5 @@
 import { isGenericFailoverProvider } from "./generic-account-failover";
-import { parseAccountPoolStickyLimit, parseAccountPoolStrategy } from "./pool-kernel";
+import { parseAccountPoolStickyLimit, parseAccountPoolStrategy, parseCodexAccountPoolStrategy } from "./pool-kernel";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 /**
@@ -147,7 +147,7 @@ export function unifiedPoolSettingsDto(
       // honest answer is "not a field here" rather than a fabricated true.
       enabled: null,
       enabledEffective: true,
-      strategy: parseGenericPoolStrategy(config.accountPoolStrategy) ?? "quota",
+      strategy: parseCodexAccountPoolStrategy(config.accountPoolStrategy) ?? "quota",
       stickyLimit: parseGenericStickyLimit(config.accountPoolStickyLimit) ?? 1,
       autoSwitchThreshold: parseGenericAutoSwitchThreshold(config.autoSwitchThreshold) ?? 80,
       quotaWindow: null,

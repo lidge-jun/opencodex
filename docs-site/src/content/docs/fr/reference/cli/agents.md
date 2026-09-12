@@ -98,6 +98,8 @@ Inspectez les requêtes de proxy, l’utilisation, le stockage, la mémoire et l
 ocx observe usage --range 30d --json
 ```
 
+Si certains enregistrements ne peuvent pas être inclus, la sortie lisible affiche un avertissement, même sans ligne lisible. Les totaux affichés ne reflètent que les enregistrements lisibles. Si un filtre ne trouve aucune correspondance lisible, la sortie affiche l'avertissement et des indications au lieu des lignes de totaux ; les enregistrements ignorés peuvent contenir des correspondances. `--json` préserve le diagnostic `usageIncomplete` et sa raison.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Lisez ou modifiez les remplacements de débogage d'exécution via la gestion du proxy en cours d'exécution API.
@@ -255,6 +257,8 @@ le CLI, l’API, et le GUI utilisent les mêmes octets.
 ### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 Gérez les paramètres d'exécution sans tête, le démarrage, la synchronisation, les diagnostics et les mises à jour.
+
+`ocx system codex-restart --yes` redémarre les serveurs d'application Codex et quitte puis relance entièrement l'application Codex Desktop, via le même module que `ocx sync --restart-codex`. Lorsque le proxy lui-même s'exécute dans l'application Codex, la commande refuse avec un message actionnable au lieu de promettre un transfert qu'elle ne peut pas mener à bien.
 
 ```bash
 ocx system settings --stream-mode eager-relay

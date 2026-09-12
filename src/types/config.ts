@@ -380,6 +380,8 @@ export interface OcxConfig {
   privacy?: OcxPrivacyConfig;
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
+  /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
+  dropCodexSafetyBuffering?: boolean;
   /**
    * Whether a login may open a browser on the machine running the proxy.
    *
@@ -638,10 +640,17 @@ export interface OcxConfig {
    */
   multiAgentMode?: "v1" | "default" | "v2";
   /**
+   * Which revision of the sub-agent surface advisory this install has answered.
+   * Absent means it has answered none. Written by the dashboard, never by a mode change.
+   */
+  multiAgentSurfaceAdvisoryVersion?: number;
+  /**
    * When `multiAgentMode` is `"v2"`, keep ChatGPT-native catalog rows on v1.
    * Routed parents get v2 tools; Sol/Terra can still spawn Grok/Claude (issue #92).
    */
   keepNativeChatGptOnV1?: boolean;
+  /** Experimental plaintext delivery for native v2 collaboration messages; disabled unless true. */
+  plaintextV2AgentMessages?: boolean;
   /** Experimental, default-off ChatGPT recovery for encrypted V2 routed tasks. */
   agentTaskRecovery?: {
     enabled?: boolean;
@@ -659,6 +668,16 @@ export interface OcxConfig {
    * so absence is the only default state this feature has.
    */
   quotaResetNotify?: OcxQuotaResetNotifyConfig;
+  /**
+   * Periodic provider model-catalog refresh (issue #3630). Absent means off: no timer, no
+   * refresh pass, no outcome record.
+   *
+   * Off by default for the same reason every optional subsystem here is: a refresh spends a
+   * live /models call against every enabled provider, and this repository's rule is that a
+   * default install runs no detection code and starts no live timer work. Not in
+   * `getDefaultConfig()` — absence is the only default state this feature has.
+   */
+  catalogAutoRefresh?: OcxCatalogAutoRefreshConfig;
   /** Active provider context limits; native long windows remain within their supported ceilings. */
   providerContextCaps?: Record<string, number>;
   /** Last selected provider caps; retained while a cap is switched off. Not an active limit. */
@@ -823,15 +842,6 @@ export interface OcxConfig {
    */
   codexAccountPickerEnabled?: boolean;
   /**
-   * Show the GPT-5.3-Codex-Spark 5-hour and weekly windows on Codex quota surfaces. Default false.
-   *
-   * Spark is a single-model window that reads 0% for most operators, and on a multi-account
-   * pool it doubles the bar count for information almost nobody acts on. Hidden by default and
-   * revealed by an explicit `true`; a malformed value reads as hidden rather than rejecting the
-   * whole config.
-   */
-  showCodexSparkQuota?: boolean;
-  /**
    * Opt-in auto-redemption of a main-account Codex reset credit shortly before it expires
    * (#822). Default off. `leadTimeMinutes` (1–60, default 10) is how long before
    * `expires_at` the redeem is attempted; the credit list is re-read upstream right before
@@ -850,23 +860,65 @@ export interface OcxConfig {
   pool?: {
     kernel?: boolean;
     /**
-     * Opt-in cache-affinity ordering, off by default.
+     * Cache-affinity ordering for bound Codex threads. **On unless set to `false`.**
      *
-     * With it on, a bound Codex thread keeps its account until that account genuinely cannot
-     * serve, instead of moving the moment usage crosses `autoSwitchThreshold`. Moving a live
+     * A bound Codex thread keeps its account until that account genuinely cannot serve,
+     * instead of moving the moment usage crosses `autoSwitchThreshold`. Moving a live
      * conversation throws away the prompt cache warmed on that account, and a threshold
-     * crossing is a hint rather than evidence the account is spent. Separate from `kernel`
-     * on purpose: that one governs the generic OAuth strategy consumer, and one switch
-     * carrying two unrelated meanings cannot be turned on alone.
+     * crossing is a hint rather than evidence the account is spent.
+     *
+     * This shipped as an opt-in (#4292) and then #4546 measured what the opt-in default
+     * costs: a pool whose accounts all sit in the 80-99% band hands a conversation from
+     * account to account, re-sending the whole prefix every turn, and the install that gets
+     * hurt is precisely the one that never heard of this setting. `false` restores
+     * capacity-first routing for operators who want it.
+     *
+     * Separate from `kernel` on purpose: that one governs the generic OAuth strategy
+     * consumer, and one switch carrying two unrelated meanings cannot be turned on alone.
+     *
+     * Note what this does NOT govern. Unbound placement still follows
+     * `autoSwitchThreshold` and the configured strategy. A bound thread's destination must
+     * have real headroom under either setting, and a transient failure streak holds the
+     * binding under either setting -- neither is a cache-affinity preference.
      */
     cacheAffinity?: boolean;
+    /**
+     * Operator-declared quota domains: groups of credential ids that demonstrably share
+     * one upstream usage limit (#4546, wp6). Members of one group count once toward
+     * available capacity, and a quota refusal inside a group is never answered by
+     * rotating to another member -- the limit is the same, so the move would pay a cold
+     * prefix for zero new capacity.
+     *
+     * Declared groups speak only to quota. Sharing a usage limit says nothing about
+     * prompt-cache compatibility, which keeps its own provider-documented domain.
+     * Absent or empty means no declared grouping, so an unconfigured install behaves
+     * exactly as before.
+     *
+     * A declaration has to mean exactly one thing, so the config rejects the spellings
+     * that could mean two. Credential ids are provider-scoped elsewhere (the auth store
+     * keys an account by provider and id), so each member is written
+     * `"<provider>:<credential-id>"` -- a bare `"acct-1"` names one credential per
+     * provider and would merge unrelated domains. The provider segment is matched
+     * case-insensitively through the usual aliases, so `chatgpt:` and `codex:` both mean
+     * OpenAI. Group ids must be unique, `credentials` must be non-empty, and a credential
+     * may belong to at most one group; a declaration that breaks any of those is rejected
+     * on write and dropped with a warning on load, never resolved by list order.
+     */
+    credentialGroups?: Array<{
+      /** Operator-chosen group identifier; only equality matters. */
+      id: string;
+      /** Provider-qualified credential ids (`"<provider>:<credential-id>"`), non-empty. */
+      credentials: string[];
+      /** Free-text provenance note for the operator's own records. */
+      note?: string;
+    }>;
   };
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
   autoSwitchThreshold?: number;
   /** New-session account rotation strategy for the Codex pool. Default quota (today's behaviour). */
-  accountPoolStrategy?: OcxAccountPoolRotationStrategy;
+  accountPoolStrategy?: OcxAccountPoolRotationStrategy | "reset-first";
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
   accountPoolStickyLimit?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
@@ -967,8 +1019,9 @@ export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" 
  * advertises no effort control (`reasoningEfforts: []`) empties the combo's picker.
  * `adaptive` excludes those empty ladders from the published intersection, keeping the
  * control usable for a mixed-capability group. Unknown (`undefined`) ladders stay
- * wildcards in both modes. Dispatch is unchanged: each concrete target still resolves
- * its own effort at request time.
+ * wildcards in both modes. An explicit empty ladder removes unsupported effort controls
+ * in either mode; adaptive dispatch also removes them before sending to an unknown target,
+ * while each known target still resolves its own effort.
  */
 export type OcxComboReasoningEffortMode = "strict" | "adaptive";
 
@@ -1301,4 +1354,27 @@ export interface OcxQuotaResetNotifyConfig {
    * cannot become a shell-injection surface.
    */
   command?: string[];
+}
+
+/**
+ * Periodic model-catalog auto-refresh settings (issue #3630).
+ *
+ * Every field is optional and the whole section defaults to off. Each tick converges the
+ * served catalog the same way `ocx sync` does, which costs a live /models call against
+ * every enabled provider — so an install that never asked for this must run no refresh
+ * code and start no timer, matching the optional-subsystem rule the rest of this file
+ * follows.
+ */
+export interface OcxCatalogAutoRefreshConfig {
+  /** Master switch. Default false — no scheduler, no tick, no upstream calls. */
+  enabled?: boolean;
+  /**
+   * Minutes between refresh ticks. Default 60, floor 15, and 0 keeps the timer dormant
+   * while leaving the section configured.
+   *
+   * The floor exists for the same reason src/quota/reset-poller.ts has MIN_INTERVAL_MS:
+   * provider catalogs are cached upstream for minutes, so a faster cadence buys no
+   * freshness and only risks a rate limit against every enabled provider at once.
+   */
+  intervalMinutes?: number;
 }

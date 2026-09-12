@@ -8,6 +8,7 @@ import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
 import { safeResponseHeaders } from "./safe-response-headers";
+import type { AudioSocketTarget } from "./audio-dictation";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -31,14 +32,28 @@ export interface WsData {
   /** Fixed-size logical session lane derived at the HTTP upgrade boundary. */
   sessionLaneId?: string;
   /** Discriminator: Responses reframing vs transparent live/realtime sideband relay. */
-  kind?: "responses" | "live-sideband";
+  kind?: "responses" | "live-sideband" | "remote-workspace-agent";
+  remoteWorkspaceConnection?: { receive(raw: string | Uint8Array): void };
+  remoteWorkspaceOpen?: (socket: ServerWebSocket<WsData>) => { receive(raw: string | Uint8Array): void };
+  remoteWorkspaceClose?: () => void;
   liveUpstream?: WebSocket;
   liveUpstreamUrl?: string;
   liveUpstreamHeaders?: Record<string, string>;
+  liveUpstreamProtocols?: string[];
+  liveValidateFrame?: AudioSocketTarget["validateFrame"];
+  liveFinish?: AudioSocketTarget["finish"];
+  liveOutcome?: number | "timeout" | "connect_error";
+  liveMaxSessionMs?: number;
+  liveConnectTimer?: ReturnType<typeof setTimeout>;
+  liveSessionTimer?: ReturnType<typeof setTimeout>;
+  liveAbortSignal?: AbortSignal;
+  liveAbortListener?: () => void;
   livePending?: Array<string | Buffer>;
   /** Total encoded bytes retained in livePending while the upstream connects. */
   livePendingBytes?: number;
   liveOpened?: boolean;
+  /** Owns captured frames and terminal state until the downstream relay attaches. */
+  liveUpstreamHandoff?: LiveSidebandUpstreamHandoff;
   /** Once teardown starts, ignore new client frames until the upstream closes. */
   liveClosing?: boolean;
   /** Schedules one bounded close retry without surrendering native-main ownership. */
@@ -46,6 +61,25 @@ export interface WsData {
   /** Turn/account ownership retained for the complete sideband socket lifetime. */
   liveTurnAdmissionLease?: AdmissionLease;
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>;
+}
+
+export interface LiveSidebandUpstreamFailure {
+  status: number;
+  code: string;
+  message: string;
+  closeCode?: number;
+  closeReason?: string;
+}
+
+export type LiveSidebandUpstreamTakeover =
+  | { ok: true; frames: Array<string | Buffer> }
+  | { ok: false; failure: LiveSidebandUpstreamFailure };
+
+export interface LiveSidebandUpstreamHandoff {
+  /** Observe failure before the downstream upgrade without ending capture. */
+  failure(): LiveSidebandUpstreamFailure | undefined;
+  /** Atomically ends capture and transfers buffered frames or terminal state. */
+  take(): LiveSidebandUpstreamTakeover;
 }
 
 /**

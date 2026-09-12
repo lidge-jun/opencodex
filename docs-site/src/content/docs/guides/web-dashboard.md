@@ -13,7 +13,8 @@ settings, and request traffic.
 ocx gui
 ```
 
-This opens `http://localhost:<port>` in your browser, auto-starting the proxy first if needed. In
+This opens `http://localhost:<port>` in your browser — or `http://127.0.0.1:<management port>` when hub
+management ingress is enabled — auto-starting the proxy first if needed. In
 development you can run the GUI dev server separately against a running proxy:
 
 ```bash
@@ -95,6 +96,11 @@ badge or the version value to read the full value.
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
 | **Stop** | Gracefully stop the proxy and installed background service, restore native Codex, and exit (`POST /api/stop`). On Windows with the Task Scheduler backend the dashboard refuses and asks you to run `ocx stop` instead: that wrapper can respawn the proxy after the task ends, and only a stop running outside this process can verify the restart window before restoring your client config. Nothing is changed when it refuses. |
+
+If some usage records cannot be included, the Usage page, Dashboard, provider workspace, provider
+catalog, and API key views show a warning even when no readable records remain. Counts, dates, and
+usage rankings reflect readable records only. **Models → Most used snapshot → Apply order** refuses
+to save an incomplete snapshot; choose another order or repair the history before retrying.
 
 ### Account selection
 
@@ -244,9 +250,11 @@ maintainers do not provide policy advice and cannot resolve provider enforcement
   thread that is already bound. The Codex Desktop (main) account is ordered like any other, so it can
   be set to **Last** and kept as the reserve. An order set from `ocx account priority` outside those
   five presets stays visible and selectable on the card.
-- Thread affinity prevents per-request flapping. With quota auto-switch enabled, a long-running
-  thread is periodically re-evaluated and may rebind after its relevant usage reaches the threshold
-  and a strictly lower-usage eligible account exists.
+- Thread affinity prevents per-request flapping. With `pool.cacheAffinity` on (the default), a
+  long-running thread is not rebound merely because usage crossed the threshold; it stays until the
+  account is exhausted or cannot serve, and then only onto an account with genuine quota headroom
+  and strictly lower usage. Set the flag `false` to restore threshold rebinding, still only onto
+  such a destination.
 - New sessions can choose the lowest-usage eligible account. Paid plans score the hottest known 5h,
   weekly, or 30d window; Go/Free plans use the 30d window only.
 - When WHAM supplies `limit_window_seconds`, Codex Auth classifies a primary window of at least 28
@@ -338,3 +346,9 @@ Adding **Ollama Cloud** or another catalog provider from the dashboard copies it
 classification into the saved provider config, so the [vision sidecar](/guides/sidecars/)
 is gated correctly without manual classification.
 :::
+
+### Pairing this browser with a hub
+
+Machine enrollment and browser authentication are separate. The pairing panel names the hub and displays an `ocx gui pair --origin` command for the exact origin currently open in your browser. Run that command on the hub, or send it to the hub operator and request a one-time pairing code. Paste that code into the panel; a data API key or admin token is not a pairing code.
+
+While browser authentication is pending, the dashboard does not recommend restarting a healthy connected client. Completing pairing refreshes the dashboard data immediately, including a previously cached authentication failure. Session expiry returns to pairing; permission denial keeps its own access-settings guidance. Other failed refreshes may show the last received data with a stale-data notice and retry action.

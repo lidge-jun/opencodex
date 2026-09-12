@@ -21,6 +21,28 @@ const repoRoot = findRepoRoot();
 const CLIENT_FIXTURE_FAILURE_CATEGORIES = ["module_load", "config_setup", "desktop_setup", "scenario", "child_failed"] as const;
 type ClientFixtureFailureCategory = typeof CLIENT_FIXTURE_FAILURE_CATEGORIES[number];
 
+const TRANSACTION_PHASES = ["module_load", "module_ready", "connect_entered", "connect_resolved", "connect_rejected", "state_read", "result_published"] as const;
+type TransactionProgress = { phase: typeof TRANSACTION_PHASES[number]; elapsedMs: number };
+
+/** Only this fixed diagnostic envelope may reach a parent-side failure message. */
+function transactionProgress(stderr: unknown): TransactionProgress | undefined {
+  if (typeof stderr !== "string") return undefined;
+  const tail = stderr.slice(-8192);
+  for (const line of tail.split("\n").reverse()) {
+    if (!line.startsWith('{"clientTransactionPhase":')) continue;
+    try {
+      const row: unknown = JSON.parse(line);
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const { clientTransactionPhase, elapsedMs } = row as Record<string, unknown>;
+      const phase = TRANSACTION_PHASES.find(value => value === clientTransactionPhase);
+      if (phase && typeof elapsedMs === "number" && Number.isSafeInteger(elapsedMs) && elapsedMs >= 0 && elapsedMs <= 600_000) {
+        return { phase, elapsedMs };
+      }
+    } catch { /* Ignore raw child output and malformed markers. */ }
+  }
+  return undefined;
+}
+
 class ClientStateProbeError extends Error {
   constructor(
     readonly pid: number,
@@ -28,9 +50,10 @@ class ClientStateProbeError extends Error {
     readonly signal: NodeJS.Signals | null,
     readonly timedOut: boolean,
     readonly failureCategory?: ClientFixtureFailureCategory,
+    readonly progress?: TransactionProgress,
   ) {
     // Do not include the child script, environment, stdout or stderr in failure output.
-    super(`Client state probe ${timedOut ? "timed out" : "failed"} (status=${status}, signal=${signal}${failureCategory ? `, category=${failureCategory}` : ""})`);
+    super(`Client state probe ${timedOut ? "timed out" : "failed"} (status=${status}, signal=${signal}${failureCategory ? `, category=${failureCategory}` : ""}${progress ? `, phase=${progress.phase}, elapsedMs=${progress.elapsedMs}` : ""})`);
     this.name = "ClientStateProbeError";
   }
 }
@@ -339,7 +362,12 @@ function runTransactionScenario(
     mkdirSync(join(opencodexHome, "config-mutation.sqlite"));
   }
   const script = options.script ?? `
-    const { existsSync, readFileSync } = require("node:fs");
+    const { existsSync, readFileSync, writeSync } = require("node:fs");
+    const transactionStarted = Date.now();
+    const markTransaction = phase => writeSync(2, JSON.stringify({
+      clientTransactionPhase: phase, elapsedMs: Math.max(0, Date.now() - transactionStarted),
+    }) + "\\n");
+    markTransaction("module_load");
     const { createHash } = require("node:crypto");
     const { connectClient, disconnectClient } = require("./src/client/connect");
     const { readClientConnectionState } = require("./src/client/state");
@@ -348,6 +376,7 @@ function runTransactionScenario(
     const { DEFAULT_CATALOG_PATH } = require("./src/codex/paths");
     const stage = ${JSON.stringify(stage)};
     const { setPersistedConfigMutationBeforeCommitForTests } = require("./src/config");
+    markTransaction("module_ready");
     let commitFaultTriggered = false;
     const catalog = '{"models":[]}';
     const etag = '"sha256-' + createHash("sha256").update(catalog).digest("base64url") + '"';
@@ -373,7 +402,9 @@ function runTransactionScenario(
     (async () => {
       let connected = null;
       let error = null;
+      let coordinatorUnavailable = false;
       try {
+        markTransaction("connect_entered");
         connected = await connectClient({
           serverUrl: "https://hub.example.test",
           credential: { kind: "admin", value: credential },
@@ -387,7 +418,17 @@ function runTransactionScenario(
           });
           return new Date("2026-08-28T00:00:00.000Z");
         }, lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
-      } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+        markTransaction("connect_resolved");
+      } catch (cause) {
+        markTransaction("connect_rejected");
+        error = cause instanceof Error ? cause.message : String(cause);
+        const seen = new Set();
+        for (let current = cause, depth = 0; current && typeof current === "object" && depth < 32 && !seen.has(current); current = current.cause, depth++) {
+          seen.add(current);
+          if (current.code === "CONFIG_MUTATION_LOCK_UNAVAILABLE") coordinatorUnavailable = true;
+        }
+      }
+      markTransaction("state_read");
       const beforeDisconnect = readClientConnectionState();
       // The hub-state cache is derived from THIS connection; disconnect has to take it with it.
       let hubStateCacheBefore = false;
@@ -407,7 +448,8 @@ function runTransactionScenario(
       if ((stage === "success" || stage === "prior-catalog") && connected) disconnected = await disconnectClient({}, { lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
       const catalogAfter = existsSync(DEFAULT_CATALOG_PATH) ? readFileSync(DEFAULT_CATALOG_PATH, "utf8") : null;
       const hubStateCacheAfter = existsSync(hubStateCachePath());
-      console.log(JSON.stringify({ connected, error, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, after: readClientConnectionState(), calls, commitFaultTriggered }));
+      writeSync(1, JSON.stringify({ connected, error, coordinatorUnavailable, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, after: readClientConnectionState(), calls, commitFaultTriggered }) + "\\n");
+      markTransaction("result_published");
     })();
   `;
   const cleanup = () => {
@@ -426,12 +468,13 @@ function runTransactionScenario(
       timeout: options.timeoutMs ?? INTERNAL_DEADLINE_MS,
       killSignal: "SIGKILL",
     });
+    const progress = transactionProgress(result.stderr);
     if (result.error || result.status !== 0 || result.signal !== null) {
-      throw new ClientStateProbeError(result.pid, result.status, result.signal, (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT");
+      throw new ClientStateProbeError(result.pid, result.status, result.signal, (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT", undefined, progress);
     }
     let parsed: Record<string, any>;
     try { parsed = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}"); }
-    catch { throw new ClientStateProbeError(result.pid, result.status, result.signal, false); }
+    catch { throw new ClientStateProbeError(result.pid, result.status, result.signal, false, undefined, progress); }
     return { status: result.status, stderr: result.stderr, parsed, configBytes: readFileSync(configPath, "utf8"), cleanup };
   } catch (error) {
     try { cleanup(); }
@@ -441,6 +484,29 @@ function runTransactionScenario(
 }
 
 describe("connect transaction and offline disconnect", () => {
+  test("transaction diagnostics retain only allowlisted phase and bounded elapsed evidence", () => {
+    for (const missing of [undefined, null, { secret: "private-marker-value" }]) {
+      expect(transactionProgress(missing)).toBeUndefined();
+    }
+    const valid = '{"clientTransactionPhase":"connect_entered","elapsedMs":12,"secret":"private-marker-value"}';
+    for (const invalid of [
+      '{"clientTransactionPhase":"private-marker-value","elapsedMs":1}',
+      '{"clientTransactionPhase":"connect_entered","elapsedMs":"private-marker-value"}',
+      '{"clientTransactionPhase":"connect_entered","elapsedMs":-1}',
+      '{"clientTransactionPhase":"connect_entered","elapsedMs":600001}',
+      '{"clientTransactionPhase":"connect_entered","elapsedMs":1.5}',
+      '{"clientTransactionPhase":"connect_entered",',
+    ]) {
+      expect(transactionProgress(invalid)).toBeUndefined();
+      const progress = transactionProgress(`${valid}\n${invalid}`);
+      expect(progress).toEqual({ phase: "connect_entered", elapsedMs: 12 });
+      const failure = new ClientStateProbeError(123, null, "SIGKILL", true, undefined, progress);
+      expect(failure.message).toContain("phase=connect_entered, elapsedMs=12");
+      expect(failure.message).not.toContain("private-marker-value");
+    }
+    expect(transactionProgress(valid + "\n" + "x".repeat(8192))).toBeUndefined();
+  });
+
   test("transaction fixture stops a child retained after valid output", async () => {
     const proofHome = mkdtempSync(join(tmpdir(), "ocx-transaction-child-proof-"));
     const markerPath = join(proofHome, "child-started.json");
@@ -451,6 +517,8 @@ describe("connect transaction and offline disconnect", () => {
         pid: process.pid, home: process.env.OPENCODEX_HOME, codexHome: process.env.CODEX_HOME,
       }));
       fs.writeSync(1, '{"ok":true}\\n');
+      fs.writeSync(2, '{"clientTransactionPhase":"result_published","elapsedMs":1}\\n');
+      fs.writeSync(2, '{"clientTransactionPhase":"private-child-secret","elapsedMs":2}\\n');
       setTimeout(() => { fs.writeFileSync(${JSON.stringify(naturalExitPath)}, "exited"); }, 5_000);
     `;
     let run: Awaited<ReturnType<typeof runTransactionScenario>> | undefined;
@@ -463,6 +531,8 @@ describe("connect transaction and offline disconnect", () => {
       expect(failure).toBeInstanceOf(ClientStateProbeError);
       if (!(failure instanceof ClientStateProbeError)) throw new Error("Expected bounded transaction child failure");
       expect(failure.timedOut).toBe(true);
+      expect(failure.progress).toEqual({ phase: "result_published", elapsedMs: 1 });
+      expect(failure.message).not.toContain("private-child-secret");
       expect(existsSync(naturalExitPath)).toBe(false);
       const proof = JSON.parse(readFileSync(markerPath, "utf8")) as { pid: number; home: string; codexHome: string };
       expect(proof.pid).toBe(failure.pid);
@@ -519,6 +589,7 @@ describe("connect transaction and offline disconnect", () => {
     try {
       expect(run.status).toBe(0);
       expect(run.parsed.connected).toBeNull();
+      expect(run.parsed.coordinatorUnavailable).toBe(true);
       expect(run.parsed.calls).toEqual([]);
       expect(run.parsed.artifacts).toEqual({ token: false, catalog: false, credentialZeroed: true });
     } finally { run.cleanup(); }

@@ -1,0 +1,19 @@
+# Bind quota history to credential publication identity
+
+New foundation cycle history-identity, C4 credential metadata, before history and capacity. Current source saveCodexAccountCredential publishes a new generation, while normal refresh CAS also increments generation and preserves replacedAt. Neither generation equality nor a millisecond timestamp alone establishes durable quota-history continuity. Reuse the credential store and its mutation lock; no new store or token-derived fingerprint.
+
+MODIFY src/types/accounts.ts CodexAccountCredentialRecord: optional private quotaHistoryIdentity UUID, not credential material and never projected to API/CLI. MODIFY src/codex/account-store.ts: every explicit save creates a fresh UUID; saveCodexAccountCredentialIfGeneration and commitRefreshedCodexCredentialWithAliases preserve each record's own UUID, including aliases. Deletes retain no old history identity. Existing credential projection excludes metadata automatically.
+
+Add PoolQuotaWriter type in dependency-free src/codex/quota-types.ts:
+```ts
+export interface PoolQuotaWriter { accountId: string; credentialGeneration: number; historyIdentity: string }
+```
+Add capturePoolQuotaWriter(accountId, dispatched:{accessToken,chatgptAccountId,generation}) in account-store.ts. Under existing withCredentialMutationLockSync, read record and require exact dispatched credential and generation, live/nondeleted state. For a legacy/malformed missing UUID initialize one once and persist under that lock without changing credential generation; do not mint on normal reads. A mismatch returns undefined. Lock/persistence failures at this optional evidence boundary return undefined, never fail the request. Credentials remain transient and never enter returned proof. Existing valid UUID capture needs only read matching record, no mutation lock or rewrite; legacy slow path rechecks under lock.
+
+Add isPoolQuotaWriterLive(writer): compare current live record's UUID and generation. Add poolQuotaHistoryIdentity(accountId): read valid current UUID only, never initialize or mutate. These separate append admission from retention, which matches UUID across ordinary refresh. Both are narrow production interfaces for the next history layer, not public management capabilities.
+
+Tests extend existing codex-account-store.test.ts: new saves unique; same-millisecond explicit replacement changes UUID; refresh preserves; alias refresh preserves distinct destination identities; stale dispatched access/generation/account cannot capture; legacy initialization stable and does not advance generation; metadata omitted from getCodexAccountCredential/load compatibility projection; delete/recreate invalidates old writer. Local tests/build/typecheck/install NOT RUN. Hosted cumulative history/capacity tip verifies these regression sources. Source security review separate from runtime proof.
+
+Field chain: explicit save/legacy capture creates UUID → existing atomic credential record serialization → existing read with UUID validity checked at history boundary → capture/live/retention helpers → next cycle's auth-context/WHAM/header history admission. All explicit record reconstructions are enumerated: save at161, validation spreads186/234 preserve, refresh279/338 preserve, alias366 preserves its own, deletion387 drops. Source ownership docs updated with private metadata semantics. No credential/token/string values enter docs or log output.
+
+A implementation checks accepted: legacy tag init uses plain persist, preserving both generation and credentialMutationEpoch. UUID validation stays at history boundary; malformed optional metadata never discards usable credentials. Catch read/hardening failures as well as lock/write failures and return no optional proof. Capture excludes the reserved native-main sentinel. If a CAS caller supplies a different upstream account identity, rotate the history UUID instead of treating that as ordinary same-account refresh.

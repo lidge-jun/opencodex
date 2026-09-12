@@ -6,6 +6,7 @@ import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
   pickLowestUsageCodexAccount,
+  isCodexAccountPlanExcluded,
   previewCodexAccountForRequest,
   resolveCodexAccountForThread,
 } from "../../src/codex/routing";
@@ -164,15 +165,24 @@ describe("codex pool plan exclusion", () => {
     expect(pickLowestUsageCodexAccount(config)).toBe("downgraded");
   });
 
-  test("the last remaining account still serves rather than stranding the operator", () => {
-    // Deliberately unlike pause. #4211 asks for a selection policy, not a hard block, so with no
-    // unexcluded candidate left the excluded account keeps answering instead of failing closed.
+  test("automatic routing refuses the last excluded account", () => {
     const config = makeConfig({
       codexAccounts: [{ id: "downgraded", email: "downgraded@test", isMain: false, plan: "free" }],
       codexPool: { excludedPlans: ["free"] },
     } as Partial<OcxConfig>);
     recordUsage("downgraded", 10);
     expect(pickLowestUsageCodexAccount(config)).toBeNull();
-    expect(resolveCodexAccountForThread("last-account", config)).toBe("downgraded");
+    expect(resolveCodexAccountForThread("last-account", config)).toBeNull();
+    expect(previewCodexAccountForRequest("last-account", config)).toBeNull();
   });
+  test("renewal clears the policy reason without pausing or deleting the account", () => {
+    const config = makeConfig({ codexPool: { excludedPlans: ["free"] } });
+    expect(isCodexAccountPlanExcluded(config, "downgraded")).toBe(true);
+    config.codexAccounts![0].plan = "plus";
+    expect(isCodexAccountPlanExcluded(config, "downgraded")).toBe(false);
+    expect(isCodexAccountPlanExcluded(config, "__main__")).toBe(false);
+    expect(config.codexAccounts).toHaveLength(2);
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+  });
+
 });

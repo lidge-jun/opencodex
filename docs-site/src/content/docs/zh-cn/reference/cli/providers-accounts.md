@@ -193,7 +193,7 @@ generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean,
 顺序决定的是先考虑哪些账号，而不是哪些账号可用：选择仍然只在合格账号中进行，取仍有 quota 余量的
 最高 tier，再由 `accountPoolStrategy` 在该 tier 内挑选。暂停、cooldown 和重新认证都不受影响。改动
 从**下一个未绑定请求**起生效，而不仅限于新开的 session：一旦更高顺序重新有了余量，preemption 会立即把
-未绑定请求提上去。已绑定账号的 thread 通常会保留该账号直到其用尽，但重新认证失败、quota cooldown 或连续的临时失败都会更早解除绑定。任何被接受的写入也会解除手动的“立即使用此账号”固定，无论固定在哪个账号上；写入与当前相同的顺序同样会解除，这是在保留当前所选账号的前提下解除固定的唯一方式（通过管理 API 清空活动账号同样会解除固定，但所选账号也一并丢失）。代理不可达、账号 id 不存在或取值不在
+未绑定请求提上去。已绑定账号的 thread 通常会保留该账号直到其用尽；重新认证失败或 quota cooldown 仍可能更早解除绑定。连续的临时失败不再删除仍有效的线程绑定：请求会改由其他账号处理，绑定保留，该账号恢复服务后任务会回到原账号；若 10 分钟后仍在失败，绑定才会按常规解除。任何被接受的写入也会解除手动的“立即使用此账号”固定，无论固定在哪个账号上；写入与当前相同的顺序同样会解除，这是在保留当前所选账号的前提下解除固定的唯一方式（通过管理 API 清空活动账号同样会解除固定，但所选账号也一并丢失）。代理不可达、账号 id 不存在或取值不在
 允许范围内都会返回退出码 1。`--json` 返回：
 
 ```text
@@ -273,9 +273,14 @@ ocx account main doctor [--json]
 ocx account main list [--json]
 ocx account main register <label> [--json]
 ocx account main add <label>
+ocx account main reauth --device [--no-wait] [--json]
+ocx account main reauth status --flow <id> [--json]
+ocx account main reauth cancel --flow <id> [--json]
 ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
+
+`ocx account main reauth --device --no-wait --json` 成功时只向 stdout 输出一个 JSON 对象，不输出供人阅读的 `follow up:` 提示行。将返回的 `flowId` 传给 `ocx account main reauth status --flow <id> --json` 即可查看进度。
 
 每个变更命令都会显示运行中代理返回的规范化有效 `CODEX_HOME`。该路径可能与调用进程的
 `CODEX_HOME` 不同；支持 JSON 的命令会在 `effectiveCodexHome` 中返回相同的值。

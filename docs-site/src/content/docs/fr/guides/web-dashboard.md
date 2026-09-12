@@ -13,7 +13,8 @@ catalogue, les services auxiliaires, les réglages des sous-agents et le trafic 
 ocx gui
 ```
 
-Cette commande ouvre `http://localhost:<port>` dans votre navigateur et démarre d'abord automatiquement le
+Cette commande ouvre `http://localhost:<port>` dans votre navigateur — ou
+`http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre d'abord automatiquement le
 proxy si nécessaire. En développement, vous pouvez lancer séparément le serveur de développement de
 l'interface contre un proxy déjà actif :
 
@@ -56,6 +57,8 @@ gestionnaire de mots de passe.
 | **Utilisation / Débogage** | Examinez la couverture et les tendances d'utilisation des jetons, ou activez à la demande les diagnostics de transport et d'extraction de l'utilisation propres aux fournisseurs. |
 | **Stockage** | Consultez en lecture seule la répartition du disque de CODEX_HOME — sessions, archives, bases de données et pièces jointes. Pour le nettoyage facultatif des archives, prévisualisez les N % les plus anciennes, puis placez-les en quarantaine dans `CODEX_HOME/.trash` (par défaut) ou supprimez-les définitivement après avoir coché une case explicite. **La stratégie de nettoyage automatique** est facultative et **désactivée par défaut** (`storageCleanupPolicy.enabled`) ; configurez son seuil, sa cible, sa planification et son mode sur la page **Stockage**, ou lancez **Exécuter maintenant**. Les entrées mises en quarantaine peuvent être restaurées depuis cette page (JSONL et fils). Les sessions actives restent en lecture seule. Le nettoyage et la restauration sont refusés tant que Codex verrouille le fichier `state_*.sqlite` le plus récent ou actif. |
 | **Arrêter** | Arrêtez proprement le proxy et le service d'arrière-plan installé, restaurez Codex natif et quittez (`POST /api/stop`). Sur Windows avec le backend Planificateur de tâches, le tableau de bord refuse et vous demande d'exécuter `ocx stop` : le wrapper peut relancer le proxy après la fin de la tâche, et seul un stop exécuté hors du proxy peut vérifier cette fenêtre de redémarrage avant de restaurer votre configuration client. Rien n'est modifié en cas de refus. |
+
+Les vues Utilisation, Tableau de bord, Fournisseurs, Catalogue des fournisseurs et Clés API signalent les enregistrements exclus, même sans résultat lisible. Les décomptes, les dates et les classements reposent uniquement sur les lignes lisibles. L’enregistrement de l’ordre des modèles par utilisation est refusé si l’historique est incomplet : choisissez un autre ordre ou réparez l’historique avant de réessayer.
 
 ### Filtrer les requêtes
 
@@ -151,7 +154,7 @@ la route à un autre compte Pool admissible. Ce mécanisme est distinct d'`opena
 
 - Choisir manuellement un compte s'applique immédiatement : un fil déjà associé y passe à sa prochaine requête, et seules les requêtes déjà en cours conservent le compte capturé. Le choix manuel est aussi épinglé : la fiche affiche le badge **ÉPINGLÉ**, et un ordre de sélection supérieur ne peut pas prendre la priorité sur ce compte avant son épuisement, la sélection d'un autre compte ou la modification de l'ordre de sélection de n'importe quel compte.
 - Chaque fiche de compte possède un contrôle **Ordre de sélection** (**Premier**, **Plus tôt**, **Normal**, **Plus tard**, **Dernier**). Les ordres supérieurs sont utilisés en premier ; le pool ne descend à un ordre inférieur qu'une fois tous les comptes supérieurs épuisés ou indisponibles. Un changement d'ordre s'applique dès la prochaine requête sans association et ne déplace jamais un fil déjà associé. Le compte Codex Desktop principal est ordonné comme les autres : il peut être placé en **Dernier** et conservé comme réserve. Un ordre défini avec `ocx account priority` en dehors de ces cinq préréglages reste visible et sélectionnable sur la fiche.
-- L'affinité des fils évite les changements à chaque requête. Lorsque le changement automatique selon les quotas est activé, un fil de longue durée est réévalué périodiquement et peut être réassocié quand son utilisation pertinente atteint le seuil et qu'il existe un compte admissible dont l'utilisation est strictement inférieure.
+- L'affinité des fils évite les changements à chaque requête. Avec `pool.cacheAffinity` activé (par défaut), un fil de longue durée n'est pas réassocié simplement parce que l'utilisation a atteint le seuil ; il reste jusqu'à ce que le compte soit épuisé ou ne puisse plus servir, puis seulement vers un compte dont l'utilisation est strictement inférieure et qui dispose d'une véritable marge de quota. Définissez le drapeau à `false` pour rétablir la réaffectation au seuil lorsqu'un compte admissible strictement moins utilisé existe.
 - Les nouvelles sessions peuvent choisir le compte admissible le moins utilisé. Pour les forfaits payants, le score retient la fenêtre connue la plus sollicitée parmi 5 h, une semaine et 30 jours ; les forfaits Go/Free utilisent uniquement la fenêtre de 30 jours.
 - Lorsque WHAM fournit `limit_window_seconds`, **Authentification Codex** classe une fenêtre principale d'au moins 28 jours comme une fenêtre de 30 jours au lieu de supposer que toute fenêtre principale est hebdomadaire. Les réponses sans durée conservent l'ancienne interprétation hebdomadaire.
 - **Actualiser les quotas** relit immédiatement l'utilisation des comptes afin que le routage et les fiches utilisent les mêmes valeurs.

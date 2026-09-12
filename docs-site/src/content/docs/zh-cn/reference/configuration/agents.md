@@ -21,6 +21,7 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | `subagentModelFallbackPollMs?` | `number` | `60000` | 可用性探测缓存间隔。低于 1000 ms 的值会回退到默认值。 |
 | `effortCap?` | `string` | — | 对符合条件的 v2 主轮次和标记的派生子轮次设置硬上限。接受 `low` 到 `ultra`。 |
 | `subagentEffortCap?` | `string` | — | 仅针对派生子轮次的额外上限。两个上限同时适用时，较低者生效。 |
+| `plaintextV2AgentMessages?` | `boolean` | —（未设置） | 实验性选项。只有显式设置为 `true` 才会启用。符合条件的新 `spawn_agent`、`send_message` 和 `followup_task` 调用会使用明文消息参数。详见[明文 v2 代理消息](#明文-v2-代理消息)。 |
 
 通过仪表板或 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` 管理该界面。模式变更会应用于新会话。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ocx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
 
@@ -79,6 +80,42 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
   "subagentEffortCap": "high"
 }
 ```
+
+## 明文 v2 代理消息
+
+新配置不会写入 `plaintextV2AgentMessages`。只有显式设置为 `true` 才会启用。调用方必须使用 Responses
+格式，最终目标必须采用规范的 ChatGPT Codex 转发配置，即 `adapter: "openai-responses"`、
+`authMode: "forward"` 和准确的基础地址 `https://chatgpt.com/backend-api/codex`。OpenAI API key
+provider、自定义 OpenAI 兼容网关、最终发往其他 provider 的请求，以及非 Responses 调用都不会被改写。
+
+对于符合条件的 v2 请求，opencodex 只识别顶层 `collaboration` namespace，而且它必须直接包含
+`spawn_agent`。原生 ChatGPT 收到请求前，opencodex 会删除 `spawn_agent`、`send_message` 和
+`followup_task` 中已有的 `parameters.properties.message.encrypted: true`。ChatGPT 会按保留的
+`collaboration` namespace 和三个工具名处理消息，因此请求会给这四个名称使用固定的临时别名。
+修改前，opencodex 会检查顶层和 `additional_tools` 工具目录、嵌套 namespace、
+`tool_search_output` 声明、`tool_choice` 和历史调用项。只要发现私有 namespace 或固定别名冲突，
+整个请求就保持原样。opencodex 只会在 JSON、SSE 和 WebSocket 响应中恢复本次请求生成的别名，
+并保留 `encrypted_function_args: []`，让兼容的 Codex 客户端把参数识别为明文。
+
+这个选项不会增加恢复请求，也不会使用 `agentTaskRecovery` 在缓存未命中时产生的额外 ChatGPT
+配额。它只能影响新工具调用，不能修改已有密文。请求已占用私有名称或有冲突引用时，opencodex 会保持该请求不变；若它后来生成加密的路由子任务，单独启用的 `agentTaskRecovery` 仍可处理。ChatGPT 拒绝或忽略修改后的 schema，或 Codex 客户端不识别明文响应字段时，调用可能失败。opencodex 不会用原 schema 自动重发父请求，因为重发可能重复消耗配额或重复执行工具。
+
+每个响应的恢复检查最多处理 10,000 个身份位置。达到限制时，JSON 响应返回 HTTP 502，流式响应返回
+`response.failed`。这两种情况都不会把私有别名发给 Codex，也不会保存该响应供后续
+`previous_response_id` 继续使用。
+
+成功改写后，这个选项会取消代理消息参数的应用层加密。HTTPS 仍会加密网络传输，但消息文字可能出现在 Codex
+任务历史、外部模型请求、`responses-state.json` 及其 spill 文件，以及启用调试记录时的
+`usage-debug.jsonl`。该行为依赖 ChatGPT 未公开的 schema 和响应字段，后端或客户端更新后可能失效。
+服务启动时会打印警告。
+
+```json
+{
+  "plaintextV2AgentMessages": true
+}
+```
+
+等价命令是 `ocx config set plaintextV2AgentMessages true`。修改后重启代理。
 
 ## Effort 上限
 

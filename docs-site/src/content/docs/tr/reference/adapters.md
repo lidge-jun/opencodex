@@ -311,12 +311,13 @@ başlığından Cursor OAuth/erişim belirteci.
 ## `devin`
 
 **Hedef:** Cognition'ın `exa.api_server_pb.ApiServerService/GetChatMessage` uç noktası; `server.codeium.com` üzerinde Connect akışı.
-**Kimlik doğrulama:** `provider.apiKey` veya iletilen authorization başlığındaki Devin/Cognition API anahtarı. Giriş tarayıcıda Auth0 oturumunu açar, ardından belirteci `SeatManagementService.RegisterUser` ile uzun ömürlü bir anahtara dönüştürür.
+**Kimlik doğrulama:** `provider.apiKey` veya iletilen authorization başlığındaki Devin/Cognition API anahtarı. Giriş önce kurulu Devin CLI'nin zaten tuttuğu kimlik bilgisini içe aktarmayı dener: `devin auth login`, CLI'nin kendi PKCE oturumunu tamamlar ve `devin-session-token`'ı kendi `credentials.toml` dosyasına yazar; bu, `SeatManagementService.RegisterUser`'ın tarayıcı girişi için ürettiği kimlikle aynıdır. Kullanılabilir bir CLI kimliği yoksa giriş, tarayıcıda Auth0 oturumuna geri döner ve yapıştırılan belirteci `RegisterUser` ile uzun ömürlü bir anahtara dönüştürür. `devin-cli` yalnızca kullanımdan kaldırılmış bir takma ad olarak kalır: `ocx login devin-cli` hâlâ `devin`'e yönlendirilir ve eski id ile kaydedilmiş bir yapılandırma başlangıçta yeniden yazılır.
 
 - Olağan fetch/parse yolu yerine `runTurn` kullanır. İstekler ve sunucu olayları `devin/cloud-direct/wire.ts` içindeki elle yazılmış protobuf çerçevelemesiyle işlenir.
 - Modeller hesaba göre `GetCascadeModelConfigs` ile keşfedilir; pakette olmayanlar istek anında hata vermek yerine listeden düşer.
 - Cognition araç açıklamaları için uzunluk sınırı ve birebir ifade engeli uygular. Bağdaştırıcı bilinen ifadeleri yeniden yazar, uzun açıklamaları kırpar.
 - Anahtarlar yenilenmez. Süresi dolduğunda veya iptal edildiğinde `ocx login devin` komutunu yeniden çalıştırın.
+- CLI içe aktarma yolu kullanıldığında yerel olan yalnızca kimlik bilgisidir; tur her iki yolda da Cognition'a gider. Önceki bir sürüm, `devin-cli` kimliği altında turu yerel bir `devin acp` alt sürecine karşı Agent Client Protocol oturumu olarak çalıştıran ikinci bir bağdaştırıcıyla geliyordu. Kaldırıldı: o bağdaştırıcıyı hâlâ adlandıran kayıtlı bir yapılandırma, `"devin-acp"` gibi özel adlı bir satır da dahil olmak üzere başlangıçta `devin`'e yeniden yazılır.
 
 ## `azure-openai` (takma ad: `azure`)
 

@@ -46,3 +46,5 @@ Two design follow-ups encountered inherited-model capacity errors; one same-hand
 ## Roadmap cycle outcome
 
 Independent design reflection and A re-audit passed with the source restrictions in 001_roadmap_audit.md. B freezes the contracts as documentation only. C checks document paths/numbering and git whitespace; local product suites NOT RUN. D next direction: execute 010_callback.md independently, then the remaining dependency-ordered cycles. Runtime behavior has not improved yet; the rejected hypotheses were native history identity by sentinel alone, attempt timing inferred from untimed attempts, and one-shot implying one physical request through a retrying primitive.
+
+History P split:048_history_identity.md supplies stable publication identity and fenced writer capture before050 history. This is a new foundation cycle, registered in the same goalplan; intended manual chain history-identity → history → capacity. It is independent of reset-first. Staged login samples are omitted until a fenced post-publication observation; native history remains nondurable and excluded from capacity.

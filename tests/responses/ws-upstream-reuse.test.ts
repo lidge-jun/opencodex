@@ -3,6 +3,8 @@ import { codexWsUpstreamFetch } from "../../src/server/responses/ws-upstream";
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { CodexWsPool, codexWsPool } from "../../src/server/responses/codex-ws-pool";
 import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
+import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const URL = "https://chatgpt.com/backend-api/codex/responses";
 const realWebSocket = globalThis.WebSocket;
@@ -306,4 +308,34 @@ test("a Lite mode change retires the old handshake", async () => {
   }
   expect(Socket.all).toHaveLength(2);
   expect(Socket.all[0]!.readyState).toBe(3);
+});
+
+test("a changed Lite identity retires the legacy socket and reuses the new one", async () => {
+  const liteHeader = "x-openai-internal-codex-responses-lite";
+  const liteKey = "ws_request_header_x_openai_internal_codex_responses_lite";
+  const options = init();
+  const rawBody = { ...JSON.parse(options.body as string), model: "gpt-5.6-sol",
+    client_metadata: { thread_id: "fixture-thread", turn_id: "fixture-turn", [liteKey]: "true" } };
+  const before = JSON.stringify(rawBody);
+  const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({
+    adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
+  }));
+  const callerHeaders = new Headers(options.headers);
+  callerHeaders.set(liteHeader, "false");
+  const built = await adapter.buildRequest({ modelId: "sol-alias", context: { messages: [] },
+    stream: true, options: {}, _rawBody: rawBody,
+  }, { headers: callerHeaders });
+  const current = { ...options, body: built.body, headers: built.headers };
+  // Keep the exact same model, scope and headers; only the Lite identity differs.
+  const legacyHeaders = new Headers(current.headers);
+  legacyHeaders.delete(liteHeader);
+  await drain({ ...current, headers: legacyHeaders });
+  await drain(current);
+  await drain(current);
+  expect(Socket.all).toHaveLength(2);
+  expect(Socket.all.map(socket => socket.readyState)).toEqual([3, 1]);
+  expect(Socket.all.map(socket => socket.frames.map(frame =>
+    (frame.client_metadata as Record<string, string>)[liteKey]))).toEqual([["true"], ["false", "false"]]);
+  expect(Socket.all.flatMap(socket => socket.frames).every(frame => frame.model === rawBody.model)).toBe(true);
+  expect(JSON.stringify(rawBody)).toBe(before);
 });

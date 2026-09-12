@@ -225,7 +225,7 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
 
       // Let the base adapter build the wire body (handles reasoning, tools, etc.)
       // but override the URL and headers after.
-      const baseReq = base.buildRequest(parsed, incoming) as AdapterRequest;
+      const baseReq = await base.buildRequest(parsed, incoming);
       const baseBody = JSON.parse(baseReq.body as string) as unknown;
       const markedBody = injectMimoSystemMarker(baseBody);
 

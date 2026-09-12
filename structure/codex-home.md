@@ -20,6 +20,10 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+Observed catalog/cache rows and restore output follow the [retired-native policy](catalog.md#shared-catalog).
+Restore filters retired bare and trusted account-qualified native rows from its output with or
+without a backup. The original backup, historical user-selected settings and session records remain intact.
+
 Journal restoration compares config and profile independently against their saved originals and
 recorded injected hashes. If either changed artifact lacks its injected hash, the config/profile
 pair and journal remain untouched and the result is explicitly unverified; callers must not
@@ -81,6 +85,19 @@ stage registry and this instance's staging tree are proven absent. This keeps an
 subsystem from fencing native traffic or creating lock contention. Presence, an unsafe entry type,
 or any observation error still takes the locked sweep and fails closed; the fast path is based only
 on proven absence, never on an unreadable path.
+
+The native main slot also accepts one same-identity device reauth (#3898):
+`/api/codex-auth/main/reauth-device` (start/status/cancel) plus
+`ocx account main reauth`. The grant is the OpenAI deviceauth grant already
+used for pool accounts, but nothing routes through the pool login surface —
+`/api/codex-auth/login` keeps rejecting `__main__` — and the commit is a
+sibling of the refresh write: same-identity check against the snapshot
+captured at start, owner-independent exclusive claim (a headless hub runs no
+owner lifecycle), path/hash/inode re-verification inside the claim, and one
+atomic write of access/refresh/id token + account_id. The old identity token
+is never retained beside the new grant. No claim is held while the human
+completes the device page, and no DTO, log, or error carries tokens, emails,
+or raw account ids.
 
 > Decision record: [ADR-0008](decisions/ADR-0008-codex-home.md)
 
@@ -227,17 +244,34 @@ a deliberate user choice:
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
+Plan-based automatic exclusions leave native credential files untouched and preserve the native-main exemption in the [selection policy](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` rejects provider-history changes with `history_paginated_requires_native_writer` when a target begins with an ordinal-bearing record or declares `history_mode=paginated`. Apply, manifest-backed restore, and explicit legacy recovery preflight all selected targets before changing database rows or manifests. The append boundary checks again. Codex owns ordinal allocation and the live projection cursor; reading the last ordinal and appending N+1 is not safe concurrent coordination. Legacy unnumbered rollouts retain their existing behavior. This guard prevents the observed stable-format corruption; it does not implement native-writer integration or guarantee a concurrent legacy-to-paginated conversion is excluded.
+`src/codex/history-provider.ts` rejects provider-history changes with `history_paginated_requires_native_writer` when a target begins with an ordinal-bearing record, later contains a paginated record after a legacy start (#4311), or declares `history_mode=paginated`. The first line alone is not sufficient: a rollout that started unnumbered and was later migrated is also refused. Apply, manifest-backed restore, and explicit legacy recovery preflight all selected targets before changing database rows or manifests. The append boundary checks again. Codex owns ordinal allocation and the live projection cursor; reading the last ordinal and appending N+1 is not safe concurrent coordination. Legacy unnumbered rollouts retain their existing behavior. This guard prevents the observed stable-format corruption; it does not implement native-writer integration.
 
-Injection preflights affected history using the normalized config candidate before writing config/profile/journal, then checks again after the complete artifact write. Detected migration restores all three preimages before returning a structured refusal, including on legacy-uncoordinated homes. A failed config restore stops catalog/history work; coordinated restore rolls back its published remove transition. Legacy first-line provider patches are bound to the validated file identity before and after writing. These compensating checks do not provide a native-writer lock or authorize external ordinal allocation.
+Injection preflights affected history using the normalized config candidate before writing config/profile/journal, then checks again after the complete artifact write. Native restore also rechecks after successful journal restoration or fallback removal, while exact config/profile/journal preimages and any coordinated remove transaction remain available for compensation.
 
-The legacy external writer is now refused for affected rows in any store whose schema includes history_mode, even while their row mode is still legacy. This deliberately sacrifices automatic relabeling on migration-capable stores rather than racing native conversion. Synchronous/asynchronous restore, inline journal restore, and direct config removal preserve all artifacts on the same refusal.
+What a detected migration does depends on which refusal it is, and on direction. On apply, `history_paginated_requires_native_writer` retires the relabel unit and the config/profile/journal write stands: it is permanent, so compensating it only produced a home with no OpenCodex models at all. Any other reason there — an unreadable state database, a changed rollout identity, a preflight that could not run — may succeed on a later attempt, so it still restores all three preimages before returning a structured refusal, including on legacy-uncoordinated homes. Restore and removal compensate on every reason, because retiring a provider definition its thread rows still name would orphan them. A failed config restore stops catalog/history work; coordinated restore rolls back its published remove transition. Legacy first-line provider patches are bound to the validated file identity before and after writing. These compensating checks do not provide a native-writer lock or authorize external ordinal allocation.
+
+The legacy external writer is now refused for affected rows in any store whose schema includes history_mode, even while their row mode is still legacy. This deliberately sacrifices automatic relabeling on migration-capable stores rather than racing native conversion. Synchronous/asynchronous restore, inline journal restore, and direct config removal preserve all artifacts on that refusal, so an already-paginated home cannot yet be uninstalled through the product; apply instead writes its config and keeps a `[model_providers.opencodex]` table the home already published, so rows naming that provider keep resolving.
 
 Native restore preflight also checks manifest-owned targets whose rows already returned to `openai`, including interrupted restores. Preimage capture distinguishes absent files from unreadable artifacts and aborts before mutation when a complete snapshot cannot be read.
-
 A config restoration that was attempted and failed retains its failed artifact in the restore
 result; unattempted catalog and history artifacts remain skipped. Successful preimage compensation
 preserves config/profile/journal bytes without relabeling the failure as a skipped operation.
 Incomplete compensation still raises the explicit partial-write error.
+
+The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
+
+Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
+
+Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+
+The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.

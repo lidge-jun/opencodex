@@ -130,7 +130,8 @@ ocx combo set balanced \
 | HTTP 401, 403, 404, 408, 429, 또는 모든 5xx | 대상을 쿨다운으로 보내고 다음 적합한 대상으로 넘어갑니다. |
 | 모델 수명 종료, retired, deprecated, sunset, decommissioned, 또는 더 이상 사용할 수 없다는 신호가 명시된 HTTP 410 | 해당 대상만 쿨다운으로 보내고 다음 대상으로 넘어갑니다. 관련 없는 410은 종결 오류로 유지합니다. |
 | 인증, 구독, 쿼터, 속도 제한, 과부하, 또는 상위 서버 오류로 분류됨 | 상태 코드만으로는 충분하지 않더라도 대상을 쿨다운으로 보내고 넘어갑니다. |
-| 클라이언트 취소(499), `origin_rejected`, cyber-policy refusal, context overflow, 또는 invalid request | 멈추고 오류를 반환합니다. 다른 대상을 써도 요청이 유효해지지 않기 때문입니다. |
+| 클라이언트 취소(499), `origin_rejected`, cyber-policy refusal, context overflow, 또는 기타 invalid request | 멈추고 오류를 반환합니다. 다른 대상을 써도 요청이 유효해지지 않기 때문입니다. |
+| `user`를 명시적으로 거부하거나, `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값 또는 모델별 이미지 입력 거부(`param: input`)를 나타내는 구조화된 HTTP 400 | 출력 시작 전에 쿨다운 기록 없이 다음 적격 대상으로 넘어갑니다. 선택적 매개변수 호환성을 참조하세요. |
 | 그 밖의 분류되지 않은 오류 | 멈추고 오류를 반환합니다. |
 
 `cooldownMs`가 설정되지 않으면 홉된 대상은 업스트림 폴백을 사용합니다. 업스트림 코드 `1302` 또는 `1305`인 요청 속도 제한 429는 5초, 그 외에는 60초입니다. 설정하면 사용 가능한 업스트림 `Retry-After` 또는 Codex 재설정 신호가 없을 때, 해당 요청 속도 제한 429를 포함해 `cooldownMs`가 적용됩니다. 숫자로 된 `Retry-After` 초와 HTTP-date 값을 허용하며, 모든 쿨다운은 최대 10분으로 제한됩니다. 우선순위는 강한 순서대로 명시적 `Retry-After` → Codex 재설정 헤더(`x-codex-primary-reset-at`, `x-codex-secondary-reset-at`, 또는 `x-codex-tertiary-reset-at`) → 콤보의 `cooldownMs`(설정된 경우) → 업스트림 속도 제한 코드 `1302`/`1305`의 5초 요청 속도 제한 폴백 → 60초 기본값입니다. 유효한 즉시 지시인 `Retry-After: 0`은 설정된 쿨다운으로 대체하지 않고 업스트림의 즉시 지시로 유지합니다.
@@ -145,15 +146,16 @@ ocx combo set balanced \
 
 ## 기본 reasoning effort
 
-`defaultEffort`는 다음 조건이 모두 참일 때만 `reasoning.effort`를 채웁니다.
+`defaultEffort`는 콤보 기본값이 null이 아니고, 선택한 대상의 지원 목록이 알려져 있으며 비어 있지 않을 때 생략된 `reasoning.effort`를 채웁니다. 설정값을 지원하면 그대로 사용합니다. 그렇지 않으면 설정값 이하의 가장 높은 지원 단계를 사용하고, 그런 단계가 없으면 가장 낮은 지원 단계를 사용합니다. 지원 목록이 없거나 비어 있으면 기본값을 생략합니다.
 
-1. 콤보에 null이 아닌 기본값이 있습니다.
-2. 호출자가 effort를 설정하지 않았습니다.
-3. 선택된 대상의 카탈로그가 그 정확한 effort를 광고합니다.
+기본값 주입은 기존 effort와 다른 reasoning 필드를 보존합니다. 아래의 capability 정규화는 별도로 지원되지 않는 effort·thinking 제어를 제거할 수 있습니다. 기본값은 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`이며, 필드를 생략하거나 `null`로 설정하면 주입하지 않습니다.
 
-요청에 `reasoning` 객체가 없으면 opencodex가 새로 만듭니다. `reasoning`은 있지만 `effort` 속성이 없으면 다른 필드는 그대로 두고 기본값만 추가합니다. 호출자가 준 effort는 절대 덮어쓰지 않습니다.
 
-대상 기능을 알 수 없거나 설정한 effort를 포함하지 않으면 opencodex는 기본값을 생략하고 대상의 동작은 그대로 둡니다. 지원 값은 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`입니다. effort를 호출자와 대상에 완전히 맡기려면 이 필드를 생략하거나 `null`로 설정하십시오.
+## 서로 다른 reasoning capability
+
+`reasoningEffortMode`의 기본값은 `"strict"`입니다. 모든 대상의 effort 목록을 교집합으로 계산하므로 명시적 빈 목록도 반영합니다. `"adaptive"`는 빈 목록을 교집합에서 제외해 혼합 콤보에서도 선택기를 유지합니다. 알 수 없는 목록은 두 모드 모두 카탈로그 교집합을 제한하지 않습니다.
+
+전송 시 명시적 빈 목록은 두 모드 모두에서 effort·thinking 제어를 제거하고, 알 수 없는 목록은 adaptive에서만 제거합니다. `reasoning.summary`와 다른 비-effort 필드는 보존하며, 알려진 비어 있지 않은 대상은 기존 방식으로 effort를 결정합니다. strict의 unknown 대상과 일반 native Chat의 unknown 선언은 그대로 유지됩니다. 기본값 주입은 기존 effort를 덮어쓰지 않지만, 이 capability 정규화는 지원되지 않는 제어를 제거할 수 있습니다.
 
 ## 암호화된 v2 서브에이전트 작업
 
@@ -241,6 +243,7 @@ ocx combo remove <id> --yes
 | `cooldownMs` | 아니요 | 미설정 → 업스트림 폴백(요청 속도 제한 429 코드 `1302`/`1305`는 5초, 그 외는 60초) | 1에서 600000 사이의 정수입니다. 설정하면 사용 가능한 업스트림 `Retry-After` 또는 Codex 재설정 신호가 없을 때 요청 속도 제한 429를 포함한 대상별 쿨다운으로 적용됩니다. 설정하지 않으면 업스트림 폴백을 사용합니다. |
 | `waitForCooldownMs` | 아니요 | `0` | 0에서 600000 사이의 정수입니다. `combo_unavailable`을 반환하기 전에 가장 먼저 적합해지는 쿨다운 중인 대상을 기다리는 최대 시간입니다. 중단하면 대기가 취소됩니다. |
 | `defaultEffort` | 아니요 | `null` | `low`, `medium`, `high`, `xhigh`, `max`, 또는 `ultra`입니다. 호출자가 effort를 생략하고 대상이 지원을 광고할 때만 적용됩니다. |
+| `reasoningEffortMode` | 아니요 | `"strict"` | `strict` 또는 `adaptive`; 혼합 capability의 교집합과 대상별 제어 정규화를 선택합니다. |
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |
 | `nativeAlias` | 아니요 | `false` | 현재 지원되는 bare native alias가 routing/catalog 우선권을 갖도록 명시적으로 허용합니다. |
 | `displayName` | 아니요 | 없음 | catalog 표시 전용 label입니다. `nativeAlias`가 true이면 필수입니다. |
@@ -270,3 +273,9 @@ opencodex 인스턴스에 기록했는지 확인하세요.
 대상별 오류가 아니라 종결 오류였기 때문입니다. 잘못된 입력을 수정하고, 너무 큰 context를 줄이고,
 정책 거부를 처리하거나, 거부된 요청 origin을 바로잡으세요. combo는 이런 경우 다음 대상으로 넘어가지
 않습니다.
+
+## 선택적 매개변수 호환성
+
+일반적인 400 오류는 종료되지만, `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값 또는 모델별 이미지 입력 거부(`param: input`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
+
+[Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

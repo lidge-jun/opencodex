@@ -213,6 +213,7 @@ export default function CodexPoolStrategySetting({
       )}
       {!loadError && (
         <AccountPoolStrategyControls
+          codex
           strategy={strategy}
           stickyDraft={stickyDraft}
           disabled={controlsDisabled}

@@ -47,16 +47,17 @@ export function dottedToolName(namespace: string | undefined, name: string): str
  *
  * Codex's code-mode shell tool is declared as `exec` (a freeform custom tool whose own
  * description mentions the nested `await tools.exec_command(...)` helper). Some routed providers
- * echo that helper name as the tool-call name, emitting `exec_command`, `write_stdin`, or
- * `apply_patch` instead of the declared `exec`. Accept these nested helper names only when the
- * request catalog actually declares `exec` and does not itself declare the emitted name (an MCP
- * server may legitimately advertise one under its own namespace).
+ * echo that helper name as the tool-call name, emitting `exec_command`, `write_stdin`,
+ * `apply_patch`, or `view_image` instead of the declared `exec`. Accept these nested helper names
+ * only when the request catalog actually declares `exec` and does not itself declare the emitted
+ * name (an MCP server may legitimately advertise one under its own namespace).
  */
 const LEGACY_SHELL_BRIDGE_TOOL_NAMES = ["exec_command", "shell_command"] as const;
 const CODE_MODE_HELPER_TOOL_NAMES = [
   ...LEGACY_SHELL_BRIDGE_TOOL_NAMES,
   "write_stdin",
   "apply_patch",
+  "view_image",
 ] as const;
 
 /**
@@ -71,7 +72,7 @@ export const CODE_MODE_EXEC_TOOL_NAME = "exec";
  *
  * Rewrites invented `default.<name>` prefixes back to a declared bare tool when that bare tool
  * is declared and neither `default.<name>` nor `default__<name>` was explicitly declared (#4176).
- * Also normalizes legacy helper names (`exec_command`, `shell_command`, `apply_patch`) to
+ * Also normalizes legacy helper names (`exec_command`, `shell_command`, `apply_patch`, `view_image`) to
  * `exec` when code-mode `exec` is declared in the request catalog.
  *
  * @param name - The tool name emitted on the wire by the provider.
@@ -94,6 +95,17 @@ export function normalizeDeclaredToolName(
     if (
       bare.length > 0
       && bareDeclared.has(bare)
+      && !declared.has("default." + bare)
+      && !declared.has("default__" + bare)
+    ) {
+      candidate = bare;
+    } else if (
+      // Code mode never declares bare helper names; a provider that invents `default.`
+      // for one still means the nested helper. Strip the prefix so the helper list
+      // below can rewrite it to `exec` (#4412).
+      bare.length > 0
+      && declared.has(CODE_MODE_EXEC_TOOL_NAME)
+      && (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(bare)
       && !declared.has("default." + bare)
       && !declared.has("default__" + bare)
     ) {

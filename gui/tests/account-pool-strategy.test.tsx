@@ -1,4 +1,4 @@
-import { putCodexPoolStrategy } from "../src/pool-settings";
+import { getPoolSettings, putPoolSettings, putCodexPoolStrategy } from "../src/pool-settings";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
@@ -91,6 +91,7 @@ describe("account pool strategy helpers", () => {
     expect(normalizeAccountPoolStrategy("quota")).toBe("quota");
     expect(normalizeAccountPoolStrategy("round-robin")).toBe("round-robin");
     expect(normalizeAccountPoolStrategy("fill-first")).toBe("fill-first");
+    expect(normalizeAccountPoolStrategy("reset-first")).toBe("reset-first");
     expect(normalizeAccountPoolStrategy("weighted")).toBe(DEFAULT_ACCOUNT_POOL_STRATEGY);
     expect(normalizeAccountPoolStrategy(undefined)).toBe("quota");
   });
@@ -161,7 +162,7 @@ describe("AccountPoolStrategyControls", () => {
     // Custom Select only paints the active label until opened (sidecar DNA).
     expect(quota).toContain("Quota");
     expect(quota).toContain("select-trigger");
-    expect(quota).toContain("Quota can also rebind an existing task on its next request after the usage threshold is crossed.");
+    expect(quota).toContain("rebinds an existing task at the usage threshold only when");
     expect(quota).not.toContain("New/unbound assignments before rotate");
 
     const rr = renderToStaticMarkup(
@@ -178,6 +179,19 @@ describe("AccountPoolStrategyControls", () => {
     expect(rr).toContain("Round-robin");
     expect(rr).toContain("New/unbound assignments before rotate");
     expect(rr).toContain('value="2"');
+  });
+
+  test("reset-first renders the dual-window threshold explanation", () => {
+    const markup = renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls codex strategy="reset-first" stickyDraft="1"
+          onStrategyChange={() => {}} onStickyDraftChange={() => {}} onStickyCommit={() => {}} />
+      </LanguageProvider>,
+    );
+    expect(markup).toContain("Soonest reset first");
+    expect(markup).toContain("nearest future 5-hour or weekly reset");
+    expect(markup).toContain("Bound tasks follow the configured affinity policy");
+    expect(markup).not.toContain("New/unbound assignments before rotate");
   });
 
   test("renders a canonical setting row: visible name, control beside it, no sr-only label", () => {
@@ -517,4 +531,15 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
     const select = host.querySelector<HTMLSelectElement>("#codex-pool-strategy");
     expect(select?.getAttribute("aria-label")).toBe("Rotation strategy");
   });
+});
+
+
+test("canonical reset-first settings survive a read and an empty successful write", async () => {
+  const read = await getPoolSettings("", "openai", async () => Response.json({ provider: "openai", kind: "codex", strategy: "reset-first", stickyLimit: 1 }));
+  expect(read?.strategy).toBe("reset-first");
+  const written = await putPoolSettings("", "openai", { strategy: "reset-first" }, async (_url, init) => {
+    expect(JSON.parse(String(init?.body))).toMatchObject({ provider: "openai", strategy: "reset-first" });
+    return new Response(null, { status: 204 });
+  });
+  expect(written?.strategy).toBe("reset-first");
 });

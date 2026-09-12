@@ -163,6 +163,8 @@ Hedef stratejileri, soğuma süreleri, takma adlar ve yönlendirme hataları iç
 | `POST /api/storage/cleanup-policy/run` | Manuel bir temizleme politikası çalıştırması başlatın | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Yalnızca test amaçlı politika akış kancası | Kullanılamadığında 404 `not_found` |
 
+Bir satır mevcut ayrıştırıcı boyut sınırını aşarsa `GET /api/usage` ve `GET /api/keys` okunabilir satır toplamlarını korur ve yanıt düzeyinde `usageIncomplete: true` ile `usageIncompleteReason: "oversized_rows"` ekler. Bu tanı, boş veya eşleşmeyen sonuçlar dahil önbellekte ve artımlı eklemelerde korunur; yeniden oluşturma sırasında tekrar hesaplanır. Sağlayıcı, model ve API anahtarı kimlikleri kısaltılmaz. Bayrağın bulunmaması tüm kayıtların geçerli olduğunu kanıtlamaz. Bu bilgi `historyTruncated`, `entriesTruncated` ve token ölçüm kapsamından ayrıdır.
+
 `GET /api/usage?range=30d&surface=codex` için `accounts`, gözlemlenen her Codex
 havuz etiketi için bir satır içerir. Her satır `accountLogLabel`, belirteç
 toplamları, `usageCoverageRatio` ve geçerli olarak yapılandırılmış görüntüleme

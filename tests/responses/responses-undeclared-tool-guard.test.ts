@@ -2,7 +2,7 @@
  * #1700: the native Responses passthrough relayed a routed provider's call to a tool the request
  * never declared. Codex has no top-level handler for it, so the turn surfaced as a bare `aborted`
  * with the target file untouched. The bridged paths already fail closed on the same condition
- * (`declaredToolNames`, src/bridge.ts); these pin the passthrough's equivalent.
+ * (`declaredToolNames`, src/bridge/sse.ts); these pin the passthrough's equivalent.
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -134,7 +134,7 @@ describe("collectDeclaredWireToolNames", () => {
   test("withholds the bare alias when only a namespaced exec was declared", () => {
     // A bare `exec` in the declared set is not just a name: it switches on nested-helper
     // normalization, so aliasing a namespaced MCP `exec` under the bare name would authorize
-    // `exec_command`/`shell_command`/`apply_patch` this request never declared.
+    // `exec_command`/`shell_command`/`apply_patch`/`view_image` this request never declared.
     const names = collectDeclaredWireToolNames({
       tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
     });
@@ -848,6 +848,57 @@ describe("the reported turn, end to end through handleResponses", () => {
     expect(body.output[0]?.input).toContain("await tools.apply_patch");
   });
 
+  test("streaming: default.view_image is bridged through unified exec with image output", async () => {
+    const viewImageCall = {
+      type: "function_call",
+      id: "fc_view",
+      call_id: "call_view",
+      name: "default.view_image",
+      arguments: JSON.stringify({ image_path: "/tmp/image.png", detail: "original" }),
+      status: "completed",
+    };
+    const response = await post(true, () => new Response([
+      frame("response.output_item.added", {
+        output_index: 0,
+        item: { ...viewImageCall, arguments: "", status: "in_progress" },
+      }),
+      frame("response.output_item.done", { output_index: 0, item: viewImageCall }),
+      frame("response.completed", {
+        response: { id: "resp_view", status: "completed", output: [viewImageCall] },
+      }),
+      "data: [DONE]",
+    ].join("\n\n") + "\n\n", { headers: { "content-type": "text/event-stream" } }));
+
+    const body = await response.text();
+    expect(body).not.toContain("response.failed");
+    expect(body).toContain('"name":"exec"');
+    expect(body).toContain("await tools.view_image");
+    expect(body).toContain('\\"path\\":\\"/tmp/image.png\\"');
+    expect(body).toContain("image(result.image_url)");
+    expect(body).not.toContain("tools.exec_command");
+  });
+
+  test("non-streaming: bare view_image is bridged through unified exec", async () => {
+    const viewImageCall = {
+      type: "function_call",
+      id: "fc_view",
+      call_id: "call_view",
+      name: "view_image",
+      arguments: JSON.stringify({ path: "/tmp/image.png" }),
+      status: "completed",
+    };
+    const response = await post(false, () => new Response(
+      JSON.stringify({ id: "resp_view", status: "completed", output: [viewImageCall] }),
+      { headers: { "content-type": "application/json" } },
+    ));
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
+    expect(String(body.output[0]?.input)).toContain("await tools.view_image");
+    expect(String(body.output[0]?.input)).toContain("image(result.image_url)");
+  });
+
   test("a declared exec call still completes normally", async () => {
     const execCall = {
       type: "function_call",
@@ -1411,7 +1462,7 @@ describe("empty and absent tool catalogs", () => {
     expect(body).toContain("response.completed");
   });
 
-  test("Spark normalization cannot turn an unreadable catalog into deny-all", async () => {
+  test("unknown hosted tools do not turn an unreadable catalog into deny-all", async () => {
     const response = await post(
       false,
       [{ type: "some_future_hosted_tool" }],
@@ -1419,15 +1470,15 @@ describe("empty and absent tool catalogs", () => {
       undefined,
       config,
       [],
-      "fixture/gpt-5.3-codex-spark",
+      "fixture/gpt-5.6-sol",
     );
 
     expect(response.status).toBe(200);
-    const sparkBody = await response.json() as { output: Array<Record<string, unknown>> };
-    expect(sparkBody.output[0]).toMatchObject({ name: "apply_patch" });
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ name: "apply_patch" });
   });
 
-  test("Spark normalization preserves streaming stand-down for an unreadable top-level catalog", async () => {
+  test("unknown hosted tool passthrough preserves streaming stand-down for an unreadable top-level catalog", async () => {
     const response = await post(
       true,
       [{ type: "some_future_hosted_tool" }],
@@ -1435,15 +1486,15 @@ describe("empty and absent tool catalogs", () => {
       undefined,
       config,
       [],
-      "fixture/gpt-5.3-codex-spark",
+      "fixture/gpt-5.6-sol",
     );
-    const sparkBody = await response.text();
+    const body = await response.text();
 
-    expect(sparkBody).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
-    expect(sparkBody).toContain("response.completed");
+    expect(body).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).toContain("response.completed");
   });
 
-  test("Spark normalization preserves non-streaming stand-down for unreadable additional tools", async () => {
+  test("unknown hosted tool passthrough preserves non-streaming stand-down for unreadable additional tools", async () => {
     const response = await post(
       false,
       undefined,
@@ -1451,15 +1502,15 @@ describe("empty and absent tool catalogs", () => {
       [{ type: "some_future_hosted_tool" }],
       config,
       [],
-      "fixture/gpt-5.3-codex-spark",
+      "fixture/gpt-5.6-sol",
     );
 
     expect(response.status).toBe(200);
-    const sparkBody = await response.json() as { output: Array<Record<string, unknown>> };
-    expect(sparkBody.output[0]).toMatchObject({ name: "apply_patch" });
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ name: "apply_patch" });
   });
 
-  test("Spark normalization preserves streaming stand-down for unreadable additional tools", async () => {
+  test("unknown hosted tool passthrough preserves streaming stand-down for unreadable additional tools", async () => {
     const response = await post(
       true,
       undefined,
@@ -1467,12 +1518,12 @@ describe("empty and absent tool catalogs", () => {
       [{ type: "some_future_hosted_tool" }],
       config,
       [],
-      "fixture/gpt-5.3-codex-spark",
+      "fixture/gpt-5.6-sol",
     );
-    const sparkBody = await response.text();
+    const body = await response.text();
 
-    expect(sparkBody).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
-    expect(sparkBody).toContain("response.completed");
+    expect(body).not.toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+    expect(body).toContain("response.completed");
   });
 
   test("non-streaming, tools: [] — refuses an upstream client tool call", async () => {
@@ -2001,7 +2052,7 @@ describe("empty and absent tool catalogs", () => {
       namespace: "mcp__functions",
     });
 
-    for (const name of ["apply_patch", "exec_command", "shell_command", "write_stdin"]) {
+    for (const name of ["apply_patch", "exec_command", "shell_command", "write_stdin", "view_image"]) {
       const refused = await post(
         false,
         tools,
@@ -2099,6 +2150,33 @@ describe("undeclaredToolCallNameInResponse", () => {
     expect(undeclaredToolCallNameInResponse(response, new Set())).toBe("write_stdin");
   });
 
+  test("accepts view_image helper spellings only through a bare unified exec declaration", () => {
+    for (const name of ["view_image", "default.view_image"]) {
+      const response = { output: [{ type: "function_call", name }] };
+      expect(undeclaredToolCallNameInResponse(response, new Set(["exec"]))).toBeUndefined();
+      expect(undeclaredToolCallNameInResponse(response, new Set())).toBe(name);
+      expect(undeclaredToolCallNameInResponse(response, new Set(["exec_command"]))).toBe(name);
+    }
+
+    const direct = { output: [{ type: "function_call", name: "view_image" }] };
+    expect(undeclaredToolCallNameInResponse(direct, new Set(["view_image"]))).toBeUndefined();
+  });
+
+  // #4171 review: a namespaced `view_image` belongs to whichever MCP server advertised it, so
+  // it is matched by its full wire name only and never reinterpreted as the nested code-mode
+  // helper, even when the request also declares a bare code-mode `exec`.
+  test("never reinterprets a namespaced view_image as the code-mode helper", () => {
+    const namespaced = {
+      output: [{ type: "function_call", name: "view_image", namespace: "mcp__server" }],
+    };
+
+    expect(undeclaredToolCallNameInResponse(namespaced, new Set(["exec"]))).toBe("view_image");
+    expect(undeclaredToolCallNameInResponse(
+      namespaced,
+      new Set(["exec", "mcp__server__view_image"]),
+    )).toBeUndefined();
+  });
+
   test("never legacy-normalizes a namespaced shell bridge call", () => {
     // A namespaced call (e.g. an MCP server advertising its own exec_command) must be
     // matched by its full wire name only — never normalized to bare `exec`.
@@ -2122,7 +2200,7 @@ describe("undeclaredToolCallNameInResponse", () => {
       tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
     });
 
-    for (const name of ["exec_command", "shell_command", "apply_patch", "write_stdin", "exec"]) {
+    for (const name of ["exec_command", "shell_command", "apply_patch", "write_stdin", "view_image", "exec"]) {
       expect(undeclaredToolCallNameInResponse(
         { output: [{ type: "function_call", name, call_id: "call_1" }] },
         declared,

@@ -15,6 +15,7 @@ import {
   codexQuotaScopeForModel,
   getCodexQuotaHealthSnapshot,
   recordCodexUpstreamOutcome,
+  tryAcquireCodexQuotaScopeProbeLease,
   type CodexQuotaScope,
 } from "../../src/codex/routing";
 import type { OcxConfig } from "../../src/types";
@@ -24,7 +25,6 @@ const START = 1_800_000_000_000;
 const DUE = START + CODEX_QUOTA_PROBE_INTERVAL_MS + 2;
 const MODELS = {
   shared: "gpt-5.6-sol",
-  spark: "gpt-5.3-codex-spark",
   reserve: "gpt-reserve",
 } satisfies Record<CodexQuotaScope, string>;
 
@@ -111,18 +111,17 @@ describe("Reserve quota scope", () => {
     expect(codexQuotaScopeForModel(" GPT-RESERVE ")).toBe("reserve");
     expect(codexQuotaScopeForModel("gpt-reserve-preview")).toBe("shared");
     expect(codexQuotaScopeForModel("main/gpt-reserve")).toBe("shared");
-    expect(codexQuotaScopeForModel("gpt-5.3-codex-spark")).toBe("spark");
+    expect(codexQuotaScopeForModel("gpt-5.3-codex-spark")).toBe("shared");
     expect(codexQuotaScopeForModel("gpt-5.6-luna")).toBe("shared");
     expect(codexQuotaScopeForModel(undefined)).toBeUndefined();
   });
 
-  test("shared and Spark reset-derived limits do not imply Reserve exhaustion", () => {
+  test("shared reset-derived limits do not imply Reserve exhaustion", () => {
     const config = makeConfig();
     cool(config, "shared");
-    cool(config, "spark");
     expect(getCodexQuotaHealthSnapshot("reserve-fixture", "reserve", START + 1)).toBeNull();
     cool(config, "reserve", START + 1);
-    for (const scope of ["shared", "spark", "reserve"] as const) {
+    for (const scope of ["shared", "reserve"] as const) {
       expect(getCodexQuotaHealthSnapshot("reserve-fixture", scope, START + 2)).toMatchObject({
         quotaScope: scope,
         cooldownSource: "reset-derived",
@@ -130,10 +129,10 @@ describe("Reserve quota scope", () => {
     }
   });
 
-  test.each(["shared", "spark"] as const)("Reserve exhaustion leaves %s quota usable", scope => {
+  test("Reserve exhaustion leaves shared quota usable", () => {
     const config = makeConfig();
     cool(config, "reserve");
-    expect(getCodexQuotaHealthSnapshot("reserve-fixture", scope, START + 1)).toBeNull();
+    expect(getCodexQuotaHealthSnapshot("reserve-fixture", "shared", START + 1)).toBeNull();
   });
 
   test.each(["retry-after", "default"] as const)("%s remains account-wide and wins over Reserve scope", source => {
@@ -145,7 +144,7 @@ describe("Reserve quota scope", () => {
       now: START + 1,
       ...(source === "retry-after" ? { retryAfter: "60", resetAt: START + 60 * 60_000 } : {}),
     });
-    for (const scope of ["shared", "spark", "reserve"] as const) {
+    for (const scope of ["shared", "reserve"] as const) {
       expect(getCodexQuotaHealthSnapshot("reserve-fixture", scope, START + 2)).toEqual({
         cooldownUntil: START + 60_001,
         cooldownSource: source,
@@ -165,6 +164,24 @@ describe("Reserve quota scope", () => {
       recordCodexUpstreamOutcome(config, "reserve-fixture", 200, { modelId, now: START + 2 });
       expect(getCodexQuotaHealthSnapshot("reserve-fixture", "reserve", START + 3)).toEqual(before);
     }
+  });
+
+  test("a leased Reserve success leaves shared cooldown and its lease intact", () => {
+    // State-machine fixture only; this does not claim an added account can dispatch Reserve.
+    const config = makeConfig();
+    cool(config, "reserve");
+    cool(config, "shared");
+    const sharedLease = tryAcquireCodexQuotaScopeProbeLease("reserve-fixture", "shared", DUE);
+    const reserveLease = tryAcquireCodexQuotaScopeProbeLease("reserve-fixture", "reserve", DUE);
+    expect(sharedLease).toBeTruthy();
+    expect(reserveLease).toBeTruthy();
+    const shared = getCodexQuotaHealthSnapshot("reserve-fixture", "shared", DUE);
+    recordCodexUpstreamOutcome(config, "reserve-fixture", 200, {
+      modelId: "gpt-reserve", probeQuotaScope: "reserve", probeLeaseId: reserveLease!, now: DUE + 1,
+    });
+    expect(getCodexQuotaHealthSnapshot("reserve-fixture", "reserve", DUE + 1)).toBeNull();
+    expect(getCodexQuotaHealthSnapshot("reserve-fixture", "shared", DUE + 1)).toEqual(shared);
+    expect(tryAcquireCodexQuotaScopeProbeLease("reserve-fixture", "shared", DUE + 1)).toBeNull();
   });
 
   test("generic recovery never claims a Reserve-only cooldown or reads upstream", async () => {

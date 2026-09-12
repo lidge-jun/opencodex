@@ -3,9 +3,8 @@ import { createBoundedFetch } from "./bounded-fetch";
 import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
 
 /**
- * Fired instead of the admin-token prompt when the dashboard cannot start a session on a
- * deployment that has no admin token to type. The shell renders it as a notice; nothing
- * blocks on it.
+ * Fired after an unauthorized request cannot recover a session. The shell synchronizes
+ * its existing readiness state; cancelled callers and newer valid sessions emit no notice.
  */
 export const SESSION_UNAVAILABLE_EVENT = "opencodex:session-unavailable";
 
@@ -282,7 +281,6 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
       // of a password box the user cannot answer (#3353, #3483).
       if (!adminTokenPromptAllowed()) {
         state.promptCancelled = true;
-        reportSessionUnavailable(plane);
         return null;
       }
       const prompted = await requestAdminToken(token => verifyAdminToken(plane, token));
@@ -332,12 +330,28 @@ export function installApiAuthFetch(): void {
     } else clearSessionIfCurrent(classified.plane, token);
     const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const nextToken = await resolveTokenAfter401(classified.plane, token, callerSignal ?? undefined);
-    if (!nextToken) return response;
+    if (!nextToken) {
+      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionUnavailable(classified.plane);
+      return response;
+    }
     const [retryInput, retryInit] = withAuth(classified.plane, input, init, nextToken);
     const retry = await originalFetch(retryInput, retryInit);
-    if (retry.status === 401) clearSessionIfCurrent(classified.plane, nextToken);
+    if (retry.status === 401) {
+      clearSessionIfCurrent(classified.plane, nextToken);
+      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionUnavailable(classified.plane);
+    }
     return retry;
   };
+}
+
+/** Audio is data-plane traffic, even when the connected management target is a relay. */
+export function fetchAudioUpload(endpoint: string, init: RequestInit): Promise<Response> {
+  const url = new URL(endpoint);
+  if (!["http:", "https:"].includes(url.protocol) || url.pathname !== "/v1/audio/transcriptions"
+    || url.username || url.password || url.search || url.hash || init.method !== "POST") {
+    return Promise.reject(new Error("Invalid audio upload destination"));
+  }
+  return (rawFetch ?? fetch)(url.href, { ...init, credentials: "omit", redirect: "error" });
 }
 
 export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = promptForAdminToken): void {

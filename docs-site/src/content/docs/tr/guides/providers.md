@@ -124,7 +124,7 @@ ocx login kiro         # kiro-cli kimlik bilgilerini içe aktarın (veya belirte
 ocx login google-antigravity
 ocx login cursor       # bağımsız Cursor PKCE girişi
 ocx login command-code # Command Code tarayıcı OAuth (veya ~/.commandcode/auth.json içe aktarma)
-ocx login devin       # Cognition/Devin için Auth0 tarayıcı girişi
+ocx login devin       # Cognition/Devin: önce Devin CLI kimliği içe aktarılır, yoksa Auth0 tarayıcı girişi
 ocx login github-copilot  # GitHub cihaz akışı → Copilot belirteci (Copilot Pro/Business)
 ocx login codex        # Codex hesap havuzu (takma adlar: chatgpt, openai; çalışan bir proxy gerekir)
 ocx logout <saglayici>
@@ -139,8 +139,7 @@ ocx logout <saglayici>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | İlk oturum açma, kurulu ve oturum açılmış `kiro-cli` oturumunu içe aktarır (Unix'te `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` ile kurun; Windows PowerShell'de `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` kullanın; ardından `kiro-cli login` çalıştırın). **Hesap ekle**, `kiro-cli` oturumunu kapatır, `kiro-cli` tarafından kullanılan hesabı değiştiren yeni bir tarayıcı girişi başlatır ve hesap kapsamlı profil meta verilerini saklar. Mevcut OpenCodex hesapları korunur ve iptal veya başarısızlık önceki `kiro-cli` oturumunu geri yükler. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Cloud Code Assist hattı üzerinden Google OAuth. Canlı keşif CCA'nın kimlik doğrulamalı `v1internal:fetchAvailableModels` uç noktasını kullanır ve oturum açmış hesap için kullanılabilir olan ajan modellerini yayınlar; sürdürülen katalog geri dönüş olarak kalır. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Deneysel PKCE girişi, canlı HTTP/2 aktarımı ve hesap filtreli model keşfi. |
-| `devin` | `devin` | `https://server.codeium.com` | Deneysel, resmi olmayan Cognition/Devin köprüsü. Giriş tarayıcıda Auth0 oturumunu açar, ardından belirteci `RegisterUser` ile uzun ömürlü bir API anahtarına dönüştürür. Modeller hesaba göre `GetCascadeModelConfigs` ile keşfedilir; akış yalnızca Connect-RPC üzerindeki `runTurn` yolunu kullanır. Panel ön ayarında varsayılan olarak yer almaz. |
-| `devin-cli` | `devin` | `https://server.codeium.com` | Kurulu Devin CLI'nin zaten tuttuğu kimlik bilgisini içe aktarır (`devin auth login` bunu kendi `credentials.toml` dosyasına yazar), ardından `devin` sağlayıcısı gibi Cognition'ın Connect-RPC api-server'ı üzerinden akış yapar — tarayıcı girişi ve yapıştırılacak anahtar yok. Model listesi ve bağlam pencereleri hesabınızın kendi kataloğundan gelir. |
+| `devin` | `devin` | `https://server.codeium.com` | Deneysel, resmi olmayan Cognition/Devin köprüsü. Giriş önce kurulu Devin CLI'nin zaten tuttuğu kimlik bilgisini içe aktarır (`devin auth login`, `devin-session-token`'ı kendi `credentials.toml` dosyasına yazar); yoksa tarayıcıda Auth0 oturumunu açar ve yapıştırılan belirteci `RegisterUser` ile uzun ömürlü bir API anahtarına dönüştürür. `ocx login devin-cli` kullanımdan kaldırılmış bir takma ad olarak çalışmaya devam eder. Modeller hesaba göre `GetCascadeModelConfigs` ile keşfedilir; akış yalnızca Connect-RPC üzerindeki `runTurn` yolunu kullanır. Panel ön ayarında varsayılan olarak yer almaz. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Deneysel. GitHub cihaz akışı + `copilot_internal` değişimi (VS Code OAuth istemcisi). Aktif bir Copilot aboneliği gerektirir; resmi bir üçüncü taraf API değildir. |
 
 Google Antigravity hesap ve sağlayıcı kota sorguları, model listesine geri dönüş dahil sabit Google uç noktalarını kullanır. Bu hedefler için şeffaf Fake-IP DNS desteklenirken TLS doğrulaması, yönlendirme reddi ve özel adres kontrolleri korunur. Özel base URL yalnızca model isteklerini değiştirir; `NO_PROXY` doğrudan bağlantı politikasını korur.
@@ -220,11 +219,10 @@ varsayılan geri çekilmeden sabit bir soğuma süresi ayarlar. Açık bir
 `Retry-After` soğuma süresindeki hesaplar erken araştırılmaz; sıfırlamadan
 türetilen soğuma süreleri, sağlayıcıyı boğmadan kurtarmanın algılanabilmesi için
 tempolu bir araştırma kiralama süresi alabilir. Sıfırlamadan türetilen yerel
-model soğuma süreleri bilinen bağımsız kota gruplarını da korur:
-`gpt-5.3-codex-spark`, aynı hesabın paylaşılan GPT-5.6 Terra/Luna kotasını
-denemesini engellemezken, bu paylaşılan gruptaki modeller yine de birbirini
-korur. Açık `Retry-After` ve varsayılan soğuma süreleri her zaman hesap
-genelinde kalır.
+model soğuma süreleri, paylaşılan yerel kotayı (GPT-5.6 Terra/Luna dahil)
+`gpt-reserve` kotasından ayrı tutar. Paylaşılan gruptaki modeller birbirini
+korur; sıradan bir isteğin başarısı Reserve soğuma süresini kaldırmaz.
+Açık `Retry-After` ve varsayılan soğuma süreleri her zaman hesap genelinde kalır.
 
 **Oturum bağlılığı.** Codex iş parçacığı→hesap bağlılığı işleme özeldir
 (yalnızca bellek içindedir; proxy yeniden başlatmalarında kalıcı değildir).
@@ -411,6 +409,11 @@ yönlendirir ve yukarı akış SSE akışını etkin tutar. Bu model tüm çıkt
 bitirir ancak son Responses olayını atlarsa opencodex beş saniyelik model
 kapsamlı bir yetkisiz kullanım onarımı uygular; hatalı biçimlendirilmiş veya
 kısmi akışlar başarılı olarak bildirilmek yerine tamamlanmamış olarak kapanır.
+Birinci taraf `deepseek-flash` modeli yerel olarak `text` ve `image` girdilerini bildirir; bu nedenle
+görüntü içeren istekler varsayılan olarak vision sidecar üzerinden geçmeden doğrudan DeepSeek'e gönderilir.
+Açık `noVisionModels` veya yalnızca metin bildirimleri önceliğini korur. Birinci taraf `deepseek-chat`,
+`deepseek-reasoner` ve `deepseek-v4-flash` varsayılan olarak sidecar üzerinden çalışmaya devam eder; Zen
+rotaları değişmedi ve bu güncellemede yoklanmadı.
 
 > **Üç Volcengine faturalandırma rotası:** `volcengine` kullandıkça öde Ark API'sidir, `volcengine-coding-plan` Coding Plan kotasını tüketir ve `volcengine-agent-plan` Agent Plan kotasını tüketir. Aynı ürün için verilen anahtarı ve uç noktayı kullanın; sıradan `/api/v3` uç noktası bir Plan aboneliği mevcut olduğunda bile kullandıkça öde ücretlerine neden olabilir. Önayarlar özenle seçilmiş statik model katalogları kullanır çünkü Ark'ın `/models` yanıtı yerleştirme, görsel, video ve 3D kaynaklarını da içerir, Coding ağ geçidi aynı geniş kataloğu döndürür ve Agent Plan ağ geçidinin `/models` kaynağı yoktur. Kullandıkça öde varsayılan olarak `doubao-seed-2-1-pro-260628`'dir; seçilmiş kataloğu güncel DeepSeek ve GLM metin modellerini de içerir. Coding Plan varsayılan olarak `ark-code-latest`, Agent Plan ise varsayılan olarak `deepseek-v4-flash`'dur.
 

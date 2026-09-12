@@ -134,6 +134,8 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `POST /api/storage/cleanup-policy/run` | 啟動手動清理政策執行 | 409 `already_running`；500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | 僅測試的政策串流 hook | 不可用時 404 `not_found` |
 
+如果某行超過現有解析器的大小限制，`GET /api/usage` 和 `GET /api/keys` 會保留可讀取行的彙總，並在回應層級加入 `usageIncomplete: true` 和 `usageIncompleteReason: "oversized_rows"`。快取和增量附加會保留此診斷，即使結果為空或沒有篩選符合項目；重建時會重新計算。不會縮短供應商、模型或 API 金鑰識別碼來容納該行。沒有此標記不代表所有記錄均有效。它與 `historyTruncated`、`entriesTruncated` 及 token 測量覆蓋率相互獨立。
+
 `models`、`providers` 及 `days[].models` 中的列也帶有 `cacheHitRate`：表示由供應商提示快取提供的輸入權杖比例，並限制在 `[0, 1]`。當供應商未回報快取遙測資料，或該列沒有輸入權杖時，其值為 `null`，絕不會是 `0`；因為「沒有快取資料」與「確實為 0% 的命中率」是不同事實，若圖表將兩者呈現為相同狀態，便會造成誤導。
 
 :::caution

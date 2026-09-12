@@ -399,7 +399,7 @@ describe("attribution reaches usage.jsonl", () => {
     }
   });
 
-  test("an oversized usage row cannot seed a partial key rollup", async () => {
+  test.each(["keys-first", "usage-first"])("an oversized usage row preserves an explicitly incomplete key rollup: %s", async order => {
     saveConfig(remoteConfig());
     const now = Date.now();
     const oversized = {
@@ -428,11 +428,21 @@ describe("attribution reaches usage.jsonl", () => {
     writeFileSync(usageLogPath(), `${JSON.stringify(oversized)}\n${JSON.stringify(valid)}\n`);
     const server = startServer(0);
     try {
+      if (order === "usage-first") {
+        const usage = await fetch(new URL("/api/usage?range=all", server.url), {
+          headers: { "x-opencodex-api-key": ADMIN_TOKEN },
+        }).then(res => res.json());
+        expect(usage).toMatchObject({ usageIncomplete: true });
+      }
       const payload = await keysGet(server);
       const keys = payload.keys as Array<Record<string, unknown>>;
       expect((keys.find(key => key.id === "key-one")!.usage as Record<string, number>).totalRequests).toBe(0);
-      expect((keys.find(key => key.id === "key-two")!.usage as Record<string, number>).totalRequests).toBe(0);
-      expect(payload.attributionSince).toBeUndefined();
+      expect((keys.find(key => key.id === "key-two")!.usage as Record<string, number>).totalRequests).toBe(1);
+      expect(payload.attributionSince).toBe(new Date(now).toISOString());
+      expect(payload).toMatchObject({ usageIncomplete: true, usageIncompleteReason: "oversized_rows" });
+      expect(await keysGet(server)).toMatchObject({
+        usageIncomplete: true, usageIncompleteReason: "oversized_rows", attributionSince: payload.attributionSince,
+      });
     } finally {
       await server.stop(true);
     }
@@ -633,11 +643,20 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // from routing and the assertions below would be testing the method guard rather
           // than admission. /v1/catalog joined this set in #809.
           const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog"
-            || row.endpoint === "/v1/hub-state";
+            || row.endpoint === "/v1/hub-state" || row.endpoint === "/v1/usage";
+          const live = row.endpoint === "/v1/live" || row.endpoint === "/v1/realtime/calls";
+          const audio = row.endpoint === "/v1/audio/transcriptions" || live ? new FormData() : null;
+          if (audio) {
+            if (live) audio.append("sdp", "v=0\r\n");
+            else {
+              audio.append("model", "gpt-4o-transcribe");
+              audio.append("file", new File([new Uint8Array([0, 0])], "sample.wav", { type: "audio/wav" }));
+            }
+          }
           const res = await fetch(new URL(row.endpoint, server.url), {
             method: isGet ? "GET" : "POST",
-            headers: { "content-type": "application/json", ...headers },
-            ...(isGet ? {} : { body: JSON.stringify({ model: "test/gpt-test", input: "hi", messages: [{ role: "user", content: "hi" }] }) }),
+            headers: { ...(audio ? {} : { "content-type": "application/json" }), ...headers },
+            ...(isGet ? {} : { body: audio ?? JSON.stringify({ model: "test/gpt-test", input: "hi", messages: [{ role: "user", content: "hi" }] }) }),
           });
           // A 401 means the header was refused; anything else means it got past
           // admission (the upstream is disabled, so later failures are expected).
@@ -665,6 +684,7 @@ describe("AUTH_MATRIX is true of the running server", () => {
             // hub, and the role gate runs AFTER admission, so reaching the gate is itself the
             // admission proof. Pin its distinguishing code too.
             if (row.endpoint === "/v1/hub-state") expect(body.error?.code).toBe("hub_state_not_a_hub");
+            if (row.endpoint === "/v1/usage") expect(body.error?.code).toBe("hub_usage_not_a_hub");
           }
           const admitted = res.status !== 401;
           expect({ endpoint: row.endpoint, headers: Object.keys(headers)[0], admitted })

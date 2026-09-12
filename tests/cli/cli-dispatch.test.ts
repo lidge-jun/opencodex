@@ -657,7 +657,7 @@ describe("GUI command delegation", () => {
     defaultProvider: "openai",
   };
 
-  test("opens the loopback management ingress from the hub", () => {
+  test("opens the hub management ingress on its literal IPv4 loopback bind", () => {
     const hubConfig = {
       port: 10100,
       hostname: "100.76.170.81",
@@ -670,7 +670,7 @@ describe("GUI command delegation", () => {
     const live = { hostname: "100.76.170.81", port: 10100 };
 
     expect(selectDefaultGuiUrl(hubConfig, live, hostname => hostname ?? "127.0.0.1"))
-      .toBe("http://localhost:10102");
+      .toBe("http://127.0.0.1:10102");
 
     const withoutIngress = { ...hubConfig, hub: { managementPublicOrigin: "https://hub.example.test" } };
     expect(selectDefaultGuiUrl(withoutIngress, live, hostname => hostname ?? "127.0.0.1"))

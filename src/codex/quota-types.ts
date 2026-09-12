@@ -49,3 +49,11 @@ export type WhamUsageResponse = {
   rate_limit_reset_credits?: { available_count: number } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
 };
+
+
+/** Captured from the exact dispatched pool credential; never a management API field. */
+export interface PoolQuotaWriter {
+  accountId: string;
+  credentialGeneration: number;
+  historyIdentity: string;
+}

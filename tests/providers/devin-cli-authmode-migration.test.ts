@@ -7,21 +7,12 @@ function cfg(row: Record<string, unknown> | undefined): OcxConfig {
   return { providers: row ? { "devin-cli": row } : {} } as unknown as OcxConfig;
 }
 
-describe("devin-cli authMode migration", () => {
-  test("rewrites the seeded local authMode the registry no longer allows", () => {
-    // derive.ts seeds authMode from authKind, so every config saved while the
-    // provider was local carries "local", and auth-cors fails closed on it.
-    const p = projectDevinCliAuthMode(cfg({ adapter: "devin", baseUrl: "https://server.codeium.com", authMode: "local" }));
-    expect(p.changed).toBe(true);
-    expect(p.config.providers!["devin-cli"]!.authMode).toBe("oauth");
-    expect(p.warnings.join(" ")).toContain("local -> oauth");
-  });
-
-  test("leaves an already-migrated row alone", () => {
-    const p = projectDevinCliAuthMode(cfg({ adapter: "devin", baseUrl: "https://server.codeium.com", authMode: "oauth" }));
-    expect(p.changed).toBe(false);
-    expect(p.warnings).toEqual([]);
-  });
+describe("devin-cli retired-adapter migration", () => {
+  // The authMode half of this projection moved into
+  // devin-provider-merge-migration.ts: the `devin-cli` registry entry is gone,
+  // so the PROVIDER_REGISTRY lookup that gated the local -> oauth rewrite here
+  // could never fire again. What remains is the adapter repair, which must
+  // keep working for custom-named rows that no registry pin protects.
 
   test("rewrites the registry-id row that still names the removed ACP adapter", () => {
     // The ACP adapter is gone, so the saved id is no longer constructible. The
@@ -57,6 +48,17 @@ describe("devin-cli authMode migration", () => {
     expect(p.config.providers!["devin-cli"]!.baseUrl).toBe("https://eu.windsurf.com/_route/api_server");
   });
 
+  test("no longer touches authMode — the merge migration owns that on the moved row", () => {
+    // A devin-cli row with authMode "local" is handled while its key moves to
+    // "devin" in projectDevinProviderMerge; this pass must not double-report
+    // it, and a custom-named row keeps whatever authMode it has because the
+    // retired adapter rewrite is the only repair left here.
+    const p = projectDevinCliAuthMode(cfg({ adapter: "devin", baseUrl: "https://server.codeium.com", authMode: "local" }));
+    expect(p.changed).toBe(false);
+    expect(p.config.providers!["devin-cli"]!.authMode).toBe("local");
+    expect(p.warnings).toEqual([]);
+  });
+
   test("is a no-op when the provider is not configured", () => {
     const p = projectDevinCliAuthMode(cfg(undefined));
     expect(p.changed).toBe(false);
@@ -64,10 +66,10 @@ describe("devin-cli authMode migration", () => {
   });
 
   test("runs inside the shared startup repair pass", () => {
-    // One boot step owns persistence, adopt and failure handling for all three
+    // One boot step owns persistence, adopt and failure handling for all the
     // repairs; a second pass would have to reimplement them.
-    const p = projectStartupConfigRepairs(cfg({ adapter: "devin", baseUrl: "https://server.codeium.com", authMode: "local" }));
+    const p = projectStartupConfigRepairs(cfg({ adapter: "devin-cli", baseUrl: "https://cli.devin.ai", authMode: "oauth" }));
     expect(p.changed).toBe(true);
-    expect(p.config.providers!["devin-cli"]!.authMode).toBe("oauth");
+    expect(p.config.providers!["devin-cli"]!.adapter).toBe("devin");
   });
 });

@@ -179,5 +179,8 @@ export function codexWsUpstreamFetch(
   } catch {
     return sseFallback(url, init);
   }
-  return codexWsExchange({ session, url, init, prepared, sseFallback, onQuota, beforeDispatch });
+  return codexWsExchange({
+    session, url, init, prepared, sseFallback, onQuota, beforeDispatch,
+    bunVersion: typeof runtime === "string" ? runtime : runtime.version,
+  });
 }

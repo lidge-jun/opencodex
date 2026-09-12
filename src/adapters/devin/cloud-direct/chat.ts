@@ -46,22 +46,65 @@ import { resolveDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
  * we only trigger when the server has genuinely stopped responding.
  */
 const CLOUD_STREAM_IDLE_MS = 120_000;
-/** Time-to-first-byte timeout. */
-const CLOUD_STREAM_TTFB_MS = 60_000;
+/**
+ * Budget for the response HEADERS, which is not the same thing as a connect
+ * timeout. Cognition holds the headers until the model produces its first
+ * token, so on a high-effort reasoning model this bounds generation. A 60s
+ * value killed live swe-2 high turns at exactly 60000ms with no output while
+ * a sibling call on the same account was still alive at 76s, which is the
+ * defect this constant exists to record.
+ *
+ * It has to be at least as generous as the body idle budget above. The cost of
+ * the larger value is bounded and understood: a peer that goes silent at the
+ * TCP level without sending RST/FIN now hangs for this long instead of 60s. A
+ * peer that actually dies still rejects immediately. This timer is the only
+ * bound on that case once `timeout: 0` is set on the fetch, so it must not be
+ * removed. Override with OPENCODEX_DEVIN_TTFB_MS.
+ */
+const CLOUD_STREAM_HEADERS_DEFAULT_MS = 300_000;
+/** Upper bound for the override, so a stray value cannot wedge a turn forever. */
+const CLOUD_STREAM_HEADERS_MAX_MS = 1_800_000;
+function cloudStreamHeadersMs(): number {
+  const raw = process.env.OPENCODEX_DEVIN_TTFB_MS?.trim();
+  if (!raw) return CLOUD_STREAM_HEADERS_DEFAULT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return CLOUD_STREAM_HEADERS_DEFAULT_MS;
+  return Math.min(parsed, CLOUD_STREAM_HEADERS_MAX_MS);
+}
+/** Test seam for the headers budget; the resolver itself stays private. */
+export const cloudStreamHeadersMsForTests = cloudStreamHeadersMs;
 /** Maximum acceptable Connect-RPC frame length (16 MB). */
 const MAX_FRAME_LEN = 16 * 1024 * 1024;
 
 /**
- * Per-(apiKey, host) session/cascade ID cache. Cloud uses these for
- * server-side context caching across turns of the same conversation; if we
- * mint a fresh sessionId on every call (which we used to), every turn looks
- * like a brand-new session and the prompt-cache hit ratio is zero.
+ * PromptCacheOptions.type = EPHEMERAL. Marks the system prefix as a cache entry
+ * the server may reuse on the next turn of the same session.
+ */
+const PROMPT_CACHE_EPHEMERAL = 1;
+
+/**
+ * Per-identity session/cascade ID cache. Cloud uses these for server-side
+ * context caching across turns of the same conversation; if we mint a fresh
+ * sessionId on every call (which we used to), every turn looks like a
+ * brand-new session and the prompt-cache hit ratio is zero.
  * Single-process scope is enough: opencode lives in one runtime for a TUI
  * session, and CLI one-shots don't benefit from caching anyway.
  */
 interface SessionIds {
   sessionId: string;
   cascadeId: string;
+}
+
+/**
+ * Cache key for one Devin credential on one host.
+ *
+ * The credential itself used to be the Map key. Hashing it keeps the raw token
+ * out of any structure a heap dump or debugger would walk, and gives the other
+ * per-account caches a name they can share. 16 hex is 64 bits, which against a
+ * bounded single-process map is not a collision risk worth widening the key for.
+ */
+export function devinCacheIdentity(apiKey: string, host: string): string {
+  return crypto.createHash('sha256').update(`${host}\x1f${apiKey}`).digest('hex').slice(0, 16);
 }
 /**
  * Bounded the same way the adapter bounds its cascade-id map: a long-running
@@ -70,7 +113,7 @@ interface SessionIds {
 const SESSION_CACHE_MAX = 256;
 const sessionCache = new Map<string, SessionIds>();
 function getOrAllocateSessionIds(apiKey: string, host: string, cascadeIdOverride?: string): SessionIds {
-  const key = `${host}\x1f${apiKey}`;
+  const key = devinCacheIdentity(apiKey, host);
   let ids = sessionCache.get(key);
   if (!ids) {
     ids = {
@@ -90,9 +133,21 @@ function getOrAllocateSessionIds(apiKey: string, host: string, cascadeIdOverride
   return ids;
 }
 
-/** Drop the cached session IDs — call after logout so a new sign-in starts fresh. */
-export function clearSessionIds(): void {
-  sessionCache.clear();
+/**
+ * Drop the cached session for ONE identity, after that account signs out or is
+ * switched away from.
+ *
+ * This replaces a global clear(). The proxy serves several accounts from one
+ * process, so clearing every entry on a per-provider logout would strip the
+ * session and cascade of accounts that were mid-turn. That is why the global
+ * version was never safe to call, and why nothing ever called it.
+ *
+ * A turn already in flight is unaffected: it received its SessionIds object at
+ * request start and never re-reads the map, so it finishes on the session it
+ * began with and the next turn allocates fresh.
+ */
+export function invalidateSessionIdentity(identity: string): void {
+  sessionCache.delete(identity);
 }
 
 // ----------------------------------------------------------------------------
@@ -120,6 +175,9 @@ export function allocateCascadeId(): string {
  *   #4 num_tokens: int                          (rough estimate)
  *   #5 safe_for_code_telemetry: bool            (1 = ok to log)
  *   #10 images: repeated ImageData              (multimodal)
+ *   #11 thinking: string                        (assistant reasoning, replayed)
+ *   #12 signature: string                       (opaque attestation for #11)
+ *   #18 signature_type: string
  * }
  *
  * ImageData (exa.codeium_common_pb.ImageData) {
@@ -153,7 +211,13 @@ function encodeChatToolCall(tc: { id: string; name: string; arguments: string })
 function encodeChatMessagePrompt(
   content: ContentPart[],
   source: number,
-  opts?: { toolCallId?: string; toolCalls?: Array<{ id: string; name: string; arguments: string }> },
+  opts?: {
+    toolCallId?: string;
+    toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    thinking?: string;
+    signature?: string;
+    signatureType?: string;
+  },
 ): Buffer {
   const textParts = content.filter((p): p is { type: 'text'; text: string } => p.type === 'text');
   const imageParts = content.filter((p): p is { type: 'image'; mimeType: string; base64Data: string; caption?: string } => p.type === 'image');
@@ -178,6 +242,14 @@ function encodeChatMessagePrompt(
   for (const img of imageParts) {
     parts.push(encodeMessage(10, encodeImageData(img)));
   }
+  // Reasoning replay. This adapter used to assert that Cognition has no
+  // reasoning-replay field and drop the assistant's own thinking, so a
+  // reasoning model restarted its chain on every turn of a tool loop. Two
+  // independent clients of the same service write it here: #11 thinking,
+  // #12 signature, #18 signature_type on the assistant prompt.
+  if (opts?.thinking) parts.push(encodeString(11, opts.thinking));
+  if (opts?.signature) parts.push(encodeString(12, opts.signature));
+  if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
   return Buffer.concat(parts);
 }
 
@@ -342,6 +414,15 @@ export interface ChatHistoryItem {
    * each ChatToolCall has #1 id, #2 name, #3 arguments_json).
    */
   tool_calls?: Array<{ id: string; name: string; arguments: string }>;
+  /**
+   * For `role: 'assistant'` only — the model's own reasoning from that turn,
+   * replayed so a reasoning model does not restart its chain on the next one.
+   * Encoded as ChatMessagePrompt #11 with its #12 signature and #18
+   * signature_type.
+   */
+  thinking?: string;
+  signature?: string;
+  signature_type?: string;
 }
 
 /**
@@ -399,6 +480,12 @@ export interface ToolDef {
 export type CloudChatEvent =
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
+  /**
+   * `delta_signature` (#10) — the opaque attestation for the reasoning this
+   * turn produced. Without decoding it there is nothing to put in the prompt's
+   * #12 on the next turn, so the replay would always be unsigned.
+   */
+  | { kind: 'reasoning_signature'; signature: string }
   | { kind: 'tool_call_start'; id: string; name: string }
   | {
       kind: 'tool_call_args';
@@ -592,6 +679,9 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
         {
           toolCallId: m.role === 'tool' ? m.tool_call_id : undefined,
           toolCalls: m.role === 'assistant' ? m.tool_calls : undefined,
+          thinking: m.role === 'assistant' ? m.thinking : undefined,
+          signature: m.role === 'assistant' ? m.signature : undefined,
+          signatureType: m.role === 'assistant' ? m.signature_type : undefined,
         },
       ),
     ),
@@ -609,6 +699,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   //   #7  request_type (varint enum)
   //   #8  completion_configuration
   //   #10 tools (repeated ChatToolDefinition)
+  //   #13 prompt_cache_options
   //   #16 cascade_id (string)
   //   #21 chat_model_uid (string)
   //   #22 prompt_id (string)
@@ -622,6 +713,13 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     encodeVarintField(7, args.requestType ?? 5),
     encodeMessage(8, completion),
     ...toolParts,
+    // #13 prompt_cache_options: { type: EPHEMERAL }. Reusing a session id is only
+    // half of prompt caching — without this the server creates no cache entry and
+    // every turn re-reads the whole prefix, which is why the sessionId reuse above
+    // was not producing the hit ratio its comment claims. The native client sends
+    // it and records real savings; sending it unconditionally matches both the
+    // native client and CLIProxyAPIPlus, which places it outside its tools gate.
+    encodeMessage(13, encodeVarintField(1, PROMPT_CACHE_EPHEMERAL)),
     // #15 session model config: { id, turn, 4 }. Present on every verified
     // request.
     encodeMessage(15, Buffer.concat([
@@ -669,7 +767,30 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
  * any non-zero to 'tool_calls' for now (and let the caller fall back to
  * 'stop' if no tool_call deltas were emitted).
  */
-function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
+export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
+  // Field 7 is `ModelUsageStats`, the authoritative per-turn accounting, and
+  // field 28 is `response_dimension_groups` — the rows the IDE renders. The
+  // decoder below reads 28 because a capture happened to expose metric-looking
+  // strings there (`ResponseDimension.uid` is its field 5, which is what the
+  // entry walker treats as `metric_id`), and that works only when the service
+  // chose to render cache rows. Field 7 carries cache read and cache write
+  // unconditionally, which is why a cached Devin turn used to report a bare
+  // total with no cached subset.
+  //
+  // Both fields arrive in the same message and the adapter keeps the last usage
+  // event it sees, so this cannot be a plain "decode both": field 7 has to
+  // suppress field 28 within the message. It is yielded before the rest of the
+  // frame rather than after it, so a frame that also carries finish (field 5)
+  // still reports usage ahead of the turn's end, and the order does not depend
+  // on where the service happens to place the field.
+  let authoritativeUsage: CloudChatEvent | null = null;
+  for (const f of iterFields(proto)) {
+    if (f.num === 7 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      authoritativeUsage = decodeModelUsageStats(f.value as Buffer);
+      if (authoritativeUsage) break;
+    }
+  }
+  if (authoritativeUsage) yield authoritativeUsage;
   for (const f of iterFields(proto)) {
     if (f.num === 3 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       // Visible delta_text — what the user should SEE in the chat.
@@ -693,6 +814,9 @@ function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       // block instead of inline with the answer.
       const s = (f.value as Buffer).toString('utf8');
       if (s) yield { kind: 'reasoning', text: s };
+    } else if (f.num === 10 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      const s = (f.value as Buffer).toString('utf8');
+      if (s) yield { kind: 'reasoning_signature', signature: s };
     } else if (f.num === 6 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       let id: string | undefined;
       let name: string | undefined;
@@ -740,6 +864,7 @@ function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       // else stays 'stop' for 0/2/4-9/12/13
       yield { kind: 'finish', reason };
     } else if (f.num === 28 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      if (authoritativeUsage) continue;
       const usage = decodeUsageBlock(f.value as Buffer);
       if (usage) yield usage;
     }
@@ -834,6 +959,68 @@ function decodeUsageBlock(buf: Buffer): CloudChatEvent | null {
   };
 }
 
+/**
+ * `exa.codeium_common_pb.ModelUsageStats` at GetChatMessageResponse field 7.
+ *
+ *   ModelUsageStats {
+ *     #2 input_tokens        uint64
+ *     #3 output_tokens       uint64
+ *     #4 cache_write_tokens  uint64
+ *     #5 cache_read_tokens   uint64
+ *   }
+ *
+ * Plain varints, so the field-28 entry walker — which descends a
+ * length-delimited sub-message and reads a fixed32 float — cannot read this at
+ * all. It needs its own decoder.
+ *
+ * Whether Cognition's `input_tokens` already includes the cached tokens is not
+ * settled. oh-my-pi sums all four into its total, which suggests exclusive, but
+ * that is their convention rather than a measurement of this field. Guessing
+ * wrong in the inclusive direction is the expensive mistake: `normalizeCostTokens`
+ * only rejects `read + write > input`, so an inflated input passes validation and
+ * bills cached tokens at the uncached rate.
+ *
+ * So the shape is derived from the frame instead of assumed. An input that
+ * already covers the cache is left alone; one that cannot possibly cover it is
+ * folded. Both branches agree on the case that motivated this — a 58k prompt
+ * that is 57k cache read and 1k fresh reads as 58k with a 57k cached subset —
+ * and neither can emit `read + write > input`. Replace the derivation with a
+ * fixed mapping once a live frame settles the question.
+ */
+export function decodeModelUsageStats(buf: Buffer): CloudChatEvent | null {
+  let wireInput: number | undefined;
+  let output: number | undefined;
+  let cacheWrite: number | undefined;
+  let cacheRead: number | undefined;
+  for (const f of iterFields(buf)) {
+    if (f.wire !== 0) continue;
+    const n = Number(f.value);
+    if (!Number.isFinite(n) || n < 0) continue;
+    if (f.num === 2) wireInput = n;
+    else if (f.num === 3) output = n;
+    else if (f.num === 4) cacheWrite = n;
+    else if (f.num === 5) cacheRead = n;
+  }
+  if (wireInput === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return null;
+  }
+  const read = cacheRead ?? 0;
+  const write = cacheWrite ?? 0;
+  const rawInput = wireInput ?? 0;
+  const promptTokens = rawInput >= read + write ? rawInput : rawInput + read + write;
+  const completionTokens = output ?? 0;
+  const total = promptTokens + completionTokens;
+  return {
+    kind: 'usage',
+    promptTokens,
+    completionTokens,
+    totalTokens: total > 0 ? total : undefined,
+    cachedInputTokens: cacheRead,
+    cacheCreationInputTokens: cacheWrite,
+    reasoningTokens: undefined,
+  };
+}
+
 // ----------------------------------------------------------------------------
 // Public API: streamChat
 // ----------------------------------------------------------------------------
@@ -864,13 +1051,63 @@ export interface CloudChatRequest {
 }
 
 export class CloudChatError extends Error {
-  constructor(message: string, public readonly code?: string, public readonly traceId?: string) {
+  constructor(
+    message: string,
+    public readonly code?: string,
+    public readonly traceId?: string,
+    /**
+     * Upstream HTTP status, when the failure was a status line rather than a
+     * Connect trailer. Without it the adapter's message reaches
+     * `inferHttpStatusFromAdapterMessage`, which does not parse `HTTP 429`, so
+     * a live rate limit was classified 502 and core's failover never rotated.
+     */
+    public readonly status?: number,
+  ) {
     super(message);
     this.name = 'CloudChatError';
   }
 }
 
 const TRACE_ID_RE = /\(trace ID: ([0-9a-f]+)\)/i;
+
+/**
+ * A quota refusal Cognition delivers as `permission_denied`.
+ *
+ * "Your limit will reset in 13 minutes" and "Reached overall message rate
+ * limit" are caps, not authorization failures. Classified as 403 they invite
+ * the client to retry straight into a live cap; as 429 the proxy backs off and
+ * can rotate.
+ */
+const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of credits)\b/i;
+
+/**
+ * Connect error code to HTTP status.
+ *
+ * Without this only the HTTP status line reached the adapter, so a cap or an
+ * expired credential delivered as an EOS trailer fell through to
+ * `inferHttpStatusFromAdapterMessage` and became a generic 502 — which is not
+ * retryable-with-backoff, not an auth prompt, and not something core's failover
+ * acts on.
+ */
+export function connectTrailerHttpStatus(code: string | undefined, message: string): number | undefined {
+  if (code === 'permission_denied' && TRAILER_QUOTA_RE.test(message)) return 429;
+  switch (code) {
+    case 'unauthenticated': return 401;
+    case 'permission_denied': return 403;
+    case 'resource_exhausted': return 429;
+    case 'not_found': return 404;
+    case 'unavailable': return 503;
+    case 'deadline_exceeded': return 504;
+    case 'unimplemented': return 501;
+    case 'invalid_argument':
+    case 'failed_precondition':
+    case 'out_of_range': return 400;
+    case 'internal':
+    case 'unknown':
+    case 'data_loss': return 502;
+    default: return undefined;
+  }
+}
 
 /**
  * Stream chat events from the cloud. Yields CloudChatEvent (text deltas, tool
@@ -941,12 +1178,24 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   const framed = frameConnectStream(proto, false);
   const body = new Blob([new Uint8Array(framed)], { type: "application/connect+proto" });
 
-  // Compose caller signal with a TTFB timeout. If the cloud takes longer
-  // than CLOUD_STREAM_TTFB_MS to start the response, abort. Once any byte
-  // arrives we cancel the TTFB timer and start the per-chunk idle timer
-  // inside the read loop instead.
+  // Compose the caller signal with a deadline on the response HEADERS. The
+  // timer is cleared in the finally below, which runs when `await fetch`
+  // resolves — and fetch resolves on headers, not on the first body byte. An
+  // earlier comment here claimed "once any byte arrives", which was wrong and
+  // hid the defect: Cognition withholds headers until the first token, so this
+  // budget is a generation deadline. Body silence after headers is a separate
+  // budget, the per-chunk idle timer in the read loop below.
   const ttfbController = new AbortController();
-  const ttfbTimer = setTimeout(() => ttfbController.abort(new Error(`cloud-direct: time-to-first-byte timeout (${CLOUD_STREAM_TTFB_MS}ms)`)), CLOUD_STREAM_TTFB_MS);
+  const headersMs = cloudStreamHeadersMs();
+  // Abort with no reason and remember that we are the one who fired. Bun rejects
+  // the fetch with its own AbortError rather than handing back `signal.reason`,
+  // so attaching a typed error to abort() would be discarded; the catch below is
+  // what actually produces a classifiable failure.
+  let headersDeadlineFired = false;
+  const ttfbTimer = setTimeout(() => {
+    headersDeadlineFired = true;
+    ttfbController.abort();
+  }, headersMs);
   const ttfbSignal = ttfbController.signal;
   // Compose req.signal + ttfbSignal. AbortSignal.any was added in Node
   // 20.3 / Bun 1.0; our `engines` allows Node ≥18, so on Node 18-20.2 the
@@ -974,7 +1223,28 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
       body,
       redirect: 'error',
       signal: initialSignal,
-    });
+      // Bun applies its own fetch idle timeout (~5 minutes) on top of ours.
+      // Two independent deadlines on the same hop means the shorter one wins
+      // silently and this function can no longer explain its own failure, so
+      // the deadline above is made the single authority. Same reason as
+      // src/server/responses/fetch-helpers.ts.
+      timeout: 0,
+    } as RequestInit);
+  } catch (err) {
+    if (headersDeadlineFired) {
+      // Ours, not the upstream failing. Raised as a typed error with an explicit
+      // status because devinErrorClassification reads CloudChatError.status and
+      // would otherwise return {} for a bare Error, leaving src/lib/errors.ts to
+      // guess from the message text. The message deliberately no longer says
+      // "timeout", so the status is the only thing carrying the classification.
+      throw new CloudChatError(
+        `cloud-direct: no response headers within ${headersMs}ms`,
+        undefined,
+        undefined,
+        504,
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(ttfbTimer);
     // The composed signal only guards the headers hop; the body is cancelled
@@ -987,7 +1257,11 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // The body is not echoed into the message. This error reaches the adapter's
     // error event and /api/logs, and a Connect error can quote the request that
     // produced it - which is the request holding the api_key.
-    throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined);
+    //
+    // The status line is carried on the error. A cap or an expired credential
+    // delivered instead as a Connect EOS trailer is mapped by
+    // connectTrailerHttpStatus at the trailer sites below.
+    throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined, undefined, resp.status);
   }
   if (!resp.body) {
     throw new CloudChatError('GetChatMessage response had no body stream');
@@ -1214,7 +1488,12 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         `service accepts. If the request is unchanged and this is new, the ` +
         `account's model access is the next thing to check. ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
-      throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
+      throw new CloudChatError(
+        enriched,
+        trailerError.code,
+        trailerError.traceId,
+        connectTrailerHttpStatus(trailerError.code, trailerError.message),
+      );
     }
     // Cognition also returns `permission_denied` when a tool description
     // contains a blocklisted phrase that the sanitizer above did not catch
@@ -1234,9 +1513,19 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         // was a phrase match at all.
         `(cloud message: ${trailerError.message}) ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
-      throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
+      throw new CloudChatError(
+        enriched,
+        trailerError.code,
+        trailerError.traceId,
+        connectTrailerHttpStatus(trailerError.code, trailerError.message),
+      );
     }
-    throw new CloudChatError(trailerError.message, trailerError.code, trailerError.traceId);
+    throw new CloudChatError(
+      trailerError.message,
+      trailerError.code,
+      trailerError.traceId,
+      connectTrailerHttpStatus(trailerError.code, trailerError.message),
+    );
   }
   // Truncation detection: the cloud always terminates a successful stream
   // with an EOS trailer. If we hit `done` from the body reader without one,

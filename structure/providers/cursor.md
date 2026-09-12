@@ -1,5 +1,17 @@
 # Cursor Provider
 
+The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+
+Codex-native retirement does not retire a Cursor-owned model name. Cursor transport and
+namespace handling retain their provider contract; the bounded native scope lives in
+[the shared catalog](../catalog.md#shared-catalog).
+
+Cursor's direct adapter does not enter the OpenAI Chat serializer's
+[OpenCode Go instruction ordering](chat-compat.md#opencode-go-chronological-instructions).
+
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
+
 ## Cursor Native Exec
 
 Cursor's experimental live transport can receive server-driven local read/write/delete/ls/grep,
@@ -69,6 +81,27 @@ does not expose authoritative cache_read_tokens.
 
 > Decision record: [ADR-0054](../decisions/ADR-0054-cursor-conversation-checkpoint-reuse.md)
 
+## Cursor root replay budgets
+
+`src/adapters/cursor/protobuf-request.ts` bounds the replayed root set at 192 blobs and 512 KiB, and
+caps the serialized arguments named inside one replayed tool-result envelope at 2 KiB. That per-call
+cap is what keeps a 600 KiB argument from consuming the aggregate budget and evicting the output it
+describes, and it still decides admission. Because it is charged while the envelope is being built,
+a small replay would otherwise clip a completed call's arguments with nearly the whole envelope
+unused. After every pruning and truncation decision is final, a second pass re-widens clipped
+invocation lines out of the leftover aggregate bytes only: newest tool result first, skipping a root
+whose own output was already elided, and never dropping, shrinking or reordering a retained root.
+The elision skip is load bearing, reached through initiator recovery rather than through truncation
+alone: a truncated root undershoots its own budget by far less than a restoration costs, but after
+the equal-share pass elides a trailing run, recovery drops an elided sibling to fit the user turn and
+the freed bytes become spare. It requires the share to land in a narrow window where the clipped
+invocation line survives but `output:` does not; outside that window the clipped-line lookup declines
+the root first.
+Root-echo eligibility is `cursorNeedsExternalToolContinuation`, which includes native
+`composer-2.5`, not only external wire models, so the restoration reaches every replay that carries
+an invocation line. Coverage lives in
+`tests/providers/cursor/cursor-tool-result-invocation.test.ts`.
+
 ## Cursor executable tool schema ownership
 
 `src/adapters/cursor/tool-schemas.ts` owns advertised and argument-normalization
@@ -82,3 +115,18 @@ constraints cannot widen the canonical shape. Bare shell bridge names are reject
 on the freeform path.
 Namespaced tools do not acquire bare-shell behavior. Regression coverage lives in
 `tests/providers/cursor/cursor-tool-definitions.test.ts`.
+
+Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
+
+Shared raw-reasoning events retain content-channel presentation; provider-authored thinking keeps its existing summary path. See [bridge contract](chat-compat.md).
+
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+
+## Overflow remint boundary
+
+`src/adapters/cursor.ts` surfaces the first bare context overflow before attempting conversation remint on later eligible requests. `cursorClientThreadOwner` recognizes both client thread aliases; `src/adapters/cursor/thread-continuity.ts` limits recovery to three remints per retained identity-scoped owner, with a one-hour idle TTL and 2,048-entry bound. Conversation-only requests have no stable owner and do not automatically remint. Quota/rate errors, tool-result resumes, partial output, local side effects, isolated helper/shadow requests and compaction remain fail-closed. Isolated requests neither consume the parent allowance nor invalidate its checkpoint. Eligible overflow checks refresh existing retention timestamps and LRU position even after the cap is exhausted, without allocating absent scopes. Retention expiry, eviction or process restart resets the in-memory allowance; this is not a persistent lifetime cap or semantic-progress policy.
+
+Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+
+Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
+Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.

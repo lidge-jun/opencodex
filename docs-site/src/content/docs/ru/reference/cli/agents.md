@@ -79,6 +79,8 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ocx observe usage --range 30d --json
 ```
 
+Если часть записей нельзя учесть, человекочитаемый вывод показывает предупреждение, даже если нет читаемых строк. Отображаемые итоги учитывают только читаемые записи. Если фильтр не находит читаемых совпадений, вместо строк итогов выводятся предупреждение и подсказки; пропущенные записи могут содержать совпадения. `--json` сохраняет диагностику `usageIncomplete` и её причину из ответа.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Прочитать или изменить runtime debug-override'ы через management API работающего прокси.
@@ -238,6 +240,8 @@ env-reference, либо несекретную loopback-заглушку. Loopba
 ### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 Управляйте headless runtime-setting'ами, startup, sync, diagnostics и update.
+
+`ocx system codex-restart --yes` перезапускает Codex app-server'ы и полностью закрывает и заново запускает Desktop-приложение Codex тем же модулем, что и `ocx sync --restart-codex`. Если сам proxy запущен внутри приложения Codex, команда отказывается с actionable-сообщением вместо handoff, который она не может завершить.
 
 ```bash
 ocx system settings --stream-mode eager-relay

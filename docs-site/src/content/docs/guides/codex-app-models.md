@@ -73,13 +73,15 @@ the resulting list; otherwise the native default is used when present, then the 
 choice. Stored custom configuration is unchanged, and repeated syncs do not add `max` back to a
 narrow custom list.
 
-This requires the exact provider, destination, and capability-backed model identity. An arbitrary
-gateway such as `YYLJ/gpt-6-astra` does not inherit native capabilities from its name. Its explicit
-custom ladder continues to override discovered provider metadata under the normal routed rules.
+The same catalog bound applies when the custom model id has pinned native capability metadata,
+including an arbitrary gateway such as `YYLJ/gpt-6-astra`. Desktop validates the model id, so
+`none` and `minimal` are stripped from that catalog row. Full native identity still requires the
+exact provider, destination, and capability-backed model identity; a gateway does not inherit
+Responses Lite, multi-agent, or native windows from its name.
 Codex's native Astra `ultra` choice is retained: it is a client delegation mode converted to a
 supported wire effort, distinct from the [API model's effort list](https://developers.openai.com/api/docs/models/gpt-6-astra).
-Catalog normalization does not rewrite existing thread settings or establish support for a
-particular installed Desktop version.
+Catalog normalization does not rewrite existing thread settings. Request-time native effort
+clamps remain canonical-forward only.
 
 When the `codexAccountNamespaces` map is empty, account-qualified picker rows are off. If
 `codexAccountPickerEnabled` is omitted with a non-empty map, they are treated as enabled for
@@ -188,7 +190,7 @@ including OpenAI service-tier metadata.
 
 ## Current stable model coverage
 
-The native fallback set includes `gpt-5.5`, `gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna.
+The native fallback set includes `gpt-5.5` and GPT-5.6 Sol/Terra/Luna.
 For the GPT-5.5 family, opencodex preserves
 the installed Codex catalog's richer live entries and only synthesizes a missing entry. The bundled
 upstream snapshot is used only for GPT-5.6, where it supplies the real per-model identity and

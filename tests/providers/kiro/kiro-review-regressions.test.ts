@@ -389,4 +389,66 @@ describe("Kiro review regressions", () => {
     expect(readKiroCliSqliteCredential()).toMatchObject({ access: "aoa-prior", refresh: "rt-prior" });
     expect(existsSync(kiroCliRecoveryPath())).toBe(false);
   });
+
+  test("a leftover sqlite profile ARN does not collapse a second Kiro account (#4435)", async () => {
+    const arnA = "arn:aws:codewhisperer:us-east-1:123456789012:profile/first";
+    const arnB = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/second";
+    await saveCredential("kiro", {
+      access: "aoa-first",
+      refresh: "rt-first",
+      expires: Date.now() + 60_000,
+      accountId: arnA,
+      email: "first@example.test",
+      source: "local-cli",
+      kiro: { profileArn: arnA },
+    });
+    expect(getAccountSet("kiro")?.accounts).toHaveLength(1);
+
+    const credential = await loginKiro({} as OAuthController, {
+      forceLogin: true,
+      cliRunner: async args => {
+        if (args[0] === "logout") {
+          removeKiroCliDb();
+          return { exitCode: 0, stdout: "" };
+        }
+        if (args[0] === "login") {
+          seedKiroCliDb("aoa-second", "rt-second", { profileArn: arnA });
+          return { exitCode: 0, stdout: "" };
+        }
+        if (args[0] === "whoami") {
+          return { exitCode: 0, stdout: JSON.stringify({ email: "second@example.test", profileArn: arnB }) };
+        }
+        return { exitCode: 1, stdout: "" };
+      },
+    });
+    await saveCredential("kiro", credential, { preserveIdentityless: true });
+
+    const set = getAccountSet("kiro")!;
+    expect(set.accounts).toHaveLength(2);
+    expect(new Set(set.accounts.map(account => account.credential.accountId))).toEqual(new Set([arnA, arnB]));
+    expect(getAccountCredential("kiro", set.activeAccountId)).toMatchObject({
+      access: "aoa-second",
+      accountId: arnB,
+      email: "second@example.test",
+    });
+    expect(set.accounts.find(account => account.credential.accountId === arnA)?.credential.access).toBe("aoa-first");
+  });
+
+  test("same-email Kiro accounts with distinct profile ARNs stay as two store slots (#4435)", async () => {
+    await saveCredential("kiro", {
+      access: "aoa-a",
+      refresh: "rt-a",
+      expires: Date.now() + 60_000,
+      accountId: "arn:aws:codewhisperer:us-east-1:123456789012:profile/a",
+      email: "shared@example.test",
+    });
+    await saveCredential("kiro", {
+      access: "aoa-b",
+      refresh: "rt-b",
+      expires: Date.now() + 60_000,
+      accountId: "arn:aws:codewhisperer:eu-west-1:123456789012:profile/b",
+      email: "shared@example.test",
+    }, { preserveIdentityless: true });
+    expect(getAccountSet("kiro")?.accounts).toHaveLength(2);
+  });
 });

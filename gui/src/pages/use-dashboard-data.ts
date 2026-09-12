@@ -1,3 +1,4 @@
+import { classifyDataSurface } from "../data-surface";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { replaceHash } from "../hash-routing";
@@ -24,6 +25,7 @@ import {
   type DashboardEpochRefs,
 } from "./dashboard-core-poll";
 import { usageSummary30dResourceKey } from "../usage-summary-resource";
+import type { SubagentSurfaceAdvisory } from "../subagent-surface";
 import {
   type DashboardSection,
   type HealthData,
@@ -135,7 +137,7 @@ function controlsCacheKey(apiBase: string): string {
   return `${CONTROLS_CACHE_PREFIX}${apiBase}`;
 }
 
-export function useDashboardData(apiBase: string) {
+export function useDashboardData(apiBase: string, refreshEpoch = 0) {
   const { locale, t } = useI18n();
   // The hash is the source of truth for the active section (#dashboard, …).
   const [selectedSection, setSelectedSection] = useState<DashboardSection>(readDashboardSectionFromHash);
@@ -179,8 +181,20 @@ export function useDashboardData(apiBase: string) {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [maMode, setMaMode] = useState<MaMode>(() => cachedMaMode ?? "default");
- const [maBusy, setMaBusy] = useState(false);
+const [maBusy, setMaBusy] = useState(false);
   const [maError, setMaError] = useState<string | null>(null);
+ /** The runtime's one-time advisory, and whether this page load has answered it. */
+  /**
+   * The runtime's one-time advisory and any staged base/v2 selection, each tagged with the
+   * endpoint it came from. This hook stays mounted across an endpoint switch, and clearing the
+   * state from an effect would be a cascading render, so the tag is what scopes them.
+   */
+  const [maAdvisoryState, setMaAdvisoryState] = useState<{ advisory: SubagentSurfaceAdvisory | null; apiBase: string } | null>(null);
+  const [maAdvisoryAnsweredFor, setMaAdvisoryAnsweredFor] = useState<string | null>(null);
+  const [pendingMaModeState, setPendingMaModeState] = useState<{ mode: "default" | "v2"; apiBase: string } | null>(null);
+  const maAdvisory = maAdvisoryState?.apiBase === apiBase ? maAdvisoryState.advisory : null;
+  const maAdvisoryAnswered = maAdvisoryAnsweredFor === apiBase;
+  const pendingMaMode = pendingMaModeState?.apiBase === apiBase ? pendingMaModeState.mode : null;
  const [maHelpOpen, setMaHelpOpen] = useState(false);
   const [effortCapHelpOpen, setEffortCapHelpOpen] = useState(false);
   const [shadowCallHelpOpen, setShadowCallHelpOpen] = useState(false);
@@ -253,7 +267,7 @@ export function useDashboardData(apiBase: string) {
 
   const startupHealthPoll = useKeyedClientResource(
     `dashboard-startup-health:${apiBase}`,
-    [apiBase],
+    [apiBase, refreshEpoch],
     (signal) => fetchStartupHealth(apiBase, signal),
     { pollMs: 30_000 },
   );
@@ -275,23 +289,24 @@ export function useDashboardData(apiBase: string) {
   // Wave 1: status/uptime/providers must not wait on injection-model / usage.
   const overviewPoll = useKeyedClientResource(
     `dashboard-overview:${apiBase}`,
-    [apiBase],
+    [apiBase, refreshEpoch],
     (signal) => fetchDashboardOverview(apiBase, signal),
     { pollMs: 5000 },
   );
+  const overviewSurface = classifyDataSurface(overviewPoll, data => data.health === null, true);
   const overviewReady = health !== null || overviewPoll.data !== undefined;
 
   // Preferences that are just config — never gate on overview or injection.
   const maModePoll = useKeyedClientResource(
     `dashboard-ma-mode:${apiBase}`,
-    [apiBase],
+    [apiBase, refreshEpoch],
     (signal) => fetchDashboardMaMode(apiBase, signal),
     { pollMs: 5000 },
   );
 
   const sidecarPoll = useKeyedClientResource(
     `dashboard-sidecars:${apiBase}`,
-    [apiBase],
+    [apiBase, refreshEpoch],
     async (signal) => {
       const startupHealthGeneration = startupHealthGenerationRef.current;
       const data = await fetchDashboardSidecars(apiBase, signal, epochRefs);
@@ -302,7 +317,7 @@ export function useDashboardData(apiBase: string) {
 
   const settingsPoll = useKeyedClientResource(
     `dashboard-settings:${apiBase}`,
-    [apiBase],
+    [apiBase, refreshEpoch],
     async (signal) => {
       const startupHealthGeneration = startupHealthGenerationRef.current;
       const data = await fetchDashboardSettings(apiBase, signal, epochRefs);
@@ -314,14 +329,14 @@ export function useDashboardData(apiBase: string) {
   // Wave 2: heavier peers start after overview commits (or session seed) to cut contention.
   const multiAgentPoll = useKeyedClientResource(
     `dashboard-multi-agent:${apiBase}`,
-    [apiBase],
+    [apiBase, refreshEpoch],
     (signal) => fetchDashboardMultiAgent(apiBase, signal),
     { pollMs: 5000, enabled: overviewReady },
   );
 
   const usagePoll = useKeyedClientResource(
     usageSummary30dResourceKey(apiBase),
-    [apiBase],
+    [apiBase, refreshEpoch],
     (signal) => fetchDashboardUsage(apiBase, signal),
     // 30d usage is documented ~5s cold; this shared key has four subscribers, so
     // every one of them carries the same raised deadline (mount-order independent).
@@ -330,14 +345,14 @@ export function useDashboardData(apiBase: string) {
 
   const diagnosticsPoll = useKeyedClientResource(
     `dashboard-diagnostics:${apiBase}`,
-    [apiBase],
+    [apiBase, refreshEpoch],
     (signal) => fetchProjectConfigDiagnostics(apiBase, signal),
     { pollMs: PROJECT_CONFIG_DIAGNOSTICS_POLL_MS, enabled: overviewReady },
   );
 
   const modelsPoll = useKeyedClientResource(
     `dashboard-models:${apiBase}`,
-    [apiBase, error],
+    [apiBase, error, refreshEpoch],
     (signal) => fetchDashboardModels(apiBase, signal),
     { enabled: overviewReady && !error },
   );
@@ -376,6 +391,7 @@ export function useDashboardData(apiBase: string) {
   useEffect(() => {
     if (maModePoll.data === undefined) return;
     setMaMode(maModePoll.data.maMode);
+    setMaAdvisoryState({ advisory: maModePoll.data.advisory ?? null, apiBase });
     writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, maModePoll.data.maMode);
   }, [maModePoll.data, apiBase]);
 
@@ -526,11 +542,11 @@ export function useDashboardData(apiBase: string) {
     // Server-computed runnable set when present (#2188); legacy union otherwise.
     // The shared SidecarSetting type admits vision's "routed", which the
     // web-search picker cannot carry — narrow it away for this card.
-    const webBackend = sidecar?.webSearch.backend;
+    const webBackend = sidecar?.webSearch?.backend;
     return webSearchModelOptionsForPicker(
       sidecar?.webSearchModels,
       models,
-      sidecar?.webSearch.model,
+      sidecar?.webSearch?.model,
       webBackend === "routed" ? undefined : webBackend,
     );
   }, [models, sidecar?.webSearchModels, sidecar?.webSearch]);
@@ -603,19 +619,22 @@ export function useDashboardData(apiBase: string) {
     }
   }
 
- const switchMaMode = async (mode: "v1" | "default" | "v2") => {
-   if (maBusy || maMode === mode) return;
-   setMaBusy(true);
+  const writeMaMode = async (mode: "v1" | "default" | "v2", acknowledgeAdvisory = false) => {
+    setMaBusy(true);
     setMaError(null);
-   try {
-     const r = await fetch(`${apiBase}/api/v2`, {
-       method: "PUT",
-       headers: { "Content-Type": "application/json" },
-       body: JSON.stringify({ multiAgentMode: mode }),
-     });
-     if (r.ok) {
-       setMaMode(mode);
-       writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, mode);
+    try {
+      const payload: { multiAgentMode: "v1" | "default" | "v2"; multiAgentSurfaceAdvisoryAcknowledged?: true } = { multiAgentMode: mode };
+      // One request, so the recommended answer cannot leave the notice raised on a mode it applied.
+      if (acknowledgeAdvisory) payload.multiAgentSurfaceAdvisoryAcknowledged = true;
+      const r = await fetch(`${apiBase}/api/v2`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (r.ok) {
+        setMaMode(mode);
+        if (acknowledgeAdvisory) setMaAdvisoryAnsweredFor(apiBase);
+        writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, mode);
       } else {
         let message = t("dash.maSwitchFailed", { status: String(r.status) });
         try {
@@ -623,12 +642,67 @@ export function useDashboardData(apiBase: string) {
           message = (typeof body.error === "string" && body.error) || (typeof body.message === "string" && body.message) || message;
         } catch { /* non-JSON error body */ }
         setMaError(message);
-     }
+      }
     } catch (e) {
       setMaError(e instanceof Error ? e.message : t("dash.maNetworkError"));
     }
-   finally { setMaBusy(false); }
- };
+    finally { setMaBusy(false); }
+  };
+
+  const switchMaMode = async (mode: "v1" | "default" | "v2") => {
+    if (maBusy || maMode === mode) return;
+    // v1 applies immediately: confirming a move toward the safe default would be noise. base
+    // and v2 both put ChatGPT-native parents on the surface whose task a routed child cannot
+    // read, so they wait for an answer.
+    if (mode !== "v1") { setPendingMaModeState({ mode, apiBase }); return; }
+    await writeMaMode("v1");
+  };
+
+  /** Answer the advisory without moving the mode. Failure just means it asks again. */
+  const acknowledgeMaAdvisory = async () => {
+    // Answered for this page load either way: the operator did answer. If the write did not
+    // land the runtime raises the notice again next load, so a failure costs one more prompt
+    // rather than a lost setting — but say so instead of swallowing it.
+    setMaAdvisoryAnsweredFor(apiBase);
+    try {
+      const r = await fetch(`${apiBase}/api/v2`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ multiAgentSurfaceAdvisoryAcknowledged: true }),
+      });
+      if (!r.ok) setMaError(t("dash.maSwitchFailed", { status: String(r.status) }));
+    } catch (e) {
+      setMaError(e instanceof Error ? e.message : t("dash.maNetworkError"));
+    }
+  };
+
+  /** The ghost button: apply the mode that was selected, or keep the stored one. */
+  const keepMaMode = async () => {
+    const pending = pendingMaMode;
+    setPendingMaModeState(null);
+    // A selection answers the advisory too. Without that, continuing to base or v2 leaves the
+    // notice raised and the next poll asks the same question the operator just answered.
+    // Unconditionally, not gated on the poll's current `required`: that projection goes false
+    // while the mode is v1 without the version having been stored, so a later confirmed base or
+    // v2 would skip the acknowledgement and be asked all over again.
+    if (pending) { await writeMaMode(pending, true); return; }
+    await acknowledgeMaAdvisory();
+  };
+
+  /** The primary button: v1, and the advisory answered in the same request when it is raised. */
+  const chooseMaV1 = async () => {
+    setPendingMaModeState(null);
+    if (maMode === "v1") { await acknowledgeMaAdvisory(); return; }
+    await writeMaMode("v1", true);
+  };
+
+  /** Escape or backdrop: abandon a selection, or leave the advisory unanswered for next load. */
+  const dismissMaSurfaceDialog = () => {
+    if (pendingMaMode) { setPendingMaModeState(null); return; }
+    setMaAdvisoryAnsweredFor(apiBase);
+  };
+
+  const maAdvisoryOpen = !pendingMaMode && !maAdvisoryAnswered && maAdvisory?.required === true;
 
   const saveInjection = async (patch: {
     multiAgentGuidanceEnabled?: boolean;
@@ -842,15 +916,17 @@ export function useDashboardData(apiBase: string) {
     usageLoading: usagePoll.loading && !usage30d,
     healthLoading: overviewPoll.loading && !health,
     sidecarSaving, shadowCallSaving, modelsLoading, settingsSaving, syncing,
-   maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
-    maError,
+maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
+   maError,
+    maAdvisory, maAdvisoryOpen, pendingMaMode, keepMaMode, chooseMaV1, dismissMaSurfaceDialog,
    effortCapHelpOpen, setEffortCapHelpOpen, shadowCallHelpOpen, setShadowCallHelpOpen,
     injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
     multiAgentGuidanceEnabled, syncCodexSubagentDefaults, saveInjection,
     effortCap, subagentEffortCap, effortCapSaving, setEffortCap, setSubagentEffortCap, setEffortCapSaving,
     syncResult, syncError, projectConfigWarnings,
     updateOpen, updateChannel, setUpdateRestart, updateRestart, updateLoading,
-    updateCheck, updateError, updateJob, reconnecting, error,
+    updateCheck, updateError, updateJob, reconnecting, error: error || overviewSurface.showError,
+    connectionFailure: overviewPoll.data?.failure ?? (overviewSurface.showError ? "unavailable" : undefined), refreshDashboard: overviewPoll.refresh,
     effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
     effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
     filteredGroups, sidecarModels, visionModels,

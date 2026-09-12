@@ -1,3 +1,7 @@
+import {
+  PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE,
+  PLAINTEXT_V2_COLLABORATION_NAMESPACE,
+} from "../../src/responses/plaintext-v2-agent-messages";
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import { handleResponses } from "../../src/server/responses";
@@ -7,6 +11,7 @@ import { fetchWithTransientRetry, isNonReplayableResponse } from "../../src/lib/
 import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
 import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
+import { readCodexWsStage } from "../../src/server/responses/codex-ws-wire";
 import { CodexWsMetadata, CODEX_WS_METADATA_MAX_BYTES, CODEX_WS_METADATA_MAX_VALUE_BYTES } from "../../src/server/responses/codex-ws-metadata";
 import {
   bunSupportsBoundedCodexWsRelay,
@@ -346,6 +351,206 @@ describe("handleResponses Codex WS relay selection", () => {
     });
   }
 
+  function plaintextV2CollaborationRequest(): Request {
+    return new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test" },
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        stream: true,
+        tools: [{ type: "namespace", name: "collaboration", tools: [{
+          type: "function", name: "spawn_agent", parameters: {
+            type: "object", properties: { message: { type: "string", encrypted: true } },
+          },
+        }, { type: "function", name: "send_message", parameters: { type: "object" } }] }],
+        input: [
+          {
+            type: "additional_tools",
+            tools: [{
+              type: "namespace",
+              name: "collaboration",
+              tools: [
+                {
+                  type: "function",
+                  name: "spawn_agent",
+                  parameters: {
+                    type: "object",
+                    properties: { message: { type: "string", encrypted: true } },
+                  },
+                },
+                { type: "function", name: "send_message", parameters: { type: "object" } },
+              ],
+            }],
+          },
+          { type: "message", role: "user", content: [{ type: "input_text", text: "delegate" }] },
+        ],
+      }),
+    });
+  }
+
+  test.each(["collaboration-optimize", null])("plaintext v2 WS restoration handles namespace=%s", async namespace => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.created",
+          response: {
+            id: "r-plaintext-v2-ws",
+            object: "response",
+            status: "in_progress",
+            output: [],
+          },
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_spawn",
+            call_id: "call-spawn",
+            namespace,
+            name: "start_delegated_task",
+            arguments: "",
+            encrypted_function_args: [],
+            status: "in_progress",
+          },
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.function_call_arguments.done",
+          item_id: "fc_spawn",
+          output_index: 0,
+          namespace,
+          name: "collaboration-optimize__start_delegated_task",
+          arguments: JSON.stringify({ message: "plain WS assignment" }),
+          encrypted_function_args: [],
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_spawn",
+            call_id: "call-spawn",
+            namespace,
+            name: "start_delegated_task",
+            arguments: JSON.stringify({ message: "plain WS assignment" }),
+            encrypted_function_args: [],
+            status: "completed",
+          },
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "r-plaintext-v2-ws",
+            status: "completed",
+            output: [{
+              type: "function_call",
+              id: "fc_spawn",
+              call_id: "call-spawn",
+              namespace,
+              name: "start_delegated_task",
+              arguments: JSON.stringify({ message: "plain WS assignment" }),
+              encrypted_function_args: [],
+              status: "completed",
+            }],
+          },
+        }),
+      });
+    });
+    const config = { ...forwardConfig(), plaintextV2AgentMessages: true } as OcxConfig;
+    const request = plaintextV2CollaborationRequest();
+
+    const response = await handleResponses(request, config, { model: "", provider: "" }, {
+      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const frame = JSON.parse(FakeWebSocket.instances[0]!.sent[0]!) as {
+      type: string;
+      stream?: unknown;
+      input: Array<Record<string, unknown>>;
+    };
+    const additionalTools = frame.input.find(item => item.type === "additional_tools") as {
+      tools: Array<{
+        name: string;
+        tools: Array<{
+          name: string;
+          parameters: { properties: { message: Record<string, unknown> } };
+        }>;
+      }>;
+    };
+    expect(frame.type).toBe("response.create");
+    expect(frame.stream).toBeUndefined();
+    expect(additionalTools.tools[0]!.name).toBe("collaboration-optimize");
+    expect(additionalTools.tools[0]!.tools[0]!.name).toBe("start_delegated_task");
+    expect(additionalTools.tools[0]!.tools[0]!.parameters.properties.message.encrypted).toBeUndefined();
+
+    expect(isEagerRelaySseResponse(response)).toBe(true);
+    const clientText = await response.text();
+    expect(clientText).toContain("response.function_call_arguments.done");
+    const argumentDoneLine = clientText.split("\n")
+      .find(line => line.includes('"response.function_call_arguments.done"'))!;
+    const argumentDone = JSON.parse(argumentDoneLine.replace(/^data: /, "")) as Record<string, unknown>;
+    expect(argumentDone.namespace).toBe("collaboration");
+    expect(argumentDone.name).toBe("spawn_agent");
+    expect(argumentDone.encrypted_function_args).toEqual([]);
+    const completedLine = clientText.split("\n")
+      .find(line => line.includes('"response.completed"'))!;
+    const completed = JSON.parse(completedLine.replace(/^data: /, "")) as {
+      response: { output: Array<Record<string, unknown>> };
+    };
+    expect(completed.response.output[0]!.namespace).toBe("collaboration");
+    expect(completed.response.output[0]!.name).toBe("spawn_agent");
+    expect(completed.response.output[0]!.encrypted_function_args).toEqual([]);
+  });
+
+  test("plaintext v2 restoration overflow fails closed on the WS upstream path", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "r-plaintext-v2-ws-overflow",
+            status: "completed",
+            output: Array.from({ length: 10_000 }, (_, index) => ({
+              type: "function_call",
+              call_id: `call-${index}`,
+              namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
+              name: "start_delegated_task",
+              arguments: "{}",
+            })),
+          },
+        }),
+      });
+    });
+    const config = { ...forwardConfig(), plaintextV2AgentMessages: true } as OcxConfig;
+
+    const response = await handleResponses(
+      plaintextV2CollaborationRequest(),
+      config,
+      { model: "", provider: "" },
+      { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME },
+    );
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(isEagerRelaySseResponse(response)).toBe(true);
+    const clientText = await response.text();
+    expect(clientText).toContain("event: response.failed");
+    expect(clientText).toContain(PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
+    expect(clientText).toContain("data: [DONE]");
+    expect(clientText).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(clientText).not.toContain("start_delegated_task");
+    expect(FakeWebSocket.instances[0]!.closed).toBe(true);
+  });
+
   test("a successful WS upgrade bypasses the configured legacy tee path", async () => {
     installFake(ws => {
       ws.emit("open", {});
@@ -407,6 +612,26 @@ describe("handleResponses Codex WS relay selection", () => {
     expect(text).toContain("data: [DONE]");
     expect(logCtx.activeAttempt?.streamAborted).toBe(true);
     expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  test("handleResponses adopts the exchange stage onto the logged attempt (#4191)", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("close", { code: 1006 });
+    });
+
+    const logCtx = { model: "", provider: "" };
+    const response = await handleResponses(request(), forwardConfig(), logCtx, {
+      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
+    });
+
+    expect([502, 504]).toContain(response.status);
+    const stage = (logCtx.activeAttempt as { codexWsStage?: Record<string, unknown> } | undefined)?.codexWsStage;
+    expect(stage).toBeDefined();
+    expect(stage?.closeCode).toBe(1006);
+    expect(stage?.sent).toBe(true);
+    expect(typeof stage?.ocxVersion).toBe("string");
+    expect(stage?.bunVersion).toBe(BOUNDED_WS_RUNTIME);
   });
 
   test.skipIf(bunSupportsBoundedCodexWsRelay())(
@@ -1680,6 +1905,52 @@ describe("oversized Codex create frames", () => {
     const failure = ((await response.json()) as { error: { code: string; message: string } }).error;
     expect(failure.code).toBe("upstream_closed_before_response");
     expect(failure.message).toContain("closed before a Responses terminal event (close 1006)");
+  });
+
+  test("a pre-terminal 1006 marks the response with a content-free stage record", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("close", { code: 1006, reason: "abnormal closure detail" });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    expect(response.status).toBe(502);
+    const stage = readCodexWsStage(response);
+    expect(stage).toBeDefined();
+    expect(stage?.closeCode).toBe(1006);
+    expect(stage?.sent).toBe(true);
+    expect(stage?.requestBytes).toBeGreaterThan(0);
+    expect(stage?.upstreamFrames).toBe(0);
+    expect(stage?.firstFrameMs).toBeNull();
+    expect(stage?.reused).toBe(false);
+    expect(typeof stage?.ocxVersion).toBe("string");
+    expect(stage?.bunVersion).toBe(BOUNDED_WS_RUNTIME);
+    // Content-free: the close reason is upstream text and never enters the record.
+    expect(JSON.stringify(stage)).not.toContain("abnormal closure detail");
+    expect(JSON.stringify(stage)).not.toContain("reason");
+  });
+
+  test("a committed exchange marks exactly one stage and never byte-counts the frame", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    expect(response.status).toBe(200);
+    await response.text();
+    const stage = readCodexWsStage(response);
+    expect(stage).toBeDefined();
+    // The happy path skips the UTF-8 walk of the create frame on purpose.
+    expect(stage?.requestBytes).toBeNull();
+    expect(stage?.closeCode).toBeNull();
+    expect(stage?.sent).toBe(true);
+    expect(stage?.relayedEvents).toBeGreaterThan(0);
   });
 
   test("dials the configured provider's own wss URL for an opt-in upstream", async () => {

@@ -201,3 +201,5 @@ opencode must be installed and on `PATH`:
 ```bash
 npm install -g opencode-ai
 ```
+
+The launcher reads the model catalog with the local admin token from the environment or the running proxy home. It connects directly to a loopback management listener and refuses redirects. A hub bound only to a nonlocal address needs its loopback `hub.managementIngress` enabled. The admin token is not passed into the OpenCode child; inference continues using its separate data key. If the local admin token is missing, the launcher reports the problem rather than retrying with a data key.

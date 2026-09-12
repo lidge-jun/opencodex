@@ -1,5 +1,11 @@
 # Kiro Provider
 
+The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+
+The shared hosted-tool policy has no Codex Spark-specific branch. Kiro continues to use its
+provider capabilities below; see [Responses compatibility](../transports/responses.md#responses-httpsse).
+
 ## Kiro client parallel-tool hint
 
 Kiro's wire remains serialized even when an OpenAI Responses client sends
@@ -9,6 +15,10 @@ advertise `supports_parallel_tool_calls: false`, and the adapter emits no parall
 while accepting the client hint and translating the ordinary tool catalog normally.
 
 > Decision record: [ADR-0060](../decisions/ADR-0060-kiro-client-parallel-tool-hint.md)
+
+Kiro's own `kiroToolName` rewrite in `src/adapters/kiro-wire.ts` is CodeWhisperer-only and
+reserves the private completion tool. Meta Muse 64-character MCP aliases live in
+`src/responses/muse-tool-name-alias.ts` and must not import that Kiro helper.
 
 ## Kiro Responses text controls
 
@@ -59,3 +69,19 @@ positive value overwrites an earlier one.
 Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
 `tokenUsage` on any event, which is why Kiro usage stays estimated; `meteringEvent` is currently
 ignored because a credit is not a token count.
+## Remote image references
+
+Kiro's wire inlines base64 bytes only, so a remote `https` image reference cannot be
+sent. It used to be dropped with neither bytes nor any marker, so the payload and the
+evidence that an attachment existed both disappeared.
+
+`countKiroUninlinableImages` reports how many parts `parseDataUrlImage` could not
+inline, and the payload builder appends a bounded marker to that turn's text. The
+marker is appended before `rawGroupText` is computed, because adjacency grouping
+rebuilds a turn's content from its collected texts and would otherwise discard it.
+
+No fetch is introduced: resolving the reference server-side would add an outbound
+request on a request path. The marker carries a count and no URL, because a remote
+image URL can carry a signed token.
+
+Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.

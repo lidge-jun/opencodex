@@ -15,6 +15,8 @@ ocx connect status
 ocx sync
 ```
 
+İnsanın okuyacağı hazırlık tanılarında katalog değerlerindeki denetim karakterleri görünür onaltılık kaçış dizileri olarak yazılır; bu hem ilk bağlanışta hem de `ocx sync` yenilenen hub kataloğunu reddettiğinde geçerlidir. JSON durumu özgün tanı değerini olduğu gibi korur.
+
 İstemci anahtarı yalnızca sahibinin okuyabildiği `service-api-token` dosyasına yazılır, `config.json` içine yazılmaz. Bağlı kullanım hub deposundan aynı `apiKeyId` ile filtrelenir; bağlantı kesilince yerel depo kullanılır. İki depo birbirini yansıtmaz.
 
 Admin token sıradan yönetim yapabilir ancak hiçbir zaman onay oturumu oluşturamaz. Onay işlemleri sunucu tarafından verilen `gui-session`, eşleşen Origin ve CSRF ister. `Tailscale-User-Login` yalnızca ayrı yönetim girişinde güvenilirdir; tam kimlikleri `remoteGui.allowedTailscaleUsers` içinde belirtin.

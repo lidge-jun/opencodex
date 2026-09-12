@@ -372,8 +372,12 @@ eligible accounts, taking the highest order tier that still has quota headroom a
 `accountPoolStrategy` to choose inside it. Pause, cooldown, and reauthentication are unaffected.
 Changes apply from the **next unbound request**, not only from newly started sessions: preemption moves
 an unbound request up as soon as a higher order regains headroom. Threads already bound to an account
-normally keep it until that account is drained; a reauthentication failure, a quota cooldown, or a
-transient-failure streak releases the binding before that. Any accepted write also releases a manual
+normally keep it until that account is drained; a reauthentication failure or a quota cooldown still
+releases the binding immediately. A transient-failure streak (5xx and other non-quota failures
+reaching `upstreamFailoverThreshold`, default 3) no longer deletes a live binding: the request is
+served by another account while the binding is kept, and the task returns to its own account as soon
+as that account serves again. If the account is still failing after 10 minutes the binding is
+released normally. This hold is independent of `pool.cacheAffinity`. Any accepted write also releases a manual
 "use this account now" pin, on whichever account held it, including a write that stores the
 order an account already had — this is the only way to clear a pin while keeping the account
 that is currently selected. (Clearing the active account through the management API releases a
@@ -486,9 +490,14 @@ ocx account main doctor [--json]
 ocx account main list [--json]
 ocx account main register <label> [--json]
 ocx account main add <label>
+ocx account main reauth --device [--no-wait] [--json]
+ocx account main reauth status --flow <id> [--json]
+ocx account main reauth cancel --flow <id> [--json]
 ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
+
+`ocx account main reauth --device --no-wait --json` writes one JSON object to stdout on success, without the human-readable `follow up:` line. Use its `flowId` with `ocx account main reauth status --flow <id> --json` to check progress.
 
 Each mutating command reports the canonical effective `CODEX_HOME` returned by the running proxy.
 This path can differ from the caller's `CODEX_HOME`; commands that support JSON expose the same
@@ -500,6 +509,8 @@ login flow before importing the resulting credential. Close Codex before switchi
 successful switch preserves local tasks and history, then requires Codex to be restarted. Use
 `doctor` to inspect profile state and `recover` to finish or roll back an interrupted transition.
 `switch` accepts either the profile ID or its label.
+
+`reauth` re-authenticates the *existing* native main identity with an OpenAI device code (#3898) instead of enrolling a new profile. It is the headless-hub recovery path: no local Codex App, no `codex` binary, and no OS keyring are required. The device login must complete for the same ChatGPT account that already holds the native main slot; the credential write is fenced by the exclusive claim and a path/hash/inode snapshot, and the command output carries only the flow id, the verification URL, the device code, and status. The pool login route stays pool-only and keeps rejecting `__main__`; the equivalent dashboard surface is the Codex Auth main card's Re-login with device code control.
 
 The v1 recovery matrix covers an OpenCodex process exiting after a transaction file has been
 published by rename. It does not claim durability across an OS or kernel crash or sudden power
@@ -581,3 +592,15 @@ otherwise look routed.
 and rejects an entire catalog containing any other value, so `add`, `edit`, and the management API
 all refuse the bad value rather than storing something the catalog writer would have to strip later
 (#759).
+
+### Mark one model text-only
+
+Use `ocx provider add mine --adapter openai-chat --base-url https://example.com/v1 --default-model model-a --text-only` when registering a provider, or `ocx provider edit mine --model model-a --text-only` for an existing provider. Add can use `--model` or its default model; edit requires `--model`. The flag updates only that exact model's `modelCapabilities.inputModalities` to `["text"]`, preserving other models and axes.
+
+### Cached quota history
+
+`ocx account history openai <pool-account-id> [--limit 1-200] [--json]` reads stored observations without contacting the provider. The output separates actual observation time, WHAM or response-header source, window family and usage percentage. At most 200 observations per account are retained for 30 days, with global storage bounds.
+
+Ordinary token refresh preserves history. Reauthentication, removal or account replacement retires the old publication. Native main and probes performed before a login is published are not included. Missing history means insufficient observations, not zero usage. This command does not spend quota. Effective estimates, when supported by observations, carry the limitations below.
+
+The history output also includes effective reported-token estimates when same-window observations and attributable usage support them. Each estimate includes a sample count and low confidence. Quota rounding, external usage and assumed log-label continuity limit the inference; it is not your provider’s token allowance. Missing or truncated ledger evidence returns insufficient evidence. `--limit` controls displayed history, not the bounded estimate input.

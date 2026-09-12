@@ -39,7 +39,6 @@ import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chat
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginDevin, refreshDevinToken } from "./devin";
-import { loginDevinCli, refreshDevinCliToken } from "./devin-cli";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
@@ -267,7 +266,9 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("kimi"),
   },
   "meta-muse": {
-    login: ctrl => loginMetaMuse(ctrl),
+    // Add-account/reauth must not reimport the credential already on disk; it starts the
+    // device grant instead, the same mapping command-code uses above.
+    login: (ctrl, opts) => loginMetaMuse(ctrl, {}, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
     refresh: refreshMetaMuseToken,
     providerConfig: oauthConfig("meta-muse"),
     defaultModel: oauthDefaultModel("meta-muse"),
@@ -311,20 +312,13 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("cursor"),
   },
   devin: {
-    login: (ctrl) => loginDevin(ctrl),
+    // Import-first: adopts a signed-in Devin CLI credential when one exists and
+    // only then falls back to the Auth0 browser flow. forceLogin skips the
+    // import so reauth/add-account can reach a different account than the CLI's.
+    login: (ctrl, opts) => loginDevin(ctrl, opts),
     refresh: refreshDevinToken,
     providerConfig: oauthConfig("devin"),
     defaultModel: oauthDefaultModel("devin"),
-    defaultRefreshPolicy: "disabled",
-  },
-  "devin-cli": {
-    // Import-first, the kiro shape: adopt the credential the installed CLI
-    // already holds instead of starting a browser flow it has already completed.
-    login: (ctrl, opts) => loginDevinCli(ctrl, opts),
-    refresh: refreshDevinCliToken,
-    providerConfig: oauthConfig("devin-cli"),
-    defaultModel: oauthDefaultModel("devin-cli"),
-    // The CLI owns the session and Cognition exposes no refresh endpoint.
     defaultRefreshPolicy: "disabled",
   },
   "github-copilot": {
@@ -341,6 +335,23 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     providerConfig: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
     defaultModel: "gpt-5.6-luna",
   },
+};
+
+/**
+ * Removed provider ids that still name a live successor.
+ *
+ * `devin-cli` was merged into `devin` (import-first login absorbed the CLI
+ * credential import; devlog/_plan/260913_devin_provider_merge). The id can
+ * still arrive here from a saved config row or a stored credential slot that
+ * the startup migration has not rekeyed yet, and from a user typing the old
+ * name at `ocx login`. It is deliberately NOT an OAUTH_PROVIDERS entry:
+ * keeping one would re-expose it as a separate dashboard/login row, and its
+ * `oauthConfig("devin-cli")` would throw at module load once the registry row
+ * is gone. The alias map covers the paths that must keep working — refresh
+ * policy resolution below, and the login-cli dispatch that warns and reroutes.
+ */
+export const DEPRECATED_OAUTH_PROVIDER_ALIASES: Record<string, string> = {
+  "devin-cli": "devin",
 };
 
 export function isOAuthProvider(name: string): boolean {
@@ -363,7 +374,11 @@ function isRefreshPolicy(value: unknown): value is RefreshPolicy {
 export function resolveRefreshPolicy(provider: string, config: OcxConfig): RefreshPolicy {
   const override = config.providers[provider]?.refreshPolicy;
   if (isRefreshPolicy(override)) return override;
-  const def = OAUTH_PROVIDERS[provider];
+  // Resolve through the alias map so a lingering `devin-cli` row inherits
+  // devin's "disabled" policy. Without it the row would fall to "lazy-only"
+  // and the guardian would attempt refreshes Cognition has no endpoint for,
+  // marking the account needsReauth on a durable key that cannot refresh.
+  const def = OAUTH_PROVIDERS[DEPRECATED_OAUTH_PROVIDER_ALIASES[provider] ?? provider];
   return def?.defaultRefreshPolicy ?? "lazy-only";
 }
 

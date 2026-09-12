@@ -155,7 +155,7 @@ export function nativeOpenAiAliasPresentation(slug: string): { displayName: stri
  * Devlog: 260816_codexrs_multiagent_v2_and_history_perf/011 §4-bis.
  */
 export const NATIVE_OPENAI_MODELS = [
-  "gpt-5.5", "gpt-5.3-codex-spark",
+  "gpt-5.5",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
@@ -178,7 +178,7 @@ export const SUPPORTED_NATIVE_OPENAI_SLUGS = new Set(NATIVE_OPENAI_MODELS);
  * thing that makes a slug retired is upstream withdrawing it.
  */
 export const RETIRED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
-  "gpt-5.4", "gpt-5.4-mini",
+  "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
 ]);
 
 /**
@@ -192,8 +192,8 @@ export const RETIRED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
  * flipped false — letting a drain silently rewrite the operator's configured subagent model.
  *
  * It is an explicit list rather than `SUPPORTED_NATIVE_OPENAI_SLUGS`, which would have widened
- * the sentinel to `gpt-5.5` and `gpt-5.3-codex-spark` as well. Those
- * models were never covered, and widening would turn "fell back and answered" into a
+ * the sentinel to `gpt-5.5` as well. That
+ * model was never covered, and widening would turn "fell back and answered" into a
  * maintenance error for the most commonly configured fallback slug in the repo. Membership is
  * the set the drain behaviour was actually reasoned about: the account-gated natives plus the
  * flagships that just left that set.

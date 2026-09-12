@@ -3,7 +3,7 @@ import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
-import { isCursorBenignCancelError, isCursorInvalidArgumentError, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
+import { isCursorBenignCancelError, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
 import { cursorCheckpointModelAffinityId, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
@@ -31,7 +31,14 @@ import { debugProviderDiagnostic } from "../lib/debug";
 import { isDebugEnabled } from "../lib/debug-settings";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { estimateTokens } from "../lib/token-estimate";
-import { rememberCursorThreadConversation } from "./cursor/thread-continuity";
+import {
+  cursorOverflowRemintScopeKey,
+  markCursorOverflowSurfaced,
+  recordCursorOverflowRemint,
+  rememberCursorThreadConversation,
+  shouldSkipCursorOverflowRemint,
+  shouldSurfaceCursorOverflowFirst,
+} from "./cursor/thread-continuity";
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
 import { cursorRequestHasShellAlias, cursorRequestUsesCodeMode } from "./cursor/tool-definitions";
 import {
@@ -396,87 +403,115 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 }
               }
             },
+            // Cursor's retry ladder re-sends the WHOLE turn, so each attempt is a physical send
+            // the enclosing request pays for. A meta without a budget -- every adapter unit test,
+            // and any caller predating this -- keeps the adapter's own three attempts (#4546).
+            incoming.sendBudget ? { sendBudget: incoming.sendBudget } : {},
           );
         };
 
-        try {
-          await runOnce(request);
-        } catch (err) {
-          const outputGuardRetryText =
-            err instanceof CursorToolResultEchoError
-              ? CURSOR_ECHO_RETRY_CONTINUATION_TEXT
-              : err instanceof CursorRoutingCommentaryError
-                ? CURSOR_ROUTING_COMMENTARY_RETRY_TEXT
-                : undefined;
-          // One-shot corrective retry for guarded external output (devlog 260826 gap-10/11).
-          // The quarantine guarantees no client-visible delta escaped, so a fresh-conversation
-          // retry is safe. A second rejection propagates as an error rather than looping.
-          if (
-            outputGuardRetryText
-            && !emittedOutput
-            && !replayUnsafe
-            && !incoming.abortSignal?.aborted
-          ) {
-            debugProviderDiagnostic(
-              "cursor",
-              err instanceof CursorToolResultEchoError
-                ? "envelope-echo-retry"
-                : "routing-commentary-retry",
-              {
-              wireModel: request.modelId,
-              conversationHash: request.conversationId.slice(0, 16),
-              },
+        const remintConversationId = (failedConversationId: string) => {
+          lastTransport = undefined;
+          _parsed._cursorConversationId = undefined;
+          const next = createCursorRequest(_parsed, { forceFreshConversation: true });
+          rekeyContextUsage(failedConversationId, next.conversationId);
+          _parsed._cursorConversationId = next.conversationId;
+          // Persist recovery for store:false clients that send any stable Cursor thread owner, so
+          // the next turn does not recompute the stale deterministic thread hash. Isolated helper /
+          // compaction turns must not park their throwaway id under the parent or Desktop owner.
+          const threadOwner = cursorClientThreadOwner(_parsed);
+          if (threadOwner && _parsed._cursorIsolateConversation !== true) {
+            rememberCursorThreadConversation(
+              threadOwner,
+              next.conversationId,
+              _parsed._cursorIdentityScope,
             );
-            const echoedConversationId = request.conversationId;
-            lastTransport = undefined;
-            _parsed._cursorConversationId = undefined;
-            request = {
-              ...createCursorRequest(_parsed, { forceFreshConversation: true }),
-              echoRetryContinuationText: outputGuardRetryText,
-            };
-            rekeyContextUsage(echoedConversationId, request.conversationId);
-            _parsed._cursorConversationId = request.conversationId;
-            const echoThreadOwner = cursorClientThreadOwner(_parsed);
-            if (echoThreadOwner && _parsed._cursorIsolateConversation !== true) {
-              rememberCursorThreadConversation(
-                echoThreadOwner,
-                request.conversationId,
-                _parsed._cursorIdentityScope,
-              );
-            }
+          }
+          return next;
+        };
+
+        for (;;) {
+          try {
             await runOnce(request);
-          } else {
-            // One-shot fallback for external-model Connect invalid_argument before any
-            // non-heartbeat output. Retries apply only to safe plain-user turns; tool-result
-            // resumes, local exec/MCP side effects, and already-emitted output fail closed.
+            break;
+          } catch (err) {
+            const outputGuardRetryText =
+              err instanceof CursorToolResultEchoError
+                ? CURSOR_ECHO_RETRY_CONTINUATION_TEXT
+                : err instanceof CursorRoutingCommentaryError
+                  ? CURSOR_ROUTING_COMMENTARY_RETRY_TEXT
+                  : undefined;
+            // One-shot corrective retry for guarded external output (devlog 260826 gap-10/11).
+            // The quarantine guarantees no client-visible delta escaped, so a fresh-conversation
+            // retry is safe. A second rejection propagates as an error rather than looping.
             if (
-              !isCursorInvalidArgumentError(err)
-              || !isCursorExternalWireModel(request.modelId)
-              || lastRawIsToolResult
-              || emittedOutput
-              || replayUnsafe
-              || incoming.abortSignal?.aborted
+              outputGuardRetryText
+              && !emittedOutput
+              && !replayUnsafe
+              && !incoming.abortSignal?.aborted
             ) {
-              throw err;
-            }
-            const failedConversationId = request.conversationId;
-            lastTransport = undefined;
-            _parsed._cursorConversationId = undefined;
-            request = createCursorRequest(_parsed, { forceFreshConversation: true });
-            rekeyContextUsage(failedConversationId, request.conversationId);
-            _parsed._cursorConversationId = request.conversationId;
-            // Persist recovery for store:false clients that send any stable Cursor thread owner, so
-            // the next turn does not recompute the stale deterministic thread hash. Isolated helper /
-            // compaction turns must not park their throwaway id under the parent or Desktop owner.
-            const threadOwner = cursorClientThreadOwner(_parsed);
-            if (threadOwner && _parsed._cursorIsolateConversation !== true) {
-              rememberCursorThreadConversation(
-                threadOwner,
-                request.conversationId,
+              debugProviderDiagnostic(
+                "cursor",
+                err instanceof CursorToolResultEchoError
+                  ? "envelope-echo-retry"
+                  : "routing-commentary-retry",
+                {
+                wireModel: request.modelId,
+                conversationHash: request.conversationId.slice(0, 16),
+                },
+              );
+              const echoedConversationId = request.conversationId;
+              request = {
+                ...remintConversationId(echoedConversationId),
+                echoRetryContinuationText: outputGuardRetryText,
+              };
+              await runOnce(request);
+              break;
+            } else {
+              const overflowRemintSafe =
+                !lastRawIsToolResult
+                && !emittedOutput
+                && !replayUnsafe
+                && _parsed._cursorIsolateConversation !== true
+                && request.contextUsageStoreCheckpoints !== false
+                && !incoming.abortSignal?.aborted;
+              const overflowScopeKey = cursorOverflowRemintScopeKey(
+                cursorClientThreadOwner(_parsed),
                 _parsed._cursorIdentityScope,
               );
+              if (
+                overflowScopeKey
+                && overflowRemintSafe
+                && isCursorOverflowRemintCandidate(err, requestSizeContext)
+              ) {
+                if (shouldSkipCursorOverflowRemint(overflowScopeKey)) throw err;
+                if (shouldSurfaceCursorOverflowFirst(overflowScopeKey)) {
+                  markCursorOverflowSurfaced(overflowScopeKey);
+                  throw err;
+                }
+                if (!recordCursorOverflowRemint(overflowScopeKey)) throw err;
+                if (inheritedCheckpointRef) invalidateCursorCheckpoint(inheritedCheckpointRef);
+                request = remintConversationId(request.conversationId);
+                continue;
+              }
+
+              // One-shot fallback for external-model Connect invalid_argument before any
+              // non-heartbeat output. Retries apply only to safe plain-user turns; tool-result
+              // resumes, local exec/MCP side effects, and already-emitted output fail closed.
+              if (
+                !isCursorInvalidArgumentError(err)
+                || !isCursorExternalWireModel(request.modelId)
+                || lastRawIsToolResult
+                || emittedOutput
+                || replayUnsafe
+                || incoming.abortSignal?.aborted
+              ) {
+                throw err;
+              }
+              request = remintConversationId(request.conversationId);
+              await runOnce(request);
+              break;
             }
-            await runOnce(request);
           }
         }
         if (

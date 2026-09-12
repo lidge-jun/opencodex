@@ -80,6 +80,90 @@ describe("codex-account-store CRUD", () => {
     expect(store.readCodexAccountRecord("pending")?.lastCodexValidationStatus).toBe("ok");
   });
 
+  test("quota history identity survives refresh but explicit publication retires the writer", async () => {
+    const store = await import("../../src/codex/account-store");
+    const credential = { accessToken: "history-access", refreshToken: "history-refresh", expiresAt: Date.now() + 3600_000, chatgptAccountId: "history-account" };
+    const generation = store.saveCodexAccountCredential("history", credential);
+    const writer = store.capturePoolQuotaWriter("history", { ...credential, generation })!;
+    expect(writer.historyIdentity).toMatch(/^[a-f0-9-]{36}$/);
+    expect(store.isPoolQuotaWriterLive(writer)).toBe(true);
+    const refreshed = { ...credential, accessToken: "history-refreshed-access", refreshToken: "history-refreshed-grant" };
+    expect(store.saveCodexAccountCredentialIfGeneration("history", generation, refreshed)).toBe(true);
+    expect(store.poolQuotaHistoryIdentity("history")).toBe(writer.historyIdentity);
+    expect(store.isPoolQuotaWriterLive(writer)).toBe(false);
+    const refreshedWriter = store.capturePoolQuotaWriter("history", { ...refreshed, generation: generation + 1 })!;
+    expect(refreshedWriter.historyIdentity).toBe(writer.historyIdentity);
+    expect(store.getCodexAccountCredential("history")).toEqual(refreshed);
+    const clock = spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      store.saveCodexAccountCredential("history", refreshed);
+      const replaced = store.poolQuotaHistoryIdentity("history");
+      expect(replaced).not.toBe(writer.historyIdentity);
+      store.saveCodexAccountCredential("history", refreshed);
+      expect(store.poolQuotaHistoryIdentity("history")).not.toBe(replaced);
+    } finally { clock.mockRestore(); }
+    expect(store.isPoolQuotaWriterLive(refreshedWriter)).toBe(false);
+  });
+
+  test("quota history aliases retain distinct publication identities through refresh", async () => {
+    const store = await import("../../src/codex/account-store");
+    const credential = { accessToken: "alias-access", refreshToken: "alias-refresh", expiresAt: Date.now() + 3600_000, chatgptAccountId: "alias-account" };
+    const generation = store.saveCodexAccountCredential("owner", credential);
+    store.saveCodexAccountCredential("alias", credential);
+    const ownerIdentity = store.poolQuotaHistoryIdentity("owner");
+    const aliasIdentity = store.poolQuotaHistoryIdentity("alias");
+    expect(ownerIdentity).not.toBe(aliasIdentity);
+    const refreshed = { ...credential, accessToken: "alias-refreshed", refreshToken: "alias-new-refresh" };
+    expect(store.commitRefreshedCodexCredentialWithAliases("owner", generation, refreshed).committed).toBe(true);
+    expect(store.poolQuotaHistoryIdentity("owner")).toBe(ownerIdentity);
+    expect(store.poolQuotaHistoryIdentity("alias")).toBe(aliasIdentity);
+    store.removeCodexAccountCredential("alias");
+    expect(store.poolQuotaHistoryIdentity("alias")).toBeUndefined();
+    store.saveCodexAccountCredential("alias", refreshed);
+    expect(store.poolQuotaHistoryIdentity("alias")).not.toBe(aliasIdentity);
+  });
+
+  test("legacy history identity initializes once without advancing credential generation or epoch", async () => {
+    const store = await import("../../src/codex/account-store");
+    const { codexCredentialMutationEpoch } = await import("../../src/codex/credential-mutation-epoch");
+    const credential = { accessToken: "legacy-history-access", refreshToken: "legacy-history-refresh", expiresAt: Date.now() + 3600_000, chatgptAccountId: "legacy-history-account" };
+    writeFileSync(ACCOUNTS_PATH, JSON.stringify({ legacy: credential }));
+    const epoch = codexCredentialMutationEpoch();
+    expect(store.poolQuotaHistoryIdentity("legacy")).toBeUndefined();
+    expect(store.capturePoolQuotaWriter("legacy", { ...credential, generation: 1 })).toBeUndefined();
+    expect(store.capturePoolQuotaWriter("legacy", { ...credential, accessToken: "wrong", generation: 0 })).toBeUndefined();
+    expect(store.capturePoolQuotaWriter("legacy", { ...credential, chatgptAccountId: "wrong", generation: 0 })).toBeUndefined();
+    const writer = store.capturePoolQuotaWriter("legacy", { ...credential, generation: 0 })!;
+    expect(store.capturePoolQuotaWriter("legacy", { ...credential, generation: 0 })).toEqual(writer);
+    expect(store.readCodexAccountRecord("legacy")?.generation).toBe(0);
+    expect(codexCredentialMutationEpoch()).toBe(epoch);
+    expect(store.loadCodexAccountStore()).toEqual({ legacy: credential });
+    expect(JSON.stringify(writer)).not.toContain(credential.accessToken);
+    expect(JSON.stringify(writer)).not.toContain(credential.refreshToken);
+    expect(store.capturePoolQuotaWriter("__main__", { ...credential, generation: 0 })).toBeUndefined();
+  });
+
+  test("malformed optional history metadata cannot discard an otherwise usable credential", async () => {
+    const store = await import("../../src/codex/account-store");
+    const credential = { accessToken: "metadata-access", refreshToken: "metadata-refresh", expiresAt: Date.now() + 3600_000, chatgptAccountId: "metadata-account" };
+    writeFileSync(ACCOUNTS_PATH, JSON.stringify({ metadata: { credential, generation: 3, quotaHistoryIdentity: 42 } }));
+    expect(store.getCodexAccountCredential("metadata")).toEqual(credential);
+    expect(store.poolQuotaHistoryIdentity("metadata")).toBeUndefined();
+    expect(store.capturePoolQuotaWriter("metadata", { ...credential, generation: 3 })?.historyIdentity).toMatch(/^[a-f0-9-]{36}$/);
+  });
+
+  test("an identity-changing CAS does not retain history or propagate credentials to old aliases", async () => {
+    const store = await import("../../src/codex/account-store");
+    const credential = { accessToken: "old-account-access", refreshToken: "shared-old-refresh", expiresAt: Date.now() + 3600_000, chatgptAccountId: "old-account" };
+    const generation = store.saveCodexAccountCredential("owner", credential);
+    store.saveCodexAccountCredential("alias", credential);
+    const identity = store.poolQuotaHistoryIdentity("owner");
+    const result = store.commitRefreshedCodexCredentialWithAliases("owner", generation, { ...credential, accessToken: "new-account-access", refreshToken: "new-refresh", chatgptAccountId: "new-account" });
+    expect(result).toMatchObject({ committed: true, propagatedAliases: [] });
+    expect(store.poolQuotaHistoryIdentity("owner")).not.toBe(identity);
+    expect(store.getCodexAccountCredential("alias")).toEqual(credential);
+  });
+
   test("save and load credential round-trip", async () => {
     const { saveCodexAccountCredential, getCodexAccountCredential } = await import("../../src/codex/account-store");
     const cred = { accessToken: "tk_a", refreshToken: "rf_a", expiresAt: Date.now() + 3600_000, chatgptAccountId: "acc_a" };

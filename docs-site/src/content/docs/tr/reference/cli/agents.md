@@ -111,6 +111,8 @@ verilerini inceleyin. Doğrudan takma adlar şunlardır:
 ocx observe usage --range 30d --json
 ```
 
+Bazı kullanım kayıtları dahil edilemiyorsa okunabilir çıktı, okunabilir satır olmadığında da uyarı gösterir. Gösterilen toplamlar yalnızca okunabilir kayıtları yansıtır. Filtreyle eşleşen okunabilir kayıt yoksa toplam satırları yerine uyarı ve yönlendirme gösterilir; atlanan kayıtlar eşleşme içerebilir. `--json`, yanıttaki `usageIncomplete` tanısını ve nedenini korur.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Çalışan proxy'nin yönetim API'si aracılığıyla çalışma zamanı hata ayıklama
@@ -285,6 +287,12 @@ sekmesinde işlenir; böylece CLI, API ve GUI aynı baytları kullanır.
 
 Başsız çalışma zamanı ayarlarını, başlatmayı, senkronizasyonu, tanılamayı ve
 güncellemeleri yönetin.
+
+`ocx system codex-restart --yes`, `ocx sync --restart-codex` ile aynı modül
+üzerinden Codex app-server'larını yeniden başlatır ve Codex masaüstü
+uygulamasını tamamen kapatıp yeniden başlatır. Proxy'nin kendisi Codex
+uygulamasının içinde çalışıyorsa, tamamlayamayacağı bir devri vaat etmek
+yerine eyleme geçirilebilir bir iletiyle reddeder.
 
 ```bash
 ocx system settings --stream-mode eager-relay

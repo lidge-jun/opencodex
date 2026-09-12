@@ -94,6 +94,8 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ocx observe usage --range 30d --json
 ```
 
+일부 사용량 기록을 집계하지 못하면 일반 출력은 읽을 수 있는 행이 없어도 경고합니다. 표시되는 합계는 읽을 수 있는 기록만 반영합니다. 필터에 일치하는 읽을 수 있는 기록이 없으면 합계 항목 대신 경고와 안내를 표시하며, 제외된 기록에는 일치하는 항목이 있을 수 있습니다. `--json`은 응답의 `usageIncomplete` 진단과 사유를 그대로 유지합니다.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 실행 중인 프록시의 관리 API를 통해 런타임 디버그 override를 읽거나 변경합니다.
@@ -209,6 +211,11 @@ opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 
 
 헤드리스 런타임 설정, 시작, 동기화, 진단, 업데이트를 관리합니다.
 
+`ocx system codex-restart --yes`는 `ocx sync --restart-codex`와 같은 모듈로 Codex
+app-server를 재시작하고 데스크톱 앱도 완전히 종료한 뒤 다시 띄웁니다. 프록시 자체가
+Codex 앱 안에서 실행 중이면 넘길 수 없는 handoff를 약속하지 않고, 대신 실행 가능한
+안내와 함께 거절합니다.
+
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
@@ -224,3 +231,7 @@ ocx system codex-cli-update check --json
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
 검증된 OpenCodex configuration을 검사하고 안전하게 수정합니다. `show`와 `get`은 비밀 값을 가립니다. import는 쓰기 전에 검증하며 `--yes`가 필요합니다.
+
+### 연결된 클라이언트의 사용량
+
+`ocx usage`는 등록된 데이터 키로 허브에서 이 클라이언트의 사용량만 읽습니다. 출력에는 허브 출처와 키 범위가 표시됩니다. 기간·모델·공급자 필터와 `--since`/`--until`, `--json`을 그대로 사용할 수 있습니다. 계정별 내역과 다른 클라이언트 기록은 반환하지 않습니다. 허브가 응답하지 않거나 이 기능을 지원하지 않으면 오류를 알립니다. 로컬 기록으로 대신 표시하지 않습니다. 구형 허브라면 허브를 업데이트하세요.

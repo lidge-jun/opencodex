@@ -579,6 +579,14 @@ describe("usage log", () => {
     expect(valid.attempts?.[0]?.reasoningWireValue).toBe(false);
   });
 
+  test("local-answer provenance survives attempt normalization for capacity exclusion", () => {
+    const value = normalizeUsageEntryForTest({ requestId: "local-capacity", timestamp: Date.now(), provider: "openai", model: "m", status: 200, durationMs: 1, usageStatus: "reported", attempts: [{
+      ordinal: 1, provider: "openai", model: "m", adapter: "openai-responses", status: 200, durationMs: 1, sendCount: 1,
+      recoveryKinds: [], usageStatus: "reported", locallyAnswered: true, accountLogLabel: "pabcdef", usage: { inputTokens: 1, outputTokens: 1 },
+    }] });
+    expect(value.attempts?.[0]?.locallyAnswered).toBe(true);
+  });
+
   test("drops only malformed persisted attempts while preserving valid siblings", () => {
     const valid = (ordinal: number) => ({
       ordinal,

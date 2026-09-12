@@ -129,6 +129,28 @@ describe("retained usage aggregate cache", () => {
     expect(report.summary.unmeteredRequests).toBe(1);
   });
 
+  test.each(["base", "filtered"])("an oversized unfinished suffix stays incomplete without duplicating rows: %s", async scope => {
+    const path = join(testDir, "usage.jsonl");
+    const read = () => scope === "filtered" ? getFilteredUsageAggregate({ provider: "openai" }) : getUsageAggregate({ now: NOW });
+    writeFileSync(path, line("one"));
+    expect(requests(await read())).toBe(1);
+    appendFileSync(path, JSON.stringify({
+      ...entry("oversized"), padding: "x".repeat(usageLedgerScannerModule.USAGE_LEDGER_MAX_LINE_BYTES),
+    }));
+    const unfinished = await read();
+    expect(unfinished).toMatchObject({ usageIncomplete: true });
+    expect(requests(unfinished)).toBe(1);
+    appendFileSync(path, "\n" + line("two"));
+    const completed = await read();
+    expect(completed).toMatchObject({ usageIncomplete: true });
+    expect(requests(completed)).toBe(2);
+    expect(await read()).toMatchObject({ update: "unchanged", usageIncomplete: true });
+    writeFileSync(path, line("replacement"));
+    const rebuilt = await read();
+    expect(rebuilt).toMatchObject({ update: "rebuild", usageIncomplete: false });
+    expect(requests(rebuilt)).toBe(1);
+  });
+
   test("custom cache keys isolate both endpoints and never poison preset aggregates", async () => {
     const path = join(testDir, "usage.jsonl");
     const rows = [NOW - 2_000, NOW - 1_000, NOW].map((timestamp, index) => ({ ...entry(String(index)), timestamp }));
@@ -392,7 +414,7 @@ describe("retained usage aggregate cache", () => {
     }
   });
 
-  test("an oversized append result never publishes its partially-fed candidate", async () => {
+  test("an oversized append retains normal rows and its incomplete marker until rebuild", async () => {
     writeFileSync(join(testDir, "usage.jsonl"), line("one"));
     const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;
     let forceOversizedAppend = false;
@@ -412,14 +434,21 @@ describe("retained usage aggregate cache", () => {
 
       appendFileSync(join(testDir, "usage.jsonl"), line("two"));
       forceOversizedAppend = true;
-      await expect(getUsageAggregate({ now: NOW })).rejects.toThrow("oversized row");
+      const partial = await getUsageAggregate({ now: NOW });
+      expect(partial).toMatchObject({ update: "append", usageIncomplete: true });
+      expect(requests(partial)).toBe(2);
       expect(requests(original)).toBe(1);
-      expect(usageAggregateRetainedStats().count).toBe(0);
+      expect(original).toMatchObject({ usageIncomplete: false });
+      expect(usageAggregateRetainedStats().count).toBe(1);
 
       forceOversizedAppend = false;
+      const unchanged = await getUsageAggregate({ now: NOW });
+      expect(unchanged).toMatchObject({ update: "unchanged", usageIncomplete: true });
+      expect(requests(unchanged)).toBe(2);
+      writeFileSync(join(testDir, "usage.jsonl"), line("replaced"));
       const rebuilt = await getUsageAggregate({ now: NOW });
-      expect(rebuilt.update).toBe("rebuild");
-      expect(requests(rebuilt)).toBe(2);
+      expect(rebuilt).toMatchObject({ update: "rebuild", usageIncomplete: false });
+      expect(requests(rebuilt)).toBe(1);
       expect(scanStarts).toHaveLength(3);
       expect(scanStarts[0]).toBe(0);
       expect(scanStarts[1]).toBeGreaterThan(0);

@@ -158,6 +158,37 @@ describe("vision eligibility core", () => {
     })).toBe(false);
   });
 
+  test("11b. canonical Codex backend metadata overrides a generic image-capable Spark row", () => {
+    const config = configWithProviders({
+      openai: {
+        adapter: "openai-responses",
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+    });
+    const candidate: VisionCandidateModel = {
+      provider: "openai",
+      id: "gpt-5.3-codex-spark",
+      inputModalities: ["text", "image"],
+    };
+    // No model-specific blacklist is required: backend metadata owns the verdict.
+    expect(isVisionSidecarConsumer(config, "openai", candidate.id)).toBe(false);
+    expect(modelAcceptsImageInput(config, candidate)).toBe(false);
+    expect(isVisionEligibleModel(config, candidate)).toBe(false);
+  });
+
+  test("11c. runtime provider hooks do not make capability enrichment uncloneable", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+      fetch: (() => Promise.reject(new Error("not called"))) as typeof fetch,
+      modelInputModalities: { vision: ["text", "image"] },
+    } as OcxProviderConfig & { fetch: typeof fetch };
+    const config = configWithProviders({ runtime: provider });
+    expect(() => modelAcceptsImageInput(config, { provider: "runtime", id: "vision" })).not.toThrow();
+    expect(modelAcceptsImageInput(config, { provider: "runtime", id: "vision" })).toBe(true);
+  });
+
   test("12. only the selected Anthropic OAuth provider contributes Anthropic options", () => {
     const config = configWithProviders({
       anthropic: {
@@ -227,6 +258,42 @@ describe("vision eligibility core", () => {
     })).toBe(false);
   });
 
+  test("15. native model declared text-only via modelCapabilities is disqualified from vision describer eligibility (#4501)", () => {
+    const config = configWithProviders({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        modelCapabilities: {
+          "gpt-5.4-mini": { inputModalities: ["text"] },
+        },
+      },
+    });
+    const candidate: VisionCandidateModel = {
+      provider: "openai",
+      id: "gpt-5.4-mini",
+    };
+    expect(modelAcceptsImageInput(config, candidate)).toBe(false);
+    expect(isVisionEligibleModel(config, candidate)).toBe(false);
+  });
+
+  test("16. native model baseline declared text-only via modelCapabilities drops the baseline option (#4501)", () => {
+    const config = configWithProviders({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        modelCapabilities: {
+          [BASELINE_VISION_MODELS.openai]: { inputModalities: ["text"] },
+        },
+      },
+      anthropic: {
+        adapter: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+      },
+    });
+    const options = visionEligibleModelOptions(config, [], ["openai", "anthropic"], "anthropic");
+    expect(options.map(o => o.value)).toEqual([BASELINE_VISION_MODELS.anthropic]);
+  });
+
   test("5. openai baseline is present when that side is enabled", () => {
     const options = visionEligibleModelOptions(emptyConfig, [], ["openai"]);
     expect(options.map((o) => o.value)).toEqual([BASELINE_VISION_MODELS.openai]);
@@ -292,4 +359,15 @@ describe("vision eligibility core", () => {
     const withRouted = visionEligibleModelOptions(config, [candidate], ["openai", "anthropic", "routed"]);
     expect(withRouted.some((o) => o.value === "cursor/cursor-vision-capable" && o.backend === "routed")).toBe(true);
   });
+});
+
+
+test("explicit routed image declarations outrank stale candidate metadata", () => {
+  const config = configWithProviders({ custom: {
+    adapter: "openai-chat", baseUrl: "https://example.test/v1", noVisionModels: ["ModelA"],
+    modelCapabilities: { ModelA: { inputModalities: ["text", "image"] } },
+  } });
+  expect(modelAcceptsImageInput(config, { provider: "custom", id: "ModelA", inputModalities: ["text"] })).toBe(true);
+  expect(modelAcceptsImageInput(config, { provider: "custom", id: "modela", inputModalities: ["text"] })).toBe(false);
+  expect(modelAcceptsImageInput(config, { provider: "custom", id: "ModelA:variant", inputModalities: ["text"] })).toBe(false);
 });

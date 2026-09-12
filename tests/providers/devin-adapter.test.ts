@@ -1,16 +1,23 @@
-import { describe, expect, test } from "bun:test";
-import { createDevinAdapter, mapOcxMessagesToDevin, mapOcxToolsToDevin } from "../../src/adapters/devin";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
 import { sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
-import { OAUTH_PROVIDERS } from "../../src/oauth";
+import { DEPRECATED_OAUTH_PROVIDER_ALIASES, OAUTH_PROVIDERS, resolveRefreshPolicy } from "../../src/oauth";
+import { DEVIN_DEFAULT_API_SERVER } from "../../src/oauth/devin";
+import { saveCredential } from "../../src/oauth/store";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
-import type { OcxParsedRequest } from "../../src/types";
+import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 describe("devin adapter", () => {
   test("is registered as an oauth provider and adapter", () => {
-    expect(OAUTH_PROVIDERS.devin.defaultModel).toBe("swe-1-7");
+    expect(OAUTH_PROVIDERS.devin.defaultModel).toBe("swe-2");
     const entry = PROVIDER_REGISTRY.find((row) => row.id === "devin");
     expect(entry?.adapter).toBe("devin");
     expect(entry?.authKind).toBe("oauth");
@@ -55,8 +62,8 @@ describe("devin adapter", () => {
   test("the tool catalog nudge names the bare wire names the encoder actually sends", () => {
     // Cognition is offered `tool.name` with no namespace prefix (mapOcxToolsToDevin),
     // so a nudge built from the default namespaced form would advertise a name the
-    // model is never given. Both Devin provider rows share this adapter, so this is
-    // the single place that covers `devin` and `devin-cli` at once.
+    // model is never given. The merged `devin` provider and the deprecated
+    // `devin-cli` alias share this adapter, so this one place covers both.
     const parsed: OcxParsedRequest = {
       modelId: "swe-1-7",
       stream: true,
@@ -75,6 +82,132 @@ describe("devin adapter", () => {
     expect(wireNames).toEqual(["exec_command", "list_threads"]);
     for (const name of wireNames) expect(system).toContain(`\`${name}\``);
     expect(system).not.toContain("codex_app__list_threads");
+  });
+
+  test("maps Cognition tool_call_start names to unique canonical request identities", () => {
+    const tools = [
+      { namespace: "mcp__cua_repl", name: "js", description: "control UI", parameters: { type: "object" } },
+      { name: "exec", description: "run code", parameters: { type: "object" } },
+    ];
+
+    expect(mapDevinToolCallStartForTests("call_js", "js", tools)).toEqual({
+      type: "tool_call_start",
+      id: "call_js",
+      name: "mcp__cua_repl__js",
+    });
+    expect(mapDevinToolCallStartForTests("call_canonical", "mcp__cua_repl__js", tools)).toEqual({
+      type: "tool_call_start",
+      id: "call_canonical",
+      name: "mcp__cua_repl__js",
+    });
+    expect(mapDevinToolCallStartForTests("call_exec", "exec", tools)).toEqual({
+      type: "tool_call_start",
+      id: "call_exec",
+      name: "exec",
+    });
+    expect(mapDevinToolCallStartForTests("call_unknown", "undeclared", tools)).toEqual({
+      type: "tool_call_start",
+      id: "call_unknown",
+      name: "undeclared",
+    });
+  });
+
+  test("maps ambiguous Cognition tool_call_start names to a non-retryable error", () => {
+    const namespaceCollision = [
+      { namespace: "mcp__first", name: "js", description: "first", parameters: { type: "object" } },
+      { namespace: "mcp__second", name: "js", description: "second", parameters: { type: "object" } },
+    ];
+    const bareCollision = [
+      { name: "js", description: "bare", parameters: { type: "object" } },
+      { namespace: "mcp__cua_repl", name: "js", description: "namespaced", parameters: { type: "object" } },
+    ];
+    const duplicateIdentity = [
+      { namespace: "mcp__cua_repl", name: "js", description: "first copy", parameters: { type: "object" } },
+      { namespace: "mcp__cua_repl", name: "js", description: "second copy", parameters: { type: "object" } },
+    ];
+
+    const expected = {
+      type: "error",
+      message: "Devin emitted a bare client tool name that maps to multiple request-declared tools.",
+      status: 502,
+      retryable: false,
+    };
+    expect(mapDevinToolCallStartForTests("call_1", "js", namespaceCollision)).toEqual(expected);
+    expect(mapDevinToolCallStartForTests("call_1", "js", [...namespaceCollision].reverse())).toEqual(expected);
+    expect(mapDevinToolCallStartForTests("call_1", "js", bareCollision)).toEqual(expected);
+    expect(mapDevinToolCallStartForTests("call_1", "js", duplicateIdentity)).toEqual({
+      type: "tool_call_start",
+      id: "call_1",
+      name: "mcp__cua_repl__js",
+    });
+  });
+
+  test("fails closed when one tool's canonical identity is another tool's advertised name", () => {
+    // `a__x` is the first tool's canonical identity and also the second tool's advertised local
+    // name, whose own canonical identity is `b__a__x`. Both readings are legitimate, so resolving
+    // to either owner would dispatch the call to a tool the caller may not have named. Before the
+    // map tracked canonical aliases, a returned `a__x` silently became `b__a__x`.
+    const aliasCollision = [
+      { namespace: "a", name: "x", description: "namespaced", parameters: { type: "object" } },
+      { namespace: "b", name: "a__x", description: "lookalike local name", parameters: { type: "object" } },
+    ];
+
+    expect(mapDevinToolCallStartForTests("call_1", "a__x", aliasCollision)).toEqual({
+      type: "error",
+      message: "Devin emitted a bare client tool name that maps to multiple request-declared tools.",
+      status: 502,
+      retryable: false,
+    });
+    expect(mapDevinToolCallStartForTests("call_1", "a__x", [...aliasCollision].reverse())).toEqual({
+      type: "error",
+      message: "Devin emitted a bare client tool name that maps to multiple request-declared tools.",
+      status: 502,
+      retryable: false,
+    });
+    // The unambiguous local name still resolves, and an unrelated canonical name is untouched.
+    expect(mapDevinToolCallStartForTests("call_2", "x", aliasCollision)).toEqual({
+      type: "tool_call_start",
+      id: "call_2",
+      name: "a__x",
+    });
+    expect(mapDevinToolCallStartForTests("call_3", "b__a__x", aliasCollision)).toEqual({
+      type: "tool_call_start",
+      id: "call_3",
+      name: "b__a__x",
+    });
+  });
+
+  test("replays a restored namespaced call under the same bare name Cognition was offered", () => {
+    const parsed: OcxParsedRequest = {
+      modelId: "swe-2",
+      stream: true,
+      context: {
+        messages: [{
+          role: "assistant",
+          content: [{
+            type: "toolCall",
+            id: "js_0",
+            namespace: "mcp__cua_repl",
+            name: "js",
+            arguments: { code: "1+1" },
+          }],
+          timestamp: 1,
+        }],
+        tools: [{
+          namespace: "mcp__cua_repl",
+          name: "js",
+          description: "control UI",
+          parameters: { type: "object" },
+        }],
+      },
+      options: {},
+    };
+
+    expect(mapOcxMessagesToDevin(parsed).find(item => item.role === "assistant")?.tool_calls).toEqual([{
+      id: "js_0",
+      name: "js",
+      arguments: JSON.stringify({ code: "1+1" }),
+    }]);
   });
 
   test("a request with no tools keeps the system prompt exactly as it was", () => {
@@ -103,11 +236,22 @@ describe("devin adapter", () => {
     expect(collapseDevinModelUid("grok-4-5-medium")).toBe("grok-4-5");
   });
 
-  test("loginDevin is browser-only (no local import option)", () => {
-    // The devin OAuth entry must not accept importLocal/forceLogin opts —
-    // login is always the Auth0 browser flow.
-    const entry = OAUTH_PROVIDERS.devin;
-    expect(entry.login.length).toBeLessThanOrEqual(1);
+  test("devin-cli survives only as a deprecated alias, never a provider entry", () => {
+    // The merge removed the registry row and the OAUTH_PROVIDERS def: an
+    // `oauthConfig("devin-cli")` entry would throw at module load, and a live
+    // entry would re-expose the id as a second dashboard/login row. What keeps
+    // `ocx login devin-cli` and pre-migration saved state working is the alias
+    // map plus refresh-policy resolution.
+    expect(PROVIDER_REGISTRY.find((row) => row.id === "devin-cli")).toBeUndefined();
+    expect("devin-cli" in OAUTH_PROVIDERS).toBe(false);
+    expect(DEPRECATED_OAUTH_PROVIDER_ALIASES["devin-cli"]).toBe("devin");
+    // A lingering devin-cli config row must inherit devin's "disabled" policy:
+    // resolving to the "lazy-only" fallback would make the guardian attempt
+    // refreshes Cognition has no endpoint for and mark the account needsReauth.
+    expect(resolveRefreshPolicy("devin-cli", { providers: {} } as never)).toBe("disabled");
+    // The canonical entry takes forceLogin so reauth/add-account can skip the
+    // CLI import and reach the browser flow for a different account.
+    expect(OAUTH_PROVIDERS.devin.login.length).toBeGreaterThanOrEqual(2);
   });
 
   test("rewrites the Cognition blocklist trigger phrase in tool descriptions", () => {
@@ -185,6 +329,38 @@ describe("devin adapter", () => {
     expect(catalog.byUid.get("mystery-model")?.contextWindow).toBeUndefined();
   });
 
+  test("the catalog parser preserves image support as a tri-state", () => {
+    // ClientModelConfig #5 is supports_images. encodeVarintField(5, 0) emits
+    // real bytes ([0x28, 0x00]), so the false case is not an omission case —
+    // and a genuinely absent field must stay unknown rather than collapse to
+    // text-only (#1796).
+    const vision = Buffer.concat([
+      encodeString(1, "Vision Model"),
+      encodeVarintField(5, 1),
+      encodeString(22, "vision-model"),
+    ]);
+    const textOnly = Buffer.concat([
+      encodeString(1, "Text Model"),
+      encodeVarintField(5, 0),
+      encodeString(22, "text-model"),
+    ]);
+    const unknown = Buffer.concat([
+      encodeString(1, "Unknown Model"),
+      encodeString(22, "unknown-model"),
+    ]);
+    const catalog = parseCatalogBuffer(
+      Buffer.concat([encodeMessage(1, vision), encodeMessage(1, textOnly), encodeMessage(1, unknown)]),
+      "key",
+      "https://server.codeium.com",
+    );
+    expect(catalog.byUid.get("vision-model")?.supportsImages).toBe(true);
+    // toBe(false), not toBeFalsy: a present 0 asserts text-only.
+    expect(catalog.byUid.get("text-model")?.supportsImages).toBe(false);
+    // The entry must exist before its field can be asserted absent.
+    expect(catalog.byUid.get("unknown-model")).toBeDefined();
+    expect(catalog.byUid.get("unknown-model")?.supportsImages).toBeUndefined();
+  });
+
   test("the degraded-mode windows match what Cognition serves", () => {
     // This table was wrong for nine of its eleven rows because it had been
     // copied from each model's ORIGINAL vendor rather than measured against
@@ -199,5 +375,200 @@ describe("devin adapter", () => {
     for (const model of DEVIN_STATIC_MODELS) {
       expect(DEVIN_MODEL_CONTEXT_WINDOWS[model]).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("SWE-2 wire effort selection", () => {
+  // Cognition spells SWE-2 effort as the model id, so an explicit effort has to
+  // beat a suffix the picker already chose. Before this, swe-2-high asked for at
+  // medium stayed high and the caller was silently ignored.
+  test.each(["medium", "high", "max"])("an explicit %s effort overrides every SWE-2 variant", async (effort) => {
+    for (const model of ["swe-2", "swe-2-medium", "swe-2-high", "swe-2-max", "swe-2.high"]) {
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", effort)).toBe(`swe-2-${effort}`);
+    }
+  });
+
+  test.each([
+    ["none", "medium"], ["off", "medium"], ["minimal", "medium"],
+    ["low", "medium"], ["xhigh", "max"], ["ultra", "max"],
+  ])("maps %s to the supported SWE-2 %s lane", async (effort, expected) => {
+    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused", effort)).toBe(`swe-2-${expected}`);
+  });
+
+  // Case is normalised, which the source contribution did not do: a caller that
+  // sends HIGH means the same lane as high.
+  test("effort matching is case-insensitive", async () => {
+    expect(await resolveWireModelUidForTests("swe-2-medium", "unused", "unused", "HIGH")).toBe("swe-2-high");
+  });
+
+  test("omitted or unknown effort preserves an explicit variant", async () => {
+    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused")).toBe("swe-2-high");
+    expect(await resolveWireModelUidForTests("swe-2-max", "unused", "unused", "future-effort")).toBe("swe-2-max");
+  });
+
+  test("other model families keep their existing suffix precedence", async () => {
+    for (const model of ["claude-opus-5-medium", "gpt-5-6-sol-high", "swe-1-7-high", "swe-20-high"]) {
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", "max")).toBe(model);
+    }
+  });
+});
+
+describe("effort suffix detection and caller effort values are different sets", () => {
+  // The two had drifted: the request path was missing `priority`, so a UID that
+  // already carried it read as unsuffixed and got a second suffix appended —
+  // the exact shape Cognition answers with an opaque permission_denied.
+  test("a UID carrying the priority tier is recognised as already suffixed", async () => {
+    for (const uid of ["gpt-5-6-sol-priority", "gpt-5-6-sol-medium-priority"]) {
+      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(uid);
+    }
+  });
+
+  test("detection handles a compound suffix, which a last-token test could not", async () => {
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol-medium-priority", "unused", "unused")).toBe(
+      "gpt-5-6-sol-medium-priority",
+    );
+  });
+
+  test("a bare model still receives the caller effort", async () => {
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "high")).toBe("gpt-5-6-sol-high");
+  });
+
+  // `priority` is a service tier, not something a caller asks for as effort.
+  // Sharing one set between detection and caller validity would admit it.
+  test("priority is not accepted as a caller reasoning effort", async () => {
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "priority")).toBe(
+      "gpt-5-6-sol-medium",
+    );
+  });
+
+  // These never appear as a trailing token, so they are meaningless to detection,
+  // but a caller can still name them and they must survive.
+  test.each(["max-1m", "none-1m", "1m", "fast"])("the compound caller value %p is preserved", async (effort) => {
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", effort)).toBe(
+      `gpt-5-6-sol-${effort}`,
+    );
+  });
+
+  test("a model name is never mistaken for a suffix", async () => {
+    // Greedy collapse must not eat part of a real model name.
+    for (const uid of ["claude-opus-5", "swe-1-7", "glm-5-3"]) {
+      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(`${uid}-high`);
+    }
+  });
+});
+
+describe("devin adapter api-server host resolution (#4503)", () => {
+  // The `devin-cli` -> `devin` merge rekeys a config row and its credential
+  // slot together at startup, so until that migration runs a row already named
+  // `devin` can have its only credential — and the tenant apiBaseUrl recorded
+  // on it — still sitting under the `devin-cli` slot. runTurn resolves the
+  // dispatch host through resolveDevinApiServer(provider.baseUrl,
+  // credentialProviderId), which must follow the DEPRECATED_OAUTH_PROVIDER_ALIASES
+  // link to that slot before falling back to the configured baseUrl and then
+  // the US default. Without it an EU/FedStart tenant's traffic — api_key
+  // included — is sent to a host the account is not provisioned on.
+  const EU_TENANT_HOST = "https://eu.windsurf.com/_route/api_server";
+  const FEDSTART_TENANT_HOST = "https://windsurf.fedstart.com/_route/api_server";
+  // A valid, non-default configured baseUrl. If the credential slots were
+  // skipped the adapter would dispatch here; if baseUrl were also skipped it
+  // would land on DEVIN_DEFAULT_API_SERVER. The assertions below reject both.
+  const CONFIGURED_BASE_URL = "https://server-staging.codeium.com";
+
+  const previousHome = process.env.OPENCODEX_HOME;
+  const previousFetch = globalThis.fetch;
+  let home = "";
+  let seenUrls: string[] = [];
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ocx-devin-host-"));
+    process.env.OPENCODEX_HOME = home;
+    seenUrls = [];
+    // This adapter's transport fetches through the global fetch — it does not
+    // consume IncomingMeta.providerFetch — so the stub observes every upstream
+    // URL the turn dispatches to.
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seenUrls.push(String(input));
+      return new Response("down", { status: 500 });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = previousFetch;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(home);
+  });
+
+  // Drive one real runTurn. The stubbed 500 ends the turn in an upstream error
+  // only after every outbound URL has been recorded.
+  async function runOneTurn(apiKey: string): Promise<AdapterEvent[]> {
+    const adapter = createDevinAdapter(
+      { adapter: "devin", baseUrl: CONFIGURED_BASE_URL, apiKey },
+      { providerId: "devin" },
+    );
+    const parsed: OcxParsedRequest = {
+      modelId: "swe-2-high",
+      stream: true,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      options: {},
+    };
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(
+      parsed,
+      { headers: new Headers(), translatorBudget: createTranslatorBudget() },
+      (event) => events.push(event),
+    );
+    return events;
+  }
+
+  function expectDispatchedTo(host: string): void {
+    expect(seenUrls.length).toBeGreaterThan(0);
+    for (const url of seenUrls) expect(url).toStartWith(host);
+  }
+
+  test("a devin row adopts the tenant host from an un-rekeyed devin-cli credential", async () => {
+    await saveCredential("devin-cli", {
+      access: "devin-cli-session",
+      refresh: "devin-cli-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli",
+      apiBaseUrl: EU_TENANT_HOST,
+    });
+
+    const events = await runOneTurn("ocx-test-alias-slot-key");
+
+    expectDispatchedTo(EU_TENANT_HOST);
+    expect(seenUrls.some((url) => url.startsWith(DEVIN_DEFAULT_API_SERVER))).toBe(false);
+    expect(seenUrls.some((url) => url.startsWith(CONFIGURED_BASE_URL))).toBe(false);
+    // The turn reached the transport and failed there on the stubbed 500 —
+    // proof the recorded URLs came from a real dispatch, not an early return.
+    expect(events.some((event) => event.type === "error")).toBe(true);
+  });
+
+  test("a usable literal devin slot still wins over the aliased devin-cli slot", async () => {
+    await saveCredential("devin", {
+      access: "devin-session",
+      refresh: "devin-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "oauth",
+      apiBaseUrl: FEDSTART_TENANT_HOST,
+    });
+    await saveCredential("devin-cli", {
+      access: "devin-cli-session",
+      refresh: "devin-cli-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli",
+      apiBaseUrl: EU_TENANT_HOST,
+    });
+
+    await runOneTurn("ocx-test-literal-slot-key");
+
+    expectDispatchedTo(FEDSTART_TENANT_HOST);
+  });
+
+  test("with neither credential slot populated the configured baseUrl still applies", async () => {
+    await runOneTurn("ocx-test-no-credential-key");
+
+    expectDispatchedTo(CONFIGURED_BASE_URL);
   });
 });

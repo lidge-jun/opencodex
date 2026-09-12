@@ -55,9 +55,10 @@ const OAUTH_LABELS: Record<string, string> = {
   "github-copilot": "GitHub Copilot",
   cursor: "Cursor",
   // Accounts rows title through this map, not `formatProviderDisplayName`.
-  // Without an entry the row reads its raw id.
+  // Without an entry the row reads its raw id. `devin-cli` needs no entry:
+  // it is a deprecated alias that startup migration rewrites to `devin`, so a
+  // stored row can never reach this map under the old id.
   devin: "Devin",
-  "devin-cli": "Devin CLI",
 };
 
 export const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;

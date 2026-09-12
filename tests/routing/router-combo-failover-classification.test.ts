@@ -203,3 +203,98 @@ describe("malformed upstream bytes are a provider failure", () => {
     });
   });
 });
+
+const unsupportedUser = { type: "invalid_request_error", message: "Unsupported parameter: user" };
+const unsupportedEffort = {
+  type: "invalid_request_error", code: "unsupported_value", param: "reasoning.effort",
+  message: "Unsupported value: 'none' is not supported with the 'gpt-5.3-codex-spark' model. Supported values are: 'low', 'medium', 'high', and 'xhigh'.",
+};
+
+const unsupportedImage = {
+  type: "invalid_request_error", code: null, param: "input",
+  message: "Model 'gpt-5.3-codex-spark' does not support image inputs. Try again with a vision model.",
+};
+
+describe("request-local optional control incompatibility", () => {
+  test.each([unsupportedUser, unsupportedEffort, unsupportedImage])("hops a structured target-local request rejection without cooling: %j", error => {
+    const body = JSON.stringify({ error });
+    for (const message of [body, `Provider error 400: ${body}`]) {
+      expect(comboFailureDecision(400, message, { code: "invalid_request_error" })).toBe("hop");
+      expect(comboFailureCooldownScope(400, message, { code: "invalid_request_error" })).toBe("none");
+    }
+  });
+  test.each([
+    { type: "invalid_request_error", message: "Unsupported parameter: tools" },
+    { type: "invalid_request_error", message: "Unsupported parameter: safety_identifier" },
+    { type: "invalid_request_error", message: "Unsupported parameter: user.name" },
+    { ...unsupportedUser, param: "input" },
+    { ...unsupportedUser, code: "origin_rejected" },
+    { ...unsupportedUser, code: "context_length_exceeded" },
+    { ...unsupportedUser, code: "unknown_terminal_code" },
+    { ...unsupportedEffort, param: "input" },
+    { ...unsupportedEffort, code: "unknown_terminal_code" },
+    { ...unsupportedEffort, code: "cyber_policy" },
+  ])("does not relax an unrelated or conflicting refusal: %j", error => {
+    expect(comboFailureDecision(400, JSON.stringify({ error }))).toBe("stop");
+  });
+  test("reflected text, truncated envelopes and oversized diagnostics stay terminal", () => {
+    const body = JSON.stringify({ error: unsupportedUser });
+    for (const text of [
+      `invalid input contains ${body}`,
+      JSON.stringify({ error: { type: "invalid_request_error", message: body } }),
+      body.slice(0, -1),
+      JSON.stringify({ error: unsupportedUser, padding: "x".repeat(16_384) }),
+    ]) expect(comboFailureDecision(400, text)).toBe("stop");
+  });
+  test("hard refusal and non-replayable codes take precedence over a compatible message", () => {
+    const message = JSON.stringify({ error: unsupportedUser });
+    for (const code of ["origin_rejected", "context_length_exceeded", "upstream_no_response", "upstream_closed_before_response"]) {
+      expect(comboFailureDecision(400, message, { code })).toBe("stop");
+    }
+    expect(comboFailureDecision(499, message)).toBe("stop");
+    expect(comboFailureDecision(413, message)).toBe("stop");
+  });
+});
+
+describe("bounded optional-control error envelopes", () => {
+  const wrapped = (message: string, code = "invalid_request_error") => JSON.stringify({
+    error: { type: "invalid_request_error", code, message: `Provider error 400: ${message}` },
+  });
+  test("accepts the proxy wrapper but not an unrelated message containing JSON", () => {
+    const raw = JSON.stringify({ error: unsupportedUser });
+    expect(comboFailureDecision(400, wrapped(raw))).toBe("hop");
+    expect(comboFailureDecision(400, wrapped(wrapped(raw)))).toBe("hop");
+    expect(comboFailureDecision(400, wrapped(wrapped(wrapped(raw))))).toBe("stop");
+    expect(comboFailureDecision(400, wrapped(raw, "cyber_policy"))).toBe("stop");
+    expect(comboFailureDecision(400, wrapped(raw, "context_length_exceeded"))).toBe("stop");
+  });
+  test("malformed envelope fields do not throw or acquire hop permission", () => {
+    for (const value of [null, [], "user", { error: null }, { error: [] },
+      { error: { ...unsupportedUser, code: {} } },
+      { error: { ...unsupportedUser, param: null } },
+      { error: { ...unsupportedUser, type: "custom_failure" } },
+    ]) expect(comboFailureDecision(400, JSON.stringify(value))).toBe("stop");
+  });
+  test("the precise reasoning code works without a proxy-generated generic code", () => {
+    const message = JSON.stringify({ error: unsupportedEffort });
+    expect(comboFailureDecision(400, message, { code: "unsupported_value" })).toBe("hop");
+    expect(comboFailureCooldownScope(400, message, { code: "unsupported_value" })).toBe("none");
+  });
+});
+
+describe("image rejection classifier bounds", () => {
+  test.each([
+    { ...unsupportedImage, param: "tools" },
+    { ...unsupportedImage, code: "origin_rejected" },
+    { ...unsupportedImage, code: "unknown_terminal_code" },
+    { ...unsupportedImage, message: "This model does not support image inputs." },
+    { ...unsupportedImage, message: "Model 'x' does not support image inputs" },
+  ])("does not hop on a lookalike or conflicting image refusal: %j", error => {
+    expect(comboFailureDecision(400, JSON.stringify({ error }))).toBe("stop");
+  });
+  test("accepts the observed null-code envelope with an outer generic code", () => {
+    const message = JSON.stringify({ error: unsupportedImage });
+    expect(comboFailureDecision(400, message, { code: "invalid_request_error" })).toBe("hop");
+    expect(comboFailureCooldownScope(400, message, { code: "invalid_request_error" })).toBe("none");
+  });
+});

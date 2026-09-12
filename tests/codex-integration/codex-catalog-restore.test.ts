@@ -109,6 +109,37 @@ describe("Codex catalog restore", () => {
     expect(slugs).toEqual(["gpt-5.5", "user-native"]);
   }, { timeout: 15_000 });
 
+  test.each([false, true])("restore excludes retired native rows with backup=%s", withBackup => {
+    const catalogPath = join(codexHome, "catalog.json");
+    const backupPath = backupPathForTestCatalog(codexHome, opencodexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n');
+    const native = {
+      slug: "gpt-5.5", visibility: "list", supported_in_api: true,
+      shell_type: "unified_exec", comp_hash: null, base_instructions: "You are Codex.",
+      model_messages: { instructions_template: "You are Codex." },
+      supported_reasoning_levels: [{ effort: "high", description: "High" }],
+    };
+    const retired = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"];
+    const bare = [native, ...retired.map(slug => ({ ...native, slug }))];
+    const qualified = retired.map(slug => ({
+      ...native, slug: `desktop/${slug}`, opencodex_catalog_kind: "account-selector-v1",
+    }));
+    if (withBackup) writeFileSync(backupPath, JSON.stringify({ models: [...bare, ...qualified] }));
+    writeFileSync(catalogPath, JSON.stringify({ models: [
+      ...bare, { ...native, slug: "gpt-future-native" }, ...qualified,
+    ] }));
+    const r = runScript(codexHome, opencodexHome, `
+      const { restoreCodexCatalog } = require("./src/codex/catalog");
+      const first = restoreCodexCatalog();
+      const second = restoreCodexCatalog();
+      console.log(JSON.stringify({ first, second }));
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ first: { removed: 6, kept: 2 }, second: { removed: 0, kept: 2 } });
+    const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models;
+    expect(rows).toEqual([native, { ...native, slug: "gpt-future-native" }]);
+  }, { timeout: 15_000 });
+
   test("fallback restore repairs only enabled natives with unanimously visible account clones", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
@@ -119,7 +150,7 @@ describe("Codex catalog restore", () => {
       models: [
         { slug: "gpt-5.5", visibility: "hide", priority: 7 },
         { slug: "gpt-5.6-luna", visibility: "hide" },
-        { slug: "gpt-5.3-codex-spark", visibility: "hide" },
+        { slug: "gpt-5.6-terra", visibility: "hide" },
         { slug: "user-native", visibility: "hide" },
         {
           slug: "team/gpt-5.5",
@@ -136,7 +167,7 @@ describe("Codex catalog restore", () => {
           visibility: "list",
           opencodex_catalog_kind: "account-selector-v1",
         },
-        { slug: "provider/gpt-5.3-codex-spark", visibility: "list" },
+        { slug: "provider/gpt-5.6-terra", visibility: "list" },
       ],
     }, null, 2) + "\n");
 
@@ -159,7 +190,7 @@ describe("Codex catalog restore", () => {
       priority: 7,
     });
     expect(restored.find(model => model.slug === "gpt-5.6-luna")?.visibility).toBe("hide");
-    expect(restored.find(model => model.slug === "gpt-5.3-codex-spark")?.visibility).toBe("hide");
+    expect(restored.find(model => model.slug === "gpt-5.6-terra")?.visibility).toBe("hide");
     expect(restored.find(model => model.slug === "user-native")?.visibility).toBe("hide");
     expect(restored.some(model => String(model.slug).includes("/"))).toBe(false);
   }, { timeout: 15_000 });
@@ -204,7 +235,7 @@ describe("Codex catalog restore", () => {
       models: [
         { slug: "gpt-5.6-luna", visibility: "hide", priority: 0 },
         { slug: "gpt-5.5", visibility: "hide", priority: 7 },
-        { slug: "gpt-5.3-codex-spark", visibility: "hide" },
+        { slug: "gpt-5.6-terra", visibility: "hide" },
         {
           slug: "team/gpt-5.6-luna",
           visibility: "list",
@@ -216,12 +247,12 @@ describe("Codex catalog restore", () => {
           opencodex_catalog_kind: "account-selector-v1",
         },
         {
-          slug: "team/gpt-5.3-codex-spark",
+          slug: "team/gpt-5.6-terra",
           visibility: "list",
           opencodex_catalog_kind: "account-selector-v1",
         },
         {
-          slug: "desktop/gpt-5.3-codex-spark",
+          slug: "desktop/gpt-5.6-terra",
           visibility: "hide",
           opencodex_catalog_kind: "account-selector-v1",
         },
@@ -239,7 +270,7 @@ describe("Codex catalog restore", () => {
     expect(restored).toEqual([
       { slug: "gpt-5.6-luna", visibility: "hide", priority: 50 },
       { slug: "gpt-5.5", visibility: "list", priority: 7 },
-      { slug: "gpt-5.3-codex-spark", visibility: "hide" },
+      { slug: "gpt-5.6-terra", visibility: "hide" },
     ]);
   }, { timeout: 15_000 });
 
@@ -310,7 +341,7 @@ describe("Codex catalog restore", () => {
     writeFileSync(catalogPath, JSON.stringify({
       models: [
         { slug: "gpt-5.5", priority: 50, base_instructions: "native", visibility: "list" },
-        { slug: "gpt-5.3-codex-spark", priority: 0, base_instructions: "native", visibility: "list" },
+        { slug: "gpt-5.6-luna", priority: 0, base_instructions: "native", visibility: "list" },
       ],
     }, null, 2) + "\n");
 
@@ -333,7 +364,7 @@ describe("Codex catalog restore", () => {
     expect(JSON.parse(r.stdout)).toMatchObject({ added: 0 });
     const synced = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(synced.find(m => m.slug === "gpt-5.5")?.priority).toBe(0);
-    expect(synced.find(m => m.slug === "gpt-5.3-codex-spark")?.priority).toBeGreaterThan(100);
+    expect(synced.find(m => m.slug === "gpt-5.6-luna")?.priority).toBeGreaterThan(100);
   }, { timeout: 15_000 });
 
   test("sync advertises documented Codex-native additions omitted by the bundled catalog", () => {
@@ -383,7 +414,7 @@ describe("Codex catalog restore", () => {
           port: 10100,
           providers: {},
           defaultProvider: "openai",
-          subagentModels: ["gpt-5.5", "gpt-5.3-codex-spark", "gpt-5.6-sol"],
+          subagentModels: ["gpt-5.5", "gpt-6-astra", "gpt-5.6-sol"],
         });
         console.log(JSON.stringify(result));
       })();
@@ -391,12 +422,19 @@ describe("Codex catalog restore", () => {
 
     expect(r.status).toBe(0);
     const synced = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
-    expect(synced.map(m => m.slug)).toContain("gpt-5.3-codex-spark");
+    expect(synced.map(m => m.slug)).not.toContain("gpt-5.3-codex-spark");
+    expect(synced.map(m => m.slug)).toContain("gpt-6-astra");
     expect(synced.map(m => m.slug)).toContain("gpt-5.6-sol");
     expect(synced.map(m => m.slug)).toContain("gpt-5.6-terra");
     expect(synced.map(m => m.slug)).toContain("gpt-5.6-luna");
     // gpt-5.4 is no longer a native catalog member, and no surviving native has a 1M window.
     expect(synced.map(m => m.slug)).not.toContain("gpt-5.4");
-    expect(synced.find(m => m.slug === "gpt-5.3-codex-spark")?.max_context_window).toBe(100_000);
+    // No long-window opt-in: sync narrows the emitted max to Astra's default window.
+    // The pinned 872k ceiling is available only when the operator enables the larger window.
+    expect(synced.find(m => m.slug === "gpt-6-astra")).toMatchObject({
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 244_800,
+    });
   }, { timeout: 15_000 });
 });

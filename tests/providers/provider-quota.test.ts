@@ -6,7 +6,7 @@ import { join } from "node:path";
 import * as authApi from "../../src/codex/auth-api";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
-import { clearAccountQuota, updateAccountQuota } from "../../src/codex/quota";
+import { clearAccountQuota, updateAccountQuota, type StoredAccountQuota } from "../../src/codex/quota";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { saveCredential } from "../../src/oauth/store";
@@ -119,8 +119,8 @@ afterEach(() => {
 
 describe("fetchProviderQuotaReports", () => {
   test("provider quota probes have no direct Response.json calls", () => {
-    const source = readFileSync(repoPath("src/providers/quota.ts"), "utf8");
-    expect(source).not.toMatch(/\.\s*json\s*\(/);
+    // Probes live in leaves now; the facade alone no longer holds one.
+    for (const p of ["quota.ts", "quota/vendor-probes-key.ts", "quota/vendor-probes-oauth.ts", "quota/antigravity.ts"]) expect(readFileSync(repoPath(`src/providers/${p}`), "utf8")).not.toMatch(/\.\s*json\s*\(/);
   });
 
   test("quota JSON reading cancels a body that stalls before its first byte", async () => {
@@ -133,7 +133,51 @@ describe("fetchProviderQuotaReports", () => {
     expect(cancelCalls).toBe(1);
   });
 
-  test("Codex report exposes primary and weekly windows, and hides Spark by default", async () => {
+  test.each(["direct", "pool"] as const)("%s rejects Spark-only cached capacity and preserves mixed windows", async mode => {
+    const config = testConfig();
+    config.providers = { openai: { ...config.providers.openai!, codexAccountMode: mode } };
+    globalThis.fetch = (async () => Response.json({
+      plan_type: "plus", rate_limit: { primary_window: { used_percent: 11 } },
+    })) as typeof fetch;
+    clearMainAccountInfoCache();
+    const main = await authApi.fetchMainAccountInfoSnapshot(true);
+    const pool = await authApi.listCodexAuthAccountsSnapshot(config, true);
+    const retired = [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 100 }];
+    let quota: StoredAccountQuota = { updatedAt: Date.now(), customWindows: retired };
+    const directSpy = spyOn(authApi, "fetchMainAccountInfoSnapshot").mockImplementation(async () => ({
+      ...main, info: { ...main.info, quota },
+    }));
+    const poolSpy = spyOn(authApi, "listCodexAuthAccountsSnapshot").mockImplementation(async () => ({
+      ...pool, accounts: pool.accounts.map(account => ({ ...account, quota })),
+    }));
+    try {
+      const empty = await fetchProviderQuotaReports(config, true);
+      if (mode === "direct") expect(empty.reports).toEqual([]);
+      else {
+        expect(empty.reports[0]?.aggregation).toMatchObject({
+          presentation: "coverage-only", includedAccounts: 0,
+        });
+        expect(empty.reports[0]?.aggregation?.currentAccount?.quota).toBeNull();
+      }
+      quota = { updatedAt: Date.now(), customWindows: retired, resetCredits: 2 };
+      const creditsOnly = await fetchProviderQuotaReports(config, true);
+      if (mode === "direct") expect(creditsOnly.reports).toEqual([]);
+      else expect(creditsOnly.reports[0]?.aggregation).toMatchObject({
+        presentation: "coverage-only", includedAccounts: 0,
+      });
+      quota = { updatedAt: Date.now(), customWindows: [...retired, { label: "Custom weekly", percent: 40 }] };
+      const mixed = await fetchProviderQuotaReports(config, true);
+      expect(mixed.reports[0]?.quota.customWindows).toEqual([
+        { label: "Custom weekly", percent: 40 },
+      ]);
+      if (mode === "pool") expect(mixed.reports[0]?.aggregation?.includedAccounts).toBe(1);
+    } finally {
+      directSpy.mockRestore();
+      poolSpy.mockRestore();
+    }
+  });
+
+  test("Codex report exposes primary and weekly windows, and omits retired Spark", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       expect(String(input)).toBe("https://chatgpt.com/backend-api/wham/usage");
       return Response.json({
@@ -170,9 +214,7 @@ describe("fetchProviderQuotaReports", () => {
       weeklyPercent: 22,
       weeklyResetAt: 2,
     });
-    // Spark is a single-model window that reads 0% for most operators; it is hidden unless the
-    // operator opts in. The upstream payload above still CARRIES it, so this asserts the
-    // projection dropped it rather than the fixture omitting it.
+    // Retired additional limits must never become account capacity.
     expect(result.reports[0]?.quota?.customWindows).toBeUndefined();
   });
 

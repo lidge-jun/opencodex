@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, restoredUserEventFor, setAfterNoopPendingCountForTests, setAfterStrictHistoryRolloutAppendForTests, setBeforeHistoryApplyTransactionForTests, setBeforeHistoryBackupConsumeForTests, setBeforeStrictHistoryRolloutAppendForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../../src/codex/history-provider";
+import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, legacyHistoryBackupPathFor, migrateHistoryToOpenai, resolveExistingHistoryBackupPath, restoreLegacyOpenaiHistory, restoredUserEventFor, setAfterNoopPendingCountForTests, setAfterStrictHistoryRolloutAppendForTests, setBeforeHistoryApplyTransactionForTests, setBeforeHistoryBackupConsumeForTests, setBeforeStrictHistoryRolloutAppendForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../../src/codex/history-provider";
+import { codexHistoryBackupId, legacyCodexHistoryBackupId, sameCodexHistoryPath } from "../../src/codex/history-manifest";
 import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "../helpers/codex-history-manifest-fixtures";
 import { preflightCodexHistoryInjection, setHistoryAppendHooksForTests } from "../../src/codex/history-provider";
 
@@ -181,7 +182,7 @@ describe("Codex history provider sync", () => {
     expect(readFileSync(fixture.rollout,"utf8")).toBe(before);
     expect(existsSync(fixture.backupPath)).toBe(false);
   });
-  test("injection preflight preserves provider definitions needed by paginated threads", () => {
+  test("injection preflight reports the paginated refusal for every target set that reaches a paginated row", () => {
     const fixture = makeFixture({ includeLegacy: true });
     noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
     const db = new Database(fixture.dbPath);
@@ -213,12 +214,61 @@ describe("Codex history provider sync", () => {
     });
   }
 
+  for (const marker of ["ordinal", "history_mode"] as const) {
+    test(`refuses a later paginated ${marker} when the first line is still legacy`, () => {
+      const fixture = makeFixture();
+      noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+      const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const first = records[0];
+      // Keep line 1 legacy. A later native migration writes the paginated marker
+      // onto a new session_meta (and, for ordinals, the following event) so the
+      // first-line-only guard would miss it and clone ordinal 0 (#4311).
+      const laterMeta = marker === "ordinal"
+        ? { ordinal: 0, type: "session_meta", payload: { ...first.payload } }
+        : { type: "session_meta", payload: { ...first.payload, history_mode: "paginated" } };
+      const laterEvent = marker === "ordinal"
+        ? { ordinal: 1, type: "event_msg", timestamp: "2026-01-01T00:00:00.000Z", payload: { message: "x" } }
+        : { type: "event_msg", timestamp: "2026-01-01T00:00:00.000Z", payload: { message: "x" } };
+      const before = [first, laterMeta, laterEvent].map(record => JSON.stringify(record)).join("\n") + "\n";
+      writeFileSync(fixture.rollout, before);
+      const result = syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath);
+      expect(result).toMatchObject({ rows: 0, files: 0, failed: true, integrityCode: "history_paginated_requires_native_writer" });
+      expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+      expect(existsSync(fixture.backupPath)).toBe(false);
+      const db = new Database(fixture.dbPath, { readonly: true });
+      expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "openai" });
+      db.close();
+    });
+  }
+
   test("preserves a routed paginated rollout and its restore manifest", () => {
     const fixture = makeFixture();
     noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
     expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).failed).toBeUndefined();
     const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
     records.forEach((record, ordinal) => { record.ordinal = ordinal; });
+    const before = records.map(record => JSON.stringify(record)).join("\n") + "\n";
+    writeFileSync(fixture.rollout, before);
+    const manifest = readFileSync(fixture.backupPath, "utf8");
+    for (const result of [syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath), restoreLegacyOpenaiHistory(fixture.dbPath)]) {
+      expect(result).toMatchObject({ rows: 0, files: 0, failed: true, integrityCode: "history_paginated_requires_native_writer" });
+    }
+    expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+    expect(readFileSync(fixture.backupPath, "utf8")).toBe(manifest);
+    const db = new Database(fixture.dbPath, { readonly: true });
+    expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "opencodex" });
+    db.close();
+  });
+
+  test("preserves a routed rollout that later becomes paginated past line 1", () => {
+    const fixture = makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).failed).toBeUndefined();
+    const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    // First line stays legacy. Native conversion appends paginated records after
+    // routing, which is the #4311 projector-stop shape if we cloned ordinal 0.
+    records.push({ ordinal: 0, type: "session_meta", payload: { id: "thread-1", model_provider: "opencodex", history_mode: "paginated" } });
+    records.push({ ordinal: 1, type: "event_msg", timestamp: "2026-01-01T00:00:01.000Z", payload: { message: "x" } });
     const before = records.map(record => JSON.stringify(record)).join("\n") + "\n";
     writeFileSync(fixture.rollout, before);
     const manifest = readFileSync(fixture.backupPath, "utf8");
@@ -1512,5 +1562,87 @@ describe("Design B migration helpers", () => {
     const db = new Database(pending.dbPath, { readonly: true });
     expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "openai" });
     db.close();
+  });
+});
+
+/**
+ * #4442: Codex records some rollout paths with the Win32 extended-length prefix
+ * (`\\?\C:\...`) and others without. Both spellings name the same file, but the
+ * integrity check compared them literally and failed intact sessions. The identity
+ * leaf strips the prefix before resolving, and the manifest filename keeps a
+ * legacy-name fallback so a backup written under the pre-fix identity is still
+ * discovered. These tests fake win32 to pin the path shapes directly; the real
+ * platform is restored after each one.
+ */
+describe("Windows history path identity (#4442)", () => {
+  const originalPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  });
+  const fakeWin32 = () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+  };
+
+  test("treats extended-length-prefixed spellings as the same file", () => {
+    fakeWin32();
+    expect(sameCodexHistoryPath(
+      "\\\\?\\C:\\Users\\a\\.codex\\sessions\\r.jsonl",
+      "C:\\Users\\a\\.codex\\sessions\\r.jsonl",
+    )).toBe(true);
+    // The case-insensitive contract still holds across the prefix boundary.
+    expect(sameCodexHistoryPath(
+      "c:\\users\\a\\r.jsonl",
+      "\\\\?\\C:\\Users\\A\\r.jsonl",
+    )).toBe(true);
+    // The UNC form maps to its bare-share spelling.
+    expect(sameCodexHistoryPath(
+      "\\\\?\\UNC\\server\\share\\r.jsonl",
+      "\\\\server\\share\\r.jsonl",
+    )).toBe(true);
+    // Prefix normalization must not collapse genuinely different files.
+    expect(sameCodexHistoryPath(
+      "\\\\?\\C:\\Users\\a\\r.jsonl",
+      "C:\\Users\\a\\other.jsonl",
+    )).toBe(false);
+    // An archived_sessions move is a real path change, not a spelling alias (#4442
+    // keeps those cases out of this fix by design).
+    expect(sameCodexHistoryPath(
+      "\\\\?\\C:\\Users\\a\\.codex\\archived_sessions\\r.jsonl",
+      "C:\\Users\\a\\.codex\\sessions\\r.jsonl",
+    )).toBe(false);
+  });
+
+  test("hashes both spellings to one backup id while keeping the pre-fix id reachable", () => {
+    fakeWin32();
+    const plain = "C:\\Users\\a\\.codex\\state_5.sqlite";
+    const prefixed = "\\\\?\\C:\\Users\\a\\.codex\\state_5.sqlite";
+    expect(codexHistoryBackupId(prefixed)).toBe(codexHistoryBackupId(plain));
+    // The prefixed spelling hashed to a DIFFERENT manifest name before #4442; that is
+    // the file a machine that recorded the prefix already has on disk, so the legacy
+    // id must stay computable. Plain spellings are untouched by the whole change.
+    expect(legacyCodexHistoryBackupId(prefixed)).not.toBe(codexHistoryBackupId(prefixed));
+    expect(legacyCodexHistoryBackupId(plain)).toBe(codexHistoryBackupId(plain));
+  });
+
+  test("discovers a manifest named under the pre-#4442 identity and never replaces it silently", () => {
+    fakeWin32();
+    const stateDb = "\\\\?\\C:\\Users\\a\\.codex\\state_5.sqlite";
+    const canonical = historyBackupPathFor(stateDb);
+    const legacy = legacyHistoryBackupPathFor(stateDb);
+    expect(legacy).not.toBe(canonical);
+
+    const present = new Set<string>([legacy]);
+    const exists = (path: string) => present.has(path);
+    // Only the legacy name exists: it still shadows the database, so restore and
+    // no-op probes keep finding its provenance instead of reading it as absent.
+    expect(resolveExistingHistoryBackupPath(stateDb, exists)).toBe(legacy);
+    // Both names exist (conflicting old/new manifests): the canonical manifest wins
+    // and the legacy file is left in place — kept, never silently replaced.
+    present.add(canonical);
+    expect(resolveExistingHistoryBackupPath(stateDb, exists)).toBe(canonical);
+    expect(present.has(legacy)).toBe(true);
+    // Neither exists: a new manifest is written under the canonical name.
+    present.clear();
+    expect(resolveExistingHistoryBackupPath(stateDb, exists)).toBe(canonical);
   });
 });

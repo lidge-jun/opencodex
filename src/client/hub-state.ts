@@ -161,6 +161,12 @@ export interface ResolveHubStateOptions {
   owner: HubStateOwner;
   /** The per-client data key. Null when the token file is missing or unsafe. */
   token: string | null;
+  /**
+   * Why the caller withheld the token, when it withheld one it holds. A null token reads the
+   * same here whether the file is missing or the caller declined to send a perfectly good
+   * token for a different connection, and the operator acts on that difference.
+   */
+  withheldTokenReason?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   now?: number;
@@ -195,7 +201,9 @@ export async function resolveHubState(options: ResolveHubStateOptions): Promise<
       ? withAge("cache", cached.state, cached.fetchedAt, now, reason)
       : withAge("unavailable", null, undefined, now, reason);
   };
-  if (!options.token) return fromCache("this client has no usable data-plane token");
+  if (!options.token) {
+    return fromCache(options.withheldTokenReason ?? "this client has no usable data-plane token");
+  }
   if (options.allowNetwork === false) return fromCache("a live hub read was not attempted");
   let state: HubStateDTO;
   try {

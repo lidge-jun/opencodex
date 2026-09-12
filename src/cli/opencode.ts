@@ -41,6 +41,9 @@ import type {
 } from "../clients/config-export";
 import { filterCatalogVisibleModels, visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
+import { configuredAdminToken } from "../lib/admin-secrets";
+import { localManagementOrigin } from "../lib/local-destinations";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { providerCodexAccountMode } from "../providers/registry";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
@@ -306,17 +309,38 @@ function opencodeBlocks(
 /** Default deadline for authenticated GET /api/models during `ocx opencode` launch. */
 export const OPENCODE_PROXY_MODELS_TIMEOUT_MS = 8_000;
 
+function opencodeManagementOrigin(live: LiveProxy, override?: string): string {
+  if (!override && (!Number.isInteger(live.port) || live.port < 1 || live.port > 65535)) {
+    throw new Error("The local management port is invalid.");
+  }
+  let url: URL;
+  try { url = new URL(override ?? `http://${probeHostname(live.hostname)}:${live.port}`); }
+  catch { throw new Error("The local management address is invalid."); }
+  if (url.protocol !== "http:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("The catalog requires a local HTTP management origin without credentials or a path.");
+  }
+  const host = url.hostname.toLowerCase();
+  if (["localhost", "localhost.", "127.0.0.1", "0.0.0.0", "[::]"].includes(host)) url.hostname = "127.0.0.1";
+  else if (host !== "[::1]") {
+    throw new Error("The catalog requires a loopback management listener. On a hub, enable hub.managementIngress.");
+  }
+  const port = Number(url.port || 80);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("The local management port is invalid.");
+  return url.origin;
+}
+
 /** Fetch the live model catalog from a running proxy's management API. */
 export async function fetchOpencodeProxyModels(
   live: LiveProxy,
-  apiKey: string,
-  deps: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  managementToken: string,
+  deps: { fetchImpl?: typeof fetch; timeoutMs?: number; managementOrigin?: string } = {},
 ): Promise<OpencodeProxyModelRow[]> {
-  const baseUrl = `http://${probeHostname(live.hostname)}:${live.port}`;
-  const fetchImpl = deps.fetchImpl ?? fetch;
+  const baseUrl = opencodeManagementOrigin(live, deps.managementOrigin);
+  const fetchImpl = deps.fetchImpl ?? directLocalHttpFetch;
   const headers = new Headers({ Accept: "application/json" });
-  const token = apiKey.trim();
-  if (token) headers.set("X-OpenCodex-API-Key", token);
+  const token = managementToken.trim();
+  if (!token) throw new Error("No local admin token is available for the model catalog.");
+  headers.set("X-OpenCodex-API-Key", token);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), deps.timeoutMs ?? OPENCODE_PROXY_MODELS_TIMEOUT_MS);
   const abortIfTimedOut = (): Promise<never> => new Promise((_, reject) => {
@@ -337,10 +361,16 @@ export async function fetchOpencodeProxyModels(
     response = await Promise.race([
       fetchImpl(`${baseUrl}/api/models`, {
         headers,
+        redirect: "error",
+        cache: "no-store",
         signal: controller.signal,
       }),
       abortIfTimedOut(),
     ]);
+    if (response.status >= 300 && response.status < 400) {
+      void response.body?.cancel().catch(() => {});
+      throw new Error("Management catalog redirects are refused.");
+    }
     text = await Promise.race([response.text(), abortIfTimedOut()]);
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "AbortError";
@@ -584,7 +614,7 @@ export function buildOpencodeEnv(
   const runtimeConfig = mergeOpencodeRuntimeConfig(base[OPENCODE_CONFIG_CONTENT_ENV], blocks);
   if (isOpencodeRuntimeConfigError(runtimeConfig)) return runtimeConfig;
   return {
-    ...base,
+    ...Object.fromEntries(Object.entries(base).filter(([name]) => name.toUpperCase() !== "OPENCODEX_ADMIN_AUTH_TOKEN")),
     [OPENCODE_CONFIG_CONTENT_ENV]: serializeOpencodeRuntimeConfig(runtimeConfig),
     [OPENCODE_API_KEY_ENV]: apiKey,
   };
@@ -652,7 +682,11 @@ export async function cmdOpencode(args: string[]): Promise<number> {
   const apiKey = opencodeApiKey(startupConfig);
   let proxyModels: OpencodeProxyModelRow[];
   try {
-    proxyModels = await fetchOpencodeProxyModels(live, apiKey);
+    const managementToken = configuredAdminToken();
+    if (!managementToken) throw new Error("No local admin token is available; check the running proxy's home.");
+    proxyModels = await fetchOpencodeProxyModels(live, managementToken, {
+      managementOrigin: localManagementOrigin({ ...startupConfig, hostname: live.hostname }, live.port),
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.error(`❌ Could not fetch the model catalog from the proxy: ${reason}`);

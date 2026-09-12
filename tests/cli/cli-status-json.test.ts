@@ -984,6 +984,11 @@ describe("status reports stale process records end to end", () => {
         writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid, port: recordedPort, hostname: "127.0.0.1" }), "utf8");
         const observed = JSON.parse(runStatusJson(home).stdout) as { proxy?: { staleProcessState?: unknown } };
         if (!await refusesConnection(recordedPort)) continue;
+        // The TCP check can refuse while the HTTP /healthz probe aborts at 800ms
+        // without an ECONNREFUSED code. That leaves staleProcessState false even
+        // though the recorded port is still empty; retry instead of treating a
+        // timed-out probe as "judged the occupied configured port".
+        if (observed?.proxy?.staleProcessState !== true) continue;
         parsed = observed;
       }
 

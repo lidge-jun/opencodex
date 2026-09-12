@@ -176,7 +176,7 @@ ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
-ocx login devin       # Cognition/Devin Auth0 browser sign-in
+ocx login devin       # Cognition/Devin: import Devin CLI credential, else Auth0 browser sign-in
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login codex        # Codex account pool (aliases: chatgpt, openai; needs a running proxy)
 ocx logout <provider>
@@ -192,8 +192,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
-| `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login opens Auth0 browser sign-in, then exchanges the token via Cognition's `RegisterUser` for a long-lived API key; models are discovered per account with `GetCascadeModelConfigs`. Not shown in the dashboard preset by default. Chat and usage reporting are verified against a live account across three models. |
-| `devin-cli` | `devin` | `https://server.codeium.com` | Imports the credential your installed Devin CLI already holds (`devin auth login` writes it to its own `credentials.toml`), then streams over Cognition's Connect-RPC api-server like the `devin` provider — no browser sign-in and no key to paste. Model discovery and context windows come from your account's own catalog. |
+| `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login first imports the credential the installed Devin CLI already holds (`devin auth login` writes a `devin-session-token` to its own `credentials.toml`); when none is present it opens Auth0 browser sign-in and exchanges the pasted token via Cognition's `RegisterUser` for a long-lived API key. `ocx login devin-cli` remains as a deprecated alias. Models are discovered per account with `GetCascadeModelConfigs`. Not shown in the dashboard preset by default. Chat and usage reporting are verified against a live account across three models. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 Google Antigravity account and provider quota probes use fixed Google accounting endpoints, including the models fallback. They support transparent Fake-IP DNS for those destinations while retaining TLS verification, redirect rejection and private-address checks. A custom provider base URL changes model requests, not quota destinations; `NO_PROXY` continues to select the direct-route policy.
@@ -313,9 +312,9 @@ Terminal refresh failures mark the account as needing reauthentication instead o
 `Retry-After`, quota `reset` headers (capped), or a short default backoff. Accounts on an explicit
 `Retry-After` cooldown are not probed early; reset-derived cooldowns may receive a paced probe lease
 so recovery can be detected without flooding the provider. Reset-derived native-model cooldowns
-also preserve known independent quota groups: `gpt-5.3-codex-spark` does not prevent the same account
-from trying the shared GPT-5.6 Terra/Luna quota, while models in that shared group still protect one
-another. Explicit `Retry-After` and default cooldowns always remain account-wide.
+keep shared native quota (including GPT-5.6 Terra/Luna) separate from `gpt-reserve`.
+Models in the shared group still protect one another; an ordinary success cannot clear a Reserve cooldown.
+Explicit `Retry-After` and default cooldowns always remain account-wide.
 
 **Session affinity.** Codex thread→account affinity is process-local (in-memory only; not persisted
 across proxy restarts). On credential failures (`401` / `403`) the account is quarantined for
@@ -525,6 +524,11 @@ The built-in DeepSeek preset also routes `deepseek-v4-flash` over its native Res
 keeps upstream SSE streaming enabled. If that model finishes every output item but omits the final
 Responses event, opencodex applies a five-second model-scoped grace repair; malformed or partial
 streams close as incomplete rather than being reported as successful.
+The first-party `deepseek-flash` model advertises native `text` and `image` input, so image requests
+are sent directly to DeepSeek by default instead of through the vision sidecar. Explicit
+`noVisionModels` or text-only declarations remain authoritative. First-party `deepseek-chat`,
+`deepseek-reasoner`, and `deepseek-v4-flash` remain sidecar-backed by default. Zen routes are
+unchanged and were not probed in this update.
 
 > **Three Volcengine billing routes:** `volcengine` is the pay-as-you-go Ark API,
 > `volcengine-coding-plan` consumes Coding Plan quota, and `volcengine-agent-plan` consumes Agent
@@ -999,6 +1003,48 @@ dashboard or `custom` in `ocx init` and enter the base URL. See the
 [Configuration reference](/reference/configuration/) for every provider field
 (`headers`, `noReasoningModels`, `noVisionModels`, `models`, …).
 
+## Approval reviewer per provider
+
+Codex asks a second model to review approval requests, and takes that reviewer from
+`auto_review_model_override` on the catalog row of the current turn's model. The root
+`auto_review_model` in `$CODEX_HOME/config.toml` applies one reviewer to every row. To give a
+routed provider its own — usually cheaper — reviewer, set the selector on that provider row in
+`~/.opencodex/config.json`:
+
+```json
+{
+  "providers": {
+    "blsc": {
+      "autoReviewModel": "opencode-go/deepseek-v4-flash",
+      "autoReviewModelOverrides": { "kimi-k3": "gpt-5.6-terra" }
+    }
+  }
+}
+```
+
+`autoReviewModel` covers every routed row of the provider. `autoReviewModelOverrides` targets a
+single upstream model id and wins over it. A value is either a bare model id of that same provider
+or a public catalog slug such as `opencode-go/deepseek-v4-flash`, and a provider stamp wins over the
+root selector on its own rows while the root selector stays the fallback elsewhere.
+
+A bare value resolves against the provider's own rows first and then against a bare catalog row,
+which is how a native model such as `gpt-5.6-terra` is named; a value that matches neither is left
+unresolved, and a bare value that lands outside the provider prints a note naming the row that
+supplies the reviewer. Giving the full slug avoids the question entirely when the reviewer is
+another provider's routed model.
+
+Selectors are resolved against the final catalog on the next sync, each one on its own, and each
+fails closed by itself: an unresolved `autoReviewModel` prints a diagnostic and stamps no
+provider-wide rows, an unresolved `autoReviewModelOverrides` entry prints a diagnostic and stamps
+no per-model override, leaving a valid provider-wide target as fallback. Whatever resolves is still applied. Rows without a provider stamp
+keep the root selector, or upstream behavior when that is unset. Removing the root selector leaves
+provider stamps alone, and removing a provider selector clears only that provider's stamps.
+
+These fields are available through configuration, `PATCH /api/providers?name=<provider>`, and
+the dashboard raw JSON provider editor; dedicated form controls are not present. The canonical `openai` provider
+rejects them. Field-by-field rules live in the
+[provider configuration reference](/reference/configuration/providers/#auto-review-approval-model-selection).
+
 ## Rate limits in the providers overview
 
 The **Rate limits** section of the Providers overview shows live utilization
@@ -1038,3 +1084,12 @@ no quota bars rather than a fabricated one, and windows the plan does not report
 absent instead of rendering as 0%.
 
 A provider using a non-canonical `baseUrl` is never sent the key for this probe.
+### Diagnosing an Antigravity quota refresh
+
+The account quota view and `ocx account list google-antigravity --quota --refresh` distinguish access denial, rate limiting, blocked destinations or redirects, DNS/connection/timeouts, and unusable quota data. Last-known bars remain visible with their observation time when a refresh fails. Reauthentication retires diagnoses from the previous credential; a successful refresh clears the failure.
+
+An access-denied result does not by itself prove an expired login or an ineligible plan. A blocked destination is a network-policy decision, not proof of a Fake-IP defect. Canonical Google quota destinations retain TLS verification and redirect/private-address restrictions. Authenticated TUN behavior must be checked in the affected environment; injected transport fixtures alone do not establish that field result.
+
+## Large inline images on Chat providers
+
+Translated OpenAI-compatible Chat requests shrink inline images when their combined base64 data exceeds 3.5 MiB. Older images lose detail first. This is a best-effort image budget, so large text, schemas, or images that cannot be processed may still exceed an upstream request limit. Remote image URLs are not downloaded, and images that cannot be shrunk remain attached. Native Chat passthrough keeps its original image bytes.

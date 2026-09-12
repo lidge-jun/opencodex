@@ -229,9 +229,8 @@ entrée. **L'omission de la valeur lit** la commande actuelle au lieu d'en écri
 comptes éligibles, en prenant le niveau de commande le plus élevé qui dispose encore d'une marge de quota et en laissant
 `accountPoolStrategy` pour choisir à l'intérieur. La pause, le temps de recharge et la réauthentification ne sont pas affectés.
 Les modifications s'appliquent à partir de la **prochaine requête non liée**, et pas seulement à partir des sessions nouvellement démarrées : mouvements de préemption
-une demande non liée augmente dès qu'un ordre supérieur retrouve de la marge. Sujets déjà liés à un compte
-conservez-le normalement jusqu’à ce que ce compte soit vidé ; un échec de réauthentification, un temps de recharge du quota ou un
-une séquence de défaillances transitoires libère la liaison avant cela. Toute écriture acceptée publie également un manuel
+une demande non liée augmente dès qu'un ordre supérieur retrouve de la marge. Les fils déjà liés à un compte
+le conservent normalement jusqu’à ce que ce compte soit vidé ; un échec de réauthentification ou un temps de recharge du quota libère encore la liaison avant cela. Une séquence de défaillances transitoires (5xx et autres échecs hors quota atteignant `upstreamFailoverThreshold`, 3 par défaut) ne supprime pas une liaison active : la requête est servie par un autre compte, puis le fil y revient dès que le sien sert à nouveau ; si le compte échoue encore après 10 minutes, la liaison est libérée normalement. Toute écriture acceptée publie également un manuel
 épingle "utiliser ce compte maintenant", sur le compte qui le détenait, y compris une écriture qui stocke le
 commander un compte déjà possédé — c'est le seul moyen d'effacer un code PIN tout en conservant le compte
 qui est actuellement sélectionné. (La compensation du compte actif via la gestion API libère un
@@ -315,9 +314,14 @@ ocx account main doctor [--json]
 ocx account main list [--json]
 ocx account main register <label> [--json]
 ocx account main add <label>
+ocx account main reauth --device [--no-wait] [--json]
+ocx account main reauth status --flow <id> [--json]
+ocx account main reauth cancel --flow <id> [--json]
 ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
+
+En cas de succès, `ocx account main reauth --device --no-wait --json` écrit un seul objet JSON sur stdout, sans la ligne destinée à la lecture humaine `follow up:`. Utilisez son `flowId` avec `ocx account main reauth status --flow <id> --json` pour suivre la progression.
 
 Chaque commande de mutation rapporte le `CODEX_HOME` effectif canonique renvoyé par le proxy en cours d'exécution.
 Ce chemin peut différer du `CODEX_HOME` de l'appelant ; les commandes qui prennent en charge JSON exposent le même

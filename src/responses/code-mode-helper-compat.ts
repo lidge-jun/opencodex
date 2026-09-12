@@ -31,7 +31,10 @@ function unwrapPatchInput(value: string): string {
  */
 export function compileCodeModeHelperInput(argumentsText: unknown, toolName: string): string {
   if (typeof argumentsText !== "string") return "";
-  if (toolName === "apply_patch") {
+  const helperName = toolName.startsWith("default.")
+    ? toolName.slice("default.".length)
+    : toolName;
+  if (helperName === "apply_patch") {
     const patch = normalizeApplyPatchDelimiters(unwrapPatchInput(argumentsText));
     return `const result = await tools.apply_patch(${JSON.stringify(patch)});\ntext(result);`;
   }
@@ -43,7 +46,7 @@ export function compileCodeModeHelperInput(argumentsText: unknown, toolName: str
   }
   const args: unknown = isPlainObject(parsed) ? { ...parsed } : parsed;
   if (
-    toolName === "shell_command"
+    helperName === "shell_command"
     && isPlainObject(args)
     && typeof args.command === "string"
     && args.cmd === undefined
@@ -51,8 +54,24 @@ export function compileCodeModeHelperInput(argumentsText: unknown, toolName: str
     args.cmd = args.command;
     delete args.command;
   }
-  if (toolName === "write_stdin") {
+  if (helperName === "write_stdin") {
     return `const result = await tools.write_stdin(${JSON.stringify(args)});\ntext(result);`;
+  }
+  if (helperName === "view_image") {
+    // Codex code-mode `exec` exposes `tools.view_image({path, detail?})`; the host answers
+    // with a custom_tool_call_output carrying `input_image`, which `image()` surfaces back
+    // to the model. Aliases map onto Codex's `path`/`detail`; anything else is passed as
+    // data so nested validation can reject it.
+    const viewArgs: unknown = isPlainObject(args) ? { ...args } : args;
+    if (isPlainObject(viewArgs)) {
+      for (const alias of ["file_path", "file", "image_path"]) {
+        if (typeof viewArgs.path !== "string" && typeof viewArgs[alias] === "string") {
+          viewArgs.path = viewArgs[alias];
+        }
+        delete viewArgs[alias];
+      }
+    }
+    return `const result = await tools.view_image(${JSON.stringify(viewArgs)});\nif (result && result.image_url) { image(result.image_url); } else { text(result); }`;
   }
   return `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);`;
 }

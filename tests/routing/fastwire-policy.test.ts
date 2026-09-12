@@ -268,9 +268,11 @@ describe("resolveFastPolicy matrix", () => {
           authMode: "oauth" as const,
         },
         adapter: "openai-responses",
-        forwardCallerTier: false,
+        // Classified by live probe 2026-09-13: the caller-tier pin is gone, so a
+        // foreign caller tier forwards on the Responses wire.
+        forwardCallerTier: true,
         callerTier: "flex",
-        settledCallerTier: undefined,
+        settledCallerTier: "flex",
       },
       {
         name: "xAI OAuth Responses override",
@@ -283,9 +285,9 @@ describe("resolveFastPolicy matrix", () => {
           modelAdapters: { "grok-4.6": "openai-responses", "grok-4.5": "openai-responses" },
         },
         adapter: "openai-responses",
-        forwardCallerTier: false,
+        forwardCallerTier: true,
         callerTier: "flex",
-        settledCallerTier: undefined,
+        settledCallerTier: "flex",
       },
       {
         // B2: key-auth Chat Completions is a documented Priority Processing transport.

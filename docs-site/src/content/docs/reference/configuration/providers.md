@@ -51,9 +51,10 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account for the next request. Selection clears thread affinity; in-flight requests keep captured credentials. |
 | `codexAccountPriorities?` | `Record<string, number>` | — | Per-account selection order for the Codex pool: account id → integer from `-100` to `100`, **higher is used earlier**, absent means `0`. This is an ordering boundary, not an eligibility one: selection narrows the already-eligible accounts to the highest tier that still has quota headroom, and `accountPoolStrategy` then picks within that tier. A tier is skipped only when every member is over `autoSwitchThreshold`, cooling down, soft-avoided, paused, or needs reauthentication — unknown quota never drains a tier. Ordering never makes an ineligible account selectable and never re-binds a thread that already has an account. The main `__main__` account participates on equal terms, which is how the Codex Desktop login can be set to drain last. With no entries the pool behaves exactly as before. A malformed map is ignored with a console warning (ordering off, no config repair). Managed by `ocx account priority` and the Codex Auth page. |
 | `activeCodexAccountPinned?` | `string` | — | Account id the operator last selected by hand. While set, a higher `codexAccountPriorities` tier cannot preempt it until the pin is released by drain, exclusion, deletion, or an explicit failover/promotion away. Ordinary round-robin movement inside the capped tier does not release it. Writing any `codexAccountPriorities` entry also releases the pin, so a pin made before an order existed cannot outrank one set afterward. `GET /api/codex-auth/active` reports both whether the effective account is pinned (`pinned`) and the account carrying the ceiling (`pinnedAccountId`). |
-| `autoSwitchThreshold?` | `number` | `80` | Usage threshold for proactive switching. `quota` can re-evaluate unbound tasks on their next request, and by default also re-evaluates bound tasks once usage crosses this threshold. With `pool.cacheAffinity` on, a bound task keeps its account past the threshold until that account is exhausted or otherwise cannot serve. `fill-first` uses it only as the drain point for unbound assignment; normal `round-robin` selection does not use it. The score uses the hottest known 5h, weekly, or 30d quota window. `0` disables usage-based proactive switching only, not unbound assignment or failure recovery. |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Assignment strategy for new/unbound Codex requests. A request is unbound when it has no live (parent thread id, quota scope) affinity; a visible existing task can become unbound after proxy restart or affinity reset. `quota` picks the lowest-usage eligible account when no active account exists, keeps an eligible active account below `autoSwitchThreshold`, and after the threshold may move an unbound request or — unless `pool.cacheAffinity` is on — proactively rebind a bound task to a lower-usage eligible account. With `pool.cacheAffinity` on, a bound task stays until its account is exhausted (known usage at 100%) or otherwise cannot serve. `round-robin` distributes unbound requests evenly; `fill-first` keeps assigning unbound requests to the active account until cooldown, unavailability, or the configured drain threshold. |
-| `pool.cacheAffinity?` | `boolean` | `false` | Opt-in cache-affinity ordering for bound Codex threads, independent of `pool.kernel`. Off by default; a malformed value reads as off. With it on, a live binding outranks quota headroom: `quota` does not move the thread merely because usage crossed `autoSwitchThreshold`. The thread still leaves if that account cannot serve — paused, unusable, or genuinely exhausted (known usage at 100%) — so affinity is a reordering, not a pin. |
+| `autoSwitchThreshold?` | `number` | `80` | Usage threshold for placing new/unbound work. `quota` can re-evaluate unbound tasks on their next request once usage crosses this threshold. Bound tasks keep their account past the threshold by default (`pool.cacheAffinity`); they leave only when that account is exhausted or otherwise cannot serve, and then only for an account with genuine quota headroom and strictly lower usage. Set `pool.cacheAffinity: false` to re-evaluate bound tasks at this threshold, still only onto such a destination. `fill-first` uses it only as the drain point for unbound assignment; normal `round-robin` selection does not use it. The score uses the hottest known 5h, weekly, or 30d quota window. `0` disables usage-based proactive switching only, not unbound assignment or failure recovery. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | Assignment strategy for new/unbound Codex requests. A request is unbound when it has no live (parent thread id, quota scope) affinity; a visible existing task can become unbound after proxy restart or affinity reset. `quota` picks the lowest-usage eligible account when no active account exists, keeps an eligible active account below `autoSwitchThreshold`, and after the threshold may move an unbound request. Bound tasks follow `pool.cacheAffinity` (on by default): they stay until the account is exhausted (known usage at 100%) or otherwise cannot serve, and then may rebind only to an account with genuine quota headroom and strictly lower usage. Set the flag `false` to proactively rebind a bound task at the threshold, still only onto such a destination. `round-robin` distributes unbound requests evenly; `fill-first` keeps assigning unbound requests to the active account until cooldown, unavailability, or the configured drain threshold.  `reset-first`: Prefer the nearest future 5-hour or weekly reset among accounts below the usage threshold. Bound tasks follow the configured affinity policy. Independent model quotas use quota ordering. Monthly resets do not determine this ordering. |
+| `pool.cacheAffinity?` | `boolean` | `true` | Cache-affinity ordering for bound Codex threads, independent of `pool.kernel`. On by default; omitting the key or setting `true` keeps a bound task on its account until that account genuinely cannot serve. Only an explicit `false` restores threshold-based rebinding of bound tasks. A live binding outranks quota headroom: `quota` does not move the thread merely because usage crossed `autoSwitchThreshold`. The thread still leaves if that account cannot serve — paused, unusable, or genuinely exhausted (known usage at 100%) — and then only to an account with genuine quota headroom and strictly lower usage. Under either setting, an account with unknown usage is never chosen as a destination for a bound task, so when every account sits above the threshold the task stays put. Affinity is a reordering, not a pin. |
+| `pool.credentialGroups?` | `Array<{ id: string; credentials: string[]; note?: string }>` | `[]` | Accepted and validated, but not yet consumed by routing: declaring a group changes no routing decision until a consuming layer lands. Operator-declared quota domains: groups of credentials that demonstrably share one upstream usage limit. Members of one group count once toward available capacity, and a quota refusal inside a group is not answered by rotating to another member — the limit is the same, so the move would pay a cold prefix for zero new capacity. Declared groups speak only to quota; sharing a limit says nothing about prompt-cache compatibility, which is classified separately. Each member is written provider-qualified as `"<provider>:<credential-id>"`, because a credential id means something only inside its provider; the provider segment accepts the usual aliases (`chatgpt:` and `codex:` both mean OpenAI). Group ids must be unique, `credentials` must be non-empty, and a credential may appear in at most one group — an ambiguous declaration is rejected on write and dropped with a warning on load rather than resolved by whichever group is listed first, since that would merge two unrelated quota domains. A malformed list costs only the grouping: `pool.kernel` and `pool.cacheAffinity` are preserved. Absent or empty means no declared grouping, so an unconfigured install behaves exactly as before. |
 | `accountPoolStickyLimit?` | `number` | `1` | New/unbound task assignments retained on one round-robin selection before advancing; the counter advances when a task is bound, not after an upstream success. Range 1–100. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient failures before future new sessions fail over. Set `0` to disable. For regular Responses and native compact sends, proven pre-connection DNS/TCP reachability failures are tracked at the provider-host level: they never affect account health, account cooldowns, thread/session affinity, active-account selection, or Pool routing, and never count toward this threshold. |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | Opt-in circuit threshold for proven pre-connection DNS/TCP failures on native OpenAI forward Responses and compact sends. `0` disables it; `1`–`20` opens a 30-second provider-origin cooldown after that many terminal logical requests. While open, requests receive `503` with `Retry-After` before account selection or upstream send; after cooldown, one half-open request is admitted. Timeouts and HTTP responses never count, and any HTTP response closes the circuit. Applies only to Codex Pool routing with no pinned account; it is inert for `codexAccountMode: "direct"` and account-qualified selectors. |
@@ -201,13 +202,14 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `terminalContinuationGuard?` | `boolean` | Opt in an `openai-chat` provider to one bounded internal re-ask when an actionable turn announces work, then cleanly stops without a tool call. Defaults to `false`; explicit `false` behaves like omission. Combo attempts and routed compaction turns are excluded, and non-`openai-chat` adapters ignore this option. |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | Disabled-by-default downstream SSE repair for exact placeholder ids, missing terminal ids, and (with `repairInvalidIds`) message/reasoning ids missing the canonical `msg_`/`rs_` prefix. Function-call ids are never rewritten. Built-in DeepSeek enables the last two by default. |
 | `responsesSnapshotRepair?` | `boolean` | Disabled-by-default client-facing repair for sparse Responses lifecycle snapshots in SSE and JSON. Fills missing canonical status, output, and tool metadata while raw inspection and persistence remain unchanged. |
-| `webSearchBridge?` | `{ enabled?: boolean; backend?: "ollama"; maxSearches?: number; timeoutMs?: number; endpoint?: string }` | Key-auth `openai-responses` passthrough providers only. Off by default. Codex always declares the hosted `web_search` tool, and the passthrough relays it on the assumption the destination executes it. A gateway that does not (Ollama Cloud GLM/DeepSeek) answers with a `function_call` named `web_search` that nothing runs, and the undeclared-tool guard ends the turn. With `enabled: true` OpenCodex intercepts that call, runs the search itself, feeds the result back to the same upstream, and shows Codex a hosted `web_search_call` cell. Never armed for `authMode: "forward"` (ChatGPT already searches) or for a provider that executes hosted search upstream. Only the `ollama` backend has an executor; the other ids in the union are accepted and stay inert. The `ollama` backend reuses this provider's own API key on `POST <origin>/api/web_search`, so the origin must be `https://ollama.com` unless the operator names `endpoint` explicitly. Streaming turns only; a turn that mixes `web_search` with another client tool call fails closed rather than dropping the client's call. Defaults: `maxSearches: 3` (1..10), `timeoutMs: 60000` (1000..600000). |
+| `webSearchBridge?` | `{ enabled?: boolean; backend?: "ollama" \| "openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"; maxSearches?: number; timeoutMs?: number; endpoint?: string }` | Key-auth `openai-responses` passthrough providers only. Off by default. Codex always declares the hosted `web_search` tool, and the passthrough relays it on the assumption the destination executes it. A gateway that does not run hosted search answers with a `function_call` named `web_search` that nothing runs, and the undeclared-tool guard ends the turn. With `enabled: true` and an explicit `backend` OpenCodex intercepts that call, runs the search itself, feeds the result back to the same upstream, and shows Codex a hosted `web_search_call` cell. Never armed for `authMode: "forward"` (ChatGPT already searches) or for a provider that executes hosted search upstream. `backend` is required; there is no implicit default and a missing credential for the named backend leaves the bridge disarmed rather than falling through to another paid search. `ollama` reuses this provider's own API key on `POST <origin>/api/web_search`, so the origin must be `https://ollama.com` unless the operator names `endpoint` explicitly. `openai` / `anthropic` / `xai` / `gemini` / `exa` reuse the matching sidecar executor and that executor's own credential (`webSearchSidecar.exaApiKey` for Exa). The search model comes from `webSearchSidecar.model` only when `webSearchSidecar.backend` resolves to the same backend this bridge names; otherwise the bridge runs that backend's own default, because a model chosen for one vendor is rejected by another. An unset `webSearchSidecar.backend` resolves to `openai`, so an unset-backend model reaches an `openai` bridge and no other. There is no per-provider bridge model override. Streaming turns only. A turn that mixes `web_search` with another client tool call still fails closed rather than dropping the client's call. Assistant text such as XML-like `<web_search>` prose is not executed. Defaults: `maxSearches: 3` (1..10), `timeoutMs: 60000` (1000..600000). |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | API-key providers only (`authMode: "key"`). Opt-in same-target 429 retry: when `retryOn429` is absent the feature is off; object presence enables it unless `enabled: false`. On 429 the proxy waits (upstream `Retry-After` or the fixed interval) and replays the identical request on the same key before any key failover — across the main text-turn recovery loop, the Responses passthrough wire, the image/video bridge, the web-search sidecar, and terminal continuations. Only pre-stream HTTP 429 responses are eligible for replay; custom `runTurn` transports are outside the HTTP retry loop. `attempts` counts same-key replays after the first 429 (total sends = `attempts` + 1) and is one request-wide budget shared by the main recovery loop, the terminal-guard continuation, and bridge retries. Exhausting `attempts` only stops further same-key replays: normal key failover or final-error handling then applies per the available targets — on the key-auth passthrough wire there is no failover, so the exhausted 429 surfaces as-is. Codex itself never retries 429, so this is the only defense for single-key providers. Defaults: `enabled: true`, `attempts: 3`, `intervalMs: 5000`, `maxIntervalMs: 60000` (any single wait is capped at `maxIntervalMs`, itself capped at 600000), `respectRetryAfter: true`. |
 | `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | Key-auth `openai-chat` providers only. Opt-in retry for pre-stream transient upstream statuses (500, 502, 503, 504, 520, 521, 522): absent means off, object presence enables it unless `enabled: false`. Covers the initial Responses request, the terminal-guard continuation, and native `/v1/chat/completions`. `attempts` is the TOTAL number of upstream sends allowed for one request including the first (1..10, default 3) — it is one budget shared with connection-reset recovery, so `3` means at most three real requests reach the provider. Waits use a fixed 400 ms exponential backoff capped at 5 s and honor `Retry-After`. Separate from `retryOn429`, which handles rate limiting; mid-stream failures are never replayed. |
 | `autoToolChoiceOnlyModels?` | `string[]` | Models whose `tool_choice` accepts only `auto` or `none`; forced choices are downgraded. |
 | `preserveReasoningContentModels?` | `string[]` | Models requiring prior assistant `reasoning_content` in chat history. |
 | `reasoningDetailsModels?` | `string[]` | Models whose endpoint returns thinking as a structured `reasoning_details` array (MiniMax M-series with `reasoning_split`); stream deltas are cumulative snapshots that are prefix-diffed, and preserved reasoning replays as a `reasoning_details` array instead of a `reasoning_content` string. |
 | `requiresReasoningPlaceholderModels?` | `string[]` | Models whose upstream rejects a tool_call continuation missing `reasoning_content` (DeepSeek thinking mode); a minimal placeholder is injected when the replay cache misses. Defaults to `preserveReasoningContentModels`; set `[]` to opt out. |
+| `showThinkingSummary?` | `boolean` | Display provider-authored summaries when a Responses client omits `reasoning.summary`. Explicit wire `"none"` wins; a client that serializes its preference as omission cannot be distinguished. Raw reasoning remains content and is never relabeled as a summary. The `google-antigravity` preset defaults to `true`; explicit `false` disables that default. CCA Gemini requests also opt into `generationConfig.thinkingConfig.includeThoughts` when display is enabled; image, Claude and gpt-oss requests do not. This does not change client configuration or global catalog summary defaults. |
 | `thinkingToggleModels?` | `string[]` | Chat models using `thinking.enabled` rather than an effort ladder. |
 | `thinkingBudgetModels?` | `string[]` | Chat models using integer `thinking_budget`; effort maps to a budget fraction. |
 | `noVisionModels?` | `string[]` | Text-only models sent through the vision sidecar; matching tolerates an Ollama `:size` tag. |
@@ -223,12 +225,19 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
+With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
+served the first request. Changing the selected key, its reference or resolved value, authentication
+mode, or base URL during search or provider pacing ends the turn with a bridge error before another
+provider request is sent. Changing away and back also ends that continuation. Start a new turn to
+use the new selection. Selection changes before the first provider send retain normal reselection.
+
 Custom-model `reasoningEfforts` normally override discovered provider metadata. The bounded
-exception is an explicit Astra or Daybreak custom row on the canonical `openai` Codex-forward
-destination: its advertised list is intersected with that model's pinned native capabilities.
-An explicit empty list remains empty with no default; a nonempty incompatible list falls back
-to the native default as a single choice. Defaults must belong to the final list. This changes
-the catalog projection, not stored configuration or arbitrary gateway models sharing a GPT name.
+exception is an explicit custom row whose model id has pinned native Codex capabilities,
+including Astra or Daybreak on an arbitrary gateway: its advertised list is intersected with
+that model's pinned native capabilities. Full native identity still requires the canonical
+`openai` Codex-forward destination. An explicit empty list remains empty with no default; a
+nonempty incompatible list falls back to the native default as a single choice. Defaults must
+belong to the final list. This changes the catalog projection, not stored configuration.
 See [custom native catalog examples](/guides/codex-app-models/).
 
 ### Operator-pinned reasoning effort
@@ -259,6 +268,49 @@ Compaction maintenance requests are exempt from pins.
 use `null` to clear a scalar or the whole map. A map entry set to `null` or `""` removes that
 entry while preserving other entries. Malformed writes are rejected before saving. A malformed
 optional pin in a hand-edited file is ignored on load without discarding the rest of the config.
+
+### Auto-review (approval) model selection
+
+Codex reads `auto_review_model_override` from the catalog row of the current turn's model to
+choose the model that reviews approval requests. The root `auto_review_model` setting in
+`$CODEX_HOME/config.toml` applies one reviewer to every catalog row; the provider-scoped fields
+below override it per provider. The [provider guide](/guides/providers/#approval-reviewer-per-provider)
+has the operator workflow and a worked example.
+
+`autoReviewModel` is the provider-wide reviewer target. A value can be a bare model id of that same
+provider (the catalog row is normalized to the `provider/model` slug) or a full public catalog
+slug such as `opencode-go/deepseek-v4-flash`. A bare value resolves against that provider's rows
+first and then against a bare catalog row, which is how a native model such as `gpt-5.6-terra` is
+named, and a bare value that lands outside the provider prints a note naming the row that actually
+supplies the reviewer; a value that matches neither is left unresolved. `autoReviewModelOverrides`
+keys are exact upstream model ids of that provider, or the provider's published alias for one
+(`modelAliases`); either spelling names the same routed row, whose slug carries the upstream id. An
+entry wins over the provider-wide value for its model. A provider
+stamp wins over the root selector on its own routed rows, and the root selector remains the
+fallback for native rows and routed rows without a provider stamp. Removing a provider selector
+clears only that provider's stamps; removing the root selector never clears provider stamps.
+Model ids that contain a slash may be written raw or in their encoded catalog form; both
+spellings resolve to the same routed row. Model keys preserve case.
+Selectors are resolved against the final catalog on each sync, independently of one another, and
+each fails closed on its own: an unresolved `autoReviewModel` emits a diagnostic and stamps no
+provider-wide rows, an unresolved `autoReviewModelOverrides` entry emits a diagnostic and stamps
+no per-model override, so a valid provider-wide target remains its fallback. Any selector that does resolve is still applied. Rows without a provider
+stamp keep the root selector, or normal upstream auto-review behavior when that is unset. The
+canonical `openai` provider does not accept these fields.
+
+Removing the root selector clears root stamps from every row, including native rows stamped by
+earlier releases that predate OpenCodex's provenance marker. That cleanup recognizes a legacy
+stamp by its shape — one value across the whole catalog that a routed row also carries — so a
+genuine per-row value matching that shape is cleared with it, and a catalog that has since
+diverged from that shape needs one manual sync. Provider stamps are never touched by root removal.
+
+`PATCH /api/providers?name=<provider>` accepts both fields. Use `null` to clear the scalar or
+the whole map; use a map entry of `null` or `""` to remove that model while preserving other
+entries. Unrelated provider saves preserve previously configured values.
+
+These fields are available in `config.json`, the provider management API, and the Dashboard raw
+JSON provider editor. Dedicated form controls are not present. Native root stamps record the
+previous value and restore it on removal when the stamped value has not been changed externally.
 
 ### Discovered model display names
 
@@ -328,6 +380,7 @@ projection, and merge precedence, so only a selector present in the catalog prod
 that sync can become an override. Native upstream values are preserved when the setting is
 cleared or unresolved. The persisted catalog field is read by Codex for the current turn's
 model, which is why a valid configured selector is copied to each applicable entry.
+Provider-scoped selectors (above) are applied before this root fallback and win on routed rows.
 
 ### FastWire B1 capability migration
 
@@ -381,11 +434,19 @@ need to rediscover. Every legacy variant id keeps routing unchanged.
 
 ### xAI Priority Processing
 
-The built-in `xai` preset advertises and injects Fast only when its effective transport uses
-`authMode: "key"`. API-key mode targets `https://api.x.ai/v1` through the `openai-chat` adapter and
-sends `service_tier: "priority"` through Chat Completions. `ocx login xai`
-instead stores OAuth credentials for the separate Grok CLI subscription-gateway flow, so OAuth
-remains unclassified: its catalog rows do not advertise Fast and the proxy does not inject a tier.
+The built-in `xai` preset supports Fast on both of its transports, with different scope.
+API-key mode targets `https://api.x.ai/v1`; routes resolved to `openai-chat` send
+`service_tier: "priority"` through Chat Completions, while model defaults and overrides can
+select the `openai-responses` transport instead. `ocx login xai`
+instead stores OAuth credentials for the Grok subscription gateway
+(`https://cli-chat-proxy.grok.com/v1`; these credentials refresh automatically), where Fast
+is classified per model (live-probed 2026-09-13): grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-reasoning,
+grok-4.20-0309-non-reasoning, grok-build-0.1, and grok-composer-2.5-fast accept
+`service_tier: "priority"` over Grok OAuth and echo it, so those rows advertise Fast, accept
+`--fast` selectors, and forward a caller-sent tier on either wire. grok-4.20-multi-agent-0309
+is excluded: the gateway answers `service_tier: "default"` when sent `priority`, so it stays
+unclassified and its caller tier is not forwarded. Unlisted models stay unclassified on both
+transports.
 
 xAI charges Priority Processing at 2× the standard token price for input, output, cached, and
 reasoning tokens; cache discounts are applied before the multiplier. Cost estimates use that premium
@@ -478,10 +539,14 @@ validation never applies the IPv6 accommodation.
 Use **Codex Auth** in the dashboard to add pool accounts and refresh quotas. `config.json` stores
 non-secret metadata; access and refresh tokens use the hardened credential store. Pool routing
 separates new/unbound assignment, usage-based proactive switching, and failure recovery. A bound task
-normally keeps affinity. By default `quota` may rebind it on its next request after the usage
-threshold is crossed; with `pool.cacheAffinity` on, that rebind waits until the bound account is
-exhausted or otherwise cannot serve. Pause, cooldown, reauthentication, and failure handling can
-clear or move routing independently. An unbound request has no live account binding; this can include an existing visible
+normally keeps affinity. By default (`pool.cacheAffinity`) `quota` does not rebind it merely because
+the usage threshold is crossed; that rebind waits until the bound account is exhausted or otherwise
+cannot serve, and then only onto an account with genuine quota headroom and strictly lower usage.
+Set `pool.cacheAffinity: false` to restore threshold rebinding of bound tasks, still only onto such
+a destination. Pause, cooldown, reauthentication, and quota refusals still release a live binding
+immediately. A transient-failure streak serves the request from another account while keeping the
+binding, and the task returns once that account serves again; after 10 minutes the binding is
+released normally. An unbound request has no live account binding; this can include an existing visible
 task after proxy restart or affinity reset. A pre-stream 429 or 402, or a 5xx response whose bounded
 body explicitly reports quota exhaustion, retries once on an eligible alternate account in the same
 request, even when usage-based proactive switching is off. The ordinary transient-5xx policy runs
@@ -502,7 +567,7 @@ and pauses only accounts freshly confirmed at 100%; unknown or failed refreshes 
 
 | Strategy | Behaviour |
 | --- | --- |
-| `quota` (default) | If no active account exists, choose the lowest-usage eligible account across 5-hour, weekly, and 30-day windows. Otherwise retain an eligible active account below `autoSwitchThreshold`; after it crosses the threshold, an unbound request can move to a lower-usage eligible account, and a bound task's next request can too unless `pool.cacheAffinity` is on. With that flag on, cache affinity outranks quota headroom and the bound task stays until the account is exhausted (known usage at 100%) or cannot serve (paused, unusable). `0` disables this usage-driven re-evaluation, not failure recovery. |
+| `quota` (default) | If no active account exists, choose the lowest-usage eligible account across 5-hour, weekly, and 30-day windows. Otherwise retain an eligible active account below `autoSwitchThreshold`; after it crosses the threshold, an unbound request can move to a lower-usage eligible account. Bound tasks keep cache affinity by default and stay until the account is exhausted (known usage at 100%) or cannot serve (paused, unusable); a move then requires genuine quota headroom and strictly lower usage on the destination, so the task stays put when every account is over the threshold or the only cooler account has unknown usage. Set `pool.cacheAffinity: false` to let a bound task's next request move at the threshold, still only onto such a destination. `0` disables this usage-driven re-evaluation, not failure recovery. |
 | `round-robin` | Evenly assign unbound requests across eligible accounts. `autoSwitchThreshold` does not change normal round-robin selection. `accountPoolStickyLimit` (1–100) counts assignments on one pick, not successful upstream responses. |
 | `fill-first` | Assign unbound requests to the active account until cooldown, reauthentication, or the configured drain threshold; unknown usage does not force a switch. Healthy bound tasks keep affinity. |
 
@@ -1043,3 +1108,15 @@ or expiry does not extend the history-recovery contract.
 Sender and recipient on routed Responses are context for the receiving model, not a new
 machine-readable routing protocol. Tool routing continues to use the existing collaboration
 contracts.
+
+### Per-model capability declarations
+
+`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`) and `video.processing` (`static`, `agentic`). These are operator declarations, not proof of provider support. Context-tier and video fields currently record intent only and do not activate upstream behavior or increase catalog windows.
+
+The raw provider editor and provider API expose this map. POST/PUT replace an explicitly supplied map and reject null entries. PATCH merges individual axes; null clears a map, model, axis or video processing value, while `{}` makes no change. Omitted provider overwrites preserve the existing map. Malformed hand-edited files retain valid independent axes and treat malformed explicit input modalities as text-only, with a diagnostic.
+
+An explicit `modelCapabilities.<id>.inputModalities` now takes precedence over legacy modality hints for that exact routed model. A text-only declaration uses the existing vision sidecar to replace images with descriptions; if no sidecar is available, the request receives an explicit omission marker before dispatch. Native Chat image requests divert through this path. The catalog can still advertise image attachment support because the proxy provides the description step. Context-tier and video processing declarations remain inert pending their transport support.
+
+### Renamed API-key presets
+
+A provider saved under another name, such as `CommandCode`, inherits missing reasoning-effort metadata when its adapter and fixed API-key endpoint match a registry preset. Your explicit per-model lists, including `[]`, remain authoritative. An omitted provider-wide list inherits the preset default; an explicit list remains unchanged. This does not match OAuth, unrelated endpoints, or templated/custom endpoint presets.

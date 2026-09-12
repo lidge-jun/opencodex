@@ -1,11 +1,65 @@
 # Inbound Compatibility Surfaces
 
+Compatibility callers retain the public Responses ingress described by the
+[core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
+The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+
+## Standalone file transcription
+
+`src/server/audio-transcriptions.ts` owns `POST /v1/audio/transcriptions`, independently of
+Responses and Chat conversion. `src/server/audio-upstream.ts` resolves explicit data-plane keys
+on both listeners and substitutes stored OpenAI credentials. Direct stored-main access claims
+the enclosing admission lease; Pool uses the existing sidecar account resolver. A selected
+ChatGPT authentication failure never falls through to the paid OpenAI provider.
+
+The bounded multipart input accepts one nonempty file up to 25,000,000 bytes within a 32 MiB
+body, required model, and optional prompt, language and JSON/text response format. Unknown or
+duplicate fields fail. Subscription requests use the compatibility identifier gpt-4o-transcribe
+and send no model upstream; the keyed API also accepts gpt-4o-mini-transcribe and whisper-1.
+Responses retain only text. Manual redirects, capped response reads and linked cancellation
+keep credentials and audio content out of redirects, request logs and durable storage.
+`tests/server/audio-transcriptions.test.ts` exercises the real ingress and synthetic upstream;
+`tests/server/api-key-attribution.test.ts` uses multipart fixtures for the HTTP auth matrix.
+
+## Streaming audio
+
+`src/server/audio-client.ts` recognizes explicit audio keys before local legacy admission.
+Browser sockets offer opencodex-audio and opencodex-key.<base64url-key>; only the public
+marker is selected downstream. Invalid presented keys cannot become credential-free native calls.
+`src/server/audio-dictation.ts` maps the validated desktop session.start/audio.append/session.close
+protocol to ChatGPT dictation with server-owned credentials and a five-minute lifetime.
+The `src/server/index.ts` byte relay retains bounded queues, handshake/session deadlines and
+the account/turn lifecycle until its upstream closes. `src/server/ws-bridge.ts` carries the
+in-memory callbacks and signal; handshake credentials are cleared after socket construction.
+
+`src/server/audio-live.ts` owns external keyed GPT-Live creation and joins while the original
+`src/server/live.ts` keeps the native compatibility path. `src/server/live-call-bindings.ts`
+maps opaque rtc_ocx_ aliases to the creating key, provider, physical account and protocol.
+Expired aliases never fall through to native joins. Reconnect resolves the recorded account
+freshly; keyed provider replacement fails unless its credential digest still matches.
+The registry is per server, holds at most 1024 entries for 30 minutes and is cleared on shutdown.
+It does not proxy WebRTC media or execute delegation requests. Standalone Frameless defaults
+to gpt-live-1-codex; gpt-live-1 is an explicit alias. Dictation and Frameless event formats remain
+separate. Coverage lives in `tests/server/audio-client.test.ts`,
+`tests/server/audio-dictation.test.ts` and `tests/server/live-call-bindings.test.ts`.
+
+Translated Claude timeline reminders use the Chat adapter's
+[OpenCode Go instruction ordering](../providers/chat-compat.md#opencode-go-chronological-instructions)
+on its exact supported route. This is separate from trailing-notice stabilization
+and from native Chat message passthrough.
+
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
+
 ## Chat Completions inbound native path
 
 `POST /v1/chat/completions` sends eligible `openai-chat` routes directly to the provider's Chat
 Completions endpoint. Route selection reads the raw Chat body and the native request keeps that body
 as its wire source; a Responses projection is constructed only after the native route is declined
-and is never converted back into Chat. Request construction remains owned by `src/adapters/openai-chat.ts`, including model
+and is never converted back into Chat. Translated Codex requests inherit the
+[Responses compatibility and retired-evidence policy](../transports/responses.md#responses-httpsse),
+without introducing a model-name denylist at this inbound boundary. Request construction remains owned by `src/adapters/openai-chat.ts`, including model
 normalization, credential and provider headers, capability-specific fields, and the send URL: the
 canonical `openaiChatCompletionsUrl()` path, or `chatCompletionsPath` when the provider declares one.
 That field is the `openai-chat` mirror of `responsesPath` and exists because a per-model wire
@@ -19,8 +73,23 @@ the native passthrough there is no canonical Fast injection and no wire mapping:
 and `fastMode` injects nothing here. Resolved-Fast-policy injection applies only to routes that
 take the Chat -> Responses -> Chat bridge below. `parallel_tool_calls` is emitted only for providers opted into
 parallel tools (or pinned false by the existing provider opt-out contract).
+The native passthrough still applies the existing model capability authority to reasoning: an
+explicit empty ladder removes caller `reasoning_effort`, while an unknown ladder remains
+unclassified. This guard does not alter the separate raw service-tier contract.
+
+On the response side, the upstream `service_tier` echo (xAI Priority Processing, OpenAI fast
+tier) relays to the Chat Completions caller on every delivery shape: the non-streaming body
+(`responsesJsonToChatCompletion` in `src/chat/outbound.ts`), the folded stream
+(`collectChatCompletion` in `src/chat/outbound.ts`), and each synthesized SSE chunk
+(`jsonCompletionSse` in `src/server/chat-native-sse.ts`). An upstream that sends no
+`service_tier` gets no injected key. The Responses lane already relayed the same field for
+responses-wire upstreams; the responses-lane assembly for chat-wire upstreams keeps it in
+attempt telemetry only.
+
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
 or storage semantics retain the existing Chat -> Responses -> Chat bridge.
+Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
+aliasing as native Responses; see [`responses.md`](../transports/responses.md).
 
 The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
 one bounded event. EOF with an unterminated event and an event above the translator limit are typed
@@ -32,6 +101,19 @@ request-signal cancellation contracts as routed Responses transport. Because
 `src/server/chat-native.ts` repeats the pre-dispatch `selectProactiveApiKeyTransport`
 call before it binds the adapter; the pick remains inert unless a strategy is configured
 and the committed key is cooling. See [`responses.md`](../transports/responses.md).
+
+### Native Chat completion lifecycle
+
+`src/server/chat-native-sse.ts` applies the resolved `stallTimeoutSec` while waiting for upstream
+progress. Nonempty text, reasoning, refusal, tool identity/arguments, and finish frames renew the
+allowance; comments, role-only frames, empty deltas, and usage alone do not. Downstream backpressure
+pauses this wait budget. A stall emits a Chat error with `upstream_stall_timeout` and logs 502;
+the non-streaming endpoint returns HTTP 502 rather than a successful partial result.
+
+`src/chat/outbound.ts` collects LF/CRLF, multiline data, and split UTF-8 through the shared SSE
+block buffer and tracks appended output bytes incrementally. A caller cancellation before a native
+terminal returns 499 / `client_cancelled`; an already accepted terminal keeps its result. Reader,
+timer, turn, and translator ownership are released through the existing lifecycle.
 
 ## Chat conversation identity forwarding
 
@@ -76,6 +158,8 @@ releasing its lock, so upstream translation cannot continue after failed JSON co
 response finalizer continues to own retained response bytes. These are projection rules, not new
 refusal policy or changes to ordinary content/tool semantics.
 
+The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
+
 ## MiniMax Anthropic-compatible clients
 
 The MiniMax platform CLI's text resource posts Anthropic Messages to
@@ -99,12 +183,28 @@ reasoning ladder into `thinking.effortOptions`. Missing capabilities stay absent
 falling back to OpenCodex guesses, and the integration does not write the removed
 `thinking.effort` / `defaultEffort` fields because MCode owns the active effort per session.
 
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+
+Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+
+Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
+
+Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
 Chat helper admission in `src/server/responses/core.ts` follows the
 [deferred stored-main contract](../providers/openai-tiers.md): only a needed Direct OpenAI helper
 claims stored main, after terminal vision, routed vision and search exclusions.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
 see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+
+Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
+
+Optional Codex transport-hint suppression is scoped to canonical Responses client output;
+its defaults and exclusions are owned by [Responses transport](../transports/responses.md).
+
+The provider summary default applies at Responses ingress; native Chat and Anthropic inbound preferences keep their existing handling. Raw content is never renamed to a summary. See [bridge contract](../providers/chat-compat.md).
 
 ## Claude affinity at final Go dispatch
 
@@ -137,4 +237,97 @@ changes prompt roles, not conversation identity, and cannot guarantee upstream c
 Instruction notice extraction scans fence ranges once and walks original lines backwards with
 a decreasing cursor. It accepts exactly one ASCII space inside the token notice, preserves
 unmatched prefix bytes, and does not repeatedly scan or copy shrinking prompt prefixes.
+
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+
+Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
+
+Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
+
+Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+
+The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
+
+Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+## Shared inbound Chat image recognition
+
+`src/chat/image-parts.ts` owns which `messages[].content[]` shapes count as an image
+on the Chat Completions ingress: OpenAI `image_url` in both spellings, Pi/MCP
+`{type:"image", data, mimeType}`, and Anthropic-shaped `{type:"image", source}` in
+base64 and url form. The translator and the native fast path both read it, because
+they previously answered that question separately and disagreed: native
+route-eligibility matched only `image_url`, so a text-only routed model kept a
+Pi-shaped or Anthropic-shaped image body and the native whitelist passthrough
+forwarded the foreign part verbatim.
+
+Normalization is copy-on-write and lazy: replacement arrays are allocated only once a
+part actually needs rewriting, so an ordinary text request walks the messages and
+allocates nothing.
+
+**Shape normalization alone does not make a tool-result image safe on the native fast
+path.** A standard Chat `role: "tool"` message accepts a string or text parts, not
+`image_url`, so rewriting a Pi or Anthropic tool image still leaves an image part
+inside a tool message. `chatBodyCarriesToolResultImage` therefore makes such a request
+ineligible for the native shortcut, and the translated openai-chat adapter owns it —
+that adapter already collects tool-result images and flushes them into a following
+`user` carrier after the complete paired tool-result batch. Ordinary user images and
+text-only tool results keep the native fast path.
+
+`normalizeChatImageParts` runs in `handleChatCompletionsWithBudget` immediately
+after routing-body validation and before `routeModel`, so the text-only diversion in
+`isNativeChatRouteEligible` and the forwarded native wire observe the same parts. It
+rewrites only recognized foreign parts into `image_url` form and returns its input by
+reference when nothing matched, so a body with no image — and one already in OpenAI
+shape — stays byte-identical. Sibling parts, message fields and top-level body fields
+are preserved; the native path is a whitelist passthrough, so an incidental deep clone
+would itself be a behavior change. A remote reference is recognized and rewritten,
+never fetched.
+
+## Translated Chat control fidelity
+
+A translated Chat turn keeps the controls the caller sent. The Chat ingress pins
+`store:false` for every `openai-responses` route and strips nothing else: the
+sampling and output-cap restrictions that the canonical ChatGPT backend requires are
+applied at the final outgoing body in `src/adapters/openai-responses.ts`, gated on
+`isCanonicalOpenAiForwardProvider`, which additionally requires `authMode: "forward"`
+and the canonical base URL.
+
+Deciding at the ingress was wrong on two axes. Seven providers share the
+`openai-responses` adapter string, so a generic key gateway lost controls it
+accepts; and `settledRoute` is the ingress-time route, while a combo or policy route
+resolves its concrete child later, so the decision preceded knowledge of the real
+target in both directions. `stripCanonicalForwardSamplingParams` returns a copy and
+no-ops when none of its keys are present, so `_rawBody` stays caller-owned. The
+separate forward-wide `max_output_tokens`/`metadata` sanitizer is unchanged.
+
+An assistant turn's `reasoning_content` or `reasoning_details` is carried into the
+projection as a `reasoning` input item emitted immediately before its assistant
+message, matching the parser's buffer-and-prepend adjacency. Only representable
+plaintext crosses: no signature, encrypted payload or provider item id is
+reconstructed, because those attest to content this proxy never received. Opaque
+reasoning replay across a Chat boundary remains unimplemented by design.
+`presence_penalty` and `frequency_penalty` are carried too; per-model
+`noPenaltyModels` opt-outs still apply at the adapter.
+
+## Explicit reasoning disable on the Chat ingress
+
+The Chat inbound effort allowlist accepts `none` alongside the ladder values.
+`none` is the runtime's disable sentinel — `src/reasoning-effort.ts` maps it to
+omitting the wire parameter, and the Pi client export maps Pi's `off` thinking level
+onto it. Dropping it let a provider default re-enable reasoning the caller had
+explicitly turned off, which is not neutral for the Anthropic families that think by
+default and require an explicit `thinking:{type:"disabled"}` to stop.
+
+
+## Media at the Chat translation boundary
+
+The native Chat path retains provider-native file/audio blocks. When a request instead needs
+Chat-to-Responses projection, `src/chat/inbound.ts` rejects recognized audio/file content
+before it can become empty text, regardless of message role. Legacy `function`-role images
+also return an explicit error; their call/result pairing is not implemented by this projection.
+Modern `tool` images continue through the existing following-user carrier. These errors state
+an OpenCodex conversion limit, not a provider capability claim. Final Responses-to-adapter
+admission follows the [registry contract](../adapters/registry.md#untranslated-input-media).
+Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.

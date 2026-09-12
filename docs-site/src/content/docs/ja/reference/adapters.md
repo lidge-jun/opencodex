@@ -178,12 +178,13 @@ model discovery の両方に適用されます。
 ## `devin`
 
 **対象:** Cognition の `exa.api_server_pb.ApiServerService/GetChatMessage`（`server.codeium.com`、Connect ストリーミング）。
-**認証:** `provider.apiKey` または転送された authorization ヘッダーの Devin/Cognition API キー。ログインは Auth0 のブラウザサインインを開き、`SeatManagementService.RegisterUser` で長期キーに交換します。
+**認証:** `provider.apiKey` または転送された authorization ヘッダーの Devin/Cognition API キー。ログインはまず、インストール済み Devin CLI が保持する認証情報の取り込みを試みます。`devin auth login` は CLI 自身の PKCE サインインを完了し、`devin-session-token` を CLI の `credentials.toml` に書き込みます。これは `SeatManagementService.RegisterUser` がブラウザサインインに発行するものと同じ資格情報です。利用できる CLI 資格情報がない場合は Auth0 のブラウザサインインにフォールバックし、貼り付けたトークンを `RegisterUser` で長期キーに交換します。`devin-cli` は非推奨エイリアスとして残るだけで、`ocx login devin-cli` も `devin` にルーティングされ、旧 id で保存された設定は起動時に書き換えられます。
 
 - 通常の fetch/parse ではなく `runTurn` を使います。リクエストとサーバーイベントは `devin/cloud-direct/wire.ts` の手動 protobuf フレーミングで扱います。
 - `GetCascadeModelConfigs` でアカウントごとにモデルを取得し、プランに含まれないモデルはリクエスト時ではなく一覧の段階で外れます。
 - Cognition はツール説明の長さ制限と完全一致のブロックリストを課します。アダプターが既知の語句を書き換え、長すぎる説明を切り詰めます。
 - キーは更新されません。失効したら `ocx login devin` をやり直してください。
+- CLI インポート経路でもローカルなのは資格情報だけで、ターン自体はどちらの経路でも Cognition へ送られます。以前のビルドには `devin-cli` id で、ローカルの `devin acp` 子プロセスに対して Agent Client Protocol セッションとしてターンを実行する第2のアダプターがありましたが、削除されました。そのアダプターをまだ指す保存済み設定は起動時に `devin` へ書き換えられ、`"devin-acp"` のようなカスタム名の行も同様です。
 
 ## `azure-openai`（別名: `azure`）
 

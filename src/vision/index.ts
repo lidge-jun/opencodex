@@ -35,6 +35,7 @@ export {
   resolveEffectiveVisionModel,
   shouldResolveOpenAiVisionSidecar,
   planVisionSidecar,
+  requiresVisionPreprocessing,
 } from "./plan";
 export type { AnthropicVisionProvider, VisionPlan } from "./plan";
 export { stripImagesInPlace } from "./image-rewrite";

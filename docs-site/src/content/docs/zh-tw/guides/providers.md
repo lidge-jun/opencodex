@@ -97,7 +97,7 @@ ocx login kiro         # 匯入 kiro-cli credential（或 token fallback）
 ocx login google-antigravity
 ocx login cursor       # 獨立 Cursor PKCE 登入
 ocx login command-code # Command Code browser OAuth（或匯入 ~/.commandcode/auth.json）
-ocx login devin       # Cognition/Devin 的 Auth0 瀏覽器登入
+ocx login devin       # Cognition/Devin：優先匯入 Devin CLI 憑證，否則走 Auth0 瀏覽器登入
 ocx login github-copilot  # GitHub device flow → Copilot token（Copilot Pro/Business）
 ocx login codex        # Codex 帳號池（別名：chatgpt、openai；需要 proxy 正在執行）
 ocx logout <provider>
@@ -112,8 +112,7 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
-| `devin` | `devin` | `https://server.codeium.com` | 實驗性的非官方 Cognition/Devin 橋接。登入會開啟 Auth0 瀏覽器頁面，再以 `RegisterUser` 將權杖換成長期 API 金鑰。模型清單依帳號透過 `GetCascadeModelConfigs` 即時取得，串流僅走 Connect-RPC 上的 `runTurn` 路徑。預設不在儀表板預設集內，需手動啟用。 |
-| `devin-cli` | `devin` | `https://server.codeium.com` | 匯入本機已安裝 Devin CLI 已持有的憑證（`devin auth login` 會寫入它自己的 `credentials.toml`），接著與 `devin` 提供者一樣透過 Cognition 的 Connect-RPC api-server 串流。不需瀏覽器登入，也不需貼上金鑰。模型清單與內容視窗來自帳號自身的目錄。 |
+| `devin` | `devin` | `https://server.codeium.com` | 實驗性的非官方 Cognition/Devin 橋接。登入會先匯入已安裝 Devin CLI 已持有的憑證（`devin auth login` 會把 `devin-session-token` 寫入它自己的 `credentials.toml`）；沒有則開啟 Auth0 瀏覽器頁面，再以 `RegisterUser` 將貼上的權杖換成長期 API 金鑰。`ocx login devin-cli` 仍作為已棄用別名可用。模型清單依帳號透過 `GetCascadeModelConfigs` 即時取得，串流僅走 Connect-RPC 上的 `runTurn` 路徑。預設不在儀表板預設集內，需手動啟用。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 
 Google Antigravity 帳戶與供應商的配額查詢（包括模型清單備援）使用固定的 Google 計量端點。這些目標支援透明 Fake-IP DNS，同時保留 TLS 驗證、重新導向拒絕與私有位址檢查。自訂 base URL 只改變模型請求，不改變配額目標；`NO_PROXY` 仍使用直連政策。
@@ -170,8 +169,8 @@ opencodex 協調 token refresh 與 Codex pool 路由，避免並行請求競爭 
 **Cooldown（Codex pool）。** 上游 `429`／quota response 會依 `Retry-After`、quota `reset` header
 （有上限）或短預設 backoff 設定 hard cooldown。明確 `Retry-After` cooldown 中的帳號不會被提前 probe；
 reset 衍生 cooldown 可能取得節流後的 probe lease，在不淹沒 provider 的情況下偵測恢復。由 reset 衍生的
-native-model cooldown 也會保留已知獨立 quota group：`gpt-5.3-codex-spark` 不會阻止同一帳號嘗試共享的
-GPT-5.6 Terra/Luna quota，而共享群組內的模型仍會互相保護。明確 `Retry-After` 與預設 cooldown 始終為
+native-model cooldown 會將共享原生 quota（含 GPT-5.6 Terra/Luna）與 `gpt-reserve` 分開。
+共享群組內的模型仍會互相保護；一般請求成功不會清除 Reserve cooldown。明確 `Retry-After` 與預設 cooldown 始終為
 account-wide。
 
 **Session affinity。** Codex thread→account affinity 只存在目前 process 記憶體，不會跨 proxy restart
@@ -316,6 +315,10 @@ provider，例如 **Xiaomi MiMo**，使用 `anthropic` adapter（`x-api-key`）�
 原生 Responses endpoint，並保持上游 SSE streaming。若該模型完成所有 output item 卻省略最後的
 Responses event，opencodex 會套用 5 秒、model-scoped 的 grace repair；malformed 或 partial stream 會以
 incomplete 關閉，不會被誤報為成功。
+第一方 `deepseek-flash` 模型原生宣告支援 `text` 與 `image` 輸入，因此圖片請求預設會直接送往
+DeepSeek，不經過 vision sidecar。明確的 `noVisionModels` 或純文字宣告仍然優先。第一方
+`deepseek-chat`、`deepseek-reasoner` 與 `deepseek-v4-flash` 預設仍使用 sidecar；Zen 路由維持不變，
+本次更新未進行探測。
 
 > **三條 Volcengine 計費路徑：** `volcengine` 是 pay-as-you-go Ark API，
 > `volcengine-coding-plan` 消耗 Coding Plan quota，`volcengine-agent-plan` 消耗 Agent Plan quota。請使用

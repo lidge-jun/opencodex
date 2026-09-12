@@ -16,7 +16,7 @@ import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { CodexWsMetadata } from "../../src/server/responses/codex-ws-metadata";
-import { applyAccountQuotaFromUpstreamHeaders } from "../../src/codex/quota";
+import { applyAccountQuotaFromUpstreamHeaders, getAccountQuotaHistory } from "../../src/codex/quota";
 
 const originalFetch = globalThis.fetch;
 
@@ -183,6 +183,8 @@ describe("Responses account usage attribution", () => {
           await response.text();
           expect(getAccountQuota(accountId)?.weeklyPercent).toBe(20);
           expect(getAccountQuota("untouched-account")?.weeklyPercent).toBe(7);
+          expect(getAccountQuotaHistory(accountId).observations.map(row => row.windows[0].usedPercent))
+            .toEqual(accountId === MAIN_CODEX_ACCOUNT_ID ? [] : [10, 20]);
         }
       });
     } finally {
@@ -235,6 +237,7 @@ describe("Responses account usage attribution", () => {
           codexWsRuntimeIdentity: "1.4.0",
         });
         expect(getAccountQuota("pool-ws-replaced")?.weeklyPercent).toBe(10);
+        expect(getAccountQuotaHistory("pool-ws-replaced").observations.map(row => row.windows[0].usedPercent)).toEqual([10]);
 
         savePoolCredential("pool-ws-replaced");
         clearAccountQuota("pool-ws-replaced");
@@ -242,6 +245,7 @@ describe("Responses account usage attribution", () => {
         await response.text();
 
         expect(getAccountQuota("pool-ws-replaced")).toBeNull();
+        expect(getAccountQuotaHistory("pool-ws-replaced").observations).toEqual([]);
       });
     } finally {
       releaseFinalQuota();

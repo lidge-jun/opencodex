@@ -52,7 +52,7 @@ describe("full uninstall command", () => {
   });
 
   test("service cleanup has a quiet best-effort helper", async () => {
-    const service = await readText("src/service.ts");
+    const service = await readText("src/service/orchestration.ts");
 
     expect(service).toContain("export function uninstallServiceIfInstalled()");
     expect(service).toContain("uninstallLaunchd");
@@ -155,7 +155,7 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     } as never);
     expect(uninstallServiceDetailed()).toBe("absent");
 
-    const serviceSource = await readText("src/service.ts");
+    const serviceSource = await readText("src/service/orchestration.ts");
     // The darwin and linux arms return "failed", not the absence value.
     expect(serviceSource).toContain('try { uninstallLaunchd(); removeServiceInstallState(); return "removed"; } catch { return "failed"; }');
     expect(serviceSource).toContain('try { unlinkSync(unitPath()); removeServiceInstallState(); return "removed"; } catch { return "failed"; }');

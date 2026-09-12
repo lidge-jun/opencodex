@@ -55,6 +55,33 @@ const CLOUD_CHAT_OS = 'windows';
  */
 const DEVICE_FINGERPRINT_BYTES = 366;
 
+/** Prefix every Cognition session key carries in `Metadata.api_key`. */
+const DEVIN_SESSION_TOKEN_PREFIX = 'devin-session-token$';
+
+/** A bare JWT: three base64url segments. Nothing else is reshaped. */
+const BARE_JWT_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/;
+
+/**
+ * Restore the `devin-session-token$` prefix on a bare JWT.
+ *
+ * Cognition reads `Metadata.api_key` as a prefixed session token. A key that
+ * arrives without the prefix — a JWT pasted into `apiKey` by hand, or one
+ * copied out of the CLI's file without its prefix — is sent verbatim and comes
+ * back as an opaque `permission_denied`, which reads as a revoked account
+ * rather than as a malformed credential.
+ *
+ * Only a bare JWT is reshaped. The other key formats this field has carried are
+ * not JWTs and must pass through untouched: a Codeium-classic bare UUID, an
+ * `sk-ws-01-…` Windsurf key, and a `cog_…` session key would all break if they
+ * were prefixed. Anything already containing `$` is left alone for the same
+ * reason.
+ */
+export function normalizeDevinSessionToken(apiKey: string): string {
+  const trimmed = apiKey.trim();
+  if (!trimmed || trimmed.includes('$')) return apiKey;
+  return BARE_JWT_PATTERN.test(trimmed) ? `${DEVIN_SESSION_TOKEN_PREFIX}${trimmed}` : apiKey;
+}
+
 export interface MetadataInput {
   /** Persistent api_key from OAuth (`devin-session-token$<JWT>`). */
   apiKey: string;
@@ -100,12 +127,14 @@ function osString(): string {
 export function buildMetadata(input: MetadataInput): Buffer {
   const version = input.windsurfVersion ?? WINDSURF_VERSION_STRING;
   const os = input.osName ?? osString();
+  // One boundary, so no caller has to remember the prefix rule.
+  const apiKey = normalizeDevinSessionToken(input.apiKey);
   if (input.cloudChatShape) {
     const clientVersion = input.windsurfVersion ?? CLOUD_CHAT_CLIENT_VERSION;
     return Buffer.concat([
       encodeString(1, CLOUD_CHAT_CLIENT_NAME),
       encodeString(2, clientVersion),
-      encodeString(3, input.apiKey),
+      encodeString(3, apiKey),
       encodeString(4, 'en'),
       encodeString(5, input.osName ?? CLOUD_CHAT_OS),
       encodeString(7, clientVersion),
@@ -117,7 +146,7 @@ export function buildMetadata(input: MetadataInput): Buffer {
   const parts: Buffer[] = [
     encodeString(1, 'windsurf'),                     // ide_name
     encodeString(2, version),                         // extension_version
-    encodeString(3, input.apiKey),                    // api_key
+    encodeString(3, apiKey),                          // api_key
     encodeString(4, 'en'),                            // locale
     encodeString(5, os),                              // os
     encodeString(7, version),                         // ide_version

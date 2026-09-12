@@ -1,3 +1,4 @@
+import { readResponsesCoreSource } from "../helpers/responses-core-source";
 import { describe, expect, test } from "bun:test";
 import { cancelBodyOnAbort } from "../../src/lib/abort";
 import { readBodyCapped } from "../../src/server/live";
@@ -83,7 +84,7 @@ describe("readBodyCapped settles the stream when a read throws", () => {
   });
 
   test("the bounded reader exclusively owns all non-combo Responses error bodies", async () => {
-    const source = await Bun.file(new URL("../../src/server/responses/core.ts", import.meta.url)).text();
+    const source = readResponsesCoreSource();
 
     expect(source.match(/\breadDisplaySafeErrorText\(/g)).toHaveLength(4);
     expect(source).not.toContain("detachPassthroughErrorGuard");
@@ -101,7 +102,7 @@ describe("readBodyCapped settles the stream when a read throws", () => {
   // tests/server/server-combo-failover-e2e.test.ts). An earlier revision guarded them anyway and
   // broke that test by adding a second `.body` read.
   test("the combo failure branches do not add a second body read", async () => {
-    const source = await Bun.file(new URL("../../src/server/responses/core.ts", import.meta.url)).text();
+    const source = readResponsesCoreSource();
 
     for (const marker of ["const failure = await consumeComboFailure("]) {
       let from = 0;

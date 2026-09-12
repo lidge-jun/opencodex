@@ -1,5 +1,7 @@
 # Client Integrations
 
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
+
 The client-integration subsystem writes one generated OpenCodex provider contribution into a
 third-party client's existing config without taking ownership of the rest of that file. Its core
 promise is reversibility: apply snapshots first, writes atomically, records exactly what it owns,
@@ -168,6 +170,8 @@ pin one legacy root owner before changing it. Sibling stores remain independent.
 precede coordinated writes under one scoped flight, and actual file state/refusals remain
 separate. Restore reconciles target intent from validated snapshot ownership without changing
 sibling policy. Profile journal views retain source-store provenance for older legacy entries.
+
+The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
 
 ## Cline paired files
 

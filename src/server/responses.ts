@@ -5,7 +5,7 @@ import { requestPacingOverloadResponse } from "./responses/pacing-overload";
 
 export { buildToolBridgeMaps, isV1CollabSurface, collabSurface, multiAgentGuidanceText, V2_GUIDANCE_CHAR_BUDGET, injectDeveloperMessage } from "./responses/collaboration";
 export type { MultiAgentGuidanceOptions, MultiAgentGuidanceDeps } from "./responses/collaboration";
-export { hasUnreadableEncryptedAgentTask, sanitizeEncryptedContentInPlace } from "./responses/encrypted-payload";
+export { hasUnreadableEncryptedAgentTask, sanitizeEncryptedContentInPlace, stripAgentMessageCiphertextInPlace } from "./responses/encrypted-payload";
 export { COMPACT_RESPONSE_MAX_BYTES, bufferCompactResponse } from "./responses/compact";
 export { disableResponsesRequestTimeout, safeHostLabel, fetchWithHeaderTimeout } from "./responses/fetch-helpers";
 export { sidecarOutcomeRecorder, isShadowSourceModel, codexLogAccountId, usesCodexForwardPoolAuth, codexForwardTerminalOutcomeRecorder, decodeRequestErrorResponse, buildComboChildHeaders, linkAbortSignal } from "./responses/core";

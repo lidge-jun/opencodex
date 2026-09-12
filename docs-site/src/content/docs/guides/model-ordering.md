@@ -116,6 +116,11 @@ Use `subagentModels` to choose and order the leading models that Codex also adve
 choice can expand into multiple selector-qualified catalog rows, so configured choices and
 advertised rows are not necessarily one-to-one.
 
+If no configured account supports an account-gated native model, the request fails as an invalid
+model choice. If supporting accounts exist but are temporarily exhausted or unavailable, it fails
+as a retryable rate limit. These states are never reported as an invalid API key; choose another
+available model or wait for the capable account's quota window to reopen.
+
 Use `modelPickerOrder` for display-only ordering of routed `<provider>/<model>` rows beyond that
 featured block:
 

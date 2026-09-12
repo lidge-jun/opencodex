@@ -28,6 +28,20 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 Safe to run at any time; none of these change state.
 
+### `ocx remote-workspace status`
+
+Read local executor enrollment and available capabilities without printing credentials.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the public local executor status. |
+
+JSON mode: `payload`.
+
+- Executor-local operation; Hub consent and session control stay in the dashboard.
+
 ### `ocx models price`
 
 Read the saved manual price for an exact provider/model selector.
@@ -103,6 +117,23 @@ Recently detected quota resets and whether reset notifications are enabled.
 | `--limit` | number | Limit returned events; defaults to 20, capped at 100. |
 
 JSON mode: `payload`.
+
+### `ocx account history`
+
+Cached quota observations for one stored Codex pool account.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/quota/history` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the bounded observation history. |
+| `--limit` | number | Return the newest 1 to 200 observations. |
+
+JSON mode: `payload`.
+
+- Use account history openai <pool-account-id>. Reads cached observations only; no refresh or warmup. Native main is not included.
 
 ### `ocx account list`
 
@@ -373,6 +404,35 @@ JSON mode: `payload`.
 
 Each of these writes. Check the flags column before running one unattended.
 
+### `ocx remote-workspace pair`
+
+Enroll this executor with one Hub using a one-time code from stdin and locally approved roots.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the public local executor status. |
+| `--pairing-code-stdin` | boolean | Read the one-time pairing code from stdin. |
+| `--root` | string | Approve an absolute workspace directory; repeatable. |
+| `--toolchain-root` | string | Approve a read-only toolchain directory; repeatable. |
+| `--executor-helper` | string | Select a reviewed native helper file. |
+| `--name` | string | Name this executor. |
+
+JSON mode: `payload`.
+
+- Executor-local operation; Hub consent and session control stay in the dashboard.
+
+### `ocx remote-workspace agent`
+
+Keep the paired executor connected to its Hub.
+
+Drives no management route.
+
+JSON mode: `none`.
+
+- Executor-local operation; Hub consent and session control stay in the dashboard.
+
 ### `ocx models set-price`
 
 Save four manual USD-per-1M-token rates, or restore automatic pricing for one model.
@@ -454,6 +514,29 @@ JSON mode: `payload`.
 
 - `store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.
 - Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.
+
+### `ocx account main reauth`
+
+Reauthenticate the native main Codex login with a device code (#3898); headless hubs need no Codex App or keyring.
+
+| Method | Route |
+|---|---|
+| POST | `/api/codex-auth/main/reauth-device` |
+| GET | `/api/codex-auth/main/reauth-device` |
+| DELETE | `/api/codex-auth/main/reauth-device` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | boolean | Run the device-code flow (the only reauth mode). |
+| `--no-wait` | boolean | Print the flow handle and code without waiting for completion. |
+| `--flow` | string | Flow id for status and cancel. |
+| `--json` | boolean | Emit the flow status as JSON. |
+
+JSON mode: `payload`.
+
+- Same-identity reauth only: the device login must complete for the ChatGPT account that already holds the native main slot, and the commit is fenced by the exclusive claim plus a path/hash/inode snapshot.
+- /api/codex-auth/login stays pool-only and keeps rejecting __main__; this namespace is the only device-reauth surface for the native main slot.
+- Payloads carry only flowId, status, the verification URL, the device code, and a closed set of failure codes -- never tokens, emails, or raw account ids.
 
 ### `ocx account refresh`
 
@@ -681,6 +764,7 @@ Restart the Codex app-server.
 JSON mode: `payload`.
 
 - `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.
+- Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
 - --yes is mandatory because this interrupts a running editor session, which must never happen because an agent guessed a subcommand.
 
 ### `ocx integration native`
@@ -743,8 +827,9 @@ Synchronize client catalogs, including Aside profiles through the running server
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--restart-codex` | boolean | Restart Codex app-servers after a catalog or cache write. |
-| `--restart-desktop-app` | boolean | Restart the Codex desktop app after a catalog or cache write. |
+| `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog or cache write, on macOS, Linux and Windows. |
+| `--restart-app-server-only` | boolean | Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given. |
+| `--restart-desktop-app` | boolean | Deprecated alias of --restart-codex. |
 
 JSON mode: `none`.
 
@@ -769,6 +854,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 41
-- of those, state-changing: 20
+- declared capabilities: 46
+- of those, state-changing: 23
 - head-resolved invocations: 2

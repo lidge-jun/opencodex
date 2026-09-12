@@ -40,6 +40,10 @@ ocx start --port 8080
 
 プロキシを停止せずに**ネイティブ Codex を復元します。挿入された設定行とルーティングされたカタログ エントリを削除し、プレーンな `codex` が再びネイティブに動作するようにします。 `eject` は `restore` の別名です。
 
+復元後のカタログでは、`gpt-5.3-codex-spark` など提供終了したネイティブモデルの bare ID と
+信頼済みのアカウント修飾エントリを除外します。バックアップの有無にかかわらず適用され、
+元のバックアップとユーザーが保存した過去のモデル選択設定は保持します。
+
 プロキシのライフサイクルを変更せずに、既に実行されているプロキシでプレーン `codex` を再指定するには、`back` をどちらかのスペルに渡します。
 
 ```bash
@@ -144,15 +148,36 @@ ocx status --json
 
 ## カタログの同期
 
-### `ocx sync [--restart-codex]`
+### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 構成されているすべてのプロバイダーからライブ モデル リストを取得し、マージされたカタログを Codex に再挿入します。プロバイダーを追加した後、または利用可能なモデルを更新するために実行します。
 
-存続期間の長い Codex `app-server` プロセスがまだ実行されている場合、`ocx sync` は、`opencodex-catalog.json` / `models_cache.json` が更新されても、以前のメモリ内モデル リストを提供し続ける可能性があることを警告します。現在のユーザーが所有する一致する `codex … app-server` および `codex-code-mode-host` プロセスにのみ `SIGTERM` を送信するには、`--restart-codex` を渡します (アクティブなターンが中断される可能性があります)。広範な `pkill -f codex` 一致は意図的に回避されます。
+存続期間の長い Codex `app-server` プロセスがまだ実行されている場合、`ocx sync` は、`opencodex-catalog.json` / `models_cache.json` が更新されても、以前のメモリ内モデル リストを提供し続ける可能性があることを警告します。`--restart-codex` を渡すと、一致する `codex … app-server` および `codex-code-mode-host` プロセスを再起動し、さらに macOS、Linux、Windows で Codex デスクトップ アプリを完全に終了して再起動します。モデル ピッカーがカタログを読み直すためです。進行中の会話は終了します。広範な `pkill -f codex` 一致は意図的に回避されます。
 
-### `ocx sync-cache [--restart-codex]`
+`--restart-desktop-app` は `--restart-codex` の非推奨エイリアスです。引き続き動作し、非推奨の案内を出力し、Windows 専用ではありません。
 
-Codex のローカル モデル ピッカー キャッシュを無効にし、アクティブな opencodex カタログから再構築されるようにします。 `ocx sync` と同じ、古い `app-server` 警告とオプションの `--restart-codex` 動作が適用されます。
+`--restart-app-server-only` は以前の狭い動作を復元します。現在のユーザーが所有する一致する app-server / code-mode-host プロセスにのみ `SIGTERM` を送り、デスクトップ アプリは起動したままにします (アクティブなターンは中断される可能性があります)。`--restart-codex` または `--restart-desktop-app` と同時に指定した場合は狭い範囲が優先されます。進行中の会話を失うことは取り返しがつかず、古いピッカーはそうではないからです。
+
+コマンドを Codex アプリ内から実行すると、再起動は切り離されたヘルパーに引き渡され、このセッションはアプリとともに終了します。
+
+### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
+
+Codex のローカル モデル ピッカー キャッシュを無効にし、アクティブな opencodex カタログから再構築されるようにします。 `ocx sync` と同じ、古い `app-server` 警告とオプションの再起動フラグが適用されます。
+
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
+
+別の OpenCodex インスタンスの `/v1/catalog` エンドポイントが提供する完全なカタログをインストール
+し、続いて `models_cache.json` を同期します。URL は HTTPS が必須で、HTTP はループバックのみ許可
+されます。URL 埋め込み資格情報、クエリ、フラグメント、リダイレクト、サイズ超過の応答、不正な
+カタログは、ローカル書き込みの前に拒否されます。認証は任意で、環境変数参照 (`--auth-env`) から
+のみ読み取られ、argv からは読み取られません。
+
+カタログとキャッシュは共有の Codex カタログロックの下で書き込まれ、失敗時は last-known-good の
+ファイルが保持されます。バイトが同一の場合は mtime を保持する no-op です。`--restart-codex`、
+`--restart-app-server-only`、非推奨エイリアス `--restart-desktop-app` は、実際の書き込みの後に
+のみ適用され、`ocx sync` および `ocx sync-cache` と同じ意味です。`ETag` 条件付きリクエストは
+このコマンドには含まれません。`--json` エンベロープと終了コードの詳細は
+[英語版リファレンス](/reference/cli/lifecycle/)を参照してください。
 
 ## バックグラウンドサービス
 
@@ -246,7 +271,7 @@ Windows ステータス トレイ アイコンをインストールして制御�
 
 ### `ocx gui`
 
-`http://localhost:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、プロキシが実行されていない場合は自動起動します。
+`http://localhost:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、プロキシが実行されていない場合は自動起動します。ハブで管理イングレスが有効な場合は `http://127.0.0.1:<管理ポート>` を開きます。
 
 ## 更新
 

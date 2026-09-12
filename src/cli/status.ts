@@ -18,6 +18,7 @@ import { effectiveLoopbackListenerPort } from "../codex/loopback-target";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import { claudeDesktopPolicyHealth, probeClaudeDesktopPolicy, type ClaudeDesktopPolicyHealth } from "../claude/desktop-policy";
 import { collectClientConnectionStatus, type ClientConnectionStatus } from "./connect";
+import { readClientConnectionState, sameClientConnectionOwner } from "../client/state";
 import type { HubStateOAuthEntry, HubStateProvider } from "../remote/hub-state";
 import type { HubStateSource } from "../client/hub-state";
 import { readServiceApiTokenState, serviceApiTokenFilePath } from "../lib/service-secrets";
@@ -325,6 +326,35 @@ export function disconnectedRemoteHubStatus(): CliRemoteHubStatus {
 }
 
 /**
+ * The data key this status snapshot may spend, and the cause when it may not.
+ *
+ * A reconnect or a rotation can replace both files between the snapshot and this read, so a
+ * matching cache owner alone does not authorize sending the current token. Withholding is only
+ * half the job: reporting every withheld case as "no usable data-plane token" is false for a
+ * client that reconnected and holds a perfectly good token for a different hub, and a cause the
+ * operator acts on has to be the real one (#4169 is the same defect in the stop path).
+ */
+function boundHubStateToken(
+  current: ReturnType<typeof readClientConnectionState>,
+  token: ReturnType<typeof readServiceApiTokenState>,
+  owner: { serverUrl: string; apiKeyId: string; connectedAt: string },
+): { token: string | null; withheldReason?: string } {
+  if (current.kind !== "connected") {
+    return { token: null, withheldReason: "this client is no longer connected" };
+  }
+  if (!sameClientConnectionOwner(current.value, owner)) {
+    return { token: null, withheldReason: "the saved connection no longer matches the one this status reports" };
+  }
+  if (token.kind !== "present") {
+    return { token: null, withheldReason: "this client has no usable data-plane token" };
+  }
+  if (token.fingerprint !== current.value.tokenFingerprint) {
+    return { token: null, withheldReason: "the data-plane token no longer belongs to the saved connection" };
+  }
+  return { token: token.token };
+}
+
+/**
  * Ask the hub what it can serve, with a bounded read and a cache fallback.
  *
  * `ocx status` must answer while the hub is offline, so the fetch is bounded and a failure is
@@ -340,14 +370,16 @@ export async function collectRemoteHubStatus(
     return disconnectedRemoteHubStatus();
   }
   const { resolveHubState } = await import("../client/hub-state");
-  const token = readServiceApiTokenState();
+  const owner = {
+    serverUrl: connection.serverUrl,
+    apiKeyId: connection.apiKeyId,
+    connectedAt: connection.connectedAt,
+  };
+  const bound = boundHubStateToken(readClientConnectionState(), readServiceApiTokenState(), owner);
   const resolved = await resolveHubState({
-    owner: {
-      serverUrl: connection.serverUrl,
-      apiKeyId: connection.apiKeyId,
-      connectedAt: connection.connectedAt,
-    },
-    token: token.kind === "present" ? token.token : null,
+    owner,
+    token: bound.token,
+    ...(bound.withheldReason ? { withheldTokenReason: bound.withheldReason } : {}),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
@@ -477,7 +509,27 @@ export async function collectStatus(): Promise<CliStatusView> {
     desiredEnabled: claudeDesktopIntegrationEnabled(config),
     policy: claudeDesktopPolicyHealth(probeClaudeDesktopPolicy()),
   };
-  const clientConnection = collectClientConnectionStatus();
+  const resolvedRuntime = (() => {
+    try {
+      return resolveCodexRuntime();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
+      return {
+        runtime: { command: "codex", version: null, source: "fallback" as const },
+        failures: [{
+          command: "codex",
+          source: "fallback" as const,
+          reason: `resolve threw: ${redacted}`,
+        }],
+        replacedConfigured: undefined,
+        newerAvailable: undefined,
+      };
+    }
+  })();
+  const clientConnection = collectClientConnectionStatus(Date.now(), undefined, {
+    selectedCodexCommand: resolvedRuntime.runtime.command,
+  });
   // Asked before the local probes below so a connected client's report is hub-sourced from its
   // first line. Bounded and failure-tolerant: an offline hub degrades the remoteHub block, it
   // does not fail `ocx status`.
@@ -535,24 +587,6 @@ export async function collectStatus(): Promise<CliStatusView> {
     routingKind: getCodexRoutingKind(),
   });
   const codexPlugins = diagnoseCodexBundledPlugins();
-  const resolvedRuntime = (() => {
-    try {
-      return resolveCodexRuntime();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
-      return {
-        runtime: { command: "codex", version: null, source: "fallback" as const },
-        failures: [{
-          command: "codex",
-          source: "fallback" as const,
-          reason: `resolve threw: ${redacted}`,
-        }],
-        replacedConfigured: undefined,
-        newerAvailable: undefined,
-      };
-    }
-  })();
   const lastClamp = loadLastEffortClamp();
   const clampActive = effortClampAppliesToRuntime(lastClamp, resolvedRuntime.runtime);
   const codexHome = collectOrcaCodexHomeDiagnostic();

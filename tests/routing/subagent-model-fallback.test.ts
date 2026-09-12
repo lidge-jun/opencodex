@@ -421,7 +421,7 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     });
     recordCodexUpstreamOutcome(config, "account-a", 429, {
       fixedAccount: true,
-      modelId: "gpt-5.3-codex-spark",
+      modelId: "gpt-reserve",
       now,
       resetAt: Math.floor((now + 60 * 60_000) / 1_000),
     });
@@ -474,7 +474,7 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     updateAccountQuota("pool-a", 10, undefined, 20);
     const config = cfg({ subagentModelFallback: ["kimi/k3"] });
     recordCodexUpstreamOutcome(config, "pool-a", 429, {
-      modelId: "gpt-5.3-codex-spark",
+      modelId: "gpt-reserve",
       now,
       resetAt: Math.floor((now + 60 * 60_000) / 1_000),
     });

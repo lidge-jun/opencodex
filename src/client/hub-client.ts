@@ -1,5 +1,6 @@
 import { MAX_REMOTE_CATALOG_BYTES } from "../server/catalog-download";
 import { MAX_HUB_STATE_BYTES, parseHubStateBody, type HubStateDTO } from "../remote/hub-state";
+import { MAX_HUB_USAGE_BYTES, parseHubUsage, type HubUsageReport } from "../remote/hub-usage";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { clearableDeadline } from "../lib/abort";
 import type { Desktop3pModelEntry } from "../claude/desktop-3p";
@@ -470,6 +471,39 @@ export async function downloadClientCatalog(
   validateRemoteCatalog(parsed);
   const keyId = response.headers.get("x-opencodex-key-id")?.trim() || undefined;
   return { kind: "fresh", body, ...(keyId ? { keyId } : {}) };
+}
+
+/** Bounded own-key usage read; never falls back to a local management endpoint. */
+export async function fetchHubUsage(
+  serverUrl: string,
+  admissionToken: string,
+  query: URLSearchParams,
+  options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+): Promise<HubUsageReport> {
+  const origin = normalizeHubOrigin(serverUrl);
+  if (!isPairingTransportPermitted(origin)) {
+    throw new HubClientError("insecure_http_refused", "Client usage requires HTTPS or loopback HTTP");
+  }
+  const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/usage?${query}`, {
+    method: "GET",
+    cache: "no-store",
+    headers: new Headers({ Accept: "application/json", "x-opencodex-api-key": admissionToken }),
+  }, options.timeoutMs);
+  if (!response.ok) {
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    const message = response.status === 404 ? "Hub does not support client usage; upgrade the hub"
+      : response.status === 401 || response.status === 403 ? "Hub rejected this client's usage credential"
+      : `Hub usage request failed (${response.status})`;
+    throw new HubClientError(`hub_usage_http_${response.status}`, message, response.status);
+  }
+  if (!jsonCompatibleContentType(response)) {
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    throw new HubClientError("hub_usage_invalid", "Hub usage response was not JSON");
+  }
+  const text = await boundedText(response, MAX_HUB_USAGE_BYTES, { inactivityTimeoutMs: safeTimeout(options.timeoutMs) });
+  const report = parseHubUsage(parseJson(text, "hub_usage_invalid"));
+  if (!report) throw new HubClientError("hub_usage_invalid", "Hub usage response was invalid");
+  return report;
 }
 
 /**

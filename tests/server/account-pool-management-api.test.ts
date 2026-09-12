@@ -667,6 +667,76 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
     if (dir) removeTreeWithRetry(dir);
   });
 
+  test("reset-first round-trips through canonical and legacy Codex settings only", async () => {
+    const server = startServer(0);
+    try {
+      const write = async (provider: string, strategy: string) => fetch(new URL("/api/pool/settings", server.url), {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, strategy }),
+      });
+      const result = await write("openai", "reset-first");
+      expect(result.status).toBe(200);
+      expect(await result.json()).toMatchObject({ kind: "codex", strategy: "reset-first" });
+      expect(loadConfig().accountPoolStrategy).toBe("reset-first");
+      const canonical = await fetch(new URL("/api/pool/settings?provider=openai", server.url));
+      expect(await canonical.json()).toMatchObject({ strategy: "reset-first" });
+      const legacy = new Request("http://localhost/api/codex-auth/active");
+      const legacyRead = await handleCodexAuthAPI(legacy, new URL(legacy.url), loadConfig());
+      expect(await legacyRead!.json()).toMatchObject({ accountPoolStrategy: "reset-first" });
+      for (const provider of ["anthropic", "google-antigravity"]) {
+        const rejected = await write(provider, "reset-first");
+        expect(rejected.status).toBe(400);
+        await rejected.text();
+      }
+      const compatibility = new Request("http://localhost/api/codex-auth/pool-strategy", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ strategy: "reset-first" }),
+      });
+      const compatibilityWrite = await handleCodexAuthAPI(compatibility, new URL(compatibility.url), loadConfig());
+      expect(compatibilityWrite!.status).toBe(200);
+      expect(await compatibilityWrite!.json()).toMatchObject({ accountPoolStrategy: "reset-first" });
+      expect(loadConfig().accountPoolStrategy).toBe("reset-first");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("quota history is a protected bounded cached read for stored pool accounts", async () => {
+    const config = loadConfig();
+    config.codexAccounts = [{ id: "history-row", email: "history@example.test", isMain: false }];
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const endpoint = "/api/codex-auth/quota/history";
+      const denied = await globalThis.fetch(new URL(`${endpoint}?accountId=history-row`, server.url));
+      expect(denied.status).toBe(401);
+      await denied.text();
+      for (const query of ["", "?accountId=__main__", "?accountId=history-row&accountId=history-row", "?accountId=history-row&limit=201", "?accountId=history-row&refresh=1"]) {
+        const response = await fetch(new URL(endpoint + query, server.url));
+        expect(response.status).toBe(400);
+        await response.text();
+      }
+      const unknown = await fetch(new URL(`${endpoint}?accountId=missing`, server.url));
+      expect(unknown.status).toBe(404);
+      await unknown.text();
+      const response = await fetch(new URL(`${endpoint}?accountId=history-row&limit=1`, server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ accountId: "history-row", observations: [], retention: { maxObservations: 200, maxAgeDays: 30 }, truncated: false, capacity: { status: "insufficient-evidence", reason: "identity_unavailable", estimates: [], assumptions: expect.any(Array) } });
+      const { saveCodexAccountCredential, capturePoolQuotaWriter } = await import("../../src/codex/account-store");
+      const { setAccountQuotaFromParsed } = await import("../../src/codex/quota");
+      const credential = { accessToken: "history-secret-access", refreshToken: "history-secret-refresh", expiresAt: Date.now() + 3600_000, chatgptAccountId: "private-history-account" };
+      const generation = saveCodexAccountCredential("history-row", credential);
+      const writer = capturePoolQuotaWriter("history-row", { ...credential, generation })!;
+      const raw = { weeklyPercent: 21 };
+      setAccountQuotaFromParsed("history-row", raw, undefined, undefined, raw, { writer, observedAt: Date.now(), source: "wham", raw });
+      const populated = await fetch(new URL(`${endpoint}?accountId=history-row`, server.url));
+      const body = await populated.json() as { observations: Array<{ source: string; windows: Array<{ usedPercent: number }> }> };
+      expect(body.observations).toHaveLength(1);
+      expect(body.observations[0]).toMatchObject({ source: "wham", windows: [{ family: "account", window: "weekly", usedPercent: 21 }] });
+      const serialized = JSON.stringify(body);
+      for (const privateValue of [credential.accessToken, credential.refreshToken, writer.historyIdentity, "credentialGeneration"]) expect(serialized).not.toContain(privateValue);
+
+    } finally { await server.stop(true); }
+  });
+
   test("every kind answers with the same keys and declares what it supports", async () => {
     const server = startServer(0);
     try {

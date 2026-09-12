@@ -14,6 +14,10 @@ import { formatUsageReport } from "./usage-report";
 import { USAGE_RANGES, USAGE_SURFACES, type UsageSummary } from "../usage/summary";
 import { parseUsageTimeWindow, type UsageTimeWindow } from "../usage/time-range";
 import { redactSecretString } from "../lib/redact";
+import { readClientConnectionState, sameClientConnectionOwner } from "../client/state";
+import { readServiceApiTokenState } from "../lib/service-secrets";
+import { fetchHubUsage } from "../client/hub-client";
+import type { HubUsageReport } from "../remote/hub-usage";
 
 const USAGE = `Usage:
   ocx observe logs [--provider <name>] [--model <id>] [--status <code>]
@@ -175,7 +179,30 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     throw new CliUsageError(`--surface must be one of ${USAGE_SURFACES.join(", ")}`, USAGE);
   }
   rejectArgs(args.map(redactSecretString), USAGE);
-  const result = await runtimeRequest<UsageSummary>(`/api/usage${query({ range, surface, provider, model, since: window?.since, until: window?.until })}`, {}, deps);
+  const suffix = query({ range, surface, provider, model, since: window?.since, until: window?.until });
+  const connection = readClientConnectionState();
+  let result: UsageSummary | HubUsageReport;
+  if (connection.kind === "invalid" || connection.kind === "mismatched") {
+    throw new Error(`Client usage unavailable: ${connection.reason}`);
+  }
+  if (connection.kind === "connected") {
+    const token = readServiceApiTokenState();
+    if (token.kind !== "present" || token.fingerprint !== connection.value.tokenFingerprint) {
+      throw new Error("Client usage unavailable: the enrolled data key is missing or changed; repair the client connection");
+    }
+    result = await fetchHubUsage(connection.value.serverUrl, token.token, new URLSearchParams(suffix), {
+      fetchImpl: deps.fetchImpl, timeoutMs: 60_000,
+    });
+    const current = readClientConnectionState();
+    const currentToken = readServiceApiTokenState();
+    if (current.kind !== "connected" || !sameClientConnectionOwner(current.value, connection.value)
+      || current.value.tokenFingerprint !== token.fingerprint
+      || currentToken.kind !== "present" || currentToken.fingerprint !== token.fingerprint) {
+      throw new Error("Client connection changed while reading usage; retry for the current connection");
+    }
+  } else {
+    result = await runtimeRequest<UsageSummary>(`/api/usage${suffix}`, {}, deps);
+  }
   // Older daemons ignore custom bounds and return successful preset reports.
   if (window && (result?.customWindow !== true || result.since !== window.since || result.until !== window.until)) {
     throw new Error("The server did not confirm the requested custom usage window. Upgrade and restart the proxy, then retry.");

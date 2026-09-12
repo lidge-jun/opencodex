@@ -65,7 +65,7 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
 });
 
 describe("systemd detection tolerates a no-DBUS SSH session (F9)", () => {
-  const src = read("src/service.ts");
+  const src = read("src/service/systemd.ts");
   test("isSystemd falls back to the per-user runtime dir when the user-bus probe fails", () => {
     expect(src).toContain("function userRuntimeDir()");
     expect(src).toContain("function ensureUserBusEnv()");

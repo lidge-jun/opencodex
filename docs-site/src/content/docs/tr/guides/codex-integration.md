@@ -379,10 +379,11 @@ sırayla kontrol edin:
 6. **Çalışan Codex `app-server`** — uzun ömürlü bir Codex `app-server` (Desktop
    / CLI arka plan ana bilgisayarı) önceki listeyi bellekte tuttuğu sürece
    diskteki kataloğu yeniden yazmak yeterli değildir. `ocx sync` ve `ocx
-   sync-cache` bu süreçler algılandığında uyarır. Bunları `ocx sync
-   --restart-codex` ile yeniden başlatın (veya eşleşen `app-server` süreçlerini
-   kendiniz durdurun), ardından yeni listenin görünmesi için Codex'in bunları
-   yeniden oluşturmasına izin verin.
+   sync-cache` bu süreçler algılandığında uyarır. `ocx sync --restart-codex` bu
+   süreçleri yeniden başlatır ve seçicinin kataloğu yeniden okuması için Codex
+   masaüstü uygulamasını macOS, Linux ve Windows'ta tamamen kapatıp yeniden
+   başlatır. Masaüstü uygulamasını çalışır bırakmak için `--restart-app-server-only`
+   iletin veya eşleşen `app-server` süreçlerini kendiniz durdurun.
 
 :::caution[Diğer yerel yazıcılar]
 Katalog yazmaları (`opencodex-catalog.json`, `config.toml`) opencodex **içinde**
@@ -449,8 +450,7 @@ ocx config set codexPool '{"excludedPlans":["free"]}'
 
 Bu bir engelleme değil, seçim politikasıdır. Dışarıda bırakılan hesap kimlik bilgisini, kota geçmişini ve iş parçacığı bağını korur, hesap listesinde görünmeye devam eder ve `work/gpt-5.5` gibi açık bir seçimle hâlâ erişilebilir. Değişen tek şey, otomatik rotasyonun onu artık seçmemesidir; hesap zaten etkin olsa ya da bir iş parçacığına bağlı olsa bile. Süresi dolan bir abonelik tam olarak bu durumu bırakır.
 
-İki kasıtlı sınır var. Ana Codex hesabı plana göre hiçbir zaman dışarıda bırakılmaz: yalnızca-seçim yönlendirmesi korunan yerel kimlik bilgisini okumamak için planını saklar, dolayısıyla ana hesabı kapsayan bir kural kendisiyle çelişirdi. Ayrıca dışarıda bırakılmamış hiçbir hesap kalmadığında, dışarıda bırakılan hesap başarısız olmak yerine yine yanıt verir; hizmeti tamamen durdurmak için hâlâ tüm hesapları duraklatmak gerekir. `minimumPlan` karşılığı yoktur, çünkü ChatGPT planlarını sıralamak burada bulunmayan bir tam sıralama gerektirir.
-
+Ana Codex hesabı plan hariç tutma politikasından muaftır; yalnızca seçim yapan yönlendirme korunan yerel kimlik bilgilerini okumaz. Kullanılabilir tüm havuz hesapları hariç tutulursa otomatik seçim hesap döndürmez. Açıkça hesap belirten yollar kullanılabilir; duraklatma, kimlik doğrulama ve model yetkisi denetimleri korunur. Hesap kartı ve CLI, hariç tutulan yönlendirme planını kimlik bilgisi durumundan ayrı gösterir. Planların tam sıralaması olmadığından `minimumPlan` ayarı yoktur.
 ## Yerel Codex'i geri yükleme
 
 `ocx stop`, proxy'yi ve kurulu arka plan servisini durdurur, ardından yerel Codex'i geri yüklemeyi dener. OpenCodex yalnızca sahipliğini doğrulayabildiği yönlendirme öğelerini kaldırır; yapılandırma dosyaları güvenle geri yüklenemiyorsa işlemin tamamlanmadığını bildirir.
@@ -470,6 +470,6 @@ service stop` yerel Codex'i geri yükler.
 
 ## Sayfalanmış geçmiş için güvenlik reddi
 
-Etkilenen geçmiş deposu sayfalamayı destekliyorsa sağlayıcı değişimi `history_paginated_requires_native_writer` döndürebilir; legacy satırlar da buna dahildir. OpenCodex, Codex dışında sıra numarası atamak yerine yapılandırmayı, profili, kataloğu, geçmişi ve geri yükleme kanıtlarını korur. Harici sağlayıcıyı korumak gibi değişim yapmayan yollar kullanılabilir.
+Etkilenen geçmiş deposu sayfalamayı destekliyorsa sağlayıcı değişimi `history_paginated_requires_native_writer` döndürebilir; legacy satırlar da buna dahildir. Bu neden artık Codex yapılandırmasını, başvuru profilini veya model kataloğunu reddetmez. `ocx sync` ve `ocx start` bu dosyaları yazmaya ve `model_catalog_json` yolunu ayarlamaya devam eder; böylece Codex model seçicisi OpenCodex üzerinden yönlendirilen her modeli göstermeyi sürdürür. Konuşma geçmişinin yeniden etiketlenmesini durduran yalnızca bu nedendir, çünkü sayfalanmış geçmiş sıra numaralarını Codex’in kendi yerel yazıcısı atar ve yeniden denemek bunu değiştirmez. Okunamayan bir durum veritabanı, kimliği değişmiş bir geçmiş veya çalıştırılamayan bir ön kontrol gibi diğer geçmiş ön kontrol nedenleri, daha sonra başarılı olabilecekleri için hâlâ tüm değişimi reddeder ve geri alır. Bu durumda OpenCodex sayfalanmış geçmiş dosyalarını veya iş parçacığı satırlarını değiştirmez. Mevcut konuşmalar zaten etiketlendikleri sağlayıcıda kalır ve taşınmaz; yeni konuşmalar proxy üzerinden normal şekilde yönlendirilir. Yeniden etiketleme durduğunda, ev dizininde zaten bulunan bir `[model_providers.opencodex]` tablosu kaldırılmaz, kök-override (loopback) biçimde bile tutulur; böylece satırları `opencodex` olarak etiketlenmiş konuşmalar hâlâ var olan bir sağlayıcı kimliğini korur. CLI şunu yazdırır: `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`. `ocx restore` ve Codex yapılandırmasının kaldırılması `history_paginated_requires_native_writer` nedeniyle hâlâ reddedilir. İş parçacığı satırları hâlâ ona başvuruyken `[model_providers.opencodex]` tanımını kaldırmak o konuşmaları çözülemez yapar ve geri yükleme yolu uyumluluk sağlayıcı tablosunu tutamaz. Zaten sayfalanmış bir ev dizini şu anda ürün üzerinden kaldırılamaz; bu amaçlanan davranış değil, bilinen açık iştir.
 
-Konuşmanın kullandığı sağlayıcı tanımını silmeyin, `ocx sync` veya legacy kurtarmayı tekrarlamayın ve etkin geçmişi yeniden yazmayın. Dosyaları koruyun, kurtarmadan önce konuşmayı kapatın ve özel geçmişi yayımlamadan tam hatayı ve sürümleri bildirin. Yerel yazıcıyla koordineli, doğrulanmış bir düzeltme gerekir. Yedek veya başarılı betik görüntünün düzeldiğini kanıtlamaz; Codex’i yeniden açıp konuşmayı kontrol edin.
+Konuşmaları kendiniz taşımak için etkin sayfalanmış geçmişi veya iş parçacığı satırını yeniden yazmayın. Kurtarmadan önce konuşmayı kapatın ve özel geçmişi yayımlamadan tam hatayı ve sürümleri bildirin. Yedek veya başarılı betik görüntünün düzeldiğini kanıtlamaz; Codex’i yeniden açıp konuşmayı kontrol edin.

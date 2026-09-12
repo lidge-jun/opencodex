@@ -7,7 +7,7 @@ import { repoPath } from "../../helpers/repo-root";
 const CLI_SOURCE = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
 const ENSURE_SOURCE = readFileSync(repoPath("src", "cli", "ensure-desired-integrations.ts"), "utf8");
 const DISPATCH_SOURCE = readFileSync(repoPath("src", "cli", "dispatch.ts"), "utf8");
-const SERVICE_SOURCE = readFileSync(repoPath("src", "service.ts"), "utf8");
+const SERVICE_SOURCE = readFileSync(repoPath("src", "service", "cli.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(repoPath("src", "server", "management-api.ts"), "utf8");
 const PROCESS_CONTROL_SOURCE = readFileSync(repoPath("src", "lib", "process-control.ts"), "utf8");
 
@@ -189,12 +189,13 @@ describe("Grok fence lifecycle wiring", () => {
 
   test("only Task Scheduler earns the respawn wait", () => {
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
-    const serviceSource = readFileSync(repoPath("src", "service.ts"), "utf8");
+    const serviceSource = readFileSync(repoPath("src", "service", "orchestration.ts"), "utf8");
     // schtasks /end leaves the `cmd :loop` wrapper alive to respawn its child (#764).
     // launchd, systemd and WinSW are down when they report stopped, so charging them a
     // seven-second poll on every ocx stop would be a regression in ordinary use.
     expect(serviceSource).toContain('"absent" | "stopped" | "stopped-respawnable" | "failed"');
-    expect(serviceSource).toContain('schedulerStopped ? "stopped-respawnable" : "stopped"');
+    const windowsOps = readFileSync(repoPath("src", "service", "windows-ops.ts"), "utf8");
+    expect(windowsOps).toContain('schedulerStopped ? "stopped-respawnable" : "stopped"');
     expect(stopFn).toContain("if (schedulerCanRespawn && !ownershipBlocked)");
     // The wait is gated on the scheduler flag, not on "a service stopped".
     expect(stopFn).not.toContain("if (stoppedService && !ownershipBlocked)");
@@ -404,7 +405,7 @@ describe("POST /api/stop teardown", () => {
   });
 
   test("an unreadable scheduler state gets the same diagnosis from the CLI and the API", () => {
-    const serviceSource = readFileSync(repoPath("src", "service.ts"), "utf8");
+    const serviceSource = readFileSync(repoPath("src", "service", "orchestration.ts"), "utf8");
     // A manager that refused to stop and a query that could not answer are different
     // problems: reporting the second as "did not stop" sends the operator looking for the
     // wrong thing, and `ocx stop` was the command the API told them to run (#3008).
@@ -497,7 +498,7 @@ describe("POST /api/stop teardown", () => {
   });
 
   test("direct service stop and uninstall fail when a shared teardown half fails", () => {
-    const serviceSource = readFileSync(repoPath("src", "service.ts"), "utf8");
+    const serviceSource = readFileSync(repoPath("src", "service", "cli.ts"), "utf8");
     // These paths logged the failure and exited 0, so a script could not tell a complete
     // teardown from one that left Grok aimed at a stopped proxy.
     const stopCase = serviceSource.slice(

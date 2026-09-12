@@ -3,9 +3,8 @@
  *
  * codex-rs resolves `ToolName::new(namespace, name)` and only treats None/""/"functions" as the
  * default namespace; `{ name: "exec", namespace: "exec" }` becomes the flat name `execexec`,
- * which no client tool matches, and Codex re-issues the call every turn. The adapter fix keeps
- * the reserved `functions` group intact so the backend stops answering that way; this scrub is
- * the belt to that suspender on the client-facing passthrough (SSE and bounded JSON).
+ * which no client tool matches, and Codex re-issues the call every turn. The generic scrub
+ * protects authorized bare custom tools on client-facing passthrough (SSE and bounded JSON).
  */
 import { afterEach, expect, test } from "bun:test";
 import { handleResponses } from "../../src/server/responses";
@@ -31,7 +30,7 @@ function forwardConfig(): OcxConfig {
 }
 
 const requestBody = {
-  model: "gpt-5.3-codex-spark",
+  model: "gpt-5.6-sol",
   stream: true,
   store: false,
   instructions: "x",

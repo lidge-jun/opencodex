@@ -213,12 +213,13 @@ discovery에 모두 적용됩니다.
 ## `devin`
 
 **대상:** Cognition의 `exa.api_server_pb.ApiServerService/GetChatMessage`(`server.codeium.com`, Connect 스트리밍).
-**인증:** `provider.apiKey` 또는 전달된 authorization 헤더의 Devin/Cognition API 키. 로그인은 Auth0 브라우저 사인인을 연 뒤 `SeatManagementService.RegisterUser`로 장기 키를 받습니다.
+**인증:** `provider.apiKey` 또는 전달된 authorization 헤더의 Devin/Cognition API 키. 로그인은 먼저 설치된 Devin CLI가 이미 보유한 자격을 가져오려 시도합니다 — `devin auth login`이 CLI 자체의 PKCE 로그인을 완료하고 `devin-session-token`을 자기 `credentials.toml`에 쓰는데, 이는 `SeatManagementService.RegisterUser`가 브라우저 사인인에 발급하는 것과 같은 자격입니다. 쓸 수 있는 CLI 자격이 없으면 Auth0 브라우저 사인인으로 폴백해 붙여넣은 토큰을 `RegisterUser`로 장기 키에 교환합니다. `devin-cli`는 deprecated alias로만 남아 `ocx login devin-cli`도 `devin`으로 라우팅되며, 구 id로 저장된 설정은 스타트업에서 리라이트됩니다.
 
 - 일반 fetch/parse 대신 `runTurn`을 씁니다. 요청과 서버 이벤트는 `devin/cloud-direct/wire.ts`의 수동 protobuf 프레이밍으로 다룹니다.
 - `GetCascadeModelConfigs`로 계정별 모델을 조회하고, 플랜에 없는 모델은 요청 시점이 아니라 목록에서 걸러집니다.
 - Cognition은 도구 설명 길이 제한과 정확 문구 차단 목록을 적용합니다. 어댑터가 알려진 문구를 바꾸고 긴 설명을 잘라냅니다.
 - 키는 갱신되지 않습니다. 만료되거나 폐기되면 `ocx login devin`을 다시 실행하세요.
+- CLI 임포트 경로를 써도 로컬인 것은 자격뿐이며, 턴은 어느 경로든 Cognition으로 갑니다. 예전 빌드에는 `devin-cli` id 아래 로컬 `devin acp` 자식 프로세스에 Agent Client Protocol 세션으로 턴을 실행하는 두 번째 어댑터가 있었지만 제거됐습니다. 그 어댑터를 아직 가리키는 저장 설정은 스타트업에서 `devin`으로 리라이트되며, `"devin-acp"` 같은 커스텀 이름 행도 마찬가지입니다.
 
 ## `azure-openai` (별칭: `azure`)
 

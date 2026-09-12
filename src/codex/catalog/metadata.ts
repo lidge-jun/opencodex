@@ -72,7 +72,6 @@ export {
 } from "./native-models";
 
 export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
-  "gpt-5.3-codex-spark",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   // The shipped pin also backfills older installed Codex catalogs that predate Astra.
   NATIVE_GPT6_ASTRA_MODEL,
@@ -163,7 +162,6 @@ const NATIVE_GPT56_FAMILY = new Set<string>([
 
 export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: number; maxContextWindow?: number; maxInputTokens?: number }> = {
   "gpt-5.5": { contextWindow: 272_000, maxContextWindow: 272_000 },
-  "gpt-5.3-codex-spark": { contextWindow: 100_000, maxContextWindow: 100_000 },
   "gpt-5.6-sol": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
   "gpt-5.6-terra": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
   "gpt-5.6-luna": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
@@ -378,8 +376,7 @@ export function nativeInputModalities(slug: string): string[] {
   if (Array.isArray(upstream?.input_modalities) && upstream!.input_modalities!.length > 0) {
     return [...upstream!.input_modalities as string[]];
   }
-  // gpt-5.3-codex-spark is not in the upstream snapshot; all supported natives are
-  // text+image capable, so default to the family baseline rather than text-only.
+  // Without a pinned row, retain the native family modality baseline.
   return ["text", "image"];
 }
 
@@ -393,7 +390,7 @@ export function nativeReasoningEfforts(slug: string): string[] {
     // include ultra while Luna intentionally ends at max.
     return levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
   }
-  // gpt-5.3-codex-spark is not in upstream snapshot — use the standard old-ladder default.
+  // Without a pinned row, use the standard old-ladder default.
   return ["low", "medium", "high", "xhigh"];
 }
 
@@ -854,7 +851,7 @@ function catalogNativeSlugs(): string[] {
 }
 
 export function listCatalogNativeSlugs(): string[] {
-  // Ensure documented additions (e.g. gpt-5.3-codex-spark) appear even when the bundled catalog
+  // Ensure documented additions (e.g. gpt-6-astra) appear even when the bundled catalog
   // predates the slug — mirrors nativeOpenAiSlugs() which already merges them for /v1/models.
   return unique([...catalogNativeSlugs(), ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
 }

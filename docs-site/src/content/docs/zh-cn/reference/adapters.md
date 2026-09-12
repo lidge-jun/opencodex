@@ -197,12 +197,13 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
 ## `devin`
 
 **目标：** Cognition 的 `exa.api_server_pb.ApiServerService/GetChatMessage`（`server.codeium.com`，Connect 流式）。
-**认证：** 来自 `provider.apiKey` 或转发的 authorization 头的 Devin/Cognition API 密钥。登录会打开 Auth0 浏览器页面，再通过 `SeatManagementService.RegisterUser` 换取长期密钥。
+**认证：** 来自 `provider.apiKey` 或转发的 authorization 头的 Devin/Cognition API 密钥。登录会先尝试导入已安装 Devin CLI 已持有的凭据：`devin auth login` 会完成 CLI 自身的 PKCE 登录并把 `devin-session-token` 写入它自己的 `credentials.toml`，这与 `SeatManagementService.RegisterUser` 为浏览器登录签发的凭据相同。没有可用的 CLI 凭据时，登录回退到 Auth0 浏览器页面，再通过 `RegisterUser` 把粘贴的令牌换成长期密钥。`devin-cli` 仅作为已弃用的别名保留：`ocx login devin-cli` 仍会路由到 `devin`，以旧 id 保存的配置会在启动时被重写。
 
 - 使用 `runTurn` 而非常规的 fetch/parse 路径。请求与服务端事件由 `devin/cloud-direct/wire.ts` 手写的 protobuf 分帧处理。
 - 通过 `GetCascadeModelConfigs` 按账号获取模型；不在套餐内的模型在列表阶段就被过滤，而不是到请求时才失败。
 - Cognition 对工具说明有长度上限和精确短语黑名单。适配器会改写已知短语并截断过长的说明。
 - 密钥不会刷新。失效后请重新执行 `ocx login devin`。
+- 即使走 CLI 导入路径，本地的也只有凭据，请求本身无论哪条路径都发往 Cognition。早期版本曾在 `devin-cli` id 下提供第二个适配器，把请求作为对本地 `devin acp` 子进程的 Agent Client Protocol 会话来执行，现已移除。仍引用该适配器的已保存配置会在启动时重写为 `devin`，包括 `"devin-acp"` 这类自定义名称的行。
 
 ## `azure-openai`（别名：`azure`）
 

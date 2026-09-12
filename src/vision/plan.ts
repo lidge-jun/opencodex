@@ -1,5 +1,5 @@
 import type { OcxConfig, OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../types";
-import type { VisionReasoningEffort } from "../reasoning-effort";
+import { modelRecordValue, type VisionReasoningEffort } from "../reasoning-effort";
 import type { VisionSettings } from "./describe";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { CodexAuthPolicyConfig } from "../codex/auth-context";
@@ -92,6 +92,34 @@ function messagesHaveImage(parsed: OcxParsedRequest): boolean {
     carriesImages(m.role) && Array.isArray(m.content) && (m.content as OcxContentPart[]).some(p => p.type === "image"));
 }
 
+/**
+ * Direct-image admission for a routed target. Returns true when capability evidence proves the
+ * target cannot accept image input, so the caller must describe or strip the image first.
+ * Explicit text-only config, an explicit per-model modality list without `image`, and
+ * proven-negative registry/vendor metadata each require the vision preprocessor. A genuinely
+ * unknown custom model is NOT guessed blind: it keeps the established pass-through behaviour.
+ * The provider-only fallback keeps legacy unit callers stable; production dispatch always
+ * supplies providerName so the complete capability chain is consulted.
+ */
+export function requiresVisionPreprocessing(
+  config: Pick<OcxConfig, "providers">,
+  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "modelCapabilities">,
+  modelId: string,
+  providerName?: string,
+): boolean {
+  if (isModelTextOnly(provider, modelId)) return true;
+  const runtimeDeclared = Object.hasOwn(provider.modelCapabilities ?? {}, modelId)
+    ? provider.modelCapabilities?.[modelId]?.inputModalities
+    : undefined;
+  if (runtimeDeclared !== undefined) return !runtimeDeclared.includes("image");
+  const runtimeModalities = modelRecordValue(provider.modelInputModalities, modelId);
+  if (Array.isArray(runtimeModalities) && runtimeModalities.length > 0) {
+    return !runtimeModalities.includes("image");
+  }
+  if (!providerName) return false;
+  return modelAcceptsImageInput(config, { provider: providerName, id: modelId }) === false;
+}
+
 /** Shared by auth admission and planning so a routed describer never borrows OpenAI auth. */
 function usableRoutedVisionModel(config: OcxConfig): string | undefined {
   const cfg = config.visionSidecar;
@@ -109,10 +137,11 @@ function usableRoutedVisionModel(config: OcxConfig): string | undefined {
 export function shouldResolveOpenAiVisionSidecar(
   config: OcxConfig,
   provider: OcxProviderConfig,
- modelId: string,
- parsed: OcxParsedRequest,
+  modelId: string,
+  parsed: OcxParsedRequest,
+  providerName?: string,
 ): boolean {
-  if (!isModelTextOnly(provider, modelId) || !messagesHaveImage(parsed)) return false;
+  if (!requiresVisionPreprocessing(config, provider, modelId, providerName) || !messagesHaveImage(parsed)) return false;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
   if (usableRoutedVisionModel(config)) return false;
@@ -132,10 +161,12 @@ export interface VisionPlan {
 }
 
 /**
- * Decide whether the vision sidecar should pre-describe images for this request, returning the plan
- * if so. Active when: the routed model is in `provider.noVisionModels`, the request actually carries
- * an image, the sidecar isn't disabled, and the selected backend has usable auth. Returns undefined
- * otherwise (the caller strips images before sending to a text-only model).
+ * Decide whether the vision sidecar should pre-describe images for this request. Raw image
+ * delivery is capability-driven: targets proven text-only are preprocessed, targets proven
+ * image-capable bypass this planner, and genuinely unknown custom targets retain legacy behavior.
+ * The request must
+ * carry an image, the sidecar must be enabled, and the selected backend must be dispatchable.
+ * Returns undefined otherwise; the caller strips images before any unverified upstream send.
  */
 export function planVisionSidecar(
   config: OcxConfig,
@@ -143,9 +174,13 @@ export function planVisionSidecar(
   modelId: string,
   parsed: OcxParsedRequest,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
-  options: { admission?: Pick<DataPlaneAdmission, "source">; codexAuthPolicy?: CodexAuthPolicyConfig } = {},
+  options: {
+    admission?: Pick<DataPlaneAdmission, "source">;
+    codexAuthPolicy?: CodexAuthPolicyConfig;
+    providerName?: string;
+  } = {},
 ): VisionPlan | undefined {
-  if (!isModelTextOnly(provider, modelId)) return undefined;
+  if (!requiresVisionPreprocessing(config, provider, modelId, options.providerName)) return undefined;
   if (!messagesHaveImage(parsed)) return undefined;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return undefined;

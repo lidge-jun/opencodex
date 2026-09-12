@@ -829,3 +829,45 @@ describe("multiauth accounts API", () => {
     }
   });
 });
+
+
+describe("Antigravity quota diagnosis projection", () => {
+  let savedProxyEnv: Record<string, string | undefined>;
+  const proxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+  beforeEach(() => {
+    savedProxyEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
+    for (const key of proxyKeys) delete process.env[key];
+  });
+  afterEach(() => {
+    for (const key of proxyKeys) {
+      if (savedProxyEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedProxyEnv[key];
+    }
+  });
+  test("authenticated account reads expose only the current safe failure category", async () => {
+    const { saveCredential } = await import("../../src/oauth/store");
+    const { clearAccountQuotaCache, setAntigravityAccountQuotaTransportForTests } = await import("../../src/providers/quota");
+    const cfg = baseConfig();
+    cfg.providers["google-antigravity"] = { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" };
+    saveConfig(cfg);
+    await saveCredential("google-antigravity", { access: "private-diagnostic-access", refresh: "private-diagnostic-refresh", expires: Date.now() + 3600_000, projectId: "private-diagnostic-project", accountId: "diag-account" });
+    clearAccountQuotaCache();
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async () => new Response(null, { status: 403 }),
+    });
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/oauth/accounts?provider=google-antigravity&quota=1&refresh=1", server.url));
+      expect(response.status).toBe(200);
+      const body = await response.json() as { accounts: Array<{ quotaFailure?: string; quotaUnavailable?: boolean }> };
+      expect(body.accounts[0]).toMatchObject({ quotaFailure: "access_denied", quotaUnavailable: true });
+      const text = JSON.stringify(body);
+      for (const secret of ["private-diagnostic-access", "private-diagnostic-refresh", "private-diagnostic-project", "quotaFailureIsCurrent"]) expect(text).not.toContain(secret);
+    } finally {
+      await server.stop(true);
+      clearAccountQuotaCache();
+      setAntigravityAccountQuotaTransportForTests(null);
+    }
+  });
+});

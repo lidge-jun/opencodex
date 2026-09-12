@@ -316,9 +316,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: codexAccountPickerEnabled(config),
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
-      // Absent means hidden, so the GUI renders the switch without having to know that
-      // `undefined` and `false` mean the same thing.
-      showCodexSparkQuota: config.showCodexSparkQuota === true,
       // Absent means off, same convention: the GUI renders a plain switch without
       // needing to know that `undefined` and `false` mean the same thing here.
       ultraFastTier: config.ultraFastTier === true,
@@ -417,7 +414,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexAccountPickerEnabled?: unknown;
       codexQuotaAutoRefresh?: unknown;
       oauthOpenBrowser?: unknown;
-      showCodexSparkQuota?: unknown;
       ultraFastTier?: unknown;
       codexMainAccountHardLock?: unknown;
       codexDesktopAuthless?: unknown;
@@ -429,12 +425,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexAccountPickerEnabled === undefined
       && body.codexQuotaAutoRefresh === undefined
       && body.oauthOpenBrowser === undefined
-      && body.showCodexSparkQuota === undefined
       && body.ultraFastTier === undefined
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -448,9 +443,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.codexAccountPickerEnabled !== undefined
       && typeof body.codexAccountPickerEnabled !== "boolean") {
       return jsonResponse({ error: "codexAccountPickerEnabled boolean is required" }, 400);
-    }
-    if (body.showCodexSparkQuota !== undefined && typeof body.showCodexSparkQuota !== "boolean") {
-      return jsonResponse({ error: "showCodexSparkQuota boolean is required" }, 400);
     }
     if (body.ultraFastTier !== undefined && typeof body.ultraFastTier !== "boolean") {
       return jsonResponse({ error: "ultraFastTier boolean is required" }, 400);
@@ -508,8 +500,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexQuotaAutoRefresh: Object.hasOwn(config, "codexQuotaAutoRefresh"),
       oauthOpenBrowser: config.oauthOpenBrowser,
       hasOauthOpenBrowser: Object.hasOwn(config, "oauthOpenBrowser"),
-      showCodexSparkQuota: config.showCodexSparkQuota,
-      hasShowCodexSparkQuota: Object.hasOwn(config, "showCodexSparkQuota"),
       ultraFastTier: config.ultraFastTier,
       hasUltraFastTier: Object.hasOwn(config, "ultraFastTier"),
       codexMainAccountHardLock: config.codexMainAccountHardLock,
@@ -545,9 +535,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
       if (typeof body.oauthOpenBrowser === "boolean") {
         config.oauthOpenBrowser = body.oauthOpenBrowser;
-      }
-      if (typeof body.showCodexSparkQuota === "boolean") {
-        config.showCodexSparkQuota = body.showCodexSparkQuota;
       }
       // Off deletes the key rather than persisting `false`: absent is the documented
       // default, and a written `false` would survive as a decision nobody made.
@@ -592,9 +579,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasOauthOpenBrowser) {
         config.oauthOpenBrowser = previousSettings.oauthOpenBrowser;
       } else deleteConfigTopLevelKey(config, "oauthOpenBrowser");
-      if (previousSettings.hasShowCodexSparkQuota) {
-        config.showCodexSparkQuota = previousSettings.showCodexSparkQuota;
-      } else deleteConfigTopLevelKey(config, "showCodexSparkQuota");
       if (previousSettings.hasUltraFastTier) {
         config.ultraFastTier = previousSettings.ultraFastTier;
       } else deleteConfigTopLevelKey(config, "ultraFastTier");
@@ -636,7 +620,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
       catalogRefreshPending,
-      showCodexSparkQuota: config.showCodexSparkQuota === true,
       codexDesktopAuthless: authlessIsEnabled,
       codexClientCompaction: clientCompactionIsEnabled,
       codexMainAccountHardLock: config.codexMainAccountHardLock === true,

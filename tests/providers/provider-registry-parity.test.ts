@@ -1,3 +1,4 @@
+import { configuredReasoningEfforts } from "../../src/reasoning-effort";
 import { describe, expect, spyOn, test } from "bun:test";
 import { buildCatalogEntries } from "../../src/codex/catalog";
 import { CURSOR_NO_VISION_MODELS } from "../../src/adapters/cursor/discovery";
@@ -19,6 +20,7 @@ import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
 import { routeModel } from "../../src/router";
 import { resolveAdapter } from "../../src/server";
+import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 function nativeTemplate(): Record<string, unknown> {
@@ -111,7 +113,7 @@ describe("provider registry parity", () => {
       expect(Object.keys(map ?? {})).toContain("deepseek-flash");
     }
     expect(nativeDeepseek?.preserveReasoningContentModels).toContain("deepseek-flash");
-    expect(nativeDeepseek?.noVisionModels).toContain("deepseek-flash");
+    expect(nativeDeepseek?.noVisionModels).not.toContain("deepseek-flash");
     // The new id keeps the Flash ladder, not the Pro one, through isDeepseekFlashModel.
     expect(nativeDeepseek?.modelReasoningEfforts?.["deepseek-flash"])
       .toEqual(nativeDeepseek?.modelReasoningEfforts?.["deepseek-v4-flash"]);
@@ -120,6 +122,7 @@ describe("provider registry parity", () => {
     expect(zenGo?.preserveReasoningContentModels).toContain("deepseek-v4.1-flash");
     expect(zenGo?.noVisionModels).toContain("deepseek-v4.1-flash");
     expect(Object.keys(zenGo?.modelReasoningEfforts ?? {})).toContain("deepseek-v4.1-flash");
+    expect(zenGo?.modelContextWindows?.["deepseek-v4.1-flash"]).toBe(1_048_576);
 
     // Negatives: neither spelling crosses into the other side.
     expect(JSON.stringify(nativeDeepseek)).not.toContain("deepseek-v4.1-flash");
@@ -237,9 +240,9 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
     expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels)
       .toEqual(["deepseek-flash", "deepseek-v4-flash"]);
-    // Issue #88: every DeepSeek API model is text-only input — the vision sidecar covers them.
+    // #4436: first-party Flash accepts images; unprobed compatibility aliases keep the sidecar.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
-      "deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash",
+      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash",
     ]);
   });
 
@@ -452,6 +455,53 @@ describe("provider registry parity", () => {
     ]);
     expect(neuralwatt?.preserveReasoningContentModels).toContain("glm-5.2-short");
     expect(neuralwatt?.preserveReasoningContentModels).not.toContain("moonshotai/Kimi-K2.5");
+  });
+
+  test("first-party DeepSeek Flash advertises native images without widening gateway aliases (#4436)", () => {
+    const provider = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "deepseek")!);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelInputModalities?.["deepseek-flash"]).toEqual(["text", "image"]);
+    expect(provider.modelInputModalities?.["deepseek-flash"]).toEqual(["text", "image"]);
+    expect(isModelVisionSidecarConsumer(provider, "deepseek-flash")).toBe(false);
+    expect(isModelVisionSidecarConsumer(provider, "deepseek-v4-flash-vision-exp")).toBe(false);
+    for (const model of ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"]) {
+      expect(isModelVisionSidecarConsumer(provider, model)).toBe(true);
+    }
+    for (const id of ["opencode-go", "opencode-zen"]) {
+      const gateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === id)!);
+      expect(isModelVisionSidecarConsumer(gateway, "deepseek-v4.1-flash")).toBe(true);
+      expect(isModelVisionSidecarConsumer(gateway, "deepseek-v4-flash")).toBe(true);
+    }
+    const free = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-free")!);
+    expect(isModelVisionSidecarConsumer(free, "deepseek-v4-flash-free")).toBe(true);
+    // Saved providers without explicit modality overrides inherit the fix during routing.
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "deepseek",
+      providers: { deepseek: { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", authMode: "key" } },
+    };
+    const route = routeModel(config, "deepseek/deepseek-flash");
+    expect(isModelVisionSidecarConsumer(route.provider, route.modelId)).toBe(false);
+    const model = applyProviderConfigHints("deepseek", route.provider, { provider: "deepseek", id: route.modelId });
+    expect(model.inputModalities).toEqual(["text", "image"]);
+    const catalog = buildCatalogEntries(nativeTemplate(), [], [model]);
+    expect(catalog.find(entry => entry.slug === "deepseek/deepseek-flash")?.input_modalities).toEqual(["text", "image"]);
+
+    // Existing saved providers that previously persisted the old seed continue using the sidecar
+    // until deepseek-flash is removed from their saved noVisionModels list.
+    const legacyConfig: OcxConfig = {
+      port: 0, defaultProvider: "deepseek",
+      providers: {
+        deepseek: {
+          adapter: "openai-chat", baseUrl: "https://api.deepseek.com", authMode: "key",
+          noVisionModels: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash"],
+        },
+      },
+    };
+    const legacyRoute = routeModel(legacyConfig, "deepseek/deepseek-flash");
+    expect(isModelVisionSidecarConsumer(legacyRoute.provider, legacyRoute.modelId)).toBe(true);
+    // Once deepseek-flash is removed from saved config, native vision is unlocked.
+    legacyConfig.providers.deepseek.noVisionModels = ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"];
+    const upgradedRoute = routeModel(legacyConfig, "deepseek/deepseek-flash");
+    expect(isModelVisionSidecarConsumer(upgradedRoute.provider, upgradedRoute.modelId)).toBe(false);
   });
 
   test("Z.AI and Kimi context aliases route with bracket-suffix stripping", () => {
@@ -1524,6 +1574,54 @@ describe("free-provider directory isolation", () => {
       expect(map?.xhigh, `${provider}/${model} xhigh alias`).toBe("high");
       expect(map?.low, `${provider}/${model} low resolution`).toBe("low");
       expect(map?.max, `${provider}/${model} max`).toBe("max");
+    }
+  });
+});
+
+
+describe("renamed fixed-key destination reasoning metadata", () => {
+  const known = "deepseek/deepseek-v4-flash";
+  const newer = "deepseek/deepseek-v4.1-flash";
+  const make = (overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig => ({
+    adapter: "openai-chat", authMode: "key", baseUrl: "https://api.commandcode.ai/provider/v1", ...overrides,
+  });
+  test("fills known model tables and unknown-model default for CommandCode", () => {
+    const provider = make();
+    enrichProviderFromRegistry("CommandCode", provider);
+    expect(configuredReasoningEfforts(provider, known)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual([]);
+  });
+  test("preserves explicit entries and clones arrays without losing other table rows", () => {
+    const caller = ["low"];
+    const provider = make({ reasoningEfforts: ["medium"], modelReasoningEfforts: { [known]: caller, custom: [] } });
+    const registry = registryEntryForProviderDestination(provider)!;
+    const registryBefore = structuredClone(registry.modelReasoningEfforts);
+    enrichProviderFromRegistry("CommandCode", provider);
+    const once = structuredClone(provider);
+    enrichProviderFromRegistry("CommandCode", provider);
+    expect(provider).toEqual(once);
+    expect(configuredReasoningEfforts(provider, known)).toEqual(["low"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, "custom")).toEqual([]);
+    expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual(["medium"]);
+    provider.modelReasoningEfforts![known]!.push("high");
+    provider.modelReasoningEfforts![newer]!.push("low");
+    expect(caller).toEqual(["low"]);
+    expect(registry.modelReasoningEfforts).toEqual(registryBefore);
+  });
+  test("explicit empty model declaration overrides a seeded ladder", () => {
+    const provider = make({ modelReasoningEfforts: { [known]: [] } });
+    enrichProviderFromRegistry("CommandCode", provider);
+    expect(configuredReasoningEfforts(provider, known)).toEqual([]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+  });
+  test("does not infer metadata for a different adapter, OAuth, or unrelated endpoint", () => {
+    for (const override of [{ adapter: "openai-responses" }, { authMode: "oauth" as const }, { baseUrl: "https://example.test/v1" }]) {
+      const provider = make(override);
+      enrichProviderFromRegistry("CommandCode", provider);
+      expect(provider.modelReasoningEfforts).toBeUndefined();
+      expect(provider.reasoningEfforts).toBeUndefined();
     }
   });
 });

@@ -37,6 +37,7 @@ still depends on upstream support for your account.
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |
 | `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
+| `plaintextV2AgentMessages?` | `boolean` | — (unset) | Experimental opt-in. It runs only when explicitly set to `true` and asks eligible native ChatGPT v2 parents to emit `spawn_agent`, `send_message`, and `followup_task` message arguments as plaintext. See [Plaintext v2 agent messages](#plaintext-v2-agent-messages). |
 | `agentTaskRecovery?` | `object` | — | Experimental opt-in recovery for backend-encrypted v2 tasks sent to routed providers. Disabled unless `enabled: true`; see [Encrypted v2 task recovery](#encrypted-v2-task-recovery). |
 
 Manage the surface with the dashboard or
@@ -162,6 +163,57 @@ on a mid-thread model switch.
 }
 ```
 
+## Plaintext v2 agent messages
+
+`plaintextV2AgentMessages` is unset in a fresh config and runs only when explicitly set to `true`.
+The caller must use the Responses wire, and the final destination must use the canonical ChatGPT
+Codex forward transport: `adapter: "openai-responses"`, `authMode: "forward"`, and the exact base URL
+`https://chatgpt.com/backend-api/codex`. OpenAI API-key providers, custom OpenAI-compatible
+gateways, routes whose final destination is another provider, and non-Responses callers are never
+rewritten.
+
+For an eligible v2 request, opencodex recognizes the catalog by a top-level `collaboration`
+namespace with a direct `spawn_agent` child. It removes
+`parameters.properties.message.encrypted: true`, when present, only from `spawn_agent`,
+`send_message`, and `followup_task`. ChatGPT reserves both the `collaboration` namespace and those
+three tool names, so the request uses fixed private aliases for all four identities. Before making
+that change, opencodex checks top-level and `additional_tools` catalogs, nested namespaces,
+`tool_search_output` declarations, `tool_choice`, and prior call items for the private namespace and
+fixed aliases. Any conflict leaves the entire request unchanged. OpenCodex restores only the
+request-scoped aliases in JSON, SSE, and WebSocket responses before Codex receives the tool call.
+The `encrypted_function_args: []` field is preserved so compatible Codex clients recognize the
+message as plaintext.
+
+This path adds no recovery request and therefore does not spend the extra ChatGPT quota used by a
+cache miss in `agentTaskRecovery`. It cannot change tasks that are already encrypted. If the request
+already declares the private alias or a conflicting reference, opencodex leaves that request
+unchanged; separately enabled recovery can still handle a routed task that is later encrypted. If
+ChatGPT rejects or ignores the modified schema, or the Codex client does not recognize the plaintext
+response fields, the call can fail. OpenCodex does not retry the parent request with the original
+schema because doing so could duplicate quota use or tool calls.
+
+Restoration uses a 10,000-identity traversal budget for each response payload. If a payload exhausts
+that budget, bounded JSON returns HTTP 502 and a stream returns `response.failed`; neither path
+sends the private aliases to Codex or saves the refused response for `previous_response_id`
+continuation.
+
+For successfully rewritten calls, the option removes application-layer encryption from agent
+message arguments. HTTPS still encrypts network transport, but message text can appear in Codex
+task history, routed-provider requests, `responses-state.json` or its spill files, and
+`usage-debug.jsonl` when debug capture is enabled. The behavior depends on undocumented ChatGPT
+schema and response fields and may stop working after a backend or client update. Startup prints a
+warning while it is enabled.
+
+```json
+{
+  "plaintextV2AgentMessages": true
+}
+```
+
+The equivalent CLI command is `ocx config set plaintextV2AgentMessages true`. Restart the proxy
+after changing the setting.
+
+
 ## Encrypted v2 task recovery
 
 `agentTaskRecovery` is an experimental compatibility path for backend-encrypted v2 tasks that reach
@@ -203,6 +255,19 @@ Admission and retention are deliberately narrow:
 - any malformed envelope, failed recovery, timeout, or validation failure preserves the existing
   fail-closed error; client cancellation returns 499. Neither path forwards ciphertext to the
   routed provider.
+
+Recovery accepts one consecutive run of up to 32 complete Fernet-shaped encrypted parts, with
+at most 2 MiB of combined ciphertext. Parts retain their order and boundaries in one authenticated
+request. Cache identity includes the sequence; the original input is revalidated before assignment
+replacement. HTTP failures retain the existing bounded diagnostic reason and do not trigger an
+internal retry.
+
+Split tokens are not reconstructed for recovery. A bounded run whose exact concatenation has
+Fernet structure stays classified as ciphertext through plaintext-slot normalization. If the task
+has no independent readable text, it fails closed without a recovery or routed-provider request.
+Independent readable text retains the existing mixed-content policy. Other fragment representations
+remain unsupported; this does not establish general token-split recovery or upstream multipart
+fidelity.
 
 ### Threat model
 

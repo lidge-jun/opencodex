@@ -28,11 +28,26 @@ import {
 import type { CodexAppServerProcessIo } from "./app-server-processes";
 import type {
   CodexAppServerStateResponse,
+  CodexDesktopRestartSummary,
   CodexRestartResponse,
 } from "../lib/codex-restart-contract";
 import { getServerListenPort } from "../server/lifecycle";
 
+async function defaultRestartDesktopApp(): Promise<CodexDesktopRestartSummary> {
+  const { restartCodexDesktopApp } = await import("./desktop-app-restart");
+  const outcome = restartCodexDesktopApp({ allowHandoff: false });
+  return {
+    attempted: outcome.attempted,
+    stopped: outcome.stopped,
+    surviving: outcome.surviving,
+    relaunch: outcome.relaunch,
+    ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+  };
+}
+
 export interface CodexRestartServiceIo {
+  /** Desktop-restart seam, so a route test cannot terminate the developer's own Codex. */
+  restartDesktopApp?: () => Promise<CodexDesktopRestartSummary>;
   /** Process-layer seam, forwarded to every app-server-processes call. */
   processIo?: CodexAppServerProcessIo;
   /** Catalog refresh seam. Resolves to whether a catalog or cache write happened. */
@@ -114,7 +129,18 @@ async function runCodexRestart(io: CodexRestartServiceIo): Promise<CodexRestartR
   (io.resetStateCache ?? resetCodexAppServerCatalogStateCache)();
   const before = (io.collectState ?? collectCodexAppServerCatalogState)(io.processIo ?? {});
 
+  // Done here, before the early returns, because the model picker lives in the DESKTOP
+  // app: "no app-server is running" is not a reason to leave a stale roster on screen,
+  // and an operator who pressed restart still wants the app back on the current catalog.
+  //
+  // allowHandoff is false and that is deliberate. The handoff waits for the CALLING
+  // process to exit, and this runs inside a long-lived proxy that does not, so every
+  // handoff started here would sit out its window and fail after the operator had
+  // already been told it was handed off. An honest refusal beats that.
+  const desktop = await (io.restartDesktopApp ?? defaultRestartDesktopApp)();
+
   const nothingToDo = (): CodexRestartResponse => ({
+    desktopApp: desktop,
     success: true,
     stateBefore: before.state,
     synced,
@@ -174,6 +200,7 @@ async function runCodexRestart(io: CodexRestartServiceIo): Promise<CodexRestartR
       surviving: [],
       failed: [],
       code: "nothing_running",
+      desktopApp: desktop,
     };
   }
 
@@ -207,8 +234,10 @@ async function runCodexRestart(io: CodexRestartServiceIo): Promise<CodexRestartR
   };
 
   const result = (io.restart ?? restartCodexAppServers)(targets, guardedProcessIo);
+
   const clean = result.surviving.length === 0 && result.failed.length === 0;
   return {
+    desktopApp: desktop,
     success: clean,
     stateBefore: before.state,
     synced,

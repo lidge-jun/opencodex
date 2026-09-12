@@ -15,7 +15,7 @@ ocx gui
 ```
 
 Bu, gerekirse önce proxy'yi otomatik olarak başlatarak tarayıcınızda
-`http://localhost:<port>` adresini açar. Geliştirme sırasında GUI geliştirme
+`http://localhost:<port>` adresini açar; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar. Geliştirme sırasında GUI geliştirme
 sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash
@@ -59,6 +59,8 @@ kararıdır.
 | **Kullanım / Hata Ayıklama** | Belirteç kullanımı kapsamını ve eğilimlerini inceleyin veya isteğe bağlı sağlayıcı aktarımı ve kullanım çıkarma tanılamalarını etkinleştirin. |
 | **Depolama** | Salt okunur CODEX_HOME disk dökümü (oturumlar, arşivler, DB'ler, ekler). İsteğe bağlı arşivlenmiş temizleme: en eski %N'yi önizleyin, ardından `CODEX_HOME/.trash` konumuna karantinaya alın (varsayılan) veya açık bir onay kutusu arkasında kalıcı olarak silin. **Otomatik temizleme politikası** isteğe bağlıdır ve **varsayılan olarak KAPALIDIR** (`storageCleanupPolicy.enabled`); Depolama sayfasında eşik/hedef/zamanlama/mod yapılandırın veya **Şimdi çalıştır (Run now)**'ı tetikleyin. Karantinaya alınan girdiler Depolama sayfasından geri yüklenebilir (JSONL + iş parçacıkları). Aktif oturumlar salt okunur kalır. Codex en yeni/aktif `state_*.sqlite` dosyasını kilitli tuttuğu sürece temizleme ve geri yükleme reddedilir. |
 | **Durdur** | Proxy'yi ve kurulu arka plan servisini zarif bir şekilde durdurun, yerel Codex'i geri yükleyin ve çıkın (`POST /api/stop`). Windows'ta Görev Zamanlayıcı arka ucunda panel reddeder ve `ocx stop` çalıştırmanızı ister: görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir ve bu yeniden başlatma penceresini istemci yapılandırmanız geri yüklenmeden önce yalnızca proxy dışında çalışan bir stop doğrulayabilir. Reddedildiğinde hiçbir şey değiştirilmez. |
+
+Kullanım, panel, sağlayıcı çalışma alanı, sağlayıcı kataloğu ve API anahtarı görünümleri, okunabilir kayıt kalmasa bile dışlanan kayıtlar için uyarı gösterir. Sayılar, tarihler ve kullanım sıralamaları yalnızca okunabilir kayıtlara dayanır. Geçmiş eksikse en çok kullanılan model sırası kaydedilmez; başka bir sıra seçin veya yeniden denemeden önce geçmişi onarın.
 
 ### İstek günlüklerini filtreleme
 
@@ -173,10 +175,12 @@ ve diğer sağlayıcılardan ayrıdır.
   (ana) hesabı diğerleri gibi sıralanır, böylece **Son** olarak ayarlanabilir ve
   yedek olarak tutulabilir. Bu beş önayarın dışındaki `ocx account priority`'den
   ayarlanan bir sıra kartta görünür ve seçilebilir kalır.
-- İş parçacığı bağlılığı istek başına dalgalanmayı önler. Kota otomatik geçişi
-  etkinken uzun süredir çalışan bir iş parçacığı düzenli olarak yeniden
-  değerlendirilir ve ilgili kullanımı eşiğe ulaştıktan ve kesinlikle daha düşük
-  kullanımlı uygun bir hesap mevcut olduğunda yeniden bağlanabilir.
+- İş parçacığı bağlılığı istek başına dalgalanmayı önler. `pool.cacheAffinity`
+  varsayılan olarak açıkken uzun süredir çalışan bir iş parçacığı, kullanım eşiğe
+  ulaştı diye yeniden bağlanmaz; hesap tükenene veya hizmet veremez hale gelene
+  kadar kalır ve o zaman yalnızca kullanımı kesin olarak daha düşük ve gerçek kota
+  payı olan bir hesaba geçer. Bayrağı kapatınca, kesinlikle daha düşük kullanımlı
+  uygun bir hesap varsa eşik yeniden bağlaması geri gelir.
 - Yeni oturumlar en düşük kullanımlı uygun hesabı seçebilir. Ücretli planlar
   bilinen en sıcak 5 saatlik, haftalık veya 30 günlük pencereyi puanlar;
   Go/Ücretsiz planlar yalnızca 30 günlük pencereyi kullanır.

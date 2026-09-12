@@ -63,7 +63,7 @@ import {
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { dispatchCommand , decideStartWithLiveOwner } from "./dispatch";
-import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
+import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
 import { isApiAuthRequired } from "../server/auth-cors";
@@ -391,7 +391,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       scheduleCatalogPrewarm();
       break;
     } catch (err) {
-      if (!isAddrInUse(err) || attempt >= 2) throw err;
+      if (err instanceof AuxiliaryListenerBindError || !isAddrInUse(err) || attempt >= 2) throw err;
       if (requestedPort !== undefined) {
         console.log(`⚠️  Port ${port} was taken while starting; waiting to retry the same port...`);
         const hostname = loadConfig().hostname ?? "127.0.0.1";
@@ -732,6 +732,9 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
     if (code === "restart_capability_unsupported") {
       console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
       console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
+    } else if (code === "restart_version_skew") {
+      console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
+      console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
     } else {
       console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
     }

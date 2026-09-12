@@ -1,5 +1,22 @@
 import { createServer } from "node:net";
 
+/** An auxiliary bind cannot be repaired by selecting a different public port. */
+export class AuxiliaryListenerBindError extends Error {
+  constructor(
+    readonly listener: "unauthenticatedLoopbackListener" | "hub.managementIngress",
+    readonly port: number,
+    readonly hostname: string,
+    cause: unknown,
+  ) {
+    super(
+      `Could not bind ${listener} at ${hostname}:${port}. `
+      + `Check that listener's address and port; the public proxy port was not retried.`,
+      { cause },
+    );
+    this.name = "AuxiliaryListenerBindError";
+  }
+}
+
 /** Temporary bind probes must not let accepted peers hold server.close() open. */
 function createProbeServer(): ReturnType<typeof createServer> {
   const server = createServer();

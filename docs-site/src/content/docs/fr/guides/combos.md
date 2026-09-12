@@ -200,7 +200,8 @@ Les échecs d’un combo se répartissent entre ceux qui entraînent un **bascul
 | --- | --- |
 | HTTP 401, 403, 404, 408, 429, ou n'importe quel 5xx | Refroidissez la cible et passez à la prochaine cible éligible. |
 | Erreur classée comme erreur d’authentification, d’abonnement, de quota, de limitation de débit, de surcharge ou de serveur en amont | Place la cible en période de refroidissement et bascule, même si le statut seul ne suffit pas. |
-| Annulation client (499), `origin_rejected`, refus de cyber-politique, débordement de contexte ou demande invalide | Arrêtez et renvoyez l'erreur ; une autre cible ne rendrait pas la demande valide. |
+| Annulation client (499), `origin_rejected`, refus de cyber-politique, débordement de contexte ou autre demande invalide | Arrêtez et renvoyez l'erreur ; une autre cible ne rendrait pas la demande valide. |
+| Rejet structuré de `user`, valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, ou rejet d'entrée d'image propre à un modèle (`param: input`) | Bascule vers la cible admissible suivante avant le début de la sortie, sans délai de refroidissement ; voir Compatibilité des paramètres facultatifs ci-dessous. |
 | Toute autre erreur non classifiée | Arrêtez et renvoyez l'erreur. |
 
 Une cible sautée entre en temps de recharge pendant 60 secondes par défaut. Si la réponse en amont inclut un
@@ -218,20 +219,16 @@ Le basculement est intentionnellement limité. Il facilite la disponibilité, l'
 
 ## Effort de raisonnement par défaut
 
-`defaultEffort` fournit `reasoning.effort` uniquement lorsque toutes ces conditions sont vraies :
+`defaultEffort` complète un `reasoning.effort` absent si le combo possède une valeur par défaut non nulle et si la liste des niveaux acceptés par la cible est connue et non vide. La valeur configurée est conservée si elle est acceptée ; sinon, le niveau accepté le plus élevé ne la dépassant pas est choisi, ou le niveau le plus bas si aucun n’est inférieur. Une liste inconnue ou vide n’ajoute aucune valeur par défaut.
 
-1. le combo a un défaut non nul ;
-2. l'appelant n'a pas fait d'effort ; et
-3. le catalogue de la cible sélectionnée annonce cet effort précis.
+Cette étape conserve un effort existant et les autres champs reasoning. La normalisation des capacités ci-dessous peut supprimer séparément les paramètres effort/thinking non acceptés. Valeurs possibles : `low`, `medium`, `high`, `xhigh`, `max`, `ultra` ; l’absence du champ ou `null` désactive l’ajout.
 
-Si la requête n'a pas d'objet `reasoning`, opencodex en crée un. Si `reasoning` existe sans
-`effort`, il préserve les autres champs et ajoute la valeur par défaut. Un effort fourni par l’appelant n’est
-jamais écrasé.
 
-Lorsque la capacité cible est inconnue ou n'inclut pas l'effort configuré, opencodex omet le
-par défaut et laisse le comportement de la cible inchangé. Les valeurs prises en charge sont `low`, `medium`,
-`high`, `xhigh`, `max` et `ultra` ; omettez le champ ou réglez-le sur `null` pour laisser l'effort entièrement à
-l'appelant et la cible.
+## Capacités reasoning mixtes
+
+`reasoningEffortMode` vaut `"strict"` par défaut : le catalogue publie l’intersection des listes effort de toutes les cibles, y compris les listes explicitement vides. `"adaptive"` exclut ces listes vides pour conserver le sélecteur dans un combo mixte. Une liste inconnue ne limite l’intersection dans aucun des deux modes.
+
+À l’envoi, une liste explicitement vide supprime les paramètres effort et thinking dans les deux modes ; une liste inconnue les supprime uniquement en adaptive. `reasoning.summary` et les autres champs hors effort sont conservés. La résolution des cibles connues non vides reste inchangée. Les cibles inconnues en strict et les déclarations inconnues du native Chat ordinaire conservent les paramètres de l’appelant. L’ajout d’une valeur par défaut ne remplace pas un effort existant, mais cette normalisation peut supprimer les paramètres non pris en charge.
 
 ## Capacité d’entrée d’images / multimodale
 
@@ -337,6 +334,7 @@ Les combos sont stockés dans l'objet `combos` de niveau supérieur, saisi par l
 | `strategy` | Non | `"failover"` | Valeurs autorisées : `"failover"`, `"round-robin"`, `"random"`, `"least-used"` et `"reset-window"`. |
 | `stickyLimit` | Non | `1` | Nombre entier de 1 à 100 requêtes réussies par sélection à tour de rôle. S’applique uniquement à `round-robin`. |
 | `defaultEffort` | Non | `null` | `low`, `medium`, `high`, `xhigh`, `max` ou `ultra` ; appliqué uniquement lorsque l'appelant omet ses efforts et que la cible annonce son soutien. |
+| `reasoningEffortMode` | Non | `"strict"` | `strict` ou `adaptive` ; choisit l’intersection des capacités et la normalisation par cible. |
 | `imageInput` | Non | `"auto"` | `"auto"` ou `"disabled"`. `"auto"` publie les images uniquement si toutes les cibles les prennent en charge ; `"disabled"` impose le texte seul, retire les images des modalités publiées et rejette les requêtes qui en contiennent avant leur distribution. |
 | `alias` | Non | aucun | Identifiant de modèle public tronqué facultatif ; utilisez les règles d'alias ci-dessus. Une valeur vide est stockée sans alias. |
 | `nativeAlias` | Non | `false` | Autoriser explicitement un `alias` natif nu actuellement pris en charge à avoir la priorité sur le routage et le catalogue. Jamais déduit de l'alias. |
@@ -368,3 +366,9 @@ message de validation.
 
 L’erreur était terminale plutôt que spécifique à la cible. Corriger une entrée invalide, réduire un contexte surdimensionné,
 gérer un refus de politique ou corriger l’origine de la demande rejetée. Les combos ne sautent pas dans ces cas-là.
+
+## Compatibilité des paramètres facultatifs
+
+Exception aux erreurs 400 terminales : un rejet structuré de `user`, une valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, ou un rejet d’entrée d’image propre à un modèle (`param: input`) peut faire passer le combo à la cible admissible suivante avant le début de la sortie, sans délai de refroidissement. Le refus de sécurité, l’annulation et une sortie déjà commencée restent non rejouables.
+
+[Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

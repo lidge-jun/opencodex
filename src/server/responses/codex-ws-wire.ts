@@ -4,6 +4,7 @@ import {
   UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
   UPSTREAM_NO_RESPONSE_CODE,
 } from "../../lib/upstream-retry";
+import { readFileSync } from "node:fs";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
 export const UPGRADE_DEADLINE_MS = 10_000;
@@ -62,6 +63,65 @@ export function isCodexWsUpstreamResponse(response: Response): boolean {
 export function markCodexWsResponse(response: Response, observed: boolean): void {
   codexWsUpstreamResponses.add(response);
   if (observed) quotaObservedResponses.add(response);
+}
+
+/**
+ * The proxy's own version, stamped onto every stage record so a field report
+ * can be tied to the exact build that produced it (#4191). Computed locally
+ * with the same package.json IIFE management-api.ts / gui-static.ts use —
+ * importing management-api from the transport layer would invert the
+ * layering and pull the management surface into every WS exchange.
+ */
+const OCX_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version as string;
+  } catch {
+    return "0.0.0";
+  }
+})();
+
+/**
+ * The durable form of the stage counters, carried out of the exchange on the
+ * resolved Response so the logging layer can persist it without the exchange
+ * ever seeing a RequestLogContext (#4191).
+ *
+ * Everything here is a size, a count, a duration, a boolean, or a semver
+ * string: no request body, no header, no account identifier, no conversation
+ * text, and no close-reason text can reach a record built by the exchange.
+ * `requestBytes` is null on a committed success because the happy path never
+ * pays the UTF-8 walk of a megabyte replay frame; it is measured on failure,
+ * where its size is the evidence.
+ */
+export type CodexWsStageRecord = Omit<CodexWsFailureStage, "requestBytes"> & {
+  /** UTF-8 size of the create frame; null on the committed-success record. */
+  requestBytes: number | null;
+  /** Numeric upstream close code when the socket closed; null otherwise. */
+  closeCode: number | null;
+  /** True when the exchange ran on a pooled, previously used session. */
+  reused: boolean;
+  /** OpenCodex version that produced this record. */
+  ocxVersion: string;
+  /** Bun runtime version the exchange gated on. */
+  bunVersion: string;
+};
+
+const codexWsStageByResponse = new WeakMap<Response, CodexWsStageRecord>();
+
+export function markCodexWsStage(response: Response, record: CodexWsStageRecord): void {
+  const current = codexWsStageByResponse.get(response);
+  if (current) {
+    Object.assign(current, record);
+    return;
+  }
+  codexWsStageByResponse.set(response, record);
+}
+
+export function readCodexWsStage(response: Response): CodexWsStageRecord | undefined {
+  return codexWsStageByResponse.get(response);
+}
+
+export function codexWsOcxVersion(): string {
+  return OCX_VERSION;
 }
 
 /**

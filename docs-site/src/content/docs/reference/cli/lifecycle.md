@@ -77,6 +77,10 @@ Idempotently ensure a background proxy is running, then sync its live model cata
 Restore native Codex **without** stopping the proxy — strips the injected config lines and routed
 catalog entries so plain `codex` works natively again. `eject` is an alias of `restore`.
 
+Restored catalog output excludes retired native models, including `gpt-5.3-codex-spark`,
+whether stored as bare ids or trusted account-qualified rows. This applies with or without
+a catalog backup; the original backup and historical user-selected configuration are preserved.
+
 Restoration reports failure instead of replacing changed configuration files when a saved journal
 lacks the corresponding injection hashes. The current files and journal remain available for
 review; see [recovery without injection hashes](/guides/codex-integration/#recovery-without-injection-hashes).
@@ -257,7 +261,7 @@ not fabricate official-client metadata. Doctor never mutates credentials or appl
 
 ## Catalog sync
 
-### `ocx sync [--restart-codex]`
+### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
@@ -269,14 +273,83 @@ nonzero, prints the concrete reason on stderr, and leaves the existing catalog a
 
 If long-lived Codex `app-server` processes are still running, `ocx sync` warns that they may keep
 serving the previous in-memory model list even though `opencodex-catalog.json` / `models_cache.json`
-were updated. Pass `--restart-codex` to send `SIGTERM` only to matching `codex … app-server` and
-`codex-code-mode-host` processes owned by the current user (active turns may be interrupted). Broad
+were updated. Pass `--restart-codex` to restart matching `codex … app-server` and
+`codex-code-mode-host` processes **and** fully quit and relaunch the Codex desktop app, on macOS,
+Linux, and Windows, so the model picker re-reads the catalog. Live conversations end. Broad
 `pkill -f codex` matching is intentionally avoided.
 
-### `ocx sync-cache [--restart-codex]`
+`--restart-desktop-app` is a deprecated alias of `--restart-codex`. It still works, prints a
+deprecation notice, and is not Windows-only.
+
+`--restart-app-server-only` restores the older, narrower behaviour: `SIGTERM` only to matching
+app-server and code-mode-host processes owned by the current user, with the desktop app left
+running. Active turns may still be interrupted. If it is combined with `--restart-codex` or
+`--restart-desktop-app`, the narrow scope wins, because losing live conversations is unrecoverable
+and a stale picker is not.
+
+When the command runs from inside the Codex app, the restart is handed off to a detached helper
+and this session ends with the app.
+
+### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Invalidate Codex's local model picker cache so it is rebuilt from the active opencodex catalog. The
-same stale-`app-server` warning and optional `--restart-codex` behavior as `ocx sync` apply.
+same stale-`app-server` warning and optional restart flags as `ocx sync` apply.
+
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
+
+Install a complete catalog served by another OpenCodex instance's `/v1/catalog` endpoint, then
+synchronize `models_cache.json`. Unlike `ocx sync`, this command does not discover configured
+providers or inject Codex configuration. Unlike `ocx sync-cache`, it replaces the active catalog
+before rebuilding the cache. It works even when the local Codex integration desired state is off.
+
+The URL must be HTTPS; loopback HTTP is accepted for local testing. Embedded URL credentials,
+queries, fragments, redirects, oversized responses, malformed JSON, duplicate or unsafe slugs, and
+unknown `input_modalities` are refused before any local write. Authentication is optional and is
+read only by environment-variable reference:
+
+```bash
+export OPENCODEX_CATALOG_AUTH_TOKEN='...'
+ocx catalog pull https://proxy.example.com/v1/catalog \
+  --auth-env OPENCODEX_CATALOG_AUTH_TOKEN
+```
+
+The value is sent as a Bearer token but is never accepted as an argv value. Redirects are refused,
+so authorization cannot cross origins. Catalog and cache writes use the shared Codex catalog lock
+and atomic writer. A failed fetch, validation, lock acquisition, catalog write, or cache rebuild
+preserves the last-known-good files. Identical catalog bytes are a no-op that preserves mtimes and
+never touches processes. `--restart-codex`, `--restart-app-server-only`, and the deprecated
+`--restart-desktop-app` alias mean the same thing here as they do on `ocx sync` and
+`ocx sync-cache`, and they apply only after a real write.
+
+The URL must name `/v1/catalog` at the host root. A reverse proxy that serves the endpoint under a
+path prefix is not supported by this command.
+
+The command downloads the full catalog and compares bytes locally instead of issuing an `ETag` /
+`If-None-Match` conditional request. Identical bytes are treated as a complete no-op, so a
+Codex home whose catalog is correct but whose `models_cache.json` is missing or stale is not
+repaired by this command; use `ocx sync-cache` for that.
+
+`--json` emits one stable envelope on stdout. `schemaVersion`, `ok`, `status`, `catalogWritten`,
+`cacheSynced`, and `codexRestarted` are always present. `codexRestarted` still means app-servers
+only. `desktopAppRestarted` is present only when a desktop restart was requested, and is `true`
+only when the relaunch actually started; a handoff is not a success. `status` is `updated`,
+`unchanged`, or `failed`. A successful pull adds `modelCount`; a failure adds `code`, which is the
+field a script branches on:
+
+| `code` | Meaning | Exit |
+| --- | --- | --- |
+| `usage` | The arguments were not a valid `catalog pull` invocation | 2 |
+| `auth_env_missing` | `--auth-env` named a variable that is not set | 1 |
+| `url_invalid`, `insecure_http_refused` | The URL was refused before any request | 1 |
+| `request_failed`, `redirect_refused`, `http_error` | The request did not produce a usable response | 1 |
+| `body_too_large`, `body_invalid`, `catalog_invalid` | The response was refused before any local write | 1 |
+| `write_failed`, `lock_database`, `unsafe_path` | The coordinated write did not complete; files are unchanged | 1 |
+| `lock_busy` | Another writer holds the Codex catalog lock | 3 |
+| `restart_incomplete` | The catalog and cache landed, but a Codex app-server survived `--restart-codex` or `--restart-app-server-only` | 1 |
+
+`restart_incomplete` is the one failure that reports real writes: `catalogWritten` and
+`cacheSynced` stay true and `ok` is false, because a surviving app-server still serves the
+previous catalog from memory.
 
 ## Background service
 
@@ -525,7 +598,8 @@ proxy controls. `start` and `stop` control the icon only; use its menu to contro
 
 ### `ocx gui`
 
-Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>`, auto-starting the proxy
+Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>` — or at
+`http://127.0.0.1:<management port>` when hub management ingress is enabled — auto-starting the proxy
 if it is not running.
 
 ## Updating

@@ -10,6 +10,7 @@ import {
   CodexAuthContextError,
   CodexDirectAuthenticationError,
   CodexMainProfileDrainingError,
+  CodexModelAvailabilityError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   codexMainProfileDrainingResponse,
@@ -20,6 +21,7 @@ import {
   materializeCodexUpstreamAuth,
   CodexMainSubstitutionUnavailableError,
   isCodexAuthContextUsable,
+  codexPoolAffinityKey,
   resolveCodexAuthContext,
   shouldMarkAccountNeedsReauthForCodexAuthFailure,
   stripCodexRuntimeProviderFields,
@@ -676,9 +678,17 @@ describe("Codex auth context", () => {
     });
 
     await expect(resolve(["gpt-daybreak-blue-latest"]))
-      .rejects.toThrow("Codex accounts that support this model are currently unavailable");
+      .rejects.toMatchObject({
+        name: "CodexModelAvailabilityError",
+        reason: "temporarily_unavailable",
+        message: "Codex accounts that support this model are currently unavailable",
+      } satisfies Partial<CodexModelAvailabilityError>);
     await expect(resolve(["gpt-5.6-sol"]))
-      .rejects.toThrow("No eligible Codex account supports this model");
+      .rejects.toMatchObject({
+        name: "CodexModelAvailabilityError",
+        reason: "unsupported",
+        message: "No eligible Codex account supports this model",
+      } satisfies Partial<CodexModelAvailabilityError>);
 
     const mainExcludedSnapshot: CodexModelEntitlementSnapshot = {
       modelsByAccount: new Map(),
@@ -697,7 +707,10 @@ describe("Codex auth context", () => {
         expect(options?.excludeAccountIds?.has(MAIN_CODEX_ACCOUNT_ID)).toBeTrue();
         return mainExcludedSnapshot;
       },
-    })).rejects.toThrow("Codex accounts that support this model are currently unavailable");
+    })).rejects.toMatchObject({
+      reason: "temporarily_unavailable",
+      message: "Codex accounts that support this model are currently unavailable",
+    } satisfies Partial<CodexModelAvailabilityError>);
   });
 
   test("auth resolution preserves per-model detours without replacing ordinary affinity", async () => {
@@ -784,7 +797,10 @@ describe("Codex auth context", () => {
       accountId: "pool-a",
       modelId: "gpt-daybreak-blue-latest",
       resolveCodexModelEntitlements: async () => entitlementSnapshot,
-    })).rejects.toThrow("Selected Codex account does not support this model");
+    })).rejects.toMatchObject({
+      reason: "unsupported",
+      message: "Selected Codex account does not support this model",
+    } satisfies Partial<CodexModelAvailabilityError>);
   });
 
   test("ordinary native models do not pay the entitlement discovery path", async () => {
@@ -881,7 +897,7 @@ describe("Codex auth context", () => {
     });
   });
 
-  test("the canonical parent-thread affinity stays authoritative over Desktop fallback headers", async () => {
+  test("a parent-bearing Desktop request keys as its own thread, not as its parent (#4546 wp8)", async () => {
     const cfg = config();
     cfg.autoSwitchThreshold = 0;
     saveCodexAccountCredential("pool-a", {
@@ -897,11 +913,24 @@ describe("Codex auth context", () => {
     });
 
     const resolved = await resolveCodexAuthContext(headers, cfg, "pool");
-    expect(resolved).toMatchObject({
-      kind: "pool",
-      accountId: "pool-a",
-      affinityKey: "canonical-parent-thread",
-    });
+    expect(resolved).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    if (resolved.kind !== "pool") throw new Error("expected pool context");
+    // The parent used to BE the key, so every child of one parent shared a single binding
+    // entry and none of them could hold one of their own. A child now keys as its own
+    // conversation; the parent qualifies placement, not identity.
+    expect(resolved.affinityKey?.startsWith("app:")).toBe(true);
+    expect(resolved.affinityKey).not.toContain("canonical-parent-thread");
+    expect(resolved.affinityKey).not.toContain("desktop-session-private");
+    expect(resolved.affinityKey).not.toContain("desktop-thread-private");
+    // Stable across turns that drop the parent header: the key is the session/thread pair.
+    expect(resolved.affinityKey).toBe(codexPoolAffinityKey(new Headers({
+      "session-id": "desktop-session-private",
+      "thread-id": "desktop-thread-private",
+    })));
+    // And distinct from the parent's own lane, which is what a parent-only request rides.
+    expect(resolved.affinityKey).not.toBe(codexPoolAffinityKey(new Headers({
+      "x-codex-parent-thread-id": "canonical-parent-thread",
+    })));
   });
 
   test("an oversized parent-thread id falls back to the bounded Desktop pair", async () => {
@@ -984,7 +1013,7 @@ describe("Codex auth context", () => {
       .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
   });
 
-  test("late transient failure cannot delete a newer Desktop affinity binding", async () => {
+  test("late transient failure cannot disturb a held Desktop affinity binding", async () => {
     const cfg = config();
     cfg.autoSwitchThreshold = 0;
     cfg.upstreamFailoverThreshold = 3;
@@ -1021,7 +1050,11 @@ describe("Codex auth context", () => {
     clearCodexUpstreamHealth();
     cfg.activeCodexAccountId = "pool-a";
     await expect(resolveCodexAuthContext(headers, cfg, "pool"))
-      .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+      // The streak detoured this session onto pool-b but never surrendered its binding
+      // (#4546), so with pool-a healthy again the session comes home to its warm prefix.
+      // That is also what proves the late failure did no damage: a guard that had dropped
+      // the held pin would leave nothing to come home to.
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
   });
 
   test("selection order never bypasses an exact account selector", async () => {
@@ -1527,6 +1560,28 @@ describe("Codex auth context", () => {
       .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
   });
 
+  test("explicit account routing bypasses plan policy while retaining pause and reauth checks", async () => {
+    const cfg = config();
+    cfg.codexAccounts!.find(account => account.id === "pool-a")!.plan = "free";
+    cfg.codexPool = { excludedPlans: ["free"] };
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token", refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000, chatgptAccountId: "pool_a_acc",
+    });
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      accountId: "pool-a", modelId: "gpt-5.5",
+    })).resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+    cfg.pausedCodexAccountIds = ["pool-a"];
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      accountId: "pool-a", modelId: "gpt-5.5",
+    })).rejects.toThrow("Selected Codex account is unavailable");
+    cfg.pausedCodexAccountIds = [];
+    markAccountNeedsReauth("pool-a");
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      accountId: "pool-a", modelId: "gpt-5.5",
+    })).rejects.toThrow("Selected Codex account needs reauthentication");
+  });
+
   test("exact selection reports reauthentication without falling back to the active Pool account", async () => {
     const cfg = config();
     cfg.activeCodexAccountId = "pool-b";
@@ -1738,7 +1793,7 @@ describe("Codex auth context", () => {
     }
   });
 
-  test("reset-derived native cooldowns stay within their confirmed quota group", async () => {
+  test("retired resets leave shared auth usable while Retry-After still blocks it", async () => {
     const originalNow = Date.now;
     const now = 1_800_000_000_000;
     const cfg = config();
@@ -1758,11 +1813,11 @@ describe("Codex auth context", () => {
         modelId: "gpt-5.3-codex-spark",
       });
 
-      // Spark owns a separate quota, so Terra can use the same account.
+      // Retired evidence cannot cool the account or create a new scope.
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
-        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
 
       recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
         now,
@@ -1770,8 +1825,7 @@ describe("Codex auth context", () => {
         modelId: "gpt-5.6-terra",
       });
 
-      // Terra and Luna stay in the shared native quota group, while Spark keeps
-      // its independent cooldown instead of being overwritten by Terra's 429.
+      // Manually typed retired ids have no quota-scope exception to ordinary cooldowns.
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-luna" }))
         .rejects.toBeInstanceOf(CodexAccountCooldownError);
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
@@ -1791,7 +1845,7 @@ describe("Codex auth context", () => {
     }
   });
 
-  test("a scoped cooldown uses another account without moving the independent native scope", async () => {
+  test("a retired reset preserves the bound Pool account across subsequent requests", async () => {
     const originalNow = Date.now;
     const now = 1_800_000_000_000;
     const cfg = config();
@@ -1815,8 +1869,7 @@ describe("Codex auth context", () => {
     }
     try {
       Date.now = () => now;
-      // Establish the shared-scope binding first. The Spark fallback below must
-      // create a second binding rather than replacing this one.
+      // Establish an ordinary binding; retired evidence must not move it.
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
 
@@ -1827,20 +1880,19 @@ describe("Codex auth context", () => {
       });
 
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
-        .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
       expect(cfg.activeCodexAccountId).toBe("pool-a");
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
-      // This second Spark request proves routing retained the peer choice for
-      // the Spark affinity instead of relying on an auth-layer substitution.
+      // Repeated manually typed requests retain the same shared affinity.
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
-        .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
     } finally {
       Date.now = originalNow;
     }
   });
 
-  test("a successful Spark recovery probe leaves the shared native cooldown intact", async () => {
+  test("a successful shared recovery probe leaves Reserve cooldown intact", async () => {
     const originalNow = Date.now;
     const now = 1_800_000_000_000;
     const cfg = config();
@@ -1857,36 +1909,38 @@ describe("Codex auth context", () => {
       recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
         now,
         resetAt,
-        modelId: "gpt-5.3-codex-spark",
+        modelId: "gpt-5.6-sol",
       });
+      // State-only Reserve evidence: no Reserve dispatch or entitlement grant is asserted.
       recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
         now,
         resetAt,
-        modelId: "gpt-5.6-terra",
+        modelId: "gpt-reserve",
       });
 
       const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
       Date.now = () => probeAt;
-      const sparkProbe = await resolveCodexAuthContext(headers, cfg, "pool", {
-        modelId: "gpt-5.3-codex-spark",
+      const sharedProbe = await resolveCodexAuthContext(headers, cfg, "pool", {
+        modelId: "gpt-5.6-sol",
       });
-      expect(sparkProbe).toMatchObject({
+      expect(sharedProbe).toMatchObject({
         kind: "pool",
-        probeQuotaScope: "spark",
+        probeQuotaScope: "shared",
       });
 
       recordCodexUpstreamOutcome(cfg, "pool-a", 200, {
         now: probeAt + 1,
-        modelId: "gpt-5.3-codex-spark",
-        probeLeaseId: (sparkProbe as { probeLeaseId?: string }).probeLeaseId,
-        probeQuotaScope: (sparkProbe as { probeQuotaScope?: "spark" }).probeQuotaScope,
+        modelId: "gpt-5.6-sol",
+        probeLeaseId: (sharedProbe as { probeLeaseId?: string }).probeLeaseId,
+        probeQuotaScope: (sharedProbe as { probeQuotaScope?: "shared" }).probeQuotaScope,
       });
 
       Date.now = () => probeAt + 1;
-      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-sol" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-luna" }))
-        .resolves.toMatchObject({ kind: "pool", probeQuotaScope: "shared" });
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+      expect(getCodexQuotaHealthSnapshot("pool-a", "reserve", probeAt + 1)).not.toBeNull();
     } finally {
       Date.now = originalNow;
     }
@@ -2287,12 +2341,12 @@ describe("cooldown error surface", () => {
       "acct_9f3c21",
       Date.parse("2026-07-26T10:00:00.000Z"),
       "reset-derived",
-      "spark",
+      "reserve",
     );
 
     const message = cooldownErrorMessage(err);
 
-    expect(message).toContain("Spark quota is cooling down");
+    expect(message).toContain("Reserve quota is cooling down");
     expect(message).not.toContain("Selected Codex account (account-…3c21) is cooling down");
   });
 

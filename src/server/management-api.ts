@@ -1,3 +1,4 @@
+import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../codex/catalog";
@@ -143,10 +144,35 @@ async function handleQuotaResetRoutesOnDemand(ctx: ManagementContext): Promise<R
   return handleQuotaResetRoutes(ctx);
 }
 
+/**
+ * Lazy like the Lab and routing-profile handlers, and for the same recorded reason: this file is
+ * mounted for every dashboard request, so a static import would put the workflow-budget ledger
+ * on all of them.
+ */
+async function handleWorkflowBudgetRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/workflow-budget", true)) return null;
+  const { handleWorkflowBudgetRoutes } = await import("./management/workflow-budget-routes");
+  return handleWorkflowBudgetRoutes(ctx);
+}
+
 async function handleGrokCouponRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/grok/reset-coupons", true)) return null;
   const { handleGrokCouponRoutes } = await import("./management/grok-coupon-routes");
   return handleGrokCouponRoutes(ctx);
+}
+
+async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/remote-workspace")) return null;
+  if (!remoteWorkspaceEnabled(ctx.config)) {
+    return Response.json({ available: false, reason: "Remote Workspace requires Hub mode and OCX_REMOTE_WORKSPACE_ENABLED=1.", devices: [], runtimes: {}, sessions: [] }, {
+      status: ctx.req.method === "GET" ? 200 : 404, headers: { "cache-control": "no-store" },
+    });
+  }
+  if (ctx.req.method !== "GET" && ctx.principal !== "gui-session") {
+    return Response.json({ error: "A dashboard session is required for Remote Workspace changes." }, { status: 403 });
+  }
+  const { handleRemoteWorkspaceRoutes } = await import("./management/remote-workspace-routes");
+  return handleRemoteWorkspaceRoutes(ctx);
 }
 
 export async function handleManagementAPI(
@@ -242,11 +268,13 @@ export async function handleManagementAPI(
   let routed: Response | null;
   try {
     routed = handleSessionRoutes(ctx)
+    ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
     ??     (await handleConfigRoutes(ctx))
     ??     (await handleStorageLogGuardRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
+    ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleGrokCouponRoutesOnDemand(ctx))
     ??     (await handleRoutingAnalyticsRoutes(ctx))
     ??     (await handleRoutingProfileRoutesOnDemand(ctx))
@@ -388,6 +416,13 @@ export async function handleManagementAPI(
   }
 
   if (url.pathname.startsWith("/api/codex-auth/")) {
+    // Native-main device reauth (#3898): a dedicated namespace the generic
+    // codex-auth dispatch must not swallow (it would 404 as an unknown pool
+    // route). Same management origin/auth/session wrapping as every /api/*.
+    if (url.pathname === "/api/codex-auth/main/reauth-device") {
+      const { handleMainDeviceReauthAPI } = await import("../codex/main-device-reauth-api");
+      return handleMainDeviceReauthAPI(req, url, config);
+    }
     const { handleCodexAuthAPI } = await import("../codex/auth-api");
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");

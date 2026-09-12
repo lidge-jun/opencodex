@@ -38,6 +38,13 @@ import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, ha
 import { nextAtomicTempSequence } from "../../src/config/atomic-write";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { DEFAULT_SUBAGENT_MODELS, migrateSubagentModels } from "../../src/config/subagent-models";
+import {
+  MULTI_AGENT_SURFACE_ADVISORY_VERSION,
+  SUBAGENT_SURFACE_GUIDE_URL,
+  multiAgentSurfaceAdvisory,
+  multiAgentSurfaceAdvisoryRequired,
+  resolveMultiAgentMode,
+} from "../../src/config/multi-agent-surface";
 import { migrateStartupSubagentModels } from "../../src/server/subagent-models-startup";
 import { migrateXaiResponsesDefault } from "../../src/providers/xai-responses-opt-in";
 import { migrateStartupXaiResponses } from "../../src/server/xai-responses-startup";
@@ -83,6 +90,102 @@ afterEach(() => {
 function backupNames(): string[] {
   return readdirSync(testDir).filter(name => name.startsWith("config.json.invalid-"));
 }
+
+describe("sub-agent surface default and advisory", () => {
+  test("a fresh config ships v1 and has nothing to advise", () => {
+    const config = getDefaultConfig();
+    expect(config.multiAgentMode).toBe("v1");
+    expect(resolveMultiAgentMode(config)).toBe("v1");
+    expect(config.multiAgentSurfaceAdvisoryVersion).toBe(MULTI_AGENT_SURFACE_ADVISORY_VERSION);
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(false);
+  });
+
+  test("an absent key still resolves to base, which is what raises the advisory", () => {
+    const config = getDefaultConfig();
+    delete config.multiAgentMode;
+    delete config.multiAgentSurfaceAdvisoryVersion;
+    expect(resolveMultiAgentMode(config)).toBe("default");
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(true);
+  });
+
+  test.each(["default", "v2"] as const)("an unanswered %s install is advised", mode => {
+    const config = { ...getDefaultConfig(), multiAgentMode: mode };
+    delete config.multiAgentSurfaceAdvisoryVersion;
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(true);
+    expect(multiAgentSurfaceAdvisory(config)).toEqual({
+      required: true,
+      mode,
+      recommended: "v1",
+      version: MULTI_AGENT_SURFACE_ADVISORY_VERSION,
+      docsUrl: SUBAGENT_SURFACE_GUIDE_URL,
+    });
+  });
+
+  test("answering it silences the notice without moving the mode", () => {
+    const config = {
+      ...getDefaultConfig(),
+      multiAgentMode: "v2" as const,
+      multiAgentSurfaceAdvisoryVersion: MULTI_AGENT_SURFACE_ADVISORY_VERSION,
+    };
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(false);
+    expect(multiAgentSurfaceAdvisory(config).mode).toBe("v2");
+  });
+
+  test("a stale acknowledgement is advised again", () => {
+    expect(multiAgentSurfaceAdvisoryRequired({
+      multiAgentMode: "v2",
+      multiAgentSurfaceAdvisoryVersion: MULTI_AGENT_SURFACE_ADVISORY_VERSION - 1,
+    })).toBe(true);
+  });
+
+  test("v1 is silent whatever the stored acknowledgement", () => {
+    expect(multiAgentSurfaceAdvisoryRequired({ multiAgentMode: "v1" })).toBe(false);
+    expect(multiAgentSurfaceAdvisoryRequired({ multiAgentMode: "v1", multiAgentSurfaceAdvisoryVersion: 0 })).toBe(false);
+  });
+
+  test("the fresh default survives save and load", () => {
+    saveConfig(getDefaultConfig());
+    const loaded = loadConfig();
+    expect(loaded.multiAgentMode).toBe("v1");
+    expect(loaded.multiAgentSurfaceAdvisoryVersion).toBe(MULTI_AGENT_SURFACE_ADVISORY_VERSION);
+  });
+
+  test("a hand-edited version degrades to an unanswered advisory, keeping providers", () => {
+    writeConfig({ ...getDefaultConfig(), multiAgentMode: "v2", multiAgentSurfaceAdvisoryVersion: "soon" });
+    const loaded = loadConfig();
+    expect(loaded.providers.openai).toEqual(getDefaultConfig().providers.openai);
+    expect(loaded.multiAgentSurfaceAdvisoryVersion).toBeUndefined();
+    expect(multiAgentSurfaceAdvisoryRequired(loaded)).toBe(true);
+  });
+
+  test("a repaired config keeps the surface its operator chose", () => {
+    // A config that reaches the repair path only because it lost an unrelated field must
+    // not be handed the new v1 default underneath: that would change a setting silently.
+    const stored = { ...getDefaultConfig() } as Record<string, unknown>;
+    delete stored.defaultProvider;
+    delete stored.multiAgentMode;
+    delete stored.multiAgentSurfaceAdvisoryVersion;
+    writeConfig(stored);
+
+    const loaded = loadConfig();
+    expect(loaded.defaultProvider).toBe("openai");
+    expect(loaded.multiAgentMode).toBeUndefined();
+    expect(resolveMultiAgentMode(loaded)).toBe("default");
+    expect(loaded.multiAgentSurfaceAdvisoryVersion).toBeUndefined();
+    expect(multiAgentSurfaceAdvisoryRequired(loaded)).toBe(true);
+  });
+
+  test("a repaired v2 config is still v2", () => {
+    const stored = { ...getDefaultConfig(), multiAgentMode: "v2" } as Record<string, unknown>;
+    delete stored.defaultProvider;
+    delete stored.multiAgentSurfaceAdvisoryVersion;
+    writeConfig(stored);
+
+    const loaded = loadConfig();
+    expect(loaded.multiAgentMode).toBe("v2");
+    expect(multiAgentSurfaceAdvisoryRequired(loaded)).toBe(true);
+  });
+});
 
 describe("Astra-first subagent upgrade", () => {
   const defaults = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"];
@@ -777,6 +880,19 @@ describe("opencodex config defaults", () => {
     });
   });
 
+  test("codex safety-buffering header drop is an explicit top-level opt-in", () => {
+    const defaults = getDefaultConfig();
+    expect(defaults.dropCodexSafetyBuffering).toBe(false);
+    expect(validateConfigCandidate({ ...defaults, dropCodexSafetyBuffering: true })).toMatchObject({
+      ok: true,
+      config: { dropCodexSafetyBuffering: true },
+    });
+    expect(validateConfigCandidate({ ...defaults, dropCodexSafetyBuffering: "yes" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("dropCodexSafetyBuffering"),
+    });
+  });
+
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {
     const defaults = getDefaultConfig();
     expect(defaults.managementUsageMaxReadBytes).toBe(64 * 1024 * 1024);
@@ -1211,6 +1327,46 @@ describe("opencodex config defaults", () => {
       expect(validateConfigCandidate({ ...base, agentTaskRecovery: invalid })).toMatchObject({
         ok: false,
         error: expect.stringContaining("agentTaskRecovery"),
+      });
+      expect(backupNames()).toEqual([]);
+    }
+  });
+
+  test("plaintextV2AgentMessages is explicit and degrades invalid hand edits", () => {
+    const base = {
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+        },
+      },
+      defaultProvider: "custom",
+    };
+    expect(getDefaultConfig().plaintextV2AgentMessages).toBeUndefined();
+
+    writeConfig({ ...base, plaintextV2AgentMessages: true });
+    expect(loadConfig()).toMatchObject({ ...base, plaintextV2AgentMessages: true });
+    expect(validateConfigCandidate({ ...base, plaintextV2AgentMessages: true })).toMatchObject({
+      ok: true,
+      config: { plaintextV2AgentMessages: true },
+    });
+
+    for (const invalid of [null, "true", 1, {}]) {
+      writeConfig({ ...base, plaintextV2AgentMessages: invalid });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics).toMatchObject({
+        source: "file",
+        error: null,
+        config: base,
+      });
+      expect(diagnostics.config.plaintextV2AgentMessages).toBeUndefined();
+      expect(diagnostics.warnings).toContain(
+        "plaintextV2AgentMessages ignored: expected a boolean",
+      );
+      expect(validateConfigCandidate({ ...base, plaintextV2AgentMessages: invalid })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("plaintextV2AgentMessages"),
       });
       expect(backupNames()).toEqual([]);
     }
@@ -2192,13 +2348,18 @@ describe("opencodex config defaults", () => {
         custom: {
           adapter: "openai-responses",
           baseUrl: "https://example.test/v1",
+          // Retirement removes native Spark policy, not explicit custom-gateway model ids.
           modelPreferHostedTools: { "gpt-5.3-codex-spark": ["image_generation"] },
         },
       },
       defaultProvider: "custom",
     });
-    expect(readConfigDiagnostics().source).toBe("fallback");
-    expect(readConfigDiagnostics().error).toContain("does not support");
+    const retiredCustomModel = readConfigDiagnostics();
+    expect(retiredCustomModel.source).toBe("file");
+    expect(retiredCustomModel.error).toBeNull();
+    expect(retiredCustomModel.config.providers.custom?.modelPreferHostedTools).toEqual({
+      "gpt-5.3-codex-spark": ["image_generation"],
+    });
 
     writeConfig({
       port: 12345,

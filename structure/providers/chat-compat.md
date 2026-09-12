@@ -1,5 +1,27 @@
 # Chat Provider Compatibility
 
+The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+
+Native Codex Spark-specific request exceptions are absent. General Lite and namespace repair
+remain shared [Responses compatibility](../transports/responses.md#responses-httpsse), including
+other providers whose models happen to share a name fragment.
+
+## OpenCode Go chronological instructions
+
+For the registry-recognized OpenCode Go Chat destination and exact model
+`deepseek-v4.1-flash`, `src/adapters/openai-chat.ts` keeps text-only timeline
+developer messages in place as system messages. Appending a reminder therefore
+does not hoist new text into the leading system prompt and rewrite the existing
+serialized message prefix. Pending tool results still precede deferred reminders.
+The base system prompt, vision conversion and native OpenAI developer roles retain
+their existing behavior; other Chat destinations and models retain leading-system
+folding. This is independent of the Claude trailing-notice stabilization option
+and does not guarantee upstream cache hits. Regression coverage is in
+`tests/adapters/openai/openai-chat-system-order.test.ts`.
+
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
+
 ## Reasoning and tool-result compatibility
 
 Kiro groups only consecutive original-message tool results whose raw call ID exactly matches
@@ -22,7 +44,9 @@ content converter after validation and imports no optional subsystem.
 Stateful developer-guidance injection reuses that validator for its raw insertion
 boundary, so parsed messages and stored raw history retain the same task/guidance order.
 
-Native OpenAI passthrough sanitizes routed reasoning history so `reasoning` input items do not send
+Native OpenAI passthrough consults the existing configured capability ladder before forwarding
+`reasoning_effort`; an explicitly empty ladder removes that unsupported control while an unknown
+ladder remains unclassified. It also sanitizes routed reasoning history so `reasoning` input items do not send
 non-empty `content` arrays to upstream models that reject them. Chat Completions bridging repairs
 orphan `toolResult` messages by inserting a synthetic assistant `tool_call` before tool messages.
 It also repairs the opposite direction (260718): an assistant `tool_calls` round left dangling —
@@ -37,6 +61,11 @@ so each oversized id and all matching call/output items receive the same determi
 request-local alias. Raw API-key continuations deliberately preserve ids because an output-only
 continuation may reference a call stored upstream under its original id; proxy-expanded API-key
 replays are explicit and receive the same repair.
+
+Separately, Meta Muse Responses (`src/responses/muse-tool-name-alias.ts`) aliases function *tool
+names* that exceed 64 characters or contain characters outside `[a-zA-Z0-9_-]` on `api.meta.ai`
+only. That map is not the call-id repair: it covers tools, `additional_tools`, history calls, and
+`tool_choice`, then restores original names inbound.
 
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
@@ -62,8 +91,9 @@ boundary so the proxy does not retain request state across the whole stream. Thi
 pre-flight is the primary path and covers threads the process has served while their record remains
 inside the TTL/LRU bounds. Missing, expired, evicted, and
 pre-process history stays fail-soft on the first send. If a Responses upstream then returns its own
-self-identifying opaque-blob 4xx (`invalid_encrypted_content`, or xAI's two `invalid-argument`
-decoder errors), the proxy rebuilds once through the same sanitation path: reasoning
+self-identifying opaque-blob 4xx (`invalid_encrypted_content`, a reasoning `encrypted_content`
+that "was not issued to this caller" (#4469), or xAI's two `invalid-argument` decoder errors),
+the proxy rebuilds once through the same sanitation path: reasoning
 `encrypted_content` is removed and compaction blobs use the existing text degradation. A one-shot
 guard makes a second rejection terminal, and a successful recovery records the current serving
 identity so later route changes return to deterministic pre-flight. A cold-record cross-backend
@@ -215,18 +245,13 @@ honored by BOTH reasoning paths: anthropic `thinking_delta` AND raw `reasoning_r
 item (`summary: []`, txt-only `ocxr1:` `encrypted_content`, no text deltas) — invisible in the
 Codex app, so tool cells group like native models — while the text still round-trips for
 `preserveReasoningContentModels` replay. Visible mode (summary "auto") keeps the raw
-`content[reasoning_text]` shape. Diagnosis and codex-rs grouping evidence:
-`devlog/_fin/260709_native_response_pattern/`.
-
-The content-to-summary channel rewrite skips any reasoning item that carries a native
-`encrypted_content` blob. The blob is opaque, state-bearing provider data, so the item must
-round-trip unchanged unless that backend has an explicit replay contract permitting a rewrite.
-This defensively protects providers that issue blobs and later join the route through
-`preserveReasoningContentModels`. The rewrite's round trip was verified against DeepSeek, which is
-`statelessResponses` and issues no blob. Grok is unaffected in practice because it natively emits
-summary-channel reasoning and no `reasoning_text` events, so this content-to-summary item rewrite
-does not engage on its route. Only the stored item is exempt — `reasoning_text` delta events carry
-no blob and still route to the summary channel, so the live expandable trace is unchanged.
+`content[reasoning_text]` shape: raw deltas stream as `response.reasoning_text.delta` and the final
+item carries `content: [{type: "reasoning_text", text}]`, so Codex applies its own display policy —
+the desktop thinking band shows the "Thinking…" placeholder, and raw text appears only when
+`show_raw_agent_reasoning` is enabled. Routing raw CoT through the summary channel instead (the
+#45 display intent, intentionally reverted 260911) put unsummarized thinking in the desktop band,
+which only fits native OpenAI providers that author real summaries. Diagnosis and codex-rs
+grouping evidence: `devlog/_fin/260709_native_response_pattern/`.
 
 The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
 thread plus an exact provider destination, wire adapter, final model, and physical credential
@@ -264,3 +289,53 @@ fragments are not guessed onto pending ID-only calls.
 parallel/colliding identities, distinct unsafe raw JSON index literals, the maximum
 safe-integer boundary, invalid index types, missing/null continuations and UTF-8
 byte-limit boundaries.
+
+Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
+
+Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+## Anthropic parallel tool use
+
+`options.parallelToolCalls === false` maps onto Anthropic's nested
+`tool_choice.disable_parallel_tool_use`. Because the flag lives inside
+`tool_choice`, a request that carries only the parallel intent and no explicit
+choice gets a synthesized `{type:"auto"}` so the flag has somewhere to live;
+`required` maps to `{type:"any"}` and a named choice to `{type:"tool"}`, and both
+accept it. `{type:"none"}` does not receive the flag because tool use is already off,
+and a request with no tools on the wire emits no `tool_choice` at all. An unset or
+true `parallelToolCalls` is byte-identical to previous behavior.
+
+The flag constrains the model's output, not execution ordering. Sequential tool use
+is enforced by the caller's own loop returning each `tool_result` before issuing the
+next request; this mapping does not provide that.
+## Unmapped modalities are recorded, not dropped
+
+The translated Chat route has no video mapping — this adapter does not implement one.
+Both serialization branches emit a bounded marker for a video part: the image-bearing
+branch previously produced `{type:"text", text: undefined}`, a malformed part, and the
+text-only branch joined it to `""` so a video-only or text-plus-video message was
+dropped entirely. The marker names opencodex's own missing mapping; it does not assert
+anything about the provider's or model's capability, which the proxy has not
+established. Native Chat passthrough and Google inline video are separate routes and
+are unaffected.
+
+`input_audio` parts are recognized in the shared Responses parser and recorded as a
+presence marker in the translated IR. This is **presence only and not audio support**:
+the IR has no audio carrier and no adapter consumes one. The parser stays non-throwing
+because the native Responses passthrough also runs through `parseRequest` before the
+adapter forwards `_rawBody`, so refusing there would regress raw passthrough.
+
+The final registered adapter also checks the original input under the
+[untranslated-media contract](../adapters/registry.md#untranslated-input-media). Audio/file
+attachments cannot succeed merely because the normalized representation retained a text
+marker: translated adapters refuse them, while native Responses retains the original body.
+Chat conversion rejects recognized audio/file parts before projection; the native Chat wire
+is unchanged. No audio/file transport or automatic URL fetch is added, and no client filename,
+payload, URL or metadata is included in the new error messages.
+
+The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images as
+real image blocks rather than flattening them to the text `[image]`, and orders image
+blocks chronologically — history before current — so attachment order matches the
+prose the model reads beside them. Vendor tool execution stays disabled on both
+adapters, and Qoder's explicit refusal of original images is unchanged.
+
+Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.

@@ -240,7 +240,7 @@ Codex pool 계정 하나의 선택 순서를 읽거나 설정합니다. **값이
 순서는 어떤 계정을 먼저 볼지 정할 뿐 어떤 계정을 쓸 수 있는지는 정하지 않습니다. 선택은 여전히
 적격한 계정 안에서 이루어지며, quota 여유가 남은 최상위 tier를 고른 뒤 그 안은
 `accountPoolStrategy`가 정합니다. 일시 중지, cooldown, 재인증에는 영향을 주지 않습니다. 변경은 새 세션뿐 아니라 **다음 미바인딩 요청** 부터 적용됩니다. 상위 순서에 여유가 돌아오면 preemption이
-미바인딩 요청을 곧바로 끌어올립니다. 이미 계정에 바인딩된 thread는 보통 그 계정이 소진될 때까지 유지하지만, 재인증 실패나 quota cooldown, 연속된 일시적 실패는 그보다 먼저 바인딩을 해제합니다. 받아들여진 쓰기는 어떤 계정에 걸려 있든 수동 "지금 이 계정 사용" 고정도 해제합니다. 이미 설정된 순서를 그대로 쓰는 경우에도 마찬가지이며, 이는 현재 선택된 계정을 그대로 두고 고정만 해제하는 유일한 방법입니다(관리 API로 활성 계정을 비우면 고정도 풀리지만 그 선택까지 사라집니다). 프록시에 연결할 수 없거나, 없는
+미바인딩 요청을 곧바로 끌어올립니다. 이미 계정에 바인딩된 thread는 보통 그 계정이 소진될 때까지 유지하지만, 재인증 실패나 quota cooldown은 그보다 먼저 바인딩을 해제할 수 있습니다. 연속된 일시적 실패는 더 이상 live 바인딩을 삭제하지 않습니다. 받아들여진 쓰기는 어떤 계정에 걸려 있든 수동 "지금 이 계정 사용" 고정도 해제합니다. 이미 설정된 순서를 그대로 쓰는 경우에도 마찬가지이며, 이는 현재 선택된 계정을 그대로 두고 고정만 해제하는 유일한 방법입니다(관리 API로 활성 계정을 비우면 고정도 풀리지만 그 선택까지 사라집니다). 프록시에 연결할 수 없거나, 없는
 계정 id, 허용되지 않는 값은 모두 종료 코드 1입니다. `--json`은 다음을 반환합니다.
 
 ```text
@@ -308,9 +308,14 @@ ocx account main doctor [--json]
 ocx account main list [--json]
 ocx account main register <label> [--json]
 ocx account main add <label>
+ocx account main reauth --device [--no-wait] [--json]
+ocx account main reauth status --flow <id> [--json]
+ocx account main reauth cancel --flow <id> [--json]
 ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
+
+`ocx account main reauth --device --no-wait --json`은 성공 시 stdout에 JSON 객체 하나만 출력하며, 사람이 읽는 `follow up:` 안내 줄은 출력하지 않습니다. 반환된 `flowId`를 `ocx account main reauth status --flow <id> --json`에 지정하면 진행 상태를 확인할 수 있습니다.
 
 각 변경 명령은 실행 중인 프록시가 반환한 정규화된 유효 `CODEX_HOME`을 표시합니다. 이 경로는
 호출자의 `CODEX_HOME`과 다를 수 있으며, JSON을 지원하는 명령은 같은 값을
@@ -364,3 +369,11 @@ ocx models remove deepseek/deepseek-v4 --yes
 슬래시가 있는 모델 선택기는 라우팅됩니다(`anthropic/claude-opus-5`). 슬래시가 없는 id는 native OpenAI 모델로 취급되므로, 라우팅된 것처럼 보일 수 있는 id에 대해 그 읽기를 강제하려면 `--native`가 필요합니다.
 
 `--modalities`는 `text`, `image`, `audio`만 허용합니다. Codex는 이 필드를 닫힌 enum으로 해석하고 다른 값이 하나라도 있으면 카탈로그 전체를 거부하므로, `add`, `edit`, 관리 API는 나중에 카탈로그 작성기가 정리해야 할 값을 저장하지 않도록 잘못된 값을 바로 거부합니다(#759).
+
+### 저장된 쿼터 기록
+
+`ocx account history openai <pool-account-id> [--limit 1-200] [--json]`은 제공자에게 요청하지 않고 저장된 관측을 읽습니다. 관측 시각, WHAM·응답 헤더 출처, 한도 종류와 사용률을 구분해 표시합니다. 계정마다 최대 200개를 30일간 보관하며 전체 저장량에도 제한이 있습니다.
+
+일반 토큰 갱신은 기록을 유지합니다. 재로그인·삭제·계정 교체는 이전 기록과 분리합니다. 네이티브 메인 계정과 로그인 저장 전 조회는 포함하지 않습니다. 기록이 없다는 것은 관측 부족이며 사용량 0을 뜻하지 않습니다. 이 명령은 쿼터를 소비하지 않습니다. 관측을 바탕으로 한 용량 추정에는 아래 한계가 적용됩니다.
+
+같은 초기화 구간의 관측과 계정별 사용 기록이 있으면 보고된 토큰 기준 용량 추정도 표시합니다. 표본 수와 낮은 신뢰도를 함께 표시하며, 쿼터 반올림·외부 사용량·로그 라벨 유지 여부 때문에 제공자의 실제 토큰 한도와 다를 수 있습니다. 기록이 없거나 잘렸으면 근거 부족으로 표시합니다. `--limit`은 표시할 기록 수만 제한하며 추정 입력은 전체 보관 범위입니다.

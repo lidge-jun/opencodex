@@ -22,6 +22,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // than prose. Translating it would invent a difference the UI does not have.
   "models.aliasAuto",
   "common.github",
+  // Product names and ordinary French words whose correct spelling is identical to English.
+  "remote.pairingCommandWindows",
+  "remote.sessions",
+  "remote.prompt",
   // A filename and a product name. "AGENTS.md" is the literal file Codex reads,
   // and translating "Plugins" would invent a difference French does not have.
   "codexSet.layer.agents-md",
@@ -88,6 +92,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.tab.codex",
   "integrations.tab.claude",
   "integrations.tab.grok",
+  // Product name for the remote hub; French keeps the same word.
+  "connection.pairing.hub",
   // Cursor product names and the two field labels Cursor's own gateway form renders in English.
   "integrations.tab.cursor",
   "integrations.cursor.title",
@@ -136,6 +142,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "claudeDesktop.supports1m",
   "claudeDesktop.effort.supported",
   // Correct French words whose spelling is identical to English.
+  // "Code" is the same word in French, and the surrounding device-reauth copy already
+  // uses it ("code appareil", "Code de l'appareil"). Inventing a different label just
+  // to make the strings differ would be worse copy for a French reader.
+  "codexAuth.mainReauthCode",
   "routing.exclusions",
   "routing.score",
   "dash.actions",

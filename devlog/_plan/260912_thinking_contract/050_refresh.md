@@ -1,0 +1,5 @@
+# Integration conflict repair
+
+Parent explicitly requests own hint branch latest-dev integration with independent resolution-only audit and no-verify push. Latest fetched dev ca5ac39124671ee05349e7873231f672824ea26c also conflicts with presentation; preserve all three independent dev-based PRs. Most collisions are adjacent structure-document additions; core received continuation recovery changes that must survive. No source PR/other worktree modifications or merges into dev. Rebase only owned branches, preserve pre-rebase refs in ignored evidence and compare range-diff; use explicit expected old remote SHA with force-with-lease plus --no-verify. This is branch refresh, not native restacking. Product tests remain NOT RUN.
+
+Prior D: Spark source audit PASS; hosted tests remain pending. Refresh is a subtask of the already-active delivery cycle; no separate cycle is claimed. MODIFY conflict paths only, retaining source contracts and new dev changes. Verification: git range-diff, git diff --check, docs source validator, independent resolution-only review; hosted tests rerun only on refreshed final heads.

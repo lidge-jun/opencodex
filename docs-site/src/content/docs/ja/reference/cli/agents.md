@@ -69,6 +69,8 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ocx observe usage --range 30d --json
 ```
 
+一部の使用履歴を集計できない場合、人向けの出力は読み取れる行がない場合も警告を表示します。表示される合計値は読み取れる記録のみを反映します。フィルターに一致する読み取れる記録がない場合は、合計欄の代わりに警告と案内を表示します。除外した記録には一致するものが含まれる可能性があります。`--json` は応答の `usageIncomplete` 診断と理由をそのまま保持します。
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 実行中のプロキシの管理 API を通じて、ランタイム デバッグ オーバーライドを読み取りまたは変更します。
@@ -181,6 +183,8 @@ opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex �
 ### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 ヘッドレス ランタイムの設定、起動、同期、診断、更新を管理します。
+
+`ocx system codex-restart --yes` は `ocx sync --restart-codex` と同じモジュールで Codex app-server を再起動し、デスクトップ アプリも完全に終了して再起動します。プロキシ自体が Codex アプリ内で動いている場合、完了できない引き渡しを約束せず、実行可能な案内とともに拒否します。
 
 ```bash
 ocx system settings --stream-mode eager-relay

@@ -147,7 +147,10 @@ describe("describeImageRouted unit", () => {
       apiKey: "routed-key",
       noVisionModels: ["text-model"],
     };
-    const vlm: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://vlm.test/v1", apiKey: "k" };
+    const vlm: OcxProviderConfig = {
+      adapter: "openai-chat", baseUrl: "https://vlm.test/v1", apiKey: "k",
+      modelInputModalities: { "qwen-vl": ["text", "image"] },
+    };
     const request = parseRequest({
       model: "routed/text-model",
       input: [{
@@ -292,7 +295,7 @@ describe("chat-surface recursion fence (full path)", () => {
     }
   });
 
-  test("routed describer end-to-end: image described via loopback before the text-only main call", async () => {
+  test("routed describer end-to-end: declared text-only main target receives only the caption", async () => {
     const mainBodies: string[] = [];
     const describerBodies: string[] = [];
     upstream = Bun.serve({
@@ -332,7 +335,7 @@ describe("chat-surface recursion fence (full path)", () => {
           baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
           allowPrivateNetwork: true,
           apiKey: "k",
-          noVisionModels: ["text-only"],
+          modelInputModalities: { "text-only": ["text"] },
         },
         vision: {
           adapter: "openai-chat",
@@ -374,4 +377,13 @@ describe("chat-surface recursion fence (full path)", () => {
       server.stop(true);
     }
   });
+});
+
+
+test("explicit routed image capability enables a describer despite stale legacy metadata", () => {
+  const main: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://main.test/v1", modelCapabilities: { blind: { inputModalities: ["text"] } } };
+  const helper: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://helper.test/v1", noVisionModels: ["vision"], modelCapabilities: { vision: { inputModalities: ["text", "image"] } } };
+  const parsed = parseRequest({ model: "main/blind", input: [{ role: "user", content: [{ type: "input_image", image_url: PNG_DATA_URL }] }] });
+  const plan = planVisionSidecar({ port: 10100, defaultProvider: "main", providers: { main, helper }, visionSidecar: { enabled: true, backend: "routed", model: "helper/vision" } } as OcxConfig, main, "blind", parsed);
+  expect(plan?.backend).toBe("routed");
 });

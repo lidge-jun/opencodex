@@ -54,6 +54,8 @@ export interface CodexAccountEntry {
   };
   mainAccountHardLock?: MainAccountHardLockStatus;
   needsReauth?: boolean;
+  selectionExcludedReason?: "plan_excluded";
+  selectionExcludedPlan?: string;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;

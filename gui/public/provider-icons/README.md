@@ -120,7 +120,9 @@ at 20px.
   the docs site is the reachable first-party vector. Windsurf does publish
   `windsurf.com/favicon.svg` — a plated `W` — but that names the retired brand
   for a provider labelled Cognition. Multi-colour gradient, so it is drawn as an
-  image and is not a candidate for the masked set.
+  image and is not a candidate for the masked set. The single icon serves the
+  merged `devin` provider; the former `devin-cli` row was folded into it and
+  remains only as a deprecated alias, so no second mapping is needed.
 
 - `gajae-code.svg` — traced 2026-08-31 from `Yeachan-Heo/gajae-code`
   `assets/character.png` (3190496 bytes, 1550x2048 RGBA), the mascot. No SVG

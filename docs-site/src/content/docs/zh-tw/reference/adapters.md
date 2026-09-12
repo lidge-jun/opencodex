@@ -169,12 +169,13 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
 ## `devin`
 
 **目標：** Cognition 的 `exa.api_server_pb.ApiServerService/GetChatMessage`（`server.codeium.com`，Connect 串流）。
-**認證：** 來自 `provider.apiKey` 或轉送 authorization 標頭的 Devin/Cognition API 金鑰。登入會開啟 Auth0 瀏覽器頁面，再透過 `SeatManagementService.RegisterUser` 換取長期金鑰。
+**認證：** 來自 `provider.apiKey` 或轉送 authorization 標頭的 Devin/Cognition API 金鑰。登入會先嘗試匯入已安裝 Devin CLI 已持有的憑證：`devin auth login` 會完成 CLI 自身的 PKCE 登入並把 `devin-session-token` 寫入它自己的 `credentials.toml`，這與 `SeatManagementService.RegisterUser` 為瀏覽器登入簽發的憑證相同。沒有可用的 CLI 憑證時，登入回退到 Auth0 瀏覽器頁面，再透過 `RegisterUser` 把貼上的權杖換成長期金鑰。`devin-cli` 僅作為已棄用的別名保留：`ocx login devin-cli` 仍會路由到 `devin`，以舊 id 儲存的設定會在啟動時被重寫。
 
 - 使用 `runTurn` 而非一般的 fetch/parse 路徑。請求與伺服器事件由 `devin/cloud-direct/wire.ts` 手寫的 protobuf 分幀處理。
 - 以 `GetCascadeModelConfigs` 依帳號取得模型；方案未涵蓋的模型在清單階段就被濾除。
 - Cognition 對工具說明設有長度上限與完全比對的封鎖清單。轉接器會改寫已知語句並截斷過長說明。
 - 金鑰不會更新。失效後請重新執行 `ocx login devin`。
+- 即使走 CLI 匯入路徑，本機的也只有憑證，請求本身無論哪條路徑都發往 Cognition。早期版本曾在 `devin-cli` id 下提供第二個轉接器，把請求作為對本機 `devin acp` 子行程的 Agent Client Protocol 工作階段來執行，現已移除。仍引用該轉接器的已儲存設定會在啟動時重寫為 `devin`，包括 `"devin-acp"` 這類自訂名稱的列。
 
 ## `azure-openai`（別名：`azure`）
 

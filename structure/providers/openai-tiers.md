@@ -1,5 +1,8 @@
 # OpenAI Provider Account Modes
 
+The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+
 This current contract supersedes the provider-identity and account-selection sections of
 `devlog/_fin/260717_openai_hardening`; that archived unit remains historical evidence for the
 earlier three-tier implementation. The replacement contract and its verification evidence live in
@@ -68,22 +71,45 @@ support them.
 
 > Decision record: [ADR-0084](../decisions/ADR-0084-public-provider-contract.md)
 
-Pool affinity preserves the existing `x-codex-parent-thread-id` supplied by ordinary Codex clients.
-The parent id is trimmed and bounded under the same 512-byte component limit as the Desktop
-fallback. When Codex Desktop omits it or sends an unusable value, the complete bounded `session-id`
-plus `thread-id` pair is mapped to an opaque HMAC under a random process-local key. Missing or
-oversized components remain unbound, raw identifiers and durable hashes are never stored, and
+Pool affinity keys every Codex V2 thread as itself. A request carrying `thread-id` maps to an
+opaque `app:HMAC(session-id ?? x-codex-parent-thread-id, thread-id)` under a random process-local
+key, so a root is keyed exactly as before while each child holds an independent binding instead of
+collapsing onto the raw parent id shared by all its siblings. A request naming only
+`x-codex-parent-thread-id` rides that parent's own lane as `app:HMAC(parent, parent)`: one parent
+id still maps to exactly one lane, and no caller-supplied identifier reaches Pool state. Which
+requests bind at all is unchanged -- a bare `thread-id` with neither a session nor a parent has no
+family anchor and stays unbound. Components are trimmed and bounded at 512 bytes, missing or
+oversized values stay unbound, raw identifiers and durable hashes are never stored, and
 account-qualified selectors skip both lookup and mutation. Selection, subagent fallback preview,
 and terminal outcome accounting carry the same key so route planning cannot preview one account
-and authenticate another, and a transient failure clears the binding that actually selected the
-account.
+and authenticate another. A transient-failure streak does not delete the live binding that
+actually selected the account; the request is served by another account while the binding is kept.
+
+`src/codex/lineage.ts` owns that derivation and records the family relation behind it: each
+thread's own conversation key, its immediate parent's thread id, and the transitive root, so a
+grandchild resolves to the same root as its parent. Records are held per authenticated scope (an
+HMAC of the caller's Authorization under the same process-local key), and bounded in both
+dimensions -- idle TTL and an LRU cap on records per scope, and an LRU cap on scopes.
+
+First placement is the only routing decision that consults lineage. A thread that has never bound
+starts on the account CURRENTLY serving its parent, which includes a live transient detour rather
+than the parent's stale home, then on a compatible sibling's current serving account, then on
+ordinary cold placement. An ineligible or dead family account contributes nothing, because a stale
+home is worse than no hint. The child then holds an ordinary binding of its own: a later move of
+the parent does not drag it, and the hint does not move the shared active-account cursor. The same
+module exposes the root lookup other layers use for cost attribution and a lineage-backed
+worker/interactive answer; admission's header-only classification is unchanged and does not yet
+read it.
 
 > Decision record: [ADR-0085](../decisions/ADR-0085-public-provider-contract.md)
 
 An explicit `Retry-After` or an unclassified quota 429 is account-wide. A reset-derived native-model
-429 is advisory and remains within its confirmed quota group: `gpt-5.3-codex-spark` is separate from
-the shared native group (including GPT-5.6 Terra/Luna). This allows a same-account combo to test an
-independent quota without allowing fallbacks that share the exhausted quota.
+429 is advisory and remains within its confirmed quota group: shared native quota (including
+GPT-5.6 Terra/Luna) is separate from exact `gpt-reserve`. Ordinary success cannot clear Reserve.
+Retired Codex Spark windows are suppressed before ingestion, hydration, presence/capacity decisions
+and account/provider DTO projection; generic custom windows remain supported. Spark model-derived
+response quota/reset evidence cannot become shared quota or recovery evidence. Explicit Retry-After
+and credential/transport failures retain their ordinary handling.
 
 `pausedCodexAccountIds` is a persisted Pool eligibility boundary. A paused added account or the
 stable `__main__` alias remains visible for maintenance and quota reads, but is excluded from new
@@ -119,7 +145,7 @@ main and added Pool accounts through their respective credential contracts. Main
 publication keeps the latest successfully published observation authoritative. Pool recovery
 across a credential refresh requires the actual self/joined refresh lineage, not matching
 replacement timestamps. It preserves
-newer failures, independent Spark/Reserve scopes, explicit Retry-After, pause, pin and
+newer failures, independent Reserve scope, explicit Retry-After, pause, pin and
 selection state. Replay and `already_redeemed` are not new-reset evidence. Failed usage
 recovery leaves the cooldown in place and preserves the confirmed consume success;
 retrying usage must not require another credit.
@@ -244,10 +270,12 @@ the auto-switch threshold, cooling down, soft-avoided, paused, or needs reauth; 
 drains a tier, and every tier drained leaves the eligible list untouched. Ordering never admits an
 account that pause, cooldown, health, or reauth already excluded, and never overrides those
 exclusions. It adds no new rebind cause for a bound thread, which still moves only for the reasons it
-already had: a quota-strategy threshold re-evaluation, a failover streak, an account that stopped
-being selectable, or affinity expiry. The stable `__main__` alias carries an order on equal terms with
-added accounts, which is what lets the Desktop login be ordered last. An absent or empty map
-reproduces the prior selection sequence exactly.
+already had: a quota-strategy re-evaluation when `pool.cacheAffinity` is off (threshold) or the bound
+account cannot serve (the default), an account that stopped being selectable, or affinity expiry.
+A transient-failure streak does not delete a live binding. A bound move requires genuine quota
+headroom and strictly lower usage on the destination. The stable `__main__` alias carries an order on
+equal terms with added accounts, which is what lets the Desktop login be ordered last. An absent or
+empty map reproduces the prior selection sequence exactly.
 
 Preemption moves unbound requests back up when a higher tier regains headroom, and it holds the
 runtime cursor only. Under an independent quota scope it must never touch the shared active cursor,
@@ -315,7 +343,7 @@ The historical v1 backup is never overwritten. Restoring the v2 backup intention
 shipped v1 shape; the next startup re-migrates to the same marker-2 bytes.
 
 A pre-existing snapshot that differs from the current config is classified before anything is written
-(`src/config.ts` `classifyOpenAiTierBackup`): a snapshot that parses as a valid pre-migration (v1)
+(`src/config/openai-tier-backup.ts` `classifyOpenAiTierBackup`, re-exported through the `src/config.ts` facade): a snapshot that parses as a valid pre-migration (v1)
 config is a user-intentional rollback point and is copied to a unique
 `config.json.pre-openai-tiers-v1-rollback.<timestamp>.bak` path before startup retries the v2
 migration backup; a snapshot that is unparseable or already tier-v2 is stale and is replaced with a
@@ -323,6 +351,9 @@ warning. The distinction matters because silently discarding a rollback point is
 preserving a stale one would block every later migration.
 
 ## Model and wire identity
+
+Native Spark membership and its model-specific request/tool exceptions are removed; the shared
+[catalog retirement policy](../catalog.md#shared-catalog) preserves historical user selections.
 
 - `openai` exposes one group of bare native Codex ids in Pool and Direct. Changing mode does not
   change catalog, selected, requested, or wire model identity.
@@ -404,6 +435,19 @@ HTTP/SSE, Responses WebSocket, compact, images, search, and vision resolve the s
 There is one mode-aware `openai` forward sidecar candidate; `openai-apikey` is not a ChatGPT-forward
 sidecar candidate and cannot hide a failed Codex credential with separately billed API usage.
 
+`src/server/audio-upstream.ts` uses the same selection for standalone transcription. Explicit
+native Direct auth remains caller-owned; proxy-key-only Direct claims stored main before
+materialization. `src/providers/openai-sidecar.ts` releases quota-probe ownership on every
+materialization or usability failure before transferring a resolved context to its caller.
+Audio reports one terminal upstream outcome after validating the response body; redirects remain
+neutral and client/shutdown cancellation does not manufacture an account failure.
+
+External voice reconnects restrict provider selection as well as exact account selection to the
+original call binding. Credential acquisition accepts a cancellation signal; post-resolution
+materialization checks cancellation before returning ownership. Connectivity-only WebSocket
+completion is neutral: HTTP 101 does not prove inference or quota recovery, and a normal close
+may follow a protocol error. Explicit transport errors/timeouts settle once during cleanup.
+
 The dashboard presents one OpenAI Codex card with accessible Pool/Direct controls and a separate,
 unchanged API-key card. `PATCH /api/providers?name=openai` persists exactly one
 `codexAccountMode`, clears affinity/quota cache, primes only when entering Pool, and does not refresh
@@ -417,9 +461,24 @@ model settings, and noncanonical `openai` rows never receive that recovery path.
 terminal 403 codes as `needsReauth`; generic permission failures remain non-terminal, and a
 successful main usage refresh clears the runtime mark.
 
-## Paginated history writer boundary
+Canonical forwarding alone can apply the optional client-output safety-buffering hint filter;
+API-key and custom forward destinations preserve their metadata. See [Responses transport](../transports/responses.md).
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before artifact changes and compensates detected migration. Failed config restore stops later catalog/history work. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
+
+## Automatic pool plan exclusions
+
+`src/codex/routing/selection.ts` applies optional `codexPool.excludedPlans` to both candidate selection and existing active/affined accounts. An all-excluded pool returns no automatic candidate, including preview and configured-account fallback. Native main remains exempt and unknown plans remain eligible. Explicit account-qualified routes retain pause, credential and entitlement checks while bypassing only this automatic policy.
+
+`src/codex/auth-api/account-list.ts` projects `selectionExcludedReason: "plan_excluded"` and `selectionExcludedPlan` from the routing config, even when a newer display-only WHAM plan could not be persisted. The dashboard and account CLI show the policy reason separately from credential health; renewal clears the derived fields. The automatic next-session action and badge are omitted for excluded rows.
+## Paginated history writer boundary
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+
+The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
+
+Exact [model input declarations](../config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
+
+Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 ## Context relay ownership
 
@@ -453,3 +512,58 @@ separately, nothing is dispatched upstream after either, and notes writes are ne
 Context relay dispatch rechecks the native experimental opt-in after body and credential waits.
 A disabled gate prevents upstream dispatch even when the request entered while enabled. Final
 materialized headers pass the proxy-credential exclusion check before owner matching.
+
+## Quota history publication identity
+
+`src/codex/account-store.ts` assigns each explicit pool credential publication a private random `quotaHistoryIdentity`. Same-account token refresh preserves it, including each alias record's own identity; replacement or deletion retires it. A refresh CAS with a changed upstream account identity rotates the tag and does not propagate that changed identity to old aliases. Credential-only projections omit this metadata.
+
+`capturePoolQuotaWriter` captures the exact dispatched access/account pair and generation. Legacy identity initialization rechecks under the credential mutation lock, persists metadata without advancing credential generation or mutation epoch, and fails to no optional evidence on read/lock/write errors. Append admission uses the captured generation and tag; history retention compares the tag across ordinary refresh. Native main is excluded from this pool proof. These interfaces supply the bounded observation layer; the identity alone is neither a quota sample nor proof of capacity.
+
+## Bounded pool quota observations
+
+`src/codex/quota-history.ts` retains at most 200 raw observations per stored pool account for 30 days, bounded globally to 64 identities, 4096 observations and 2 MiB. `src/codex/quota.ts` persists these alongside the latest quota cache; the file reader caps allocation at 4 MiB and rejects nonregular/oversized input. Invalid history envelopes are discarded without blocking inference. Atomic cache replacement is best-effort single-writer persistence, not cross-process merging.
+
+WHAM and response-header producers pass the exact captured pool writer, including refreshed replay and compact outcomes. Admission rechecks credential generation and publication UUID. Same-account refresh preserves prior history; replacement/removal invalidates it. Raw invalid percentages discard the entire trusted observation before display clamping; carried windows, reset credits alone, native main and staged-login probes never become durable pool history.
+
+`GET /api/codex-auth/quota/history` and `ocx account history openai <pool-account-id>` read only cached, identity-checked observations. The optional limit is 1–200. Public results omit the internal publication UUID and credential generation. These observations are inputs for capacity estimation; percentages alone do not establish absolute token capacity.
+
+## Observed effective token capacity
+
+`src/codex/quota-capacity.ts` joins raw account-family observations with reported single-send usage attempts wholly contained within matching, unexpired reset intervals. Source, window duration and monthly-primary provenance must match; percentage delta must be at least one point. Duplicate request/attempt identities never multiply usage. Local, estimated, multi-send, independent-model and absent-attempt evidence does not supply a capacity sample.
+
+The history read API reports a median effective token estimate and interval sample count with low confidence and explicit coverage/rounding/label-continuity assumptions. It is not a provider token limit or mathematical lower bound and never affects account selection. Truncated, unavailable or excessive usage-ledger reads produce insufficient evidence while retaining history. Publication UUID and explicit unique account label are checked around the asynchronous read; identity changes discard the estimate and refresh the returned history.
+
+## Reset-first account ordering
+
+`src/codex/routing/selection.ts` supports Codex-only `accountPoolStrategy: "reset-first"`. For new shared-quota assignments it chooses the earliest future short/weekly reset after existing eligibility, priority and usage-threshold filtering; ties and absent/elapsed deadlines use the existing usage order. Seconds and milliseconds are normalized with `resetAtToMs`. Threshold zero disables usage filtering while retaining reset ordering. Monthly deadlines do not order this strategy.
+
+Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on by default, so threshold crossing alone retains a healthy account. A bound thread that does leave may move only onto an account with genuine quota headroom and strictly lower usage. Manual preference, scoped health and shared-cursor guards remain authoritative. Set the flag false to restore threshold rebinding of bound tasks. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
+
+The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic and Anthropic parsers reject reset-first. The dashboard offers it only for Codex; API, CLI and translated guides preserve the same contract.
+
+## Bound-thread rebind destination
+
+A quota-strategy re-evaluation may move a LIVE thread binding only to an account that has genuine
+quota headroom and is also strictly cooler than the bound account. Both bars are load-bearing.
+Without the headroom bar, "strictly cooler" has no floor, so a pool whose every member sits in the
+80-100% band hands a long conversation from account to account on consecutive turns; Codex prompt
+caches are account-isolated, so each hop restarts from a cold prefix and a 7k-token turn becomes a
+150k-token one (#4546). Without the strictly-cooler bar, `hasCodexQuotaHeadroom` — which answers
+true for unknown usage, correctly for an unbound pick — would trade a warm prefix for an unmeasured
+account. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so the second bar excludes an unobserved destination
+without a special case.
+
+Movement is therefore bounded by the number of accounts rather than the number of turns. The rule
+narrows a preference and never a refusal: a 429/402 with no success since, a failover streak, pause,
+cooldown, lost generation and an unusable account all still release the binding before this rule is
+consulted, and they run in `resolveCodexAccountForThreadDetailed` ahead of it. A known score of 100
+with no recorded refusal is deliberately not a release path on its own — stickiness until the
+account actually refuses is intended — but it does surrender the binding as soon as a sibling with
+headroom exists. Unbound assignment is untouched and still takes the coolest eligible account,
+because a fresh request has no warm prefix to lose. `pool.cacheAffinity` remains the stronger
+opt-in, raising the bar from the threshold to genuine exhaustion.
+
+Two call sites need the rule — the live path in `reevaluateAffinityQuota` and the side-effect-free
+`previewReusableAffinityAccount` that subagent fallback reads — and they share one helper rather
+than restating it, because the suite asserts the two answer identically and a preview that
+disagreed would hand fallback a different account than the request actually uses.

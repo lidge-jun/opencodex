@@ -88,6 +88,7 @@
         "src/router.ts",
         "src/server/",
         "src/service.ts",
+        "src/service/",
         "src/stall-timeout.ts",
         "src/storage/",
         "src/tray/",
@@ -139,6 +140,17 @@
       "documents": [
         "src/codex/",
         "src/providers/",
+        "src/server/"
+      ]
+    },
+    {
+      "path": "transports/byte-accounting.md",
+      "tier": 3,
+      "title": "Byte Accounting",
+      "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget.",
+      "documents": [
+        "src/adapters/",
+        "src/lib/",
         "src/server/"
       ]
     },
@@ -366,7 +378,7 @@
       "path": "remote-workspace.md",
       "tier": 3,
       "title": "Remote Workspace",
-      "scope": "Inactive workspace protocol, cryptographic identity primitives, and bounded framing.",
+      "scope": "Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration.",
       "documents": [
         "src/remote-control/"
       ]
@@ -377,6 +389,10 @@
       {
         "path": "src/bridge.ts",
         "reason": "no doc names this file; it is the legacy adapter bridge entry and its behavior is described under the adapter registry without a path reference"
+      },
+      {
+        "path": "src/bridge/",
+        "reason": "no doc names this directory; it holds the leaves moved out of the src/bridge.ts facade and inherits the same adapter-registry description the facade has"
       },
       {
         "path": "src/quota/",
@@ -405,7 +421,10 @@
         "reason": "no test constrains routed slug shape; the ten files that mention provider/model consume slugs rather than enforcing the form"
       }
     ],
-    "oversizeDocs": [],
+    "oversizeDocs": [
+      "gui-and-management-api.md",
+      "transports/responses.md"
+    ],
     "staleRefs": []
   }
 }

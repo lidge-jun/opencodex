@@ -143,16 +143,17 @@ ocx provider add droid \
 남기세요. 이 프로바이더의 업스트림은 Factory HTTP 엔드포인트가 아니라 로컬 브리지이므로
 Factory 추론 전용 헤더를 추가하지 않습니다.
 
-프로바이더를 저장하거나 정적 카탈로그를 바꾼 뒤에는 새 세션이 갱신된 카탈로그를 읽도록 Codex
-app-server를 동기화하고 재시작합니다.
+프로바이더를 저장하거나 정적 카탈로그를 바꾼 뒤에는 새 세션이 갱신된 카탈로그를 읽도록 Codex를
+동기화하고 재시작합니다.
 
 ```bash
 ocx sync --restart-codex
 ocx doctor
 ```
 
-Codex app-server 재시작은 진행 중인 Codex 작업을 중단합니다. 해당 세션을 끝내거나 저장한 뒤에만
-재시작하세요.
+`--restart-codex`는 일치하는 app-server를 재시작하고 Codex 데스크톱 앱을 완전히 종료한 뒤 다시
+띄우므로, 진행 중인 대화가 끝납니다. 데스크톱 앱을 그대로 두려면 `--restart-app-server-only`를
+쓰세요. 해당 세션을 끝내거나 저장한 뒤에만 재시작하세요.
 
 ## 전체 경로 검증
 

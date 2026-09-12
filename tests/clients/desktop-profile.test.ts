@@ -154,11 +154,13 @@ describe("Claude Desktop profile", () => {
       expect(parsed).not.toHaveProperty("appliedAt");
     });
 
-    test("non-string markers are rejected with the field named", () => {
-      expect(() => parseDesktopProfile({ ...seeded(), appliedFingerprint: 42 }))
-        .toThrow("profile.appliedFingerprint");
-      expect(() => parseDesktopProfile({ ...seeded(), appliedAt: {} }))
-        .toThrow("profile.appliedAt");
+    test("null and other non-string markers are treated as unset", () => {
+      const fromNull = parseDesktopProfile({ ...seeded(), appliedFingerprint: null, appliedAt: null });
+      expect(fromNull).not.toHaveProperty("appliedFingerprint");
+      expect(fromNull).not.toHaveProperty("appliedAt");
+      const fromOther = parseDesktopProfile({ ...seeded(), appliedFingerprint: 42, appliedAt: {} });
+      expect(fromOther).not.toHaveProperty("appliedFingerprint");
+      expect(fromOther).not.toHaveProperty("appliedAt");
     });
 
     test("genuinely unknown fields are still rejected", () => {

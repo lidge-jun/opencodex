@@ -1,3 +1,4 @@
+import { modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -15,6 +16,7 @@ import {
   mutatePersistedConfig,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
+  normalizeAutoReviewModelOverrides,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   requestPacingConfigError,
@@ -34,7 +36,7 @@ import {
   upsertOAuthProvider,
 } from "../../oauth";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
-import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
+import { canonicalAutoReviewModelKey, mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
 import { replaceProviderAccountSet } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -257,7 +259,10 @@ function providerEditorCandidate(
     if (namespaceCollision) return { ok: false, status: 409, error: namespaceCollision, code: "provider_namespace_conflict" };
     const merged = mergeProviderEditorRow(persisted.providers[name], baseline.providers[name], publicProvider);
     const transportCandidate = providerTransportValidationCandidate(merged as unknown as Record<string, unknown>);
-    const providerError = providerManagementConfigError(name, transportCandidate)
+    // The editor merges onto the persisted row, so stored operator overlays (selectedModels,
+    // disabled, …) ride along in the candidate. They are owned by their own write boundaries;
+    // the seed check must only pin the canonical transport/auth keys.
+    const providerError = providerManagementConfigError(name, transportCandidate, { allowOperatorOverlays: true })
       ?? providerEmptyToolOutputConfigError(name, transportCandidate)
       ?? providerServiceTierConfigError(name, transportCandidate);
     if (providerError) return { ok: false, status: 400, error: providerError, code: "invalid_provider" };
@@ -287,6 +292,13 @@ function providerEditorCandidate(
     if (provider.modelPinnedReasoningEfforts !== undefined) {
       provider.modelPinnedReasoningEfforts = validated.config.providers[name]!.modelPinnedReasoningEfforts;
     }
+    const normalized = validated.config.providers[name]!;
+    if (normalized.autoReviewModel === undefined) delete provider.autoReviewModel;
+    else provider.autoReviewModel = normalized.autoReviewModel;
+    if (normalized.autoReviewModelOverrides === undefined) delete provider.autoReviewModelOverrides;
+    else provider.autoReviewModelOverrides = normalized.autoReviewModelOverrides;
+    if (normalized.modelCapabilities === undefined) delete provider.modelCapabilities;
+    else provider.modelCapabilities = normalized.modelCapabilities;
   }
   return { ok: true, config: candidate, removedProviders };
 }
@@ -490,6 +502,14 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "modelCapabilities")) {
+    const error = modelCapabilitiesConfigError(rawBody.modelCapabilities, true);
+    if (error) return { error };
+    const capabilities = mergeModelCapabilities(next.modelCapabilities, rawBody.modelCapabilities);
+    if (capabilities === undefined) delete next.modelCapabilities;
+    else next.modelCapabilities = capabilities;
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "modelContextWindows")) {
     const value = rawBody.modelContextWindows;
     if (value === null) {
@@ -516,6 +536,61 @@ function applyProviderPatchFields(
   if (Object.hasOwn(rawBody, "pinnedReasoningEffort") || Object.hasOwn(rawBody, "modelPinnedReasoningEfforts")) {
     const error = applyProviderPinFields(next, rawBody, provider);
     if (error) return { error };
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "autoReviewModel")) {
+    const value = rawBody.autoReviewModel;
+    if (value === null || value === "") {
+      delete next.autoReviewModel;
+    } else if (typeof value === "string" && value.trim()) {
+      next.autoReviewModel = value.trim();
+    } else {
+      return { error: "autoReviewModel must be a catalog selector string or null" };
+    }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "autoReviewModelOverrides")) {
+    const value = rawBody.autoReviewModelOverrides;
+    if (value === null) {
+      delete next.autoReviewModelOverrides;
+    } else if (isPlainRecord(value)) {
+      const merged: Record<string, string> = { ...(next.autoReviewModelOverrides ?? {}) };
+      const existingByCanonical = new Map<string, string>();
+      for (const existingKey of Object.keys(merged)) {
+        existingByCanonical.set(canonicalAutoReviewModelKey(existingKey), existingKey);
+      }
+      const submittedCanonicalKeys = new Set<string>();
+      for (const [model, target] of Object.entries(value)) {
+        const key = model.trim();
+        if (["__proto__", "prototype", "constructor"].includes(key)) {
+          return { error: "autoReviewModelOverrides keys must be non-reserved model ids" };
+        }
+        const canonicalKey = canonicalAutoReviewModelKey(model);
+        // Uniqueness is enforced before the tombstone branch: a clear and a set that normalize to
+        // the same key would otherwise resolve in object order instead of being rejected.
+        if (submittedCanonicalKeys.has(canonicalKey)) {
+          return { error: "autoReviewModelOverrides keys must be unique after trimming and slash normalization" };
+        }
+        submittedCanonicalKeys.add(canonicalKey);
+        if (target === null || target === "") {
+          const previousKey = existingByCanonical.get(canonicalKey);
+          if (previousKey !== undefined) delete merged[previousKey];
+          if (Object.hasOwn(merged, key)) delete merged[key];
+          continue;
+        }
+        if (typeof target !== "string" || !target.trim()) {
+          return { error: "autoReviewModelOverrides values must be catalog selectors, null, or empty to remove" };
+        }
+        const previousKey = existingByCanonical.get(canonicalKey);
+        if (previousKey !== undefined && previousKey !== key) delete merged[previousKey];
+        merged[key] = target.trim();
+        existingByCanonical.set(canonicalKey, key);
+      }
+      if (Object.keys(merged).length > 0) next.autoReviewModelOverrides = merged;
+      else delete next.autoReviewModelOverrides;
+    } else {
+      return { error: "autoReviewModelOverrides must be a plain object or null" };
+    }
     touched = true;
   }
   if (Object.hasOwn(rawBody, "modelAutoCompactTokenLimits")) {
@@ -784,6 +859,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      modelCapabilities: p.modelCapabilities,
       pinnedReasoningEffort: p.pinnedReasoningEffort,
       modelPinnedReasoningEfforts: p.modelPinnedReasoningEfforts,
       modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
@@ -829,6 +905,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const providerError = providerManagementConfigError(
       name,
       providerTransportValidationCandidate(provider as unknown as Record<string, unknown>),
+      // Reload validates a row straight off disk, which legitimately carries stored
+      // operator overlays; only the canonical transport/auth keys need to match the seed.
+      { allowOperatorOverlays: true },
     )
       ?? providerEmptyToolOutputConfigError(name, provider);
     if (providerError) return jsonResponse({ error: "provider reload target invalid" }, 409);
@@ -996,6 +1075,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!isPlainRecord(body.provider)) return jsonResponse({ error: "provider must be a plain object" }, 400);
+    // Same prohibition as PATCH: the canonical OpenAI row never carries these fields, and a clear
+    // form would otherwise be normalized away before the merged-row guard could see it.
+    if (name === "openai" && (Object.hasOwn(body.provider, "autoReviewModel") || Object.hasOwn(body.provider, "autoReviewModelOverrides"))) {
+      return jsonResponse({ error: "provider openai must not include autoReviewModel or autoReviewModelOverrides" }, 400);
+    }
     const existing = config.providers[name];
     const aliasOwnershipError = providerAliasOverlayOwnershipError(body.provider, existing);
     if (aliasOwnershipError) return jsonResponse({ error: aliasOwnershipError }, 400);
@@ -1069,6 +1153,29 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // erase hand-edited per-model prices from Logs/Usage estimates.
     const existingCosts = config.providers[name]?.modelCosts;
     if (existingCosts && !prov.modelCosts) prov.modelCosts = existingCosts;
+    // The add/edit form also omits auto-review selectors. Preserve hand-configured
+    // provider-wide and per-model targets across an unrelated overwrite; clearing is
+    // explicit through PATCH with null.
+    const submittedAutoReviewModel = Object.hasOwn(body.provider, "autoReviewModel");
+    const submittedAutoReviewOverrides = Object.hasOwn(body.provider, "autoReviewModelOverrides");
+    const existingAutoReviewModel = config.providers[name]?.autoReviewModel;
+    if (!submittedAutoReviewModel && existingAutoReviewModel && !prov.autoReviewModel) prov.autoReviewModel = existingAutoReviewModel;
+    const existingAutoReviewOverrides = config.providers[name]?.autoReviewModelOverrides;
+    if (!submittedAutoReviewOverrides && existingAutoReviewOverrides && !prov.autoReviewModelOverrides) {
+      prov.autoReviewModelOverrides = { ...existingAutoReviewOverrides };
+    }
+    if (prov.autoReviewModel !== undefined) {
+      if (typeof prov.autoReviewModel === "string" && prov.autoReviewModel.trim()) {
+        prov.autoReviewModel = prov.autoReviewModel.trim();
+      } else {
+        delete prov.autoReviewModel;
+      }
+    }
+    if (prov.autoReviewModelOverrides !== undefined) {
+      const normalizedOverrides = normalizeAutoReviewModelOverrides(prov.autoReviewModelOverrides);
+      if (normalizedOverrides) prov.autoReviewModelOverrides = normalizedOverrides;
+      else delete prov.autoReviewModelOverrides;
+    }
     // And to the per-provider account-failover opt-out (#2568d). `ProviderPayload` has no
     // member for it either, so an add/edit save structurally cannot carry it — and dropping it
     // silently ENABLES rotation, because activation is presence-driven once the knob is gone.
@@ -1117,6 +1224,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // completed during that wait remains authoritative instead of being overwritten by the
     // older ownership snapshot used to admit this POST.
     restorePersistedAliasOverlays(prov, config.providers[name]);
+    const capabilities = Object.hasOwn(body.provider, "modelCapabilities")
+      ? mergeModelCapabilities(undefined, prov.modelCapabilities)
+      : mergeModelCapabilities(config.providers[name]?.modelCapabilities, undefined);
+    if (capabilities === undefined) delete prov.modelCapabilities;
+    else prov.modelCapabilities = capabilities;
     // The add/edit form omits wire choices. Read after DNS so a concurrent switch
     // remains authoritative, including the marker that protects it on the next boot.
     if (name === "xai") {
@@ -1260,6 +1372,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (Object.hasOwn(rawBody, "apiKey")) {
       return jsonResponse({ error: "apiKey cannot be patched here; use the provider API-key endpoints" }, 400);
     }
+    // The canonical OpenAI row rejects these fields outright on create. A PATCH that only clears
+    // or restates them would otherwise slip past the merged-row guard and answer 200, which reads
+    // as acceptance for a field the provider does not support.
+    if (name === "openai" && (Object.hasOwn(rawBody, "autoReviewModel") || Object.hasOwn(rawBody, "autoReviewModelOverrides"))) {
+      return jsonResponse({ error: "provider openai must not include autoReviewModel or autoReviewModelOverrides" }, 400);
+    }
     const applied = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
     if ("error" in applied) return jsonResponse({ error: applied.error }, 400);
     const next = applied.next;
@@ -1271,6 +1389,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         : providerManagementConfigError(
             name,
             providerTransportValidationCandidate(next as unknown as Record<string, unknown>),
+            // PATCH merges the mask onto the persisted row, which legitimately carries
+            // stored operator overlays (selectedModels, disabled, …); only the canonical
+            // transport/auth keys need to match the seed.
+            { allowOperatorOverlays: true },
           )
           ?? providerEmptyToolOutputConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
@@ -1314,6 +1436,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           : providerManagementConfigError(
               name,
               providerTransportValidationCandidate(replay.next as unknown as Record<string, unknown>),
+              { allowOperatorOverlays: true },
             )
             ?? providerEmptyToolOutputConfigError(name, replay.next);
         if (syncError) {

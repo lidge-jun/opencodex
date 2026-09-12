@@ -8,7 +8,7 @@ import {
   requestBoundLocalProviderReload,
   type LocalProviderReloadResult,
 } from "../server/local-provider-reload-client";
-import { isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
+import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
@@ -85,6 +85,14 @@ export function loginUsageMessage(): string {
 
 export async function handleLogin(provider?: string): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
+  // A removed provider id reached through its alias still logs in — the merged
+  // successor owns the flow. Warn rather than silently reroute so scripts and
+  // docs that still say `devin-cli` surface the rename to whoever runs them.
+  const alias = DEPRECATED_OAUTH_PROVIDER_ALIASES[name];
+  if (alias) {
+    console.error(`${name} is deprecated; logging in as ${alias}`);
+    return handleOAuthLogin(alias);
+  }
   if (isPublicOAuthProvider(name)) return handleOAuthLogin(name);
   if (isKeyLoginProvider(name)) return handleKeyLogin(name);
   console.error(loginUsageMessage());

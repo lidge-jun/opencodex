@@ -75,6 +75,8 @@ API key，且绝不会回退到 native alias。启用这组兼容选项前，请
 ocx observe usage --range 30d --json
 ```
 
+部分用量记录无法计入时，人类可读输出会显示警告，即使没有可读取的记录也是如此。显示的总数仅反映可读取的记录。如果筛选条件没有匹配到可读取的记录，输出将显示警告和提示，而不显示总数行；被跳过的记录可能包含匹配项。`--json` 原样保留响应中的 `usageIncomplete` 诊断及原因。
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 通过正在运行的代理的管理 API 读取或更改运行时调试覆盖项。
@@ -188,6 +190,8 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 ### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 管理无头运行时设置、启动、同步、诊断和更新。
+
+`ocx system codex-restart --yes` 通过与 `ocx sync --restart-codex` 相同的模块重启 Codex app-server，并完全退出再重新启动 Codex 桌面应用。若代理本身运行在 Codex 应用内部，该命令会给出可执行提示并拒绝，而不是承诺无法完成的移交。
 
 ```bash
 ocx system settings --stream-mode eager-relay

@@ -41,6 +41,7 @@ const REPLACEMENT_STYLE_OAUTH = new Set<string>();
 
 const ACCOUNT_USAGE = `Usage:
   ocx account list [provider] [--json] [--all] [--quota [--refresh]]
+  ocx account history openai <pool-account-id> [--limit <1-200>] [--json]
   ocx account current <provider> [--json]
   ocx account use <provider> <account-or-key-id|main> [--json]
   ocx account refresh <provider> [--json]
@@ -50,7 +51,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account pause <provider> <account-id|main> [--json]
   ocx account resume <provider> <account-id|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account remove <provider> <account-or-key-id|main> --yes [--json]
   ocx account clear-cooldown <provider> <account-id|main> [--json]
@@ -61,7 +62,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account cancel <provider> [--flow <flow-id>] [--json]
   ocx account reset-credits <account-id|main> [--consume --yes] [--json]
   ocx account grok-reset-coupons [<account-id>] [--consume --yes] [--token-id <token-id>] [--json]
-  ocx account main <doctor|list|register|add|switch|recover> ...
+  ocx account main <doctor|list|register|add|reauth|switch|recover> ...
 
 List and switch provider accounts and API-key pools (masked output only).
 'main' selects the Codex App login for the openai account pool.`;
@@ -101,6 +102,9 @@ function statusText(row: AccountRow): string {
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth) parts.push("needs-reauth");
   if (row.validationPending) parts.push("validation-pending");
+  if (row.selectionExcludedReason === "plan_excluded") {
+    parts.push(`not-auto-selected(plan=${row.selectionExcludedPlan ?? row.plan ?? "unknown"})`);
+  }
   return parts.join(" ");
 }
 
@@ -115,7 +119,7 @@ function priorityText(row: AccountRow): string {
  * decides on before a long session. The full breakdown stays in `--json`.
  */
 function quotaText(row: AccountRow): string {
-  if ((row as { quotaUnavailable?: boolean }).quotaUnavailable) return "unavailable";
+  if (row.quotaUnavailable) return row.quotaFailure ? `unavailable (${row.quotaFailure})` : "unavailable";
   const quota = row.quota;
   if (!quota) return "-";
   const parts: string[] = [];
@@ -335,6 +339,10 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
   const [sub, ...rest] = args;
   try {
     if (sub === "list") return await cmdList(rest, deps);
+    if (sub === "history") {
+      const { cmdAccountHistory } = await import("./account-history");
+      return await cmdAccountHistory(rest, deps);
+    }
     if (sub === "current") return await cmdCurrent(rest, deps);
     if (sub === "use") return await cmdUse(rest, deps);
     if (sub === "refresh") return await cmdRefresh(rest, deps);

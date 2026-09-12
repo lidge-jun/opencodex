@@ -337,15 +337,6 @@ export function findSupportedNativeTemplate(catalog: RawCatalog | null): RawEntr
   ) ?? null;
 }
 
-/**
- * Native OpenAI slugs that do NOT support the Fast (priority) service tier.
- * Upstream may advertise service_tiers for these models, but the tier is not
- * actually available — strip it so the Codex UI does not offer a dead toggle.
- */
-const NO_FAST_TIER_NATIVE_SLUGS = new Set([
-  "gpt-5.3-codex-spark",
-]);
-
 /** Does this row already carry an `ultrafast` tier the operator put there themselves? */
 /**
  * Read the opt-in from the live config, ONCE per catalog build.
@@ -438,14 +429,6 @@ export function normalizeServiceTiers(entry: RawEntry): RawEntry {
         ? { ...tier, description: "2x speed, increased usage" } : tier,
     );
   }
-  // Strip service tiers for models that do not actually support the Fast tier.
-  if (typeof entry.slug === "string" && NO_FAST_TIER_NATIVE_SLUGS.has(entry.slug)) {
-    delete entry.service_tier;
-    delete entry.service_tiers;
-    delete entry.default_service_tier;
-    delete entry.additional_speed_tiers;
-    return entry;
-  }
   // Codex stores the user-facing config spelling as "fast", but the catalog/request
   // service tier id is "priority" in current codex-rs. Keep legacy catalogs working.
   if (entry.service_tier === "fast") entry.service_tier = "priority";
@@ -517,9 +500,8 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
     }
   }
   // providerContextCaps.openai is a ceiling for native OpenAI rows regardless of where the
-  // advertised window came from (#1430): preserved rows without a hardcoded override (e.g.
-  // gpt-5.3-codex-spark) must stay under the cap too, and auto-compaction follows the capped
-  // window.
+  // advertised window came from (#1430): preserved rows without a hardcoded override
+  // must stay under the cap too, and auto-compaction follows the capped window.
   // The per-model window narrows the same rows for the same reason.
   const currentContext = typeof entry.context_window === "number" ? entry.context_window : undefined;
   const cappedContext = narrowNativeMaxContextWindow(nativeSlug, currentContext, limits);

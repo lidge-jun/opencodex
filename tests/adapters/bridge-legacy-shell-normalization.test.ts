@@ -97,6 +97,41 @@ describe("bridge normalizes code-mode helper names against the declared catalog"
     expect(sse).toContain("image.png");
   });
 
+  test("view_image is compiled through code-mode exec and surfaces the image", async () => {
+    const sse = await drain(bridgeToResponsesSSE(
+      toolTurn("view_image", '{"file_path":"/tmp/image.png","detail":"high"}'),
+      "fixture-model",
+      undefined,
+      new Set(["exec"]),
+      undefined,
+      undefined,
+      50_000,
+      { declaredToolNames: new Set(["exec"]) },
+    ));
+    expect(sse).not.toContain("undeclared client tool");
+    expect(sse).toContain('"name":"exec"');
+    expect(sse).toContain('await tools.view_image({\\"detail\\":\\"high\\",\\"path\\":\\"/tmp/image.png\\"})');
+    expect(sse).toContain("image(result.image_url)");
+    expect(sse).not.toContain("tools.exec_command");
+  });
+
+  test("default.view_image is compiled through code-mode exec", async () => {
+    const sse = await drain(bridgeToResponsesSSE(
+      toolTurn("default.view_image", '{"path":"/tmp/image.png"}'),
+      "fixture-model",
+      undefined,
+      new Set(["exec"]),
+      undefined,
+      undefined,
+      50_000,
+      { declaredToolNames: new Set(["exec"]) },
+    ));
+    expect(sse).not.toContain("undeclared client tool");
+    expect(sse).toContain('"name":"exec"');
+    expect(sse).toContain("await tools.view_image");
+    expect(sse).not.toContain("tools.exec_command");
+  });
+
   test("a catalog that declares exec_command itself is never rewritten", async () => {
     const sse = await drain(bridgeToResponsesSSE(
       toolTurn("exec_command"), "deepseek-x", undefined, undefined, undefined, undefined, 50_000,
@@ -105,5 +140,24 @@ describe("bridge normalizes code-mode helper names against the declared catalog"
     expect(sse).not.toContain("undeclared client tool");
     expect(sse).toContain('"name":"exec_command"');
     expect(sse).toContain('"arguments":"{\\"cmd\\":\\"ls\\"}"');
+  });
+
+  // #4171 review: the flat-bridge shape declares `exec` next to a bare `exec_command`, where
+  // `exec` may be an ordinary caller tool and nested `tools.*` helpers are not what it runs.
+  // A `view_image` call there must not be compiled into code-mode JavaScript.
+  test("a flat-bridge catalog never compiles view_image into code-mode exec", async () => {
+    const sse = await drain(bridgeToResponsesSSE(
+      toolTurn("view_image", '{"path":"/tmp/image.png"}'),
+      "deepseek-x",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      50_000,
+      { declaredToolNames: new Set(["exec", "exec_command", "view_image"]) },
+    ));
+    expect(sse).toContain('"name":"view_image"');
+    expect(sse).not.toContain("tools.view_image");
+    expect(sse).not.toContain('"name":"exec"');
   });
 });
