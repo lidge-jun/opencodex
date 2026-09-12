@@ -68,6 +68,10 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | `$CODEX_HOME/models_cache.json` | Codex, invalidated by opencodex | Cache invalidated after model/catalog changes. |
 | `dist/`, `gui/dist/`, `node_modules/` | generated | Build output/dependencies. |
 
+OrcaRouter login returns credentials for storage only after bounded response ingestion and payload
+validation. The shared reader's cancellation contract and the login-specific byte/deadline limits
+are defined in [bounded response ingestion](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
+
 ## Non-negotiable invariants
 
 Each invariant carries a stable id. A bound invariant names one test, and that test names the id

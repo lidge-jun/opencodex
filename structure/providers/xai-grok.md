@@ -24,6 +24,9 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   on a per-provider FIXED loopback port, so every response it sends closes its connection. A
   retired flow that kept a pooled socket would capture the NEXT login's callback and reject it
   as a state mismatch; see `src/oauth/callback-server.ts`.
+  Provider token-body budgets are separate from this shared callback lifetime. The
+  [OrcaRouter bounded key-exchange contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login)
+  is owned by its login consumer and does not impose that budget on Grok token grants.
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
