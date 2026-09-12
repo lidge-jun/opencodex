@@ -815,3 +815,16 @@
     padding: var(--space-2) 0 0;
   }
 }
+
+/* The shell's mobile top bar is 44px controls + 8px padding + 1px border. */
+@media (max-width: 760px) {
+  .apikeys-workspace-shell .section-tabs {
+    top: 53px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-top: 0;
+    min-height: 44px;
+  }
+  .apikeys-workspace-shell .awi-section-anchor { scroll-margin-top: 108px; }
+}
