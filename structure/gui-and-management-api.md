@@ -106,7 +106,7 @@ be treated as implemented:
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates to
 `src/server/management-api.ts`, which composes the route modules under `src/server/management/`.
 Codex account routes live in `src/codex/auth-api.ts` because they own the credential store, not
-because they are a different plane.
+because they are a different plane. Its raw-byte reads of upstream account and key-exchange responses follow the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 The registered route set is larger than the areas described below; the code is the route SOT. What
 this document owns is which module holds which area and what invariant that area must not break.
