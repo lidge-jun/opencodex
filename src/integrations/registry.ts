@@ -43,6 +43,8 @@ import {
   raycastConfigPath,
   zcodeConfigPath,
   zcodeHomeDir,
+  commandCodeConfigPath,
+  commandCodeHomeDir,
   type ExportClientId,
 } from "../clients/config-export";
 
@@ -231,6 +233,12 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "zcode",
     configPath: (env = process.env, home = homedir()) => zcodeConfigPath(env, home),
     detectDir: (env = process.env, home = homedir()) => zcodeHomeDir(env, home),
+  },
+  commandcode: {
+    id: "commandcode",
+    configPath: (env = process.env, home = homedir()) => commandCodeConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => commandCodeHomeDir(env, home),
+    writerLock: { suffix: ".lock" },
   },
   prime: {
     id: "prime",

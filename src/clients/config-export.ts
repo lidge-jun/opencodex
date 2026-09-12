@@ -49,6 +49,17 @@ import { buildMcodeClientConfig, summarizeMcode, buildMcodeContribution } from "
 import { buildZcodeClientConfig, summarizeZcode, buildZcodeContribution } from "./config-export/zcode";
 import { buildClineClientConfig, summarizeCline, buildClineContribution } from "./config-export/cline";
 import { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
+import {
+  buildCommandCodeClientConfig,
+  summarizeCommandCode,
+  buildCommandCodeContribution,
+  type CommandCodeGeneratedConfig,
+  type CommandCodeModelEntry,
+  type CommandCodeProviderBlock,
+} from "./config-export/commandcode";
+
+export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
+export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution };
 
 
 
@@ -445,6 +456,16 @@ export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string 
 
 export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   return join(zcodeHomeDir(env, home), "v2", "config.json");
+}
+
+export function commandCodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.COMMANDCODE_HOME?.trim();
+  if (override) return absoluteClientPath(override, home, "COMMANDCODE_HOME");
+  return join(home, ".commandcode");
+}
+
+export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(commandCodeHomeDir(env, home), "providers.json");
 }
 
 /**
@@ -1354,6 +1375,18 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // ZCode persists the credential in its own file and has no dedicated
     // proxy-admission header field, so real keys are never serialized and
     // remote binds refuse — same reasoning as MCode.
+    loopbackOnly: true,
+  },
+  commandcode: {
+    id: "commandcode",
+    filename: "providers.json",
+    destination: env => commandCodeConfigPath(env),
+    apiKeyEnv: "OPENCODEX_COMMANDCODE_API_KEY",
+    exportHint: "Command Code reads service token from serviceApiTokenFilePath or loopback placeholder.",
+    build: buildCommandCodeClientConfig,
+    format: "json",
+    summarize: summarizeCommandCode,
+    buildContribution: buildCommandCodeContribution,
     loopbackOnly: true,
   },
   prime: {

@@ -103,7 +103,8 @@ export type ExportClientId =
   | "aside"
   | "raycast"
   | "omo"
-  | "cline";
+  | "cline"
+  | "commandcode";
 
 export interface ExportClientSpec {
   id: ExportClientId;

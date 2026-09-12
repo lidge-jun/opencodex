@@ -347,3 +347,24 @@ export async function handleZcodeCommand(argv: string[], deps: RuntimeApiDeps = 
   }
   return code;
 }
+
+const COMMANDCODE_USAGE = "Usage: ocx commandcode [status|show|list|enable|disable|history|journal|restore] [--json]";
+
+export async function handleCommandcodeCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  const args = [...argv];
+  const verbIndex = args.findIndex(arg => !arg.startsWith("-"));
+  const action = (verbIndex === -1 ? "status" : args[verbIndex]).toLowerCase();
+  const known = ["status", "show", "list", "enable", "disable", "history", "journal", "restore"];
+  if (!known.includes(action)) {
+    console.error(`unknown commandcode command ${action}`);
+    console.error(COMMANDCODE_USAGE);
+    return 2;
+  }
+  const rest = verbIndex === -1 ? args : [...args.slice(0, verbIndex), ...args.slice(verbIndex + 1)];
+  const forwarded = action === "restore" ? [action, ...rest] : [action, ...rest, "--client", "commandcode"];
+  const code = await handleClientIntegrationCommand(forwarded, deps);
+  if (code === 0 && (action === "enable" || action === "disable")) {
+    console.error("Command Code reads providers on startup.");
+  }
+  return code;
+}
