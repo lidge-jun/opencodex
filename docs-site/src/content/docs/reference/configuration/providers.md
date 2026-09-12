@@ -224,6 +224,12 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
+With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
+served the first request. Changing the selected key, its reference or resolved value, authentication
+mode, or base URL during search or provider pacing ends the turn with a bridge error before another
+provider request is sent. Changing away and back also ends that continuation. Start a new turn to
+use the new selection. Selection changes before the first provider send retain normal reselection.
+
 Custom-model `reasoningEfforts` normally override discovered provider metadata. The bounded
 exception is an explicit Astra or Daybreak custom row on the canonical `openai` Codex-forward
 destination: its advertised list is intersected with that model's pinned native capabilities.

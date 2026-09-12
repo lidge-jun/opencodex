@@ -3,6 +3,9 @@
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+The shared server's key-auth Responses hosted-search continuation policy is documented in
+[continuation binding contract](../runtime.md#hosted-search-continuation-binding).
+
 ## Connected Claude Desktop profiles
 
 Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin

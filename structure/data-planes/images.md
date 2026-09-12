@@ -3,6 +3,9 @@
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+For the shared Responses server's hosted-search continuation binding, see
+[continuation binding contract](../runtime.md#hosted-search-continuation-binding).
+
 ## Standalone Images
 
 Codex's local `image_gen.imagegen` tool makes a second Images request after the model calls it:

@@ -206,6 +206,19 @@ Routed Responses continuations whose local replay state is missing resolve their
 
 The shared Responses path follows the [bounded multipart recovery contract](subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
+### Hosted-search continuation binding
+
+The opt-in key-auth Responses hosted-search bridge in `src/server/responses/core.ts` captures the
+request binding that served the first leg, after any permitted initial reselection. Before every
+continuation dispatch, after provider pacing, that binding must remain an API-key selection matching
+the configured entry, reference, revision, resolved key, authentication mode, and base URL; a
+disabled or removed provider fails the same check. Drift produces the bridge's failed terminal
+without another provider request, and an unchanged binding resends the built request with its
+executed search result appended, never re-entering the initial reselection/rebuild path. Initial
+dispatch keeps its normal reselection policy. `tests/web-search/web-search-passthrough-bridge.test.ts`
+covers drift during search, while pacing, and before first-leg headers return, plus successful
+first-dispatch reselection and result preservation.
+
 ## Remote Hub hardening ownership
 
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.

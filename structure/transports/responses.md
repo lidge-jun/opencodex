@@ -9,7 +9,7 @@ Plaintext collaboration restoration treats a null namespace as absent, rejects n
 
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
-Responses-compatible streaming output.
+Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../runtime.md#hosted-search-continuation-binding).
 
 ### Credential-bearing HTTP redirects
 

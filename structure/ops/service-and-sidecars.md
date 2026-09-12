@@ -44,6 +44,9 @@ PATH, so a launcher-backed job is never misreported as an older plist (#3464).
 
 ## Sidecars
 
+The opt-in key-auth Responses hosted-search bridge follows the
+[continuation binding contract](../runtime.md#hosted-search-continuation-binding).
+
 Web search and vision sidecars run only when the main request needs that capability and a usable
 sidecar authority exists. Vision has two possible backends; web search's config union additionally
 admits `xai`, `gemini`, and `exa`. xAI is a live explicit-only backend through stored Grok OAuth;
