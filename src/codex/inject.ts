@@ -900,7 +900,25 @@ export interface CodexInjectResult {
   nativeSubagentDefaultsWarning?: string;
 }
 
+class CodexHistoryPreflightRefusal extends Error {}
+let beforeHistoryArtifactCommitForTests: ((kind: string) => void) | undefined;
+export function setBeforeHistoryArtifactCommitForTests(hook: typeof beforeHistoryArtifactCommitForTests): void {
+  beforeHistoryArtifactCommitForTests = hook;
+}
+
 export async function injectCodexConfig(
+  port: number,
+  config?: OcxConfig,
+  options: InjectCodexOptions = {},
+): Promise<CodexInjectResult> {
+  try { return await injectCodexConfigImpl(port, config, options); }
+  catch (error) {
+    if (error instanceof CodexHistoryPreflightRefusal) return { success: false, message: `Codex config injection refused: ${error.message}. Existing configuration and history were preserved.` };
+    throw error;
+  }
+}
+
+async function injectCodexConfigImpl(
   port: number,
   config?: OcxConfig,
   options: InjectCodexOptions = {},
@@ -1256,8 +1274,9 @@ export async function injectCodexConfig(
   }
 
   const applyNativeArtifacts = (): void => {
+    beforeHistoryArtifactCommitForTests?.(eligibility.kind);
     const historyError = historyPreflight();
-    if (historyError) throw new Error(historyError);
+    if (historyError) throw new CodexHistoryPreflightRefusal(historyError);
     writeJournal({
       currentStateIsNative: journalBaselineIsNative(),
       configContent: baselineContent,
@@ -1947,8 +1966,6 @@ function restoreCodexCatalogArtifact(
 export async function restoreNativeCodexAsync(
   options: { revalidateDesiredState?: boolean } = {},
 ): Promise<CodexNativeRestoreResult> {
-  const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     // External-provider courtesy: only the stale journal is removed. The
@@ -1965,7 +1982,11 @@ export async function restoreNativeCodexAsync(
   if (options.revalidateDesiredState) {
     const ownership = inspectNativeCodexOwnership();
     if (ownership.ownership === "foreign") return foreignOwnershipRestoreRefusal(ownership.reason);
+    if (shouldSyncCodexOnStart(loadConfig())) return desiredEnabledRestoreSkip();
   }
+
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
 
   const eligibility = codexWriteCoordinationEligibility({
     coordinatorPath: () =>
@@ -2102,8 +2123,6 @@ export async function restoreNativeCodexAsync(
 }
 
 export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateDesiredState?: boolean } = {}): CodexNativeRestoreResult {
-  const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     removeJournal();
@@ -2112,6 +2131,8 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
   if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
     return desiredEnabledRestoreSkip();
   }
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
   // Captured before the config half: a successful journal restore DELETES the journal, and
   // restoring the config can drop `model_catalog_json`. Either one would hide the routed
   // catalog we actually wrote (#1798).

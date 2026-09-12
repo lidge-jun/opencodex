@@ -360,3 +360,9 @@ ocx restore back # 讓普通 Codex 再次指向仍在執行的 proxy
 當 opencodex 作為受管的 [背景服務](/zh-tw/reference/cli/#ocx-service) 執行時，會設定 `OCX_SERVICE=1`，
 因此 service 驅動的 restart **不會**反覆改寫 Codex 設定；只有明確執行 `ocx stop` 或
 `ocx service stop` 才會恢復原生 Codex。
+
+## 分頁歷史記錄安全拒絕
+
+如果受影響的歷史儲存區支援分頁，提供者切換可能傳回 `history_paginated_requires_native_writer`。OpenCodex 會保留目前設定、設定檔、模型目錄、歷史檔案及復原依據，而不在 Codex 之外分配序號；可遷移儲存區中的 legacy 記錄也受保護。不執行切換、僅保留外部提供者的路徑仍可使用。
+
+請勿刪除對話仍參照的提供者定義、反覆執行 `ocx sync` 或舊版復原，也不要改寫使用中的歷史檔案來繞過拒絕。保留檔案，復原前關閉相關對話，只回報確切錯誤與版本，不要公開私人歷史。需要與原生寫入器協調的已驗證修正。備份或指令碼成功不能證明顯示已復原；重新開啟 Codex 後確認對話。

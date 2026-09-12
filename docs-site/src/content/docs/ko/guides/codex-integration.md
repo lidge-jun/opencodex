@@ -291,3 +291,9 @@ ocx restore back # point plain Codex at the running proxy again
 ```
 
 opencodex가 managed [background service](/reference/cli/#ocx-service)로 실행될 때는 `OCX_SERVICE=1`을 설정하므로 service-driven restart가 Codex config를 흔들지 **않습니다**. 네이티브 Codex를 복원하는 것은 명시적인 `ocx stop` / `ocx service stop`뿐입니다.
+
+## 페이지 분할 기록 보호에 따른 거부
+
+영향받는 기록 저장소가 페이지 분할을 지원하면 프로바이더 전환이 `history_paginated_requires_native_writer`로 거부될 수 있습니다. OpenCodex는 Codex 밖에서 순번을 지정하는 대신 현재 설정, 프로필, 카탈로그, 대화 원본과 복원 근거를 보존합니다. 변환 가능한 저장소의 `legacy` 행도 포함됩니다. 외부 프로바이더 보존처럼 전환을 하지 않는 경로는 계속 사용할 수 있습니다.
+
+대화가 참조하는 프로바이더 정의를 삭제하거나, `ocx sync`·레거시 복구를 반복하거나, 실행 중인 대화 원본을 고쳐 우회하지 마세요. 현재 파일을 보존하고 복구 전에 해당 대화를 닫은 뒤, 개인 대화 내용을 올리지 말고 정확한 오류와 버전을 보고하세요. 네이티브 기록 작성자와 조정하는 검증된 수정이 필요합니다. 백업이나 스크립트 성공만으로 표시 복구가 증명되지는 않으므로 Codex를 다시 열어 확인하세요.

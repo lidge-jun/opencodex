@@ -467,3 +467,9 @@ opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/#ocx-service)
 olarak çalıştığında `OCX_SERVICE=1` ayarlar, böylece servis odaklı bir yeniden
 başlatma Codex yapılandırmasını **bozmaz** — yalnızca açık bir `ocx stop` / `ocx
 service stop` yerel Codex'i geri yükler.
+
+## Sayfalanmış geçmiş için güvenlik reddi
+
+Etkilenen geçmiş deposu sayfalamayı destekliyorsa sağlayıcı değişimi `history_paginated_requires_native_writer` döndürebilir; legacy satırlar da buna dahildir. OpenCodex, Codex dışında sıra numarası atamak yerine yapılandırmayı, profili, kataloğu, geçmişi ve geri yükleme kanıtlarını korur. Harici sağlayıcıyı korumak gibi değişim yapmayan yollar kullanılabilir.
+
+Konuşmanın kullandığı sağlayıcı tanımını silmeyin, `ocx sync` veya legacy kurtarmayı tekrarlamayın ve etkin geçmişi yeniden yazmayın. Dosyaları koruyun, kurtarmadan önce konuşmayı kapatın ve özel geçmişi yayımlamadan tam hatayı ve sürümleri bildirin. Yerel yazıcıyla koordineli, doğrulanmış bir düzeltme gerekir. Yedek veya başarılı betik görüntünün düzeldiğini kanıtlamaz; Codex’i yeniden açıp konuşmayı kontrol edin.

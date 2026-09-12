@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
@@ -75,19 +75,21 @@ function openStateDb(stateDbPath: string): Database {
  * rollout's updated_at), and forcing it backwards could hide a real edit from list ordering.
  */
 function appendRolloutLine(path: string, line: string): Buffer {
-  assertLegacyHistoryWritable(path);
-  const record = JSON.parse(line) as { ordinal?: unknown; payload?: { history_mode?: unknown } };
-  if (Object.hasOwn(record, "ordinal") || record.payload?.history_mode === "paginated") {
-    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
-  }
-  const fd = openSync(path, "a");
+  assertLegacyHistoryRecord(line);
+  // No O_CREAT: a disappeared target is not an invitation to recreate history.
+  const fd = openSync(path, constants.O_RDWR | constants.O_APPEND);
   const buf = Buffer.from(line.endsWith("\n") ? line : `${line}\n`, "utf8");
   try {
+    assertLegacyHistoryWritable(path, fd);
+    historyAppendHooks?.beforeWrite?.(path);
+    assertHistoryDescriptorIdentity(path, fd);
     let offset = 0;
     while (offset < buf.length) {
       offset += writeSync(fd, buf, offset, buf.length - offset, null);
     }
     try { fsyncSync(fd); } catch { /* best-effort durability */ }
+    historyAppendHooks?.afterWrite?.(path);
+    assertHistoryDescriptorIdentity(path, fd);
   } finally {
     closeSync(fd);
   }
@@ -230,18 +232,41 @@ class CodexHistoryIntegrityError extends Error {
  * O_APPEND does not allocate an ordinal or update that writer's in-memory cursor.
  * Refuse before changing the DB, manifest, or first-line provider; never guess N+1.
  */
-function assertLegacyHistoryWritable(path: string): void {
+function assertLegacyHistoryRecord(line: string): void {
+  let value: unknown;
+  try { value = JSON.parse(line); } catch { throw new CodexHistoryIntegrityError("history_rollout_record_invalid"); }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+  }
+  const record = value as Record<string, unknown>;
+  const payload = record.payload;
+  if (Object.hasOwn(record, "ordinal") || (payload !== null && typeof payload === "object" && (payload as Record<string, unknown>).history_mode === "paginated")) {
+    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+  }
+}
+
+function assertHistoryDescriptorIdentity(path: string, fd: number): void {
+  const held = fstatSync(fd);
+  let current: ReturnType<typeof lstatSync>;
+  try { current = lstatSync(path); } catch { throw new CodexHistoryIntegrityError("history_rollout_identity_changed"); }
+  if (!current.isFile() || current.isSymbolicLink() || current.dev !== held.dev || current.ino !== held.ino) {
+    throw new CodexHistoryIntegrityError("history_rollout_identity_changed");
+  }
+}
+
+let historyAppendHooks: { beforeWrite?: (path: string) => void; afterWrite?: (path: string) => void } | undefined;
+export function setHistoryAppendHooksForTests(hooks: typeof historyAppendHooks): void { historyAppendHooks = hooks; }
+
+function assertLegacyHistoryWritable(path: string, heldFd?: number): void {
   if (!path || !existsSync(path)) return;
-  const fd = openSync(path, "r");
+  const fd = heldFd ?? openSync(path, "r");
   try {
+    assertHistoryDescriptorIdentity(path, fd);
     const first = readFirstRolloutLine(fd);
-    if (!first) return;
-    const record = JSON.parse(first) as { ordinal?: unknown; payload?: { history_mode?: unknown } };
-    if (Object.hasOwn(record, "ordinal") || record.payload?.history_mode === "paginated") {
-      throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
-    }
+    if (!first) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+    assertLegacyHistoryRecord(first);
   } finally {
-    closeSync(fd);
+    if (heldFd === undefined) closeSync(fd);
   }
 }
 
@@ -1236,8 +1261,8 @@ function relabelAllRoutedHistoryToOpenai(db: Database): { rows: number; files: n
         provider: "openai",
         source: row.source === "exec" ? "cli" : undefined,
       }).changed) files++;
-    } catch {
-      /* explicit legacy recovery still relabels the DB when an old rollout is missing */
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
     }
   }
 
@@ -1447,15 +1472,15 @@ function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbP
       for (const row of openaiRows) {
         try {
           if (updateSessionMeta(row.rollout_path, row.id, { provider: "opencodex" }).changed) files++;
-        } catch {
-          /* keep DB migration moving; the manifest still carries exact original metadata */
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
         }
       }
       for (const row of execRows) {
         try {
           if (updateSessionMeta(row.rollout_path, row.id, { source: "cli" }).changed) files++;
-        } catch {
-          /* keep DB migration moving; the manifest still carries exact original metadata */
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
         }
       }
     });

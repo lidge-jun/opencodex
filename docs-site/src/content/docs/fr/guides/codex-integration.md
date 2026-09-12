@@ -416,3 +416,9 @@ ocx restore back # point plain Codex at the running proxy again
 Lorsque opencodex s'exécute comme [service d'arrière-plan géré](/fr/reference/cli/lifecycle/#ocx-service-installrepairstartstopstatusuninstallremove), il définit
 `OCX_SERVICE=1` afin qu'un redémarrage déclenché par le service ne modifie **pas** sans cesse la configuration
 Codex. Seule l'exécution explicite de `ocx stop` ou `ocx service stop` restaure Codex natif.
+
+## Refus de sécurité pour l’historique paginé
+
+Une transition de fournisseur peut renvoyer `history_paginated_requires_native_writer` si le stockage concerné prend en charge la pagination, même pour ses lignes legacy. OpenCodex conserve configuration, profil, catalogue, historique et preuves de restauration au lieu d’attribuer des numéros hors de Codex. Les sorties sans transition, comme la préservation d’un fournisseur externe, restent disponibles.
+
+Ne supprimez pas un fournisseur encore référencé, ne répétez pas `ocx sync` ou une restauration legacy et ne réécrivez pas un historique actif. Conservez les fichiers, fermez la conversation avant toute récupération et signalez l’erreur exacte et les versions sans publier de données privées. Utilisez un correctif vérifié coordonné avec le processus natif d’écriture. Une sauvegarde ou le succès d’un script ne prouve pas le rétablissement de l’affichage : vérifiez la conversation après réouverture de Codex.

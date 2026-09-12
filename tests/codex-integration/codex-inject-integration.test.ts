@@ -34,10 +34,10 @@ function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { std
   return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
 }
 
-function runRestore(codexHome: string, ocxHome: string): { stdout: string; status: number } {
+function runRestore(codexHome: string, ocxHome: string, asyncRestore = false): { stdout: string; status: number } {
   const script = `
-    const { restoreNativeCodex } = require("./src/codex/inject");
-    console.log(JSON.stringify(restoreNativeCodex()));
+    const { restoreNativeCodex, restoreNativeCodexAsync } = require("./src/codex/inject");
+    console.log(JSON.stringify(${asyncRestore ? "await restoreNativeCodexAsync()" : "restoreNativeCodex()"}));
   `;
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
@@ -66,6 +66,37 @@ describe("injectCodexConfig integration (Design B)", () => {
   afterEach(() => {
     removeTreeWithRetry(codexHome);
     removeTreeWithRetry(ocxHome);
+  });
+
+  test.each([false,true])("commit-boundary history refusal returns a result after rollback (legacy=%s)",(legacy)=>{
+    const original=legacy ? DESIGN_B_BLOCK+"\n" : 'model="test"\n';
+    writeFileSync(join(codexHome,"config.toml"),original);
+    if(legacy) writeFileSync(join(codexHome,"opencodex.config.toml"),"[invalid profile\n");
+    const script=`
+      const {Database}=require("bun:sqlite");
+      const {join}=require("node:path");
+      const {injectCodexConfig,setBeforeHistoryArtifactCommitForTests}=require("./src/codex/inject");
+      let kind;
+      setBeforeHistoryArtifactCommitForTests(value=>{
+        kind=value;
+        const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+        db.run("INSERT INTO threads VALUES ('fixture','opencodex','paginated')");
+        db.close();
+      });
+      const result=await injectCodexConfig(10100,{});
+      console.log(JSON.stringify({kind,result}));
+    `;
+    const child=spawnSync(process.execPath,["--eval",script],{cwd:repoRoot,env:{...process.env,CODEX_HOME:codexHome,OPENCODEX_HOME:ocxHome},encoding:"utf8",timeout:SPAWN_BUDGET_MS-5000});
+    expect(child.status).toBe(0);
+    const value=JSON.parse(child.stdout);
+    expect(value.kind).toBe(legacy?"legacy-uncoordinated":"coordinated");
+    expect(value.result).toMatchObject({success:false});
+    expect(value.result.message).toContain("history_paginated_requires_native_writer");
+    expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe(original);
+    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+    if(legacy) expect(readFileSync(join(codexHome,"opencodex.config.toml"),"utf8")).toBe("[invalid profile\n");
+    else expect(existsSync(join(codexHome,"opencodex.config.toml"))).toBe(false);
   });
 
   test.each([false, true])("paginated history preserves config and profile before provider transition (authless=%s)", (authless) => {
@@ -798,7 +829,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
-  test("restoreNativeCodex removes a stale journal without changing external provider state", () => {
+  test.each([false,true])("restore removes a stale journal without changing external provider state (async=%s)", (asyncRestore) => {
     const configPath = join(codexHome, "config.toml");
     const config = 'model_provider = "custom"\nmodel = "third-party-model"\n';
     writeFileSync(configPath, config, "utf8");
@@ -820,7 +851,9 @@ describe("injectCodexConfig integration (Design B)", () => {
       id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, model_provider TEXT NOT NULL,
       source TEXT NOT NULL, first_user_message TEXT NOT NULL, has_user_event INTEGER NOT NULL
     )`);
-    db.run(`INSERT INTO threads VALUES ('thread-custom', ?, 'custom', 'cli', 'hello', 1)`, rolloutPath);
+      db.run(`INSERT INTO threads VALUES ('thread-custom', ?, 'custom', 'cli', 'hello', 1)`, rolloutPath);
+      db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+      db.run("INSERT INTO threads VALUES ('old-routed', ?, 'opencodex', 'cli', 'older', 1, 'paginated')", rolloutPath);
     db.close();
     const dbBefore = readFileSync(dbPath);
 
@@ -833,7 +866,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       timestamp: new Date().toISOString(),
     }), "utf8");
 
-    const r = runRestore(codexHome, ocxHome);
+      const r = runRestore(codexHome, ocxHome, asyncRestore);
     expect(r.status).toBe(0);
     const result = JSON.parse(r.stdout);
     expect(result.success).toBe(true);
