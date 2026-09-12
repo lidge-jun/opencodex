@@ -877,6 +877,8 @@ export const ja: Record<TKey, string> = {
   "usage.dayWed": "水",
   "usage.dayFri": "金",
   "usage.heatmap.tooltipTokens": "{tokens} トークン",
+  "usage.chart.dayDetail": "{date}: {requests} リクエスト、{tokens} トークン",
+  "usage.heatmap.keyboardLabel": "上下キーで日単位、左右キーで週単位に移動します。",
   "usage.heatmap.tooltipRequests": "{requests} リクエスト",
 
   "nav.storage": "ストレージ",

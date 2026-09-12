@@ -964,6 +964,8 @@ export const en = {
   "usage.dayWed": "Wed",
   "usage.dayFri": "Fri",
   "usage.heatmap.tooltipTokens": "{tokens} tokens",
+  "usage.chart.dayDetail": "{date}: {requests} requests, {tokens} tokens",
+  "usage.heatmap.keyboardLabel": "Use Up and Down to move by day; Left and Right to move by week.",
   "usage.heatmap.tooltipRequests": "{requests} requests",
 
   "nav.storage": "Storage",

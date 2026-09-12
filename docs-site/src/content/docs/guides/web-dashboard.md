@@ -338,3 +338,7 @@ Adding **Ollama Cloud** or another catalog provider from the dashboard copies it
 classification into the saved provider config, so the [vision sidecar](/guides/sidecars/)
 is gated correctly without manual classification.
 :::
+
+### Usage chart keyboard and touch controls
+
+Usage heatmap days have one Tab entry point. Use Up/Down for adjacent days and Left/Right for adjacent weeks. Weekly bars expose the same day details on keyboard focus, pointer hover, or touch. Day labels include the date, request count, and token count; tooltip overlays stay within the viewport.
