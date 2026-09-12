@@ -141,20 +141,26 @@ describe("AgentRouter openai-chat compatibility", () => {
     expect(rawBody.messages[0]?.content).toBe("responda somente: OK");
   });
 
-  test("passthrough chat drops reasoning_effort for an explicitly empty capability ladder", () => {
+  test.each([
+    ["noReasoningModels", provider({ noReasoningModels: ["test-model"] }), undefined],
+    ["explicit empty raw ladder", provider({ reasoningEfforts: [] }), undefined],
+    ["non-empty non-rankable raw ladder", provider({ reasoningEfforts: ["enabled"] }), "xhigh"],
+    ["raw ladder unset", provider(), "xhigh"],
+    ["known reasoning ladder", provider({ reasoningEfforts: ["low", "medium", "high", "xhigh"] }), "xhigh"],
+  ] as const)("passthrough chat preserves capability-specific reasoning_effort behavior (%s)", (_caseName, configuredProvider, expectedEffort) => {
     const rawBody = {
       messages: [{ role: "user", content: "hi" }],
       reasoning_effort: "xhigh",
     };
     const request = buildOpenAIChatPassthroughRequest(
-      provider({ reasoningEfforts: [] }),
+      configuredProvider,
       rawBody,
       "test-model",
       false,
     );
     const body = JSON.parse(request.body as string) as Record<string, unknown>;
 
-    expect(body).not.toHaveProperty("reasoning_effort");
+    expect(body.reasoning_effort).toBe(expectedEffort);
     expect(rawBody.reasoning_effort).toBe("xhigh");
   });
 });

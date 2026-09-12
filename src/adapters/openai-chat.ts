@@ -1,7 +1,7 @@
 import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
-import { configuredReasoningEfforts, mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -130,7 +130,12 @@ export function buildOpenAIChatPassthroughRequest(
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
     if (rawBody[field] !== undefined) body[field] = rawBody[field];
   }
-  if (configuredReasoningEfforts(provider, modelId)?.length === 0) delete body.reasoning_effort;
+  // Sanitizing the ladder collapses raw non-rankable values such as ["enabled"] to [],
+  // but that is an unknown capability rather than an explicit no-effort declaration.
+  const rawReasoningEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
+  if (modelInList(provider.noReasoningModels, modelId) || rawReasoningEfforts?.length === 0) {
+    delete body.reasoning_effort;
+  }
 
   const openRouterRouting = resolveOpenRouterRouting(provider, modelId);
   if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
