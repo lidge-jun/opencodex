@@ -1,5 +1,10 @@
 # Config Surface
 
+`src/cli/account-orca-import.ts` exposes an explicit-source, preview-first local import command.
+Apply adds pool configuration under the shared mutation lock; the
+[source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs
+deduplication and credential storage separately from Codex config injection.
+
 ## Config surface
 
 ### OpenCodex home and live process state

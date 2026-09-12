@@ -455,6 +455,25 @@ JSON mode: `payload`.
 - `store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.
 - Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.
 
+### `ocx account import-orca`
+
+Preview or register read-only links to Orca-managed Codex accounts without another login.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--source` | string | Orca data directory containing codex-accounts. |
+| `--registry` | string | The chosen Orca profile's orca-data.json account registry. |
+| `--apply` | boolean | Register new accounts; requires a stopped proxy. Default is preview. |
+| `--json` | boolean | Emit counts without credentials or source paths. |
+
+JSON mode: `envelope`.
+
+- Local files only; never copies refresh tokens or changes Orca authentication files.
+- Skips existing ChatGPT identities. New accounts remain pending until dashboard validation.
+- Orca must keep the source login available and refreshed; a missing or expired source fails closed.
+
 ### `ocx account refresh`
 
 Refresh account quotas without model validation; pending Codex accounts require dashboard consent.
@@ -769,6 +788,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 41
-- of those, state-changing: 20
+- declared capabilities: 42
+- of those, state-changing: 21
 - head-resolved invocations: 2

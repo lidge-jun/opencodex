@@ -1,5 +1,9 @@
 # Claude Desktop Integration
 
+Native OpenAI pool routing also accepts
+[Orca-linked accounts](../codex-home.md#orca-source-owned-account-import), whose source resolution
+belongs to the shared account store. The import CLI adds pool rows independently of Desktop profiles.
+
 ## Connected Claude Desktop profiles
 
 Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin

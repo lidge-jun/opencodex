@@ -1,5 +1,9 @@
 # Runtime
 
+The local account CLI and pool credential resolver share the
+[Orca source-owned import contract](codex-home.md#orca-source-owned-account-import): importing
+does not perform OAuth, and runtime credential resolution rereads the owned source.
+
 ## Entrypoints
 
 | Path | Responsibility |
