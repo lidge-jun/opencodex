@@ -19,6 +19,9 @@ Native retirement keeps active model/quota instructions aligned across locales w
 [catalog contract](../catalog.md#shared-catalog). Historical records and other providers
 sharing a model-name fragment remain distinct from current Codex-native support.
 
+The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
+`tests/cli/cli-connect-readiness.test.ts` exercises that boundary with isolated executable fixtures.
+
 ## GitHub Pages
 
 `.github/workflows/deploy-docs.yml` publishes the docs to:
