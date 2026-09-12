@@ -25,7 +25,7 @@ import {
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { emailMaskingEnabled } from "../../lib/privacy";
+import { emailMaskingEnabled, projectEmail } from "../../lib/privacy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -138,6 +138,45 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // Which providers support real OAuth login (drives the GUI's "Log in with …" buttons).
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {
     return jsonResponse({ providers: listOAuthProviders() });
+  }
+
+  // Human-readable attribution for the request log's opaque account labels. Log rows carry
+  // `accountLogLabel` (one-way: `o<sha256(provider\0accountId)[0..6]>` for oauth accounts, the
+  // `p<random>` label from the Codex pool config). This maps those labels back to the email
+  // (masked per the privacy setting) and plan so the dashboard can show who served a turn.
+  if (url.pathname === "/api/account-labels" && req.method === "GET") {
+    const mask = emailMaskingEnabled(config);
+    const { getAccountSet } = await import("../../oauth/store");
+    const { oauthAccountLogLabel } = await import("../../codex/account-label");
+    const labels: Array<{ label: string; provider: string; email?: string; plan?: string }> = [];
+    for (const [providerName, provider] of Object.entries(config.providers ?? {})) {
+      if (provider.authMode !== "oauth" || provider.disabled === true) continue;
+      let set: ReturnType<typeof getAccountSet>;
+      try {
+        set = getAccountSet(providerName);
+      } catch {
+        continue;
+      }
+      for (const account of set?.accounts ?? []) {
+        const email = account.credential.email;
+        labels.push({
+          label: oauthAccountLogLabel(account.id, providerName),
+          provider: providerName,
+          ...(email ? { email: projectEmail(email, mask) ?? undefined } : {}),
+        });
+      }
+    }
+    for (const entry of config.codexAccounts ?? []) {
+      if (!entry.logLabel) continue;
+      const email = entry.email;
+      labels.push({
+        label: entry.logLabel,
+        provider: "openai",
+        ...(email ? { email: projectEmail(email, mask) ?? undefined } : {}),
+        ...(entry.plan ? { plan: entry.plan } : {}),
+      });
+    }
+    return jsonResponse({ labels });
   }
 
   // API-key "login" providers (open dashboard → paste key). Drives the GUI's key-provider picker.

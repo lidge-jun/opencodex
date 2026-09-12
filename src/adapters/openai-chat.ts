@@ -29,6 +29,7 @@ import {
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
 import { stripResponsesOnlyEncryptedMarker, stripUnicodePropertyPatterns } from "./responses-tool-schema";
 import { agentRouterDefaultHeaders, frameAgentRouterMessages } from "./agentrouter";
+import { buildZcodeIdentityHeaders, buildZcodeTraceHeaders, isZcodePlanMeteredEndpoint } from "./zcode-identity";
 import {
   isXaiSchemaTarget,
   lookupLocalJsonPointer,
@@ -90,9 +91,16 @@ function openAIChatTransport(provider: OcxProviderConfig): {
   if ((provider.authMode === "key" || provider.authMode === "oauth") && !provider.keyOptional && !hasCredential) {
     throw new Error(`${provider.adapter} requires a non-empty credential (authMode: ${provider.authMode})`);
   }
+  // Plan-metered GLM destinations (coding-plan paths on api.z.ai / open.bigmodel.cn) are
+  // attributed by client identity and ZCode-identified traffic receives the increased
+  // usage allowance; neutral headers would meter the same plan without the bonus.
+  const zcodeIdentity = isZcodePlanMeteredEndpoint(provider.baseUrl)
+    ? { ...buildZcodeIdentityHeaders(), ...buildZcodeTraceHeaders("coding-plan") }
+    : {};
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...agentRouterDefaultHeaders(provider.baseUrl, provider.headers),
+    ...zcodeIdentity,
   };
   if (hasCredential) headers.Authorization = `Bearer ${provider.apiKey}`;
   if (provider.headers) Object.assign(headers, provider.headers);

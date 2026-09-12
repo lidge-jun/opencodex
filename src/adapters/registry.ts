@@ -9,6 +9,7 @@ import { createCursorAdapter } from "./cursor";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
+import { createZcodeStartPlanAdapter } from "./zcode-start-plan";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
@@ -115,6 +116,10 @@ export const ADAPTER_REGISTRY = {
   "mimo-free": {
     contractParent: "openai-chat",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createMimoFreeAdapter(provider),
+  },
+  "zcode-start-plan": {
+    contractParent: "anthropic",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createZcodeStartPlanAdapter(provider),
   },
   qoder: {
     contractParent: "codebuddy",

@@ -28,6 +28,7 @@ import { normalizeResponsesCodeMode } from "./responses-code-mode";
 import { stripUnicodePropertyPatterns } from "./responses-tool-schema";
 import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "./xai-web-search";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "./empty-tool-output-annotation";
+import { buildZcodeIdentityHeaders, buildZcodeTraceHeaders, isZcodePlanMeteredEndpoint } from "./zcode-identity";
 import {
   isXaiSchemaTarget,
   normalizeXaiToolParameters,
@@ -2313,7 +2314,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
 
     buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       const translatorBudget = incoming.translatorBudget;
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      // Plan-metered GLM destinations (e.g. the BigModel Coding Plan Responses wire) are
+      // attributed by client identity; ZCode-identified traffic receives the increased
+      // usage allowance. Forward-mode (ChatGPT backend) is never plan-metered.
+      const zcodeIdentity = provider.authMode !== "forward" && isZcodePlanMeteredEndpoint(provider.baseUrl)
+        ? { ...buildZcodeIdentityHeaders(), ...buildZcodeTraceHeaders("coding-plan") }
+        : {};
+      const headers: Record<string, string> = { "Content-Type": "application/json", ...zcodeIdentity };
       let url: string;
 
       if (provider.authMode === "forward") {

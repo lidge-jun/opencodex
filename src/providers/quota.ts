@@ -1,4 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { arch, homedir } from "node:os";
+import { join } from "node:path";
 import {
   effectiveCodexAuthAccountId,
   fetchMainAccountInfoSnapshot,
@@ -91,6 +94,8 @@ const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
 const OLLAMA_CLOUD_USAGE_URL = `${OLLAMA_CLOUD_BASE_URL}/api/usage`;
 const ZAI_BASE_URL = "https://api.z.ai";
 const ZAI_CN_BASE_URL = "https://open.bigmodel.cn";
+const ZCODE_PLAN_ORIGIN = "https://zcode.z.ai";
+const ZCODE_PLAN_APP_VERSION = process.env.ZCODE_PLAN_APP_VERSION?.trim() || "3.11.2";
 const MINIMAX_REMAINS_URL = "https://www.minimax.io/v1/token_plan/remains";
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
@@ -353,6 +358,35 @@ function isCanonicalZaiBaseUrl(baseUrl: string): boolean {
     || normalized === `${ZAI_CN_BASE_URL}/api/coding/paas/v4`
     // BigModel serves the same GLM Coding Plan on the OpenAI Responses wire at /api/v1.
     || normalized === `${ZAI_CN_BASE_URL}/api/v1`;
+}
+
+function isCanonicalZcodePlanBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === `${ZCODE_PLAN_ORIGIN}/api/v1/zcode-plan/anthropic`
+    || normalized === `${ZCODE_PLAN_ORIGIN}/api/v1/zcode-plan`;
+}
+
+/**
+ * Stable per-install device id the plan gateway's control plane expects on billing calls
+ * (`X-Device-Mid`; its absence is answered with biz code 3001). Generated once and stored
+ * under the OpenCodex config dir; `ZCODE_DEVICE_MID` overrides (e.g. to reuse the desktop
+ * client's id so the gateway sees one continuous device).
+ */
+function zcodePlanDeviceMid(): string {
+  const fromEnv = process.env.ZCODE_DEVICE_MID?.trim();
+  if (fromEnv) return fromEnv;
+  const dir = join(homedir(), ".config", "opencodex");
+  const file = join(dir, "zcode-plan-device-mid");
+  try {
+    const stored = readFileSync(file, "utf8").trim();
+    if (stored) return stored;
+  } catch {}
+  const mid = randomUUID();
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, mid, { mode: 0o600 });
+  } catch {}
+  return mid;
 }
 
 function isCanonicalMinimaxBaseUrl(baseUrl: string): boolean {
@@ -1684,7 +1718,8 @@ export function supportsPerAccountQuota(provider: string): boolean {
 }
 
 function explicitAccountReader(provider: string): boolean {
-  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code";
+  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
+    || provider === "zcode-start-plan";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -1962,6 +1997,7 @@ function explicitQuotaDestination(provider: string, config: OcxProviderConfig): 
   if (config.disabled === true || config.authMode !== "oauth") return false;
   if (provider === "kimi") return isCanonicalKimiCodeBaseUrl(config.baseUrl);
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
+  if (provider === "zcode-start-plan") return isCanonicalZcodePlanBaseUrl(config.baseUrl);
   // These readers use fixed canonical billing origins, never config.baseUrl.
   return provider === "xai" || provider === "cursor";
 }
@@ -1989,6 +2025,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "cursor": result = await fetchCursorQuota(provider, accessToken); break;
     case "kimi": result = await fetchKimiQuota(provider, config, accessToken); break;
     case "command-code": result = await fetchCommandCodeQuota(provider, config, accessToken); break;
+    case "zcode-start-plan": result = await fetchZcodeStartPlanQuota(provider, accessToken); break;
     default: return null;
   }
   return { result, identity, isCurrent };
@@ -2309,6 +2346,81 @@ async function fetchKimiQuota(provider: string, config: OcxProviderConfig, acces
   if (!response.ok) return null;
   const quota = parseKimiQuotaPayload(await readQuotaJson(response));
   return quota ? report(provider, "kimi:usages", quota) : null;
+}
+
+/**
+ * ZCode plan gateway billing balance (`/api/v1/zcode-plan/billing/balance`) — the same
+ * control plane the ZCode desktop client reads. Auth is the plan JWT; the gateway
+ * fingerprints control-plane calls, so the identity header set mirrors the client minus
+ * `X-ZCode-Agent` (which the client itself omits on control-plane fetches). Balance rows
+ * are plan-specific pools (`show_name`, used/total units), surfaced as custom windows.
+ */
+async function fetchZcodeStartPlanQuota(provider: string, accessToken: string): Promise<ProviderQuotaProbeResult> {
+  if (!accessToken) return null;
+  const platform = `${process.platform}-${arch()}`;
+  const language = (() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().locale || "unknown";
+    } catch {
+      return "unknown";
+    }
+  })();
+  const timezone = (() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown";
+    } catch {
+      return "unknown";
+    }
+  })();
+  const response = await fetch(
+    `https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(ZCODE_PLAN_APP_VERSION)}&platform=${encodeURIComponent(platform)}`,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        "HTTP-Referer": "https://zcode.z.ai",
+        "User-Agent": `ZCode/${ZCODE_PLAN_APP_VERSION}`,
+        "X-ZCode-App-Version": ZCODE_PLAN_APP_VERSION,
+        "X-Title": "Z Code@cli",
+        "X-Release-Channel": process.env.ZCODE_ENV?.trim().toLowerCase() === "test" ? "test" : "production",
+        "X-Client-Language": language,
+        "X-Client-Timezone": timezone,
+        "X-Platform": platform,
+        "X-Os-Category": process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux",
+        "X-Device-Mid": zcodePlanDeviceMid(),
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  if (!body || (typeof body.code === "number" && body.code !== 0)) return null;
+  const data = asRecord(body.data) ?? {};
+  const balances = Array.isArray(data.balances) ? data.balances : [];
+  const windows: ProviderQuotaWindow[] = [];
+  for (const row of balances) {
+    const entry = asRecord(row);
+    if (!entry) continue;
+    const label = typeof entry.show_name === "string" && entry.show_name.trim() ? entry.show_name.trim() : "balance";
+    const total = toFiniteNumber(entry.total_units ?? entry.totalUnits);
+    const used = toFiniteNumber(entry.used_units ?? entry.usedUnits);
+    if (total === undefined || total <= 0) continue;
+    const ratio = used === undefined ? (total - (toFiniteNumber(entry.remaining_units ?? entry.remainingUnits) ?? total)) / total : used / total;
+    const percent = normalizePercent(ratio * 100);
+    if (percent === undefined) continue;
+    const expiresAt = toFiniteNumber(entry.expires_at ?? entry.expiresAt);
+    windows.push({ label, percent, ...(expiresAt !== undefined ? { resetAt: expiresAt } : {}) });
+  }
+  if (windows.length === 0) return AUTHORITATIVE_EMPTY_QUOTA;
+  return report(provider, "zcode-start-plan:billing-balance", {
+    customWindows: windows,
+    updatedAt: Date.now(),
+  });
 }
 
 /**

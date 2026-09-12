@@ -2109,13 +2109,14 @@ table.logs-table {
   min-width: 1100px;
   table-layout: fixed;
 }
-.logs-table col.logs-col-time { width: 12%; }
-.logs-table col.logs-col-tokens { width: 9%; }
+.logs-table col.logs-col-time { width: 10%; }
+.logs-table col.logs-col-tokens { width: 8%; }
 .logs-table col.logs-col-rate { width: 7%; }
 .logs-table col.logs-col-cost { width: 8%; }
-.logs-table col.logs-col-model { width: 15%; }
-.logs-table col.logs-col-effort { width: 9%; }
-.logs-table col.logs-col-provider { width: 13%; }
+.logs-table col.logs-col-model { width: 13%; }
+.logs-table col.logs-col-effort { width: 8%; }
+.logs-table col.logs-col-provider { width: 11%; }
+.logs-table col.logs-col-account { width: 8%; }
 .logs-table col.logs-col-status { width: 8%; }
 .logs-table col.logs-col-request { width: 11%; }
 .logs-table col.logs-col-duration { width: 8%; }

@@ -784,6 +784,7 @@ export const tr: Record<TKey, string> = {
   "logs.col.model": "Model",
   "logs.col.effort": "Çaba",
   "logs.col.provider": "Sağlayıcı",
+"logs.col.account": "Hesap",
   "logs.col.status": "Durum",
   "logs.col.tokens": "Jetonlar",
   "logs.col.tokPerSec": "jeton/sn",

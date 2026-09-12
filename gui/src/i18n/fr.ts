@@ -778,6 +778,7 @@ export const fr: Record<TKey, string> = {
   "logs.col.model": "Modèle",
   "logs.col.effort": "Niveau",
   "logs.col.provider": "Fournisseur",
+"logs.col.account": "Compte",
   "logs.col.status": "État",
   "logs.col.tokens": "Jetons",
   "logs.col.tokPerSec": "jetons/s",

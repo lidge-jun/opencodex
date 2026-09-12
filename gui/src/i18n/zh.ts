@@ -760,6 +760,7 @@ export const zh: Record<TKey, string> = {
   "logs.col.model": "模型",
   "logs.col.effort": "推理强度",
   "logs.col.provider": "提供方",
+"logs.col.account": "账户",
   "logs.col.status": "状态",
   "logs.col.tokens": "Token 数",
   "logs.col.tokPerSec": "tok/s",

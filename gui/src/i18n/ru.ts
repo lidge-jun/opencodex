@@ -765,6 +765,7 @@ export const ru: Record<TKey, string> = {
   "logs.col.model": "Модель",
   "logs.col.effort": "Уровень",
   "logs.col.provider": "Провайдер",
+"logs.col.account": "Аккаунт",
   "logs.col.status": "Статус",
   "logs.col.tokens": "Токены",
   "logs.col.tokPerSec": "tok/s",

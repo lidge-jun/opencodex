@@ -710,6 +710,7 @@ export const ja: Record<TKey, string> = {
   "logs.col.model": "モデル",
   "logs.col.effort": "負荷",
   "logs.col.provider": "プロバイダー",
+"logs.col.account": "アカウント",
   "logs.col.status": "状態",
   "logs.col.tokens": "トークン",
   "logs.col.tokPerSec": "tok/s",

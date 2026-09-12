@@ -797,6 +797,7 @@ export const en = {
   "logs.col.model": "Model",
   "logs.col.effort": "Effort",
   "logs.col.provider": "Provider",
+"logs.col.account": "Account",
   "logs.col.status": "Status",
   "logs.col.tokens": "Tokens",
   "logs.col.tokPerSec": "tok/s",

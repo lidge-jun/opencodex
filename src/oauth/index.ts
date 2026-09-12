@@ -34,6 +34,7 @@ import {
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
+import { loginZcodeStartPlan, refreshZcodeStartPlanToken } from "./zcode-start-plan";
 import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, RefreshIntentIOError } from "./nous";
 import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
@@ -263,6 +264,15 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: refreshKimiToken,
     providerConfig: oauthConfig("kimi"),
     defaultModel: oauthDefaultModel("kimi"),
+  },
+  "zcode-start-plan": {
+    login: (ctrl) => loginZcodeStartPlan(ctrl),
+    refresh: refreshZcodeStartPlanToken,
+    providerConfig: oauthConfig("zcode-start-plan"),
+    defaultModel: oauthDefaultModel("zcode-start-plan"),
+    // The plan JWT has no exp claim and no silent refresh: a rejected token is terminal and
+    // needs a fresh browser login. Never generate background refresh traffic for it.
+    defaultRefreshPolicy: "disabled",
   },
   "meta-muse": {
     login: ctrl => loginMetaMuse(ctrl),

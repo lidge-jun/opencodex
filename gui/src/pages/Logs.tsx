@@ -142,6 +142,8 @@ export interface LogEntry {
   timestamp: number;
   model: string;
   provider: string;
+  /** Pool/account label the turn was served under (e.g. "p83fa8d", "main"); absent when unattributed. */
+  accountLogLabel?: string;
   surface?: LogSurface;
   conversationId?: string;
   /**
@@ -437,6 +439,34 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       })
       .catch(() => {
         // Offline or an older proxy without the field: keep browser-local formatting.
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [apiBase]);
+  // Opaque log labels → human attribution (email masked per proxy privacy settings).
+  // Fetched once per page: labels are stable for the lifetime of an account.
+  const [accountLabels, setAccountLabels] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+    fetch(`${apiBase}/api/account-labels`, { signal: controller.signal })
+      .then(res => (res.ok ? res.json() as Promise<{ labels?: Array<{ label?: unknown; email?: unknown; plan?: unknown }> }> : null))
+      .then(body => {
+        if (cancelled || !body?.labels) return;
+        const map = new Map<string, string>();
+        for (const row of body.labels) {
+          if (typeof row.label !== "string" || !row.label) continue;
+          const parts: string[] = [];
+          if (typeof row.email === "string" && row.email) parts.push(row.email);
+          if (typeof row.plan === "string" && row.plan) parts.push(row.plan);
+          if (parts.length > 0) map.set(row.label, parts.join(" · "));
+        }
+        setAccountLabels(map);
+      })
+      .catch(() => {
+        // Older proxy without the endpoint: fall back to the raw opaque labels.
       });
     return () => {
       cancelled = true;
@@ -752,6 +782,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               <col className="logs-col-model" />
               <col className="logs-col-effort" />
               <col className="logs-col-provider" />
+              <col className="logs-col-account" />
               <col className="logs-col-status" />
               <col className="logs-col-request" />
               <col className="logs-col-duration" />
@@ -765,6 +796,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                <th className="log-col-model">{t("logs.col.model")}</th>
                <th>{t("logs.col.effort")}</th>
                <th>{t("logs.col.provider")}</th>
+               <th>{t("logs.col.account")}</th>
                <th>{t("logs.col.status")}</th>
                 <th>{t("logs.col.request")}</th>
                <th className="num log-col-duration">{t("logs.col.duration")}</th>
@@ -773,7 +805,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             <tbody>
               {paddingTop > 0 && (
                 <tr>
-                  <td colSpan={10} className="logs-virtual-spacer" style={{ height: paddingTop }} />
+                  <td colSpan={11} className="logs-virtual-spacer" style={{ height: paddingTop }} />
                 </tr>
               )}
               {virtualRows.map(virtualRow => {
@@ -858,6 +890,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       9% column and painted over the provider cell. */}
                   <td className="mono log-reasoning-cell" title={reasoningWire}>{effortLabel(log)}</td>
                   <td className="muted">{formatProviderDisplayName(log.provider, t)}</td>
+                  <td className="muted mono" title={log.accountLogLabel}>{accountLabels.get(log.accountLogLabel ?? "") ?? log.accountLogLabel ?? "—"}</td>
                   <td>
                     <span className="log-status-cell">
                       <span className="mono font-semibold" style={{ color: statusColor(log.status) }}>{log.status}</span>
@@ -878,7 +911,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               })}
               {paddingBottom > 0 && (
                 <tr>
-                  <td colSpan={10} className="logs-virtual-spacer" style={{ height: paddingBottom }} />
+                  <td colSpan={11} className="logs-virtual-spacer" style={{ height: paddingBottom }} />
                 </tr>
               )}
             </tbody>

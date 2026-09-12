@@ -614,6 +614,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.col.model": "模型",
   "logs.col.effort": "推理強度",
   "logs.col.provider": "供應商",
+"logs.col.account": "帳戶",
   "logs.col.status": "狀態",
   "logs.col.tokens": "Token 數",
   "logs.col.tokPerSec": "tok/s",

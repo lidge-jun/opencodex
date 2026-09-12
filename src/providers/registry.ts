@@ -2546,6 +2546,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "GLM-5.3 coding subscription",
     models: ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
     modelContextWindows: { "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    // glm-5.3-flash is a native VLM (docs.z.ai/guides/vlm/glm-5.3-flash): text+image in.
+    // The 5.x rows minus flash stay in noVisionModels (sidecar-described images).
+    modelInputModalities: { "glm-5.3-flash": ["text", "image"] },
     // Z.AI's OpenAI path returns 400 code 1211 for bracketed model ids.
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
@@ -2554,6 +2557,32 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, 131_072])),
     modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_5X_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: ZAI_GLM_5X_MODELS,
+  },
+  // ZCode plan gateway (zcode.z.ai): serves the Z.ai Start Plan quota bundled with the
+  // ZCode desktop client. Login is the gateway's OAuth CLI flow (`ocx login
+  // zcode-start-plan`); the JWT arrives as apiKey through oauth rotation and is sent as
+  // `Authorization: Bearer` with client-identical identity headers. The route is exempt
+  // from V4 client signing; Aliyun WAF captcha challenges are solved in-process by the
+  // adapter's traceless solver. Model ids follow the gateway's client config.
+  {
+    id: "zcode-start-plan",
+    label: "ZCode — Z.ai Start Plan",
+    baseUrl: "https://zcode.z.ai/api/v1/zcode-plan/anthropic",
+    adapter: "zcode-start-plan",
+    authKind: "oauth",
+    oauthId: "zcode-start-plan",
+    featured: true,
+    dashboardUrl: "https://zcode.z.ai",
+    defaultModel: "GLM-5.3",
+    note: "Z.ai Start Plan quota from the ZCode gateway (OAuth login)",
+    models: ["GLM-5.3", "GLM-5.3-Flash", "GLM-5.2", "GLM-5-Turbo"],
+    modelContextWindows: { "GLM-5.3": 1_000_000, "GLM-5.3-Flash": 1_000_000, "GLM-5.2": 1_000_000, "GLM-5-Turbo": 200_000 },
+    // The gateway's Anthropic route has no /models listing; `models` is the allowlist
+    // published by its client config. Live discovery would 404 every startup.
+    liveModels: false,
+    // GLM-5.3-Flash accepts image input on this gateway (per the client config the
+    // desktop client loads); GLM-5.3 and GLM-5.2 stay text-only.
+    modelInputModalities: { "GLM-5.3-Flash": ["text", "image"] },
   },
   // Zhipu's domestic BigModel platform: OpenAI-compatible pay-as-you-go on open.bigmodel.cn — a
   // different host and billing product from the `zai` coding-plan subscription above.

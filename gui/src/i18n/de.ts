@@ -748,6 +748,7 @@ export const de: Record<TKey, string> = {
   "logs.col.model": "Modell",
   "logs.col.effort": "Aufwand",
   "logs.col.provider": "Anbieter",
+"logs.col.account": "Konto",
   "logs.col.status": "Status",
   "logs.col.tokens": "Tokens",
   "logs.col.tokPerSec": "tok/s",
