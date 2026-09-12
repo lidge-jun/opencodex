@@ -10,6 +10,7 @@ import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, Ocx
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import { getCachedCatalog } from "./devin/cloud-direct/catalog";
+import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
 
 export const DEVIN_API_SERVER = DEVIN_DEFAULT_API_SERVER;
@@ -119,7 +120,20 @@ function assistantText(message: OcxAssistantMessage): string {
 
 export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem[] {
   const items: ChatHistoryItem[] = [];
-  const system = parsed.context.systemPrompt?.filter((line) => line.trim().length > 0).join("\n");
+  // Cognition is not an OpenAI host, and this adapter does advertise a real
+  // client tool catalog (proto #10 via `mapOcxToolsToDevin`), so the same
+  // contract paragraph the other non-OpenAI adapters inject belongs here. The
+  // wire name is the bare `tool.name` that encoder writes, not the namespaced
+  // form, so the nudge names exactly what the model is offered.
+  const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(
+    parsed.context.tools,
+    parsed.options.toolChoice,
+    (tool) => tool.name,
+  );
+  const systemPrompt = parsed.context.systemPrompt?.filter((line) => line.trim().length > 0).join("\n");
+  const system = [systemPrompt, toolCatalogNudge]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join("\n\n");
   if (system) items.push({ role: "system", content: system });
 
   for (const message of parsed.context.messages) {

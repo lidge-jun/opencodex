@@ -1320,19 +1320,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // The CLI writes a `devin-session-token$<JWT>` to its own credentials.toml,
     // which is the same credential RegisterUser hands `ocx login devin` and which
     // the cloud-direct client already speaks. So this provider imports that token
-    // and streams over Connect-RPC like its browser-login sibling, rather than
-    // spawning `devin acp`.
+    // and streams over Connect-RPC like its browser-login sibling.
     //
     // `oauth` classifies the ACCOUNT, not the transport. This is not a local
     // runtime: unlike Ollama or LM Studio it cannot answer at all until a vendor
     // account is signed in, and `local` grouped it with things that have no
     // account. It is also the only classification that reaches the dashboard
     // Accounts tab, which is built from OAUTH_PROVIDERS.
-    //
-    // The ACP adapter stays registered and tested. It is no longer reachable
-    // under THIS id — `routedProviderConfig` pins the adapter from the registry
-    // for any row whose name is a registry id — but a custom-named row such as
-    // `{"devin-acp": {"adapter": "devin-cli", ...}}` is not pinned and still gets it.
     id: "devin-cli",
     label: "Devin CLI",
     adapter: "devin",
@@ -1343,7 +1337,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // flag, so leaving it true would draw the row twice: an Accounts login row and
     // a preset tile.
     dashboardPreset: false,
-    note: "Imports the credential your installed Devin CLI already holds (`devin auth login`), then streams over Cognition's Connect-RPC api-server like the `devin` provider. No browser sign-in and no key to paste. For the CLI's own local agent loop over ACP stdio instead, configure a custom-named provider row with \"adapter\": \"devin-cli\".",
+    note: "Imports the credential your installed Devin CLI already holds (`devin auth login`), then streams over Cognition's Connect-RPC api-server like the `devin` provider. No browser sign-in and no key to paste.",
     // Degraded-mode seed only; `liveModels` discovers the account's real roster,
     // which is where `swe-2` and the rest of the current catalog come from.
     models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6"],

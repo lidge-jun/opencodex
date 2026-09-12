@@ -19,10 +19,20 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
-import { DEVIN_CLI_INSTALL_HINT } from "../adapters/devin-cli/binary";
 import { identityFromApiKey } from "./devin";
 import { resolveDevinApiBaseUrl } from "./devin/api-base";
 import type { OAuthController, OAuthCredentials } from "./types";
+
+/**
+ * How to get a signed-in CLI, for the one error that needs to say so.
+ *
+ * This flow reads `credentials.toml` and never executes the CLI, so it does not
+ * resolve the binary. The constant used to live beside the discovery helper the
+ * retired ACP adapter needed; that adapter is gone and this sentence is all that
+ * outlived it.
+ */
+const DEVIN_CLI_INSTALL_HINT =
+  "Install the Devin CLI with `curl -fsSL https://cli.devin.ai/install.sh | bash` or `brew install --cask devin-cli`, then run `devin auth login`.";
 
 /**
  * Structurally the `LoginOpts` from `./index`, restated here rather than imported.

@@ -14,10 +14,10 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   cursor: "cursor-color.svg",
   deepseek: "deepseek-color.svg",
   /*
-   * One mark for both Devin providers. `devin` is Cognition's cloud, reached
-   * through the Windsurf sign-in, and `devin-cli` drives the installed Devin
-   * CLI; they are two transports into the same product, the meta-model/meta-muse
-   * shape. Windsurf still publishes its own `W` app icon, but showing it next
+   * One mark for both Devin providers. They are one product reached two ways:
+   * `devin` signs in through Windsurf in a browser, `devin-cli` imports the
+   * credential the installed CLI already holds, and both stream over the same
+   * Cognition adapter. Windsurf still publishes its own `W` app icon, but showing it next
    * to a row labelled Cognition would name the retired brand.
    */
   devin: "devin.svg",
