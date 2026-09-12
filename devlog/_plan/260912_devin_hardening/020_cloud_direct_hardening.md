@@ -76,3 +76,18 @@ already knows, with status 499.
 ## Verification
 
 bun test tests/providers/devin-adapter.test.ts tests/providers/devin-hardening.test.ts
+
+## 5. A Connect trailer carries no status — closed
+
+Landed in `connectTrailerHttpStatus`. The three EOS trailer throw sites now pass a status,
+so a cap delivered as `permission_denied` with "your limit will reset" reads as 429 rather
+than 403, an `unauthenticated` trailer reaches the auth path, and an unrecognised code still
+falls back to message inference. `unimplemented` maps to 501 and is explicitly non-retryable,
+because the blanket 5xx rule was telling clients to retry a call the service does not
+implement.
+
+Accepted residuals: `internal`, `unknown` and `data_loss` map to 502 rather than Connect's
+500 — both are transient here and 502 is what this adapter already reported — and a genuine
+ACL denial whose text happens to contain the words "rate limit" would be read as a cap. The
+regex reads the raw trailer message, never the enriched text, so the tool-description
+blocklist wrapper cannot trip it.
