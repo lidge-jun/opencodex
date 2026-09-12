@@ -1,6 +1,6 @@
 # Transport Inventory
 
-For shared JSON request-body parsing, see [request-copy accounting](responses.md#request-copy-accounting).
+Shared parsing and streaming follow the [request-copy](responses.md#request-copy-accounting) and [stream-buffer accounting](responses.md#stream-buffer-accounting) contracts.
 
 ## Transport inventory
 

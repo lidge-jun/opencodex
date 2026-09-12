@@ -15,7 +15,7 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 | `hostname?` | `string` | `"127.0.0.1"` | Bağlama adresi. Geri döngü olmayan bağlamalar `OPENCODEX_API_AUTH_TOKEN` gerektirir. |
 | `proxy?` | `string` | — | Giden HTTP(S) proxy URL'si veya `${ENV_VAR}`. Yalnızca bu değişkenler ayarlanmadığında `HTTP_PROXY` / `HTTPS_PROXY`'ye uygulanır; geri döngü `NO_PROXY` içinde kalır. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Metin veya araç çağrısı içermeyen bir Responses tamamlamasını aynı istekle bir kez yeniden denemeyi açıkça etkinleştirir. Yeniden deneme ücretlendirilebilir. `OCX_EMPTY_COMPLETION_RETRY=0`, yapılandırmayı değiştirmeden devre dışı bırakır; combo ve routed-compaction turları hariçtir. |
-| `stallTimeoutSec?` | `number` | `300` | `response.incomplete` öncesinde yukarı akış verisi olmadan geçen saniye. Minimum 1. |
+| `stallTimeoutSec?` | `number` | `300` | Responses ve yerel Chat için anlamlı üst sunucu ilerlemesi olmadan geçen saniye. En az 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Deneme başına DNS/TCP/TLS/nihai başlık son tarihi; gövde üretiminden önce biter. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Aktif turlar iptal edilmeden önce zarif boşaltma süresi sınırı. |
 | `websockets?` | `boolean` | `false` | Responses WebSocket yolu için `supports_websockets` bildirin. False, HTTP/SSE'yi tutar. |
@@ -35,6 +35,10 @@ Daha eski bir geliştirme derlemesi yedekleme desteği var olmadan önce devam
 geçmişi meta verilerini değiştirdiyse yerel sağlayıcı kurtarmasını zorlamak için
 `ocx recover-history --legacy-openai --yes` çalıştırın.
 Komut, geçerli dedicated-provider geçmişi de dahil olmak üzere kullanıcı iletisi bulunan tüm `opencodex` satırlarını yeniden etiketler; çalıştırmadan önce lifecycle başvurusundaki tam kapsam uyarısını okuyun.
+
+### Yerel Chat zaman aşımı ve tamamlanma
+
+Yerel Chat de üst sunucu çıktısını beklerken `stallTimeoutSec` kullanır. Boş olmayan metin, akıl yürütme, ret içeriği, araç güncellemeleri ve bitiş olayları süreyi yeniler; bağlantıyı canlı tutan yorumlar, yalnızca rol ve yalnızca kullanım bilgileri yenilemez. Yavaş istemcinin okumasını beklemek süreyi duraklatır. Zaman aşımı `upstream_stall_timeout` üretir: akış istemcileri hata olayı, akışsız istemciler HTTP 502 alır. Sonuç tamamlanmadan iptal edilen istek, başarılı bir kısmi yanıt yerine iptal hatası döndürür. Akışsız Chat, LF ve CRLF ayraçlarını ve çok satırlı data alanlarını destekler.
 
 ## Uzaktan erişim
 

@@ -13,7 +13,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `hostname?` | `string` | `"127.0.0.1"` |バインドアドレス。非ループバック バインドには `OPENCODEX_API_AUTH_TOKEN` が必要です。 |
 | `proxy?` | `string` | — |送信 HTTP(S) プロキシ URL または `${ENV_VAR}`。これらの変数が設定されていない場合にのみ、`HTTP_PROXY` / `HTTPS_PROXY` に適用されます。ループバックは `NO_PROXY` に残ります。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | テキストもツール呼び出しもない Responses ターンを、ターミナルイベント前にストリームが終了した場合も含め、同一リクエストで 1 回再試行するよう明示的に有効化します。再試行は課金対象になる場合があります。`OCX_EMPTY_COMPLETION_RETRY=0` で設定を変更せず無効化できます。combo と routed-compaction turn は対象外です。 |
-| `stallTimeoutSec?` | `number` | `300` | `response.incomplete` より前にアップストリーム データがない秒数。最小 1。
+| `stallTimeoutSec?` | `number` | `300` | Responses とネイティブ Chat の有効な上流進捗がない秒数。最小 1 秒。 |
 | `connectTimeoutMs?` | `number` | `200000` |試行ごとの DNS/TCP/TLS/最終ヘッダーの期限。本体が生成される前に終了します。 |
 | `shutdownTimeoutMs?` | `number` | `5000` |アクティブなターンが中止される前の正常な排出期限。 |
 | `websockets?` | `boolean` | `false` | クライアント向け Responses WebSocket パスを広告して許可します。false の場合クライアントは HTTP/SSE を使いますが、対象となる canonical ChatGPT upstream WS 最適化は無効にしません。 |
@@ -31,6 +31,10 @@ description: リスナー、リモート アクセス、アドミッション �
 
 バックアップ サポートが存在する前に古い開発ビルドで再開履歴メタデータが変更された場合は、`ocx recover-history --legacy-openai --yes` を実行してネイティブ プロバイダーの回復を強制します。
 このコマンドは、正当な専用プロバイダー履歴を含む、ユーザーメッセージを持つすべての `opencodex` 行を再ラベル付けします。実行前にライフサイクル リファレンスの全範囲に関する警告を確認してください。
+
+### ネイティブ Chat のタイムアウトと完了
+
+ネイティブ Chat も上流出力の待機に `stallTimeoutSec` を使用します。空でないテキスト、推論、拒否内容、ツール更新、完了イベントは待機時間を更新しますが、キープアライブのコメント、ロールのみのイベント、使用量のみのイベントは更新しません。低速クライアントの読み取り待ちは計時を停止します。タイムアウト時は `upstream_stall_timeout` が返り、ストリーミングではエラーイベント、非ストリーミングでは HTTP 502 になります。終端結果より前のキャンセルは成功した部分回答ではなくキャンセルエラーになります。非ストリーミング Chat は LF、CRLF、複数行 data の SSE に対応します。
 
 ## リモートアクセス
 

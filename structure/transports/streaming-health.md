@@ -1,8 +1,12 @@
 # Streaming Health And WebSocket
 
-For shared JSON request-body parsing, see [request-copy accounting](responses.md#request-copy-accounting).
+Shared parsing and streaming follow the [request-copy](responses.md#request-copy-accounting) and [stream-buffer accounting](responses.md#stream-buffer-accounting) contracts.
 
 ## Heartbeat and stall deadline
+
+Native Chat uses the same resolved `stallTimeoutSec` with a pending-upstream-read allowance that
+pauses under downstream backpressure. Its Chat error and cancellation contract is documented in
+[native Chat completion lifecycle](../data-planes/inbound-compat.md#native-chat-completion-lifecycle).
 
 The HTTP/SSE bridge emits an SSE comment-line keep-alive (`: opencodex heartbeat`) during upstream
 silence to re-arm Codex's idle timer (Codex's default `stream_idle_timeout` is 300 s and ANY SSE

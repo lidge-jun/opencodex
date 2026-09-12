@@ -1,6 +1,6 @@
 # xAI Grok Provider
 
-For shared JSON request-body parsing, see [request-copy accounting](../transports/responses.md#request-copy-accounting).
+Shared parsing and streaming follow the [request-copy](../transports/responses.md#request-copy-accounting) and [stream-buffer accounting](../transports/responses.md#stream-buffer-accounting) contracts.
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
