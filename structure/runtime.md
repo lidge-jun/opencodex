@@ -191,6 +191,27 @@ not an authentication or entitlement decision.
 
 Routed Responses continuations whose local replay state is missing resolve their recovery decision from the selected wire protocol, not the model name; the contract lives in [Responses transport](transports/responses.md).
 
+### Hosted web-search forced-answer contract
+
+`src/web-search/loop.ts` drives the routed model in rounds: while the model's only actionable output is
+the synthetic `web_search` call, each round runs the sidecar search and re-asks. Once the search budget
+is spent the loop takes a forced-answer pass with the synthetic tool removed, so the model has to answer
+from the tool results already in the conversation. The loop's hard iteration bound is therefore
+`maxSearches + 2` — the search rounds, the forced pass, and at most one recovery pass below.
+
+A forced pass that ends `done` with no visible text and no real tool call is silence, not an answer. It
+is retried exactly once, at the cost of one extra upstream model call: the retry empties
+`context.tools` as well as setting `toolChoice`, so no adapter can keep advertising a tool, appends a
+developer nudge asking for the missing text, and leaves the search/result history collected so far
+unchanged. A second empty pass fails the turn rather than reporting a silent success, and a malformed
+closed call fails immediately without a retry.
+
+Truncated terminals are a different outcome and are never retried: a forced pass that ends `done` with a
+`stopReason` from the truncation vocabulary in `src/responses/truncated-stop-reason.ts`
+(`content_filter`, `refusal`, `max_tokens`, ...) is replayed unchanged and spends no recovery call, so
+the bridge still reports it as `response.incomplete`. A provider's explicit filtered/truncated decision
+is preserved; only genuine silence is bought back with a second model call.
+
 ## Remote Hub hardening ownership
 
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.

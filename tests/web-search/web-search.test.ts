@@ -133,6 +133,181 @@ describe("issue #1001 — forced-answer passes must produce usable output", () =
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
     expect(frames.some(frame => frame.event === "response.failed")).toBe(false);
   });
+
+  // #1001 chose to fail rather than complete silently, which turned silence into a dead turn:
+  // the user sees "stream disconnected before completion: forced-answer pass produced no usable
+  // assistant output". Silence is recoverable, so the pass is retried once with no tools before
+  // the same error is reported. Malformed calls still fail immediately.
+  describe("empty forced answer recovery", () => {
+    const webSearchOnly = [{ type: "web_search" }];
+    // The client's ordinary tool must survive the forced pass yet disappear from the recovery pass:
+    // adapters such as Devin put context.tools on the wire verbatim, so toolChoice "none" alone
+    // still advertised it. Only a web_search + ordinary-tool fixture distinguishes the two.
+    const webSearchAndFileTool = [
+      { type: "web_search" },
+      { type: "function", name: "read_file", description: "Read file", parameters: { type: "object" } },
+    ];
+
+    function sequenceAdapter(
+      passes: AdapterEvent[][],
+      seen: OcxParsedRequest[],
+      onPass?: (pass: number) => void,
+    ): ProviderAdapter {
+      let pass = 0;
+      return {
+        name: "sequence",
+        buildRequest: (request) => {
+          seen.push(request);
+          return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+        },
+        fetchResponse: async () => new Response("wire", { status: 200 }),
+        async *parseStream() {
+          const index = Math.min(pass++, passes.length - 1);
+          onPass?.(index);
+          for (const event of passes[index] ?? []) yield event;
+        },
+        async parseResponse() {
+          throw new Error("parseResponse must be unreachable");
+        },
+      };
+    }
+
+    async function drivePasses(
+      passes: AdapterEvent[][],
+      seen: OcxParsedRequest[] = [],
+      options: { tools?: unknown[]; abortSignal?: AbortSignal; onPass?: (pass: number) => void } = {},
+    ) {
+      const response = await runWithWebSearch({
+        parsed: parseRequest({
+          model: "routed/model",
+          input: "hi",
+          stream: true,
+          tools: options.tools ?? webSearchOnly,
+        }),
+        adapter: sequenceAdapter(passes, seen, options.onPass),
+        forwardProvider,
+        hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+        settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+        maxSearches: 1,
+        ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+      });
+      return collectSse(response.body!);
+    }
+
+    /** Only the three frames that end a turn, in the order the bridge emitted them. */
+    function terminalFrames(frames: { event?: string }[]): string[] {
+      return frames
+        .map(frame => frame.event ?? "")
+        .filter(event => event === "response.completed" || event === "response.failed" || event === "response.incomplete");
+    }
+
+    test("an empty forced pass is retried once and completes", async () => {
+      const frames = await drivePasses([
+        webSearchFirstPass,
+        [{ type: "done" }],
+        [{ type: "text_delta", text: "recovered answer" }, { type: "done" }],
+      ]);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+      expect(frames.some(frame => frame.event === "response.failed")).toBe(false);
+    });
+
+    test("the recovery pass asks for text with every tool removed", async () => {
+      const seen: OcxParsedRequest[] = [];
+      await drivePasses([
+        webSearchFirstPass,
+        [{ type: "done" }],
+        [{ type: "text_delta", text: "recovered answer" }, { type: "done" }],
+      ], seen);
+      // The search pass plus the empty forced pass plus exactly one recovery — no extra upstream call.
+      expect(seen).toHaveLength(3);
+      const recovery = seen[2]!;
+      expect(recovery.options.toolChoice).toBe("none");
+      expect(recovery.context.tools).toEqual([]);
+      // The results gathered by the search reach the recovery turn as a tool result ...
+      expect(recovery.context.messages.filter(message => message.role === "toolResult")).toHaveLength(1);
+      // ... and the recovery turn carries the developer nudge that asks for the missing text.
+      expect(recovery.context.messages.some(message =>
+        message.role === "developer" && String(message.content).includes("no tools are available")))
+        .toBe(true);
+    });
+
+    test("an ordinary client tool is dropped from the recovery pass but kept for the forced pass", async () => {
+      const seen: OcxParsedRequest[] = [];
+      const frames = await drivePasses([
+        webSearchFirstPass,
+        [{ type: "done" }],
+        [{ type: "text_delta", text: "recovered answer" }, { type: "done" }],
+      ], seen, { tools: webSearchAndFileTool });
+      expect(seen).toHaveLength(3);
+      // Forced pass: the synthetic web_search is gone, the client's own tool is still advertised.
+      expect(seen[1]!.context.tools?.map(tool => tool.name)).toEqual(["read_file"]);
+      expect(seen[1]!.options.toolChoice).toBeUndefined();
+      // Recovery pass: nothing to call at all — in the tool list AND in the tool choice.
+      expect(seen[2]!.context.tools).toEqual([]);
+      expect(seen[2]!.options.toolChoice).toBe("none");
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+    });
+
+    test("a persistent empty forced pass still fails after the one recovery", async () => {
+      const seen: OcxParsedRequest[] = [];
+      const frames = await drivePasses([
+        webSearchFirstPass,
+        [{ type: "done" }],
+        [{ type: "done" }],
+      ], seen);
+      expect(seen).toHaveLength(3);
+      expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+    });
+
+    test("a malformed forced call is not retried", async () => {
+      const seen: OcxParsedRequest[] = [];
+      const frames = await drivePasses([
+        webSearchFirstPass,
+        [{ type: "tool_call_start", id: "", name: "" }, { type: "tool_call_end" }, { type: "done" }],
+        [{ type: "text_delta", text: "recovered answer" }, { type: "done" }],
+      ], seen);
+      expect(seen).toHaveLength(2);
+      expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+    });
+
+    // A filtered/truncated forced pass is a provider DECISION, not silence. The bridge already
+    // reports it as response.incomplete, so the loop must spend no second upstream call on it and
+    // must not turn it into a success — the third pass below is deliberately a good answer that
+    // must never be requested.
+    for (const stopReason of ["content_filter", "max_tokens", "refusal"] as const) {
+      test("a " + stopReason + " forced terminal is replayed incompletely and never retried", async () => {
+        const seen: OcxParsedRequest[] = [];
+        const frames = await drivePasses([
+          webSearchFirstPass,
+          [{ type: "done", stopReason }],
+          [{ type: "text_delta", text: "recovered answer" }, { type: "done" }],
+        ], seen);
+        expect(seen).toHaveLength(2);
+        expect(terminalFrames(frames)).toEqual(["response.incomplete"]);
+        const incomplete = frames.filter(frame => frame.event === "response.incomplete");
+        const snapshot = incomplete[0]!.data.response as { incomplete_details: { reason: string } };
+        expect(snapshot.incomplete_details.reason)
+          .toBe(stopReason === "max_tokens" ? "max_output_tokens" : "content_filter");
+      });
+    }
+
+    test("a cancelled turn does not spend the recovery attempt", async () => {
+      const seen: OcxParsedRequest[] = [];
+      const controller = new AbortController();
+      const frames = await drivePasses([
+        webSearchFirstPass,
+        [{ type: "done" }],
+        [{ type: "text_delta", text: "recovered answer" }, { type: "done" }],
+      ], seen, {
+        abortSignal: controller.signal,
+        onPass: pass => { if (pass === 1) controller.abort(new Error("client closed responses stream")); },
+      });
+      expect(seen).toHaveLength(2);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+    });
+  });
 });
 
 const routedProvider: OcxProviderConfig = {
