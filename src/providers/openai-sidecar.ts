@@ -130,6 +130,7 @@ export async function resolveFirstUsableOpenAiSidecar(
     admission?: Pick<DataPlaneAdmission, "source">;
     codexAuthPolicy?: CodexAuthPolicyConfig;
     beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
+    signal?: AbortSignal;
   } = {},
 ): Promise<ResolvedOpenAiForwardSidecar | undefined> {
   const { exactAccount } = options;
@@ -152,9 +153,11 @@ export async function resolveFirstUsableOpenAiSidecar(
         modelId: exactAccount.modelId,
         admission: options.admission,
         beginCodexAccountSelection: options.beginCodexAccountSelection,
+        signal: options.signal,
       });
       let selectedHeaders: Headers;
       try {
+        options.signal?.throwIfAborted();
         selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, exactAccount.modelId, options.admission);
       } catch (error) {
         releaseCodexAuthContextProbeLease(authContext);
@@ -202,9 +205,11 @@ export async function resolveFirstUsableOpenAiSidecar(
       codexAuthPolicy: policy,
       admission: options.admission,
       beginCodexAccountSelection: options.beginCodexAccountSelection,
+      signal: options.signal,
     });
     let selectedHeaders: Headers;
     try {
+      options.signal?.throwIfAborted();
       selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, undefined, options.admission);
     } catch (error) {
       releaseCodexAuthContextProbeLease(authContext);

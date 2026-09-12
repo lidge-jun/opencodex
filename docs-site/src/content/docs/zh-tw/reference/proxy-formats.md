@@ -191,6 +191,8 @@ thinking 重播與提示快取仍由獨立的 [#3719](https://github.com/lidge-j
 
 ## `POST /v1/live` 與 Realtime sideband
 
+下方帳戶綁定說明適用於原生 Codex 用戶端。透過外部 API 金鑰使用語音轉寫及 GPT-Live，請參閱[英文音訊 API 規格](/reference/proxy-formats/#streaming-dictation)。
+
 `POST /v1/live` 接受 ChatGPT/Codex App Frameless call-creation 介面。
 `POST /v1/realtime/calls` 接受 OpenAI Realtime call-creation 介面。opencodex 選擇一個合格的 OpenAI 家族路由、為上游認證模式正規化 call-creation 請求，並中繼有界的回應。
 

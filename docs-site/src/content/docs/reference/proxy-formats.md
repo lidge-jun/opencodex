@@ -34,6 +34,7 @@ Credential-bearing model, image, video, and search requests do not automatically
 | Anthropic token count | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | Not applicable |
 | Model discovery | `GET /v1/models` | Catalog or explicit Desktop snapshot | Not applicable |
 | File transcription | `POST /v1/audio/transcriptions` | `{ "text": string }` or plain text | Not supported on this file endpoint |
+| Streaming dictation | `WS /v1/audio/transcriptions/stream` | Not applicable | Desktop dictation JSON events |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
 
@@ -71,6 +72,40 @@ Direct mode uses the stored main account under the existing profile admission
 rules; Pool mode uses the selected stored account. Missing, expired or draining
 credentials return an error. Cancellation stops the outbound request and audio
 content is not written to request history.
+
+## Streaming dictation
+
+`WS /v1/audio/transcriptions/stream` is an OpenCodex extension for a connected
+ChatGPT account. It is separate from OpenAI's public Realtime transcription
+protocol. Authenticate with the same proxy-key headers as file transcription.
+Browser clients instead offer these two WebSocket subprotocols:
+
+```text
+opencodex-audio
+opencodex-key.<canonical-base64url-of-UTF8-proxy-key>
+```
+
+Only `opencodex-audio` is selected in the response. Encoding is transport syntax,
+not encryption. Explicit HTTP credential headers take precedence. ChatGPT tokens
+stay on the proxy; an API-key-only upstream cannot serve this dictation protocol.
+
+After connecting, send:
+
+```json
+{"type":"session.start","config":{"input_audio_format":"pcm16","sample_rate_hz":48000,"num_channels":1,"max_buffer_size_bytes":4194304,"max_utterance_duration_ms":30000,"session_ttl_ms":300000,"provider_mode":"streaming_sse","transcript_delivery_mode":"segment","vad":{"type":"server_vad","threshold":0.5,"prefix_padding_ms":300,"silence_duration_ms":500}}}
+```
+
+Use the actual sample rate of mono PCM16 audio. Wait for `session.started`, then
+send `{"type":"audio.append","audio":"<base64 PCM bytes>"}`. These are JSON text
+frames, not WAV files or binary WebSocket frames. The gateway accepts sample
+rates from 8,000 through 192,000 Hz; upstream support is account/service-dependent.
+Client frames are limited to 64 KiB and sessions to five minutes. Unsupported or
+malformed event/config fields close the stream with code 1008.
+
+`transcript.segment` and `transcript.final` contain `utterance_id`, `revision`, and
+`text`. Replace prior text for the same utterance when its revision increases;
+do not concatenate revisions. Finish with `{"type":"session.close"}` and wait
+for final text and `session.updated` with `session.status="closed"`.
 
 ## `POST /v1/responses`
 
@@ -419,6 +454,45 @@ automatically revoke the hub key. See [Claude Desktop lifecycle](/guides/claude-
 Thinking replay and prompt-cache work remain separate in [#3719](https://github.com/lidge-jun/opencodex/issues/3719).
 
 ## `POST /v1/live` and Realtime sideband
+
+### External API keys
+
+External clients use an OpenCodex key in any supported audio credential header,
+or the browser subprotocol pair described above. Standalone
+`WS /v1/live?model=gpt-live-1-codex` uses the Frameless protocol; an omitted model
+defaults to that identifier and `gpt-live-1` is its proxy alias. This is not a
+claim that every public OpenAI Realtime SDK or API key supports GPT-Live.
+
+For a new standalone connection, send the source-compatible initialization below
+after socket open and wait for `session.started` with a nonempty `session.id`.
+An updated-session event with the same shape is also accepted by the native client.
+
+```json
+{"type":"session.update","session":{"instructions":"","audio":{"output":{"voice":"cove"}},"delegation":{"type":"client"}}}
+```
+
+Frameless uses `input_audio.append` and `output_audio.delta`, unlike dictation's
+`audio.append`. A connection-only check needs no microphone or audio frames; send
+`{"type":"session.close"}` and close the socket after readiness. Delegation
+events are work requests, not readiness signals, and the external client owns
+their execution and responses.
+
+For WebRTC, post an SDP offer to `/v1/live` as multipart `sdp` and optional JSON
+`session`, JSON `{sdp, session?}`, or raw `application/sdp`. The response contains
+the answer and a proxy-relative `Location` with an opaque `rtc_ocx_` call ID. Join
+that location using the same proxy key. The proxy resolves the creating provider
+and physical account even if Pool selection changes. Unknown, expired or
+other-key aliases fail before an upstream connection. Client key rotation
+preserves ownership by key ID; replacement of a keyed upstream credential
+requires a new call. Existing-call sidebands do not need another session update.
+
+Call bindings last 30 minutes, are bounded to 1024 entries per server, and end on
+server restart. Socket lifetimes are bounded independently; media travels
+directly over WebRTC and is not proxied. The proxy never executes delegation
+requests. OpenAI account availability is established by the actual upstream
+response, not by the presence of a model name in the dashboard.
+
+### Native Codex compatibility
 
 `POST /v1/live` accepts the ChatGPT/Codex App Frameless call-creation surface.
 `POST /v1/realtime/calls` accepts the OpenAI Realtime call-creation surface. opencodex selects an

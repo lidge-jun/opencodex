@@ -260,6 +260,8 @@ HTTP 400. В обоих случаях дата не удаляется и др�
 
 ## `POST /v1/live` и Realtime sideband
 
+Привязка аккаунта ниже относится к штатным клиентам Codex. Для диктовки и GPT-Live с внешним API-ключом см. [спецификацию аудио API на английском](/reference/proxy-formats/#streaming-dictation).
+
 `POST /v1/live` принимает surface Frameless call-creation из ChatGPT/Codex App.
 `POST /v1/realtime/calls` принимает surface call-creation OpenAI Realtime. opencodex выбирает
 подходящий маршрут семейства OpenAI, нормализует запрос call-creation под нужный режим

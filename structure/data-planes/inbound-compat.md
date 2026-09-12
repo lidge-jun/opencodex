@@ -17,6 +17,28 @@ keep credentials and audio content out of redirects, request logs and durable st
 `tests/server/audio-transcriptions.test.ts` exercises the real ingress and synthetic upstream;
 `tests/server/api-key-attribution.test.ts` uses multipart fixtures for the HTTP auth matrix.
 
+## Streaming audio
+
+`src/server/audio-client.ts` recognizes explicit audio keys before local legacy admission.
+Browser sockets offer opencodex-audio and opencodex-key.<base64url-key>; only the public
+marker is selected downstream. Invalid presented keys cannot become credential-free native calls.
+`src/server/audio-dictation.ts` maps the validated desktop session.start/audio.append/session.close
+protocol to ChatGPT dictation with server-owned credentials and a five-minute lifetime.
+The `src/server/index.ts` byte relay retains bounded queues, handshake/session deadlines and
+the account/turn lifecycle until its upstream closes. `src/server/ws-bridge.ts` carries the
+in-memory callbacks and signal; handshake credentials are cleared after socket construction.
+
+`src/server/audio-live.ts` owns external keyed GPT-Live creation and joins while the original
+`src/server/live.ts` keeps the native compatibility path. `src/server/live-call-bindings.ts`
+maps opaque rtc_ocx_ aliases to the creating key, provider, physical account and protocol.
+Expired aliases never fall through to native joins. Reconnect resolves the recorded account
+freshly; keyed provider replacement fails unless its credential digest still matches.
+The registry is per server, holds at most 1024 entries for 30 minutes and is cleared on shutdown.
+It does not proxy WebRTC media or execute delegation requests. Standalone Frameless defaults
+to gpt-live-1-codex; gpt-live-1 is an explicit alias. Dictation and Frameless event formats remain
+separate. Coverage lives in `tests/server/audio-client.test.ts`,
+`tests/server/audio-dictation.test.ts` and `tests/server/live-call-bindings.test.ts`.
+
 ## Chat Completions inbound native path
 
 `POST /v1/chat/completions` sends eligible `openai-chat` routes directly to the provider's Chat

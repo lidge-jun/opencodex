@@ -370,7 +370,7 @@ export function buildLiveSidebandUpstreamWsUrl(
   );
 }
 
-async function backendJsonBodyFromApiMultipart(
+export async function backendJsonBodyFromApiMultipart(
   body: ArrayBuffer,
   contentType: string,
 ): Promise<{ body: Uint8Array; contentType: string } | Response> {

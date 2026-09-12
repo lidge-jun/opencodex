@@ -54,6 +54,7 @@ export interface AudioUpstreamOptions {
   model: string;
   lease?: AdmissionLease;
   exactAccountId?: string;
+  providerName?: string;
   signal?: AbortSignal;
 }
 
@@ -65,6 +66,10 @@ export async function resolveAudioUpstream(
   options: AudioUpstreamOptions,
 ): Promise<AudioUpstream | Response> {
   const candidates = selectOpenAiImagesProvider(config);
+  if (options.providerName) {
+    candidates.forwardCandidates = candidates.forwardCandidates.filter(candidate => candidate.providerName === options.providerName);
+    if (candidates.keyed?.providerName !== options.providerName) delete candidates.keyed;
+  }
   const headers = new Headers(incoming);
   const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (bearer && isProxyAdmissionSecret(bearer, config)) {
@@ -90,6 +95,7 @@ export async function resolveAudioUpstream(
           beginCodexAccountSelection,
           signal: options.signal,
         });
+        options.signal?.throwIfAborted();
         selected = materializeCodexUpstreamAuth(headers, context, {
           config,
           admission: options.admission,
@@ -99,6 +105,7 @@ export async function resolveAudioUpstream(
         const resolved = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, headers, config, {
           admission: options.admission,
           beginCodexAccountSelection,
+          signal: options.signal,
           ...(options.exactAccountId ? { exactAccount: { accountId: options.exactAccountId, modelId: options.model } } : {}),
         });
         if (!resolved) return formatErrorResponse(401, "authentication_error", "Connect a ChatGPT account to use audio");

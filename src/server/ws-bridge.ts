@@ -8,6 +8,7 @@ import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
 import { safeResponseHeaders } from "./safe-response-headers";
+import type { AudioSocketTarget } from "./audio-dictation";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -35,6 +36,15 @@ export interface WsData {
   liveUpstream?: WebSocket;
   liveUpstreamUrl?: string;
   liveUpstreamHeaders?: Record<string, string>;
+  liveUpstreamProtocols?: string[];
+  liveValidateFrame?: AudioSocketTarget["validateFrame"];
+  liveFinish?: AudioSocketTarget["finish"];
+  liveOutcome?: number | "timeout" | "connect_error";
+  liveMaxSessionMs?: number;
+  liveConnectTimer?: ReturnType<typeof setTimeout>;
+  liveSessionTimer?: ReturnType<typeof setTimeout>;
+  liveAbortSignal?: AbortSignal;
+  liveAbortListener?: () => void;
   livePending?: Array<string | Buffer>;
   /** Total encoded bytes retained in livePending while the upstream connects. */
   livePendingBytes?: number;

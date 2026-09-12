@@ -249,6 +249,8 @@ HTTP 400을 반환합니다. 두 경우 모두 날짜 제거나 다른 경로로
 
 ## `POST /v1/live`와 Realtime sideband
 
+아래 계정 연결 설명은 기존 Codex 클라이언트 기준입니다. 외부 API 키로 쓰는 받아쓰기와 GPT-Live는 [영문 음성 API 명세](/reference/proxy-formats/#streaming-dictation)를 따릅니다.
+
 `POST /v1/live`는 ChatGPT/Codex App Frameless call-creation 표면을 받습니다.
 `POST /v1/realtime/calls`는 OpenAI Realtime call-creation 표면을 받습니다. opencodex는 적절한 OpenAI 계열
 경로를 선택하고, 업스트림 인증 모드에 맞게 call-creation 요청을 정규화한 뒤, 제한된 응답을 릴레이합니다.

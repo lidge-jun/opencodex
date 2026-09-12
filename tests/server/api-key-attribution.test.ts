@@ -634,10 +634,14 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // than admission. /v1/catalog joined this set in #809.
           const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog"
             || row.endpoint === "/v1/hub-state";
-          const audio = row.endpoint === "/v1/audio/transcriptions" ? new FormData() : null;
+          const live = row.endpoint === "/v1/live" || row.endpoint === "/v1/realtime/calls";
+          const audio = row.endpoint === "/v1/audio/transcriptions" || live ? new FormData() : null;
           if (audio) {
-            audio.append("model", "gpt-4o-transcribe");
-            audio.append("file", new File([new Uint8Array([0, 0])], "sample.wav", { type: "audio/wav" }));
+            if (live) audio.append("sdp", "v=0\r\n");
+            else {
+              audio.append("model", "gpt-4o-transcribe");
+              audio.append("file", new File([new Uint8Array([0, 0])], "sample.wav", { type: "audio/wav" }));
+            }
           }
           const res = await fetch(new URL(row.endpoint, server.url), {
             method: isGet ? "GET" : "POST",

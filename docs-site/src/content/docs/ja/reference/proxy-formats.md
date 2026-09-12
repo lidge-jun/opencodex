@@ -202,6 +202,8 @@ API ではありません。Desktop のキー移行・復旧・切断は既存�
 
 ## `POST /v1/live` とRealtime サイドバンド
 
+以下のアカウント連携は既存の Codex クライアント向けです。外部 API キーで利用する音声入力と GPT-Live は[英語版の音声 API 仕様](/reference/proxy-formats/#streaming-dictation)を参照してください。
+
 `POST /v1/live` は、ChatGPT/Codex アプリのフレームレス通話作成サーフェスを受け入れます。 `POST /v1/realtime/calls` は、OpenAI Realtime 呼び出し作成サーフェスを受け入れます。 opencodex は、適格な OpenAI ファミリ ルートを選択し、アップストリーム認証モードのコール作成リクエストを正規化し、制限付き応答を中継します。
 
 コールの作成後、クライアントはサポートされている受信フォームを使用してサイドバンド WebSocket に参加できます。
