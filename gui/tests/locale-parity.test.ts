@@ -135,6 +135,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // "omo" is the product's own lowercase spelling, identical in every locale.
   "integrations.tab.omo",
   "api.clientConfig.clientOmo",
+  // Cline CLI is the product name, kept in English like the other client brands.
+  "integrations.tab.cline",
+  "api.clientConfig.clientCline",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",

@@ -37,6 +37,14 @@ Export-client marks (used by the API tab's connect rows, not the provider list):
   carries its authoring tool's generator comment).
 - `kimi-color.svg` — already in the baseline as a provider icon; the API tab reuses
   it for the Kimi Code client, which is the same Moonshot AI brand.
+- `cline-color.svg` — the Cline mark introduced by
+  [`ec81f7fef9bb`](https://github.com/lidge-jun/opencodex/blob/ec81f7fef9bb0086d3d527cac234d3845ce4d559/gui/public/provider-icons/cline-color.svg),
+  whose commit identifies it as the official brand mark but records no download
+  URL. That Git object preserves the original 92x96 SVG. `b4820478fcea` removed
+  its fixed dimensions and normalized it to `viewBox="0 0 24 24"` with
+  `translate(0.5000 0.0000) scale(0.25000)`. The path, circle, rectangles, and
+  purple `#9F58FA` fill/strokes are unchanged. The Cline client reuses this
+  provider icon as an image, preserving its brand color.
 - `aside.svg` — extracted 2026-08-31 from the installed Aside application, module
   `Contents/Frameworks/Aside Framework.framework/Versions/1.0.825.1/Libraries/AsideAgentManager/assets/official-brand-symbol-*.js`.
   It is Aside's own brand symbol, named as such by the vendor and rendered by
