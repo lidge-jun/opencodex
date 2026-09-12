@@ -21,8 +21,12 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
 - `devin` is the cloud half of the same family and is also direct. It streams Cognition's
   `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
   framing, so like Cursor and `devin-cli` it never travels the `buildRequest`/`parseStream` path.
-  The two share a name and nothing else: separate transports, separate credentials, separate
-  adapters.
+  The `devin-cli` PRESET streams over this same adapter: the installed CLI's own
+  `credentials.toml` holds an ordinary `devin-session-token`, so that provider imports the token
+  rather than spawning a child, and the two rows differ only in where the credential came from —
+  a browser sign-in versus a signed-in local CLI. The ACP adapter above remains registered and is
+  selected by a custom-named row, never by the `devin-cli` id, because `routedProviderConfig` pins
+  the adapter from the registry for any registry id.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 

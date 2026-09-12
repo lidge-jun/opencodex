@@ -453,13 +453,19 @@ Login opens Auth0 browser sign-in, then exchanges the Firebase ID token via
 
 ## `devin-cli`
 
-**Targets:** the locally installed Devin CLI, over the Agent Client Protocol — `devin acp` speaking
-newline-delimited JSON-RPC on stdin and stdout.
-**Auth:** none held by opencodex. The CLI carries its own credentials from `devin auth login`, so
-this provider stores no key and asks for none.
+**Targets:** Cognition's `exa.api_server_pb.ApiServerService/GetChatMessage`, the same Connect
+streaming endpoint the `devin` provider uses.
+**Auth:** imported from the installed Devin CLI. After `devin auth login` the CLI writes a
+`devin-session-token` to its own `credentials.toml`, which is the same credential
+`SeatManagementService.RegisterUser` mints for `ocx login devin`; signing in from the dashboard
+adopts it, with no browser step and no key to paste. opencodex reads only that token and the
+api-server URL beside it, and never the file's other fields.
 
-- Uses `runTurn`; a handshake over a child process has no fetch-shaped request for the generic wire
-  path, so `buildRequest` / `parseStream` are disabled.
+- Uses `runTurn` on the shared cloud-direct client, so it inherits that adapter's live catalog,
+  per-account context windows and tool-description handling.
+- For the CLI's own local agent loop over ACP stdio instead, configure a **custom-named** provider
+  row with `"adapter": "devin-cli"` — for example `"devin-acp"`. A row named `devin-cli` cannot
+  select it, because the router pins the adapter from the registry for any registry id.
 - One turn is one ACP session: `initialize`, `session/new`, `session/prompt`, with `session/update`
   notifications streaming in between and a unary reply carrying the stop reason and usage. The
   conversation is flattened into the single prompt string a session takes, with role labels fenced

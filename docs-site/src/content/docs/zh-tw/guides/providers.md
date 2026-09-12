@@ -113,7 +113,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
 | `devin` | `devin` | `https://server.codeium.com` | 實驗性的非官方 Cognition/Devin 橋接。登入會開啟 Auth0 瀏覽器頁面，再以 `RegisterUser` 將權杖換成長期 API 金鑰。模型清單依帳號透過 `GetCascadeModelConfigs` 即時取得，串流僅走 Connect-RPC 上的 `runTurn` 路徑。預設不在儀表板預設集內，需手動啟用。 |
-| `devin-cli` | `devin-cli` | `https://cli.devin.ai` | 透過 Agent Client Protocol（`devin acp`，stdio 上的 JSON-RPC）驅動本機安裝的 Devin CLI。憑證由 CLI 以 `devin auth login` 自行保管，opencodex 不會儲存金鑰。可用 `OPENCODEX_DEVIN_CLI_BIN` 指定執行檔；要允許 CLI 讀寫檔案，必須明確設定 `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1`，預設為拒絕。 |
+| `devin-cli` | `devin` | `https://server.codeium.com` | 匯入本機已安裝 Devin CLI 已持有的憑證（`devin auth login` 會寫入它自己的 `credentials.toml`），接著與 `devin` 提供者一樣透過 Cognition 的 Connect-RPC api-server 串流。不需瀏覽器登入，也不需貼上金鑰。模型清單與內容視窗來自帳號自身的目錄。若要改用 CLI 自帶的本機 agent 迴圈（ACP stdio），請使用另取名稱的項目並設定 `"adapter": "devin-cli"`。|
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 
 Google Antigravity 帳戶與供應商的配額查詢（包括模型清單備援）使用固定的 Google 計量端點。這些目標支援透明 Fake-IP DNS，同時保留 TLS 驗證、重新導向拒絕與私有位址檢查。自訂 base URL 只改變模型請求，不改變配額目標；`NO_PROXY` 仍使用直連政策。
