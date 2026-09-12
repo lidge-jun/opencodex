@@ -131,6 +131,34 @@ describe("Codex history provider sync", () => {
     db.close();
   });
 
+  for (const stage of ["beforeFirstLineOpen", "beforeFirstLineWrite", "afterFirstLineWrite"] as const) {
+    test.each([false, true])(`first-line identity guard preserves replacement (${stage}, strict=%s)`, (strict) => {
+      const fixture = makeFixture();
+      noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+      // Leave enough first-line padding for forward provider replacement in place.
+      const raw = readFileSync(fixture.rollout, "utf8");
+      writeFileSync(fixture.rollout, raw.replace('"model_provider":"openai"', '"model_provider":"openai"                '));
+      if (strict) expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).rows).toBe(1);
+      const provider = strict ? "opencodex" : "openai";
+      const replacement = JSON.stringify({ordinal:0,type:"session_meta",payload:{id:"thread-1",history_mode:"paginated",model_provider:provider}}) + "\n";
+      let fired = false;
+      setHistoryAppendHooksForTests({[stage]:(path:string)=>{
+        if(path!==fixture.rollout || fired)return;
+        fired=true;
+        renameSync(path,path+".old");
+        writeFileSync(path,replacement);
+      }});
+      const result=syncCodexHistoryProvider(strict?"openai":"opencodex",fixture.dbPath,fixture.backupPath);
+      expect(fired).toBe(true);
+      expect(result).toMatchObject({failed:true,rows:0,integrityCode:strict?"history_backup_partial_restore":"history_rollout_identity_changed"});
+      expect(readFileSync(fixture.rollout,"utf8")).toBe(replacement);
+      const db=new Database(fixture.dbPath,{readonly:true});
+      expect(db.query("SELECT model_provider FROM threads WHERE id='thread-1'").get()).toEqual({model_provider:provider});
+      db.close();
+      if(strict) expect(existsSync(fixture.backupPath)).toBe(true);
+    });
+  }
+
   test("late paginated conversion rolls back routing instead of swallowing integrity failure",()=>{
     const fixture=makeFixture();
     noopSnapshotArtifacts.add(join(fixture.dbPath,".."));

@@ -193,21 +193,38 @@ function readFirstLineProviderValue(path: string, expectedId: string): string | 
   }
 }
 
-function patchFirstLineProviderInPlace(path: string, expectedId: string, provider: string): FirstLineProviderResult {
-  if (!existsSync(path)) return "unsafe";
+function patchFirstLineProviderInPlace(
+  path: string, expectedId: string, provider: string,
+  expectedIdentity: { dev: number | bigint; ino: number | bigint },
+): FirstLineProviderResult {
+  historyAppendHooks?.beforeFirstLineOpen?.(path);
   const fd = openSync(path, "r+");
   try {
+    const assertIdentity = (): void => {
+      assertHistoryDescriptorIdentity(path, fd);
+      const held = fstatSync(fd);
+      if (held.dev !== expectedIdentity.dev || held.ino !== expectedIdentity.ino) {
+        throw new CodexHistoryIntegrityError("history_rollout_identity_changed");
+      }
+    };
+    assertIdentity();
+    assertLegacyHistoryWritable(path, fd);
     const firstLine = readFirstRolloutLine(fd);
     if (firstLine === null) return "unsafe";
     const plan = planFirstLineProvider(firstLine, expectedId, provider);
     if (plan.state === "unsafe") return "unsafe";
     if (plan.state === "current") return "current";
     const out = Buffer.from(plan.patchedLine, "utf8");
+    historyAppendHooks?.beforeFirstLineWrite?.(path);
+    assertIdentity();
+    assertLegacyHistoryWritable(path, fd);
     let offset = 0;
     while (offset < out.length) {
       offset += writeSync(fd, out, offset, out.length - offset, offset);
     }
     try { fsyncSync(fd); } catch { /* best-effort durability */ }
+    historyAppendHooks?.afterFirstLineWrite?.(path);
+    assertIdentity();
     return "patched";
   } finally {
     closeSync(fd);
@@ -254,7 +271,13 @@ function assertHistoryDescriptorIdentity(path: string, fd: number): void {
   }
 }
 
-let historyAppendHooks: { beforeWrite?: (path: string) => void; afterWrite?: (path: string) => void } | undefined;
+let historyAppendHooks: {
+  beforeWrite?: (path: string) => void;
+  afterWrite?: (path: string) => void;
+  beforeFirstLineOpen?: (path: string) => void;
+  beforeFirstLineWrite?: (path: string) => void;
+  afterFirstLineWrite?: (path: string) => void;
+} | undefined;
 export function setHistoryAppendHooksForTests(hooks: typeof historyAppendHooks): void { historyAppendHooks = hooks; }
 
 function assertLegacyHistoryWritable(path: string, heldFd?: number): void {
@@ -1122,6 +1145,7 @@ function updateSessionMeta(
   } = {},
 ): SessionMetaUpdateResult {
   if (!path || !existsSync(path)) return { changed: false, durableProvider: false };
+  const validatedIdentity = lstatSync(path);
   if (options.expectedFileIdentity !== undefined
     && historyFileIdentity(path) !== options.expectedFileIdentity) {
     return { changed: false, durableProvider: false, conflict: true };
@@ -1195,8 +1219,9 @@ function updateSessionMeta(
     let firstLine: FirstLineProviderResult = "current";
     if (patch.provider !== undefined) {
       try {
-        firstLine = patchFirstLineProviderInPlace(path, expectedId, patch.provider);
-      } catch {
+        firstLine = patchFirstLineProviderInPlace(path, expectedId, patch.provider, validatedIdentity);
+      } catch (error) {
+        if (error instanceof CodexHistoryIntegrityError) throw error;
         firstLine = "unsafe";
       }
     }
@@ -1223,8 +1248,9 @@ function updateSessionMeta(
   let firstLine: FirstLineProviderResult = "current";
   if (patch.provider !== undefined) {
     try {
-      firstLine = patchFirstLineProviderInPlace(path, expectedId, patch.provider);
-    } catch {
+      firstLine = patchFirstLineProviderInPlace(path, expectedId, patch.provider, validatedIdentity);
+    } catch (error) {
+      if (error instanceof CodexHistoryIntegrityError) throw error;
       firstLine = "unsafe";
     }
     if (options.requireDurableProvider && firstLine === "unsafe") {

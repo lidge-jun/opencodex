@@ -68,22 +68,27 @@ describe("injectCodexConfig integration (Design B)", () => {
     removeTreeWithRetry(ocxHome);
   });
 
-  test.each([false,true])("commit-boundary history refusal returns a result after rollback (legacy=%s)",(legacy)=>{
+  for (const stage of ["before-preflight", "after-preflight", "after-config", "after-artifacts"]) {
+  test.each([false,true])(`commit-boundary history refusal returns a result after rollback (${stage}, legacy=%s)`,(legacy)=>{
     const original=legacy ? DESIGN_B_BLOCK+"\n" : 'model="test"\n';
     writeFileSync(join(codexHome,"config.toml"),original);
     if(legacy) writeFileSync(join(codexHome,"opencodex.config.toml"),"[invalid profile\n");
     const script=`
       const {Database}=require("bun:sqlite");
       const {join}=require("node:path");
-      const {injectCodexConfig,setBeforeHistoryArtifactCommitForTests}=require("./src/codex/inject");
+      const {injectCodexConfig,setBeforeHistoryArtifactCommitForTests,setHistoryArtifactStageForTests}=require("./src/codex/inject");
       let kind;
-      setBeforeHistoryArtifactCommitForTests(value=>{
-        kind=value;
+      const migrate=()=>{
         const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
         db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
         db.run("INSERT INTO threads VALUES ('fixture','opencodex','paginated')");
         db.close();
+      };
+      setBeforeHistoryArtifactCommitForTests(value=>{
+        kind=value;
+        if (${JSON.stringify(stage)} === "before-preflight") migrate();
       });
+      setHistoryArtifactStageForTests(value=>{if(value===${JSON.stringify(stage)})migrate();});
       const result=await injectCodexConfig(10100,{});
       console.log(JSON.stringify({kind,result}));
     `;
@@ -96,6 +101,51 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe(original);
     expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
     if(legacy) expect(readFileSync(join(codexHome,"opencodex.config.toml"),"utf8")).toBe("[invalid profile\n");
+    else expect(existsSync(join(codexHome,"opencodex.config.toml"))).toBe(false);
+  });
+  }
+
+  test.each(["sync", "legacy-uncoordinated", "coordinated"])("config restore failure aborts every later artifact (%s)", (kind) => {
+    const original = kind === "coordinated" ? 'model="test"\n' : DESIGN_B_BLOCK + "\n";
+    writeFileSync(join(codexHome, "config.toml"), original);
+    if (kind !== "coordinated") writeFileSync(join(codexHome, "opencodex.config.toml"), "[invalid profile\n");
+    const catalog = '{"models":[],"sentinel":"preserve"}\n';
+    writeFileSync(join(codexHome, "models_cache.json"), catalog);
+    const script = `
+      const {Database}=require("bun:sqlite");
+      const {join}=require("node:path");
+      const {restoreNativeCodex,restoreNativeCodexAsync,setBeforeRestoreConfigForTests}=require("./src/codex/inject");
+      const readState=${kind === "coordinated" ? 'require("./src/codex/transition-state").readCodexTransitionState' : "()=>null"};
+      const before=readState();
+      let observed;
+      setBeforeRestoreConfigForTests(value=>{
+        observed=value;
+        const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+        db.run("INSERT INTO threads VALUES ('fixture','opencodex','paginated')");
+        db.close();
+      });
+      const result=${kind === "sync" ? "restoreNativeCodex()" : "await restoreNativeCodexAsync()"};
+      console.log(JSON.stringify({observed,result,before,after:readState()}));
+    `;
+    const child=spawnSync(process.execPath,["--eval",script],{cwd:repoRoot,env:{...process.env,CODEX_HOME:codexHome,OPENCODEX_HOME:ocxHome},encoding:"utf8",timeout:SPAWN_BUDGET_MS-5000});
+    expect(child.status).toBe(0);
+    const value=JSON.parse(child.stdout);
+    expect(value.observed).toBe(kind);
+    expect(value.result.success).toBe(false);
+    if(kind==="coordinated") {
+      // Also covered by the earlier fork PR luvs01/opencodex#118: never advance
+      // durable generation/tx state when config restoration reports failure.
+      expect(value.before.state).toMatchObject({nativeGeneration:0,currentTxId:null});
+      expect(value.after.state).toEqual(value.before.state);
+    }
+    for (const artifact of Object.values(value.result.artifacts)) {
+      expect(artifact).toMatchObject({state:"skipped",changed:false});
+    }
+    expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe(original);
+    expect(readFileSync(join(codexHome,"models_cache.json"),"utf8")).toBe(catalog);
+    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+    if(kind!=="coordinated") expect(readFileSync(join(codexHome,"opencodex.config.toml"),"utf8")).toBe("[invalid profile\n");
     else expect(existsSync(join(codexHome,"opencodex.config.toml"))).toBe(false);
   });
 
