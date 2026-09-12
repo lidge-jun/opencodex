@@ -10,9 +10,17 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerProxyConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
 } from "../../src/config/provider-validation";
+import {
+  parseProviderEditorConfigDTO,
+  providerEditorConfigDTO,
+  providerManagementConfigError,
+  safeConfigDTO,
+} from "../../src/server/auth-cors";
+import type { OcxConfig } from "../../src/types";
 
 describe("provider config validation leaf", () => {
   test("accepts only credential-free HTTP(S) base URLs", () => {
@@ -43,6 +51,23 @@ describe("provider config validation leaf", () => {
       expect(upstreamHttpVersionConfigError(value)).toBeNull();
     }
     expect(upstreamHttpVersionConfigError("h3")).toContain("must be one of");
+  });
+
+  test("accepts only absent or explicit http(s) provider proxy URLs", () => {
+    expect(providerProxyConfigError(undefined)).toBeNull();
+    expect(providerProxyConfigError("http://127.0.0.1:7897")).toBeNull();
+    expect(providerProxyConfigError("https://proxy.example:8443")).toBeNull();
+    for (const value of [null, 8080, true, {}, []]) {
+      expect(providerProxyConfigError(value)).toContain("string URL");
+    }
+    for (const value of ["", "   "]) {
+      expect(providerProxyConfigError(value)).toContain("must not be empty");
+    }
+    expect(providerProxyConfigError("direct")).toContain("Phase 1A");
+    expect(providerProxyConfigError("auto")).toContain("Phase 1A");
+    for (const value of ["not a url", "socks5://127.0.0.1:1080", "ftp://127.0.0.1:21", "gopher://127.0.0.1:70"]) {
+      expect(providerProxyConfigError(value)).toContain("http(s)");
+    }
   });
 
   test("requires own-property positive integer maps", () => {
@@ -114,5 +139,68 @@ describe("provider config validation leaf", () => {
     const error = modelDisplayNamesConfigError({ [secretModelId]: "Bad/Name" });
     expect(error).not.toContain(secretModelId);
     expect(error).toContain("[REDACTED]");
+  });
+});
+
+describe("provider proxy management boundary", () => {
+  const manageableBase = {
+    adapter: "openai-chat",
+    baseUrl: "https://api.example.test/v1",
+  };
+
+  test("management validation accepts absent and explicit http(s) proxy URLs", () => {
+    expect(providerManagementConfigError("xai", { ...manageableBase })).toBeNull();
+    expect(
+      providerManagementConfigError("xai", { ...manageableBase, proxy: "http://127.0.0.1:7897" }),
+    ).toBeNull();
+    expect(
+      providerManagementConfigError("xai", { ...manageableBase, proxy: "https://proxy.example:8443" }),
+    ).toBeNull();
+  });
+
+  test("management validation rejects invalid proxy values before persistence", () => {
+    for (const proxy of [null, 8080, true, "", "   ", "direct", "auto", "not a url", "socks5://127.0.0.1:1080", "ftp://127.0.0.1:21"]) {
+      expect(providerManagementConfigError("xai", { ...manageableBase, proxy })).not.toBeNull();
+    }
+  });
+
+  test("management proxy errors never echo embedded credentials", () => {
+    const error = providerManagementConfigError("xai", {
+      ...manageableBase,
+      proxy: "socks5://bob:s3cret-9@127.0.0.1:1080",
+    });
+    expect(error).not.toBeNull();
+    expect(error).not.toContain("s3cret-9");
+    expect(error).not.toContain("bob");
+  });
+
+  test("credential-bearing proxy stays out of dashboard DTOs", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          ...manageableBase,
+          proxy: "http://alice:s3cret-1@127.0.0.1:7897",
+        },
+      },
+    } as unknown as OcxConfig;
+    const serialized = JSON.stringify(safeConfigDTO(config));
+    expect(serialized).not.toContain("\"proxy\"");
+    expect(serialized).not.toContain("alice");
+    expect(serialized).not.toContain("s3cret-1");
+    const editorSerialized = JSON.stringify(providerEditorConfigDTO(config));
+    expect(editorSerialized).not.toContain("\"proxy\"");
+    expect(editorSerialized).not.toContain("s3cret-1");
+  });
+
+  test("raw editor round-trip refuses the redacted proxy field", () => {
+    const parsed = parseProviderEditorConfigDTO({
+      defaultProvider: "xai",
+      providers: {
+        xai: { ...manageableBase, proxy: "http://127.0.0.1:7897" },
+      },
+    });
+    expect(parsed.ok).toBe(false);
   });
 });

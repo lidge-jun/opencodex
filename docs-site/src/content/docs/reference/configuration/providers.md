@@ -140,6 +140,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | --- | --- | --- |
 | `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` (or alias `azure`), `codebuddy`, `qoder`. |
 | `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; collision-safe key presets preserve an older same-named custom destination. |
+| `proxy?` | `string` | Optional provider-specific HTTP(S) proxy URL. When omitted, the provider inherits the server-level `proxy`, `noProxy`, and global `proxy: "auto"` behavior. Only `http://` and `https://` URLs are accepted; provider-level `auto`, `direct`, `null`, empty/whitespace values, SOCKS, and malformed URLs are rejected. |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | Optional client-side outbound request-start pacing, separate from upstream usage, billing, and rate-limit indicators. RPM is converted to an even interval; `minIntervalMs` may impose a longer interval. Provider limits apply across all models, while `models` entries use exact upstream model IDs (for example `nvidia/llama-3.1-nemotron-ultra-253b-v1`) and can only add delay. Queue waits do not consume the upstream response-header timeout. HTTP, Responses WebSocket, and explicit adapter `fetchResponse`/`runTurn` dispatches are covered. |
 | `upstreamHttpVersion?` | `"auto" \| "http1.1" \| "h1" \| "http2" \| "h2"` | Pin the HTTP version used for upstream requests to this provider. Defaults to `auto`, which lets Bun negotiate. An explicit pin requires an HTTPS target and fails locally when it cannot be honored. Set `http1.1` when a provider's HTTP/2 SSE stream stalls instead of delivering events — the symptom is a long-running streaming request that produces nothing and eventually times out. For Cursor, `http1.1`/`h1` selects its `RunSSE` + `BidiAppend` compatibility transport for inference and also pins live model discovery. Management `POST`/`PATCH` accept `null` to clear it back to `auto`. |
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
@@ -259,6 +260,29 @@ Compaction maintenance requests are exempt from pins.
 use `null` to clear a scalar or the whole map. A map entry set to `null` or `""` removes that
 entry while preserving other entries. Malformed writes are rejected before saving. A malformed
 optional pin in a hand-edited file is ignored on load without discarding the rest of the config.
+
+### Per-provider HTTP(S) proxy
+
+Set `providers.<name>.proxy` when one provider should use a different HTTP(S) proxy from
+the server-level route:
+
+```jsonc
+{
+  "providers": {
+    "deepseek": {
+      "proxy": "http://127.0.0.1:7897"
+    }
+  }
+}
+```
+
+Configure this field through the provider configuration file or a supported management API; the dashboard editor does not expose or round-trip proxy URLs because they may contain credentials.
+
+An explicit provider proxy is applied to the provider's core HTTP/SSE and provider outbound
+requests. On the verified HTTP/HTTPS fetch paths, it takes precedence over the inherited
+global `NO_PROXY` decision. Provider-level direct routing, automatic proxy discovery, and
+`null` are not supported; omit the field to inherit the server-level behavior. Proxy credentials
+may be included in the URL and are redacted from dashboard responses.
 
 ### Discovered model display names
 

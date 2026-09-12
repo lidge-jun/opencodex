@@ -149,6 +149,25 @@ export function upstreamHttpVersionConfigError(value: unknown): string | null {
   return null;
 }
 
+/** Validates an optional provider HTTP(S) proxy URL. */
+export function providerProxyConfigError(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string") return "proxy must be a string URL or omitted";
+  const trimmed = value.trim();
+  if (!trimmed) return "proxy must not be empty; omit the field to inherit the global proxy behavior";
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "direct") return "proxy direct is not supported in Phase 1A; use global noProxy for direct routes";
+  if (lowered === "auto") return "proxy auto is not supported in Phase 1A; omit the field to inherit the global proxy behavior";
+  let protocol: string;
+  try {
+    protocol = new URL(trimmed).protocol;
+  } catch {
+    return "proxy must be a valid http(s) proxy URL";
+  }
+  if (protocol !== "http:" && protocol !== "https:") return "proxy must be an http(s) proxy URL";
+  return null;
+ }
+
 export function positiveIntegerRecordConfigError(value: unknown, field: string): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;

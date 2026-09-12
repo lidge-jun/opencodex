@@ -8,11 +8,12 @@ import {
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
 import { effectiveProxyFor, noProxyMatches, normalizeProxyHostname, outboundProxyConfigured } from "./proxy-env";
+import { InvalidProviderEgressError, resolveProviderEgress } from "./provider-egress";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
 type ProviderPostInit = ProviderGetInit & { body: string };
-type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork"> & {
+type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork" | "proxy"> & {
   fetch?: typeof globalThis.fetch;
 };
 export interface ProviderOutboundDependencies {
@@ -116,7 +117,15 @@ async function providerOutboundRequest(
   if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
     throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");
   }
+  // Resolve provider egress before DNS and transport policy.
+  const egress = resolveProviderEgress({ providerName: name, provider, url, purpose: "providerOutbound" });
   if (provider.fetch) {
+    // Explicit routes require the built-in executor.
+    if (egress.kind === "proxy") {
+      throw new InvalidProviderEgressError(
+        "providers." + name + ".proxy cannot be honored through a caller-owned fetch executor."
+      );
+    }
     // A caller-owned executor cannot be peer-pinned here. This branch keeps literal/config
     // checks and redirect blocking, but does not provide the resolved-address guarantees of
     // the built-in transport. Main-request migration must define that executor contract first.
@@ -138,13 +147,16 @@ async function providerOutboundRequest(
     return provider.fetch(url, { ...init, method, redirect: "manual" });
   }
   const parsed = postUrl ?? new URL(url);
-  const proxyConfigured = outboundProxyConfigured();
+  // Explicit routes override inherited NO_PROXY selection.
+  const explicitProxy = egress.kind === "proxy" ? egress.proxyUrl : null;
+  const proxyConfigured = explicitProxy !== null || outboundProxyConfigured();
   // Snapshot the scheme-matched proxy once, before the DNS await, so admission and transport
   // below reason about the same value. `null` here means "no proxy fetch would actually use",
   // even if some other proxy variable is set.
-  const effectiveProxy = effectiveProxyFor(parsed);
+  const effectiveProxy = explicitProxy ?? effectiveProxyFor(parsed);
+  const noProxyBypass = explicitProxy !== null ? false : noProxyMatches(parsed);
   const isCanonicalUrl = dependencies.isCanonicalUrl ?? (() => false);
-  const allowMihomoIpv6FakeIp = (effectiveProxy !== null && !noProxyMatches(parsed))
+  const allowMihomoIpv6FakeIp = (effectiveProxy !== null && !noProxyBypass)
     || transparentFakeIpException(url, parsed, isCanonicalUrl, name);
   const resolveAddresses = dependencies.resolveAddresses ?? resolvePublicAddresses;
   const pinnedGet = dependencies.pinnedGet ?? pinnedHttpGet;
@@ -168,7 +180,7 @@ async function providerOutboundRequest(
       // proof is on the final request URL — not the provider name — because an
       // OAuth/forward name matches any baseUrl by design while the bearer is
       // pinned to the registry destination independently.
-      allowBenchmarkAddresses: (proxyConfigured && !noProxyMatches(parsed))
+      allowBenchmarkAddresses: (proxyConfigured && !noProxyBypass)
         || transparentFakeIpException(url, parsed, isCanonicalUrl, name),
       // Mihomo IPv6 fake-IP (fdfe:dcba:9876::/48) answers are admitted either when bound
       // to a scheme-matched proxy (#3462) or under the TUN transparency exception for a
@@ -184,7 +196,8 @@ async function providerOutboundRequest(
     if (!proxyConfigured) throw error;
     warnProxyBoundaryOnce();
     warnProxyDnsDegradationOnce();
-    return globalThis.fetch(url, { ...init, method, redirect: "manual" });
+    // Preserve an explicit provider route on the fallback request.
+    return globalThis.fetch(url, { ...init, method, redirect: "manual", ...(explicitProxy ? { proxy: explicitProxy } : {}) });
   }
   // A canonical TUN exception with no scheme-matched proxy must retain the
   // validated address, even when an unrelated HTTP_PROXY/ALL_PROXY is present.
@@ -195,7 +208,7 @@ async function providerOutboundRequest(
     const proxy = (allowMihomoIpv6FakeIp && effectiveProxy) ? effectiveProxy : undefined;
     return globalThis.fetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
   }
-  if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
+  if (proxyConfigured && resolved.privateNetwork && !noProxyBypass) {
     const hostname = normalizeProxyHostname(parsed.hostname);
     throw new Error(
       `provider URL resolves to a private-network destination; add ${hostname} to NO_PROXY before using allowPrivateNetwork with an outbound proxy`,

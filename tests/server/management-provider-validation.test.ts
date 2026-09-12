@@ -675,6 +675,112 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider POST rejects invalid provider.proxy before persistence", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      for (const proxy of ["direct", "socks5://127.0.0.1:1080"]) {
+        const response = await fetch(new URL("/api/providers", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "relay-proxy",
+            provider: { adapter: "openai-chat", baseUrl: "https://relay.example/v1", proxy },
+          }),
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          error: expect.stringContaining("proxy"),
+        });
+      }
+      expect(loadConfig().providers["relay-proxy"]).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider POST persists a valid HTTP(S) provider.proxy", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue(null);
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay-proxy",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://relay.example/v1",
+            proxy: "http://127.0.0.1:7897",
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+      expect(loadConfig().providers["relay-proxy"]?.proxy).toBe("http://127.0.0.1:7897");
+    } finally {
+      resolvedError.mockRestore();
+      await server.stop(true);
+    }
+  });
+
+  test("provider PATCH keeps proxy outside the Phase 1A field mask", async () => {
+    // Phase 1A intentionally exposes proxy on config-file POST only: proxy is a
+    // redacted dashboard field, so the PUT editor denies it and the PATCH mask does
+    // not adopt it. This test locks that boundary instead of forcing PATCH support.
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue(null);
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay-proxy",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://relay.example/v1",
+            proxy: "http://127.0.0.1:7897",
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      const note = await fetch(new URL("/api/providers?name=relay-proxy", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ note: "operator note" }),
+      });
+      expect(note.status).toBe(200);
+      expect(loadConfig().providers["relay-proxy"]?.proxy).toBe("http://127.0.0.1:7897");
+
+      const proxyPatch = await fetch(new URL("/api/providers?name=relay-proxy", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ proxy: "http://127.0.0.1:7898" }),
+      });
+      expect(proxyPatch.status).toBe(400);
+      expect(loadConfig().providers["relay-proxy"]?.proxy).toBe("http://127.0.0.1:7897");
+    } finally {
+      resolvedError.mockRestore();
+      await server.stop(true);
+    }
+  });
+
   test("provider management rejects modelCosts rows with extra fields", () => {
     const error = providerManagementConfigError("blsc", {
       adapter: "openai-chat",

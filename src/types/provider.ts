@@ -350,6 +350,8 @@ export interface OcxProviderConfig {
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.
    */
   allowPrivateNetwork?: boolean;
+  /** Optional provider HTTP(S) proxy override; absent inherits global routing. */
+  proxy?: string;
   /**
    * Pin the HTTP version used for upstream provider requests. Bun's fetch negotiates
    * HTTP/2 via TLS ALPN by default; some Cloudflare-fronted SSE endpoints hang on
