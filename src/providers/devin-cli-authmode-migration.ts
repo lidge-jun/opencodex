@@ -26,6 +26,7 @@
  * resolve a host.
  */
 import { PROVIDER_REGISTRY } from "./registry";
+import { DEVIN_DEFAULT_API_SERVER } from "../oauth/devin/api-base";
 import type { OcxConfig } from "../types";
 
 export interface DevinCliAuthModeProjection {
@@ -38,7 +39,6 @@ export interface DevinCliAuthModeProjection {
 const RETIRED_ACP_ADAPTER = "devin-cli";
 /** Identity-only URL the ACP rows carried; never a destination. */
 const RETIRED_ACP_IDENTITY_HOST = "cli.devin.ai";
-const DEVIN_API_SERVER = "https://server.codeium.com";
 
 function retiredIdentityUrl(baseUrl: string | undefined): boolean {
   if (typeof baseUrl !== "string") return false;
@@ -61,8 +61,10 @@ export function projectDevinCliAuthMode(config: OcxConfig): DevinCliAuthModeProj
     changed = true;
     let detail = "";
     if (retiredIdentityUrl(row.baseUrl)) {
-      row.baseUrl = DEVIN_API_SERVER;
-      detail = ` and repointed its baseUrl at ${DEVIN_API_SERVER}`;
+      // The shared default, not a second copy of the host: a migration that
+      // hardcodes it would keep writing the old address after the default moves.
+      row.baseUrl = DEVIN_DEFAULT_API_SERVER;
+      detail = ` and repointed its baseUrl at ${DEVIN_DEFAULT_API_SERVER}`;
     }
     warnings.push(
       `rewrote "${name}" adapter ${RETIRED_ACP_ADAPTER} -> devin${detail}: the local ACP transport `
@@ -85,4 +87,3 @@ export function projectDevinCliAuthMode(config: OcxConfig): DevinCliAuthModeProj
   );
   return { config, changed: true, warnings };
 }
-
