@@ -82,3 +82,5 @@ constraints cannot widen the canonical shape. Bare shell bridge names are reject
 on the freeform path.
 Namespaced tools do not acquire bare-shell behavior. Regression coverage lives in
 `tests/providers/cursor/cursor-tool-definitions.test.ts`.
+
+The shared Devin adapter owns [SWE-2 model effort selection](../adapters/registry.md#swe-2-model-effort-selection); this UID rewrite is not a shared routing rule for other models.

@@ -524,3 +524,5 @@ see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routi
 Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
+
+The shared Devin adapter owns [SWE-2 model effort selection](../adapters/registry.md#swe-2-model-effort-selection); this UID rewrite is not a shared routing rule for other models.

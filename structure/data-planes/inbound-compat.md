@@ -138,3 +138,5 @@ Instruction notice extraction scans fence ranges once and walks original lines b
 a decreasing cursor. It accepts exactly one ASCII space inside the token notice, preserves
 unmatched prefix bytes, and does not repeatedly scan or copy shrinking prompt prefixes.
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
+
+The shared Devin adapter owns [SWE-2 model effort selection](../adapters/registry.md#swe-2-model-effort-selection); this UID rewrite is not a shared routing rule for other models.

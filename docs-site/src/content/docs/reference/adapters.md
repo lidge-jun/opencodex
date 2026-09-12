@@ -451,6 +451,13 @@ Login opens Auth0 browser sign-in, then exchanges the Firebase ID token via
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 
+For SWE-2, an explicit reasoning effort overrides an effort suffix in the model
+id. For example, `swe-2-high` with `medium` selects the native `swe-2-medium` UID;
+`xhigh`, `ultra`, and `max` select `swe-2-max`. Values below Medium select Medium
+and do not disable SWE-2 reasoning. Without an explicit effort, a suffixed model
+id is preserved. This applies to both Devin account providers through their
+shared adapter; other model families keep their existing suffix precedence.
+
 ## `devin-cli`
 
 **Targets:** Cognition's `exa.api_server_pb.ApiServerService/GetChatMessage`, the same Connect

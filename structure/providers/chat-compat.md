@@ -264,3 +264,5 @@ fragments are not guessed onto pending ID-only calls.
 parallel/colliding identities, distinct unsafe raw JSON index literals, the maximum
 safe-integer boundary, invalid index types, missing/null continuations and UTF-8
 byte-limit boundaries.
+
+The shared Devin adapter owns [SWE-2 model effort selection](../adapters/registry.md#swe-2-model-effort-selection); this UID rewrite is not a shared routing rule for other models.

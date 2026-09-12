@@ -45,13 +45,23 @@ function hasEffortSuffix(modelId: string): boolean {
  * If the catalog is unavailable (degraded mode): append the effort suffix
  * for any base id that doesn't already carry one, mirroring the catalog shape.
  */
-async function resolveWireModelUid(
+export async function resolveWireModelUid(
   rawModelId: string,
   apiKey: string,
   host: string,
   reasoningEffort?: string,
 ): Promise<string> {
-  const modelId = normalizeDevinModelId(rawModelId);
+  let modelId = normalizeDevinModelId(rawModelId);
+  // SWE-2's native UIDs encode the effort. A suffix on a picker model must
+  // not silently discard the caller's explicit reasoning selection.
+  if (/^swe-2(?:-(?:medium|high|max))?$/.test(modelId)) {
+    const efforts: Record<string, string> = {
+      none: "medium", off: "medium", minimal: "medium", low: "medium",
+      medium: "medium", high: "high", xhigh: "max", ultra: "max", max: "max",
+    };
+    const effort = reasoningEffort ? efforts[reasoningEffort] : undefined;
+    if (effort) modelId = `swe-2-${effort}`;
+  }
   if (hasEffortSuffix(modelId)) return modelId;
   const catalog = await getCachedCatalog(apiKey, host);
   if (catalog) {
