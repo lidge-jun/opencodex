@@ -106,14 +106,14 @@ function syncFetchBlocking(url: string, init: Record<string, unknown>, timeoutMs
     return { status: i32[1], statusText, headers, setCookie, body };
   } catch (err: any) {
     // A crashed worker must not poison later solves — reset it.
-    try { _syncFetchWorker?.terminate(); } catch {}
+    try { _syncFetchWorker?.terminate(); } catch  { /* best-effort: continue */ }
     _syncFetchWorker = null;
     return { error: `sync fetch error: ${err?.message ?? err}` };
   }
 }
 
 function shutdownSyncFetchWorker(): void {
-  try { _syncFetchWorker?.terminate(); } catch {}
+  try { _syncFetchWorker?.terminate(); } catch  { /* best-effort: continue */ }
   _syncFetchWorker = null;
 }
 
@@ -129,7 +129,7 @@ const proxyUrl = process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
 if (proxyUrl) {
   try {
     setGlobalDispatcher(new ProxyAgent(proxyUrl));
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
 }
 
 // ── Globals shared across solves ────────────────────────────────────────────
@@ -155,10 +155,10 @@ function noteStallAndMaybeEvict(peUrl) {
     }
     if (n >= 2) {
       _memCdnCache.delete(peUrl);
-      try { fs.unlinkSync(diskPathFor(peUrl)); } catch (_) {}
+      try { fs.unlinkSync(diskPathFor(peUrl)); } catch (_) { /* best-effort: continue */ }
       _stallCounts.delete(peUrl);
     }
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
 }
 
 // ── Fingerprint ─────────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ function getCachedBody(url) {
       _memCdnCache.set(url, body);
       return body;
     }
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   return null;
 }
 
@@ -257,9 +257,9 @@ function injectRequestHeaders(request) {
       if (crossOrigin || (method !== "GET" && method !== "HEAD")) {
         origin = "https://zcode.z.ai";
       }
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
     if (origin) h.set("origin", origin);
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
 }
 
 function cookieHeader(request, window, browserFrame) {
@@ -271,7 +271,7 @@ function cookieHeader(request, window, browserFrame) {
     if (cookies.length > 0) {
       return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
     }
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   return null;
 }
 
@@ -305,11 +305,11 @@ function storeSetCookies(res, url) {
           }
           try {
             cookieContainer.addCookies([cookie]);
-          } catch (_) {}
+          } catch (_) { /* best-effort: continue */ }
         }
       }
     }
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
 }
 
 // ── The interceptor: replaces happy-dom's network layer completely ─────────
@@ -329,7 +329,7 @@ function makeInterceptor(bypassPeCache = false) {
           } catch (parseErr) {
             process.stderr.write(`[cache-bad-js] ${url} len=${body.length} ${parseErr.message} — refetch fresh\n`);
             _memCdnCache.delete(url);
-            try { fs.unlinkSync(diskPathFor(url)); } catch (_) {}
+            try { fs.unlinkSync(diskPathFor(url)); } catch (_) { /* best-effort: continue */ }
             body = null;
           }
         }
@@ -338,7 +338,7 @@ function makeInterceptor(bypassPeCache = false) {
         // the async fetch path handled by happy-dom.
         if (body) {
           if (/dynamicJS\/[^/]*\/pe\.\d+\./.test(url)) {
-            try { w.__lastPeUrl = url; } catch (_) {}
+            try { w.__lastPeUrl = url; } catch (_) { /* best-effort: continue */ }
           }
           return new w.Response(Buffer.from(body), {
             status: 200,
@@ -365,14 +365,14 @@ function makeInterceptor(bypassPeCache = false) {
               hasBody = true;
             }
           }
-        } catch (_) {}
+        } catch (_) { /* best-effort: continue */ }
         const res = await fetch(url, init);
         const buf = Buffer.from(await res.arrayBuffer());
         storeSetCookies(res, url);
         if (_DEBUG && /captcha-open|verify\.|device\.saf|cloudauth-device|upload\./i.test(url) && buf.length && buf.length < 4096) {
           try {
             process.stderr.write(`[xhr-body] ${request.method} ${bs.hostname}${bs.pathname}-> ${res.status} ${buf.toString("utf8").slice(0, 1200)}\n`);
-          } catch (_) {}
+          } catch (_) { /* best-effort: continue */ }
         }
         const headers = {};
         const ct = res.headers.get("content-type");
@@ -405,7 +405,7 @@ function makeInterceptor(bypassPeCache = false) {
           } catch (parseErr) {
             process.stderr.write(`[cache-bad-js:sync] ${url} len=${body.length} ${parseErr.message} — refetch fresh\n`);
             _memCdnCache.delete(url);
-            try { fs.unlinkSync(diskPathFor(url)); } catch (_) {}
+            try { fs.unlinkSync(diskPathFor(url)); } catch (_) { /* best-effort: continue */ }
             body = null;
           }
         }
@@ -415,7 +415,7 @@ function makeInterceptor(bypassPeCache = false) {
       }
       if (body) {
         if (/dynamicJS\/[^/]*\/pe\.\d+\./.test(url)) {
-          try { w.__lastPeUrl = url; } catch (_) {}
+          try { w.__lastPeUrl = url; } catch (_) { /* best-effort: continue */ }
         }
         return {
           status: 200,
@@ -442,7 +442,7 @@ function makeInterceptor(bypassPeCache = false) {
           const ab = request.body;
           if (ab && (ab as any).byteLength > 0) init.body = ab;
         }
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
       const res = syncFetchBlocking(url, init as any) as any;
       if (res.error) {
         process.stderr.write(`[sync-xhr-err] ${url}: ${res.error}\n`);
@@ -473,9 +473,9 @@ function makeInterceptor(bypassPeCache = false) {
             if (k === "secure") cookie.secure = true;
             if (k === "samesite") cookie.sameSite = kv[1];
           }
-          try { cookieContainer.addCookies([cookie]); } catch (_) {}
+          try { cookieContainer.addCookies([cookie]); } catch (_) { /* best-effort: continue */ }
         }
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
       const hdrs: Record<string, string> = {};
       for (const [k, v] of Object.entries(res.headers || {})) hdrs[k] = String(v);
       // Sync interceptor contract: PLAIN OBJECT with Buffer body (happy-dom's
@@ -562,7 +562,7 @@ function removeGuestScope(w) {
     const id = w && w.__capScopeId;
     const root = globalThis[GUEST_SCOPE_ROOT];
     if (id && root) delete root[id];
-  } catch {}
+  } catch  { /* best-effort: continue */ }
 }
 
 /**
@@ -591,7 +591,7 @@ function makeScopedFunction(w) {
       configurable: true,
       writable: true,
     });
-  } catch {}
+  } catch  { /* best-effort: continue */ }
   return Scoped;
 }
 
@@ -673,7 +673,7 @@ function installNativeToString(w) {
         configurable: true,
         writable: true,
       });
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   };
   const seen = new w.Set();
   const maskObj = (obj, depth) => {
@@ -691,7 +691,7 @@ function installNativeToString(w) {
         const ctorName = obj.constructor.name;
         if (/^(WriteStream|ReadStream|Socket|Process|Timeout|Immediate)$/.test(ctorName)) return;
       }
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
     if (seen.has(obj)) return;
     try {
       seen.add(obj);
@@ -726,14 +726,14 @@ function installNativeToString(w) {
           // sink each probe surfaced as an unhandledRejection during every
           // solve — noise that buried real diagnostics.
           else if (v && typeof v.then === "function") v.catch(() => {});
-        } catch {}
+        } catch  { /* best-effort: continue */ }
       }
       if (depth < 3) {
         try {
           const v = desc.value;
           if (v && (typeof v === "function" || typeof v === "object"))
             maskObj(v, depth + 1);
-        } catch (_) {}
+        } catch (_) { /* best-effort: continue */ }
       }
     }
   };
@@ -754,7 +754,7 @@ function installNativeToString(w) {
   for (const t of targets) {
     try {
       maskObj(t, 0);
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
 }
 
@@ -766,16 +766,16 @@ const GUEST_EVAL_PATCH = `
       get() { return true; },
       configurable: true
     });
-  } catch (e) {}
+  } catch (e) { /* best-effort: continue */ }
   try {
     if (window.HTMLDocument) {
       Object.defineProperty(window.HTMLDocument, "name", { value: "HTMLDocument", configurable: true });
       Object.defineProperty(window.HTMLDocument.prototype, Symbol.toStringTag, { value: "HTMLDocument", configurable: true });
     }
-  } catch (e) {}
+  } catch (e) { /* best-effort: continue */ }
   try {
     Object.defineProperty(window.Document.prototype, Symbol.toStringTag, { value: "HTMLDocument", configurable: true });
-  } catch (e) {}
+  } catch (e) { /* best-effort: continue */ }
   // Guest errors are RECORDED, not printed: the Aliyun/FeiLin SDKs throw
   // benign uncaught TypeErrors inside happy-dom on every solve (imperfect DOM
   // emulation) while the solve still succeeds — printing them flooded the
@@ -796,19 +796,19 @@ const GUEST_EVAL_PATCH = `
         if (window.__capErrs.length > 8) window.__capErrs.shift();
       }
       if (__capDebug) console.error("[" + kind + "]", m, s);
-    } catch (e2) {}
+    } catch (e2) { /* best-effort: continue */ }
   }
   try {
     window.addEventListener("unhandledrejection", function(e) {
       var r = e && e.reason;
       __capRecord("UH-REASON", (r && r.message) || typeof r, r && r.stack);
     });
-  } catch (e) {}
+  } catch (e) { /* best-effort: continue */ }
   try {
     window.addEventListener("error", function(e) {
       __capRecord("WINDOW-ERROR", e && e.message, e && e.error && e.error.stack);
     });
-  } catch (e) {}
+  } catch (e) { /* best-effort: continue */ }
   // Pass-through eval/Function wrappers kept from the removed parse-fail
   // dump instrumentation (name/prototype masking preserved).
   try {
@@ -818,7 +818,7 @@ const GUEST_EVAL_PATCH = `
         return _origEval2.call(window, code);
       };
     }
-  } catch (e) {}
+  } catch (e) { /* best-effort: continue */ }
   try {
     var _of = window.Function;
     if (_of) {
@@ -826,10 +826,10 @@ const GUEST_EVAL_PATCH = `
         return _of.apply(this, Array.prototype.slice.call(arguments));
       };
       _WF.prototype = _of.prototype;
-      try { Object.defineProperty(_WF, "name", { value: "Function", configurable: true }); } catch (e) {}
+      try { Object.defineProperty(_WF, "name", { value: "Function", configurable: true }); } catch (e) { /* best-effort: continue */ }
       window.Function = _WF;
     }
-  } catch (e) {}
+  } catch (e) { /* best-effort: continue */ }
 })();
 `;
 
@@ -866,11 +866,11 @@ function applyPolyfills(w) {
   if (typeof w.confirm !== "function") w.confirm = () => false;
   if (typeof w.open !== "function") w.open = () => null;
   if (typeof w.close !== "function") w.close = () => {};
-  try { Object.defineProperty(w, "alert", { value: w.alert, configurable: true, writable: true }); } catch (_) {}
-  try { Object.defineProperty(w, "prompt", { value: w.prompt, configurable: true, writable: true }); } catch (_) {}
-  try { Object.defineProperty(w, "confirm", { value: w.confirm, configurable: true, writable: true }); } catch (_) {}
-  try { Object.defineProperty(w, "open", { value: w.open, configurable: true, writable: true }); } catch (_) {}
-  try { Object.defineProperty(w, "close", { value: w.close, configurable: true, writable: true }); } catch (_) {}
+  try { Object.defineProperty(w, "alert", { value: w.alert, configurable: true, writable: true }); } catch (_) { /* best-effort: continue */ }
+  try { Object.defineProperty(w, "prompt", { value: w.prompt, configurable: true, writable: true }); } catch (_) { /* best-effort: continue */ }
+  try { Object.defineProperty(w, "confirm", { value: w.confirm, configurable: true, writable: true }); } catch (_) { /* best-effort: continue */ }
+  try { Object.defineProperty(w, "open", { value: w.open, configurable: true, writable: true }); } catch (_) { /* best-effort: continue */ }
+  try { Object.defineProperty(w, "close", { value: w.close, configurable: true, writable: true }); } catch (_) { /* best-effort: continue */ }
 
   // happy-dom lacks browser globals that FeiLin / the pe risk engine probe.
   // A missing one throws ReferenceError inside the VM machine → breaks the
@@ -884,12 +884,12 @@ function applyPolyfills(w) {
     find: () => false,
   };
   for (const [k, v] of Object.entries(extraGlobals)) {
-    try { Object.defineProperty(w, k, { value: v, configurable: true, writable: true }); } catch (_) {}
+    try { Object.defineProperty(w, k, { value: v, configurable: true, writable: true }); } catch (_) { /* best-effort: continue */ }
   }
   // happy-dom's own open()/close() are destructive (close() tears the window
   // down); the risk engine probes them → neutralize.
-  try { Object.defineProperty(w, "open", { value: () => null, configurable: true, writable: true }); } catch (_) {}
-  try { Object.defineProperty(w, "close", { value: () => {}, configurable: true, writable: true }); } catch (_) {}
+  try { Object.defineProperty(w, "open", { value: () => null, configurable: true, writable: true }); } catch (_) { /* best-effort: continue */ }
+  try { Object.defineProperty(w, "close", { value: () => {}, configurable: true, writable: true }); } catch (_) { /* best-effort: continue */ }
 
   if (!w.Option) {
     w.Option = class {
@@ -1084,7 +1084,7 @@ function applyPolyfills(w) {
       try {
         const ctx = nativeGetContext.call(this, type, ...rest);
         if (ctx) return ctx;
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     }
     return make2DStub(this);
   };
@@ -1190,7 +1190,7 @@ function applyPolyfills(w) {
   proto.toDataURL = function (...a) {
     try {
       if (nativeToDataURL) return nativeToDataURL.apply(this, a);
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
     return fp.canvasImage;
   };
   if (typeof proto.toBlob !== "function") {
@@ -1294,7 +1294,7 @@ function applyPolyfills(w) {
       value: "visible",
       configurable: true,
     });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
 
   if (!w.document.fonts) {
     w.document.fonts = {
@@ -1373,7 +1373,7 @@ function applyPolyfills(w) {
   for (const [k, v] of Object.entries(navPatch)) {
     try {
       Object.defineProperty(nav, k, { value: v, configurable: true });
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
 
   // polyfill navigator sub-objects that happy-dom lacks
@@ -1389,7 +1389,7 @@ function applyPolyfills(w) {
     w.NetworkInformation = NetInfo;
     try {
       Object.defineProperty(nav, "connection", { value: makeNS(NetInfo.prototype), configurable: true });
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
   if (!nav.userAgentData) {
     const UAData = function () {};
@@ -1420,7 +1420,7 @@ function applyPolyfills(w) {
     };
     try {
       Object.defineProperty(nav, "userAgentData", { value: makeNS(UAData.prototype), configurable: true });
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
   if (!w.Permissions) {
     const Perms = () => {};
@@ -1432,14 +1432,14 @@ function applyPolyfills(w) {
   }
   try {
     if (!nav.permissions) Object.defineProperty(nav, "permissions", { value: makeNS(w.Permissions.prototype), configurable: true });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     if (!nav.clipboard)
       Object.defineProperty(nav, "clipboard", {
         value: makeNS({ readText: () => Promise.resolve(""), writeText: () => Promise.resolve() }),
         configurable: true,
       });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     if (!nav.geolocation)
       Object.defineProperty(nav, "geolocation", {
@@ -1450,35 +1450,35 @@ function applyPolyfills(w) {
         }),
         configurable: true,
       });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     if (!nav.credentials)
       Object.defineProperty(nav, "credentials", {
         value: makeNS({ get: () => Promise.resolve(null), create: () => Promise.resolve(null), store: () => Promise.resolve(), preventSilentAccess: () => Promise.resolve() }),
         configurable: true,
       });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     if (!nav.storage)
       Object.defineProperty(nav, "storage", {
         value: makeNS({ estimate: () => Promise.resolve({ quota: 1e8, usage: 0 }), persisted: () => Promise.resolve(false), persist: () => Promise.resolve(false) }),
         configurable: true,
       });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     if (!nav.usb)
       Object.defineProperty(nav, "usb", {
         value: makeNS({ getDevices: () => Promise.resolve([]), requestDevice: () => Promise.reject(new Error("no devices")) }),
         configurable: true,
       });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     if (!nav.mediaDevices)
       Object.defineProperty(nav, "mediaDevices", {
         value: makeNS({ enumerateDevices: () => Promise.resolve([]), getUserMedia: () => Promise.reject(new Error("NotAllowedError")) }),
         configurable: true,
       });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
 
   // screen
   const screenPatch = {
@@ -1495,7 +1495,7 @@ function applyPolyfills(w) {
   for (const [k, v] of Object.entries(screenPatch)) {
     try {
       Object.defineProperty(w.screen, k, { get: () => v, configurable: true });
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
 
   w.outerWidth = fp.screen.w;
@@ -1557,7 +1557,7 @@ function simulateBehavior(w, durationMs = 600) {
       const ev = new Ctor(type, { bubbles: true, cancelable: true, view: w, ...opts });
       document.dispatchEvent(ev);
       if (document.body) document.body.dispatchEvent(ev);
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   };
   let x = 140 + Math.random() * 30;
   let y = 110 + Math.random() * 20;
@@ -1590,7 +1590,7 @@ function simulateBehavior(w, durationMs = 600) {
       fire("click", MouseEvent, { clientX: Math.round(x), clientY: Math.round(y), button: 0 });
       try {
         fire("keyup", KeyboardEvent, { key: "a", code: "KeyA", keyCode: 65, which: 65 });
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     }
   };
   moveStep();
@@ -1603,7 +1603,7 @@ function waitFor(cond, timeoutMs = 15_000, intervalMs = 40) {
       let ok = false;
       try {
         ok = cond();
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
       if (ok) {
         clearInterval(timer);
         res();
@@ -1634,7 +1634,7 @@ async function createDom(region, prefix) {
       });
       cookies = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
       _cookieCache = { cookies, ts: Date.now() };
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
 
   const interceptor = makeInterceptor(_bypassPeCacheOnce);
@@ -1648,7 +1648,7 @@ async function createDom(region, prefix) {
       try {
         const r = reason && reason.stack ? reason.stack : String(reason);
         process.stderr.write(`[host-unhandledRejection] ${typeof reason} ${JSON.stringify(reason).slice(0, 200)} ${r}\n`);
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     });
     // Guest scripts (rotated pe/FeiLin bundles) can throw synchronous errors
     // that surface as uncaughtExceptions. Without a handler, happy-dom's
@@ -1658,7 +1658,7 @@ async function createDom(region, prefix) {
       try {
         const msg = err && err.message ? err.message : String(err);
         process.stderr.write(`[captcha-guest-uncaught] ${msg}\n`);
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     });
   }
   // Guest console is silent unless CAPTCHA_DEBUG — piping every SDK log to
@@ -1721,7 +1721,7 @@ async function createDom(region, prefix) {
         if (k === "samesite") cookie.sameSite = kv[1];
       }
       browserFrame.page.context.cookieContainer.addCookies([cookie]);
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
 
   const visitorId = crypto.randomUUID();
@@ -1734,7 +1734,7 @@ async function createDom(region, prefix) {
   for (const c of pre) {
     try {
       browserFrame.page.context.cookieContainer.addCookies([{ ...c, url: "https://zcode.z.ai", path: "/" }]);
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
 
   // Apply polyfills + masking BEFORE the SDK script runs.
@@ -1913,14 +1913,14 @@ function installGlobalWindowAlias(g, w, tombstoneMs?) {
         // flowing to the restore path.
         if (d && d.get && _aliasGetters.has(d.get)) continue;
         if (d) saved[prop] = d;
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     }
     for (const prop of ["window", "self", "top", "parent", "__capWindowFor"]) {
       try {
         const d = Object.getOwnPropertyDescriptor(g, prop);
         if (d && d.get && _aliasGetters.has(d.get)) continue;
         if (d && !saved[prop]) saved[prop] = d;
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     }
     _savedHostGlobalDescriptors = saved;
   }
@@ -1932,11 +1932,11 @@ function installGlobalWindowAlias(g, w, tombstoneMs?) {
       Object.defineProperty(g, prop, {
         get: getter,
         set(v) {
-          try { w[prop] = v; } catch (_) {}
+          try { w[prop] = v; } catch (_) { /* best-effort: continue */ }
         },
         configurable: true,
       });
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
   // w.window/self may not exist as own props on this happy-dom build
   for (const prop of ["window", "self", "top", "parent"]) {
@@ -1944,7 +1944,7 @@ function installGlobalWindowAlias(g, w, tombstoneMs?) {
       const getter = function () { return w; };
       _aliasGetters.add(getter);
       Object.defineProperty(g, prop, { get: getter, configurable: true });
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
   }
   // Timers are deliberately NOT aliased: globalThis keeps Bun's pristine
   // functions so node:_http_server keep-alive, undici and AbortSignal.timeout
@@ -1961,7 +1961,7 @@ function installGlobalWindowAlias(g, w, tombstoneMs?) {
       get: capGetter,
       configurable: true,
     });
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
 }
 function removeGlobalWindowAlias(g, w) {
   _aliasRefCount -= 1;
@@ -1973,7 +1973,7 @@ function removeGlobalWindowAlias(g, w) {
   const restored = new Set<string>();
   if (_savedHostGlobalDescriptors) {
     for (const [name, desc] of Object.entries(_savedHostGlobalDescriptors)) {
-      try { Object.defineProperty(g, name, desc); } catch (_) {}
+      try { Object.defineProperty(g, name, desc); } catch (_) { /* best-effort: continue */ }
       restored.add(name);
     }
     _savedHostGlobalDescriptors = undefined;
@@ -1990,15 +1990,15 @@ function removeGlobalWindowAlias(g, w) {
       if (restored.has(name)) continue;
       try {
         if (Object.getOwnPropertyDescriptor(g, name)?.get) names.push(name);
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     }
     for (const prop of ["window", "self", "top", "parent", "__capWindowFor"]) {
       if (restored.has(prop)) continue;
       try {
         if (Object.getOwnPropertyDescriptor(g, prop)?.get) names.push(prop);
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     }
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     const t = _hostSetTimeout(() => {
       if (generation !== _aliasGeneration || _aliasRefCount > 0) return;
@@ -2017,13 +2017,13 @@ function removeGlobalWindowAlias(g, w) {
             configurable: true,
             writable: true,
           });
-        } catch (_) {}
+        } catch (_) { /* best-effort: continue */ }
       }
     }, _tombstoneMs);
     try {
       if (t && typeof t.unref === "function") t.unref();
-    } catch (_) {}
-  } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
+  } catch (_) { /* best-effort: continue */ }
 }
 
 function destroyDom(win) {
@@ -2031,19 +2031,19 @@ function destroyDom(win) {
     const cap = win.document.getElementById("cap");
     if (cap) cap.replaceChildren();
     win.happyDOM.close();
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     global.__cookieContainer = null;
     global.__browserFrame = null;
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   try {
     if (typeof Bun !== "undefined") removeGlobalWindowAlias(globalThis, win);
-  } catch (_) {}
+  } catch (_) { /* best-effort: continue */ }
   // The scope holds window-bound timer functions; dropping it releases the
   // closed window and makes any straggler's `new Function` fall back to the
   // host constructor (harmless: the window registry is already cleared).
   removeGuestScope(win);
-  try { shutdownSyncFetchWorker(); } catch (_) {}
+  try { shutdownSyncFetchWorker(); } catch (_) { /* best-effort: continue */ }
 }
 
 function extractVerifyParam(param) {
@@ -2120,7 +2120,7 @@ function stageReusableWindow(window, browserFrame) {
 function discardReusableWindow() {
   const p = _reusePool;
   if (p.window) {
-    try { destroyDom(p.window); } catch (_) {}
+    try { destroyDom(p.window); } catch (_) { /* best-effort: continue */ }
   }
   p.window = null;
   p.browserFrame = null;
@@ -2248,7 +2248,7 @@ async function solveTraceless(opts) {
       const okPe = w.__lastPeUrl;
       if (okPe) _stallCounts.delete(okPe);
       w.__capErrs = [];
-    } catch (_) {}
+    } catch (_) { /* best-effort: continue */ }
 
     solveSucceeded = true;
     const out = extractVerifyParam(param);
@@ -2265,7 +2265,7 @@ async function solveTraceless(opts) {
     if (summary) {
       try {
         err.message = `${err && err.message ? err.message : String(err)} |${summary}`;
-      } catch (_) {}
+      } catch (_) { /* best-effort: continue */ }
     }
     throw err;
   } finally {

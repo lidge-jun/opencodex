@@ -398,12 +398,12 @@ function zcodePlanDeviceMid(): string {
   try {
     const stored = readFileSync(file, "utf8").trim();
     if (stored) return stored;
-  } catch {}
+  } catch { /* first run or unreadable: generate below */ }
   const mid = randomUUID();
   try {
     mkdirSync(dir, { recursive: true });
     writeFileSync(file, mid, { mode: 0o600 });
-  } catch {}
+  } catch { /* persistence is best-effort; an unpersisted id still works per-process */ }
   return mid;
 }
 
