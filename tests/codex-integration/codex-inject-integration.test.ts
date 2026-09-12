@@ -134,8 +134,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(value.observed).toBe(kind);
     expect(value.result.success).toBe(false);
     if(kind==="coordinated") {
-      // Also covered by the earlier fork PR luvs01/opencodex#118: never advance
-      // durable generation/tx state when config restoration reports failure.
+      // Never advance durable generation/tx state when config restoration fails.
       expect(value.before.state).toMatchObject({nativeGeneration:0,currentTxId:null});
       expect(value.after.state).toEqual(value.before.state);
     }
