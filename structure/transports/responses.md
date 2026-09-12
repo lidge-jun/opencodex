@@ -201,7 +201,14 @@ Responses requests default to native `openai-responses`. Existing namespace, hos
 reasoning-replay normalization remains in force. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
-existing wire and tier policy. OAuth still drops caller-owned `service_tier` on either wire.
+existing wire and tier policy. The OAuth lane is service-tier classified per model
+(`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13): grok-4.6, grok-4.5,
+grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
+grok-composer-2.5-fast accept `service_tier: "priority"` over Grok OAuth and echo it, so those
+routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either
+wire (`chatServiceTier: true`). grok-4.20-multi-agent-0309 stays unclassified with its
+caller-tier pin: the gateway accepts the field but answers `service_tier: "default"`, a live
+downgrade rather than a fast tier.
 
 Native Responses participates in the same pre-stream OAuth HTTP-429 account rotation as the Chat
 bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes

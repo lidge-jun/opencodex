@@ -69,3 +69,23 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 Devin CLI credential path composition in `src/oauth/devin-cli.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
+### OAuth Fast Tier (Priority Processing)
+
+xAI's Priority Processing (`service_tier: "priority"` on Chat Completions and Responses,
+documented for the API-key product) is honored by the Grok OAuth subscription gateway on a
+probed model set (live probe 2026-09-13, `devlog/_fin/260913_xai_oauth_fast/`): grok-4.6,
+grok-4.5, grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
+grok-composer-2.5-fast each echoed `priority` upstream. The registry entry classifies exactly
+that set in `modelSupportsServiceTier` and declares `chatServiceTier: true`, so the OAuth lane
+resolves Fast-eligible per model: `--fast` synthetic rows publish, `fastMode` can force the
+tier, and a caller-sent tier forwards (the Codex fast-toggle path). grok-4.20-multi-agent-0309
+is deliberately excluded — the gateway answers `service_tier: "default"` when sent
+`priority`, so it keeps `forwardCallerServiceTier: false` and publishes no fast row.
+Classification reaches saved configs through the fill-only enrich backfill
+(`src/providers/derive.ts`); an explicit config value always wins, and a config saved while
+the lane is live keeps it as an explicit value even if the registry default later changes.
+
+The upstream tier echo relays to the client on every Chat Completions delivery shape
+(`src/chat/outbound.ts` projections and `src/server/chat-native-sse.ts` chunks), matching
+what the Responses lane already relayed for responses-wire upstreams; the responses-lane
+assembly for chat-wire upstreams tracks the echo in attempt telemetry only.

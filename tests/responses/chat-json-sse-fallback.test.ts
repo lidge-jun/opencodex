@@ -1,8 +1,8 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, translatorObservedBufferSnapshot } from "../../src/lib/translator-budget";
 import type { OcxConfig } from "../../src/types";
-import { responsesJsonToChatCompletion, isChatCompletionsStreamError } from "../../src/chat/outbound";
+import { responsesJsonToChatCompletion, collectChatCompletion, isChatCompletionsStreamError } from "../../src/chat/outbound";
 import { jsonCompletionSse } from "../../src/server/chat-native-sse";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { readUsageEntries } from "../../src/usage/log";
@@ -251,4 +251,92 @@ test("buffered calls enforce their per-call cap, including an empty upstream ID"
 test("JSON-to-SSE rejects a call above 2 MiB without success output or duplicate usage", async () => {
   await streamFixture([{ type: "function_call", call_id: "large-call", name: "lookup", arguments: JSON.stringify({ text: "x".repeat(2 * 1024 * 1024) }) }],
     "completed", false, "max_output_tokens", { error: true, errorCode: "translation_buffer_limit" });
+});
+
+// The upstream service-tier echo (xAI Priority Processing, OpenAI fast tier) must
+// reach the Chat Completions caller on every delivery shape, matching the field the
+// Responses lane already relays for responses-wire upstreams.
+describe("service_tier echo relay", () => {
+  test("responses JSON echo lands in the converted non-streaming body", () => {
+    const completion = responsesJsonToChatCompletion({
+      status: "completed",
+      service_tier: "priority",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+    }, "model");
+    expect(completion.service_tier).toBe("priority");
+    expect(completion.choices).toMatchObject([{ message: { content: "OK" }, finish_reason: "stop" }]);
+  });
+
+  test("an upstream without service_tier gets no injected key", () => {
+    const completion = responsesJsonToChatCompletion({
+      status: "completed",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+    }, "model");
+    expect(completion).not.toHaveProperty("service_tier");
+  });
+
+  test("synthesized SSE carries the echo on every chunk", () => {
+    const budget = createTranslatorBudget();
+    try {
+      const completion = responsesJsonToChatCompletion({
+        status: "completed",
+        service_tier: "priority",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+      }, "model", budget);
+      const text = jsonCompletionSse(completion, "model", budget);
+      const frames = text.split(/\r?\n/)
+        .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map(line => JSON.parse(line.slice(6)));
+      expect(frames.length).toBeGreaterThan(1);
+      for (const frame of frames) expect(frame.service_tier).toBe("priority");
+    } finally { budget.dispose(); }
+  });
+
+  test("collectChatCompletion folds a chunk-level echo into the final body", async () => {
+    const chunk = (delta: Record<string, unknown>, finish: string | null, extra: Record<string, unknown> = {}) =>
+      `data: ${JSON.stringify({ id: "chatcmpl-fold", object: "chat.completion.chunk", created: 1, model: "model", choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`;
+    const sse = chunk({ role: "assistant", content: "" }, null, { service_tier: "priority" })
+      + chunk({ content: "OK" }, null)
+      + chunk({}, "stop")
+      + "data: [DONE]\n\n";
+    const budget = createTranslatorBudget();
+    try {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode(sse)); controller.close(); },
+      });
+      const completion = await collectChatCompletion(stream, "model", budget);
+      expect(completion.service_tier).toBe("priority");
+      expect(completion.choices).toMatchObject([{ message: { content: "OK" }, finish_reason: "stop" }]);
+    } finally { budget.dispose(); }
+  });
+
+  test("the endpoint relays the echo on both non-stream and stream delivery", async () => {
+    upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch() {
+      return Response.json({
+        id: "resp_tier", status: "completed", service_tier: "priority",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+        usage: { input_tokens: 3, output_tokens: 1 },
+      });
+    } });
+    const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "openai-responses", baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+      authMode: "key", apiKey: "fixture-key", allowPrivateNetwork: true, models: ["model"],
+    } } };
+    const post = (stream: boolean) => handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture/model", stream, messages: [{ role: "user", content: "ping" }] }),
+    }), config, { model: "", provider: "" }, { requestId: `tier-relay-${stream}`, start: Date.now() });
+
+    const jsonResponse = await post(false);
+    expect(jsonResponse.status).toBe(200);
+    expect(await jsonResponse.json()).toMatchObject({ service_tier: "priority", choices: [{ finish_reason: "stop" }] });
+
+    const sseResponse = await post(true);
+    expect(sseResponse.status).toBe(200);
+    const frames = (await sseResponse.text()).split(/\r?\n/)
+      .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+      .map(line => JSON.parse(line.slice(6)));
+    expect(frames.length).toBeGreaterThan(1);
+    for (const frame of frames) expect(frame.service_tier).toBe("priority");
+  });
 });

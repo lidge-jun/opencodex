@@ -871,6 +871,10 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
       logprobs: null,
     }],
     usage: chatCompletionsUsage(body.usage),
+    // Relay the upstream service-tier echo (xAI Priority Processing, OpenAI fast tier)
+    // so a Chat Completions caller can confirm the tier the turn actually used, the
+    // same field the Responses lane already relays for responses-wire upstreams.
+    ...(typeof body.service_tier === "string" ? { service_tier: body.service_tier } : {}),
   };
 }
 
@@ -891,6 +895,7 @@ export async function collectChatCompletion(
   const callScope = (index: number) => `chat_collect_${index}`;
   let finishReason = "stop";
   let usage: unknown;
+  let serviceTier: unknown;
   const replaceRetained = (previous: string, next: string, kind: "live_transient" | "retained_collectors") => {
     const reservation = translatorBudget.reserveTransient(Buffer.byteLength(next), { kind });
     reservation.commitRetained();
@@ -951,6 +956,7 @@ export async function collectChatCompletion(
             throw streamError;
           }
           if (parsed.usage) usage = parsed.usage;
+          if (typeof parsed.service_tier === "string") serviceTier = parsed.service_tier;
           const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
           const choice = isRec(choices[0]) ? choices[0] : null;
           if (!choice) continue;
@@ -1076,5 +1082,6 @@ export async function collectChatCompletion(
       logprobs: null,
     }],
     usage: usage && isRec(usage) ? usage : chatCompletionsUsage(undefined),
+    ...(typeof serviceTier === "string" ? { service_tier: serviceTier } : {}),
   };
 }
