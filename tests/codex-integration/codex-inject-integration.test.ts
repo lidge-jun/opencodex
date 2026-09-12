@@ -89,6 +89,21 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
     expect(readFileSync(rollout,"utf8")).toBe(bytes);
     expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+    const restoreScript = `
+      const { restoreNativeCodex, restoreNativeCodexAsync, removeCodexConfig } = require("./src/codex/inject");
+      const results = [restoreNativeCodex(), await restoreNativeCodexAsync(), removeCodexConfig()];
+      console.log(JSON.stringify(results));
+    `;
+    const restored = spawnSync(process.execPath, ["--eval", restoreScript], {
+      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(restored.status).toBe(0);
+    for (const outcome of JSON.parse(restored.stdout)) expect(outcome.success).toBe(false);
+    expect(readFileSync(configPath,"utf8")).toBe(original);
+    expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
+    expect(readFileSync(rollout,"utf8")).toBe(bytes);
+    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
   });
 
   test("remote target validate-only writes nothing; commit journals client ownership and restores exact preimage", () => {

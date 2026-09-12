@@ -198,3 +198,5 @@ Client connection metadata stores a stable `apiKeyId` and a non-secret rotation 
 Authless routing cannot relabel paginated history through the legacy file writer. A refused history transition must be reported; provider-definition retention during that refusal remains an integration concern. See [Codex Home](codex-home.md#paginated-history-writer-boundary).
 
 Injection now preflights affected paginated threads before writing config/profile/journal, using the normalized config candidate to resolve SQLite storage. It rechecks immediately before artifact writes; this preserves provider definitions on a stable-format refusal but does not replace native-writer coordination for concurrent format changes.
+
+The legacy external writer is now refused for affected rows in any store whose schema includes history_mode, even while their row mode is still legacy. This deliberately sacrifices automatic relabeling on migration-capable stores rather than racing native conversion. Synchronous/asynchronous restore, inline journal restore, and direct config removal preserve all artifacts on the same refusal.

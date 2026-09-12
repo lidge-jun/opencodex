@@ -1668,6 +1668,8 @@ function hasOpencodexRouting(content: string): boolean {
 export function removeCodexConfig(
   options: { preserveProfile?: boolean } = {},
 ): { success: boolean; message: string } {
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
   if (!existsSync(CODEX_CONFIG_PATH)) {
     if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
       unlinkSync(CODEX_PROFILE_PATH);
@@ -1870,6 +1872,8 @@ export function skippedRestoreEnvelope(success: boolean, message: string): Codex
 /** The config/profile half of a native restore, reported as one artifact. */
 function restoreCodexConfigInline(): CodexRestoreConfigResult {
   try {
+    const historyError = preflightCodexHistoryInjection(false, false);
+    if (historyError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${historyError}.` };
     const journal = restoreJournalState();
     if (journal.unverified) {
       return {
@@ -1943,6 +1947,8 @@ function restoreCodexCatalogArtifact(
 export async function restoreNativeCodexAsync(
   options: { revalidateDesiredState?: boolean } = {},
 ): Promise<CodexNativeRestoreResult> {
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     // External-provider courtesy: only the stale journal is removed. The
@@ -2096,6 +2102,8 @@ export async function restoreNativeCodexAsync(
 }
 
 export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateDesiredState?: boolean } = {}): CodexNativeRestoreResult {
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     removeJournal();

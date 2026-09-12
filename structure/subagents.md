@@ -201,3 +201,5 @@ Native Codex advertisements still follow display priority; private guidance rank
 History metadata for parent or child threads follows the same [paginated writer boundary](codex-home.md#paginated-history-writer-boundary); a child source does not authorize external ordinal allocation.
 
 Injection now preflights affected paginated threads before writing config/profile/journal, using the normalized config candidate to resolve SQLite storage. It rechecks immediately before artifact writes; this preserves provider definitions on a stable-format refusal but does not replace native-writer coordination for concurrent format changes.
+
+The legacy external writer is now refused for affected rows in any store whose schema includes history_mode, even while their row mode is still legacy. This deliberately sacrifices automatic relabeling on migration-capable stores rather than racing native conversion. Synchronous/asynchronous restore, inline journal restore, and direct config removal preserve all artifacts on the same refusal.

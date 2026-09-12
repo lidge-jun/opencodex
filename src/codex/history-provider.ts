@@ -245,6 +245,16 @@ function assertLegacyHistoryWritable(path: string): void {
   }
 }
 
+/** A store with history_mode can migrate legacy rows while Codex is running.
+ * Refuse the entire external mutation, not only rows already marked paginated.
+ */
+function assertLegacyHistoryStore(db: Database): void {
+  const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
+  if (columns.some(column => column.name === "history_mode")) {
+    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+  }
+}
+
 /** Read-only preflight before the injector changes provider definitions.
  * Native paginated history cannot participate in the legacy relabel protocol.
  * Returning a refusal preserves the existing config as well as the rollout.
@@ -252,12 +262,13 @@ function assertLegacyHistoryWritable(path: string): void {
 export function preflightCodexHistoryInjection(
   providerTableMode: boolean,
   resumeHistory: boolean,
-  stateDbPath = resolveCodexStateDbPath(),
+  stateDbPath?: string,
 ): string | null {
-  if (!existsSync(stateDbPath)) return null;
   let db: Database | undefined;
   try {
-    db = new Database(stateDbPath, { readonly: true });
+    const resolvedPath = stateDbPath ?? resolveCodexStateDbPath();
+    if (!existsSync(resolvedPath)) return null;
+    db = new Database(resolvedPath, { readonly: true });
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
     const paginatedColumn = columns.some(column => column.name === "history_mode");
     const rows = db.query<{ rollout_path: string; history_mode: string | null }, []>(`
@@ -268,7 +279,7 @@ export function preflightCodexHistoryInjection(
         : "model_provider = 'opencodex'"}
     `).all();
     for (const row of rows) {
-      if (row.history_mode === "paginated") return "history_paginated_requires_native_writer";
+      if (paginatedColumn || row.history_mode === "paginated") return "history_paginated_requires_native_writer";
       assertLegacyHistoryWritable(row.rollout_path);
     }
     return null;
@@ -1216,6 +1227,7 @@ function relabelAllRoutedHistoryToOpenai(db: Database): { rows: number; files: n
     `)
     .all();
 
+  if (rows.length > 0) assertLegacyHistoryStore(db);
   for (const row of rows) assertLegacyHistoryWritable(row.rollout_path);
   let files = 0;
   for (const row of rows) {
@@ -1368,6 +1380,7 @@ function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbP
       `)
       .all();
 
+    if (openaiRows.length + execRows.length > 0) assertLegacyHistoryStore(db);
     for (const row of [...openaiRows, ...execRows]) assertLegacyHistoryWritable(row.rollout_path);
     const manifest = readBackup(backupPath, stateDbPath).manifest;
     for (const row of [...openaiRows, ...execRows]) rememberOriginal(manifest, row);
@@ -1481,6 +1494,7 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
   const db = openStateDb(stateDbPath);
   try {
     if (entries.length === 0) return { rows: 0, files: 0 };
+    assertLegacyHistoryStore(db);
 
     // Validate the whole manifest-to-database target set before touching a rollout. Only the
     // OpenCodex post-image (or an already-restored target from an interrupted retry) is owned by

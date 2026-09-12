@@ -102,6 +102,17 @@ function makeFixture({ includeExec = false, includeLegacy = false } = {}) {
 }
 
 describe("Codex history provider sync", () => {
+  test("refuses legacy rows in a migration-capable store before external writes", () => {
+    const fixture = makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    const before = readFileSync(fixture.rollout, "utf8");
+    const db = new Database(fixture.dbPath);
+    db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+    db.close();
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath)).toMatchObject({failed:true,rows:0,files:0,integrityCode:"history_paginated_requires_native_writer"});
+    expect(readFileSync(fixture.rollout,"utf8")).toBe(before);
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
   test("injection preflight preserves provider definitions needed by paginated threads", () => {
     const fixture = makeFixture({ includeLegacy: true });
     noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
