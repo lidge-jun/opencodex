@@ -121,6 +121,9 @@ Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent
 
 ## Subagents
 
+Parent and subagent requests using the key-auth Responses hosted-search bridge share the
+[continuation binding contract](transports/responses.md#hosted-search-continuation-binding).
+
 New non-OAuth provider registrations carry `initialModelSelection` with a unique
 registration identity. Until reliable live/static discovery completes, public
 catalogs and model candidates withhold those providers' models; the provider itself

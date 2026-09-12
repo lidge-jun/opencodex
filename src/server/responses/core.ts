@@ -6144,6 +6144,8 @@ async function handleResponsesInner(
         isPassthrough: true,
         stream: parsed.stream === true,
       });
+      // Capture the binding that actually served the first leg, after its permitted reselection.
+      const webSearchBridgeBinding = requestBindings.get(request);
       // The bridge wraps the RAW upstream body, so terminal repair below still owns the single
       // client-facing terminal — the bridge drops the terminal of every intercepted leg.
       const upstreamSseBody = webSearchBridgePlan
@@ -6161,7 +6163,14 @@ async function handleResponsesInner(
             connectMs,
             true,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(request),
+              // Pacing can outlive a manual selection change. A continuation must retain the
+              // first leg's key and appended search result, never rebuild from the original turn.
+              beforeDispatch: () => {
+                if (webSearchBridgeBinding?.kind !== "api-key"
+                  || !providerApiKeySelectionIsCurrent(config, route.providerName, webSearchBridgeBinding.provider)) {
+                  throw new Error("API key selection changed during a web-search continuation");
+                }
+              },
               providerName: route.providerName,
               modelId: route.modelId,
             }),

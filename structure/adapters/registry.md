@@ -3,6 +3,9 @@
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+The server-owned key-auth Responses hosted-search bridge retains the serving adapter's account
+binding as specified in [Responses transport](../transports/responses.md#hosted-search-continuation-binding).
+
 ## Decision
 
 Runtime adapter construction has one authority: `src/adapters/registry.ts`.

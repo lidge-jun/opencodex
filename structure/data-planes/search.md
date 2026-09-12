@@ -1,5 +1,8 @@
 # Search Data Plane
 
+The opt-in key-auth Responses hosted-search bridge follows the
+[continuation binding contract](../transports/responses.md#hosted-search-continuation-binding).
+
 ## Standalone Search and exact account selectors
 
 `POST /v1/alpha/search` retains the selected model in its request body. When that value is an

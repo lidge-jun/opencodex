@@ -3,6 +3,9 @@
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+Key-auth hosted-search continuations validate account selection after pacing and report a failed
+terminal on drift; see [Responses transport](responses.md#hosted-search-continuation-binding).
+
 ## Heartbeat and stall deadline
 
 The HTTP/SSE bridge emits an SSE comment-line keep-alive (`: opencodex heartbeat`) during upstream

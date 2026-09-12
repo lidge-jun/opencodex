@@ -21,6 +21,11 @@ import {
 import { mapOllamaSearchResponse } from "../../src/web-search/ollama-executor";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../src/server/responses-undeclared-tool-guard";
 import { handleResponses } from "../../src/server/responses";
+import {
+  resetProviderRequestPacingForTest,
+  setProviderRequestPacingRuntimeForTest,
+  waitForProviderRequestSlot,
+} from "../../src/providers/request-pacing";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig, ProviderWebSearchBridgeConfig } from "../../src/types";
 
 /** One SSE event block without its blank-line delimiter. */
@@ -572,9 +577,16 @@ describe("the reported turn, end to end through handleResponses", () => {
   async function post(
     ocxConfig: OcxConfig,
     legs: string[],
-  ): Promise<{ body: string; outbound: string[]; searches: number }> {
+    hooks: { onSearch?: () => void; onProviderResponse?: (leg: number) => void } = {},
+  ): Promise<{
+    body: string;
+    outbound: string[];
+    destinations: Array<{ url: string; authorization: string | null }>;
+    searches: number;
+  }> {
     const savedFetch = globalThis.fetch;
     const outbound: string[] = [];
+    const destinations: Array<{ url: string; authorization: string | null }> = [];
     let searches = 0;
     let leg = 0;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
@@ -583,13 +595,16 @@ describe("the reported turn, end to end through handleResponses", () => {
         : input instanceof URL ? input.href : (input as Request).url;
       if (url.includes("/api/web_search")) {
         searches += 1;
+        hooks.onSearch?.();
         return new Response(JSON.stringify({
           results: [{ title: "Releases", url: "https://example.test/rel", content: "opencodex 2.50.0" }],
         }), { headers: { "content-type": "application/json" } });
       }
       outbound.push(String(init?.body ?? ""));
+      destinations.push({ url, authorization: new Headers(init?.headers).get("authorization") });
       const text = legs[Math.min(leg, legs.length - 1)]!;
       leg += 1;
+      hooks.onProviderResponse?.(leg);
       return new Response(text, { headers: { "content-type": "text/event-stream" } });
     }) as unknown as typeof fetch;
     try {
@@ -598,7 +613,7 @@ describe("the reported turn, end to end through handleResponses", () => {
         headers: { "content-type": "application/json" },
         body: clientRequest,
       }), ocxConfig, { model: "", provider: "" });
-      return { body: await response.text(), outbound, searches };
+      return { body: await response.text(), outbound, destinations, searches };
     } finally {
       globalThis.fetch = savedFetch;
     }
@@ -624,12 +639,159 @@ describe("the reported turn, end to end through handleResponses", () => {
 
     // The search result reached the SECOND upstream body as a native tool result.
     expect(result.outbound).toHaveLength(2);
+    expect(result.destinations).toEqual([
+      { url: "https://ollama.com/v1/responses", authorization: "Bearer fixture-key" },
+      { url: "https://ollama.com/v1/responses", authorization: "Bearer fixture-key" },
+    ]);
     const continuation = JSON.parse(result.outbound[1]!) as { input: Record<string, unknown>[] };
     const output = continuation.input.find(item => item.type === "function_call_output");
     expect(output).toBeDefined();
     expect(String(output!.output)).toContain("opencodex 2.50.0");
     expect(continuation.input.some(item =>
       item.type === "function_call" && item.name === "web_search")).toBe(true);
+  });
+
+  const selectionChanges: Array<[string, (ocxConfig: OcxConfig) => void]> = [
+    ["selection revision with an unchanged key", cfg => {
+      cfg.providers.fixture!.apiKeySelectionRevision = "selection-after";
+    }],
+    ["key reference with the same resolved value", cfg => {
+      cfg.providers.fixture!.apiKey = "${OCX_BRIDGE_BINDING_ALTERNATE}";
+      cfg.providers.fixture!.apiKeyPool![0]!.key = "${OCX_BRIDGE_BINDING_ALTERNATE}";
+    }],
+    ["selected entry id", cfg => {
+      cfg.providers.fixture!.apiKeyPool![0]!.id = "entry-after";
+    }],
+    ["resolved key behind an unchanged reference", () => {
+      process.env.OCX_BRIDGE_BINDING_KEY = "fixture-key-after";
+    }],
+    ["authentication mode", cfg => { cfg.providers.fixture!.authMode = "forward"; }],
+    ["base URL", cfg => { cfg.providers.fixture!.baseUrl = "https://gateway.example/v1"; }],
+    ["provider disabled", cfg => { cfg.providers.fixture!.disabled = true; }],
+    ["provider removed", cfg => { delete cfg.providers.fixture; }],
+  ];
+
+  test.each(selectionChanges)("refuses the continuation when search changes the %s", async (_name, change) => {
+    const savedKey = process.env.OCX_BRIDGE_BINDING_KEY;
+    const savedAlternate = process.env.OCX_BRIDGE_BINDING_ALTERNATE;
+    process.env.OCX_BRIDGE_BINDING_KEY = "fixture-key";
+    process.env.OCX_BRIDGE_BINDING_ALTERNATE = "fixture-key";
+    const cfg = config(armed);
+    Object.assign(cfg.providers.fixture!, {
+      apiKey: "${OCX_BRIDGE_BINDING_KEY}",
+      apiKeySelectionRevision: "selection-before",
+      apiKeyPool: [{ id: "entry-before", key: "${OCX_BRIDGE_BINDING_KEY}" }],
+    });
+    try {
+      const result = await post(cfg, [searchLeg(), answerLeg()], { onSearch: () => change(cfg) });
+      expect(result.searches).toBe(1);
+      expect(result.outbound).toHaveLength(1);
+      expect(result.destinations).toEqual([
+        { url: "https://ollama.com/v1/responses", authorization: "Bearer fixture-key" },
+      ]);
+      const events = clientEvents(result.body);
+      expect(events.filter(event => event.type === "response.failed")).toHaveLength(1);
+      expect(events.filter(event => event.type === "response.completed")).toHaveLength(0);
+      expect(result.body).toContain(WEB_SEARCH_BRIDGE_ERROR_CODE);
+      expect(result.body).not.toContain("The current release is 2.50.0.");
+    } finally {
+      if (savedKey === undefined) delete process.env.OCX_BRIDGE_BINDING_KEY;
+      else process.env.OCX_BRIDGE_BINDING_KEY = savedKey;
+      if (savedAlternate === undefined) delete process.env.OCX_BRIDGE_BINDING_ALTERNATE;
+      else process.env.OCX_BRIDGE_BINDING_ALTERNATE = savedAlternate;
+    }
+  });
+
+  test("rechecks the continuation binding after its pacing wait", async () => {
+    const cfg = config(armed);
+    cfg.providers.fixture!.requestPacing = { enabled: true, minIntervalMs: 100 };
+    let now = 0;
+    let searches = 0;
+    let waitsAfterSearch = 0;
+    resetProviderRequestPacingForTest();
+    setProviderRequestPacingRuntimeForTest({
+      now: () => now,
+      setTimer: (callback, delayMs) => {
+        queueMicrotask(() => {
+          if (searches > 0) {
+            waitsAfterSearch += 1;
+            cfg.providers.fixture!.apiKeySelectionRevision = "selection-during-pacing";
+          }
+          now += delayMs;
+          callback();
+        });
+        return 1;
+      },
+      clearTimer: () => {},
+      enqueueMicrotask: queueMicrotask,
+    });
+    try {
+      const result = await post(cfg, [searchLeg(), answerLeg()], { onSearch: () => { searches += 1; } });
+      expect(result.searches).toBe(1);
+      expect(waitsAfterSearch).toBe(1);
+      expect(result.outbound).toHaveLength(1);
+      expect(result.body).toContain(WEB_SEARCH_BRIDGE_ERROR_CODE);
+      expect(clientEvents(result.body).filter(event => event.type === "response.completed")).toHaveLength(0);
+    } finally {
+      resetProviderRequestPacingForTest();
+    }
+  });
+
+  test("keeps the dispatched binding if selection changes before first-leg headers return", async () => {
+    const cfg = config(armed);
+    const result = await post(cfg, [searchLeg(), answerLeg()], {
+      onProviderResponse: leg => {
+        if (leg === 1) cfg.providers.fixture!.apiKey = "fixture-key-after";
+      },
+    });
+    expect(result.searches).toBe(1);
+    expect(result.outbound).toHaveLength(1);
+    expect(result.destinations[0]!.authorization).toBe("Bearer fixture-key");
+    expect(result.body).toContain(WEB_SEARCH_BRIDGE_ERROR_CODE);
+    expect(clientEvents(result.body).filter(event => event.type === "response.completed")).toHaveLength(0);
+  });
+
+  test("allows initial dispatch reselection and binds search to the key that served it", async () => {
+    const cfg = config(armed);
+    cfg.providers.fixture!.requestPacing = { enabled: true, minIntervalMs: 100 };
+    let now = 0;
+    let waits = 0;
+    resetProviderRequestPacingForTest();
+    setProviderRequestPacingRuntimeForTest({
+      now: () => now,
+      setTimer: (callback, delayMs) => {
+        queueMicrotask(() => {
+          waits += 1;
+          if (waits === 1) {
+            cfg.providers.fixture!.apiKey = "fixture-key-after";
+            cfg.providers.fixture!.apiKeySelectionRevision = "selection-before-first-send";
+          }
+          now += delayMs;
+          callback();
+        });
+        return 1;
+      },
+      clearTimer: () => {},
+      enqueueMicrotask: queueMicrotask,
+    });
+    try {
+      // Occupy the first slot so the already-built request must wait before credential dispatch.
+      await waitForProviderRequestSlot("fixture", cfg.providers.fixture!, "glm-4.7");
+      const result = await post(cfg, [searchLeg(), answerLeg()]);
+      expect(waits).toBe(2);
+      expect(result.searches).toBe(1);
+      expect(result.destinations).toEqual([
+        { url: "https://ollama.com/v1/responses", authorization: "Bearer fixture-key-after" },
+        { url: "https://ollama.com/v1/responses", authorization: "Bearer fixture-key-after" },
+      ]);
+      const continuation = JSON.parse(result.outbound[1]!) as { input: Record<string, unknown>[] };
+      const output = continuation.input.find(item => item.type === "function_call_output");
+      expect(String(output?.output)).toContain("opencodex 2.50.0");
+      expect(result.body).toContain("The current release is 2.50.0.");
+      expect(result.body).not.toContain("response.failed");
+    } finally {
+      resetProviderRequestPacingForTest();
+    }
   });
 
   test("an unrelated undeclared tool still fails closed through the bridged stream", async () => {
