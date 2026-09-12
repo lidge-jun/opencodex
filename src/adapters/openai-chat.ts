@@ -91,10 +91,18 @@ function openAIChatTransport(provider: OcxProviderConfig): {
   if ((provider.authMode === "key" || provider.authMode === "oauth") && !provider.keyOptional && !hasCredential) {
     throw new Error(`${provider.adapter} requires a non-empty credential (authMode: ${provider.authMode})`);
   }
-  // Plan-metered GLM destinations (coding-plan paths on api.z.ai / open.bigmodel.cn) are
-  // attributed by client identity and ZCode-identified traffic receives the increased
-  // usage allowance; neutral headers would meter the same plan without the bonus.
-  const zcodeIdentity = isZcodePlanMeteredEndpoint(provider.baseUrl)
+  // A configured relative path wins, mirroring how the Responses adapter honours
+  // `responsesPath`. An upstream can serve both wires under different prefixes, and a
+  // per-model wire override only swaps the adapter, so without this the opted-in Chat
+  // request would be sent to the Responses base with `/chat/completions` appended.
+  const url = provider.chatCompletionsPath === undefined
+    ? openaiChatCompletionsUrl(provider.baseUrl)
+    : `${provider.baseUrl.replace(/\/$/, "")}${provider.chatCompletionsPath}`;
+  // Plan-metered GLM destinations are attributed by client identity and ZCode-identified
+  // traffic receives the increased usage allowance. The guard tests the RESOLVED send
+  // URL, not the configured base: the zai preset's baseUrl is the bare host while its
+  // chatCompletionsPath is the plan-metered coding route.
+  const zcodeIdentity = isZcodePlanMeteredEndpoint(url)
     ? { ...buildZcodeIdentityHeaders(), ...buildZcodeTraceHeaders("coding-plan") }
     : {};
   const headers: Record<string, string> = {
@@ -104,13 +112,6 @@ function openAIChatTransport(provider: OcxProviderConfig): {
   };
   if (hasCredential) headers.Authorization = `Bearer ${provider.apiKey}`;
   if (provider.headers) Object.assign(headers, provider.headers);
-  // A configured relative path wins, mirroring how the Responses adapter honours
-  // `responsesPath`. An upstream can serve both wires under different prefixes, and a
-  // per-model wire override only swaps the adapter, so without this the opted-in Chat
-  // request would be sent to the Responses base with `/chat/completions` appended.
-  const url = provider.chatCompletionsPath === undefined
-    ? openaiChatCompletionsUrl(provider.baseUrl)
-    : `${provider.baseUrl.replace(/\/$/, "")}${provider.chatCompletionsPath}`;
   return { url, headers, hasCredential };
 }
 

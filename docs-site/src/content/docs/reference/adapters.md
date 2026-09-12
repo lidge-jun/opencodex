@@ -504,3 +504,37 @@ or a permission grant. Unmarked clients retain their existing behavior. This
 repair runs before the separate provider `responsesSnapshotRepair` option and
 does not enable that broader lifecycle repair. Existing tool-search, custom-tool,
 function-completion and undeclared-tool handling keep their established order.
+
+## `zcode-start-plan`
+
+**Targets:** the ZCode plan gateway's Anthropic-wire messages endpoint at
+`zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages`.
+**Auth:** the plan JWT from `ocx login zcode-start-plan` (the gateway's OAuth CLI flow),
+sent as `Authorization: Bearer`. The JWT carries no `exp` claim; when the gateway rejects
+it, the account is marked for re-login — there is no silent refresh.
+
+- Requests mirror the official desktop client's LLM calls: the identity header set
+  (`User-Agent: ZCode/<version> ai-sdk/anthropic/3.0.81`, `X-Title`, `X-ZCode-Agent: glm`
+  last, no device id) plus fresh per-request attribution ids and
+  `x-zcode-session-type: main`.
+- The gateway inspects the request body: the official ZCode system blocks are prepended to
+  `system` (the dynamic powered-by line merged into the trailing Environment block), the
+  client's two-phase `cache_control` marking is applied, and `metadata.user_id` is decoded
+  from the JWT. Without these the gateway answers biz code 3012. The Claude Code identity
+  block that the inner oauth-mode Anthropic adapter would add is stripped so the model sees
+  one identity.
+- Aliyun WAF captcha challenges (biz 3007 in the body, or the verify-param response
+  header) mint a fresh verify param and replay the request once. The traceless solver runs
+  the official Aliyun Captcha 2.0 SDK inside a happy-dom window that lives entirely in a
+  dedicated worker thread — its window aliasing, exception handlers, and any stall can
+  never touch the server thread. A crash or hang fails only the pending solve.
+- Business errors that arrive inside HTTP 200 bodies (for example `1005`, a per-window
+  rate limit) are mapped to real statuses (429/502) instead of surfacing as truncated
+  streams. A 3012 WAF block surfaces as `upstream_error`.
+- Quota: per-account probe of `billing/balance` (requires the `X-Device-Mid` header,
+  persisted per install under the OpenCodex home; `ZCODE_DEVICE_MID` overrides). Balance
+  rows become custom quota windows.
+- The static model list comes from the gateway's client config — the Anthropic route has
+  no `/models` listing, so live discovery stays off.
+
+See the [provider guide](/guides/providers/) for login instructions and operational notes.

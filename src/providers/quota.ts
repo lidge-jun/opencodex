@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { arch, homedir } from "node:os";
+import { arch } from "node:os";
 import { join } from "node:path";
 import {
   effectiveCodexAuthAccountId,
@@ -16,6 +16,7 @@ import { resolveEnvValue } from "../config";
 import { resolveProviderApiKey } from "./key-store";
 import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
+import { getConfigDir } from "../config/paths";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { isCanonicalOllamaCloudUrl } from "../adapters/ollama-native-url";
 import { providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../lib/provider-outbound";
@@ -388,13 +389,14 @@ function isCanonicalZcodePlanBaseUrl(baseUrl: string): boolean {
 /**
  * Stable per-install device id the plan gateway's control plane expects on billing calls
  * (`X-Device-Mid`; its absence is answered with biz code 3001). Generated once and stored
- * under the OpenCodex config dir; `ZCODE_DEVICE_MID` overrides (e.g. to reuse the desktop
- * client's id so the gateway sees one continuous device).
+ * under the configured OpenCodex home (isolated OPENCODEX_HOME installs keep separate
+ * device identities); `ZCODE_DEVICE_MID` overrides (e.g. to reuse the desktop client's id
+ * so the gateway sees one continuous device).
  */
 function zcodePlanDeviceMid(): string {
   const fromEnv = process.env.ZCODE_DEVICE_MID?.trim();
   if (fromEnv) return fromEnv;
-  const dir = join(homedir(), ".config", "opencodex");
+  const dir = getConfigDir();
   const file = join(dir, "zcode-plan-device-mid");
   try {
     const stored = readFileSync(file, "utf8").trim();
@@ -2523,7 +2525,7 @@ async function fetchZcodeStartPlanQuota(provider: string, accessToken: string): 
     const ratio = used === undefined ? (total - (toFiniteNumber(entry.remaining_units ?? entry.remainingUnits) ?? total)) / total : used / total;
     const percent = normalizePercent(ratio * 100);
     if (percent === undefined) continue;
-    const expiresAt = toFiniteNumber(entry.expires_at ?? entry.expiresAt);
+    const expiresAt = normalizeResetAt(entry.expires_at ?? entry.expiresAt);
     windows.push({ label, percent, ...(expiresAt !== undefined ? { resetAt: expiresAt } : {}) });
   }
   if (windows.length === 0) return AUTHORITATIVE_EMPTY_QUOTA;

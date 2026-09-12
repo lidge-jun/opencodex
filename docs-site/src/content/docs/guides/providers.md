@@ -178,6 +178,7 @@ ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/au
 ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
 ocx login devin       # Cognition/Devin Auth0 browser sign-in
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
+ocx login zcode-start-plan  # Z.ai Start Plan via the ZCode gateway (browser authorize → poll)
 ocx login codex        # Codex account pool (aliases: chatgpt, openai; needs a running proxy)
 ocx logout <provider>
 ```
@@ -195,6 +196,7 @@ ocx logout <provider>
 | `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login opens Auth0 browser sign-in, then exchanges the token via Cognition's `RegisterUser` for a long-lived API key; models are discovered per account with `GetCascadeModelConfigs`. Not shown in the dashboard preset by default. Chat and usage reporting are verified against a live account across three models. |
 | `devin-cli` | `devin` | `https://server.codeium.com` | Imports the credential your installed Devin CLI already holds (`devin auth login` writes it to its own `credentials.toml`), then streams over Cognition's Connect-RPC api-server like the `devin` provider — no browser sign-in and no key to paste. Model discovery and context windows come from your account's own catalog. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
+| `zcode-start-plan` | `zcode-start-plan` | `https://zcode.z.ai/api/v1/zcode-plan/anthropic` | Serves the Z.ai Start Plan quota from the ZCode plan gateway — no ZCode desktop app needed. Login is the gateway's own OAuth CLI flow (`ocx login zcode-start-plan` → browser → poll); the stored plan JWT has no expiry and is re-obtained by re-login when the gateway rejects it. The gateway requires the official ZCode identity system blocks, client identity headers, and solves Aliyun WAF captcha challenges with an in-process traceless solver confined to a worker thread. Quota reads `billing/balance`; the `GLM-5.3-Flash` row accepts images. Per-window rate limits on a fresh identity surface as ordinary 429s. |
 
 Google Antigravity account and provider quota probes use fixed Google accounting endpoints, including the models fallback. They support transparent Fake-IP DNS for those destinations while retaining TLS verification, redirect rejection and private-address checks. A custom provider base URL changes model requests, not quota destinations; `NO_PROXY` continues to select the direct-route policy.
 

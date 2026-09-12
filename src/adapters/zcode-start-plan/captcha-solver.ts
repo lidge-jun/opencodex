@@ -13,7 +13,6 @@
  */
 import { GlobalWindow as Window, PropertySymbol } from "happy-dom";
 import WindowBrowserContext from "happy-dom/lib/window/WindowBrowserContext.js";
-import { ProxyAgent, setGlobalDispatcher } from "undici";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -43,8 +42,11 @@ const SYNC_WORKER_SRC = `
       const u8 = new Uint8Array(m.sab);
       // Fixed-size header (bytes), NOT i32.length * 4 — that is the whole SAB.
       const payloadAt = 64;
+      const capacity = u8.length - payloadAt;
       const fail = (msg) => {
-        const b = enc.encode(msg);
+        // Bounded: an overlong message must not itself throw past the notify, which
+        // would leave the host blocked in Atomics.wait until the full timeout.
+        const b = enc.encode(String(msg)).subarray(0, capacity);
         u8.set(b, payloadAt);
         i32[5] = b.length; i32[1] = 0; i32[2] = 0; i32[3] = 0; i32[4] = 0;
         i32[0] = 2; Atomics.notify(i32, 0);
@@ -58,6 +60,8 @@ const SYNC_WORKER_SRC = `
         const statusText = enc.encode(res.statusText || "");
         const headersJson = enc.encode(JSON.stringify(headers));
         const setCookieJson = enc.encode(JSON.stringify(setCookie));
+        const needed = statusText.length + headersJson.length + setCookieJson.length + body.length;
+        if (needed > capacity) return fail("sync fetch response exceeds " + capacity + " bytes");
         let off = payloadAt;
         u8.set(statusText, off); i32[2] = statusText.length; off += statusText.length;
         u8.set(headersJson, off); i32[3] = headersJson.length; off += headersJson.length;
@@ -125,12 +129,10 @@ const _DEBUG = /^(1|true|yes)$/i.test(
   process.env.CAPTCHA_DEBUG || process.env.CAPTCHA_DEBUG_BODIES || "",
 );
 
-const proxyUrl = process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
-if (proxyUrl) {
-  try {
-    setGlobalDispatcher(new ProxyAgent(proxyUrl));
-  } catch (_) { /* best-effort: continue */ }
-}
+// Proxy env support is deliberately NOT wired here: a process-global undici dispatcher
+// installed by a solver would reroute unrelated traffic, and this module runs inside a
+// dedicated worker thread anyway (see captcha-host.ts) so host fetches would not even
+// see it. If proxy support is ever needed, pass a per-request dispatcher at the call site.
 
 // ── Globals shared across solves ────────────────────────────────────────────
 const _requestLog = [];
@@ -220,14 +222,12 @@ async function fetchAndStore(url) {
       _memCdnCache.set(url, buf);
       try {
         const p = diskPathFor(url);
-        fs.mkdirSync(CDN_CACHE_DIR, { recursive: true });
-        fs.writeFileSync(p, buf);
-        // verify write completed (no partial file)
-        const stat = fs.statSync(p);
-        if (stat.size !== buf.length) {
-          process.stderr.write(`[cache-write-short] ${url} wrote ${stat.size}/${buf.length}b — rewrite\n`);
-          fs.writeFileSync(p, buf);
-        }
+        fs.mkdirSync(CDN_CACHE_DIR, { recursive: true, mode: 0o700 });
+        // 0o600 temp + atomic rename: a reader never observes a partial cache file, and
+        // the final path never holds group/world-readable bytes even mid-write.
+        const tmp = `${p}.${crypto.randomUUID()}.tmp`;
+        fs.writeFileSync(tmp, buf, { mode: 0o600 });
+        fs.renameSync(tmp, p);
       } catch (err) {
         if (_DEBUG) process.stderr.write(`[cache-write-err] ${url}: ${err.message}\n`);
       }

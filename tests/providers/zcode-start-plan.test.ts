@@ -16,17 +16,18 @@ import {
 } from "../../src/adapters/zcode-identity";
 
 describe("zcode identity attribution eligibility", () => {
-  test("plan-metered GLM endpoints qualify (coding paths + plan gateway)", () => {
-    expect(isZcodePlanMeteredEndpoint("https://api.z.ai/api/coding/paas/v4")).toBe(true);
-    expect(isZcodePlanMeteredEndpoint("https://open.bigmodel.cn/api/coding/paas/v4")).toBe(true);
+  test("plan-metered GLM send URLs qualify (resolved chat/responses paths + plan gateway)", () => {
+    expect(isZcodePlanMeteredEndpoint("https://api.z.ai/api/coding/paas/v4/chat/completions")).toBe(true);
+    expect(isZcodePlanMeteredEndpoint("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions")).toBe(true);
     expect(isZcodePlanMeteredEndpoint("https://open.bigmodel.cn/api/v1")).toBe(true);
-    expect(isZcodePlanMeteredEndpoint("https://zcode.z.ai/api/v1/zcode-plan/anthropic")).toBe(true);
+    expect(isZcodePlanMeteredEndpoint("https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages")).toBe(true);
+    expect(isZcodePlanMeteredEndpoint("https://api.z.ai/api/v1/responses")).toBe(true);
   });
 
-  test("pay-as-you-go and unrelated endpoints do not qualify", () => {
-    expect(isZcodePlanMeteredEndpoint("https://open.bigmodel.cn/api/paas/v4")).toBe(false);
-    expect(isZcodePlanMeteredEndpoint("https://api.z.ai/api/paas/v4")).toBe(false);
-    expect(isZcodePlanMeteredEndpoint("https://api.openai.com/v1")).toBe(false);
+  test("pay-as-you-go and unrelated send URLs do not qualify", () => {
+    expect(isZcodePlanMeteredEndpoint("https://open.bigmodel.cn/api/paas/v4/chat/completions")).toBe(false);
+    expect(isZcodePlanMeteredEndpoint("https://api.z.ai/api/paas/v4/chat/completions")).toBe(false);
+    expect(isZcodePlanMeteredEndpoint("https://api.openai.com/v1/responses")).toBe(false);
     expect(isZcodePlanMeteredEndpoint(undefined)).toBe(false);
   });
 
@@ -69,7 +70,35 @@ describe("zcode-start-plan gateway body transform", () => {
     expect(buildStartPlanSystem(undefined)[3]).toBeUndefined();
     const blocks = buildStartPlanSystem([{ type: "text", text: "keep" }, { type: "image" as never }]);
     expect(blocks[3]).toEqual({ type: "text", text: "keep" });
+    // The unrecognized image entry is coerced (never dropped), so 3 official + 2 caller.
+    expect(blocks.length).toBe(5);
+  });
+
+  test("the Claude Code identity block injected by the oauth-mode inner adapter is dropped", () => {
+    const blocks = buildStartPlanSystem([
+      { type: "text", text: "You are a Claude agent, built on Anthropic's Claude Agent SDK." },
+      { type: "text", text: "caller instruction" },
+    ]);
+    const texts = blocks.map(b => b.text);
+    expect(texts).not.toContain("You are a Claude agent, built on Anthropic's Claude Agent SDK.");
+    expect(texts).toContain("caller instruction");
+  });
+
+  test("caller system blocks stay present after the official identity blocks (gateway contract)", () => {
+    // The gateway REQUIRES the official ZCode blocks first (biz 3012 otherwise — extracted
+    // from the desktop client). The caller's instructions must survive verbatim AFTER them;
+    // this pins that the prepend never drops or truncates caller content.
+    const blocks = buildStartPlanSystem("Always answer in Spanish.");
     expect(blocks.length).toBe(4);
+    expect(blocks[0].text).toBe("You are ZCode, an interactive coding agent");
+    expect(blocks[3]).toEqual({ type: "text", text: "Always answer in Spanish." });
+  });
+
+  test("unrecognized caller system entries are coerced to text, never dropped", () => {
+    const blocks = buildStartPlanSystem([{ type: "image", source: { type: "url" } }]);
+    expect(blocks.length).toBe(4);
+    expect(blocks[3].type).toBe("text");
+    expect(blocks[3].text).toContain("image");
   });
 
   test("cache_control: strips stray markers, marks only the last message's last block", () => {

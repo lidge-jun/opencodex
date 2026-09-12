@@ -47,21 +47,42 @@ function nonEmpty(value: unknown): string | undefined {
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timer);
+    if (signal?.aborted) {
       reject(signal.reason ?? new DOMException("aborted", "AbortError"));
-    }, { once: true });
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason ?? new DOMException("aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
+
+/** Bounded fetch helper: every login request carries the caller's signal and a deadline. */
+const boundedFetch = (url: string, init: RequestInit, deadline: number, signal?: AbortSignal): Promise<Response> => {
+  const remaining = Math.max(0, deadline - Date.now());
+  return fetch(url, {
+    ...init,
+    signal: AbortSignal.any([
+      AbortSignal.timeout(Math.min(20_000, remaining || 1)),
+      ...(signal ? [signal] : []),
+    ]),
+  });
+};
 
 /** Run one full browser login and return the stored credential. */
 export async function loginZcodeStartPlan(ctrl: OAuthController): Promise<OAuthCredentials> {
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   const pollToken = randomBytes(32).toString("hex");
-  const initRes = await fetch(`${ZCODE_ORIGIN}/api/v1/oauth/cli/init`, {
+  const initRes = await boundedFetch(`${ZCODE_ORIGIN}/api/v1/oauth/cli/init`, {
     method: "POST",
     headers: { authorization: `Bearer ${pollToken}`, "content-type": "application/json", "user-agent": SDK_UA },
     body: JSON.stringify({ provider: "zai" }),
-  });
+  }, deadline, ctrl.signal);
   const init = (await initRes.json().catch(() => undefined)) as CliInitResponse | undefined;
   const flowId = nonEmpty(init?.data?.flow_id);
   const authorizeUrl = nonEmpty(init?.data?.authorize_url);
@@ -74,15 +95,19 @@ export async function loginZcodeStartPlan(ctrl: OAuthController): Promise<OAuthC
     instructions: "Approve the Z.ai authorization in your browser to connect the ZCode plan.",
   });
 
-  const intervalMs = Math.max(1000, (init?.data?.poll_interval_sec ?? 0) * 1000) || DEFAULT_POLL_INTERVAL_MS;
-  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  // Default first, minimum clamp second: `Math.max(1000, 0)` is truthy and would silently
+  // poll at 1s when the field is absent — three times the documented rate.
+  const intervalSec = init?.data?.poll_interval_sec;
+  const intervalMs = typeof intervalSec === "number" && intervalSec > 0
+    ? Math.max(1000, intervalSec * 1000)
+    : DEFAULT_POLL_INTERVAL_MS;
   while (Date.now() < deadline) {
     await sleep(intervalMs, ctrl.signal);
     let poll: CliPollResponse | undefined;
     try {
-      const res = await fetch(`${ZCODE_ORIGIN}/api/v1/oauth/cli/poll/${encodeURIComponent(flowId)}`, {
+      const res = await boundedFetch(`${ZCODE_ORIGIN}/api/v1/oauth/cli/poll/${encodeURIComponent(flowId)}`, {
         headers: { authorization: `Bearer ${pollToken}`, "user-agent": SDK_UA },
-      });
+      }, deadline, ctrl.signal);
       poll = (await res.json().catch(() => undefined)) as CliPollResponse | undefined;
     } catch {
       continue; // transient poll errors retry until the flow deadline

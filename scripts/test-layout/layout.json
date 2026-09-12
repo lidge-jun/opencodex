@@ -1372,7 +1372,9 @@
     "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
     "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
     "devin-cli-login.test.ts": "providers",
-    "devin-cli-authmode-migration.test.ts": "providers"
+    "devin-cli-authmode-migration.test.ts": "providers",
+    "zcode-start-plan.test.ts": "providers",
+    "zcode-attribution.test.ts": "adapters"
   },
   "migrated": [
     "adapters",

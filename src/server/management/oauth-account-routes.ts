@@ -194,7 +194,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         ...(entry.plan ? { plan: entry.plan } : {}),
       });
     }
-    return jsonResponse({ labels });
+    // Identity data (provider, plan, email) must never be replayable from a browser cache
+    // after an account is removed or re-added.
+    const labelsResponse = jsonResponse({ labels });
+    labelsResponse.headers.set("Cache-Control", "no-store");
+    return labelsResponse;
   }
 
   // API-key "login" providers (open dashboard → paste key). Drives the GUI's key-provider picker.

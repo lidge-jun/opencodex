@@ -54,14 +54,15 @@ function clientTimezone(): string {
   }
 }
 
-/** True for plan-metered Z.ai/Zhipu destinations (coding-plan and plan-gateway routes). */
-export function isZcodePlanMeteredEndpoint(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false;
-  const url = baseUrl.replace(/\/+$/, "").toLowerCase();
-  return url === "https://zcode.z.ai/api/v1/zcode-plan"
-    || url === "https://zcode.z.ai/api/v1/zcode-plan/anthropic"
-    || url === "https://api.z.ai/api/coding/paas/v4"
-    || url === "https://open.bigmodel.cn/api/coding/paas/v4"
+/** True for plan-metered GLM destinations (coding-plan and plan-gateway send URLs). */
+export function isZcodePlanMeteredEndpoint(sendUrl: string | undefined): boolean {
+  if (!sendUrl) return false;
+  const url = sendUrl.replace(/\/+$/, "").toLowerCase();
+  if (url.startsWith("https://zcode.z.ai/api/v1/zcode-plan")) return true;
+  return url === "https://api.z.ai/api/coding/paas/v4/chat/completions"
+    || url === "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+    || url === "https://api.z.ai/api/v1/responses"
+    || url === "https://open.bigmodel.cn/api/v1/responses"
     || url === "https://open.bigmodel.cn/api/v1";
 }
 

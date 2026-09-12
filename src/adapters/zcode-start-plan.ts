@@ -26,7 +26,7 @@
 import { createAnthropicAdapter } from "./anthropic";
 import type { AdapterFetchContext, AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { OcxParsedRequest, OcxProviderConfig } from "../types";
-import { solveTraceless } from "./zcode-start-plan/captcha-solver";
+import { solveTraceless } from "./zcode-start-plan/captcha-host";
 import { transformStartPlanBody, userIdFromJwt } from "./zcode-start-plan/body-transform";
 import { buildZcodeIdentityHeaders, buildZcodeTraceHeaders } from "./zcode-identity";
 
@@ -48,8 +48,12 @@ export function isZcodeStartPlanEndpoint(baseUrl: string | undefined): boolean {
   return !!baseUrl && /https:\/\/(zcode\.z\.ai|zcode\.chatglm\.site)\/api\/v1\/zcode-plan/.test(baseUrl);
 }
 
-async function readCaptchaScene(): Promise<{ sceneId: string; prefix: string; region: string }> {
-  const res = await fetch(CAPTCHA_CONFIG_URL);
+async function readCaptchaScene(signal?: AbortSignal): Promise<{ sceneId: string; prefix: string; region: string }> {
+  // Bounded: a stalled config endpoint must not outlive the challenged request itself.
+  const timeout = AbortSignal.timeout(10_000);
+  const res = await fetch(CAPTCHA_CONFIG_URL, {
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+  });
   if (!res.ok) throw new Error(`captcha config fetch failed: status ${res.status}`);
   const body = (await res.json()) as {
     data?: { configs?: { captcha?: { enabled?: boolean; sceneId?: string; prefix?: string; region?: string } } };
@@ -104,20 +108,25 @@ export function isCaptchaChallenge(status: number, headers: Headers, bodyText: s
   return !!bodyText && CHALLENGE_BODY_MARKERS.some(m => bodyText.includes(m));
 }
 
+/**
+ * Module-level solve chain: verify params are single-use, so solves run one at a time and
+ * every caller receives a FRESH param (a shared inflight promise would hand one consumed
+ * param to every concurrent challenger). Adapters are constructed per request, so this
+ * mutex has to live at module scope, not on the adapter instance.
+ */
+let solveChain: Promise<unknown> = Promise.resolve();
+
 export function createZcodeStartPlanAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const inner = createAnthropicAdapter(provider);
-  let inflightSolve: Promise<{ param: string; region: string }> | undefined;
 
-  const solveCaptcha = async (): Promise<{ param: string; region: string }> => {
-    // Serialized: verify params are single-use, so concurrent solves only burn risk score.
-    inflightSolve ??= (async () => {
-      const scene = await readCaptchaScene();
+  const solveCaptcha = (signal?: AbortSignal): Promise<{ param: string; region: string }> => {
+    const mine = solveChain.then(async () => {
+      const scene = await readCaptchaScene(signal);
       const param = await solveTraceless({ scene: scene.sceneId, region: scene.region, prefix: scene.prefix, timeoutMs: 30_000 });
       return { param, region: scene.region };
-    })().finally(() => {
-      inflightSolve = undefined;
     });
-    return inflightSolve;
+    solveChain = mine.catch(() => undefined);
+    return mine;
   };
 
   const isChallenge = isCaptchaChallenge;
@@ -146,9 +155,9 @@ export function createZcodeStartPlanAdapter(provider: OcxProviderConfig): Provid
         throw new Error("zcode-start-plan: no JWT — run ocx login zcode-start-plan");
       }
       // The gateway inspects the body: without the ZCode identity system blocks it rejects
-      // with biz code 3012 even when auth and captcha pass.
-      const model = JSON.parse(built.body as string).model as string | undefined;
-      const body = transformStartPlanBody(built.body as string, model, userIdFromJwt(jwt.replace(/^Bearer /, "")));
+      // with biz code 3012 even when auth and captcha pass. transformStartPlanBody parses
+      // the body tolerantly; the model id is already on the parsed request.
+      const body = transformStartPlanBody(built.body as string, parsed.modelId, userIdFromJwt(jwt.replace(/^Bearer /, "")));
       return {
         ...built,
         body,
@@ -180,7 +189,7 @@ export function createZcodeStartPlanAdapter(provider: OcxProviderConfig): Provid
           } catch { /* already drained */ }
           let captcha: { param: string; region: string };
           try {
-            captcha = await solveCaptcha();
+            captcha = await solveCaptcha(ctx?.abortSignal);
           } catch (err) {
             return new Response(
               JSON.stringify({

@@ -16,6 +16,7 @@
  *      decoded, preserving any other metadata fields.
  */
 import systemBlocksJson from "./system-blocks.json";
+import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../oauth/anthropic";
 
 interface SystemBlock {
   type: "text";
@@ -51,11 +52,18 @@ function normalizeUserSystem(system: unknown): SystemBlock[] {
     if (typeof item === "string") {
       if (item.trim()) out.push({ type: "text", text: item });
     } else if (isPlainObject(item) && item.type === "text" && typeof item.text === "string" && item.text.trim()) {
+      // The inner Anthropic adapter runs in oauth mode and prepends the Claude Code identity
+      // block; the plan gateway must see ONLY the ZCode identity, never a dual identity.
+      if (item.text === CLAUDE_CODE_SYSTEM_INSTRUCTION) continue;
       out.push({
         type: "text",
         text: item.text,
         ...(isPlainObject(item.cache_control) ? { cache_control: item.cache_control as { type: "ephemeral" } } : {}),
       });
+    } else if (isPlainObject(item)) {
+      // Never drop caller system content silently: surface it as text instead.
+      const text = typeof item.text === "string" ? item.text : JSON.stringify(item);
+      if (text.trim()) out.push({ type: "text", text });
     }
   }
   return out;
