@@ -123,6 +123,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientRaycast",
   "integrations.tab.omo",
   "api.clientConfig.clientOmo",
+  // Cline product name and CLI acronym are intentionally preserved.
+  "integrations.tab.cline",
+  "api.clientConfig.clientCline",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "pws.pacingRpmUnit",

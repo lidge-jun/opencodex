@@ -404,3 +404,28 @@ describe("ocx logs --follow output contract", () => {
     }
   });
 });
+
+describe("cached tokens in the per-row tables", () => {
+  test("a provider and model row name their cache-read subset", () => {
+    // The summary line has always said "cached N". The tables below it printed a
+    // bare total, so a mostly-cached provider looked like an ordinary one.
+    const lines = formatUsageReport({
+      range: "today",
+      summary: { requests: 1, totalTokens: 58_000, cachedInputTokens: 57_000 },
+      providers: [{ provider: "devin-cli", requests: 1, totalTokens: 58_000, cacheReadInputTokens: 57_000 }],
+      models: [{ provider: "devin-cli", model: "swe-2", requests: 1, totalTokens: 58_000, cachedInputTokens: 57_000 }],
+    }).join("\n");
+    expect(lines).toContain("58,000 (cached 57,000)");
+    expect(lines.match(/cached 57,000/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a provider that reports no cache keeps a bare total", () => {
+    const lines = formatUsageReport({
+      range: "today",
+      summary: { requests: 1, totalTokens: 58_000 },
+      providers: [{ provider: "xai", requests: 1, totalTokens: 58_000 }],
+    }).join("\n");
+    expect(lines).toContain("58,000");
+    expect(lines).not.toContain("cached");
+  });
+});

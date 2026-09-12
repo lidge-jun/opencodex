@@ -10,7 +10,59 @@ import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, Ocx
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import { getCachedCatalog } from "./devin/cloud-direct/catalog";
+import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
+
+/**
+ * Combine two usage frames from one turn by keeping the larger count per field.
+ *
+ * Devin's counters are cumulative within a turn, so a frame that reports less
+ * than an earlier one is reporting a subset, not a correction.
+ */
+export function mergeDevinUsage(previous: OcxUsage, next: OcxUsage): OcxUsage {
+  const keys = [
+    "inputTokens", "outputTokens",
+    "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens",
+    "reasoningOutputTokens",
+  ] as const;
+  const merged: OcxUsage = { ...previous, ...next };
+  for (const key of keys) {
+    const a = previous[key];
+    const b = next[key];
+    if (typeof a === "number" && typeof b === "number") merged[key] = Math.max(a, b);
+    else if (typeof a === "number" && b === undefined) merged[key] = a;
+  }
+  // totalTokens is derived, not merged. Taking the max of two totals alongside
+  // per-field maxima can leave total !== input + output, and the cost and log
+  // paths read the total.
+  const total = (merged.inputTokens ?? 0) + (merged.outputTokens ?? 0);
+  if (total > 0) merged.totalTokens = total;
+  return merged;
+}
+
+/**
+ * The wording `isClientClosedMessage` recognises.
+ *
+ * "Devin turn was aborted." matched nothing, so a cancelled turn fell through to
+ * the default inference and was logged as a 502 upstream failure rather than as
+ * the client hanging up.
+ */
+const DEVIN_CLIENT_CLOSED_MESSAGE = "client closed request";
+
+/** Map a cloud-direct failure onto the structured fields the error event carries. */
+export function devinErrorClassification(error: unknown): { status?: number; errorType?: string; retryable?: boolean } {
+  const status = error instanceof CloudChatError ? error.status : undefined;
+  if (status === undefined) return {};
+  if (status === 401) return { status, errorType: "authentication_error", retryable: false };
+  if (status === 403) return { status, errorType: "permission_error", retryable: false };
+  if (status === 429) return { status, errorType: "rate_limit_error", retryable: true };
+  // 501 is the one 5xx that will never succeed on a second attempt: the service
+  // does not implement the call. Marking it retryable put `retryable: true` on
+  // the SSE failure a client reads, inviting a retry that cannot change.
+  if (status === 501) return { status, retryable: false };
+  if (status >= 500) return { status, retryable: true };
+  return { status, retryable: false };
+}
 
 export const DEVIN_API_SERVER = DEVIN_DEFAULT_API_SERVER;
 
@@ -119,7 +171,20 @@ function assistantText(message: OcxAssistantMessage): string {
 
 export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem[] {
   const items: ChatHistoryItem[] = [];
-  const system = parsed.context.systemPrompt?.filter((line) => line.trim().length > 0).join("\n");
+  // Cognition is not an OpenAI host, and this adapter does advertise a real
+  // client tool catalog (proto #10 via `mapOcxToolsToDevin`), so the same
+  // contract paragraph the other non-OpenAI adapters inject belongs here. The
+  // wire name is the bare `tool.name` that encoder writes, not the namespaced
+  // form, so the nudge names exactly what the model is offered.
+  const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(
+    parsed.context.tools,
+    parsed.options.toolChoice,
+    (tool) => tool.name,
+  );
+  const systemPrompt = parsed.context.systemPrompt?.filter((line) => line.trim().length > 0).join("\n");
+  const system = [systemPrompt, toolCatalogNudge]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join("\n\n");
   if (system) items.push({ role: "system", content: system });
 
   for (const message of parsed.context.messages) {
@@ -196,7 +261,7 @@ export function createDevinAdapter(
 
     async runTurn(parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void) {
       if (incoming.abortSignal?.aborted) {
-        emit({ type: "error", message: "Devin turn was aborted before start." });
+        emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false });
         return;
       }
       let apiKey: string;
@@ -258,7 +323,7 @@ export function createDevinAdapter(
             // Say what happened instead, the way the other runTurn-only adapter
             // does, and carry any usage already seen.
             closeOpenTool();
-            emit({ type: "error", message: "Devin turn was aborted.", ...(usage ? { usage } : {}) });
+            emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false, ...(usage ? { usage } : {}) });
             return;
           }
           if (event.kind === "text") {
@@ -291,7 +356,7 @@ export function createDevinAdapter(
           }
           if (event.kind === "usage") {
             const total = event.totalTokens ?? ((event.promptTokens ?? 0) + (event.completionTokens ?? 0));
-            usage = {
+            const next: OcxUsage = {
               inputTokens: event.promptTokens ?? 0,
               outputTokens: event.completionTokens ?? 0,
               ...(total > 0 ? { totalTokens: total } : {}),
@@ -299,19 +364,24 @@ export function createDevinAdapter(
               ...(event.cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens: event.cacheCreationInputTokens } : {}),
               ...(event.reasoningTokens !== undefined ? { reasoningOutputTokens: event.reasoningTokens } : {}),
             };
+            // Merge rather than replace. A turn can carry more than one usage
+            // frame, and the counters are cumulative, so a later partial frame
+            // that omits a field used to zero a count the earlier frame had
+            // already reported.
+            usage = usage ? mergeDevinUsage(usage, next) : next;
             continue;
           }
         }
         closeOpenTool();
         if (incoming.abortSignal?.aborted) {
-          emit({ type: "error", message: "Devin turn was aborted.", ...(usage ? { usage } : {}) });
+          emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false, ...(usage ? { usage } : {}) });
         } else {
           emit({ type: "done", ...(usage ? { usage } : {}), ...(stopReason ? { stopReason } : {}) });
         }
       } catch (error) {
         closeOpenTool();
         if (incoming.abortSignal?.aborted) {
-          emit({ type: "error", message: "Devin turn was aborted.", ...(usage ? { usage } : {}) });
+          emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false, ...(usage ? { usage } : {}) });
           return;
         }
         const message = error instanceof CloudChatError
@@ -319,7 +389,13 @@ export function createDevinAdapter(
           : error instanceof Error ? error.message : String(error);
         // Usage that already arrived is still real; dropping it loses the
         // accounting for a turn that did most of its work before failing.
-        emit({ type: "error", message, ...(usage ? { usage } : {}) });
+        emit({
+          type: "error",
+          message,
+          ...devinErrorClassification(error),
+          ...(error instanceof CloudChatError && error.code ? { code: error.code } : {}),
+          ...(usage ? { usage } : {}),
+        });
       }
     },
   };

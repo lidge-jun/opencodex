@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
-import { formatTokens } from "../format-tokens";
+import { formatTokens, formatTokensWithCache } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
@@ -64,6 +64,10 @@ interface UsageModel {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  // /api/usage has carried these all along; dropping them from the row type is
+  // what left the token column without its cached companion.
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
   shareRatio: number;
 }
 
@@ -74,6 +78,8 @@ interface UsageProvider {
   reportedRequests: number;
   estimatedRequests: number;
   totalTokens: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
   shareRatio: number;
 }
 
@@ -561,7 +567,7 @@ function UsageModelsTable({
               <td className="muted">{formatProviderDisplayName(model.provider, t)}</td>
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
-              <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+              <td className="num mono">{formatTokensWithCache(model.totalTokens, model.cacheReadInputTokens ?? model.cachedInputTokens, locale)}</td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -621,7 +627,7 @@ function UsageProvidersTable({
               <td className="mono">{formatProviderDisplayName(provider.provider, t)}</td>
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
-              <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
+              <td className="num mono">{formatTokensWithCache(provider.totalTokens, provider.cacheReadInputTokens ?? provider.cachedInputTokens, locale)}</td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}

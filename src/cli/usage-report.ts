@@ -17,6 +17,13 @@ interface CostRow {
   model?: string;
   requests: number;
   totalTokens: number;
+  /**
+   * Cache-read subset of the row's tokens. The API sends it; the CLI dropped it,
+   * so a mostly-cached provider's TOKENS column read as an ordinary total while
+   * the summary line two rows above already said `cached N`.
+   */
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
   estimatedCostUsd?: number;
 }
 
@@ -53,6 +60,8 @@ interface UsageReportInput {
     ambiguous?: boolean;
     requests: number;
     totalTokens: number;
+    cachedInputTokens?: number;
+    cacheReadInputTokens?: number;
     estimatedCostUsd?: number;
   }[];
 }
@@ -74,6 +83,16 @@ function terminalText(value: unknown): string {
 function count(value: number | undefined): string {
   if (value === undefined || value === null) return "0";
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US") : "—";
+}
+
+/**
+ * A row's token total with its cache-read subset, matching the summary line's
+ * `cached N` wording rather than inventing a second vocabulary for the tables.
+ */
+function countWithCache(total: number | undefined, cached: number | undefined): string {
+  const base = count(total);
+  if (typeof cached !== "number" || !Number.isFinite(cached) || cached <= 0) return base;
+  return `${base} (cached ${count(cached)})`;
 }
 
 /**
@@ -141,7 +160,12 @@ export function formatUsageReport(data: UsageReportInput): string[] {
     lines.push("");
     lines.push(...table(
       ["PROVIDER", "REQUESTS", "TOKENS", "EST. COST"],
-      providers.map(row => [row.provider, count(row.requests), count(row.totalTokens), usd(row.estimatedCostUsd)]),
+      providers.map(row => [
+        row.provider,
+        count(row.requests),
+        countWithCache(row.totalTokens, row.cacheReadInputTokens ?? row.cachedInputTokens),
+        usd(row.estimatedCostUsd),
+      ]),
     ));
   }
 
@@ -163,7 +187,7 @@ export function formatUsageReport(data: UsageReportInput): string[] {
         // wrong conclusion. Mark it rather than presenting it as a single identity.
         row.ambiguous ? `${terminalText(row.accountLogLabel)} (ambiguous)` : terminalText(row.accountLogLabel),
         count(row.requests),
-        count(row.totalTokens),
+        countWithCache(row.totalTokens, row.cacheReadInputTokens ?? row.cachedInputTokens),
         usd(row.estimatedCostUsd),
       ]),
     ));
@@ -175,7 +199,13 @@ export function formatUsageReport(data: UsageReportInput): string[] {
     const shown = models.slice(0, MAX_MODEL_ROWS);
     lines.push(...table(
       ["MODEL", "PROVIDER", "REQUESTS", "TOKENS", "EST. COST"],
-      shown.map(row => [row.model ?? "-", row.provider, count(row.requests), count(row.totalTokens), usd(row.estimatedCostUsd)]),
+      shown.map(row => [
+        row.model ?? "-",
+        row.provider,
+        count(row.requests),
+        countWithCache(row.totalTokens, row.cacheReadInputTokens ?? row.cachedInputTokens),
+        usd(row.estimatedCostUsd),
+      ]),
     ));
     if (models.length > shown.length) {
       lines.push(`... ${models.length - shown.length} more (use --json)`);

@@ -215,7 +215,15 @@ test.each(["timer", "visible", "active", "commit-boundary"])("Combos expires a q
   const cancel = testWindow.clearTimeout.bind(testWindow);
   const expiryTimers = new Set<number>();
   let expire: (() => void) | undefined;
+  let controlImmediate = false;
+  let nextControlledTimer = -1;
+  const immediateTimers = new Map<number, () => void>();
   const scheduleSpy = spyOn(testWindow, "setTimeout").mockImplementation((callback, delay, ...args) => {
+    if (controlImmediate && delay === 0 && typeof callback === "function") {
+      const timer = nextControlledTimer--;
+      immediateTimers.set(timer, () => callback(...args));
+      return timer;
+    }
     const timer = schedule(callback, delay, ...args);
     if (delay === 123_456 && typeof callback === "function") {
       expiryTimers.add(timer);
@@ -225,6 +233,7 @@ test.each(["timer", "visible", "active", "commit-boundary"])("Combos expires a q
   });
   const cancelSpy = spyOn(testWindow, "clearTimeout").mockImplementation(timer => {
     expiryTimers.delete(timer);
+    if (immediateTimers.delete(timer)) return;
     cancel(timer);
   });
   const item = { id: "alpha", model: "combo/alpha", strategy: "failover", stickyLimit: 1,
@@ -286,19 +295,27 @@ test.each(["timer", "visible", "active", "commit-boundary"])("Combos expires a q
     if (wake === "visible") {
       Object.defineProperty(testWindow.document, "visibilityState", { configurable: true, value: "hidden" });
       await act(async () => { testWindow.document.dispatchEvent(new testWindow.Event("visibilitychange")); });
-    } else if (wake === "active" || wake === "commit-boundary") {
-      await act(async () => { root.render(render(false)); });
     }
-    now = startedAt + 123_456 - (wake === "commit-boundary" ? 1 : 0);
-    await act(async () => {
-      if (wake === "timer") expire!();
-      else if (wake === "visible") {
-        Object.defineProperty(testWindow.document, "visibilityState", { configurable: true, value: "visible" });
-        testWindow.document.dispatchEvent(new testWindow.Event("visibilitychange"));
-      } else root.render(render(true, wake === "commit-boundary"));
-    });
-    if (wake === "commit-boundary") {
-      await act(async () => { await new Promise<void>(resolve => schedule(resolve, 0)); });
+    if (wake === "active" || wake === "commit-boundary") {
+      controlImmediate = true;
+      // Do not yield to global resource eviction between the two activation commits.
+      act(() => { root.render(render(false)); });
+      expect(expiryTimers.size).toBe(0);
+      now = startedAt + 123_456 - (wake === "commit-boundary" ? 1 : 0);
+      act(() => { root.render(render(true, wake === "commit-boundary")); });
+      expect(immediateTimers.size).toBe(1);
+      const [timer, recheck] = [...immediateTimers.entries()][0]!;
+      immediateTimers.delete(timer);
+      act(() => { recheck(); });
+    } else {
+      now = startedAt + 123_456;
+      await act(async () => {
+        if (wake === "timer") expire!();
+        else {
+          Object.defineProperty(testWindow.document, "visibilityState", { configurable: true, value: "visible" });
+          testWindow.document.dispatchEvent(new testWindow.Event("visibilitychange"));
+        }
+      });
     }
     expect(container.querySelector<HTMLInputElement>("#cwi-edit-alias")!.value).toBe("kept-draft");
     expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(false);
@@ -311,6 +328,7 @@ test.each(["timer", "visible", "active", "commit-boundary"])("Combos expires a q
     clock.mockRestore();
   }
   expect(expiryTimers.size).toBe(0);
+  expect(immediateTimers.size).toBe(0);
 });
 
 

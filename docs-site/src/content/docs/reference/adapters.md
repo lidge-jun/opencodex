@@ -463,23 +463,14 @@ api-server URL beside it, and never the file's other fields.
 
 - Uses `runTurn` on the shared cloud-direct client, so it inherits that adapter's live catalog,
   per-account context windows and tool-description handling.
-- For the CLI's own local agent loop over ACP stdio instead, configure a **custom-named** provider
-  row with `"adapter": "devin-cli"` — for example `"devin-acp"`. A row named `devin-cli` cannot
-  select it, because the router pins the adapter from the registry for any registry id.
-- One turn is one ACP session: `initialize`, `session/new`, `session/prompt`, with `session/update`
-  notifications streaming in between and a unary reply carrying the stop reason and usage. The
-  conversation is flattened into the single prompt string a session takes, with role labels fenced
-  so a message body cannot forge one.
-- The CLI's own tool calls stay internal. Devin executes them inside its session, so forwarding
-  them as client tools would either fail the turn — the bridge rejects a tool Codex never declared —
-  or ask Codex to run something the agent already ran.
-- **Permission requests are refused by default.** This provider runs an agent in the operator's own
-  tree, so `session/request_permission` is answered with `cancelled` unless
-  `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1` is set. The child also gets a scoped environment rather than
-  the proxy's, and `OPENCODEX_DEVIN_CLI_CWD` chooses where it runs.
-- Binary discovery prefers `OPENCODEX_DEVIN_CLI_BIN`, then the paths the official installer and the
-  Homebrew cask use, then `PATH`. Install with `curl -fsSL https://cli.devin.ai/install.sh | bash`
-  or `brew install --cask devin-cli`.
+- Only the credential is local. The turn itself goes to Cognition, exactly as `devin` does, so the
+  two rows differ in nothing but which account signed in. Install the CLI with
+  `curl -fsSL https://cli.devin.ai/install.sh | bash` or `brew install --cask devin-cli`, run
+  `devin auth login` once, then add the provider.
+- An earlier build shipped a second adapter under the id `devin-cli` that ran the turn as an
+  Agent Client Protocol session against a local `devin acp` child process. It is gone. A saved
+  configuration that still names that adapter is rewritten to `devin` at startup, including a
+  custom-named row such as `"devin-acp"`.
 
 ## `azure-openai` (alias: `azure`)
 

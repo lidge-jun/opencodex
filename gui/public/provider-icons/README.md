@@ -12,6 +12,9 @@ License/source notes for the additional candidates are recorded in
 
 Export-client marks (used by the API tab's connect rows, not the provider list):
 
+- `cline-color.svg` — reuses the existing provider mark already tracked in this directory
+  for Cline CLI; no new image was imported for the file integration.
+
 - `pi.svg` — fetched 2026-08-02 from `https://pi.dev/favicon.svg`, the Pi
   project's own favicon, unmodified. Pi is `earendil-works/pi`
   (formerly `badlogic/pi-mono`).

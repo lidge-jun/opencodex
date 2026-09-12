@@ -428,10 +428,72 @@ describe("operator pins on the actual request wire", () => {
     expect(wire.reasoning).toEqual({ effort: "max", summary: "auto" });
   });
 
-  test("native Chat without pins preserves caller wire spelling and existing cap behavior", async () => {
+  test("native Chat without pins caps spawned children and preserves unqualified caller spelling", async () => {
     const c = config({ reasoningEfforts: ["low"], reasoningEffortMap: { max: "enabled" } }, { effortCap: "low", subagentEffortCap: "low" });
-    expect((await request(c, "chat", { reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("ultra");
+    expect((await request(c, "chat", { reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("low");
+    expect((await request(c, "chat", { reasoning_effort: "ultra" })).reasoning_effort).toBe("ultra");
     expect(Object.hasOwn(await request(c, "chat", { reasoning_effort: undefined }), "reasoning_effort")).toBe(false);
+  });
+
+  test("native Chat without pins caps v2 main turns and preserves forced v1", async () => {
+    const c = config({}, { effortCap: "medium", subagentEffortCap: "low" });
+    const tools = [{ type: "function", function: { name: "spawn_agent", parameters: { type: "object", properties: {} } } }];
+    expect((await request(c, "chat", { tools, reasoning_effort: "ultra" })).reasoning_effort).toBe("medium");
+    expect((await request(c, "chat", { tools, reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("low");
+    c.multiAgentMode = "v1";
+    expect((await request(c, "chat", { tools, reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("ultra");
+  });
+
+  test("native Chat maps newly capped values and preserves lower, non-ladder and absent efforts", async () => {
+    const c = config({ reasoningEffortMap: { medium: "enabled", low: "disabled" } }, { subagentEffortCap: "medium" });
+    const headers = { "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }) };
+    expect((await request(c, "chat", { reasoning_effort: "ultra" }, headers)).reasoning_effort).toBe("enabled");
+    expect((await request(c, "chat", { reasoning_effort: "low" }, headers)).reasoning_effort).toBe("low");
+    expect((await request(c, "chat", { reasoning_effort: "enabled" }, headers)).reasoning_effort).toBe("enabled");
+    expect(Object.hasOwn(await request(c, "chat", { reasoning_effort: undefined }, headers), "reasoning_effort")).toBe(false);
+    c.providers.fixture!.pinnedReasoningEffort = "medium";
+    expect((await request(c, "chat", { reasoning_effort: "medium" })).reasoning_effort).toBe("enabled");
+  });
+
+  test("native Chat without pins omits effort when no supported rung fits the cap", async () => {
+    for (const reasoningEfforts of [[], ["high", "max"]]) {
+      const c = config({ reasoningEfforts }, { subagentEffortCap: "low" });
+      const wire = await request(c, "chat", { reasoning_effort: "max", temperature: 0.4 }, { "x-openai-subagent": "collab_spawn" });
+      expect(Object.hasOwn(wire, "reasoning_effort")).toBe(false);
+      expect(wire.temperature).toBe(0.4);
+    }
+  });
+
+  test("direct native Chat compaction keeps its pin and cap exemption", async () => {
+    const c = config({ pinnedReasoningEffort: "high" }, { subagentEffortCap: "low" });
+    const chatBody = { model: "fixture/pin-model", messages: [{ role: "user", content: "summarize" }],
+      reasoning_effort: "ultra", compaction_trigger: {} };
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "x-openai-subagent": "collab_spawn" } });
+    const response = await handleNativeChatCompletions({ req, config: c, logCtx: { model: "", provider: "" },
+      route: routeModel(c, chatBody.model), chatBody, requestedModel: chatBody.model,
+      requestedStream: false, translatorBudget: createTestTranslatorBudget() });
+    expect(response.status, await response.text()).toBe(200);
+    expect(captured.at(-1)!.body.reasoning_effort).toBe("ultra");
+  });
+
+  test("native cap retries retain their annotation and restore original effort for a new destination", async () => {
+    const c = config({}, { defaultProvider: "first", subagentEffortCap: "high", providers: {
+      first: provider({ reasoningEfforts: ["low", "max"] }),
+      second: provider({ reasoningEfforts: ["medium", "high"] }),
+    } });
+    const chatBody = { model: "first/pin-model", messages: [{ role: "user", content: "hello" }], reasoning_effort: "ultra" };
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "x-openai-subagent": "collab_spawn" } });
+    const annotations: Array<string | undefined> = [];
+    for (const name of ["first", "first", "second"]) {
+      const logCtx = { model: "", provider: "", requestedEffort: undefined as string | undefined };
+      const response = await handleNativeChatCompletions({ req, config: c, logCtx,
+        route: routeModel(c, `${name}/pin-model`), chatBody, requestedModel: `${name}/pin-model`,
+        requestedStream: false, translatorBudget: createTestTranslatorBudget() });
+      expect(response.status, await response.text()).toBe(200);
+      annotations.push(logCtx.requestedEffort);
+    }
+    expect(captured.map(({ body }) => body.reasoning_effort)).toEqual(["low", "low", "high"]);
+    expect(annotations).toEqual(["ultra->low", "ultra->low", "ultra->high"]);
   });
 
   test("unpinned Responses keeps its existing applicable cap", async () => {

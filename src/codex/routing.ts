@@ -985,14 +985,27 @@ export function resetCodexRoutingForManualSelection(accountId: string): void {
       seedPoolRotationAccount(codexPoolKeyForScope(scope), accountId);
     }
   }
-  const current = upstreamHealth.get(accountId);
-  if (!current) return;
-  const preserved = preservedCooldownFields(current);
   // Quota avoidance is a preference, like the soft avoid dropped above, and an operator naming
   // this account has overruled it. The hard cooldown is the part that survives.
-  const { quotaAvoidUntil: _avoid, ...retained } = preserved;
-  if (Object.keys(retained).length === 0) upstreamHealth.delete(accountId);
-  else upstreamHealth.set(accountId, { consecutiveFailures: 0, ...retained });
+  const overrule = (health: CodexUpstreamHealth) => {
+    const { quotaAvoidUntil: _avoid, ...retained } = preservedCooldownFields(health);
+    return retained;
+  };
+  const current = upstreamHealth.get(accountId);
+  if (current) {
+    const retained = overrule(current);
+    if (Object.keys(retained).length === 0) upstreamHealth.delete(accountId);
+    else upstreamHealth.set(accountId, { consecutiveFailures: 0, ...retained });
+  }
+  // A reset-derived refusal records its avoidance on the SCOPED map and returns before the
+  // account-wide entry is written, so naming the account has to reach that map too. Stopping
+  // at `upstreamHealth` — and returning early when it holds nothing — overruled nothing in
+  // the case that produces the avoidance this function exists to overrule.
+  for (const [scope, health] of [...(quotaScopedHealth.get(accountId) ?? [])]) {
+    const retained = overrule(health);
+    if (Object.keys(retained).length === 0) deleteScopedHealth(accountId, scope);
+    else setScopedHealth(accountId, scope, { consecutiveFailures: 0, ...retained });
+  }
 }
 
 export function getCodexAccountCooldownUntil(accountId: string, now = Date.now()): number | null {
@@ -1061,18 +1074,31 @@ export function isCodexAccountInCooldown(accountId: string, now = Date.now()): b
  *   bumps it in {@link recordCodexUpstreamOutcome}, so the bump here is not load-bearing
  *   today and is kept so the invariant survives a future change that retains the lease.
  *
- * Returns false when the account carried no live cooldown (already expired or never set).
+ * Returns false when the account carried neither a live cooldown nor a live avoidance window.
+ * The window outlives the cooldown by design — the cooldown caps at fifteen minutes and the
+ * window runs up to six hours — so the moment an operator actually reaches for this escape
+ * hatch is usually after the cooldown lapsed and only the window is still keeping the account
+ * out of rotation. Refusing to look at the window then would leave the hatch shut in the one
+ * case it exists for.
  */
 export function clearCodexAccountCooldown(accountId: string, now = Date.now()): boolean {
   const clear = (health: CodexUpstreamHealth): CodexUpstreamHealth | null => {
     const cooldownUntil = health.cooldownUntil;
-    if (typeof cooldownUntil !== "number" || !Number.isFinite(cooldownUntil) || cooldownUntil <= now) return null;
+    const liveCooldown = typeof cooldownUntil === "number" && Number.isFinite(cooldownUntil) && cooldownUntil > now;
+    const avoidUntil = health.quotaAvoidUntil;
+    const liveAvoidance = typeof avoidUntil === "number" && Number.isFinite(avoidUntil) && avoidUntil > now;
+    if (!liveCooldown && !liveAvoidance) return null;
     const {
       cooldownUntil: _until,
       cooldownSince: _since,
       cooldownSource: _source,
       probeLeaseId: _leaseId,
       probeLeaseGeneration: _leaseGeneration,
+      // Same reasoning as the probe recovery above: "the quota window moved" is a statement
+      // about the whole refusal, so the avoidance it announced goes with the block it
+      // produced. Keeping it would leave this escape hatch not escaping, because selection
+      // would still pass over the account for as long as the announced window runs.
+      quotaAvoidUntil: _avoid,
       ...rest
     } = health;
     return {
@@ -1417,6 +1443,12 @@ function getEligiblePoolAccounts(
     && (!isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID) || hasMainAccountRefreshGrant())
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
+    // The main login is not in `config.codexAccounts`, so it never passes through the
+    // filters above and this is the only place an avoidance window can exclude it. Without
+    // this the window a refusal announced applies to the pool but not to the account that
+    // earned it: the cooldown caps at fifteen minutes, the window runs up to six hours, and
+    // in between the main account returns as a first-class candidate.
+    && !isCodexQuotaAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope, now)
     && (!skipFailoverReadyCandidates || !shouldFailover(config, MAIN_CODEX_ACCOUNT_ID, now))
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)
   ) {

@@ -123,7 +123,17 @@ export interface SidecarPatch {
   };
 }
 export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
-export interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
+export interface UsageSummary30d {
+  summary: {
+    requests: number;
+    totalTokens: number;
+    coverageRatio: number;
+    // Already on /api/usage; the tile showed a bare total only because this
+    // type dropped them.
+    cachedInputTokens?: number;
+    cacheReadInputTokens?: number;
+  };
+}
 export type UpdateChannel = "latest" | "preview";
 export type Installer = "npm" | "bun" | "source";
 export type UpdateJobStatus = "running" | "restarting" | "succeeded" | "failed";

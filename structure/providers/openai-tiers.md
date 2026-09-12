@@ -92,6 +92,24 @@ requests keep their captured credential. An all-paused pool fails closed.
 The dashboard's bulk pause action refreshes all account quotas and mutates only accounts whose
 plan-relevant window is freshly confirmed at exactly 100%; unknown and failed refreshes are skipped.
 
+A quota refusal that announces a reset carries two durations, not one. The hard cooldown governs
+blocking and keeps its cap, and a separate avoidance window records the period the refusal actually
+announced, bounded at six hours so a reset days out cannot take an account out of rotation for that
+long. Selection and affinity reuse both pass over an account while its window is live. The window
+binds the stable `__main__` alias on the same terms as an added account: the main login is not in
+the configured pool and enters candidacy through its own re-insertion path, which applies the same
+avoidance check the pool filters apply. Avoidance stays soft. Last-resort selection still reaches
+the account when nothing else can serve, a successful recovery probe drops the window with the
+cooldown it belonged to, and both operator escapes remove it: clearing a cooldown and naming an
+account each clear the window from the account-wide entry and from every scoped entry, because a
+reset-derived refusal records only the scoped one.
+
+Clearing a cooldown is also the management operation for a window whose cooldown has already
+lapsed. Because the cooldown is the shorter of the two durations, the state an operator usually
+finds is an expired cooldown and a live window, so a live window alone makes the operation
+succeed and report a clear. An account with neither reports no change, which is what keeps the
+route from disclosing whether an account exists.
+
 A confirmed manual reset-credit consumption may immediately reconcile that account's
 eligible pre-existing ordinary reset-derived cooldown after a complete, non-exhausted usage
 observation started after the reset. Paused or reauthentication-required accounts and
@@ -402,3 +420,36 @@ successful main usage refresh clears the runtime mark.
 ## Paginated history writer boundary
 
 `src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+
+## Context relay ownership
+
+`src/codex/context-owner.ts` records which account actually served a root session, taken from the
+final materialized outbound headers of an accepted model attempt, after refresh and failover.
+Entries are bounded, process-local and expiring, and are keyed by the admission principal that
+`src/server/auth-cors.ts` mints for the matched opencodex API key, plus the destination and the
+root session. Two keys therefore cannot observe or overwrite each other's ownership even when both
+resolve to one ChatGPT workspace, and rotating a key mints a new principal instead of inheriting
+the previous holder's sessions. `resolveContextPrincipal` resolves that principal from the opencodex API key the request
+presents, on both the recording and the relay path so the two agree. A remote bind supplies it
+through admission. A loopback bind admits without reading a token, so the key is resolved from the
+request only for a loopback admission; this adds identity where the caller volunteered it rather
+than admitting anyone new, and changes neither admission nor which credential goes upstream. The
+built-in loopback injection cannot carry that header, so the relay is unavailable through the
+default Codex integration and refuses instead of inferring an owner. Making loopback callers
+identifiable is an open maintainer decision, not a gap to be closed by relaxing the refusal.
+
+A workspace id identifies an organization, so an entry also binds the stable user claim carried by
+the accepted credential. That claim is read without signature verification, which is why upstream
+acceptance stays the evidence: a credential proving a different user does not continue the session,
+conflicting claims are never recorded, and an entry with no proven user continues only for the
+exact accepted credential. Conflicting observations stay ambiguous, and ambiguous, unknown,
+expired, evicted or restart-lost ownership fails closed before account selection or upstream I/O.
+
+`src/server/context-history.ts` relays the native history and notes endpoints under one deadline
+that starts on route entry, before the body is read and before credential selection, so an
+unfinished body cannot hold an admitted turn. Client cancellation and deadline expiry are reported
+separately, nothing is dispatched upstream after either, and notes writes are never retried.
+
+Context relay dispatch rechecks the native experimental opt-in after body and credential waits.
+A disabled gate prevents upstream dispatch even when the request entered while enabled. Final
+materialized headers pass the proxy-credential exclusion check before owner matching.

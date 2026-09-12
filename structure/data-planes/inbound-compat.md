@@ -33,6 +33,15 @@ request-signal cancellation contracts as routed Responses transport. Because
 call before it binds the adapter; the pick remains inert unless a strategy is configured
 and the committed key is cooling. See [`responses.md`](../transports/responses.md).
 
+## Chat conversation identity forwarding
+
+`src/server/chat-completions.ts` preserves caller `prompt_cache_key` on the Chat-to-Responses
+bridge. Canonical ChatGPT Responses forwarding preserves `session_id`, `session-id`, `thread-id`
+and per-request `x-client-request-id` under their original names. Missing conversation identity
+stays missing; a shared prefix/cache key is not converted into a session. The direct-mode
+outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`.
+This transport contract does not prove a client's emission, Pool selection stability or cache hits.
+
 ## Chat streaming client with a JSON upstream result
 
 The translated inbound path in `src/server/chat-completions.ts` may receive a complete JSON
@@ -128,3 +137,4 @@ changes prompt roles, not conversation identity, and cannot guarantee upstream c
 Instruction notice extraction scans fence ranges once and walks original lines backwards with
 a decreasing cursor. It accepts exactly one ASCII space inside the token notice, preserves
 unmatched prefix bytes, and does not repeatedly scan or copy shrinking prompt prefixes.
+Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
