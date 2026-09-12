@@ -39,6 +39,7 @@ import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chat
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginDevin, refreshDevinToken } from "./devin";
+import { loginDevinCli, refreshDevinCliToken } from "./devin-cli";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
@@ -314,6 +315,16 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: refreshDevinToken,
     providerConfig: oauthConfig("devin"),
     defaultModel: oauthDefaultModel("devin"),
+    defaultRefreshPolicy: "disabled",
+  },
+  "devin-cli": {
+    // Import-first, the kiro shape: adopt the credential the installed CLI
+    // already holds instead of starting a browser flow it has already completed.
+    login: (ctrl, opts) => loginDevinCli(ctrl, opts),
+    refresh: refreshDevinCliToken,
+    providerConfig: oauthConfig("devin-cli"),
+    defaultModel: oauthDefaultModel("devin-cli"),
+    // The CLI owns the session and Cognition exposes no refresh endpoint.
     defaultRefreshPolicy: "disabled",
   },
   "github-copilot": {

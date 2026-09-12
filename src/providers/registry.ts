@@ -1,7 +1,6 @@
 import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
 import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
-import { DEVIN_CLI_DEFAULT_MODEL, DEVIN_CLI_MODEL_CONTEXT_WINDOWS, DEVIN_CLI_MODELS } from "../adapters/devin-cli/models";
 import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
@@ -1316,34 +1315,41 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noVisionModels: [...CURSOR_NO_VISION_MODELS],
   },
   {
-    // Drives the locally installed Devin CLI. The CLI owns its own credentials
-    // from `devin auth login`, so this provider takes no key and the proxy never
-    // holds one. Inference happens in the child process, which is why the
-    // destination is a stdio scheme rather than a URL.
+    // The signed-in Devin CLI as an account source.
+    //
+    // The CLI writes a `devin-session-token$<JWT>` to its own credentials.toml,
+    // which is the same credential RegisterUser hands `ocx login devin` and which
+    // the cloud-direct client already speaks. So this provider imports that token
+    // and streams over Connect-RPC like its browser-login sibling, rather than
+    // spawning `devin acp`.
+    //
+    // `oauth` classifies the ACCOUNT, not the transport. This is not a local
+    // runtime: unlike Ollama or LM Studio it cannot answer at all until a vendor
+    // account is signed in, and `local` grouped it with things that have no
+    // account. It is also the only classification that reaches the dashboard
+    // Accounts tab, which is built from OAUTH_PROVIDERS.
+    //
+    // The ACP adapter stays registered and tested. It is no longer reachable
+    // under THIS id — `routedProviderConfig` pins the adapter from the registry
+    // for any row whose name is a registry id — but a custom-named row such as
+    // `{"devin-acp": {"adapter": "devin-cli", ...}}` is not pinned and still gets it.
     id: "devin-cli",
-    label: "Devin CLI (local)",
-    adapter: "devin-cli",
-    // A canonical identity URL, not a transport. The CLI performs the real
-    // transport over stdio; this is the destination the config records, and it
-    // has to be an http(s) URL because providerBaseUrlConfigError rejects any
-    // other scheme — a `devin://` destination made the generated config
-    // unloadable. Same shape as the other CLI-backed providers.
-    baseUrl: "https://cli.devin.ai",
-    authKind: "local",
+    label: "Devin CLI",
+    adapter: "devin",
+    baseUrl: "https://server.codeium.com",
+    authKind: "oauth",
     featured: false,
-    // Reachable from the dashboard's add-provider list. `derive.ts` builds that
-    // list from `featured || authKind === "key" || dashboardPreset`, and this
-    // provider is none of the first two, so without this flag the only way to
-    // add it was to hand-edit config.json — which is how it came to be missing
-    // from a picker that already had the cloud `devin` row. The other local
-    // providers (ollama, vLLM, LM Studio) are reachable through `featured`;
-    // this one stays out of the featured strip because it needs an installed
-    // CLI and a completed `devin auth login` before it can answer anything.
-    dashboardPreset: true,
-    note: "Drives the locally installed Devin CLI over the Agent Client Protocol (`devin acp`, newline-delimited JSON-RPC on stdio). Requires the CLI on PATH and a completed `devin auth login`; no API key is stored by opencodex. Set OPENCODEX_DEVIN_CLI_BIN to point at a specific build, and OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1 to let the CLI read and write files — the default is to refuse.",
-    models: [...DEVIN_CLI_MODELS],
-    defaultModel: DEVIN_CLI_DEFAULT_MODEL,
-    modelContextWindows: DEVIN_CLI_MODEL_CONTEXT_WINDOWS,
+    // Off, like `devin`. `deriveProviderPresets` keys the preset catalog off this
+    // flag, so leaving it true would draw the row twice: an Accounts login row and
+    // a preset tile.
+    dashboardPreset: false,
+    note: "Imports the credential your installed Devin CLI already holds (`devin auth login`), then streams over Cognition's Connect-RPC api-server like the `devin` provider. No browser sign-in and no key to paste. For the CLI's own local agent loop over ACP stdio instead, configure a custom-named provider row with \"adapter\": \"devin-cli\".",
+    // Degraded-mode seed only; `liveModels` discovers the account's real roster,
+    // which is where `swe-2` and the rest of the current catalog come from.
+    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6"],
+    liveModels: true,
+    defaultModel: "swe-2",
+    modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
   },
   {
     id: "devin",

@@ -14,6 +14,7 @@ import { DEVIN_CLI_BIN_ENV, resolveDevinCliBinary } from "../../src/adapters/dev
 import { createDevinCliAdapter } from "../../src/adapters/devin-cli/adapter";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { DEVIN_CLI_MODELS, DEVIN_CLI_MODEL_CONTEXT_WINDOWS, DEVIN_CLI_DEFAULT_MODEL } from "../../src/adapters/devin-cli/models";
+import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../../src/adapters/devin/live-models";
 import { formatProviderDisplayName, providerIconSrc } from "../../gui/src/provider-icons";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import { EventEmitter } from "node:events";
@@ -21,16 +22,19 @@ import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 describe("devin-cli registration", () => {
-  test("is a local provider that stores no credential", () => {
+  test("is an account provider sourced from the installed CLI", () => {
     const entry = PROVIDER_REGISTRY.find((row) => row.id === "devin-cli");
-    expect(entry?.adapter).toBe("devin-cli");
-    // The installed CLI carries its own credentials from `devin auth login`,
-    // so the proxy must never ask for or hold a key for this provider.
-    expect(entry?.authKind).toBe("local");
-    // Addable from the dashboard. It is neither `featured` nor key-auth, so this
-    // flag is the only thing that puts it in the add-provider list; without it
-    // the provider existed but could only be reached by hand-editing config.
-    expect(entry?.dashboardPreset).toBe(true);
+    // The preset streams over Cognition's api-server now: the CLI's own
+    // credentials.toml holds an ordinary devin-session-token, so there is no
+    // reason to spawn a child to reach the same models.
+    expect(entry?.adapter).toBe("devin");
+    // `oauth` classifies the ACCOUNT, not the transport, and is what puts the row
+    // in the dashboard Accounts tab beside `devin`.
+    expect(entry?.authKind).toBe("oauth");
+    // Off, or the row is drawn twice: an Accounts login row and a preset tile.
+    expect(entry?.dashboardPreset).toBe(false);
+    // The ACP adapter is still registered and still constructible — it is simply
+    // no longer what this provider id resolves to.
     expect(createDevinCliAdapter({ adapter: "devin-cli", baseUrl: "https://cli.devin.ai" }).name).toBe("devin-cli");
   });
 
@@ -57,8 +61,13 @@ describe("devin-cli registration", () => {
     expect(Object.keys(DEVIN_CLI_MODEL_CONTEXT_WINDOWS).sort()).toEqual([...DEVIN_CLI_MODELS].sort());
     expect(DEVIN_CLI_MODEL_CONTEXT_WINDOWS[DEVIN_CLI_DEFAULT_MODEL]).toBe(262_000);
 
+    // The PRESET no longer uses this table: it streams over the cloud transport,
+    // so its windows come from the shared Devin table and, at runtime, from the
+    // account's own catalog through live discovery. The table above still governs
+    // the ACP roster for a custom-named row that selects that adapter.
     const entry = PROVIDER_REGISTRY.find((row) => row.id === "devin-cli");
-    expect(entry?.modelContextWindows).toBe(DEVIN_CLI_MODEL_CONTEXT_WINDOWS);
+    expect(entry?.modelContextWindows).toBe(DEVIN_MODEL_CONTEXT_WINDOWS);
+    expect(entry?.liveModels).toBe(true);
   });
 });
 

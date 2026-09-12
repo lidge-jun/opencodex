@@ -1,6 +1,7 @@
 import { mutatePersistedConfig } from "../config";
 import { projectModelRenames } from "./model-rename-migration";
 import { projectStaleContextWindows } from "./stale-context-window-migration";
+import { projectDevinCliAuthMode } from "./devin-cli-authmode-migration";
 import type { OcxConfig } from "../types";
 
 /**
@@ -13,10 +14,11 @@ import type { OcxConfig } from "../types";
 export function projectStartupConfigRepairs(config: OcxConfig): ReturnType<typeof projectModelRenames> {
   const renames = projectModelRenames(config);
   const windows = projectStaleContextWindows(renames.config);
+  const devinCli = projectDevinCliAuthMode(windows.config);
   return {
-    config: windows.config,
-    changed: renames.changed || windows.changed,
-    warnings: [...renames.warnings, ...windows.warnings],
+    config: devinCli.config,
+    changed: renames.changed || windows.changed || devinCli.changed,
+    warnings: [...renames.warnings, ...windows.warnings, ...devinCli.warnings],
   };
 }
 
