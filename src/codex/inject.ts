@@ -895,6 +895,8 @@ export function chooseCatalogPathForInjection(
 export interface CodexInjectResult {
   success: boolean;
   message: string;
+  /** Structured read-only history preflight refusal; never parsed from display text. */
+  historyPreflightFailureReason?: string;
   status?: "skipped";
   /** `hub-gated` is the hub-role gate (#4236), distinct from the user's own OFF switch. */
   skippedReason?: "desired_disabled" | "desired_enabled" | "hub-gated";
@@ -1192,6 +1194,7 @@ async function injectCodexConfigImpl(
   if (historyPreflightError) {
     return {
       success: false,
+      historyPreflightFailureReason: historyPreflightError,
       message: `Codex config injection refused: ${historyPreflightError}. `
         + "Existing provider definitions and conversation files were preserved. "
         + "Paginated history requires native-writer coordination; do not run legacy recovery or retry this transition blindly.",
