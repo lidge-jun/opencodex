@@ -7,18 +7,18 @@
  * The write-time gate added in the first round cannot close this. It runs once, on bytes about
  * to be written, so it says nothing about a catalog that predates it, one written while the
  * runtime ladder was unverified, or a runtime swapped after the write. These tests drive the
- * status surface itself, in a real client home, with the ladder injected so no Codex process is
- * spawned to observe it.
+ * status surface itself, in an isolated client home, with injected ladders or harmless fixture
+ * launchers in place of the operator's Codex runtime.
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
-import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { connectCompletionReport } from "../../src/cli/connect";
 import type { ClientCatalogReadiness } from "../../src/client/catalog-compatibility";
 
@@ -39,17 +39,60 @@ type ProbeResult = {
     readiness?: string;
     readinessReason?: string;
   };
+  runtime?: {
+    beforeDiagnostics: Record<string, string[]>;
+    afterDiagnostics: Record<string, string[]>;
+    diagnosticsCached: boolean;
+    newerVersion?: string;
+    selectionUnchanged: boolean;
+  };
 };
+
+/** Harmless real launchers: the fixture PATH never includes the operator's Codex. */
+function writeRuntimeFixture(dir: string, version: string, valid = true): string {
+  mkdirSync(dir, { recursive: true });
+  const command = join(dir, process.platform === "win32" ? "codex.cmd" : "codex");
+  const catalog = JSON.stringify({ models: [{
+    slug: "gpt-5.6-sol",
+    base_instructions: "fixture",
+    supported_reasoning_levels: NEW_CLI.map(effort => ({ effort })),
+  }] });
+  writeFileSync(command, process.platform === "win32"
+    ? [
+      "@echo off",
+      'echo %~1 %~2 %~3>>"%~dp0calls.log"',
+      ...(valid ? [
+        'if "%~1"=="--version" (',
+        `  echo codex-cli ${version}`,
+        "  exit /b 0",
+        ")",
+        `echo ${catalog}`,
+        "exit /b 0",
+      ] : ["exit /b 1"]),
+    ].join("\r\n")
+    : [
+      "#!/bin/sh",
+      'printf "%s\\n" "$*" >> "${0%/*}/calls.log"',
+      ...(valid ? [
+        `if [ "$1" = "--version" ]; then printf '%s\\n' 'codex-cli ${version}'; exit 0; fi`,
+        `printf '%s\\n' '${catalog}'`,
+      ] : ["exit 1"]),
+    ].join("\n"), "utf8");
+  if (process.platform !== "win32") chmodSync(command, 0o755);
+  return command;
+}
 
 /**
  * Runs the real "ocx connect status" surface against a throwaway client home. The ladder is
- * injected rather than observed: a spawned "codex debug models" would make the assertion depend
- * on whichever Codex CLI the test machine happens to have.
+ * injected by default; the observer cases use only the isolated fixture launchers below.
  */
 function runStatusProbe(options: {
   connected: boolean;
-  ladder: string[] | null | "forbidden";
+  ladder: string[] | null | "forbidden" | "observed";
   catalog?: string;
+  preferred?: "valid" | "failed" | "missing";
+  persisted?: boolean;
+  fullDiagnostics?: boolean;
 }): ProbeResult {
   const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-readiness-home-"));
   const codexHome = mkdtempSync(join(tmpdir(), "ocx-readiness-codex-"));
@@ -80,29 +123,74 @@ function runStatusProbe(options: {
       : { port: 10100, providers: {}, defaultProvider: "openai" }), "utf8");
     writeFileSync(join(opencodexHome, "service-api-token"), `${token}\n`, { mode: 0o600 });
     writeFileSync(join(codexHome, "opencodex-catalog.json"), catalog, "utf8");
+    const runtimeEnv: NodeJS.ProcessEnv = {};
+    if (options.ladder === "observed") {
+      const selectedDir = join(opencodexHome, "selected");
+      const lowerDir = join(opencodexHome, "lower");
+      const rejectedDir = join(opencodexHome, "rejected");
+      const selected = writeRuntimeFixture(selectedDir, "0.145.0");
+      writeRuntimeFixture(lowerDir, "99.0.0");
+      const preferred = options.preferred ?? "valid";
+      runtimeEnv.CODEX_CLI_PATH = preferred === "valid" ? selected
+        : preferred === "failed" ? writeRuntimeFixture(rejectedDir, "", false)
+        : join(rejectedDir, process.platform === "win32" ? "codex.cmd" : "codex");
+      runtimeEnv.PATH = [selectedDir, lowerDir].join(delimiter);
+      runtimeEnv.HOME = opencodexHome;
+      runtimeEnv.USERPROFILE = opencodexHome;
+      runtimeEnv.FIXTURE_RUNTIME_DIRS = JSON.stringify({ selected: selectedDir, lower: lowerDir, rejected: rejectedDir });
+      runtimeEnv.FIXTURE_FULL_DIAGNOSTICS = options.fullDiagnostics ? "1" : "0";
+      if (options.persisted) writeFileSync(join(opencodexHome, "codex-runtime.json"), JSON.stringify({
+        version: 1, command: selected, source: "configured", selectedVersion: "0.145.0",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+      }));
+    }
 
     const script = `
       const { collectClientConnectionStatus, handleConnectCommand } = require("./src/cli/connect");
+      const { readFileSync } = require("node:fs");
+      const { join } = require("node:path");
       const ladder = JSON.parse(process.env.FIXTURE_LADDER);
       const supportedEfforts = ladder === "forbidden"
         ? () => { throw new Error("the runtime was probed on a path that must not probe it"); }
         : ladder === null ? () => null : () => new Set(ladder);
+      const catalogProbeDeps = ladder === "observed" ? {} : { supportedEfforts };
+      const readOptional = path => { try { return readFileSync(path, "utf8"); } catch { return null; } };
+      const selectionPath = join(process.env.OPENCODEX_HOME, "codex-runtime.json");
+      const selectionBefore = readOptional(selectionPath);
       const lifecycleLockDeps = { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" };
       const captured = [];
       const real = console.log;
       (async () => {
         console.log = (...parts) => captured.push(parts.join(" "));
         try {
-          await handleConnectCommand(["status"], { lifecycleLockDeps, catalogProbeDeps: { supportedEfforts } });
+          await handleConnectCommand(["status"], { lifecycleLockDeps, catalogProbeDeps });
         } finally {
           console.log = real;
         }
         const status = collectClientConnectionStatus(
           Date.parse("2026-08-28T00:00:10.000Z"),
           lifecycleLockDeps,
-          { supportedEfforts },
+          catalogProbeDeps,
         );
-        console.log(JSON.stringify({ lines: captured, status }));
+        let runtime;
+        if (ladder === "observed") {
+          const dirs = JSON.parse(process.env.FIXTURE_RUNTIME_DIRS);
+          const calls = () => Object.fromEntries(Object.entries(dirs).map(([key, dir]) =>
+            [key, (readOptional(join(dir, "calls.log")) ?? "").split(/\\r?\\n/).map(line => line.trim()).filter(Boolean)]));
+          const beforeDiagnostics = calls();
+          let newerVersion;
+          let diagnosticsCached = true;
+          if (process.env.FIXTURE_FULL_DIAGNOSTICS === "1") {
+            const { resolveCodexRuntime } = require("./src/codex/runtime");
+            newerVersion = resolveCodexRuntime().newerAvailable?.version;
+            const first = JSON.stringify(calls());
+            resolveCodexRuntime();
+            diagnosticsCached = first === JSON.stringify(calls());
+          }
+          runtime = { beforeDiagnostics, afterDiagnostics: calls(), diagnosticsCached, newerVersion,
+            selectionUnchanged: selectionBefore === readOptional(selectionPath) };
+        }
+        console.log(JSON.stringify({ lines: captured, status, runtime }));
       })();
     `;
 
@@ -122,6 +210,7 @@ function runStatusProbe(options: {
         // Desktop configuration, even transitively.
         OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop"),
         FIXTURE_LADDER: JSON.stringify(options.ladder),
+        ...runtimeEnv,
       },
     });
     expect(result.status).toBe(0);
@@ -198,6 +287,45 @@ describe("#4207 connected-client readiness", () => {
     expect(probe.status.readinessReason).toBeUndefined();
     expect(probe.lines[0]).toBe("Connection: disconnected");
   });
+});
+
+describe("connected-client runtime probe scope", () => {
+  test("observes only the selected runtime and leaves full diagnostics available", () => {
+    const probe = runStatusProbe({ connected: true, ladder: "observed", fullDiagnostics: true });
+
+    expect(probe.status.readiness).toBe("ready");
+    expect(probe.runtime?.beforeDiagnostics.lower).toEqual([]);
+    expect(probe.runtime?.beforeDiagnostics.selected).toEqual([
+      "--version", "debug models --bundled", "debug models --bundled",
+    ]);
+    expect(probe.runtime?.newerVersion).toBe("99.0.0");
+    expect(probe.runtime?.afterDiagnostics.lower).toEqual(["--version"]);
+    expect(probe.runtime?.diagnosticsCached).toBe(true);
+    expect(probe.runtime?.selectionUnchanged).toBe(true);
+  }, SPAWN_BUDGET_MS);
+
+  test("a rejected preferred runtime falls back without rewriting the saved selection", () => {
+    const probe = runStatusProbe({ connected: true, ladder: "observed", preferred: "failed", persisted: true });
+
+    expect(probe.status.readiness).toBe("ready");
+    expect(probe.runtime?.beforeDiagnostics.lower).toEqual([]);
+    expect(probe.runtime?.beforeDiagnostics.rejected).toEqual(["--version"]);
+    expect(probe.runtime?.beforeDiagnostics.selected).toEqual([
+      "--version", "debug models --bundled", "debug models --bundled",
+    ]);
+    expect(probe.runtime?.selectionUnchanged).toBe(true);
+  }, SPAWN_BUDGET_MS);
+
+  test("a missing preferred runtime falls back to the first valid PATH candidate", () => {
+    const probe = runStatusProbe({ connected: true, ladder: "observed", preferred: "missing" });
+
+    expect(probe.status.readiness).toBe("ready");
+    expect(probe.runtime?.beforeDiagnostics.lower).toEqual([]);
+    expect(probe.runtime?.beforeDiagnostics.selected).toEqual([
+      "--version", "debug models --bundled", "debug models --bundled",
+    ]);
+    expect(probe.runtime?.selectionUnchanged).toBe(true);
+  }, SPAWN_BUDGET_MS);
 });
 
 describe("#4207 what ocx connect reports when the local CLI cannot use the catalog", () => {
