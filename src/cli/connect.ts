@@ -101,11 +101,12 @@ function readInstalledCatalogBody(): string | null {
  * `codexSupportedReasoningEfforts()` with no deps reaches `resolveAndPersistCodexRuntime`, which
  * writes codex-runtime.json. `ocx status` deliberately resolves without persisting, and a
  * read-only diagnostics command should not start writing runtime selection state because a
- * readiness check was added to it. Handing the already-resolved command in as the only candidate
- * skips that path and reuses the resolve cache `ocx status` has usually already filled.
+ * readiness check was added to it. Stop at the first valid runtime, then hand only that command
+ * to the catalog probe: readiness does not consume alternative-runtime diagnostics. The resolver
+ * keeps this priority-only cache separate from the full discovery used by `ocx status`.
  */
 function observeLocalCodexEffortLadder(): ReadonlySet<string> | null {
-  const command = resolveCodexRuntime().runtime.command;
+  const command = resolveCodexRuntime({ discoverAlternatives: false }).runtime.command;
   return codexSupportedReasoningEfforts({ commandCandidates: () => [command] });
 }
 

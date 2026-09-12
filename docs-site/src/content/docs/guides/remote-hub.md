@@ -79,6 +79,11 @@ data-key rotation, revocation, and disconnect.
 
 ### What a connected client shows
 
+`ocx connect` and `ocx connect status` check catalog readiness against the first valid local
+Codex runtime in selection order. Failed preferred candidates can fall back, but lower-priority
+alternatives are not probed after a valid runtime is selected. This check leaves the saved runtime
+selection unchanged. General `ocx status` still discovers alternatives for runtime diagnostics.
+
 A client stores no provider credentials and no catalog of its own, so its local config and
 credential store are empty by design — and reading them as the truth produces a confident, wrong
 answer about what the hub can serve. On a connected client `ocx status` therefore leads with

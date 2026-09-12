@@ -5,6 +5,9 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 
 ## Connected Claude Desktop profiles
 
+The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership).
+It does not discover lower-priority alternatives after a valid selection or alter Desktop ownership.
+
 Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin
 and exact hub-issued IDs to the local Desktop configuration. Static/hybrid embed the entries;
 discovery-only keeps discovery on the hub. The hub owns family assignments and defaults; local

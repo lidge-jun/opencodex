@@ -11,6 +11,9 @@ served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
+The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
+`tests/cli/cli-connect-readiness.test.ts` exercises that boundary with isolated executable fixtures.
+
 ## GitHub Pages
 
 `.github/workflows/deploy-docs.yml` publishes the docs to:
