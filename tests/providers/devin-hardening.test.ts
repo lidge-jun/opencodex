@@ -7,6 +7,7 @@ import { anySignal } from "../../src/lib/abort";
 import { buildGetChatMessageRequestForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { decodeModelUsageStats } from "../../src/adapters/devin/cloud-direct/chat";
 import { CloudChatError, decodeChatFrame } from "../../src/adapters/devin/cloud-direct/chat";
+import { connectTrailerHttpStatus } from "../../src/adapters/devin/cloud-direct/chat";
 import { devinErrorClassification, mergeDevinUsage } from "../../src/adapters/devin";
 import { iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { buildMetadata, normalizeDevinSessionToken } from "../../src/adapters/devin/cloud-direct/metadata";
@@ -396,5 +397,50 @@ describe("devin usage merging and error classification", () => {
       .toEqual({ status: 503, retryable: true });
     // A Connect trailer carries no status, so it keeps the older inference path.
     expect(devinErrorClassification(new CloudChatError("x", "resource_exhausted"))).toEqual({});
+  });
+});
+
+describe("connect trailer to HTTP status", () => {
+  test("a cap delivered as permission_denied is a 429, not a 403", () => {
+    // Cognition sends the account cap through the same code as an ACL denial.
+    // Classified 403 the client retries straight into a live cap.
+    expect(connectTrailerHttpStatus("permission_denied", "Your limit will reset in 13 minutes")).toBe(429);
+    expect(connectTrailerHttpStatus("permission_denied", "Reached overall message rate limit")).toBe(429);
+    // An ordinary denial stays a denial.
+    expect(connectTrailerHttpStatus("permission_denied", "an internal error occurred")).toBe(403);
+  });
+
+  test("the remaining Connect codes map to the status core acts on", () => {
+    expect(connectTrailerHttpStatus("unauthenticated", "")).toBe(401);
+    expect(connectTrailerHttpStatus("resource_exhausted", "")).toBe(429);
+    expect(connectTrailerHttpStatus("unavailable", "")).toBe(503);
+    expect(connectTrailerHttpStatus("deadline_exceeded", "")).toBe(504);
+    expect(connectTrailerHttpStatus("invalid_argument", "")).toBe(400);
+    expect(connectTrailerHttpStatus("internal", "")).toBe(502);
+    // An unknown code keeps the older message-inference path rather than
+    // asserting a status nobody measured.
+    expect(connectTrailerHttpStatus("some_new_code", "")).toBeUndefined();
+    expect(connectTrailerHttpStatus(undefined, "")).toBeUndefined();
+  });
+
+  test("a trailer status reaches the adapter's structured classification", () => {
+    const err = new CloudChatError("capped", "permission_denied", "abc", connectTrailerHttpStatus("permission_denied", "Your limit will reset in 3 minutes"));
+    expect(devinErrorClassification(err)).toEqual({ status: 429, errorType: "rate_limit_error", retryable: true });
+  });
+});
+
+describe("devin status classification across the newly reachable trailer codes", () => {
+  const cls = (status: number) => devinErrorClassification(new CloudChatError("x", undefined, undefined, status));
+
+  test("a request the service will not accept is never retried", () => {
+    expect(cls(400)).toEqual({ status: 400, retryable: false });
+    expect(cls(404)).toEqual({ status: 404, retryable: false });
+    // 501 is the one 5xx a second attempt cannot change.
+    expect(cls(501)).toEqual({ status: 501, retryable: false });
+  });
+
+  test("a timeout or an unavailable service is retryable", () => {
+    expect(cls(503)).toEqual({ status: 503, retryable: true });
+    expect(cls(504)).toEqual({ status: 504, retryable: true });
   });
 });

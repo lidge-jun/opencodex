@@ -56,6 +56,10 @@ export function devinErrorClassification(error: unknown): { status?: number; err
   if (status === 401) return { status, errorType: "authentication_error", retryable: false };
   if (status === 403) return { status, errorType: "permission_error", retryable: false };
   if (status === 429) return { status, errorType: "rate_limit_error", retryable: true };
+  // 501 is the one 5xx that will never succeed on a second attempt: the service
+  // does not implement the call. Marking it retryable put `retryable: true` on
+  // the SSE failure a client reads, inviting a retry that cannot change.
+  if (status === 501) return { status, retryable: false };
   if (status >= 500) return { status, retryable: true };
   return { status, retryable: false };
 }

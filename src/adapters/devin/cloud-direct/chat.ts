@@ -970,6 +970,45 @@ export class CloudChatError extends Error {
 const TRACE_ID_RE = /\(trace ID: ([0-9a-f]+)\)/i;
 
 /**
+ * A quota refusal Cognition delivers as `permission_denied`.
+ *
+ * "Your limit will reset in 13 minutes" and "Reached overall message rate
+ * limit" are caps, not authorization failures. Classified as 403 they invite
+ * the client to retry straight into a live cap; as 429 the proxy backs off and
+ * can rotate.
+ */
+const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of credits)\b/i;
+
+/**
+ * Connect error code to HTTP status.
+ *
+ * Without this only the HTTP status line reached the adapter, so a cap or an
+ * expired credential delivered as an EOS trailer fell through to
+ * `inferHttpStatusFromAdapterMessage` and became a generic 502 — which is not
+ * retryable-with-backoff, not an auth prompt, and not something core's failover
+ * acts on.
+ */
+export function connectTrailerHttpStatus(code: string | undefined, message: string): number | undefined {
+  if (code === 'permission_denied' && TRAILER_QUOTA_RE.test(message)) return 429;
+  switch (code) {
+    case 'unauthenticated': return 401;
+    case 'permission_denied': return 403;
+    case 'resource_exhausted': return 429;
+    case 'not_found': return 404;
+    case 'unavailable': return 503;
+    case 'deadline_exceeded': return 504;
+    case 'unimplemented': return 501;
+    case 'invalid_argument':
+    case 'failed_precondition':
+    case 'out_of_range': return 400;
+    case 'internal':
+    case 'unknown':
+    case 'data_loss': return 502;
+    default: return undefined;
+  }
+}
+
+/**
  * Stream chat events from the cloud. Yields CloudChatEvent (text deltas, tool
  * call deltas, finish reason). Use `streamChatText` for legacy text-only iteration.
  *
@@ -1085,10 +1124,9 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // error event and /api/logs, and a Connect error can quote the request that
     // produced it - which is the request holding the api_key.
     //
-    // Only the HTTP status line is carried here. A Connect EOS trailer that
-    // reports resource_exhausted or unavailable still arrives without a status,
-    // so a cap delivered that way keeps the older message-inference path.
-    // Mapping trailer codes onto HTTP statuses is deliberately a follow-up.
+    // The status line is carried on the error. A cap or an expired credential
+    // delivered instead as a Connect EOS trailer is mapped by
+    // connectTrailerHttpStatus at the trailer sites below.
     throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined, undefined, resp.status);
   }
   if (!resp.body) {
@@ -1316,7 +1354,12 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         `service accepts. If the request is unchanged and this is new, the ` +
         `account's model access is the next thing to check. ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
-      throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
+      throw new CloudChatError(
+        enriched,
+        trailerError.code,
+        trailerError.traceId,
+        connectTrailerHttpStatus(trailerError.code, trailerError.message),
+      );
     }
     // Cognition also returns `permission_denied` when a tool description
     // contains a blocklisted phrase that the sanitizer above did not catch
@@ -1336,9 +1379,19 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         // was a phrase match at all.
         `(cloud message: ${trailerError.message}) ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
-      throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
+      throw new CloudChatError(
+        enriched,
+        trailerError.code,
+        trailerError.traceId,
+        connectTrailerHttpStatus(trailerError.code, trailerError.message),
+      );
     }
-    throw new CloudChatError(trailerError.message, trailerError.code, trailerError.traceId);
+    throw new CloudChatError(
+      trailerError.message,
+      trailerError.code,
+      trailerError.traceId,
+      connectTrailerHttpStatus(trailerError.code, trailerError.message),
+    );
   }
   // Truncation detection: the cloud always terminates a successful stream
   // with an EOS trailer. If we hit `done` from the body reader without one,
