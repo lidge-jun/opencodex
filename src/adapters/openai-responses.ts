@@ -25,6 +25,7 @@ import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-co
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
+import { stripBracketedModelSuffix } from "./openai-chat";
 import { normalizeResponsesCodeMode } from "./responses-code-mode";
 import { stripUnicodePropertyPatterns } from "./responses-tool-schema";
 import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "./xai-web-search";
@@ -2382,6 +2383,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // stripPreviousResponseId() intentionally returns its input on a no-op. Detach before the
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
       outBody = applyTierDecisionToResponsesBody(outBody, parsed.options?.tierDecision);
+      if (provider.modelSuffixBracketStrip && isPlainObject(outBody) && typeof (outBody as { model?: unknown }).model === "string") {
+        // Detach before the write: upstream helpers may return parsed._rawBody itself on a
+        // no-op chain, and the caller still owns it.
+        outBody = { ...outBody, model: stripBracketedModelSuffix((outBody as { model: string }).model) };
+      }
       const stateless = provider.statelessResponses === true;
       if (stateless) outBody = stripStatefulResponsesParams(outBody);
       // A replay miss can leave a function_call_output whose paired function_call sat

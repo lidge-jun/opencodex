@@ -42452,6 +42452,31 @@
 				"minLevel": "minimal",
 				"maxLevel": "high"
 			}
+		},
+		"kimi-k3": {
+			"id": "kimi-k3",
+			"name": "Kimi K3",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 3,
+				"output": 15,
+				"cacheRead": 0.3,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "high"
+			}
 		}
 	},
 	"nanogpt": {

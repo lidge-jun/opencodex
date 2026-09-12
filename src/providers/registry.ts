@@ -1605,6 +1605,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noPenaltyModels: KIMI_LOCKED_PARAMETER_MODELS,
     autoToolChoiceOnlyModels: KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS,
     preserveReasoningContentModels: KIMI_THINKING_MODELS,
+    // 260908 K3 live canary (api.kimi.com coding endpoint, not NIM): k3 completes multi-step tool loops
+    // (read -> patch -> test -> inspect -> repair) with multiple tool calls per turn,
+    // so advertise the parallel capability bit and stop pinning the wire field off.
+    // Evidence: devlog/_plan/260908_openai_chat_compat/ (this unit).
+    parallelToolCalls: true,
   },
   {
     id: "kiro",
@@ -2613,21 +2618,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Model data frozen pending Tier-2 entitlement proof",
   },
   {
-    id: "moonshot", label: "Moonshot (Kimi API)", baseUrl: MOONSHOT_INTL_BASE_URL, adapter: "openai-chat", authKind: "key",
+    id: "moonshot", label: "Moonshot (Kimi API)", baseUrl: MOONSHOT_INTL_BASE_URL, adapter: "openai-responses", authKind: "key",
     allowBaseUrlOverride: true,
     baseUrlChoices: MOONSHOT_BASE_URL_CHOICES,
-    dashboardUrl: "https://platform.moonshot.ai/console/api-keys", defaultModel: "kimi-k2.7-code", jawcodeBundle: "moonshot",
+    dashboardUrl: "https://platform.moonshot.ai/console/api-keys", defaultModel: "kimi-k3", jawcodeBundle: "moonshot",
     models: KIMI_API_MODELS,
     modelContextWindows: KIMI_API_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_API_MODEL_INPUT_MODALITIES,
     noReasoningModels: KIMI_API_NO_REASONING_MODELS,
     modelReasoningEfforts: KIMI_API_REASONING_EFFORTS,
-    noTemperatureModels: KIMI_API_MODELS,
-    noTopPModels: KIMI_API_MODELS,
-    noPenaltyModels: KIMI_API_MODELS,
-    autoToolChoiceOnlyModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     preserveReasoningContentModels: KIMI_API_MODELS,
-    note: "International default (api.moonshot.ai). China accounts: choose China (.cn) or Custom for api.moonshot.cn.",
+    statelessResponses: true,
+    preserveResponsesReasoningContent: true,
+    note: "Official Kimi / Moonshot OpenAI Responses API endpoint (https://platform.kimi.com/docs/api/responses). International default (api.moonshot.ai); choose China (.cn) for api.moonshot.cn.",
   },
   { id: "huggingface", label: "Hugging Face", baseUrl: "https://router.huggingface.co/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://huggingface.co/settings/tokens" },
   // 260715 NIM hardening (issue #126, devlog/_plan/260715_issue126_nim_kimi):
