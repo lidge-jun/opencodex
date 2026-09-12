@@ -339,6 +339,27 @@ describe("combo request cloning", () => {
     });
   });
 
+  test("strict normalization preserves reasoning controls for an unknown target", () => {
+    const raw = {
+      model: "combo/x",
+      input: "hi",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    };
+    const concrete = concreteComboRequestBody(raw, target, null, undefined, "strict");
+
+    expect(concrete).toEqual({
+      model: "a/m1",
+      input: "hi",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    });
+  });
+
   test("explicit empty ladder strips unsupported controls while preserving reasoning summary", () => {
     const concrete = concreteComboRequestBody({
       model: "combo/x",
