@@ -250,6 +250,53 @@ and the plan/label column falls back across plan, masked email, label, and maske
 }
 ```
 
+### `ocx account import-orca --source <orca-data-directory> --registry <orca-data.json> [--apply] [--json]`
+
+Reuse local Orca-managed Codex logins without another browser login. The source
+directory must contain `codex-accounts/<account>/home/auth.json`. Supply the Orca
+data directory and the chosen profile's `orca-data.json` explicitly. Only accounts
+registered in that profile are considered; leftover or removed account homes are
+not imported. Each home must carry Orca's matching `.orca-managed-home` marker.
+The command does not scan unrelated homes or remote hosts.
+
+```powershell
+# Windows: preview only; no account is registered.
+ocx account import-orca --source "$env:APPDATA\orca" --registry "$env:APPDATA\orca\profiles\local-default\orca-data.json" --json
+
+# Finish active proxy requests and stop the proxy before applying.
+ocx stop
+ocx account import-orca --source "$env:APPDATA\orca" --registry "$env:APPDATA\orca\profiles\local-default\orca-data.json" --apply
+ocx start
+```
+
+Older Orca profiles may use `orca-data.json` directly under the data directory.
+On other platforms, pass the local Orca data directory and profile registry with the same layout.
+The importer skips identities already present in the native main login, account
+pool, or credential store, including duplicates within the source. This deliberately
+uses the ChatGPT account ID as a conservative bucket: separate members sharing a
+workspace account ID are skipped too, not merged or individually imported. Repeating an
+import preserves existing accounts. If an earlier import stopped between saving
+credentials and registering the pool row, retry can finish that registration with
+the same ID only when its untouched pending record still matches the source. Invalid
+entries are counted, and the command exits nonzero when any are encountered.
+Output contains counts, not emails, account identifiers, paths, or tokens.
+
+**Orca retains refresh ownership.** OpenCodex stores a read-only source link and
+an access-token snapshot, never Orca's refresh token. When resolving credentials,
+it reads the source again and verifies that it still belongs to the imported
+identity. Orca must keep that login available and refreshed. Missing, malformed,
+expired, or identity-mismatched source credentials fail closed; OpenCodex does not
+fall back to the old snapshot or refresh the source login. This is a local link,
+not a portable export or a transfer of refresh ownership.
+Requests already sent upstream keep the credentials they captured.
+
+New accounts are registered as **validation pending**. After starting the proxy,
+open **Codex Auth** and click **Refresh quotas** to authorize the existing model
+validation step, which may consume a small amount of quota. Offline import and
+JWT parsing do not establish upstream authentication. CLI quota refresh alone
+does not perform that validation. The importer never starts or stops either app,
+changes Orca files, or changes the active pool account.
+
 ### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
 Without a provider, lists the Codex pool, OAuth accounts, and configured API-key pools. Empty

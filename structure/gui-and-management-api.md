@@ -1,5 +1,9 @@
 # GUI And Management API
 
+The [Orca importer](codex-home.md#orca-source-owned-account-import) is a local CLI operation with
+no management route. Imported accounts use existing quota validation; deferred warmups reread
+linked sources after the quota await to reject revoked or rotated captures.
+
 ## Dashboard serving
 
 The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui`

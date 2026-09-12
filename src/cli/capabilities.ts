@@ -248,6 +248,24 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["account", "import-orca"],
+    summary: "Preview or register read-only links to Orca-managed Codex accounts without another login.",
+    routes: [],
+    flags: [
+      { name: "--source", value: "string", required: true, summary: "Orca data directory containing codex-accounts." },
+      { name: "--registry", value: "string", required: true, summary: "The chosen Orca profile's orca-data.json account registry." },
+      { name: "--apply", value: "boolean", summary: "Register new accounts; requires a stopped proxy. Default is preview." },
+      { name: "--json", value: "boolean", summary: "Emit counts without credentials or source paths." },
+    ],
+    mutates: true,
+    json: "envelope",
+    details: [
+      "Local files only; never copies refresh tokens or changes Orca authentication files.",
+      "Skips existing ChatGPT identities. New accounts remain pending until dashboard validation.",
+      "Orca must keep the source login available and refreshed; a missing or expired source fails closed.",
+    ],
+  },
+  {
     command: ["account", "refresh"],
     summary: "Refresh account quotas without model validation; pending Codex accounts require dashboard consent.",
     routes: [

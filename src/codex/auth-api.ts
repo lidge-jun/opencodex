@@ -1591,9 +1591,15 @@ export async function fetchPoolAccountQuota(
       && generation !== undefined && record.generation === generation
       && isCompleteCodexQuotaRecoverySnapshot(result.freshQuota ?? null, result.freshPlan ?? configuredPlan)) {
       try {
+        // WHAM awaited network work. A linked source may have disappeared or rotated since
+        // that dispatch; never validate its cached snapshot or validate a newer generation
+        // with an older generation's quota evidence.
+        const sourceToken = record.credential.sourceAuthPath ? await getValidToken(accountId) : null;
+        if (sourceToken && (sourceToken.generation !== generation
+          || !isCodexAccountGenerationLive(accountId, generation))) return result;
         await warmCodexAccount({
-          accessToken: record.credential.accessToken,
-          chatgptAccountId: record.credential.chatgptAccountId,
+          accessToken: sourceToken?.accessToken ?? record.credential.accessToken,
+          chatgptAccountId: sourceToken?.chatgptAccountId ?? record.credential.chatgptAccountId,
         });
         markCodexAccountValidated(accountId, Date.now(), generation);
         clearAccountNeedsReauth(accountId, generation);

@@ -1,5 +1,9 @@
 # Subagents And Multi-Agent Surface
 
+Pool credentials used by subagent routes can be
+[linked to Orca-managed homes](codex-home.md#orca-source-owned-account-import). The account-store
+resolver enforces source identity and expiry before those credentials reach routing.
+
 ## Multi-agent surface mode (3-state)
 
 `OcxConfig.multiAgentMode` controls the `multi_agent_version` field stamped on catalog entries:

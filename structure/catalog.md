@@ -1,5 +1,8 @@
 # Model Catalog
 
+Accounts added through the [Orca import](codex-home.md#orca-source-owned-account-import) remain
+validation-pending. Import alone supplies no entitlement evidence for the model catalog.
+
 ## Shared catalog
 
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:

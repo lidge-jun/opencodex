@@ -1,5 +1,9 @@
 # OpenAI Provider Account Modes
 
+[Orca-linked pool accounts](../codex-home.md#orca-source-owned-account-import) use the current
+source access token and leave refresh ownership with Orca. They enter the pool validation-pending;
+import deduplicates by ChatGPT account ID, including shared-workspace IDs.
+
 This current contract supersedes the provider-identity and account-selection sections of
 `devlog/_fin/260717_openai_hardening`; that archived unit remains historical evidence for the
 earlier three-tier implementation. The replacement contract and its verification evidence live in
