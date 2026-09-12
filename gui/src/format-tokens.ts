@@ -32,24 +32,3 @@ export function formatTokens(n: number, locale: string): string {
   if (n < 1_000_000_000_000) return `${trim((n / 1_000_000_000).toFixed(1))}B`;
   return `${trim((n / 1_000_000_000_000).toFixed(1))}T`;
 }
-
-/**
- * A token total with its cached subset beside it: `5.8만 c5.7만`, `58K c57K`.
- *
- * A cached request's total is mostly cache. Printing the total alone makes a
- * 58,000-token prompt that is 57,000 cache read and 1,000 fresh look like an
- * ordinary 58,000-token prompt, and it reads as a different, smaller request
- * than the log row directly below it, which already shows the companion. The
- * `c` marker matches the `logs.tokens.cacheRead` label, which reads
- * "cache read (c)".
- *
- * The companion is omitted only when there is no cache to report. It is NOT
- * omitted when the cached subset equals the total: a turn served entirely from
- * cache is the most interesting row on the page, and hiding its marker there
- * would blank exactly the case this exists for.
- */
-export function formatTokensWithCache(total: number, cached: number | undefined, locale: string): string {
-  const base = formatTokens(total, locale);
-  if (cached === undefined || !Number.isFinite(cached) || cached <= 0) return base;
-  return `${base} c${formatTokens(cached, locale)}`;
-}

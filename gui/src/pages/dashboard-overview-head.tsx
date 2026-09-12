@@ -1,6 +1,6 @@
 import { IconAlert, IconInfo } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
-import { formatTokensWithCache } from "../format-tokens";
+import { formatTokens } from "../format-tokens";
 import { formatUptime } from "../formatUptime";
 import { navigateHash } from "../hash-routing";
 import type { useDashboardData } from "./use-dashboard-data";
@@ -81,13 +81,7 @@ export function DashboardOverviewHead({
           <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
           <div className="stat" aria-busy={usageLoading || undefined}>
             <div className="label">{t("dash.tokens30d")}</div>
-            <div className="value mono">{usage30d && usage30d.summary.requests > 0
-              ? formatTokensWithCache(
-                usage30d.summary.totalTokens,
-                usage30d.summary.cacheReadInputTokens ?? usage30d.summary.cachedInputTokens,
-                locale,
-              )
-              : "—"}</div>
+            <div className="value mono">{usage30d && usage30d.summary.requests > 0 ? formatTokens(usage30d.summary.totalTokens, locale) : "—"}</div>
             <div className="muted text-label dash-stat-coverage">
               {usage30d && usage30d.summary.requests > 0
                 ? t("dash.coverage").replace("{pct}", `${Math.round(usage30d.summary.coverageRatio * 100)}%`)

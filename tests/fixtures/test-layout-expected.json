@@ -549,7 +549,6 @@
   "grok-sync.test.ts": "providers/xai",
   "grok-writer-boundary.test.ts": "providers/xai",
   "gui-api-error.test.ts": "gui",
-  "gui-format-tokens-cache.test.ts": "gui",
   "gui-management-session.test.ts": "gui",
   "gui-pair-capability.test.ts": "gui",
   "gui-pair-client.test.ts": "gui",
