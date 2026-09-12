@@ -123,6 +123,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientRaycast",
   "integrations.tab.omo",
   "api.clientConfig.clientOmo",
+  // Cline CLI is the product name in every locale.
+  "integrations.tab.cline",
+  "api.clientConfig.clientCline",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "pws.pacingRpmUnit",
