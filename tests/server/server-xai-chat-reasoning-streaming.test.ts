@@ -170,7 +170,10 @@ describe("xAI OAuth Chat reasoning streaming", () => {
       expect(outboundBody?.model).toBe("grok-4.6");
       expect(outboundBody?.messages).toBeArray();
       expect(outboundBody?.stream).toBe(true);
-      expect(outboundBody?.service_tier).toBeUndefined();
+      // The OAuth lane is fast-classified for grok-4.6 (2026-09-13 probe), so a
+      // caller-sent priority tier now forwards on the Chat wire instead of being
+      // stripped by the old unclassified-route pin.
+      expect(outboundBody?.service_tier).toBe("priority");
       expect(outboundBody?.reasoning_effort).toBe("xhigh");
       expect(outboundBody?.input).toBeUndefined();
       expect(outboundBody?.reasoning).toBeUndefined();
