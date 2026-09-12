@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { homedir } from "node:os";
+import { win32 } from "node:path";
 import {
   DEVIN_CLI_CREDENTIALS_ENV,
   devinCliCredentialsPath,
@@ -149,13 +151,21 @@ describe("devin-cli credential path and read bounds", () => {
     // directory the proxy was started in, and a planted file there would import
     // as the operator's own CLI session.
     // The fallback reads the real home directory rather than env.HOME, so the
-    // assertion is on shape: absolute, and under the home data dir.
+    // assertion is on shape: anchored at that home directory, and under its data
+    // dir. Anchoring is what proves the path is not cwd-relative; asserting a
+    // leading "/" instead would only hold when the HOST is POSIX, because
+    // `homedir()` returns `C:\\Users\\<name>` on Windows no matter which
+    // platform the resolver is asked about.
     for (const empty of ["", "   "]) {
       const resolved = devinCliCredentialsPath({ HOME: "/home/u", XDG_DATA_HOME: empty }, "linux");
-      expect(resolved.startsWith("/")).toBe(true);
+      expect(resolved.startsWith(homedir())).toBe(true);
       expect(resolved.endsWith("/.local/share/devin/credentials.toml")).toBe(true);
     }
     const win = devinCliCredentialsPath({ APPDATA: "" }, "win32");
+    // The win32 branch joins with win32 separators, so a POSIX host home such as
+    // `/Users/runner` comes back as `\\Users\\runner`. Normalize the anchor the
+    // same way rather than comparing a host-shaped string against it.
+    expect(win.startsWith(win32.join(homedir()))).toBe(true);
     expect(win.endsWith("AppData\\Roaming\\devin\\credentials.toml")).toBe(true);
     expect(win.startsWith("devin")).toBe(false);
   });
