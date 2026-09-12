@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeDevinModelId } from "../../src/adapters/devin";
+import { mapOcxMessagesToDevin } from "../../src/adapters/devin";
 import { parseDevinAuthPaste, refreshDevinToken } from "../../src/oauth/devin";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "../../src/oauth/devin/api-base";
 import { registerUser } from "../../src/oauth/devin/register-user";
@@ -442,5 +443,78 @@ describe("devin status classification across the newly reachable trailer codes",
   test("a timeout or an unavailable service is retryable", () => {
     expect(cls(503)).toEqual({ status: 503, retryable: true });
     expect(cls(504)).toEqual({ status: 504, retryable: true });
+  });
+});
+
+describe("devin reasoning replay", () => {
+  const parsedWith = (messages: unknown[]) => ({
+    context: { messages, tools: undefined, systemPrompt: undefined },
+    options: { toolChoice: undefined },
+  }) as never;
+  function uvarint(value: number): number[] {
+    const out: number[] = [];
+    let v = value;
+    do { const b = v & 0x7f; v = Math.floor(v / 128); out.push(v > 0 ? b | 0x80 : b); } while (v > 0);
+    return out;
+  }
+  function lenDelim(num: number, payload: Buffer): Buffer {
+    return Buffer.concat([Buffer.from([...uvarint((num << 3) | 2), ...uvarint(payload.length)]), payload]);
+  }
+  function fieldsOf(buf: Buffer): Record<number, Buffer[]> {
+    const out: Record<number, Buffer[]> = {};
+    for (const f of iterFields(buf)) {
+      if (Buffer.isBuffer(f.value)) (out[f.num] ??= []).push(f.value);
+    }
+    return out;
+  }
+
+  test("an assistant turn's thinking and signature ride the prompt instead of being dropped", () => {
+    // The adapter used to assert this field did not exist and drop the chain,
+    // so a reasoning model re-derived it on every turn of a tool loop.
+    const history = mapOcxMessagesToDevin(parsedWith([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "step one", signature: "sig-abc" },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ]));
+    const assistant = history.find(m => m.role === "assistant");
+    expect(assistant?.thinking).toBe("step one");
+    expect(assistant?.signature).toBe("sig-abc");
+    // Reasoning must not leak into the visible text.
+    expect(assistant?.content).toBe("answer");
+  });
+
+  test("a turn that produced only reasoning is still replayed", () => {
+    const history = mapOcxMessagesToDevin(parsedWith([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "assistant", content: [{ type: "thinking", thinking: "only thought" }] },
+    ]));
+    expect(history.find(m => m.role === "assistant")?.thinking).toBe("only thought");
+  });
+
+  test("the encoded prompt carries thinking at #11 and its signature at #12", () => {
+    const req = buildGetChatMessageRequestForTests({
+      apiKey: "devin-session-token$x",
+      modelUid: "swe-2",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "answer", thinking: "step one", signature: "sig-abc" },
+      ],
+      cascadeId: "c",
+    } as never);
+    const prompts = fieldsOf(req)[3] ?? [];
+    const assistantPrompt = prompts.map(fieldsOf).find(p => p[11]);
+    expect(assistantPrompt?.[11]?.[0]?.toString("utf8")).toBe("step one");
+    expect(assistantPrompt?.[12]?.[0]?.toString("utf8")).toBe("sig-abc");
+  });
+
+  test("the response signature is decoded so there is something to replay", () => {
+    const frame = lenDelim(10, Buffer.from("sig-from-cloud", "utf8"));
+    const events = [...decodeChatFrame(frame)];
+    expect(events).toEqual([{ kind: "reasoning_signature", signature: "sig-from-cloud" }]);
   });
 });

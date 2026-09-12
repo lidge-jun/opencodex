@@ -120,6 +120,9 @@ export function allocateCascadeId(): string {
  *   #4 num_tokens: int                          (rough estimate)
  *   #5 safe_for_code_telemetry: bool            (1 = ok to log)
  *   #10 images: repeated ImageData              (multimodal)
+ *   #11 thinking: string                        (assistant reasoning, replayed)
+ *   #12 signature: string                       (opaque attestation for #11)
+ *   #18 signature_type: string
  * }
  *
  * ImageData (exa.codeium_common_pb.ImageData) {
@@ -153,7 +156,13 @@ function encodeChatToolCall(tc: { id: string; name: string; arguments: string })
 function encodeChatMessagePrompt(
   content: ContentPart[],
   source: number,
-  opts?: { toolCallId?: string; toolCalls?: Array<{ id: string; name: string; arguments: string }> },
+  opts?: {
+    toolCallId?: string;
+    toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    thinking?: string;
+    signature?: string;
+    signatureType?: string;
+  },
 ): Buffer {
   const textParts = content.filter((p): p is { type: 'text'; text: string } => p.type === 'text');
   const imageParts = content.filter((p): p is { type: 'image'; mimeType: string; base64Data: string; caption?: string } => p.type === 'image');
@@ -178,6 +187,14 @@ function encodeChatMessagePrompt(
   for (const img of imageParts) {
     parts.push(encodeMessage(10, encodeImageData(img)));
   }
+  // Reasoning replay. This adapter used to assert that Cognition has no
+  // reasoning-replay field and drop the assistant's own thinking, so a
+  // reasoning model restarted its chain on every turn of a tool loop. Two
+  // independent clients of the same service write it here: #11 thinking,
+  // #12 signature, #18 signature_type on the assistant prompt.
+  if (opts?.thinking) parts.push(encodeString(11, opts.thinking));
+  if (opts?.signature) parts.push(encodeString(12, opts.signature));
+  if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
   return Buffer.concat(parts);
 }
 
@@ -342,6 +359,15 @@ export interface ChatHistoryItem {
    * each ChatToolCall has #1 id, #2 name, #3 arguments_json).
    */
   tool_calls?: Array<{ id: string; name: string; arguments: string }>;
+  /**
+   * For `role: 'assistant'` only — the model's own reasoning from that turn,
+   * replayed so a reasoning model does not restart its chain on the next one.
+   * Encoded as ChatMessagePrompt #11 with its #12 signature and #18
+   * signature_type.
+   */
+  thinking?: string;
+  signature?: string;
+  signature_type?: string;
 }
 
 /**
@@ -399,6 +425,12 @@ export interface ToolDef {
 export type CloudChatEvent =
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
+  /**
+   * `delta_signature` (#10) — the opaque attestation for the reasoning this
+   * turn produced. Without decoding it there is nothing to put in the prompt's
+   * #12 on the next turn, so the replay would always be unsigned.
+   */
+  | { kind: 'reasoning_signature'; signature: string }
   | { kind: 'tool_call_start'; id: string; name: string }
   | {
       kind: 'tool_call_args';
@@ -592,6 +624,9 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
         {
           toolCallId: m.role === 'tool' ? m.tool_call_id : undefined,
           toolCalls: m.role === 'assistant' ? m.tool_calls : undefined,
+          thinking: m.role === 'assistant' ? m.thinking : undefined,
+          signature: m.role === 'assistant' ? m.signature : undefined,
+          signatureType: m.role === 'assistant' ? m.signature_type : undefined,
         },
       ),
     ),
@@ -716,6 +751,9 @@ export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       // block instead of inline with the answer.
       const s = (f.value as Buffer).toString('utf8');
       if (s) yield { kind: 'reasoning', text: s };
+    } else if (f.num === 10 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      const s = (f.value as Buffer).toString('utf8');
+      if (s) yield { kind: 'reasoning_signature', signature: s };
     } else if (f.num === 6 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       let id: string | undefined;
       let name: string | undefined;

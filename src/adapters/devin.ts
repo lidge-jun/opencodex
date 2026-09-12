@@ -160,13 +160,42 @@ function assistantToolCalls(message: OcxAssistantMessage): Array<{ id: string; n
 
 function assistantText(message: OcxAssistantMessage): string {
   return message.content
-    // Thinking stays out of the replayed content. Cognition has no reasoning
-    // replay field, and folding chain-of-thought into assistant text sends it
-    // back as visible prior output - which the model then treats as something
-    // it said to the user.
+    // Thinking stays out of the replayed TEXT: folding chain-of-thought into
+    // assistant text sends it back as visible prior output, which the model
+    // then treats as something it said to the user. It is replayed in its own
+    // field instead — see assistantThinking below.
     .map((part) => (part.type === "text" ? part.text : ""))
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * The assistant turn's own reasoning, for replay in ChatMessagePrompt #11.
+ *
+ * This adapter previously asserted that Cognition has no reasoning-replay
+ * field and dropped the thinking outright, so a reasoning model restarted its
+ * chain on every turn of a tool loop. The field exists: two independent
+ * clients of the same service write #11 thinking with #12 signature and #18
+ * signature_type on the assistant prompt.
+ *
+ * The signature attests the thinking it was produced with, so a block without
+ * one contributes its text and nothing else rather than borrowing a neighbour's.
+ */
+function assistantThinking(
+  message: OcxAssistantMessage,
+): { thinking?: string; signature?: string } {
+  const blocks = message.content.filter(
+    (part): part is Extract<typeof part, { type: "thinking" }> => part.type === "thinking",
+  );
+  if (blocks.length === 0) return {};
+  const thinking = blocks.map(b => b.thinking).filter(Boolean).join("\n");
+  // Only one signature can ride the prompt, so take the last block that has
+  // one: that is the block the turn actually ended on.
+  const signature = blocks.filter(b => b.signature).at(-1)?.signature;
+  return {
+    ...(thinking ? { thinking } : {}),
+    ...(signature ? { signature } : {}),
+  };
 }
 
 export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem[] {
@@ -203,11 +232,15 @@ function mapOneMessage(message: OcxMessage): ChatHistoryItem | undefined {
   if (message.role === "assistant") {
     const toolCalls = assistantToolCalls(message);
     const text = assistantText(message);
-    if (!text && toolCalls.length === 0) return undefined;
+    const reasoning = assistantThinking(message);
+    // A turn that produced only reasoning is still worth replaying: dropping it
+    // is what makes the next turn re-derive the same chain.
+    if (!text && toolCalls.length === 0 && !reasoning.thinking) return undefined;
     return {
       role: "assistant",
       content: text || "",
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      ...reasoning,
     };
   }
   if (message.role === "toolResult") {
@@ -333,6 +366,12 @@ export function createDevinAdapter(
           }
           if (event.kind === "reasoning") {
             if (event.text) emit({ type: "thinking_delta", thinking: event.text });
+            continue;
+          }
+          if (event.kind === "reasoning_signature") {
+            // Carried back out so the next turn can replay it in the prompt's
+            // signature field; an unsigned replay is what the service ignores.
+            emit({ type: "thinking_signature", signature: event.signature });
             continue;
           }
           if (event.kind === "tool_call_start") {
