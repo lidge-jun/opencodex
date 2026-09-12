@@ -116,17 +116,23 @@ describe("injectCodexConfig integration (Design B)", () => {
       const target = join(process.env.CODEX_HOME,"opencodex.config.toml");
       const configPath = join(process.env.CODEX_HOME,"config.toml");
       fs.writeFileSync(configPath,'model="test"');
+      const realRead = fs.readFileSync;
+      let failReads = false;
+      let deniedReads = 0;
+      const readSpy = spyOn(fs,"readFileSync").mockImplementation((path,...args)=>{
+        if (failReads && String(path)===target) {
+          deniedReads++;
+          throw Object.assign(new Error("fixture denied"),{code:"EACCES"});
+        }
+        return realRead(path,...args);
+      });
       const {injectCodexConfig,restoreNativeCodex,restoreNativeCodexAsync}=require("./src/codex/inject");
       const initial=await injectCodexConfig(10100,{});
       if(!initial.success) throw new Error("fixture injection failed");
       const watched=[configPath,target,join(process.env.CODEX_HOME,"opencodex-journal.json")];
       const original=watched.map(path=>fs.readFileSync(path,"utf8"));
-      const realRead = fs.readFileSync;
-      const readSpy = spyOn(fs,"readFileSync").mockImplementation((path,...args)=>{
-        if (String(path)===target) throw Object.assign(new Error("fixture denied"),{code:"EACCES"});
-        return realRead(path,...args);
-      });
       const {captureCodexPreImages,restoreCodexPreImages}=require("./src/codex/inject-coordination");
+      failReads = true;
       let captureCode;
       try { captureCodexPreImages(); } catch(error) { captureCode=error.code; }
       const outcomes=[];
@@ -138,14 +144,16 @@ describe("injectCodexConfig integration (Design B)", () => {
       }
       const restored=restoreCodexPreImages({config:original[0],profile:original[1],journal:original[2]});
       readSpy.mockRestore();
-      console.log(JSON.stringify({captureCode,restored,outcomes,unchangedAfterEach,preserved:watched.every((p,i)=>realRead(p,"utf8")===original[i])}));
+      console.log(JSON.stringify({deniedReads,captureCode,restored,outcomes,unchangedAfterEach,preserved:watched.every((p,i)=>realRead(p,"utf8")===original[i])}));
     `;
     const child = spawnSync(process.execPath, ["--eval", script], {
       cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
       encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
     });
     expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({
+    const { deniedReads, ...result } = JSON.parse(child.stdout);
+    expect(deniedReads).toBeGreaterThanOrEqual(5);
+    expect(result).toEqual({
       captureCode: "EACCES", restored: { complete: false, unrestored: ["profile"] }, outcomes: [true, true, true], unchangedAfterEach: [true, true, true], preserved: true,
     });
   });

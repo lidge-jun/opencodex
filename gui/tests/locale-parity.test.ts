@@ -99,6 +99,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "nav.grok",
   // Other short identifiers, commands, and product names kept in English
   "api.clientConfig.clientOpencode",
+  // Cline CLI is a product name, not untranslated interface copy.
+  "integrations.tab.cline",
+  "api.clientConfig.clientCline",
   "api.clientConfig.clientPi",
   "api.clientConfig.clientOmp",
   "api.clientConfig.clientHermes",
