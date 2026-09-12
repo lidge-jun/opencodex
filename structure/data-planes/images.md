@@ -6,6 +6,9 @@ Codex's local `image_gen.imagegen` tool makes a second Images request after the 
 `POST /v1/images/generations` for generation or `POST /v1/images/edits` for reference-image edits.
 These are standalone Images API routes, not the hosted Responses `image_generation` tool.
 
+The [native Chat effort-cap contract](../catalog.md#ultra-reasoning-level) belongs to
+`src/server/chat-native.ts`; the standalone Images relay does not apply that Chat request policy.
+
 `src/server/images.ts` uses the existing ChatGPT/OpenAI fallback unless `images.provider` explicitly
 selects a custom API-key `openai-responses` provider. Explicit selection fails closed when the
 provider is missing, disabled, registry-managed, incompatible, or lacks a usable key; it never

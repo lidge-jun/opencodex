@@ -22,6 +22,12 @@ parallel tools (or pinned false by the existing provider opt-out contract).
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
 or storage semantics retain the existing Chat -> Responses -> Chat bridge.
 
+`src/server/chat-native.ts` applies the shared
+[effort-cap contract](../catalog.md#ultra-reasoning-level) independently of model pins.
+Provider wire mapping runs for an applied pin or a cap rewrite; otherwise the caller's
+effort spelling is preserved. Same-destination retries reuse the normalized value and
+annotation; a destination change starts again from the original caller effort.
+
 The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
 one bounded event. EOF with an unterminated event and an event above the translator limit are typed
 upstream failures, never successful partial completions. Provider-controlled structured error

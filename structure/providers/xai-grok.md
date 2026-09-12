@@ -1,5 +1,9 @@
 # xAI Grok Provider
 
+For routes admitted to `src/server/chat-native.ts`, request effort follows the shared
+[cap and provider-mapping contract](../catalog.md#ultra-reasoning-level), including eligible
+requests without a pin. Provider-specific Grok transport behavior is described below.
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:

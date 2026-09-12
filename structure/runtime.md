@@ -1,5 +1,9 @@
 # Runtime
 
+Native Chat request preparation in `src/server/chat-native.ts` applies the shared
+[effort-cap contract](catalog.md#ultra-reasoning-level) before provider dispatch, including
+eligible requests without an operator effort pin.
+
 ## Entrypoints
 
 | Path | Responsibility |

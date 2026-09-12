@@ -1,5 +1,9 @@
 # Claude Desktop Integration
 
+Client profile discovery and persistence do not determine per-turn effort-cap admission.
+For native Chat requests, `src/server/chat-native.ts` owns the
+[shared cap contract](../catalog.md#ultra-reasoning-level), including eligible unpinned turns.
+
 ## Connected Claude Desktop profiles
 
 Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin

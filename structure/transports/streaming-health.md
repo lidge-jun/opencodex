@@ -1,5 +1,9 @@
 # Streaming Health And WebSocket
 
+Native Chat effort normalization occurs before the upstream send in `src/server/chat-native.ts`.
+Its [cap and wire-mapping policy](../catalog.md#ultra-reasoning-level) also covers eligible
+unpinned requests; the SSE relay and its cancellation/deadline ownership follow the resulting send.
+
 ## Heartbeat and stall deadline
 
 The HTTP/SSE bridge emits an SSE comment-line keep-alive (`: opencodex heartbeat`) during upstream

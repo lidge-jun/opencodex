@@ -1,5 +1,9 @@
 # Background Service And Sidecars
 
+Effort ceilings are request policy rather than service or sidecar startup policy.
+`src/server/chat-native.ts` applies the [shared cap contract](../catalog.md#ultra-reasoning-level)
+to eligible native Chat turns with or without a model pin before dispatch.
+
 ## Background service command selection
 
 A bare `ocx service` is an idempotent install-or-repair command. Argument validation happens before

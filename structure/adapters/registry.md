@@ -4,6 +4,10 @@
 
 Runtime adapter construction has one authority: `src/adapters/registry.ts`.
 
+Native Chat admission in `src/server/chat-native.ts` applies the shared
+[effort-cap and wire-mapping policy](../catalog.md#ultra-reasoning-level) before the selected
+adapter builds its request, including when no model effort pin resolves.
+
 `src/server/adapter-resolve.ts` may resolve a provider/model onto an adapter id, but it does not maintain a second adapter factory inventory. The selected persisted/configured adapter id remains an untrusted string until the registry lookup succeeds. Unknown ids fail with the existing `Unknown adapter: <id>` error instead of widening configuration types around a closed compile-time union.
 
 ## Semantic inheritance is not constructor inheritance

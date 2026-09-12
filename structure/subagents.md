@@ -133,6 +133,10 @@ availability on a bounded interval (default 60 s, `src/codex/subagent-model-fall
 the requested model id only; effort remains owned by the caps described under
 [Ultra reasoning level](catalog.md#ultra-reasoning-level).
 
+Native Chat uses that same cap policy in `src/server/chat-native.ts` for qualifying v2 main
+turns and exactly marked spawned children, even without a model effort pin. Leaf children
+do not need collaboration tools to qualify; forced v1 and compaction remain exempt.
+
 `injectionModel` and `injectionEffort` are shared selections with two independent consumers.
 `multiAgentGuidanceEnabled` controls only OpenCodex-authored delegation guidance.
 `syncCodexSubagentDefaults` is a separate, default-off opt-in that applies the selected values to

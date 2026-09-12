@@ -6,6 +6,10 @@
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+The native Chat lane applies the same [effort-cap contract](../catalog.md#ultra-reasoning-level)
+in `src/server/chat-native.ts` before dispatch, so eligible unpinned Chat requests do not
+need a Responses projection to receive their configured ceiling.
+
 ### Credential-bearing HTTP redirects
 
 Credential/body-bearing HTTP sends use `redirect: "manual"` at the final executor boundary,

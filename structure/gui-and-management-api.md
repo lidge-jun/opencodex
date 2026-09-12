@@ -1,5 +1,9 @@
 # GUI And Management API
 
+Configured effort ceilings are enforced per request by the
+[shared effort policy](catalog.md#ultra-reasoning-level). The native Chat implementation in
+`src/server/chat-native.ts` applies eligible caps without requiring a model-pin setting.
+
 ## Dashboard serving
 
 The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui`
