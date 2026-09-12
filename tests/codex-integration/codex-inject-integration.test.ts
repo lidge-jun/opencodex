@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -59,8 +59,9 @@ describe("injectCodexConfig integration (Design B)", () => {
   let ocxHome: string;
 
   beforeEach(() => {
-    codexHome = mkdtempSync(join(tmpdir(), "ocx-inject-codex-"));
-    ocxHome = mkdtempSync(join(tmpdir(), "ocx-inject-home-"));
+    // Production canonicalizes homes before selecting journal/manifest paths.
+    codexHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-codex-")));
+    ocxHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-home-")));
   });
 
   afterEach(() => {
