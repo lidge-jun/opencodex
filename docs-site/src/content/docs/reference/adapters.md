@@ -470,6 +470,13 @@ api-server URL beside it, and never the file's other fields.
   notifications streaming in between and a unary reply carrying the stop reason and usage. The
   conversation is flattened into the single prompt string a session takes, with role labels fenced
   so a message body cannot forge one.
+- The ACP adapter selects the model with `devin acp --model`, before creating the session.
+  For SWE-2, an explicit reasoning effort selects `swe-2-medium`, `swe-2-high`, or
+  `swe-2-max`, overriding an effort suffix in the requested model. `xhigh` and
+  `ultra` select `max`; lower-than-medium values select `medium`. With no effort,
+  the requested model id is preserved, including the CLI's `swe-2` default alias.
+  If the CLI acknowledges a different exact SWE-2 variant, the turn fails before
+  the user prompt is sent. This mapping is local to the ACP adapter.
 - The CLI's own tool calls stay internal. Devin executes them inside its session, so forwarding
   them as client tools would either fail the turn — the bridge rejects a tool Codex never declared —
   or ask Codex to run something the agent already ran.

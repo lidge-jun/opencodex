@@ -1,5 +1,5 @@
 /**
- * Models the Devin CLI accepts on `session/new`.
+ * Models the Devin CLI accepts through `devin acp --model`.
  *
  * The CLI picks its own default when no model is named, so this roster exists
  * for the picker rather than as a gate. It is a static list on purpose: ACP has
@@ -10,7 +10,9 @@ export const DEVIN_CLI_DEFAULT_MODEL = "swe-2";
 
 export const DEVIN_CLI_MODELS = [
   "swe-2",
+  "swe-2-medium",
   "swe-2-high",
+  "swe-2-max",
   "claude-opus-5-medium",
   "claude-fable-5-1-medium",
   "claude-sonnet-5-medium",
@@ -44,7 +46,9 @@ export const DEVIN_CLI_MODELS = [
  */
 export const DEVIN_CLI_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "swe-2": 262_000,
+  "swe-2-medium": 262_000,
   "swe-2-high": 262_000,
+  "swe-2-max": 262_000,
   "claude-opus-5-medium": 1_000_000,
   "claude-fable-5-1-medium": 1_000_000,
   "claude-sonnet-5-medium": 1_000_000,
@@ -55,3 +59,15 @@ export const DEVIN_CLI_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "glm-5-3-low": 1_048_576,
   "kimi-k3-high": 1_048_576,
 };
+
+/** SWE-2 represents effort as a native model id, not a session/new extension. */
+export function resolveDevinCliModel(modelId: string, reasoning?: string): string {
+  const model = modelId.slice(modelId.lastIndexOf("/") + 1);
+  if (!/^swe-2(?:-(?:medium|high|max))?$/.test(model)) return model;
+  const efforts: Record<string, string> = {
+    none: "medium", off: "medium", minimal: "medium", low: "medium",
+    medium: "medium", high: "high", xhigh: "max", ultra: "max", max: "max",
+  };
+  const effort = reasoning ? efforts[reasoning] : undefined;
+  return effort ? `swe-2-${effort}` : model;
+}

@@ -36,6 +36,7 @@ import {
   sessionPromptFrame,
 } from "./acp";
 import { DEVIN_CLI_INSTALL_HINT, resolveDevinCliBinary } from "./binary";
+import { resolveDevinCliModel } from "./models";
 
 /** A turn that has not produced a prompt reply by this point is abandoned. */
 const DEVIN_CLI_TURN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -103,16 +104,14 @@ export function createDevinCliAdapter(provider: OcxProviderConfig, deps?: { spaw
         return;
       }
 
-      const modelId = parsed.modelId.includes("/")
-        ? parsed.modelId.slice(parsed.modelId.lastIndexOf("/") + 1)
-        : parsed.modelId;
+      const modelId = resolveDevinCliModel(parsed.modelId, parsed.options.reasoning);
       const cwd = process.env.OPENCODEX_DEVIN_CLI_CWD?.trim() || process.cwd();
       const toolsAllowed = devinCliToolsAllowed();
 
       await new Promise<void>((resolve) => {
         let child: ChildProcessWithoutNullStreams;
         try {
-          child = spawnChild(binary, ["acp"], {
+          child = spawnChild(binary, ["acp", "--model", modelId], {
             cwd,
             env: {
               // A scoped environment, not the proxy's. The child would
@@ -306,13 +305,26 @@ export function createDevinCliAdapter(provider: OcxProviderConfig, deps?: { spaw
 
           if (id === ACP_INITIALIZE_ID) {
             if (error) return finish(`Devin CLI initialize failed: ${error.message ?? "unknown error"}`);
-            send(sessionNewFrame(cwd, modelId));
+            send(sessionNewFrame(cwd));
             return;
           }
           if (id === ACP_SESSION_NEW_ID) {
             if (error) return finish(`Devin CLI session/new failed: ${error.message ?? "unknown error"}`);
             const sessionId = (frame.result as { sessionId?: string } | undefined)?.sessionId;
             if (!sessionId) return finish("Devin CLI session/new returned no sessionId.");
+            // CLI 3000.10.21 ignores the non-standard session/new model field.
+            // Check its acknowledgement before sending user content when an
+            // exact SWE-2 effort variant was requested. Older ACP peers may omit
+            // model metadata; --model remains authoritative in that case.
+            const result = frame.result as {
+              configOptions?: Array<{ id?: string; currentValue?: string }>;
+              models?: { currentModelId?: string };
+            };
+            const selected = result.configOptions?.find((option) => option.id === "model")?.currentValue
+              ?? result.models?.currentModelId;
+            if (/^swe-2-(?:medium|high|max)$/.test(modelId) && selected && selected !== modelId) {
+              return finish(`Devin CLI selected ${selected} instead of requested ${modelId}.`);
+            }
             send(sessionPromptFrame(sessionId, buildAcpPrompt(parsed)));
             return;
           }

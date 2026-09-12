@@ -264,3 +264,5 @@ fragments are not guessed onto pending ID-only calls.
 parallel/colliding identities, distinct unsafe raw JSON index literals, the maximum
 safe-integer boundary, invalid index types, missing/null continuations and UTF-8
 byte-limit boundaries.
+
+The local Devin ACP adapter owns [SWE-2 effort selection](../adapters/registry.md#devin-acp-model-selection); shared routing and other adapter effort policies do not apply that model-id rewrite.

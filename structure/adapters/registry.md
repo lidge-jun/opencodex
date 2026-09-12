@@ -71,3 +71,12 @@ see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routi
 Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
+
+## Devin ACP model selection
+
+`src/adapters/devin-cli/models.ts` maps SWE-2 reasoning effort to the CLI's native
+medium/high/max model ids. The ACP adapter passes the selected id through the
+child's `--model` argument, not the non-standard `session/new.model` extension.
+An advertised model acknowledgement that differs from an exact requested SWE-2
+variant fails before `session/prompt`. Omitted acknowledgement metadata remains
+compatible with older peers. Non-SWE-2 ids retain their own effort semantics.

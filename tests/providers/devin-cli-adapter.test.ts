@@ -14,7 +14,7 @@ import {
 import { DEVIN_CLI_BIN_ENV, resolveDevinCliBinary } from "../../src/adapters/devin-cli/binary";
 import { createDevinCliAdapter } from "../../src/adapters/devin-cli/adapter";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
-import { DEVIN_CLI_MODELS, DEVIN_CLI_MODEL_CONTEXT_WINDOWS, DEVIN_CLI_DEFAULT_MODEL } from "../../src/adapters/devin-cli/models";
+import { DEVIN_CLI_MODELS, DEVIN_CLI_MODEL_CONTEXT_WINDOWS, DEVIN_CLI_DEFAULT_MODEL, resolveDevinCliModel } from "../../src/adapters/devin-cli/models";
 import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../../src/adapters/devin/live-models";
 import { formatProviderDisplayName, providerIconSrc } from "../../gui/src/provider-icons";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
@@ -269,16 +269,17 @@ describe("devin-cli runTurn", () => {
     options: {},
   } as unknown as OcxParsedRequest;
 
-  async function run(script: (stdout: PassThrough, child: EventEmitter) => void) {
+  async function run(script: (stdout: PassThrough, child: EventEmitter) => void, request = parsed) {
     const { child, stdout, stdinWrites } = fakeChild();
     const events: AdapterEvent[] = [];
+    let args: string[] = [];
     process.env[DEVIN_CLI_BIN_ENV] = "/fake/devin";
     const adapter = createDevinCliAdapter({ adapter: "devin-cli", baseUrl: "https://cli.devin.ai" }, {
-      spawn: () => { queueMicrotask(() => script(stdout, child as unknown as EventEmitter)); return child; },
+      spawn: (_binary, spawnArgs) => { args = spawnArgs; queueMicrotask(() => script(stdout, child as unknown as EventEmitter)); return child; },
     });
-    await adapter.runTurn!(parsed, {} as never, (e) => events.push(e));
+    await adapter.runTurn!(request, {} as never, (e) => events.push(e));
     delete process.env[DEVIN_CLI_BIN_ENV];
-    return { events, stdinWrites };
+    return { events, stdinWrites, args };
   }
 
   test("a complete handshake produces exactly one terminal event, carrying usage", async () => {
@@ -302,6 +303,30 @@ describe("devin-cli runTurn", () => {
     expect((terminals[0] as { stopReason?: string }).stopReason).toBeUndefined();
     expect(events.filter((e) => e.type === "text_delta")).toEqual([{ type: "text_delta", text: "PONG" }]);
     expect(stdinWrites.join("")).toContain('"method":"session/prompt"');
+  });
+
+  test.each(["medium", "high", "max"])("selects SWE-2 %s before starting the prompt", async (effort) => {
+    const model = `swe-2-${effort}`;
+    const { events, stdinWrites, args } = await run((stdout) => {
+      stdout.write(JSON.stringify({ id: 1, result: {} }) + "\n");
+      stdout.write(JSON.stringify({ id: 2, result: { sessionId: "s1", configOptions: [{ id: "model", currentValue: model }] } }) + "\n");
+      stdout.write(JSON.stringify({ id: 3, result: { stopReason: "end_turn" } }) + "\n");
+    }, { ...parsed, modelId: "devin-acp/swe-2-high", options: { reasoning: effort } });
+    expect(args).toEqual(["acp", "--model", model]);
+    expect(JSON.parse(stdinWrites[1]!).params).not.toHaveProperty("model");
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test.each(["configOptions", "models"])("rejects a mismatched %s acknowledgement before sending user content", async (shape) => {
+    const { events, stdinWrites } = await run((stdout) => {
+      stdout.write(JSON.stringify({ id: 1, result: {} }) + "\n");
+      const metadata = shape === "models"
+        ? { models: { currentModelId: "swe-2-high" } }
+        : { configOptions: [{ id: "model", currentValue: "swe-2-high" }] };
+      stdout.write(JSON.stringify({ id: 2, result: { sessionId: "s1", ...metadata } }) + "\n");
+    }, { ...parsed, options: { reasoning: "medium" } });
+    expect(events).toEqual([{ type: "error", message: "Devin CLI selected swe-2-high instead of requested swe-2-medium." }]);
+    expect(stdinWrites.some((frame) => JSON.parse(frame).method === "session/prompt")).toBe(false);
   });
 
   test("a crash before the prompt reply is an error, not an empty success", async () => {
@@ -338,5 +363,19 @@ describe("devin-cli runTurn", () => {
     });
     expect(events).toHaveLength(1);
     expect((events[0] as { message: string }).message).toMatch(/malformed ACP frame/);
+  });
+});
+
+describe("Devin CLI effort selection", () => {
+  test("explicit effort overrides a SWE-2 suffix and unrelated models pass through", () => {
+    expect(resolveDevinCliModel("devin-acp/swe-2-max", "medium")).toBe("swe-2-medium");
+    expect(resolveDevinCliModel("swe-2-high", "xhigh")).toBe("swe-2-max");
+    expect(resolveDevinCliModel("swe-2-high", "ultra")).toBe("swe-2-max");
+    expect(resolveDevinCliModel("swe-2", "low")).toBe("swe-2-medium");
+    expect(resolveDevinCliModel("swe-2-max")).toBe("swe-2-max");
+    expect(resolveDevinCliModel("swe-2")).toBe("swe-2");
+    expect(resolveDevinCliModel("custom/claude-opus-5-medium", "high")).toBe("claude-opus-5-medium");
+    expect(resolveDevinCliModel("swe-20", "medium")).toBe("swe-20");
+    expect(resolveDevinCliModel("swe-2-high", "future-effort")).toBe("swe-2-high");
   });
 });
