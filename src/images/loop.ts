@@ -18,7 +18,7 @@ import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuatio
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
-import { bridgeToResponsesSSE } from "../bridge";
+import { bridgeToResponsesSSE, diagnoseAdapterEvent, type BridgeDiagnosticContext } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
@@ -279,6 +279,8 @@ export interface ImageBridgeDeps {
   onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
   /** WebSocket Responses path only — leave response id empty for protocol compatibility. */
   forceEmptyResponseId?: boolean;
+  /** Internal, opt-in structural stream diagnostics shared with the final bridge. */
+  diagnostic?: BridgeDiagnosticContext;
 }
 
 /**
@@ -651,6 +653,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         inactivityTimeoutMs: stallTimeoutMs,
         translatorBudget,
       })) {
+        if (deps.diagnostic) {
+          deps.diagnostic.adapterName = prepared.responseAdapter.name;
+          diagnoseAdapterEvent(deps.diagnostic, event);
+        }
         if (event.type === "heartbeat") yield event;
         else events.push(event);
       }
@@ -962,6 +968,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(usage),
       } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
+      ...(deps.diagnostic ? { diagnostic: deps.diagnostic } : {}),
     },
   );
   return new Response(sse, { headers: SSE_HEADERS });
