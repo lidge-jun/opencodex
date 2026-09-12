@@ -686,6 +686,8 @@ On OpenCode Go's `deepseek-v4.1-flash` Chat route, translated timeline system
 reminders automatically retain their position and system role, after any pending
 tool results. This prevents newly appended reminders from rewriting the leading
 system prompt. It applies with or without `stabilizePromptCache`; other models
-and destinations keep their existing conversion. Upstream cache availability,
-changes to earlier instructions or tools, and conversation compaction can still
-affect cache hits.
+and destinations keep their existing conversion; native Anthropic passthrough
+is unchanged. Cache reuse still requires stable session identity and upstream
+cache availability. Changes to earlier instructions or tools, and conversation
+compaction, can still affect cache hits; preserving reminder order alone does
+not guarantee reuse.
