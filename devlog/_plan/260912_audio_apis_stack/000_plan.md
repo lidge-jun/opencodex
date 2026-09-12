@@ -6,6 +6,8 @@ Expose file transcription, streaming dictation and GPT-Live to external clients 
 
 Owner steering during wp1 C: no local Bun suites, product tests, typecheck, build or dependency installation. Push with --no-verify and use exact-head remote CI for remaining executable verification. This supersedes every local command example in the layer plans. Already completed checks are historical evidence only; interrupted/crashed checks are not passing evidence. All active task-owned local suites were stopped. Functional layer closure uses the completed source review and pre-restriction focused evidence; PR readiness and final completion retain the remote CI gate under wp3 publication.
 
+Owner scope steering during wp2: finish the audio stack and record pre-existing unrelated CI failures separately. Do not extend this task into further journal-restore or CLI stale-process repairs. Audio-owned regressions and source-review blockers still require closure. The already-published prerequisite corrections remain in the bottom branch; their remote outcomes are reported honestly. Aggregate CI failures are not represented as passing checks, and PRs remain drafts where baseline failures prevent full readiness.
+
 - Archetype: satisfy-spec, C4 API/auth and C3 dashboard integration.
 - Trigger: owner requested both audio capabilities, inherited subagent verification and a published dependent PR stack.
 - Goal: three independently reviewable ordinary PRs with protocol tests, documentation and usable client controls.

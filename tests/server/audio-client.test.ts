@@ -3,6 +3,7 @@ import { resolveAudioClient, type AudioClient } from "../../src/server/audio-cli
 import type { OcxConfig } from "../../src/types";
 
 const KEY = "ocx_data_audio_client_fixture";
+const ROTATED_KEY = "ocx_data_rotated_fixture";
 const originalToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const config = { providers: {}, defaultProvider: "none", apiKeys: [{ id: "one", name: "one", key: KEY, createdAt: "2026-09-12T00:00:00Z" }] } as OcxConfig;
 beforeEach(() => { delete process.env.OPENCODEX_API_AUTH_TOKEN; });
@@ -53,9 +54,9 @@ describe("audio-only WebSocket admission", () => {
     expect((resolveAudioClient(request({ authorization: "Bearer custom-revoked-key" }), config) as Response).status).toBe(401);
   });
   test("pending rotation key keeps configured call ownership", () => {
-    const rotated = { ...config, apiKeys: [{ ...config.apiKeys![0]!, pendingRotation: { id: "rotation", key: "ocx_data_rotated_fixture", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } }] };
+    const rotated = { ...config, apiKeys: [{ ...config.apiKeys![0]!, pendingRotation: { id: "rotation", key: ROTATED_KEY, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } }] };
     const old = client(resolveAudioClient(request({ authorization: `Bearer ${KEY}` }), rotated));
-    const next = client(resolveAudioClient(request({ authorization: "Bearer ocx_data_rotated_fixture" }), rotated));
+    const next = client(resolveAudioClient(request({ authorization: `Bearer ${ROTATED_KEY}` }), rotated));
     expect(next.owner).toBe(old.owner);
   });
   test("known native platform bearer retains legacy handling without guessing by prefix", () => {
