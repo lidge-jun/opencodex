@@ -138,7 +138,11 @@ For a custom usage interval, the server must confirm the exact requested start a
 If an older running proxy does not support those bounds, the dashboard and CLI reject its report;
 upgrade and restart that proxy before retrying. Resetting a manual model price affects only that
 model, preserving other rates saved independently.
-They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
+The **Usage** Models and Providers tables show the estimated priced portion for each row; any
+requests without a matching price or usable usage are counted as excluded beside that amount.
+A row with only excluded requests shows an em dash rather than a zero-dollar estimate; a displayed
+zero-dollar value is therefore a confirmed priced estimate.
+These are not billing receipts or evidence of an actual charge; subscription usage or provider credits
 may apply instead.
 
 Provider model rows may include **unresolved requested model usage**: the saved route sent the
