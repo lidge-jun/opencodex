@@ -304,6 +304,10 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
 
 ## Remote Hub locale and release gate
 
+The Remote Hub guide describes the
+[status credential binding](../runtime.md#remote-hub-status-credential-binding)
+and its matching-cache or `unavailable` result.
+
 The Remote Hub guide and affected CLI, server-config, management-API, and dashboard references have eight sources: root English plus `fr`, `ko`, `zh-cn`, `zh-tw`, `ru`, `ja`, and `tr`. English is canonical; commands, defaults, endpoint auth, and warnings remain exact in translations. A release requires the remote-only focused/full gates, privacy scan, GUI/docs builds, protocol compatibility receipts, and the MAINTAINERS security review for the exact head.
 
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the

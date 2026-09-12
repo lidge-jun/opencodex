@@ -92,6 +92,10 @@ local login state, and `ocx config show` on a client prints a `_remoteHub` note 
 credentials and model availability live on the hub. The hub read uses the per-client data key
 only; no admin token and no provider secret ever reaches a client.
 
+`ocx status` makes a live hub-state request only when the saved connection still matches the
+status snapshot and the data-token file matches that connection. If either check fails, it skips
+the request and shows matching cached hub state, or `unavailable` if no matching cache exists.
+
 ## Linux systemd or macOS launchd
 
 Bind the data listener to the hub's Tailscale address, enable the loopback companion so the hub's

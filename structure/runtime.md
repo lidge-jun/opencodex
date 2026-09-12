@@ -210,6 +210,14 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.
 
+### Remote Hub status credential binding
+
+`src/cli/status.ts` rereads the persisted client connection and `service-api-token` state before
+requesting hub state. It passes a usable token only when the current connection matches the
+status snapshot's `serverUrl`, `apiKeyId`, and `connectedAt`, and the token fingerprint matches
+the current connection's `tokenFingerprint`. Otherwise it skips the live request and uses the
+snapshot owner's matching cached hub state, or reports `unavailable`.
+
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 

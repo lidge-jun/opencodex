@@ -27,6 +27,7 @@ import {
   type CliRemoteHubStatus,
 } from "../../src/cli/status";
 import type { HubStateDTO } from "../../src/remote/hub-state";
+import { writeCachedHubState } from "../../src/client/hub-state";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
@@ -88,6 +89,27 @@ function jsonFetch(body: unknown): typeof fetch {
   })) as unknown as typeof fetch;
 }
 
+function observedHubFetch() {
+  const requests: { url: string; token: string | null }[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({
+      url: String(input),
+      token: new Headers(init?.headers).get("x-opencodex-api-key"),
+    });
+    return Response.json(hubState());
+  }) as typeof fetch;
+  return { requests, fetchImpl };
+}
+
+function connectionSnapshot() {
+  return {
+    state: "connected" as const,
+    serverUrl: "https://hub.example.test:8443",
+    apiKeyId: "status-hub-state",
+    connectedAt: "2026-09-06T00:00:00.000Z",
+  };
+}
+
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ocx-status-hub-"));
   process.env.OPENCODEX_HOME = testHome;
@@ -103,16 +125,88 @@ afterEach(() => {
 describe("collectRemoteHubStatus", () => {
   test("a connected client with a live hub reports the hub's facts", async () => {
     writeConnectedHome(testHome, "https://hub.example.test:8443");
+    const probe = observedHubFetch();
     const remoteHub = await collectRemoteHubStatus(
       { state: "connected", serverUrl: "https://hub.example.test:8443", apiKeyId: "status-hub-state", connectedAt: "2026-09-06T00:00:00.000Z" },
-      { fetchImpl: jsonFetch(hubState()) },
+      { fetchImpl: probe.fetchImpl },
     );
+    expect(probe.requests).toEqual([{
+      url: "https://hub.example.test:8443/v1/hub-state",
+      token: FIXTURE_TOKEN,
+    }]);
     expect(remoteHub.connected).toBe(true);
     expect(remoteHub.stateSource).toBe("hub");
     expect(remoteHub.hubVersion).toBe("2.51.0");
     expect(remoteHub.oauth).toEqual([{ provider: "xai", loggedIn: true }, { provider: "anthropic", loggedIn: false }]);
     expect(remoteHub.subagentModels).toEqual(["xai/grok-4.6", "gpt-5.6-sol"]);
     expect(remoteHub.claudeCodeEnabled).toBe(true);
+  });
+
+  test.each([
+    ["origin", { serverUrl: "https://other-hub.example.test" }],
+    ["key", { apiKeyId: "another-client-key" }],
+    ["enrollment", { connectedAt: "2026-09-07T00:00:00.000Z" }],
+  ])("a changed %s never sends a credential for the old snapshot", async (_label, changed) => {
+    const snapshot = connectionSnapshot();
+    const config = connectedConfig(snapshot.serverUrl);
+    Object.assign(config.client, changed);
+    writeFileSync(join(testHome, "config.json"), JSON.stringify(config));
+    writeFileSync(join(testHome, "service-api-token"), FIXTURE_TOKEN, { mode: 0o600 });
+    const probe = observedHubFetch();
+
+    const remoteHub = await collectRemoteHubStatus(snapshot, { fetchImpl: probe.fetchImpl });
+
+    expect(probe.requests).toEqual([]);
+    expect(remoteHub.stateSource).toBe("unavailable");
+    expect(remoteHub.providers).toEqual([]);
+  });
+
+  test("a persistent token fingerprint mismatch never sends the changed token", async () => {
+    const snapshot = connectionSnapshot();
+    writeConnectedHome(testHome, snapshot.serverUrl);
+    writeFileSync(join(testHome, "service-api-token"), "unowned-status-token", { mode: 0o600 });
+    const probe = observedHubFetch();
+
+    const remoteHub = await collectRemoteHubStatus(snapshot, { fetchImpl: probe.fetchImpl });
+
+    expect(probe.requests).toEqual([]);
+    expect(remoteHub.stateSource).toBe("unavailable");
+    expect(remoteHub.reason).toContain("data-plane token");
+  });
+
+  test("a token rotation during the asynchronous boundary cannot reach the old hub", async () => {
+    const snapshot = connectionSnapshot();
+    writeConnectedHome(testHome, snapshot.serverUrl);
+    const probe = observedHubFetch();
+    const pending = collectRemoteHubStatus(snapshot, { fetchImpl: probe.fetchImpl });
+    // The collector has yielded before reading credentials. Rotate the actual files before
+    // its continuation runs, including a fingerprint that legitimately owns the NEW token.
+    const config = connectedConfig("https://other-hub.example.test");
+    const rotatedToken = "rotated-status-token";
+    config.client.apiKeyId = "rotated-client-key";
+    config.client.tokenFingerprint = createHash("sha256").update(rotatedToken).digest("hex");
+    writeFileSync(join(testHome, "config.json"), JSON.stringify(config));
+    writeFileSync(join(testHome, "service-api-token"), rotatedToken, { mode: 0o600 });
+
+    const remoteHub = await pending;
+
+    expect(probe.requests).toEqual([]);
+    expect(remoteHub.stateSource).toBe("unavailable");
+  });
+
+  test.each([true, false])("a mismatched connection uses only the snapshot's cache (matching=%s)", async matching => {
+    const snapshot = connectionSnapshot();
+    const current = connectedConfig("https://other-hub.example.test");
+    writeFileSync(join(testHome, "config.json"), JSON.stringify(current));
+    writeFileSync(join(testHome, "service-api-token"), FIXTURE_TOKEN, { mode: 0o600 });
+    expect(writeCachedHubState(matching ? snapshot : current.client, hubState(), "2026-09-06T00:00:00.000Z")).toBe(true);
+    const probe = observedHubFetch();
+
+    const remoteHub = await collectRemoteHubStatus(snapshot, { fetchImpl: probe.fetchImpl });
+
+    expect(probe.requests).toEqual([]);
+    expect(remoteHub.stateSource).toBe(matching ? "cache" : "unavailable");
+    expect(remoteHub.providers).toEqual(matching ? hubState().providers : []);
   });
 
   test("a client whose token file is missing is unavailable, not locally sourced", async () => {

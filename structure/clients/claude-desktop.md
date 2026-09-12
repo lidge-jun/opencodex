@@ -66,6 +66,9 @@ or profile-upload API. Thinking replay and prompt caching remain separate in #37
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
+Connected `ocx status` diagnostics follow the shared
+[status credential binding](../runtime.md#remote-hub-status-credential-binding).
+
 ## Claude Desktop config-library resolution
 
 The Desktop profile writer and the management status probe share

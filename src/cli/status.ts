@@ -18,6 +18,7 @@ import { effectiveLoopbackListenerPort } from "../codex/loopback-target";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import { claudeDesktopPolicyHealth, probeClaudeDesktopPolicy, type ClaudeDesktopPolicyHealth } from "../claude/desktop-policy";
 import { collectClientConnectionStatus, type ClientConnectionStatus } from "./connect";
+import { readClientConnectionState, sameClientConnectionOwner } from "../client/state";
 import type { HubStateOAuthEntry, HubStateProvider } from "../remote/hub-state";
 import type { HubStateSource } from "../client/hub-state";
 import { readServiceApiTokenState, serviceApiTokenFilePath } from "../lib/service-secrets";
@@ -340,14 +341,24 @@ export async function collectRemoteHubStatus(
     return disconnectedRemoteHubStatus();
   }
   const { resolveHubState } = await import("../client/hub-state");
+  const current = readClientConnectionState();
   const token = readServiceApiTokenState();
+  const owner = {
+    serverUrl: connection.serverUrl,
+    apiKeyId: connection.apiKeyId,
+    connectedAt: connection.connectedAt,
+  };
+  // A reconnect or rotation may have replaced the files since the status snapshot.
+  // A matching cache owner alone does not authorize sending the current token.
+  const boundToken = current.kind === "connected"
+    && sameClientConnectionOwner(current.value, owner)
+    && token.kind === "present"
+    && token.fingerprint === current.value.tokenFingerprint
+    ? token.token
+    : null;
   const resolved = await resolveHubState({
-    owner: {
-      serverUrl: connection.serverUrl,
-      apiKeyId: connection.apiKeyId,
-      connectedAt: connection.connectedAt,
-    },
-    token: token.kind === "present" ? token.token : null,
+    owner,
+    token: boundToken,
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
