@@ -169,6 +169,9 @@ The server exposes `POST /api/stop` which restores native Codex config, stops an
 Adapter output must stay in internal `AdapterEvent` form until `bridge.ts` converts it back to
 Responses SSE or WebSocket frames.
 
+The image/video loop bounds each hidden iteration before replay or fulfillment; see
+[media iteration retention](transports/inventory.md#media-iteration-retention).
+
 Live model discovery is bounded and registry-driven through `src/providers/model-discovery.ts`.
 Custom providers keep the conventional `${baseUrl}/models` request; canonical presets may select a
 trusted URL/path/query and declarative eligibility filter without persisting that policy into user
