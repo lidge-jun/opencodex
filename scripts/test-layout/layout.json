@@ -11,7 +11,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline|command|commandcode|context|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -109,6 +109,7 @@
     "clients": {
       "match": [
         "^aside-profile(?!s-routes)",
+        "^cline-(?:client|writer)\\.test\\.ts$",
         "^(?:desktop|omp|pi|prime|remote|sync)-"
       ]
     },
@@ -216,6 +217,7 @@
     "antigravity-baseurl-override.test.ts": "adapters/google",
     "antigravity-static-catalog.test.ts": "adapters/google",
     "api-access-endpoints.test.ts": "server",
+    "audio-transcriptions.test.ts": "server",
     "api-catalog-route.test.ts": "server",
     "api-codex-log-guard-compact.test.ts": "server",
     "api-codex-log-guard-protection.test.ts": "server",

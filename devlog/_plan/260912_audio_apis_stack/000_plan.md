@@ -38,4 +38,4 @@ Configuration alone cannot create the missing audio endpoints. Reuse the existin
 
 ## Progress
 
-wp0: planning in progress. Production code unchanged.
+wp0: roadmap locked after independent PASS and resolved design reflection. Documentation checkpoint 5e4ade8432; staged whitespace check passed. Production code unchanged. Next cycle executes 010_transcription.md; protocol and auth decisions remain the dependency foundation.

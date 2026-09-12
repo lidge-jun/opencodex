@@ -5,6 +5,7 @@ import {
   hasCallerCodexBearer,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  releaseCodexAuthContextProbeLease,
   type CodexAccountSelectionAdmission,
   type CodexAuthContext,
   type CodexAuthPolicyConfig,
@@ -152,11 +153,18 @@ export async function resolveFirstUsableOpenAiSidecar(
         admission: options.admission,
         beginCodexAccountSelection: options.beginCodexAccountSelection,
       });
-      const selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, exactAccount.modelId, options.admission);
+      let selectedHeaders: Headers;
+      try {
+        selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, exactAccount.modelId, options.admission);
+      } catch (error) {
+        releaseCodexAuthContextProbeLease(authContext);
+        throw error;
+      }
       if ((authContext.kind !== "pool" && authContext.kind !== "main-pool")
         || !isCodexAuthContextUsable(authContext, config)) {
         // Exact selection is fail-closed. A generation/runtime-state race must not fall through
         // to the caller-bearer error or let a later candidate select another account.
+        releaseCodexAuthContextProbeLease(authContext);
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
       return {
@@ -195,8 +203,17 @@ export async function resolveFirstUsableOpenAiSidecar(
       admission: options.admission,
       beginCodexAccountSelection: options.beginCodexAccountSelection,
     });
-    const selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, undefined, options.admission);
-    if (!isCodexAuthContextUsable(authContext, config)) continue;
+    let selectedHeaders: Headers;
+    try {
+      selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, undefined, options.admission);
+    } catch (error) {
+      releaseCodexAuthContextProbeLease(authContext);
+      throw error;
+    }
+    if (!isCodexAuthContextUsable(authContext, config)) {
+      releaseCodexAuthContextProbeLease(authContext);
+      continue;
+    }
     return {
       ...candidate,
       authContext,

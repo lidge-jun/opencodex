@@ -1,5 +1,22 @@
 # Inbound Compatibility Surfaces
 
+## Standalone file transcription
+
+`src/server/audio-transcriptions.ts` owns `POST /v1/audio/transcriptions`, independently of
+Responses and Chat conversion. `src/server/audio-upstream.ts` resolves explicit data-plane keys
+on both listeners and substitutes stored OpenAI credentials. Direct stored-main access claims
+the enclosing admission lease; Pool uses the existing sidecar account resolver. A selected
+ChatGPT authentication failure never falls through to the paid OpenAI provider.
+
+The bounded multipart input accepts one nonempty file up to 25,000,000 bytes within a 32 MiB
+body, required model, and optional prompt, language and JSON/text response format. Unknown or
+duplicate fields fail. Subscription requests use the compatibility identifier gpt-4o-transcribe
+and send no model upstream; the keyed API also accepts gpt-4o-mini-transcribe and whisper-1.
+Responses retain only text. Manual redirects, capped response reads and linked cancellation
+keep credentials and audio content out of redirects, request logs and durable storage.
+`tests/server/audio-transcriptions.test.ts` exercises the real ingress and synthetic upstream;
+`tests/server/api-key-attribution.test.ts` uses multipart fixtures for the HTTP auth matrix.
+
 ## Chat Completions inbound native path
 
 `POST /v1/chat/completions` sends eligible `openai-chat` routes directly to the provider's Chat

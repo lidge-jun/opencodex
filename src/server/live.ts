@@ -423,14 +423,20 @@ export async function readBodyCapped(
   stream: ReadableStream<Uint8Array> | null,
   maxBytes: number,
   tooLargeMessage: (total: number) => string,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer | Response> {
   if (!stream) return new ArrayBuffer(0);
   const reader = stream.getReader();
+  const abortRead = () => { void reader.cancel(signal?.reason).catch(() => {}); };
+  signal?.addEventListener("abort", abortRead, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
+    if (signal?.aborted) abortRead();
+    signal?.throwIfAborted();
     for (;;) {
       const { done, value } = await reader.read();
+      signal?.throwIfAborted();
       if (done) break;
       if (!value || value.byteLength === 0) continue;
       total += value.byteLength;
@@ -449,6 +455,7 @@ export async function readBodyCapped(
     await reader.cancel(err).catch(() => {});
     throw err;
   } finally {
+    signal?.removeEventListener("abort", abortRead);
     try {
       // Always release: `reader.cancel()` does NOT drop the lock, and holding it would leave
       // the stream permanently locked for any later consumer (audit R-WP5-2).

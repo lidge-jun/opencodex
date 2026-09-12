@@ -51,6 +51,7 @@
   "antigravity-baseurl-override.test.ts": "adapters/google",
   "antigravity-static-catalog.test.ts": "adapters/google",
   "api-access-endpoints.test.ts": "server",
+  "audio-transcriptions.test.ts": "server",
   "api-catalog-route.test.ts": "server",
   "api-codex-log-guard-compact.test.ts": "server",
   "api-codex-log-guard-protection.test.ts": "server",

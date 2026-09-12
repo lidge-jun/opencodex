@@ -204,6 +204,8 @@ import {
 } from "../codex/native-profile-startup";
 import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
+import { handleAudioTranscriptions } from "./audio-transcriptions";
+import { resolveAudioAdmission, TRANSCRIPTION_MODEL } from "./audio-upstream";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
@@ -844,6 +846,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     if (path === "/v1/responses/compact") return req.method === "POST";
     if (path === "/v1/messages" || path === "/v1/chat/completions") return req.method === "POST";
     if (path === "/v1/messages/count_tokens") return req.method === "POST";
+    if (path === "/v1/audio/transcriptions") return req.method === "POST";
     if (path === "/v1/alpha/search") return req.method === "POST";
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
@@ -2109,6 +2112,24 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           req,
           policy,
         ));
+      }
+
+      if (url.pathname === "/v1/audio/transcriptions" && req.method === "POST") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const admission = resolveAudioAdmission(req.headers, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin audio request blocked"), req, policy);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = { model: TRANSCRIPTION_MODEL, provider: "unknown", ...admissionFields(admission) };
+        return runAdmittedHttpTurn(req, policy, async lease => {
+          const response = await handleAudioTranscriptions(req, config, logCtx, admission, lease);
+          addFinalRequestLog(requestId, start, logCtx, response.status);
+          return withCors(response, req, policy);
+        });
       }
 
       // ChatGPT / Codex App voice (GPT‑Live / Frameless Bidi) + OpenAI Realtime call-create.

@@ -33,8 +33,44 @@ Credential-bearing model, image, video, and search requests do not automatically
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic token count | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | Not applicable |
 | Model discovery | `GET /v1/models` | Catalog or explicit Desktop snapshot | Not applicable |
+| File transcription | `POST /v1/audio/transcriptions` | `{ "text": string }` or plain text | Not supported on this file endpoint |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
+
+## File transcription
+
+`POST /v1/audio/transcriptions` accepts an OpenCodex data-plane key in
+`Authorization: Bearer`, `x-opencodex-api-key`, or `x-api-key`, including on a local
+listener. An explicitly supplied invalid key is rejected. Upload one audio file
+as multipart `file` and provide `model=gpt-4o-transcribe` for a connected ChatGPT
+account. OpenCodex resolves the upstream credential; never supply a ChatGPT token
+as the client API key.
+
+```bash
+curl "$OPENCODEX_BASE_URL/audio/transcriptions" \
+  -H "Authorization: Bearer $OPENCODEX_API_KEY" \
+  -F 'model=gpt-4o-transcribe' \
+  -F 'file=@recording.wav' \
+  -F 'language=ko'
+```
+
+Set `OPENCODEX_BASE_URL` to your proxy URL ending in `/v1`. Optional fields are
+`prompt`, `language`, and `response_format` (`json`, the default, or `text`). The
+JSON result contains `text` only. Files must be nonempty and no larger than
+25,000,000 bytes; multipart bodies are limited to 32 MiB and text fields to
+16 KiB. The configured listener body limit can impose a smaller ceiling.
+Duplicate or unsupported fields, including `stream`, are rejected. This endpoint
+does not promise timestamps, diarization, subtitles, or token-usage metadata.
+
+The ChatGPT subscription path uses `gpt-4o-transcribe` as a compatibility identifier
+and does not send a model name to the private transcription endpoint. It is not
+evidence of the backend's internal model. An enabled OpenAI API-key provider also
+supports `gpt-4o-mini-transcribe` and `whisper-1`; when a ChatGPT provider is selected,
+an authentication failure does not silently switch to that paid provider.
+Direct mode uses the stored main account under the existing profile admission
+rules; Pool mode uses the selected stored account. Missing, expired or draining
+credentials return an error. Cancellation stops the outbound request and audio
+content is not written to request history.
 
 ## `POST /v1/responses`
 

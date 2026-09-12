@@ -634,10 +634,15 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // than admission. /v1/catalog joined this set in #809.
           const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog"
             || row.endpoint === "/v1/hub-state";
+          const audio = row.endpoint === "/v1/audio/transcriptions" ? new FormData() : null;
+          if (audio) {
+            audio.append("model", "gpt-4o-transcribe");
+            audio.append("file", new File([new Uint8Array([0, 0])], "sample.wav", { type: "audio/wav" }));
+          }
           const res = await fetch(new URL(row.endpoint, server.url), {
             method: isGet ? "GET" : "POST",
-            headers: { "content-type": "application/json", ...headers },
-            ...(isGet ? {} : { body: JSON.stringify({ model: "test/gpt-test", input: "hi", messages: [{ role: "user", content: "hi" }] }) }),
+            headers: { ...(audio ? {} : { "content-type": "application/json" }), ...headers },
+            ...(isGet ? {} : { body: audio ?? JSON.stringify({ model: "test/gpt-test", input: "hi", messages: [{ role: "user", content: "hi" }] }) }),
           });
           // A 401 means the header was refused; anything else means it got past
           // admission (the upstream is disabled, so later failures are expected).

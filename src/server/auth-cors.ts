@@ -427,6 +427,7 @@ export interface ApiAuthMatrixRow {
  * against every cell rather than reading the table back to itself.
  */
 export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
+  { endpoint: "/v1/audio/transcriptions", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // #1686: a bearer that is one of OUR admission secrets is now accepted here. It is safe
   // because materializeCodexUpstreamAuth substitutes the stored main credential rather than
   // forwarding it; a bearer that is NOT our secret stays unadmitted and remains Codex Direct

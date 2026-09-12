@@ -386,6 +386,13 @@ HTTP/SSE, Responses WebSocket, compact, images, search, and vision resolve the s
 There is one mode-aware `openai` forward sidecar candidate; `openai-apikey` is not a ChatGPT-forward
 sidecar candidate and cannot hide a failed Codex credential with separately billed API usage.
 
+`src/server/audio-upstream.ts` uses the same selection for standalone transcription. Explicit
+native Direct auth remains caller-owned; proxy-key-only Direct claims stored main before
+materialization. `src/providers/openai-sidecar.ts` releases quota-probe ownership on every
+materialization or usability failure before transferring a resolved context to its caller.
+Audio reports one terminal upstream outcome after validating the response body; redirects remain
+neutral and client/shutdown cancellation does not manufacture an account failure.
+
 The dashboard presents one OpenAI Codex card with accessible Pool/Direct controls and a separate,
 unchanged API-key card. `PATCH /api/providers?name=openai` persists exactly one
 `codexAccountMode`, clears affinity/quota cache, primes only when entering Pool, and does not refresh
