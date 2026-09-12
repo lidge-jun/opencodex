@@ -1,5 +1,7 @@
 # Subagents And Multi-Agent Surface
 
+For shared JSON request-body parsing, see [request-copy accounting](transports/responses.md#request-copy-accounting).
+
 ## Multi-agent surface mode (3-state)
 
 `OcxConfig.multiAgentMode` controls the `multi_agent_version` field stamped on catalog entries:

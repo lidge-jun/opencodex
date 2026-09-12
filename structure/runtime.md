@@ -1,5 +1,7 @@
 # Runtime
 
+For shared JSON request-body parsing, see [request-copy accounting](transports/responses.md#request-copy-accounting).
+
 ## Entrypoints
 
 | Path | Responsibility |

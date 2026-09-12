@@ -1,5 +1,7 @@
 # Background Service And Sidecars
 
+For shared JSON request-body parsing, see [request-copy accounting](../transports/responses.md#request-copy-accounting).
+
 ## Background service command selection
 
 A bare `ocx service` is an idempotent install-or-repair command. Argument validation happens before

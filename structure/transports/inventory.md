@@ -1,5 +1,7 @@
 # Transport Inventory
 
+For shared JSON request-body parsing, see [request-copy accounting](responses.md#request-copy-accounting).
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport

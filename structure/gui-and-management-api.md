@@ -1,5 +1,7 @@
 # GUI And Management API
 
+For shared JSON request-body parsing, see [request-copy accounting](transports/responses.md#request-copy-accounting).
+
 ## Dashboard serving
 
 The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui`

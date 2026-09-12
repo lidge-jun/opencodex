@@ -6,6 +6,16 @@
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+### Request-copy accounting
+
+`src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
+without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
+`JSON.stringify(parsed)`: numeric normalization can make it larger than the input text. These
+observations retain the existing ownership and release lifecycle and do not consume the translator's
+hard byte cap. Admission limits, parsing, compression, and error envelopes are unchanged.
+`tests/usage/request-decompress.test.ts` covers exact accounting across codecs and Unicode/numeric
+normalization, UTF-8 counting without encoded copies, and release after malformed or optional empty input.
+
 ### Credential-bearing HTTP redirects
 
 Credential/body-bearing HTTP sends use `redirect: "manual"` at the final executor boundary,

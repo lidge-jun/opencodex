@@ -1,5 +1,7 @@
 # Adapter Registry Authority
 
+For shared JSON request-body parsing, see [request-copy accounting](../transports/responses.md#request-copy-accounting).
+
 ## Decision
 
 Runtime adapter construction has one authority: `src/adapters/registry.ts`.

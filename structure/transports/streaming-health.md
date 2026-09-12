@@ -1,5 +1,7 @@
 # Streaming Health And WebSocket
 
+For shared JSON request-body parsing, see [request-copy accounting](responses.md#request-copy-accounting).
+
 ## Heartbeat and stall deadline
 
 The HTTP/SSE bridge emits an SSE comment-line keep-alive (`: opencodex heartbeat`) during upstream

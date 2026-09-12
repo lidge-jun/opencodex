@@ -1,5 +1,7 @@
 # Inbound Compatibility Surfaces
 
+For shared JSON request-body parsing, see [request-copy accounting](../transports/responses.md#request-copy-accounting).
+
 ## Chat Completions inbound native path
 
 `POST /v1/chat/completions` sends eligible `openai-chat` routes directly to the provider's Chat

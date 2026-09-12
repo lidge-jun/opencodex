@@ -1,5 +1,7 @@
 # Claude Desktop Integration
 
+For shared JSON request-body parsing, see [request-copy accounting](../transports/responses.md#request-copy-accounting).
+
 ## Connected Claude Desktop profiles
 
 Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin

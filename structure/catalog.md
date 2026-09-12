@@ -1,5 +1,7 @@
 # Model Catalog
 
+For shared JSON request-body parsing, see [request-copy accounting](transports/responses.md#request-copy-accounting).
+
 ## Shared catalog
 
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:

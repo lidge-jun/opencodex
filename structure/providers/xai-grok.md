@@ -1,5 +1,7 @@
 # xAI Grok Provider
 
+For shared JSON request-body parsing, see [request-copy accounting](../transports/responses.md#request-copy-accounting).
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
