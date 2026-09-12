@@ -93,6 +93,13 @@ it does not add process-instance proof or change the classification cache.
 
 > Decision record: [ADR-0003](decisions/ADR-0003-lifecycle.md)
 
+Pinned-start retries in `src/update/job.ts` retain the spawned child object for cleanup.
+An observed exit retires only that object, and recorded exit or signal status prevents a PID
+liveness check or termination attempt for the retired child. A previous child's late exit cannot
+retire a newer child with the same numeric PID. Live children are still cleaned up before a retry
+and after the final health timeout; a successful health probe leaves the current child running.
+`tests/update/update-job.test.ts` exercises these transitions with injected process and port I/O.
+
 An installed Codex shim is checked on ordinary CLI startup with a regular-file/1 MiB state bound plus
 bounded metadata and prefix reads. A complete replacement must produce identical fingerprints and
 prefixes across a 100 ms observation interval; changing launchers are silently deferred, while mixed
