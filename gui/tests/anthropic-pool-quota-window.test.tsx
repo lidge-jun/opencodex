@@ -62,7 +62,7 @@ function stubPool(initial: PoolPayload): Record<string, unknown>[] {
   const puts: Record<string, unknown>[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.includes("/api/oauth/accounts/pool") && init?.method === "PUT") {
+    if (url.includes("/api/pool/settings") && init?.method === "PUT") {
       const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
       puts.push(body);
       return new Response(JSON.stringify({
@@ -71,7 +71,7 @@ function stubPool(initial: PoolPayload): Record<string, unknown>[] {
         quotaWindow: body.quotaWindow,
       }), { status: 200 });
     }
-    if (url.includes("/api/oauth/accounts/pool")) {
+    if (url.includes("/api/pool/settings")) {
       return new Response(JSON.stringify(initial), { status: 200 });
     }
     throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);

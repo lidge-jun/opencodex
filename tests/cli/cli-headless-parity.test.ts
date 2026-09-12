@@ -250,6 +250,11 @@ describe("headless GUI parity CLI", () => {
       // skipping the endpoint.
       ["/api/github/star", "(none — GUI-only)"],
       ["/api/oauth", "ocx account"],
+      // The unified pool-settings route (#695 wp5c). One path answers for every pool
+      // kind, and `ocx account strategy` / `ocx account sticky` / `ocx account auto-switch`
+      // are what drive it headlessly — they declare it in src/cli/capabilities.ts rather
+      // than the retired per-namespace paths.
+      ["/api/pool/settings", "ocx account strategy/sticky/auto-switch"],
       ["/api/accounts/events", "(none — dashboard invalidation; ocx account reads current selection)"],
       ["/api/providers/keys", "ocx account"],
       ["/api/providers", "ocx provider"],

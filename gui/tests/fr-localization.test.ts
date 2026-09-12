@@ -121,6 +121,11 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientAside",
   "integrations.tab.raycast",
   "api.clientConfig.clientRaycast",
+  "integrations.tab.omo",
+  "api.clientConfig.clientOmo",
+  // Cline product name and CLI acronym are intentionally preserved.
+  "integrations.tab.cline",
+  "api.clientConfig.clientCline",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "pws.pacingRpmUnit",
@@ -145,6 +150,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "debug.streamInjection",
   "storage.trash.col.mode",
   "modal.badge.local",
+  // The catalog tab beside the badge, and the same word in French for the same reason:
+  // a Local tab labelled anything else would not match the Local badge on its own rows.
+  "modal.tab.local",
   "modal.badge.direct",
   "pws.rail.suffixLocal",
   "pws.filterType",

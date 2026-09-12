@@ -84,7 +84,7 @@ codex -m "ollama-cloud/glm-5.2"      "Bir SQL geçişi yaz"
 ## Alt ajan modellerini seçin (isteğe bağlı)
 
 Yeni bir yapılandırma, Codex'in alt ajan seçicisinde beş yerel model sunar:
-`gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` ve `gpt-5.4-mini`. En
+`gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` ve `gpt-6-astra`. En
 fazla beş yerel veya yönlendirilmiş modeli değiştirmek veya yeniden sıralamak
 için `ocx gui`'yi açın. Kontrol paneli ayrıca tercih edilen bir alt ajan
 modelini ve akıl yürütme çabasını ayarlayabilir. v1/base/v2 seçmek ve rehberlik,

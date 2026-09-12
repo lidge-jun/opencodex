@@ -51,6 +51,34 @@ No model-level default effort is written. The proxy keeps applying its own confi
 default whenever a request carries no effort, so a default you change in opencodex stays
 in force instead of being frozen into the config.
 
+## Images and attachments
+
+opencode decides whether a model takes an image from the model entry itself, and it cannot ask
+models.dev about `opencodex` — this provider is not there. The generated blocks therefore
+carry opencode's own per-model capability fields, `attachment` and `modalities`, taken from
+the metadata the proxy reports at `GET /api/models`:
+
+```json
+"gpt-5.6-luna": {
+  "name": "gpt-5.6-luna (native)",
+  "limit": { "context": 272000, "output": 32000 },
+  "attachment": true,
+  "modalities": { "input": ["text", "image"], "output": ["text"] }
+}
+```
+
+Without those fields opencode assumes the model is text-only and refuses the paste on the
+client side, so the image never reaches the proxy. That applies to text-only models too: when
+the catalog reports image input for a model the vision sidecar covers, opencode lets the
+attachment through so the sidecar can describe it before the upstream call.
+
+What is written comes from the row's declared input modalities in `GET /api/models`. For a
+discovered model the catalog adds `image` itself for the sidecar case; a custom row is written
+from the modalities stored on it, so a custom entry that declares text only stays text-only
+even when the sidecar would cover it. A row that declares none — an undeclared custom model,
+for example — keeps the plain entry (`name`, plus `limit` when its context window is known),
+and opencode treats it as text-only.
+
 ## Your own config is never modified
 
 The launcher does not copy or rewrite `~/.config/opencode/opencode.json`,

@@ -7,7 +7,7 @@
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/021 §5-6.
  */
-import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import type { ConfigFormat } from "../clients/config-export";
 import { MAX_JSON_NESTING } from "./serialize";
 import { atomicWriteFile } from "../config";
@@ -200,6 +200,8 @@ export interface IntegrationIO {
   readText: (path: string) => ReadResult;
   /** `failed` is distinct from `missing` for the same reason. */
   statKind: (path: string) => StatKind;
+  /** Optional no-follow probe for paired-file clients. */
+  lstatKind?: (path: string) => StatKind;
   writeText: (path: string, text: string) => void;
   removeFile: (path: string) => void;
   mkdirp: (path: string) => void;
@@ -208,6 +210,16 @@ export interface IntegrationIO {
   appendJournal: (entry: JournalEntry) => void;
   putRecord: (record: OwnershipRecord) => void;
   dropRecord: (clientId: IntegrationClientId) => void;
+  beginTransaction?: (transaction: IntegrationTransaction) => void;
+  finishTransaction?: () => void;
+}
+
+export interface IntegrationTransaction {
+  entry: JournalEntry;
+  before: string | null;
+  nextText: string | null;
+  record: OwnershipRecord | null;
+  priorRecord: OwnershipRecord | null;
 }
 
 export type TargetState =
@@ -240,6 +252,14 @@ export function loadTarget(io: IntegrationIO, configPath: string): TargetState {
  */
 export function fileIO(): Omit<IntegrationIO, "appendJournal" | "putRecord" | "dropRecord"> {
   return {
+    lstatKind: path => {
+      try {
+        const stats = lstatSync(path);
+        return stats.isFile() ? "file" : stats.isDirectory() ? "dir" : "other";
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "failed";
+      }
+    },
     readText: path => {
       try {
         return { kind: "text", text: readFileSync(path, "utf8") };
@@ -334,4 +354,3 @@ export function assertIntegrationWriteOwnership(
     + "of sharing the mount.",
   );
 }
-

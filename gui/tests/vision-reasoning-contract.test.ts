@@ -12,15 +12,15 @@ import {
 test("vision reasoning uses advertised model ladders and clamps unsupported persisted values", () => {
   const models: ModelInfo[] = [
     { id: "gpt-5.6-luna", provider: "openai", namespaced: "gpt-5.6-luna", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-    { id: "gpt-5.4-mini", provider: "openai", namespaced: "gpt-5.4-mini", reasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    { id: "gpt-5.5", provider: "openai", namespaced: "gpt-5.5", reasoningEfforts: ["low", "medium", "high", "xhigh"] },
   ];
 
   expect(visionReasoningLadder(models, "gpt-5.6-luna")).toEqual(VISION_REASONING_LEVELS);
-  const mini = visionReasoningLadder(models, "gpt-5.4-mini");
-  expect(mini).toEqual(["low", "medium", "high", "xhigh"]);
-  expect(clampVisionReasoningToLadder(mini, "max")).toBe("xhigh");
-  expect(clampVisionReasoningToLadder(mini, "high")).toBe("high");
-  expect(visionReasoningOptionsFor(mini, "max")).toEqual(mini);
+  const shorter = visionReasoningLadder(models, "gpt-5.5");
+  expect(shorter).toEqual(["low", "medium", "high", "xhigh"]);
+  expect(clampVisionReasoningToLadder(shorter, "max")).toBe("xhigh");
+  expect(clampVisionReasoningToLadder(shorter, "high")).toBe("high");
+  expect(visionReasoningOptionsFor(shorter, "max")).toEqual(shorter);
 });
 
 test("vision reasoning clamp matches the server for non-prefix ladders", () => {

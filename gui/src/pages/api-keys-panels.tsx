@@ -319,7 +319,7 @@ export function ApiKeysUsagePanel({
   -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-5.4",
+    "model": "gpt-5.6-luna",
     "messages": [{"role": "user", "content": ${sampleInput}}]
   }'`;
 
@@ -327,7 +327,7 @@ export function ApiKeysUsagePanel({
   -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-5.4",
+    "model": "gpt-5.6-luna",
     "input": ${sampleInput}
   }'`;
 

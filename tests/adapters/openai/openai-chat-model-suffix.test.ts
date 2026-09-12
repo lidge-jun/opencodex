@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter, stripBracketedModelSuffix } from "../../../src/adapters/openai-chat";
+import { createResponsesPassthroughAdapter } from "../../../src/adapters/openai-responses";
+import { parseRequest } from "../../../src/responses/parser";
+import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
 import { routeModel } from "../../../src/router";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -113,9 +116,25 @@ describe("openai-chat adapter wire model normalization", () => {
     expect(wireModel(req)).toBe("glm-5.2[1m]");
   });
 
-  test("a routed zai config strips glm-5.2[1m]", async () => {
-    const req = createOpenAIChatAdapter(routedZaiProvider()).buildRequest(parsed("glm-5.2[1m]"));
+  test("a routed zai config opted back into Chat strips glm-5.2[1m]", async () => {
+    // zai defaults to Responses now, so this is the modelAdapters opt-in path: the override
+    // swaps the adapter and the row's chatCompletionsPath carries the request to the Chat
+    // prefix. The bracket strip has to survive that swap.
+    const req = createOpenAIChatAdapter({ ...routedZaiProvider(), adapter: "openai-chat" })
+      .buildRequest(parsed("glm-5.2[1m]"));
     expect(wireModel(req)).toBe("glm-5.2");
+  });
+
+  test("the Responses wire strips the alias too, on the passthrough body", async () => {
+    // The Responses adapter forwards the raw body instead of rebuilding it from the parsed
+    // selector, and the router writes the routed id into that raw body. Stripping only the
+    // parsed selector would send `glm-5.2[1m]` upstream, which Z.AI answers with a 400.
+    const provider = routedZaiProvider();
+    expect(provider.adapter).toBe("openai-responses");
+    const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter(provider));
+    const req = await adapter.buildRequest(parseRequest({ model: "glm-5.2[1m]", input: "hi" }));
+    expect((JSON.parse(req.body as string) as { model?: unknown }).model).toBe("glm-5.2");
+    expect(req.url).toBe("https://api.z.ai/api/v1/responses");
   });
 });
 

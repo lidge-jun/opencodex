@@ -15,6 +15,10 @@ import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetry
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
+// quota-key-accounts imports only node:crypto, the key store and the quota types -- NOT
+// providers/quota.ts -- so the cached reader reaches the dispatch path without dragging the
+// probe machinery onto it.
+import { cachedApiKeyQuota } from "./quota-key-accounts";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
 
@@ -98,6 +102,177 @@ function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()):
 export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
   if (provider.authMode === "oauth" || provider.authMode === "forward") return false;
   return (provider.apiKeyPool?.length ?? 0) >= 2;
+}
+
+/**
+ * Process-local round-robin cursor per provider, deliberately parallel to `keyCooldowns`
+ * rather than borrowing the Codex pool-rotation state: an API key is not an OAuth account
+ * and must not share a quota scope key. Multi-process desync is the same accepted limit
+ * the cooldown map already carries.
+ */
+const keyRotationCursor = new Map<string, string>();
+
+/**
+ * Forget a provider's cursor so an operator's manual key selection is not second-guessed.
+ *
+ * Optional name, mirroring `clearKeyCooldowns`, because the batch provider PUT rewrites the
+ * entire roster: a cursor that survives a reorder still names a real id, so round-robin
+ * resumes after the pre-edit position and can skip the first eligible key in the new pool.
+ */
+export function forgetApiKeyRotationCursor(providerName?: string): void {
+  if (!providerName) {
+    keyRotationCursor.clear();
+    return;
+  }
+  keyRotationCursor.delete(providerName);
+}
+
+/** The pool entry shape is inline on OcxProviderConfig; name it once rather than re-spelling it. */
+type ApiKeyPoolEntry = NonNullable<OcxProviderConfig["apiKeyPool"]>[number];
+
+/**
+ * Remaining headroom for one key, or null when nothing current measures it.
+ *
+ * Same definition as `headroomOf` on the OAuth side, so the two pools cannot disagree about
+ * what "more room" means. `creditsUsd` is deliberately excluded: it is a currency amount, not
+ * a percentage, and ranking one against the other produces an order that means nothing.
+ */
+function keyHeadroom(providerName: string, provider: OcxProviderConfig, entry: ApiKeyPoolEntry): number | null {
+  const quota = cachedApiKeyQuota(providerName, provider, entry.id, entry.key);
+  if (!quota) return null;
+  const percents = [
+    quota.fiveHourPercent,
+    quota.weeklyPercent,
+    quota.monthlyPercent,
+    ...(quota.customWindows ?? []).map((window: { percent?: number }) => window.percent),
+  ].filter((value): value is number => typeof value === "number");
+  if (percents.length === 0) return null;
+  return 100 - Math.max(...percents);
+}
+
+/**
+ * Order eligible keys best-first, in the same three buckets `rankAccountsByHeadroom` uses:
+ * measured-with-headroom, then unmeasured, then measured-and-spent. Ties keep the roster order.
+ *
+ * An unmeasured key is NOT assumed spent, and not assumed fresh either -- it sits between the
+ * two, which is the only honest position for a key nothing has looked at. A provider that
+ * publishes no per-key differentiation (DeepSeek reports every key at the same percent) ties
+ * across the board and falls through to the roster order, which is exactly today's behaviour.
+ */
+function rankKeysByHeadroom(
+  providerName: string,
+  provider: OcxProviderConfig,
+  eligible: readonly ApiKeyPoolEntry[],
+): ApiKeyPoolEntry[] {
+  return eligible
+    .map((entry, index) => {
+      const headroom = keyHeadroom(providerName, provider, entry);
+      const bucket = headroom === null ? 1 : headroom <= 0 ? 2 : 0;
+      return { entry, bucket, headroom: headroom ?? 0, index };
+    })
+    .sort((left, right) => (left.bucket - right.bucket)
+      || (right.headroom - left.headroom)
+      || (left.index - right.index))
+    .map(row => row.entry);
+}
+
+
+/**
+ * Pick a better key BEFORE the first attempt when the committed one is already cooling.
+ *
+ * This is intentionally narrow. It never overrides a healthy key: if the committed
+ * `apiKey` is not in cooldown it returns null, so an operator's manual selection stands
+ * and no config write happens. It only acts when the committed key is known-cooled (or
+ * missing from the pool), which is exactly the case where the first request would
+ * otherwise be spent earning a 429 the runtime could already predict.
+ *
+ * Returning null is the common path, so the persisted-selection transaction is not on
+ * the per-request hot path.
+ *
+ * Like `rotateKeyAfterFailure`, the returned object is a snapshot of the PERSISTED config
+ * and carries none of the registry backfills `routedProviderConfig` merges in at request
+ * time. A request path must not assign it to an active route wholesale -- for a built-in
+ * provider stored in its valid minimal form that would drop the adapter id, the base URL and
+ * the static headers, so `resolveAdapter()` throws `Unknown adapter: undefined` and a
+ * hand-built URL dereferences a missing `baseUrl`. Use
+ * `selectProactiveApiKeyTransport`, the pre-dispatch twin of `rotateProviderTransportOn429`.
+ */
+export function selectProactiveApiKey(
+  config: OcxConfig,
+  providerName: string,
+  now = Date.now(),
+): OcxProviderConfig | null {
+  const provider = config.providers?.[providerName];
+  if (!provider) return null;
+  const strategy = provider.apiKeyPoolStrategy;
+  if (!strategy) return null;
+  if (!hasKeyPoolFailover(provider)) return null;
+  const pool = provider.apiKeyPool ?? [];
+
+  const activeEntry = pool.find(entry => entry.key === provider.apiKey);
+  // A healthy committed key wins, whether the operator chose it or a previous rotation did.
+  if (activeEntry && !isKeyInCooldown(providerName, activeEntry.id, now)) return null;
+
+  const eligible = pool.filter(entry => !isKeyInCooldown(providerName, entry.id, now));
+  if (eligible.length === 0) return null;
+
+  let chosen = eligible[0]!;
+  if (strategy === "round-robin") {
+    const lastId = keyRotationCursor.get(providerName);
+    const lastIndex = lastId ? pool.findIndex(entry => entry.id === lastId) : -1;
+    for (let offset = 1; offset <= pool.length; offset += 1) {
+      const candidate = pool[(lastIndex + offset) % pool.length]!;
+      if (isKeyInCooldown(providerName, candidate.id, now)) continue;
+      chosen = candidate;
+      break;
+    }
+  } else if (strategy === "quota") {
+    // else-if, deliberately. `fill-first` is not a named branch here -- it is the eligible[0]
+    // default above, so replacing that default would silently retarget it.
+    chosen = rankKeysByHeadroom(providerName, provider, eligible)[0] ?? chosen;
+  }
+  if (chosen.key === provider.apiKey) return null;
+
+  const outcome = commitProviderApiKeySelection<string | null>(config, providerName, freshProvider => {
+    const freshPool = freshProvider.apiKeyPool ?? [];
+    const target = freshPool.find(entry => entry.id === chosen.id);
+    if (!target) return { changed: false, value: null };
+    if (freshProvider.apiKey === target.key) return { changed: false, value: null };
+    const freshActive = freshPool.find(entry => entry.key === freshProvider.apiKey);
+    // Re-check under the lock: a concurrent manual selection may have landed a healthy key.
+    if (freshActive && !isKeyInCooldown(providerName, freshActive.id, now)) {
+      return { changed: false, value: null };
+    }
+    freshProvider.apiKey = target.key;
+    return { changed: true, value: target.id };
+  });
+  if (outcome.status !== "committed" || outcome.value === null) return null;
+
+  keyRotationCursor.set(providerName, outcome.value);
+  const committed = structuredClone(outcome.provider);
+  config.providers[providerName] = committed;
+  return structuredClone(committed);
+}
+
+/**
+ * Pre-dispatch twin of `rotateProviderTransportOn429`: pick a warm key, then rebuild the
+ * active route from the committed row through the same seam the 429 path uses, so the
+ * registry backfills survive and only explicit runtime transport state (`fetch` and a
+ * generated OpenCode session header) is carried over from the route being replaced.
+ *
+ * Every request path that assigns the result to a live route must call THIS, not
+ * `selectProactiveApiKey`, which answers with a persisted snapshot.
+ */
+export function selectProactiveApiKeyTransport(
+  config: OcxConfig,
+  providerName: string,
+  routedProvider: OcxProviderTransport,
+  promptCacheKey?: string,
+  now = Date.now(),
+): OcxProviderTransport | null {
+  const committed = selectProactiveApiKey(config, providerName, now);
+  if (!committed) return null;
+  return applyRotatedTransport(providerName, routedProvider, committed, promptCacheKey);
 }
 
 /**

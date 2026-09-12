@@ -38,6 +38,13 @@ export interface OpencodeCatalogModel {
   id?: string;
   contextWindow?: number;
   displayName?: string;
+  /**
+   * Declared input modalities, carried verbatim from `/api/models`. Serialized as opencode's
+   * per-model `attachment` + `modalities`, because opencode gates attachments CLIENT-side:
+   * without them every `opencodex` model is text-only in its picker and an image never
+   * reaches the proxy or the vision sidecar (#4286).
+   */
+  inputModalities?: readonly string[];
   /** Declared effort ladder. Exported as opencode model variants where the client reads them. */
   reasoningEfforts?: readonly string[];
   /**
@@ -94,7 +101,9 @@ export type ExportClientId =
   | "zcode"
   | "prime"
   | "aside"
-  | "raycast";
+  | "raycast"
+  | "omo"
+  | "cline";
 
 export interface ExportClientSpec {
   id: ExportClientId;

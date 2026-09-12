@@ -8,6 +8,7 @@
 
 .provider-catalog-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   border-bottom: 1px solid var(--border);
 }
@@ -26,6 +27,85 @@
 .provider-catalog-tab.active {
   color: var(--fg);
   border-bottom-color: var(--accent);
+}
+
+/* Search mode: the strip stops being a tablist and becomes jump chips with counts, so
+   it loses the selected-underline vocabulary and gains a count badge. A chip with no
+   matches is disabled rather than hidden, so the strip does not reflow under the
+   pointer on every keystroke. */
+.provider-catalog-tabs--chips {
+  border-bottom: none;
+  flex-wrap: wrap;
+}
+
+.provider-catalog-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.provider-catalog-chip:not(:disabled):hover {
+  color: var(--text);
+  border-color: var(--accent-ring);
+}
+
+.provider-catalog-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.provider-catalog-chip-count {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-label);
+  color: var(--muted);
+}
+
+/* Group heading inside the result list: a small caps label with a hairline running out
+   to the right, the way a dense list separates sections without adding another slab of
+   chrome. It scrolls with the content rather than sticking — `.modal-card` is a
+   translucent glass panel, so any opaque sticky bar shows a seam against it, and with
+   four short groups in a 360px list the chips above are the index anyway. */
+.provider-catalog-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 2px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.provider-catalog-group-head:first-child {
+  padding-top: 2px;
+}
+
+.provider-catalog-group-head::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border);
+}
+
+.provider-catalog-group-head:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 3px;
+  border-radius: var(--radius-xs);
+}
+
+/* The count is data, not a label: tabular figures, no small caps, and it sits before
+   the rule so the eye reads "FREE 1 ————" as one unit. */
+.provider-catalog-group-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-normal, 400);
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.75;
 }
 
 .provider-catalog-accounts-hint {
@@ -53,6 +133,107 @@
 
 .provider-catalog-empty {
   padding: 8px;
+}
+
+/* A preset row and its note-reveal control. The control has to be a SIBLING of the row
+   button rather than a child, because the row is itself a <button> and nesting one is
+   invalid HTML the parser is free to hoist out. The wrapper is what holds the two
+   together as one list item. */
+.provider-catalog-row-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Merge the two children into one visual row: the row button loses its bottom corners
+   and border, the reveal strip grows the matching bottom corners, and they share the
+   raised surface. Without this the control floats on the modal background between two
+   rows and reads as though it belongs to the next provider. */
+.provider-catalog-row-wrap:has(.provider-catalog-note-more) .list-row {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom: none;
+  padding-bottom: 8px;
+}
+
+/* Two-line clamp on the note. A handful of catalog notes are paragraphs — opencode-free
+   is ~1100 characters — and unclamped, one of them fills the whole 360px scroller and
+   the row it belongs to becomes the only row anyone can see. Scoped through the wrapper
+   so account rows keep their existing single-line ellipsis instead. */
+.provider-catalog-row-wrap .list-row .sub {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Qualified with `.link-btn` on purpose, and it is not redundant: this file is
+   @imported at the TOP of styles.css while `.link-btn` is declared far below it, so a
+   bare `.provider-catalog-note-more` loses background, border, padding and font-size to
+   the later equal-specificity rule and the control renders as a full-width underlined
+   link floating between two rows instead of the bottom edge of its own row. Same trap
+   already documented above for `.list-row.provider-catalog-account-row--waiting`. */
+.link-btn.provider-catalog-note-more {
+  align-self: stretch;
+  text-align: right;
+  padding: 0 13px 9px;
+  font-size: var(--text-label);
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-bottom-left-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+  background: var(--raised);
+}
+
+.link-btn.provider-catalog-note-more:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* The row and its reveal strip highlight together, because they are one row. */
+.provider-catalog-row-wrap:hover .link-btn.provider-catalog-note-more,
+.provider-catalog-row-wrap:hover .list-row {
+  background: var(--raised-hover);
+}
+
+.provider-catalog-row-wrap:hover .list-row {
+  border-color: var(--accent-ring);
+}
+
+.provider-catalog-row-wrap:hover .link-btn.provider-catalog-note-more {
+  border-color: var(--accent-ring);
+}
+
+/* The full-note popup: a native <dialog> sibling of the add-provider overlay. */
+.provider-note-card {
+  max-width: 560px;
+}
+
+.provider-note-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.provider-note-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* The note is the reason this popup exists, so it scrolls here rather than being
+   truncated a second time. */
+.provider-note-text {
+  margin: 0;
+  white-space: pre-wrap;
+  max-height: 55vh;
+  overflow-y: auto;
 }
 
 .provider-catalog-account-row .sub {

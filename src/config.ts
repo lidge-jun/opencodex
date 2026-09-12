@@ -580,6 +580,10 @@ const modelPinnedEffortsSchema = z.unknown().superRefine((value, ctx) => {
 const providerConfigSchema = z.object({
   pinnedReasoningEffort: pinnedReasoningEffortSchema.optional(),
   modelPinnedReasoningEfforts: modelPinnedEffortsSchema.optional(),
+  // Validated rather than left to passthrough: an unrecognized strategy would otherwise
+  // load silently and then be ignored at selection time, which reads as a broken feature
+  // rather than a rejected setting.
+  apiKeyPoolStrategy: z.enum(["round-robin", "fill-first", "quota"]).optional(),
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
   alias: z.string().optional(),
@@ -598,6 +602,7 @@ const providerConfigSchema = z.object({
   mcpMaxResultBytes: z.number().int().positive().optional(),
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
+  chatCompletionsPath: z.string().min(1).optional(),
   statelessResponses: z.boolean().optional(),
   requiresAdjacentResponsesToolResults: z.boolean().optional(),
   annotateEmptyToolOutputs: z.boolean().optional(),
@@ -620,6 +625,9 @@ const providerConfigSchema = z.object({
   upstreamWebsocket: z.boolean().optional(),
   directGeminiWireRenames: z.boolean().optional(),
   noStructuredOutputModels: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .optional(),
+  noJsonSchemaModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
   retainModels: z.array(z.string().min(1))
@@ -649,6 +657,7 @@ const providerConfigSchema = z.object({
   webSearchBridge: providerWebSearchBridgeSchema.optional().catch(undefined),
   xaiResponsesXSearch: z.boolean().optional(),
   xaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
+  zaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
 }).passthrough();
 
 export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
@@ -667,14 +676,18 @@ export {
   upstreamHttpVersionConfigError,
 } from "./config/provider-validation";
 
-function providerResponsesPathConfigError(responsesPath: string | undefined): string | null {
-  if (responsesPath === undefined) return null;
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(responsesPath) || responsesPath.includes("://")) {
-    return "responsesPath must be a relative path without a URL scheme";
+/**
+ * Shared shape check for the two relative send-path overrides. `field` names the
+ * offending key so the message stays specific to what the user actually wrote.
+ */
+function providerRelativeSendPathConfigError(field: string, value: string | undefined): string | null {
+  if (value === undefined) return null;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) || value.includes("://")) {
+    return `${field} must be a relative path without a URL scheme`;
   }
-  if (!responsesPath.startsWith("/")) return "responsesPath must start with /";
-  if (responsesPath.includes("?") || responsesPath.includes("#")) {
-    return "responsesPath must not include query strings or fragments";
+  if (!value.startsWith("/")) return `${field} must start with /`;
+  if (value.includes("?") || value.includes("#")) {
+    return `${field} must not include query strings or fragments`;
   }
   return null;
 }
@@ -1298,6 +1311,12 @@ const configSchema = z.object({
     enabled: z.boolean().optional(),
     leadTimeMinutes: z.number().int().min(1).max(60).optional(),
   }).optional().catch(undefined),
+  // Same degrade-to-off rule as the flags above: a hand-edited typo in an opt-in pool
+  // feature must never cost the operator their providers.
+  pool: z.object({
+    kernel: z.boolean().optional(),
+    cacheAffinity: z.boolean().optional(),
+  }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
@@ -1443,13 +1462,15 @@ const configSchema = z.object({
         });
       }
     }
-    const responsesPathError = providerResponsesPathConfigError(provider.responsesPath);
-    if (responsesPathError) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["providers", redactSecretString(name), "responsesPath"],
-        message: responsesPathError,
-      });
+    for (const field of ["responsesPath", "chatCompletionsPath"] as const) {
+      const sendPathError = providerRelativeSendPathConfigError(field, provider[field]);
+      if (sendPathError) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["providers", redactSecretString(name), field],
+          message: sendPathError,
+        });
+      }
     }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);
     if (headersError) {
@@ -1610,6 +1631,17 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "noStructuredOutputModels"],
         message: structuredOutputOptOutError,
+      });
+    }
+    const jsonSchemaOptOutError = nonBlankStringArrayConfigError(
+      (provider as { noJsonSchemaModels?: unknown }).noJsonSchemaModels,
+      "noJsonSchemaModels",
+    );
+    if (jsonSchemaOptOutError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "noJsonSchemaModels"],
+        message: jsonSchemaOptOutError,
       });
     }
     const retainModelsError = nonBlankStringArrayConfigError(

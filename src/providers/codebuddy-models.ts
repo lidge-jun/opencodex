@@ -35,7 +35,6 @@ export const CODEBUDDY_GLOBAL_MODELS = [
 /** China (`internal`) session models from the official internal manifest (text/chat models only). */
 export const CODEBUDDY_CN_MODELS = [
   "default",
-  "deepseek-v4-pro",
   "deepseek-v4-flash",
   "minimax-m3",
   "minimax-m2.7",
@@ -121,7 +120,6 @@ export const CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS: Record<string, st
 
 export const CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "default": 200_000,
-  "deepseek-v4-pro": 1_000_000,
   "deepseek-v4-flash": 1_000_000,
   "minimax-m3": 512_000,
   "minimax-m2.7": 200_000,
@@ -142,7 +140,6 @@ export const CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 export const CODEBUDDY_CN_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "default": 24_000,
-  "deepseek-v4-pro": 50_000,
   "deepseek-v4-flash": 50_000,
   "minimax-m3": 128_000,
   "minimax-m2.7": 48_000,

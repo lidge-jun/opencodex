@@ -1,10 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, restoredUserEventFor, setAfterNoopPendingCountForTests, setAfterStrictHistoryRolloutAppendForTests, setBeforeHistoryApplyTransactionForTests, setBeforeHistoryBackupConsumeForTests, setBeforeStrictHistoryRolloutAppendForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../../src/codex/history-provider";
 import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "../helpers/codex-history-manifest-fixtures";
+import { preflightCodexHistoryInjection, setHistoryAppendHooksForTests } from "../../src/codex/history-provider";
 
 // Windows CI: a transient file lock can consume the full production 5s busy timeout, tripping
 // bun's 5s default per-test timeout by itself. Fail fast into withHistoryRetry instead.
@@ -15,6 +16,7 @@ setDefaultTimeout(30_000);
 
 const noopSnapshotArtifacts = new Set<string>();
 afterEach(() => {
+  setHistoryAppendHooksForTests(undefined);
   setBeforeHistoryBackupConsumeForTests(undefined);
   setBeforeStrictHistoryRolloutAppendForTests(undefined);
   setAfterStrictHistoryRolloutAppendForTests(undefined);
@@ -101,6 +103,135 @@ function makeFixture({ includeExec = false, includeLegacy = false } = {}) {
 }
 
 describe("Codex history provider sync", () => {
+  test.each(["{broken", "null", "[]", "42", '"text"'])("invalid first record %s is a structured integrity failure", (first) => {
+    const fixture = makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath,".."));
+    writeFileSync(fixture.rollout, first + "\n");
+    expect(syncCodexHistoryProvider("opencodex",fixture.dbPath,fixture.backupPath)).toMatchObject({failed:true,rows:0,files:0,integrityCode:"history_rollout_record_invalid"});
+    const db = new Database(fixture.dbPath);
+    db.run("UPDATE threads SET model_provider='opencodex'");
+    db.close();
+    expect(restoreLegacyOpenaiHistory(fixture.dbPath)).toMatchObject({failed:true,rows:0,files:0,integrityCode:"history_rollout_record_invalid"});
+    expect(readFileSync(fixture.rollout,"utf8")).toBe(first+"\n");
+  });
+
+  test.each(["beforeWrite", "afterWrite"] as const)("descriptor-bound append refuses path replacement %s", (stage) => {
+    const fixture = makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath,".."));
+    const replacement=JSON.stringify({ordinal:0,type:"session_meta",payload:{id:"thread-1",history_mode:"paginated",model_provider:"openai"}})+"\n";
+    setHistoryAppendHooksForTests({[stage]:(path:string)=>{
+      if(path!==fixture.rollout)return;
+      renameSync(path,path+".old");
+      writeFileSync(path,replacement);
+    }});
+    expect(syncCodexHistoryProvider("opencodex",fixture.dbPath,fixture.backupPath)).toMatchObject({failed:true,rows:0,integrityCode:"history_rollout_identity_changed"});
+    expect(readFileSync(fixture.rollout,"utf8")).toBe(replacement);
+    const db=new Database(fixture.dbPath,{readonly:true});
+    expect(db.query("SELECT model_provider FROM threads WHERE id='thread-1'").get()).toEqual({model_provider:"openai"});
+    db.close();
+  });
+
+  for (const stage of ["beforeFirstLineOpen", "beforeFirstLineWrite", "afterFirstLineWrite"] as const) {
+    test.each([false, true])(`first-line identity guard preserves replacement (${stage}, strict=%s)`, (strict) => {
+      const fixture = makeFixture();
+      noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+      // Leave enough first-line padding for forward provider replacement in place.
+      const raw = readFileSync(fixture.rollout, "utf8");
+      writeFileSync(fixture.rollout, raw.replace('"model_provider":"openai"', '"model_provider":"openai"                '));
+      if (strict) expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).rows).toBe(1);
+      const provider = strict ? "opencodex" : "openai";
+      const replacement = JSON.stringify({ordinal:0,type:"session_meta",payload:{id:"thread-1",history_mode:"paginated",model_provider:provider}}) + "\n";
+      let fired = false;
+      setHistoryAppendHooksForTests({[stage]:(path:string)=>{
+        if(path!==fixture.rollout || fired)return;
+        fired=true;
+        renameSync(path,path+".old");
+        writeFileSync(path,replacement);
+      }});
+      const result=syncCodexHistoryProvider(strict?"openai":"opencodex",fixture.dbPath,fixture.backupPath);
+      expect(fired).toBe(true);
+      expect(result).toMatchObject({failed:true,rows:0,integrityCode:strict?"history_backup_partial_restore":"history_rollout_identity_changed"});
+      expect(readFileSync(fixture.rollout,"utf8")).toBe(replacement);
+      const db=new Database(fixture.dbPath,{readonly:true});
+      expect(db.query("SELECT model_provider FROM threads WHERE id='thread-1'").get()).toEqual({model_provider:provider});
+      db.close();
+      if(strict) expect(existsSync(fixture.backupPath)).toBe(true);
+    });
+  }
+
+  test("late paginated conversion rolls back routing instead of swallowing integrity failure",()=>{
+    const fixture=makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath,".."));
+    const replacement=JSON.stringify({ordinal:0,type:"session_meta",payload:{id:"thread-1",history_mode:"paginated",model_provider:"openai"}})+"\n";
+    setBeforeHistoryApplyTransactionForTests(()=>writeFileSync(fixture.rollout,replacement));
+    expect(syncCodexHistoryProvider("opencodex",fixture.dbPath,fixture.backupPath)).toMatchObject({failed:true,rows:0,integrityCode:"history_paginated_requires_native_writer"});
+    expect(readFileSync(fixture.rollout,"utf8")).toBe(replacement);
+    const db=new Database(fixture.dbPath,{readonly:true});
+    expect(db.query("SELECT model_provider FROM threads WHERE id='thread-1'").get()).toEqual({model_provider:"openai"});
+    db.close();
+  });
+  test("refuses legacy rows in a migration-capable store before external writes", () => {
+    const fixture = makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    const before = readFileSync(fixture.rollout, "utf8");
+    const db = new Database(fixture.dbPath);
+    db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+    db.close();
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath)).toMatchObject({failed:true,rows:0,files:0,integrityCode:"history_paginated_requires_native_writer"});
+    expect(readFileSync(fixture.rollout,"utf8")).toBe(before);
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
+  test("injection preflight preserves provider definitions needed by paginated threads", () => {
+    const fixture = makeFixture({ includeLegacy: true });
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    const db = new Database(fixture.dbPath);
+    db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+    db.run("UPDATE threads SET history_mode='paginated' WHERE id='thread-3'");
+    db.close();
+    expect(preflightCodexHistoryInjection(false, false, fixture.dbPath)).toBe("history_paginated_requires_native_writer");
+    expect(preflightCodexHistoryInjection(true, true, fixture.dbPath)).toBe("history_paginated_requires_native_writer");
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
+
+  for (const marker of ["ordinal", "history_mode"] as const) {
+    test(`refuses paginated ${marker} before routing any row or writing a manifest`, () => {
+      const fixture = makeFixture();
+      noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+      const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      if (marker === "ordinal") records.forEach((record, ordinal) => { record.ordinal = ordinal; });
+      else records[0].payload.history_mode = "paginated";
+      const before = records.map(record => JSON.stringify(record)).join("\n") + "\n";
+      writeFileSync(fixture.rollout, before);
+      const result = syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath);
+      expect(result).toMatchObject({ rows: 0, files: 0, failed: true, integrityCode: "history_paginated_requires_native_writer" });
+      expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+      expect(existsSync(fixture.backupPath)).toBe(false);
+      const db = new Database(fixture.dbPath, { readonly: true });
+      expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "openai" });
+      db.close();
+    });
+  }
+
+  test("preserves a routed paginated rollout and its restore manifest", () => {
+    const fixture = makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).failed).toBeUndefined();
+    const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    records.forEach((record, ordinal) => { record.ordinal = ordinal; });
+    const before = records.map(record => JSON.stringify(record)).join("\n") + "\n";
+    writeFileSync(fixture.rollout, before);
+    const manifest = readFileSync(fixture.backupPath, "utf8");
+    for (const result of [syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath), restoreLegacyOpenaiHistory(fixture.dbPath)]) {
+      expect(result).toMatchObject({ rows: 0, files: 0, failed: true, integrityCode: "history_paginated_requires_native_writer" });
+    }
+    expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+    expect(readFileSync(fixture.backupPath, "utf8")).toBe(manifest);
+    const db = new Database(fixture.dbPath, { readonly: true });
+    expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "opencodex" });
+    db.close();
+  });
+
   test("maps resumable Codex threads to opencodex via the latest session_meta", () => {
     const { dbPath, backupPath, rollout } = makeFixture();
 

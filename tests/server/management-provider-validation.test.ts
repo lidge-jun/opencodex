@@ -48,6 +48,8 @@ import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { fastPolicyForModel } from "../../src/providers/service-tier";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { clearProviderQuotaCache, fetchProviderQuotaReports, setProviderQuotaBeforePublishForTests } from "../../src/providers/quota";
+import { setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -134,6 +136,153 @@ afterEach(() => {
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+});
+
+describe("provider quota routing state", () => {
+  function quotaConfig(name = "openrouter", baseUrl = "https://openrouter.ai/api/v1"): OcxConfig {
+    return { port: 10100, defaultProvider: name, providers: { [name]: {
+      adapter: "openai-chat", authMode: "key", baseUrl, apiKey: "synthetic-probed-key",
+    } } };
+  }
+
+  async function readQuota(cfg: OcxConfig, force = false) {
+    const url = new URL(`http://localhost/api/provider-quotas${force ? "?refresh=1" : ""}`);
+    const response = await handleManagementAPI(new Request(url), url, cfg);
+    expect(response?.status).toBe(200);
+    return response!.json();
+  }
+
+  beforeEach(() => {
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    clearProviderQuotaCache();
+    setProviderQuotaBeforePublishForTests(null);
+  });
+
+  afterEach(() => {
+    clearProviderQuotaCache();
+    setProviderQuotaBeforePublishForTests(null);
+  });
+
+  test("projects bound inference state without mutating display reports", async () => {
+    const cfg: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openrouter",
+      providers: {
+        openrouter: {
+          adapter: "openai-chat", authMode: "key",
+          baseUrl: "https://openrouter.ai/api/v1", apiKey: "synthetic-probed-key",
+        },
+      },
+    };
+    globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+    const url = new URL("http://localhost/api/provider-quotas");
+    const response = await handleManagementAPI(new Request(url), url, cfg);
+    expect(response?.status).toBe(200);
+    const dto = await response!.json();
+    const row = dto.reports.find((item: { provider: string }) => item.provider === "openrouter");
+    expect(row.routingQuota).toEqual({
+      state: "exhausted", updatedAt: row.quota.updatedAt,
+      validUntil: row.quota.updatedAt + 30 * 60_000,
+    });
+    const cached = await fetchProviderQuotaReports(cfg, false);
+    expect(cached.reports[0]).not.toHaveProperty("routingQuota");
+    expect(row.quota).toEqual(cached.reports[0]!.quota);
+    expect(JSON.stringify(dto)).not.toContain("synthetic-probed-key");
+    expect(JSON.stringify(dto)).not.toContain("binding");
+  });
+
+  test("single-key capacity recovers on refresh and an uncapped key drops its old cap", async () => {
+    const cfg = quotaConfig();
+    let payload = { limit: 20 as number | null, limit_remaining: 0 };
+    globalThis.fetch = (async () => Response.json({ data: payload })) as typeof fetch;
+    expect((await readQuota(cfg)).reports[0].routingQuota.state).toBe("exhausted");
+    payload = { limit: 20, limit_remaining: 8 };
+    expect((await readQuota(cfg, true)).reports[0].routingQuota.state).toBe("available");
+    payload = { limit: null, limit_remaining: 0 };
+    expect((await readQuota(cfg, true)).reports).toEqual([]);
+  });
+
+  test.each(["authorization", "x-api-key", "x-goog-api-key", "key-pool", "oauth"])(
+    "rechecks current credential scope: %s", async change => {
+      const cfg = quotaConfig();
+      globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+      expect((await readQuota(cfg)).reports[0].routingQuota.state).toBe("exhausted");
+      if (change === "key-pool") cfg.providers.openrouter!.apiKeyPool = [
+        { id: "primary", key: "synthetic-probed-key" },
+        { id: "secondary", key: "other-key" },
+      ];
+      else if (change === "oauth") cfg.providers.openrouter!.authMode = "oauth";
+      else cfg.providers.openrouter!.headers = { [change]: "other-credential" };
+      const dto = await readQuota(cfg);
+      expect(dto.reports.every((row: { routingQuota: { state: string } }) => row.routingQuota.state === "unknown")).toBe(true);
+    },
+  );
+
+  test("reads a provider row replaced while the quota probe is awaiting publication", async () => {
+    const cfg = quotaConfig();
+    let replaced = false;
+    globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+    setProviderQuotaBeforePublishForTests(() => {
+      cfg.providers.openrouter = { ...cfg.providers.openrouter!, apiKey: "replacement-key" };
+      replaced = true;
+    });
+    const dto = await readQuota(cfg);
+    expect(replaced).toBe(true);
+    expect(dto.reports.every((row: { routingQuota: { state: string } }) => row.routingQuota.state === "unknown")).toBe(true);
+  });
+
+  test("search-only and MCP-only display windows have no inference authority", async () => {
+    const cfg: OcxConfig = { port: 10100, defaultProvider: "synthetic", providers: {
+      ...quotaConfig("synthetic", "https://api.synthetic.new/v2").providers,
+      ...quotaConfig("zai", "https://api.z.ai/api/coding/paas/v4").providers,
+    } };
+    globalThis.fetch = (async input => String(input).includes("synthetic")
+      ? Response.json({ data: { search: { hourly: 100 } } })
+      : Response.json({ success: true, data: { monthlyMCPUsage: 100 } })) as typeof fetch;
+    const dto = await readQuota(cfg);
+    expect(dto.reports).toHaveLength(2);
+    expect(dto.reports.every((row: { routingQuota: { state: string } }) => row.routingQuota.state === "unknown")).toBe(true);
+    expect(dto.reports.find((row: { provider: string }) => row.provider === "synthetic").quota.customWindows[0].percent).toBe(100);
+    expect(dto.reports.find((row: { provider: string }) => row.provider === "zai").quota.monthlyPercent).toBe(100);
+  });
+
+  test("an exhausted OAuth account report stays display-only", async () => {
+    const cfg = quotaConfig("kimi", "https://api.kimi.com/coding/v1");
+    cfg.providers.kimi!.authMode = "oauth";
+    await saveCredential("kimi", { access: "synthetic-account-access", refresh: "synthetic-account-refresh", expires: Date.now() + 3600_000 });
+    globalThis.fetch = (async () => Response.json({ usage: { limit: "100", used: "100" } })) as typeof fetch;
+    const dto = await readQuota(cfg);
+    expect(dto.reports[0].quota.weeklyPercent).toBe(100);
+    expect(dto.reports[0].routingQuota).toEqual({ state: "unknown" });
+  });
+
+  test("cached responses respect reset boundaries, persistent blockers and evidence expiry", async () => {
+    const cfg = quotaConfig();
+    let probes = 0;
+    globalThis.fetch = (async () => {
+      probes += 1;
+      return Response.json({ data: { limit: 20, limit_remaining: 0 } });
+    }) as typeof fetch;
+    const first = await readQuota(cfg);
+    const now = Date.now();
+    const quota = { updatedAt: now, fiveHourPercent: 100, fiveHourResetAt: now + 10_000,
+      weeklyPercent: 100, weeklyResetAt: now + 20_000 };
+    setCachedProviderQuotaForTests("openrouter", quota);
+    expect((await readQuota(cfg)).reports[0].routingQuota.validUntil).toBe(now + 20_000);
+    setCachedProviderQuotaForTests("openrouter", { ...quota, creditsUsd: { used: 20, limit: 20, remaining: 0, percent: 100 } });
+    expect((await readQuota(cfg)).reports[0].routingQuota.validUntil).toBe(now + 30 * 60_000);
+    setCachedProviderQuotaForTests("openrouter", { updatedAt: now, fiveHourPercent: 100, fiveHourResetAt: now - 1 });
+    expect((await readQuota(cfg)).reports[0].routingQuota.state).toBe("available");
+    setCachedProviderQuotaForTests("openrouter", { updatedAt: now,
+      creditsUsd: { used: 0, limit: 0, remaining: 0, percent: 0, unlimited: true } });
+    expect((await readQuota(cfg)).reports[0].routingQuota.state).toBe("available");
+    setCachedProviderQuotaForTests("openrouter", { ...quota, updatedAt: now - 30 * 60_000 });
+    const stale = await readQuota(cfg);
+    expect(stale.reports[0].routingQuota).toEqual({ state: "unknown" });
+    expect(stale.reports[0].quota).toEqual(first.reports[0].quota);
+    expect(probes).toBe(1);
+  });
 });
 
 describe("provider management validation", () => {

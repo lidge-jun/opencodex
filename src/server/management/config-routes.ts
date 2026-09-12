@@ -237,7 +237,7 @@ export async function syncEnabledClientIntegrations(
     },
     config,
     port,
-  }, ["mcode", "pi", "aside", "raycast"]));
+  }, ["mcode", "pi", "aside", "raycast", "omo", "cline"]));
 
   return out;
 }
@@ -820,8 +820,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.vision && (body.vision.model !== undefined || body.vision.reasoning !== undefined)) {
       visionReasoningTouched = true;
       const model = typeof body.vision.model === "string"
-        ? (body.vision.model === "" ? "gpt-5.4-mini" : body.vision.model)
-        : (config.visionSidecar?.model || "gpt-5.4-mini");
+        ? (body.vision.model === "" ? "gpt-5.6-luna" : body.vision.model)
+        : (config.visionSidecar?.model || "gpt-5.6-luna");
       const sourceReasoning = body.vision.reasoning ?? config.visionSidecar?.reasoning;
       normalizedVisionReasoning = sourceReasoning === undefined
         ? undefined

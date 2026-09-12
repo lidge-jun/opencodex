@@ -349,6 +349,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const noTemperatureModels = mergeStringArray(registryEntry.noTemperatureModels, provider.noTemperatureModels);
   const noTopPModels = mergeStringArray(registryEntry.noTopPModels, provider.noTopPModels);
   const noPenaltyModels = mergeStringArray(registryEntry.noPenaltyModels, provider.noPenaltyModels);
+  const noJsonSchemaModels = mergeStringArray(registryEntry.noJsonSchemaModels, provider.noJsonSchemaModels);
   const autoToolChoiceOnlyModels = mergeStringArray(registryEntry.autoToolChoiceOnlyModels, provider.autoToolChoiceOnlyModels);
   const preserveReasoningContentModels = mergeStringArray(registryEntry.preserveReasoningContentModels, provider.preserveReasoningContentModels);
   const requiresReasoningPlaceholderModels = mergeStringArray(registryEntry.requiresReasoningPlaceholderModels, provider.requiresReasoningPlaceholderModels);
@@ -375,6 +376,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     baseUrl,
     ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
       ? { responsesPath: registryEntry.responsesPath }
+      : {}),
+    ...(provider.chatCompletionsPath === undefined && registryEntry.chatCompletionsPath !== undefined
+      ? { chatCompletionsPath: registryEntry.chatCompletionsPath }
       : {}),
     ...(provider.requiresAdjacentResponsesToolResults === undefined
       && registryEntry.requiresAdjacentResponsesToolResults !== undefined
@@ -473,6 +477,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(noTemperatureModels ? { noTemperatureModels } : {}),
     ...(noTopPModels ? { noTopPModels } : {}),
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
+    ...(noJsonSchemaModels ? { noJsonSchemaModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
     ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),
@@ -681,7 +686,7 @@ function routeModelInternal(
     }
   }
 
-  // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4-pro").
+  // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4.1-flash").
   //    Only triggers when the prefix matches a CONFIGURED provider, so genuine
   //    slash-containing model ids (e.g. "anthropic/claude-...") fall through when
   //    no such provider exists.

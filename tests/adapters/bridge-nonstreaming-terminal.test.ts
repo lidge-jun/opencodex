@@ -310,3 +310,71 @@ describe("Command Code finishReason error is a failure, not a stop", () => {
     expect((json.output as { type: string }[]).some(o => o.type === "compaction")).toBe(false);
   });
 });
+
+
+describe("truncated done preserves open tool integrity (#4312)", () => {
+  const cases = [
+    ["refusal", "content_filter"],
+    ["content_filter", "content_filter"],
+    ["max_tokens", "max_output_tokens"],
+    ["length", "max_output_tokens"],
+  ] as const;
+  for (const [stopReason, reason] of cases) {
+    for (const kind of ["function_call", "custom_tool_call", "tool_search_call"] as const) {
+      test(`${stopReason}: open ${kind} stays incomplete in both projections`, async () => {
+        const options = {
+          freeformToolNames: kind === "custom_tool_call" ? new Set(["fixture"]) : undefined,
+          toolSearchToolNames: kind === "tool_search_call" ? new Set(["fixture"]) : undefined,
+        };
+        const args = kind === "custom_tool_call" ? "partial input" : '{"arg":"unfinished';
+        const events: AdapterEvent[] = [
+          { type: "text_delta", text: "partial answer" },
+          { type: "tool_call_start", id: "call_fixture", name: "fixture" },
+          { type: "tool_call_delta", arguments: args },
+          { type: "done", stopReason },
+        ];
+        async function* source(): AsyncGenerator<AdapterEvent> { yield* events; }
+        const text = await new Response(bridgeToResponsesSSE(
+          source(), "fixture/model", undefined, options.freeformToolNames, options.toolSearchToolNames,
+        )).text();
+        const frames = text.split("\n\n").flatMap(frame => {
+          const data = frame.split("\n").find(line => line.startsWith("data: "))?.slice(6);
+          return data && data !== "[DONE]" ? [JSON.parse(data)] : [];
+        });
+        expect(terminalEventNames(text)).toEqual(["response.incomplete"]);
+        expect(frames.some(frame => frame.type === "response.function_call_arguments.done"
+          || frame.type === "response.custom_tool_call_input.done")).toBe(false);
+        const terminal = frames.find(frame => frame.type === "response.incomplete");
+        const buffered = buildResponseJSON(events, "fixture/model", options);
+        for (const response of [terminal.response, buffered]) {
+          expect(response.status).toBe("incomplete");
+          expect(response.incomplete_details.reason).toBe(reason);
+          const call = response.output.find((item: { type: string }) => item.type === kind);
+          expect(call.status).toBe("incomplete");
+          if (kind === "function_call") expect(call.arguments).toBe(args);
+          if (kind === "custom_tool_call") expect(call.input).toBe(args);
+          expect(response.output.find((item: { type: string }) => item.type === "message")
+            .content[0].text).toBe("partial answer");
+        }
+        const itemDone = frames.find(frame => frame.type === "response.output_item.done" && frame.item.type === kind);
+        expect(itemDone.item.status).toBe("incomplete");
+      });
+    }
+    test(`${stopReason}: a previously completed call stays completed`, async () => {
+      const events: AdapterEvent[] = [
+        { type: "tool_call_start", id: "call_complete", name: "fixture" },
+        { type: "tool_call_delta", arguments: '{"arg":"complete"}' },
+        { type: "tool_call_end", id: "call_complete" },
+        { type: "done", stopReason },
+      ];
+      const buffered = buildResponseJSON(events, "fixture/model");
+      expect(buffered.status).toBe("incomplete");
+      const output = buffered.output as { type: string; status?: string }[];
+      expect(output.find(item => item.type === "function_call")?.status).toBe("completed");
+      const text = await sseText(events);
+      expect(terminalEventNames(text)).toEqual(["response.incomplete"]);
+      expect(text).toContain("event: response.function_call_arguments.done");
+      expect(text).toContain('"arguments":"{\\"arg\\":\\"complete\\"}","status":"completed"');
+    });
+  }
+});

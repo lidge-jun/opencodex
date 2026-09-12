@@ -17,6 +17,7 @@ import {
   setVisionDescriptionCache,
   setVisionDescriptionCacheLimitsForTests,
   shouldResolveOpenAiVisionSidecar,
+  planVisionSidecar,
   visionDescriptionRetainedStoreSnapshot,
   type VisionPlan,
 } from "../../src/vision";
@@ -73,6 +74,20 @@ test("vision sidecar auth stays lazy for no-image and disabled branches", () => 
     withImage,
   )).toBe(false);
   expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", withImage)).toBe(true);
+});
+
+test("vision auth and planning agree on a routed describer and its legacy fallback", () => {
+  const cfg: OcxConfig = { port: 10100, defaultProvider: "routed", providers: {
+    routed: textOnlyProvider, sighted: { adapter: "openai-chat", baseUrl: "https://vision.test/v1", apiKey: "vision-key" },
+  }, visionSidecar: { enabled: true, backend: "routed", model: "sighted/vision-model" } };
+  const request = parseRequest({ model: "routed/text-model",
+    input: [{ type: "message", role: "user", content: [{ type: "input_image", image_url: DATA_A }] }],
+  });
+  expect(planVisionSidecar(cfg, textOnlyProvider, "text-model", request)?.backend).toBe("routed");
+  expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", request)).toBe(false);
+  cfg.visionSidecar!.model = "legacy-bare-model";
+  expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", request)).toBe(true);
+  expect(planVisionSidecar(cfg, textOnlyProvider, "text-model", request, plan().forwardSidecar)?.backend).toBe("openai");
 });
 
 function parsed(parts: Array<Record<string, unknown>>) {

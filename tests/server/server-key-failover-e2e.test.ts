@@ -3,7 +3,7 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
-import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { startServer } from "../../src/server";
@@ -664,3 +664,126 @@ describe("server 429 key failover (end-to-end)", () => {
     }
   });
 });
+
+  /**
+   * Both cases land on the same state: the committed key is already cooling when a request
+   * arrives. That is not exotic -- it is what an operator has after the pool rotated and a
+   * restart, a manual edit or a config reload pointed `apiKey` back at the spent key.
+   */
+  async function cooledCommittedKeySetup(strategy?: "round-robin" | "fill-first") {
+    const seen: string[] = [];
+    upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      seen.push(req.headers.get("authorization") ?? "");
+      return Response.json({ id: "chatcmpl-warm", object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "warm" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    } });
+    saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "pooled", providers: { pooled: {
+      adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true,
+      authMode: "key", apiKey: "synthetic-first",
+      ...(strategy ? { apiKeyPoolStrategy: strategy } : {}),
+      apiKeyPool: [{ id: "first", key: "synthetic-first" }, { id: "second", key: "synthetic-second" }],
+    } } } as OcxConfig);
+    // Cool the committed key exactly the way a real 429 does, then point the stored selection
+    // back at it. Cooldowns are process-local, so the server started below shares this state.
+    const live = loadConfig();
+    rotateKeyOn429(live, "pooled", null, Date.now(), "synthetic-first");
+    const restored = loadConfig();
+    restored.providers.pooled!.apiKey = "synthetic-first";
+    saveConfig(restored);
+    return seen;
+  }
+
+  test("a cooled committed key is replaced before the first attempt", async () => {
+    const seen = await cooledCommittedKeySetup("round-robin");
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "pooled/test", stream: false, messages: [{ role: "user", content: "hello" }] }),
+      });
+      expect(response.status).toBe(200);
+      // ONE attempt, on the warm key. Reactive rotation alone cannot produce this: it needs a
+      // 429 first, so without the pre-dispatch pick the upstream would see the cooled key here
+      // and the request would be spent earning a refusal the runtime could already predict.
+      expect(seen).toEqual(["Bearer synthetic-second"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("without a configured strategy the cooled key is still used", async () => {
+    const seen = await cooledCommittedKeySetup();
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "pooled/test", stream: false, messages: [{ role: "user", content: "hello" }] }),
+      });
+      expect(response.status).toBe(200);
+      // The other half of the contract: rotation stays reactive-only for an install that never
+      // asked for a strategy, so the committed key is honoured even when it is cooling.
+      expect(seen).toEqual(["Bearer synthetic-first"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  /**
+   * The two cases above pin the behaviour but not the PATH: an `openai-chat` provider sends
+   * /v1/chat/completions through `handleNativeChatCompletions`, so the pick in
+   * `responses/core.ts` never runs in either of them. This one goes through /v1/responses, so
+   * the independently changed core call site is actually covered.
+   *
+   * The pool keys are stored as `\${VAR}` references on purpose. Reference resolution is one of
+   * the backfills `routedProviderConfig` applies and the adapter does not, so the upstream
+   * bearer proves the route the core path dispatched was a rebuilt one rather than the
+   * picker's persisted snapshot.
+   *
+   * Red control: remove the pick from core.ts and the upstream sees `Bearer resolved-cooled`,
+   * because the committed selection still points at the cooled key.
+   *
+   * What this case does NOT prove is the Transport-vs-snapshot distinction on this path:
+   * `refreshDispatchAdapter` re-derives the transport from config before dispatch, so the
+   * Responses core self-heals a wholesale assignment. That contract is pinned as a unit in
+   * tests/adapters/key-failover.test.ts, where it has a red control that actually fails.
+   */
+  test("the Responses core pick reaches the warm key through /v1/responses", async () => {
+    const seen: string[] = [];
+    upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      seen.push(req.headers.get("authorization") ?? "");
+      return Response.json({ id: "chatcmpl-warm", object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "warm" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    } });
+    process.env.OCX_KEYFAIL_COOLED = "resolved-cooled";
+    process.env.OCX_KEYFAIL_WARM = "resolved-warm";
+    saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "env-pooled", providers: { "env-pooled": {
+      adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true,
+      authMode: "key", apiKey: "\${OCX_KEYFAIL_COOLED}", apiKeyPoolStrategy: "round-robin",
+      apiKeyPool: [
+        { id: "cooled", key: "\${OCX_KEYFAIL_COOLED}" },
+        { id: "warm", key: "\${OCX_KEYFAIL_WARM}" },
+      ],
+    } } } as OcxConfig);
+    const live = loadConfig();
+    rotateKeyOn429(live, "env-pooled", null, Date.now(), "\${OCX_KEYFAIL_COOLED}");
+    const restored = loadConfig();
+    restored.providers["env-pooled"]!.apiKey = "\${OCX_KEYFAIL_COOLED}";
+    saveConfig(restored);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "env-pooled/test", input: "hi", stream: false }),
+      });
+      expect(response.status).toBe(200);
+      expect(seen).toEqual(["Bearer resolved-warm"]);
+    } finally {
+      await server.stop(true);
+      delete process.env.OCX_KEYFAIL_COOLED;
+      delete process.env.OCX_KEYFAIL_WARM;
+    }
+  });

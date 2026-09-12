@@ -61,7 +61,7 @@ ocx models live --provider ark --json
 
 プロバイダーの登録済みログイン フローを開始します。 OAuth プロバイダーはブラウザを開き、自動更新された認証情報を `~/.opencodex/` に保存します。 API キー ログイン プロバイダーは、キー ダッシュボードを開き、キーの入力を求め、可能な場合は検証し、結果のプロバイダー設定を保存します。名前が欠落しているか不明な場合、このコマンドは現在受け入れられている OAuth および API キーのプロバイダー ID を出力します。
 
-`ocx status` / `ocx doctor` が再認証が必要であるか、端末の更新失敗を報告した後、同じコマンドを使用して **再認証**します (またはダッシュボードで再認証を使用します)。 Codex プール アカウントはパブリック `ocx login` プロバイダーではありません。代わりに、ダッシュボード Codex アカウント プール (再認証) またはヘッドレス `ocx account reauth` フローを介して再認証します。
+`ocx status` / `ocx doctor` が再認証が必要であるか、端末の更新失敗を報告した後、同じコマンドを使用して **再認証**します (またはダッシュボードで再認証を使用します)。 Codex プール アカウントは上記の OAuth / API キーのプロバイダーではありませんが、`ocx login codex` から到達できます。このコマンドはアカウントプールのログインに転送されるため、`ocx login codex --reauth` は `ocx account reauth codex` と同じです。ダッシュボードの Codex アカウントプール (再認証) でも行えます。この経路はプロキシ内部で動くため、プロキシの起動が必要です。
 
 ```bash
 ocx login xai
@@ -79,7 +79,7 @@ ocx login anthropic
 実行中のプロキシを介してプロバイダー アカウントと API キー プールを一覧表示し、切り替えます。出荷されたヘルプ画面は次のとおりです。
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -91,6 +91,7 @@ remove <provider> <id> --yes  Remove a stored account or key after an existence 
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
@@ -152,11 +153,11 @@ OAuth プロバイダーと API キー プロバイダーの場合、これに�
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-`openai` Codex プールのしきい値を制御するか、汎用 OAuth プールのしきい値を保存します。`on` は 80%、`off` は 0%、`threshold <n>` は 0–100 を保存します。汎用プールのしきい値は現在適用されません。保存しても、しきい値による切り替え、プロバイダーの有効化設定、429 エラー時のローテーションは変更されません。汎用プールの照会と変更の結果はサーバーの確認値を使用します。汎用プールの `poolEnabled` は保存された設定で、`null` は未指定です。継承後の実効状態ではありません。`inert: true` は未適用を示し、機能が不明な場合も `enabled: true` とは表示しません。API キープロバイダー、Anthropic、不正な値は拒否されます。
+`openai` Codex プールのしきい値を制御するか、汎用 OAuth プールのしきい値を保存します。`on` は 80%、`off` は 0%、`threshold <n>` は 0–100 を保存します。汎用プールのしきい値は `pool.kernel` が有効で `strategy: "fill-first"` の場合にのみ選択へ反映されます。フラグが無効なら、保存してもしきい値による切り替えは有効になりません。いずれの場合もプロバイダーの有効化設定と 429 エラー時のローテーションは変更されません。汎用プールの照会と変更の結果はサーバーの確認値を使用します。汎用プールの `poolEnabled` は保存された設定で、`null` は未指定です。継承後の実効状態ではありません。`inert: true` は保存済みで未適用、`inert: false` はプールが適用中であることを示します。`inert` が無い場合は機能が不明であり、その場合も `enabled: true` とは表示しません。API キープロバイダー、Anthropic、不正な値は拒否されます。
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }
-generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: true | null }
+generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -212,6 +213,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
 アカウントの Codex リセット クレジットを検査します。クレジットの消費は破壊的であり、`--consume` と `--yes` の両方が必要です。
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+xAI / Grok アカウントの残りリセット クーポンを検査または換金します。
+
+`--consume` を付けずに実行すると、利用可能なクーポン トークンと有効期限ウィンドウを返します:
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+リセット クーポンの換金は請求状態を変更し、クーポン トークンを 1 つ恒久的に消費します。`--consume` には `--yes` が厳密に必要です:
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+`--operation-id <uuid>`（有効な UUIDv4 である必要があります）を指定すると、冪等な確定が保証されます。ネットワークが切断されたりコマンドが再試行されたりしても、同一の操作 ID は 2 つ目のクーポンを消費する代わりに、永続化された結果を再生します。
 
 ### `ocx account main <subcommand>`
 

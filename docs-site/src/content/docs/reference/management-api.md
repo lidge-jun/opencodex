@@ -78,10 +78,19 @@ route-specific results rather than repeating this table.
 | `GET /api/grok` | Read Grok managed-config status and candidate models | 400 status read failure |
 | `PUT /api/grok/selection` | Persist the excluded Grok models | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
+| `GET /api/grok/reset-coupons?accountId=...` | Read remaining Grok billing reset tokens and validity windows for the active or specified xAI account | 400 missing account; 401 unauthenticated; 502 upstream gRPC-Web error |
+| `POST /api/grok/reset-coupons/consume` | Redeem an eligible reset coupon. Body `{ accountId?, tokenId?, operationId? }`. Optional `operationId` (UUIDv4) makes redemption idempotent: repeating the same ID replays the durable result without double-redemption. | 400 invalid JSON/UUID; 401 unauthenticated; 409 `identity_mismatch`; 502 upstream error; 503 ledger capacity |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
 | `GET, PUT /api/claude-code` | Read or update Claude Code gateway, auth-mode, model-map, context, agent, and sidecar settings | 400 invalid field or shape |
+
+The dashboard drives both coupon paths from **Providers > xAI Grok > Accounts**: each
+signed-in account row carries a ticket badge with its remaining coupon count, and the
+badge opens a dialog that lists validity windows and redeems the coupon closest to
+expiry. The dialog sends a client-minted `operationId`, and it stops sending after a
+timeout instead of retrying, because a redemption whose journal record is still open
+would execute again. `ocx account grok-reset-coupons` remains the terminal equivalent.
 
 For the concepts behind the model roster and encrypted worker-task behavior, see
 [Sub-agent Surface](/guides/sub-agent-surface/).
@@ -329,7 +338,8 @@ outcome fields from an older server do not establish successful recovery.
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | List masked accounts or remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Read or update Anthropic OAuth pool policy | 400 non-Anthropic provider or invalid policy |
+| `GET, PUT, PATCH /api/pool/settings` | Read or update pool policy for any kind (codex, anthropic, generic); answers with the same keys for all three and declares in `supported` which the kind honours | 400 unknown provider, a field the kind does not support, or an invalid value |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Legacy per-pool policy for Anthropic and generic OAuth providers; superseded by `/api/pool/settings` and kept for existing clients | 400 codex or api-key provider, or invalid policy |
 | `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider/account |
 | `PUT /api/oauth/accounts/alias` | Set or clear an OAuth account alias | 400 invalid provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |

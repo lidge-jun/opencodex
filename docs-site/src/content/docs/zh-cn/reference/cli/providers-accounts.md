@@ -63,9 +63,10 @@ ocx models live --provider ark --json
 打印当前可接受的 OAuth 和 API 密钥提供方 id。
 
 在 `ocx status` / `ocx doctor` 报告需要重新认证或终端刷新失败后，也可用同一条
-命令执行**重新认证**（或者在仪表盘中使用 Reauthenticate）。Codex 池账号不是一个
-公开的 `ocx login` 提供方 - 请通过仪表盘里的 Codex 账号池（Reauthenticate）或
-无头模式的 `ocx account reauth` 流程重新认证。
+命令执行**重新认证**（或者在仪表盘中使用 Reauthenticate）。Codex 池账号不是上面
+那些 OAuth / API key 提供方，但 `ocx login codex` 可以到达：它会转到账号池登录，
+因此 `ocx login codex --reauth` 与 `ocx account reauth codex` 等价。仪表盘里的
+Codex 账号池（Reauthenticate）同样可以。这条路径跑在代理内部，需要代理正在运行。
 
 ```bash
 ocx login xai
@@ -83,7 +84,7 @@ ocx login anthropic
 通过正在运行的代理列出并切换提供方账号和 API 密钥池。随附的帮助输出如下：
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -95,6 +96,7 @@ remove <provider> <id> --yes  Remove a stored account or key after an existence 
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
@@ -172,11 +174,11 @@ token，也不是简单重读账号列表。`--json` 返回
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-控制 `openai` Codex 账户池阈值，或保存通用 OAuth 账户池阈值。`on` 保存 80%，`off` 保存 0%，`threshold <n>` 接受 0–100。通用池的阈值目前不参与运行；保存阈值不会启用阈值切换、改变提供方启用设置或禁用 429 错误后的轮换。通用池的查询和修改结果使用服务器确认值。通用池的 `poolEnabled` 是已保存的提供方设置，`null` 表示未指定，并不代表继承后的实际状态。`inert: true` 表示阈值未应用；能力未知时也不会报告 `enabled: true`。API 密钥提供方、Anthropic 和无效值会被拒绝。
+控制 `openai` Codex 账户池阈值，或保存通用 OAuth 账户池阈值。`on` 保存 80%，`off` 保存 0%，`threshold <n>` 接受 0–100。通用池的阈值只有在 `pool.kernel` 打开且 `strategy: "fill-first"` 时才参与选择；标志关闭时，保存阈值不会启用阈值切换。两种情况下都不会改变提供方启用设置或禁用 429 错误后的轮换。通用池的查询和修改结果使用服务器确认值。通用池的 `poolEnabled` 是已保存的提供方设置，`null` 表示未指定，并不代表继承后的实际状态。`inert: true` 表示阈值已保存但未应用，`inert: false` 表示账户池正在应用它。没有 `inert` 字段表示能力未知，此时同样不会报告 `enabled: true`。API 密钥提供方、Anthropic 和无效值会被拒绝。
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }
-generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: true | null }
+generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -241,6 +243,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 查看某个账号的 Codex 重置额度。消耗额度会造成破坏性影响，因此同时需要 `--consume`
 和 `--yes`。
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+检查或兑换 xAI / Grok 账号剩余的重置优惠券。
+
+不带 `--consume` 调用时，返回可用的优惠券 token 及其有效期窗口：
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+兑换重置优惠券会改变计费状态，并永久消耗一个优惠券 token。`--consume` 严格要求同时提供 `--yes`：
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+传入 `--operation-id <uuid>`（必须是有效的 UUIDv4）可保证结算具备幂等性。当网络中断或命令重试时，相同的 operation id 会重放已持久化的结果，而不会再次消耗一个优惠券。
 
 ### `ocx account main <subcommand>`
 

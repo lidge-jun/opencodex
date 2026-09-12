@@ -373,12 +373,12 @@ test("configured manual OpenAI rows can be toggled alongside native rows", async
   const config = loadConfig();
   config.providers.openai = {adapter:"openai-responses",authMode:"forward",baseUrl:"https://chatgpt.com/backend-api/codex",liveModels:false};
   config.customModels = [{id:"manual-gpt",provider:"openai",modelId:"gpt-5.5",contextWindow:128_000}];
-  config.disabledModels = ["openai/gpt-5.5", "gpt-5.4"];
+  config.disabledModels = ["openai/gpt-5.5", "gpt-5.6-luna"];
   expect((await putWithConfig({scope:"models",provider:"openai",targets:[{id:"gpt-5.5",native:false}],enabled:true},config)).status).toBe(200);
-  expect(config.disabledModels).toEqual(["gpt-5.4"]);
-  expect((await putWithConfig({scope:"models",provider:"openai",targets:[{id:"gpt-5.5",native:false},{id:"gpt-5.4",native:true}],enabled:false},config)).status).toBe(200);
+  expect(config.disabledModels).toEqual(["gpt-5.6-luna"]);
+  expect((await putWithConfig({scope:"models",provider:"openai",targets:[{id:"gpt-5.5",native:false},{id:"gpt-5.6-luna",native:true}],enabled:false},config)).status).toBe(200);
   expect(config.disabledModels).toContain("openai/gpt-5.5");
-  expect(config.disabledModels).toContain("gpt-5.4");
+  expect(config.disabledModels).toContain("gpt-5.6-luna");
   expect((await putWithConfig({scope:"models",provider:"openai",targets:[{id:"not-configured",native:false}],enabled:true},config)).status).toBe(400);
 });
 
@@ -391,15 +391,15 @@ test("provider-group toggles persist mixed native and manual OpenAI targets toge
   config.customModels = [{ id: "manual-gpt", provider: "openai", modelId: "gpt-5.5" }];
   const unrelatedDisabled = [...config.disabledModels!];
   const unrelatedProvider = structuredClone(config.providers["google-antigravity"]);
-  const targets = [{ id: "gpt-5.5", native: false }, { id: "gpt-5.4", native: true }];
+  const targets = [{ id: "gpt-5.5", native: false }, { id: "gpt-5.6-luna", native: true }];
   saveConfig(config);
 
   const disabled = await putWithConfig({ scope: "provider", provider: "openai", targets, enabled: false }, config);
   expect(disabled.status).toBe(200);
   expect(await disabled.json()).toMatchObject({ ok: true, scope: "provider", provider: "openai", enabled: false });
-  expect(config.disabledModels).toEqual([...unrelatedDisabled, "openai/gpt-5.5", "gpt-5.4"]);
+  expect(config.disabledModels).toEqual([...unrelatedDisabled, "openai/gpt-5.5", "gpt-5.6-luna"]);
   expect(config.providers.openai.selectedModels).toEqual(["gpt-5.5"]);
-  expect(loadConfig().disabledModels).toEqual([...unrelatedDisabled, "openai/gpt-5.5", "gpt-5.4"]);
+  expect(loadConfig().disabledModels).toEqual([...unrelatedDisabled, "openai/gpt-5.5", "gpt-5.6-luna"]);
   expect(loadConfig().providers.openai.selectedModels).toEqual(["gpt-5.5"]);
   expect(loadConfig().providers["google-antigravity"]).toEqual(unrelatedProvider);
   expect(refreshes).toBe(1);
@@ -426,14 +426,14 @@ test("an invalid trailing target leaves a mixed OpenAI provider-group update ato
 
   for (const enabled of [false, true]) {
     // Both valid targets would change state before the final invalid target is reached.
-    config.disabledModels = enabled ? ["other/keep", "openai/gpt-5.5", "gpt-5.4"] : ["other/keep"];
+    config.disabledModels = enabled ? ["other/keep", "openai/gpt-5.5", "gpt-5.6-luna"] : ["other/keep"];
     saveConfig(config);
     const before = structuredClone(config);
     const persistedBefore = loadConfig();
     for (const invalid of [{ id: "not-configured", native: false }, { id: "gpt-9.9-imaginary", native: true }]) {
       const response = await putWithConfig({
         scope: "provider", provider: "openai", enabled,
-        targets: [{ id: "gpt-5.5", native: false }, { id: "gpt-5.4", native: true }, invalid],
+        targets: [{ id: "gpt-5.5", native: false }, { id: "gpt-5.6-luna", native: true }, invalid],
       }, config);
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({ error: "invalid model visibility target" });

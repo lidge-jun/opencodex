@@ -732,3 +732,5 @@ modellerde opencodex varsayılan olarak bunu taslakla değiştirir (`blockedSkil
 aracının `model` argümanını değil, `<!-- ocx-route: ... -->` yönergelerini
 kullanır. Yönergenin hedeflenen rotayla eşleştiğinden emin olun. Model yer
 tutucusu olarak `"haiku"` iletin.
+
+`config.json` içindeki `claudeCode.stabilizePromptCache: true`, dönüştürülen rotalarda sistem talimatlarının sonundaki desteklenen Claude bildirimlerini son kullanıcı mesajına taşır. Varsayılan değer `false` olur. Yalnızca bu rol değişikliği istemcileriniz için uygunsa etkinleştirin. Kod bloklarındaki örnekler ve eşleşmeyen metin korunur; yerel Anthropic aktarımı değişmez. Meta veri yoksa önbellek anahtarı kararlı talimatlardan hesaplanır. Bu seçenek konuşma kimliği oluşturmaz veya üst hizmette önbellek isabeti garanti etmez.

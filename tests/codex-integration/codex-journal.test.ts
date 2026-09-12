@@ -167,7 +167,11 @@ describe("codex-journal", () => {
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout);
     expect(out.result.success).toBe(false);
-    expect(out.result.artifacts.config.state).toBe("failed");
+    expect(out.result.message).toContain("journal recovery was not verified");
+    expect(out.result.artifacts.config).toMatchObject({ state: "failed", changed: false });
+    for (const artifact of [out.result.artifacts.catalog, out.result.artifacts.history]) {
+      expect(artifact).toMatchObject({ state: "skipped", changed: false });
+    }
     expect(out.config).toBe(edited);
     expect(out.journalPreserved).toBe(true);
   });
@@ -515,17 +519,23 @@ describe("codex-journal", () => {
           marker + '\\ndefault_subagent_model',
           marker + '\\n\\ndefault_subagent_model',
         ), "utf8");
-        console.log(JSON.stringify(restoreNativeCodex()));
+        const paths = ["config.toml", "opencodex.config.toml", "opencodex-journal.json"].map(name => path.join(process.env.CODEX_HOME, name));
+        const snapshot = () => paths.map(file => ({ exists: fs.existsSync(file), content: fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null }));
+        const before = snapshot();
+        const result = restoreNativeCodex();
+        console.log(JSON.stringify({ result, before, after: snapshot() }));
       })();
     `);
 
     expect(r.status).toBe(0);
-    const result = JSON.parse(r.stdout);
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("could not be safely removed");
-    expect(result.message).toContain("orphaned managed subagent default marker");
+    const out = JSON.parse(r.stdout);
+    expect(out.result.success).toBe(false);
+    expect(out.result.message).toContain("could not be safely removed");
+    expect(out.result.message).toContain("orphaned managed subagent default marker");
+    expect(out.after).toEqual(out.before);
+    expect(out.result.artifacts.config.state).toBe("failed");
     const after = readFileSync(join(testDir, "config.toml"), "utf8");
-    expect(after).not.toContain("openai_base_url");
+    expect(after).toContain("openai_base_url");
     expect(after).toContain("# Managed by opencodex: native subagent default");
     expect(after).toContain('default_subagent_model = "gpt-5.6-sol"');
     expect(existsSync(join(testDir, "opencodex-journal.json"))).toBe(true);

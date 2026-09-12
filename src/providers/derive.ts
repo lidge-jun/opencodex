@@ -16,6 +16,7 @@ export interface DerivedKeyLoginProvider {
   label: string;
   baseUrl: string;
   responsesPath?: string;
+  chatCompletionsPath?: string;
   adapter: string;
   apiKeyValidation?: "unknown";
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
@@ -71,6 +72,7 @@ export interface DerivedProviderPreset {
   adapter: string;
   baseUrl: string;
   responsesPath?: string;
+  chatCompletionsPath?: string;
   defaultModel?: string;
   auth: "oauth" | "forward" | "key" | "local";
   codexAccountMode?: CodexAccountMode;
@@ -222,6 +224,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     baseUrl: entry.baseUrl,
     ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
     ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
+    ...(entry.chatCompletionsPath ? { chatCompletionsPath: entry.chatCompletionsPath } : {}),
     ...(entry.alias ? { alias: entry.alias } : {}),
     // Preserve the registry auth kind verbatim (including "local") so fail-closed gates that
     // distinguish local runtimes from API-key providers keep working after the seed round-trip.
@@ -257,6 +260,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.chatServiceTier !== undefined ? { chatServiceTier: entry.chatServiceTier } : {}),
     ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
     ...(entry.responsesPath !== undefined ? { responsesPath: entry.responsesPath } : {}),
+    ...(entry.chatCompletionsPath !== undefined ? { chatCompletionsPath: entry.chatCompletionsPath } : {}),
     ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
     ...(entry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: entry.requiresAdjacentResponsesToolResults }
@@ -288,6 +292,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       label: entry.label,
       baseUrl: entry.baseUrl,
       ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
+      ...(entry.chatCompletionsPath ? { chatCompletionsPath: entry.chatCompletionsPath } : {}),
       adapter: entry.adapter,
       ...(entry.apiKeyValidation !== undefined ? { apiKeyValidation: entry.apiKeyValidation } : {}),
       ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
@@ -478,6 +483,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
+  if (prov.chatCompletionsPath === undefined && seed.chatCompletionsPath !== undefined) prov.chatCompletionsPath = seed.chatCompletionsPath;
   // Fill mode only when absent: an explicit persisted `direct` must never be overwritten.
   if (prov.codexAccountMode === undefined && seed.codexAccountMode !== undefined) prov.codexAccountMode = seed.codexAccountMode;
   if (!prov.models && seed.models) prov.models = [...seed.models];
@@ -521,6 +527,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // Fill-only: a hand-edited path must survive, and a config saved before the registry
   // learned this route still gets backfilled.
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
+  if (prov.chatCompletionsPath === undefined && seed.chatCompletionsPath !== undefined) prov.chatCompletionsPath = seed.chatCompletionsPath;
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
   if (prov.requiresAdjacentResponsesToolResults === undefined && seed.requiresAdjacentResponsesToolResults !== undefined) {
     prov.requiresAdjacentResponsesToolResults = seed.requiresAdjacentResponsesToolResults;
@@ -602,6 +609,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
+    ...(entry.chatCompletionsPath ? { chatCompletionsPath: entry.chatCompletionsPath } : {}),
     auth: entry.authKind === "forward" ? "forward" : entry.authKind === "oauth" ? "oauth" : entry.authKind === "local" ? "local" : "key",
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.codexAccountMode ? { provider: providerConfigSeed(entry) } : {}),

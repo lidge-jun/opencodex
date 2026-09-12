@@ -201,7 +201,7 @@ OpenAI 백엔드는 ChatGPT 로그인과 활성화된 ChatGPT `forward` provider
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | 주 이미지 설명 스위치입니다. |
 | `backend?` | `"openai" \| "anthropic"` | auto | 명시값이 우선하며, 미설정 시 사용 가능한 저장된 Anthropic OAuth 자격 증명을 우선하고 없으면 `openai`를 사용합니다. |
-| `model?` | `string` | backend-dependent | OpenAI는 `gpt-5.4-mini`, Anthropic은 `claude-sonnet-5`입니다. |
+| `model?` | `string` | backend-dependent | OpenAI는 `gpt-5.6-luna`, Anthropic은 `claude-sonnet-5`입니다. |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses 추론 강도입니다. Anthropic은 무시합니다. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 메인 턴당 허용되는 새 설명 캐시 미스 수입니다. `0`이면 호출이 비활성화되며, 잘못된 값은 기본값을 사용합니다. |
 | `timeoutMs?` | `number` | `45000` | 사이드카 fetch 제한 시간입니다. 정수 1–2147483647. |

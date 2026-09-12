@@ -1,3 +1,4 @@
+// Holds INV-OPENAI-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../../helpers/repo-root";

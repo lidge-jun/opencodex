@@ -235,7 +235,7 @@ Manage and apply the Grok Build model fence.
 
 ## Client config export
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
 
 Print a client config wired to the running proxy. The command serializes the
 `opencodex` provider block — base URL, model list, and the client's credential
@@ -246,7 +246,7 @@ models Codex can currently see.
 
 | Flag | Action |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast>` | Required. Selects the client config dialect. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Required. Selects the client config dialect. |
 | `--json` | Print the generated document as JSON on stdout for scripts. This is JSON even when the selected client's native format is YAML, TOML, or JSON5. |
 | `--out <path>` | Write the client's native config format to `<path>`. Refuses to replace an existing file. |
 | `--force` | Allow `--out` to replace an existing file. |
@@ -277,6 +277,7 @@ client applies its own defaults for those).
 | `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` wins when set; a relative value is refused) | `prime-models.json` | none — loopback placeholder |
 | `aside` | `~/.aside/u/<account>/models.json` for the account Aside's own `accounts.json` names as current; an unreadable manifest is refused rather than defaulting to an account | `aside-models.json` | none — loopback placeholder |
 | `raycast` | `~/.config/raycast/ai/providers.yaml` on macOS and Windows alike (Raycast does not honor `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | none — loopback only, no `api_keys` entry is written |
+| `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, then `SENPI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR` win in that order when set; a relative value is refused) | `omo-models.json` | none — loopback placeholder |
 
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
 `llm-pi-ai.providers.opencodex`. DSH hot reloads that provider; the user's default model and
@@ -328,8 +329,8 @@ the proxy binds beyond loopback; see
 [Remote access](/reference/configuration/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per
 [Providers](/guides/providers/).
-Gajae is the exception: `OPENCODEX_GAJAE_API_KEY` fills its provider credential from the
-environment, but its schema cannot send the remote admission header, so the generated Gajae
+gjc is the exception: `OPENCODEX_GAJAE_API_KEY` fills its provider credential from the
+environment, but its schema cannot send the remote admission header, so the generated gjc
 integration remains loopback-only.
 
 The same payload is served by `GET /api/client-config` and rendered on the dashboard's API tab, so

@@ -144,3 +144,39 @@ export function cancelBodyOnAbort(body: ReadableStream<Uint8Array> | null, signa
   signal.addEventListener("abort", onAbort, { once: true });
   return () => signal.removeEventListener("abort", onAbort);
 }
+
+/**
+ * Compose multiple AbortSignals into a single signal that aborts when ANY input
+ * aborts. Uses `AbortSignal.any` when available (Node >=20.3 / Bun >=1.0);
+ * falls back to a manual implementation for older runtimes.
+ *
+ * The caller gets a `cleanup` alongside the signal and must call it once the
+ * work it guards has settled. `{ once: true }` only removes a listener that
+ * actually fired, so on the polyfill path a long-lived parent signal - a proxy
+ * session's, say - accumulates one listener per request until it aborts or the
+ * process exits. `signalWithTimeout` in this file has always had that
+ * discipline; this function did not.
+ */
+export function anySignal(signals: AbortSignal[]): { signal: AbortSignal; cleanup: () => void } {
+  const builtin = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+  if (typeof builtin === "function") return { signal: builtin(signals), cleanup: () => {} };
+  const controller = new AbortController();
+  const listeners: Array<[AbortSignal, () => void]> = [];
+  const cleanup = (): void => {
+    for (const [source, handler] of listeners.splice(0)) source.removeEventListener("abort", handler);
+  };
+  const onAbort = (reason: unknown): void => {
+    if (!controller.signal.aborted) controller.abort(reason);
+    cleanup();
+  };
+  for (const s of signals) {
+    if (s.aborted) {
+      onAbort(s.reason);
+      break;
+    }
+    const handler = () => onAbort(s.reason);
+    listeners.push([s, handler]);
+    s.addEventListener("abort", handler);
+  }
+  return { signal: controller.signal, cleanup };
+}

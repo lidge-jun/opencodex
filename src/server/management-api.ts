@@ -143,6 +143,12 @@ async function handleQuotaResetRoutesOnDemand(ctx: ManagementContext): Promise<R
   return handleQuotaResetRoutes(ctx);
 }
 
+async function handleGrokCouponRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/grok/reset-coupons", true)) return null;
+  const { handleGrokCouponRoutes } = await import("./management/grok-coupon-routes");
+  return handleGrokCouponRoutes(ctx);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -241,6 +247,7 @@ export async function handleManagementAPI(
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
+    ??     (await handleGrokCouponRoutesOnDemand(ctx))
     ??     (await handleRoutingAnalyticsRoutes(ctx))
     ??     (await handleRoutingProfileRoutesOnDemand(ctx))
     ??     (await handleProviderRoutes(ctx))

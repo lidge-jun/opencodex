@@ -201,6 +201,7 @@ export function shouldResolveOpenAiWebSearchSidecar(
   isPassthrough: boolean,
 ): boolean {
   if (!parsed._webSearch || isPassthrough) return false;
+  if (!toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) return false;
   const cfg = config.webSearchSidecar ?? {};
   return cfg.enabled !== false && resolveSidecarBackend(cfg.backend) === "openai";
 }

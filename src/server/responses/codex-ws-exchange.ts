@@ -4,9 +4,9 @@ import { CodexWsMetadata, type CodexWsQuotaObserver } from "./codex-ws-metadata"
 import { CODEX_RESPONSES_HTTP_URL, type PreparedCodexWsRequest } from "./codex-ws-request";
 import { CodexWsCorrelation } from "./codex-ws-correlation";
 import type { CodexWsSession } from "./codex-ws-session";
-import { UPGRADE_DEADLINE_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES,
+import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
-  codexWsFailureDetail, type CodexWsFailureStage } from "./codex-ws-wire";
+  codexWsFailureDetail, codexWsPreResponseFailure, type CodexWsFailureStage } from "./codex-ws-wire";
 
 interface ExchangeOptions {
   session: CodexWsSession;
@@ -101,6 +101,8 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     let upstreamFrames = 0;
     let controlFrames = 0;
     let relayedEvents = 0;
+    let pings = 0;
+    let pongs = 0;
     let sentAt: number | null = null;
     let firstFrameAt: number | null = null;
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -108,7 +110,11 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     const metadata = url === CODEX_RESPONSES_HTTP_URL ? new CodexWsMetadata(onQuota) : null;
     const correlation = session.retainable ? new CodexWsCorrelation(session.reused, id => session.hasCompleted(id)) : null;
     let detachOwner = () => {};
-    let preludeTimer: ReturnType<typeof setTimeout> | undefined;
+    // Liveness while waiting for the first response event (metadata path only): the
+    // silence timer is re-armed by every inbound frame or pong; the pinger runs on a fixed
+    // interval so a peer that answers pings can never trip the silence bound while alive.
+    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+    let pingTimer: ReturnType<typeof setTimeout> | undefined;
     const stream = new ReadableStream<Uint8Array>({
       start(c) { controller = c; },
       cancel() {
@@ -121,7 +127,8 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
 
     const cleanup = () => {
       clearTimeout(upgradeTimer);
-      clearTimeout(preludeTimer);
+      clearTimeout(silenceTimer);
+      clearTimeout(pingTimer);
       signal?.removeEventListener("abort", onAbort);
       metadata?.finish();
       correlation?.finish();
@@ -130,6 +137,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       ws.removeEventListener("message", onMessage);
       ws.removeEventListener("close", onClose);
       ws.removeEventListener("error", onError);
+      ws.removeEventListener("pong", onPong);
     };
 
     /**
@@ -145,12 +153,15 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       relayedEvents,
       firstFrameMs: sentAt !== null && firstFrameAt !== null ? Math.max(0, firstFrameAt - sentAt) : null,
       elapsedMs: sentAt !== null ? Math.max(0, Date.now() - sentAt) : null,
+      pings,
+      pongs,
     });
 
     const commitResponse = () => {
       if (responseCommitted) return;
       responseCommitted = true;
-      clearTimeout(preludeTimer);
+      clearTimeout(silenceTimer);
+      clearTimeout(pingTimer);
       const responseHeaders = metadata?.snapshot() ?? new Headers();
       responseHeaders.set("content-type", "text/event-stream; charset=utf-8");
       const response = new Response(stream, { status: 200, headers: responseHeaders });
@@ -159,15 +170,59 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       resolve(response);
     };
 
-    const failStream = (error: unknown) => {
+    const failStream = (error: unknown, status: 502 | 504 = 502) => {
       if (terminal) return;
       terminal = true;
-      // A frame may already be executing upstream. Settle as a body failure,
-      // never a fetch rejection/5xx that the pre-stream wrapper could resend.
+      if (sent && !responseCommitted && metadata) {
+        // Nothing has been promised to the client yet, so the honest answer is a gateway
+        // status, not a 200 whose body then fails. The frame may already be executing
+        // upstream: the response is marked non-replayable so no layer of this process sends
+        // it again, and the client applies its own retry policy as it would on the direct
+        // path. Same settle order as a refused create: snapshot, detach, close, dispose.
+        const prelude = metadata.snapshot();
+        // Claim the commit slot so no later path can resolve a second, 200 Response.
+        responseCommitted = true;
+        cleanup();
+        try { controller?.close(); } catch { /* unused stream already closed */ }
+        session.dispose();
+        const message = error instanceof Error ? error.message : String(error);
+        resolve(codexWsPreResponseFailure(status, message, prelude));
+        return;
+      }
+      // A response is already flowing (or this transport has no metadata channel and
+      // committed at send). Settle as a body failure, never a fetch rejection/5xx that the
+      // pre-stream wrapper could resend.
       if (sent) commitResponse();
       cleanup();
       try { controller?.error(typeof error === "string" ? new Error(error) : error); } catch { /* stream already done */ }
       session.dispose();
+    };
+
+    /** (Re)start the silence bound; every inbound frame or pong is proof of life. */
+    const armSilence = () => {
+      clearTimeout(silenceTimer);
+      if (responseCommitted || terminal) return;
+      silenceTimer = setTimeout(
+        () => failStream(`codex websocket response prelude timed out${codexWsFailureDetail(failureStage())}`, 504),
+        CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
+      );
+    };
+    /** Ping on a fixed interval until the response starts; a socket without ping() is never pinged. */
+    const schedulePing = () => {
+      const ping = (ws as WebSocket & { ping?: (data?: string) => void }).ping;
+      if (typeof ping !== "function" || responseCommitted || terminal) return;
+      pingTimer = setTimeout(() => {
+        if (responseCommitted || terminal) return;
+        try { ping.call(ws); } catch { return; }
+        pings += 1;
+        // ping() may close the socket synchronously and settle the exchange; re-check.
+        if (!terminal) schedulePing();
+      }, CODEX_WS_LIVENESS_PING_INTERVAL_MS);
+    };
+    const onPong = () => {
+      if (terminal) return;
+      pongs += 1;
+      if (!responseCommitted) armSilence();
     };
 
     const upgradeTimer = setTimeout(() => {
@@ -182,6 +237,25 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       if (terminal || settledPreOpen) return;
       if (!sent) {
         settledPreOpen = true;
+        terminal = true;
+        cleanup();
+        session.dispose();
+        reject(reason);
+        return;
+      }
+      if (!responseCommitted && metadata) {
+        // Sent, unacknowledged. The proxy's own connect deadline is an origin-silence
+        // verdict and settles like one; a caller abort is the caller's decision, so the
+        // exchange rejects with that reason and disposing the socket cancels the turn.
+        // Both arrive on the same composite signal (fetchWithHeaderTimeout joins the
+        // caller's controller with its own), so the reason is the only discriminator: the
+        // deadline aborts with a TimeoutError DOMException, and every caller abort in this
+        // process (upstream.abort() in core.ts) carries the default AbortError. A future
+        // proxy-side deadline that aborts with TimeoutError would still be honestly a 504.
+        if ((reason as { name?: unknown } | null)?.name === "TimeoutError") {
+          failStream(`codex websocket response did not start before the connect deadline${codexWsFailureDetail(failureStage())}`, 504);
+          return;
+        }
         terminal = true;
         cleanup();
         session.dispose();
@@ -208,6 +282,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         ws.removeEventListener("message", onMessage);
         ws.removeEventListener("close", onClose);
         ws.removeEventListener("error", onError);
+        ws.removeEventListener("pong", onPong);
         session.dispose();
         reject(error);
         return;
@@ -236,16 +311,15 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       }
       if (!metadata) commitResponse();
       else if (!responseCommitted && !terminal) {
-        preludeTimer = setTimeout(
-          () => failStream(`codex websocket response prelude timed out${codexWsFailureDetail(failureStage())}`),
-          CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
-        );
+        armSilence();
+        schedulePing();
       }
     };
 
     const onMessage = (event: MessageEvent) => {
       if (!controller || terminal) return;
       received = true;
+      if (!responseCommitted) armSilence();
       upstreamFrames += 1;
       if (firstFrameAt === null) firstFrameAt = Date.now();
       const text = typeof event.data === "string" ? event.data : "";
@@ -288,8 +362,9 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       if (!controlFrame && !type.startsWith("response.") && type !== "error") return;
       if (!controlFrame) {
         try { correlation?.accept(normalized.payload); } catch (error) { failStream(error); return; }
-        // Correlation must run first: a reused socket's foreign-stream error
-        // must not become an HTTP refusal that could authorize account replay.
+        // Correlation must run first: a reused socket's foreign-stream error settles as a
+        // non-replayable 502 above, never as the refused-create 4xx projection below, which
+        // is the one status family that could authorize an account replay.
         if (metadata && sent && !responseCommitted && type === "error") {
           let rejection: Response | null;
           try { rejection = wrappedRejectionResponse(normalized.payload, metadata.snapshot()); }
@@ -366,6 +441,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     ws.addEventListener("message", onMessage);
     ws.addEventListener("close", onClose);
     ws.addEventListener("error", onError);
+    ws.addEventListener("pong", onPong);
     if (signal?.aborted) onAbort();
     else if (session.opened) onOpen();
   });

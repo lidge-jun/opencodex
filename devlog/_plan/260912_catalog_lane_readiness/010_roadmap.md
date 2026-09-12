@@ -1,0 +1,2 @@
+# Roadmap documentation cycle
+NEW 000_plan.md and decade documents 010/020/030 in this unit; before: absent; after: outcome, authority, exact read targets and acceptance. NEW .tmp/catalog-review/HANDOFF.md: identity, current PR states and evidence pointers. No product delta. Check: read all four documents and git diff --check; confirm every phase has real outputs and user restrictions. D locks this roadmap and directs the next cycle to review exact tip source.

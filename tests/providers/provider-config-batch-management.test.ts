@@ -9,6 +9,8 @@ import { safeConfigDTO } from "../../src/server/auth-cors";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor, rotateKeyOn429, selectProactiveApiKey } from "../../src/providers/key-failover";
+import { setActiveProviderApiKey } from "../../src/providers/api-keys";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { ManagementRequest as Request } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -359,5 +361,62 @@ describe("atomic provider editor batch", () => {
     expect(await response?.json()).toEqual({
       error: "Full config PUT is disabled. Use /api/providers POST for provider changes.",
     });
+  });
+
+  /**
+   * The batch PUT rewrites the whole roster, which is why it already clears every key cooldown
+   * without naming a provider. The rotation cursor is the other half of that state and was
+   * being left behind, so round-robin resumed after the pre-edit position instead of at the
+   * head of the roster the operator had just saved.
+   *
+   * Red control: drop `forgetApiKeyRotationCursor()` from the PUT success path and the pick
+   * below returns `sk-alpha-three`, continuing after the stale cursor instead of taking the
+   * first eligible key.
+   */
+  test("a batch PUT forgets the rotation cursor along with the cooldowns", async () => {
+    const liveConfig = seededConfig();
+    liveConfig.providers.alpha!.apiKeyPoolStrategy = "round-robin";
+    liveConfig.providers.alpha!.apiKeyPool = [
+      { id: "one", key: "sk-alpha-one" },
+      { id: "two", key: "sk-alpha-two" },
+      { id: "three", key: "sk-alpha-three" },
+    ];
+    liveConfig.providers.alpha!.apiKey = "sk-alpha-one";
+    saveConfig(liveConfig);
+    clearKeyCooldowns();
+    forgetApiKeyRotationCursor();
+
+    // Establish a cursor the honest way: cool the committed key, point the stored selection
+    // back at it -- which is the state a restart or a config reload leaves -- and let the pool
+    // advance. Cooling alone is not enough, because rotateKeyOn429 already commits the next
+    // key and the picker refuses to second-guess a healthy committed one.
+    const t0 = Date.now();
+    rotateKeyOn429(loadConfig(), "alpha", null, t0, "sk-alpha-one");
+    setActiveProviderApiKey(loadConfig(), "alpha", "one");
+    const first = selectProactiveApiKey(loadConfig(), "alpha", t0);
+    expect(first?.apiKey).toBe("sk-alpha-two");
+
+    const baseline = editorBaseline(loadConfig());
+    // apiKeyPoolStrategy is a public editor field, so it has to appear in the baseline or the
+    // deep-equal staleness check rejects the PUT.
+    baseline.providers.alpha!.apiKeyPoolStrategy = "round-robin";
+    const next = structuredClone(baseline);
+    next.providers.alpha!.defaultModel = "alpha-new";
+    // Same seam the other successful-PUT cases use: the destination check would otherwise do a
+    // real DNS lookup for alpha.example.test on the commit path.
+    const destinationSpy = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    try {
+      const response = await putBatch(loadConfig(), { baseline, next });
+      expect(response?.status).toBe(200);
+    } finally {
+      destinationSpy.mockRestore();
+    }
+
+    // The PUT cleared the cooldowns, so key one is eligible again. Cool only the committed key
+    // and point the selection back at it, the same way as above.
+    rotateKeyOn429(loadConfig(), "alpha", null, t0, "sk-alpha-two");
+    setActiveProviderApiKey(loadConfig(), "alpha", "two");
+    const second = selectProactiveApiKey(loadConfig(), "alpha", t0);
+    expect(second?.apiKey).toBe("sk-alpha-one");
   });
 });

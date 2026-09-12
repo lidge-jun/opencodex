@@ -95,8 +95,10 @@ account id, OpenAI beta/originator/session — см. [Адаптеры](/ru/refe
 
 Восемь пресетов провайдеров используют вход через OAuth — плюс GitHub Copilot через
 экспериментальный неофициальный мост device flow. opencodex хранит их учётные данные в
-`~/.opencodex/auth.json` и обновляет их автоматически. CLI входа также принимает `chatgpt`: эта
-команда получает учётные данные ChatGPT и одновременно создаёт запись провайдера в режиме `forward`.
+`~/.opencodex/auth.json` и обновляет их автоматически. CLI входа принимает и `ocx login codex`, но это
+не один из провайдеров выше: команда направляется во вход пула аккаунтов Codex (тот же поток, что и
+`ocx account login codex`). У пула отдельный реестр аккаунтов, поэтому такому входу нужен запущенный
+прокси. `chatgpt` и `openai` — псевдонимы того же маршрута.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -107,8 +109,9 @@ ocx login kiro         # импорт учётных данных kiro-cli (с �
 ocx login google-antigravity
 ocx login cursor       # отдельный PKCE-вход Cursor
 ocx login command-code # браузерный OAuth Command Code (или импорт ~/.commandcode/auth.json)
+ocx login devin       # Вход в Cognition/Devin через браузер (Auth0)
 ocx login github-copilot  # device flow GitHub → токен Copilot (Copilot Pro/Business)
-ocx login chatgpt      # отдельный OAuth-вход ChatGPT
+ocx login codex        # пул аккаунтов Codex (псевдонимы: chatgpt, openai; нужен запущенный прокси)
 ocx logout <provider>
 ```
 
@@ -121,6 +124,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Первый вход импортирует существующую сессию после установки Kiro CLI (в Unix: `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; в Windows PowerShell: `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; затем выполните `kiro-cli login`). **Добавить аккаунт** выполняет выход из `kiro-cli`, запускает новый вход через браузер, переключает аккаунт самого `kiro-cli` и сохраняет метаданные профиля отдельно для каждого аккаунта. Существующие аккаунты OpenCodex сохраняются; при отмене или сбое восстанавливается предыдущая сессия `kiro-cli`. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth поверх протокола Cloud Code Assist. Живое обнаружение использует аутентифицированный CCA-эндпоинт `v1internal:fetchAvailableModels` и публикует только agent-модели, доступные текущему аккаунту; поддерживаемый каталог остаётся резервным вариантом. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Экспериментальный PKCE-вход, живой транспорт HTTP/2 и обнаружение моделей с фильтрацией по аккаунту. |
+| `devin` | `devin` | `https://server.codeium.com` | Экспериментальный неофициальный мост к Cognition/Devin. Вход открывает страницу Auth0 в браузере, затем токен обменивается через `RegisterUser` на долгоживущий API-ключ. Список моделей запрашивается для каждой учётной записи через `GetCascadeModelConfigs`; потоковая передача идёт только по пути `runTurn` поверх Connect-RPC. В пресете панели по умолчанию отсутствует. |
+| `devin-cli` | `devin` | `https://server.codeium.com` | Импортирует учётные данные, которые установленный Devin CLI уже хранит (`devin auth login` записывает их в свой `credentials.toml`), а затем передаёт потоком через Connect-RPC api-server Cognition, как и провайдер `devin` — без входа в браузере и без ключа для вставки. Список моделей и контекстные окна берутся из каталога вашей учётной записи. Для собственного локального цикла агента CLI (ACP stdio) используйте строку с другим именем и `"adapter": "devin-cli"`. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Экспериментально. Device flow GitHub + обмен `copilot_internal` (OAuth-клиент VS Code). Требуется активная подписка Copilot; это не официальный сторонний API. |
 
 Проверки квот аккаунтов и провайдера Google Antigravity используют фиксированные адреса Google, включая резервный запрос списка моделей. Для этих адресов поддерживается прозрачный Fake-IP DNS с сохранением проверки TLS, запрета перенаправлений и проверки частных адресов. Пользовательский base URL меняет только запросы моделей; `NO_PROXY` сохраняет политику прямого подключения.
@@ -278,7 +283,7 @@ Volcengine Agent Plan использует нативную конечную т�
 > каталог. У шлюза Agent Plan ресурса `/models` нет. Для pay-as-you-go модель по умолчанию —
 > `doubao-seed-2-1-pro-260628`; его статический каталог также включает актуальные текстовые модели
 > DeepSeek и GLM. Для Coding Plan модель по умолчанию — `ark-code-latest`, для Agent Plan —
-> `deepseek-v4-pro`.
+> `deepseek-v4-flash`.
 
 **Discovery для Chutes.** Пресет `chutes` использует фиксированный общий OpenAI-совместимый LLM
 gateway Chutes. Из публичного каталога `/v1/models` он оставляет только строки, где
@@ -472,7 +477,7 @@ Ollama Cloud — это размещённая в облаке (не локал�
 получает список моделей от провайдера, поэтому новые модели Ollama Cloud появляются без
 изменения конфигурации. opencodex классифицирует её облачную
 линейку по поддержке изображений, чтобы [vision-сайдкар](/ru/guides/sidecars/) включался
-только для текстовых моделей. Текстовые модели (например, `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`,
+только для текстовых моделей. Текстовые модели (например, `glm-5.2`, `deepseek-v4-flash`, `gpt-oss`,
 `qwen3-coder`, `minimax-m2.x`, `nemotron-3-*`) перечислены в `noVisionModels`; модели с нативной
 поддержкой изображений (например, `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`,
 `gemini-3-flash-preview`) — нет. Сопоставление терпимо к тегам Ollama вида `:size`, поэтому

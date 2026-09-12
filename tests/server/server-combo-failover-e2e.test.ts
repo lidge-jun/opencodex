@@ -1412,7 +1412,7 @@ describe("server combo failover 030 activation matrix", () => {
         authMode: "forward",
         codexAccountMode: "pool",
       },
-    }, [{ provider: "openai", model: "gpt-5.4" }]);
+    }, [{ provider: "openai", model: "gpt-5.6-luna" }]);
     config.codexAccounts = [{
       id: rawAccountId,
       email: "pool@example.test",
@@ -1427,7 +1427,7 @@ describe("server combo failover 030 activation matrix", () => {
       expiresAt: Date.now() + 300_000,
       chatgptAccountId: "acct-pool-safe",
     });
-    customTransientResponse = async () => Response.json(responsesSuccess("pool success", "gpt-5.4"));
+    customTransientResponse = async () => Response.json(responsesSuccess("pool success", "gpt-5.6-luna"));
 
     const response = await postLogged(config);
     expect(response.status).toBe(200);
@@ -1459,7 +1459,7 @@ describe("server combo failover 030 activation matrix", () => {
         authMode: "forward",
         codexAccountMode: "pool",
       },
-    }, [{ provider: "openai", model: "gpt-5.4" }]);
+    }, [{ provider: "openai", model: "gpt-5.6-luna" }]);
     config.codexAccounts = [{
       id: rawAccountId,
       email: "combo-terminal@example.test",
@@ -1504,7 +1504,7 @@ describe("server combo failover 030 activation matrix", () => {
       },
     }, [
       { provider: "openai", model: "gpt-5.3-codex-spark" },
-      { provider: "openai", model: "gpt-5.4" },
+      { provider: "openai", model: "gpt-5.6-luna" },
     ]);
     config.codexAccounts = [{
       id: rawAccountId,
@@ -1531,7 +1531,7 @@ describe("server combo failover 030 activation matrix", () => {
             headers: { "x-codex-primary-reset-at": String(Math.floor(Date.now() / 1000) + 3600) },
           },
         )
-        : Response.json(responsesSuccess("model fallback succeeded", "gpt-5.4"));
+        : Response.json(responsesSuccess("model fallback succeeded", "gpt-5.6-luna"));
     };
 
     const response = await postLogged(config);
@@ -1552,7 +1552,7 @@ describe("server combo failover 030 activation matrix", () => {
       },
     }, [
       { provider: "openai", model: "gpt-5.3-codex-spark" },
-      { provider: "openai", model: "gpt-5.4" },
+      { provider: "openai", model: "gpt-5.6-luna" },
     ]);
     config.codexAccounts = [{
       id: rawAccountId,
@@ -1582,7 +1582,7 @@ describe("server combo failover 030 activation matrix", () => {
             },
           },
         )
-        : Response.json(responsesSuccess("must not reach second upstream", "gpt-5.4"));
+        : Response.json(responsesSuccess("must not reach second upstream", "gpt-5.6-luna"));
     };
 
     const response = await postLogged(config);
@@ -3801,7 +3801,7 @@ describe("combo compact failover", () => {
       return chatStream("compact backup");
     });
     const { config } = canonicalPoolConfig([
-      { provider: "openai-apikey", model: "gpt-5.4" },
+      { provider: "openai-apikey", model: "gpt-5.6-luna" },
       { provider: "backup", model: "m1" },
     ], baseUrl(b));
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
@@ -3857,7 +3857,7 @@ describe("combo compact failover", () => {
 
   test("combo compact runs the synthetic turn as SSE so a canonical child can serve it", async () => {
     const bodies: Array<Record<string, unknown>> = [];
-    const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.4" }]);
+    const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.6-luna" }]);
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = typeof input === "object" && input !== null && "url" in input
         ? String((input as Request).url)
@@ -3908,7 +3908,7 @@ describe("combo compact failover", () => {
   });
 
   test("native compact rejects an empty ciphertext item", async () => {
-    const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.4" }]);
+    const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.6-luna" }]);
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = typeof input === "object" && input !== null && "url" in input
         ? String((input as Request).url)

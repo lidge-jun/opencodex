@@ -59,7 +59,7 @@ opencodex 會跳過已停用、不可路由、不健康、冷卻中或達到配�
   "injectionModel": "gpt-5.5",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallback": ["gpt-5.6-luna"],
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }

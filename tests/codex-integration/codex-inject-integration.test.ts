@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -34,10 +34,10 @@ function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { std
   return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
 }
 
-function runRestore(codexHome: string, ocxHome: string): { stdout: string; status: number } {
+function runRestore(codexHome: string, ocxHome: string, asyncRestore = false): { stdout: string; status: number } {
   const script = `
-    const { restoreNativeCodex } = require("./src/codex/inject");
-    console.log(JSON.stringify(restoreNativeCodex()));
+    const { restoreNativeCodex, restoreNativeCodexAsync } = require("./src/codex/inject");
+    console.log(JSON.stringify(${asyncRestore ? "await restoreNativeCodexAsync()" : "restoreNativeCodex()"}));
   `;
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
@@ -59,13 +59,227 @@ describe("injectCodexConfig integration (Design B)", () => {
   let ocxHome: string;
 
   beforeEach(() => {
-    codexHome = mkdtempSync(join(tmpdir(), "ocx-inject-codex-"));
-    ocxHome = mkdtempSync(join(tmpdir(), "ocx-inject-home-"));
+    codexHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-codex-")));
+    ocxHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-home-")));
   });
 
   afterEach(() => {
     removeTreeWithRetry(codexHome);
     removeTreeWithRetry(ocxHome);
+  });
+
+  test.each(["sync", "async"])("manifest-owned native rows refuse restore before artifact changes (%s)", (kind) => {
+    writeFileSync(join(codexHome, "config.toml"), 'model="test"\n');
+    const script = `
+      const fs = require("node:fs");
+      const { join } = require("node:path");
+      const { Database } = require("bun:sqlite");
+      const { injectCodexConfig, restoreNativeCodex, restoreNativeCodexAsync } = require("./src/codex/inject");
+      const { syncCodexHistoryProvider, historyBackupPathFor } = require("./src/codex/history-provider");
+      const { resolveCodexStateDbPath } = require("./src/codex/paths");
+      const enabled = await injectCodexConfig(10100, {});
+      if (!enabled.success) throw new Error("fixture injection failed");
+      const dbPath = join(process.env.CODEX_HOME, "state_5.sqlite");
+      const rollout = join(process.env.CODEX_HOME, "manifest-fixture.jsonl");
+      fs.writeFileSync(rollout, JSON.stringify({type:"session_meta",payload:{id:"fixture",model_provider:"openai",source:"cli"}})+String.fromCharCode(10));
+      const db = new Database(dbPath);
+      db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, model_provider TEXT, source TEXT, first_user_message TEXT, has_user_event INTEGER)");
+      db.run("INSERT INTO threads VALUES ('fixture', ?, 'openai', 'cli', 'hello', 1)", rollout);
+      const routed = syncCodexHistoryProvider("opencodex", dbPath);
+      if (routed.failed || routed.rows !== 1) throw new Error("fixture history route failed");
+      db.run("UPDATE threads SET model_provider='openai'");
+      db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+      db.close();
+      const backup = historyBackupPathFor(dbPath);
+      const entries = Object.keys(JSON.parse(fs.readFileSync(backup,"utf8")).entries).length;
+      const defaultEntries = Object.keys(JSON.parse(fs.readFileSync(historyBackupPathFor(resolveCodexStateDbPath()),"utf8")).entries).length;
+      const paths = ["config.toml","opencodex.config.toml","opencodex-journal.json"].map(p=>join(process.env.CODEX_HOME,p)).concat([backup,rollout]);
+      const before = paths.map(p=>fs.readFileSync(p,"utf8"));
+      const result = ${kind === "sync" ? "restoreNativeCodex()" : "await restoreNativeCodexAsync()"};
+      console.log(JSON.stringify({entries,defaultEntries,result,preserved:paths.every((p,i)=>fs.readFileSync(p,"utf8")===before[i])}));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const result = JSON.parse(child.stdout);
+    expect(result.entries).toBe(1);
+    expect(result.defaultEntries).toBe(1);
+    expect(result.result.success).toBe(false);
+    expect(result.result.message).toContain("history_paginated_requires_native_writer");
+    expect(result.preserved).toBe(true);
+  });
+
+  // The denial has to be a real filesystem permission. `inject-coordination.ts`
+  // binds `readFileSync` as an ESM named import, so `spyOn(fs, "readFileSync")`
+  // on the child's `require("node:fs")` handle never reached it: the mock
+  // matched nothing and every assertion below passed through an undenied run.
+  // `unreadable` now proves the precondition before anything depends on it.
+  // Root reads a mode-0 file regardless, and Windows chmod only toggles the
+  // read-only bit, so neither can express the permission this test needs.
+  const unreadablePreimages =
+    process.platform === "win32" || process.getuid?.() === 0 ? test.skip : test;
+  unreadablePreimages("unreadable preimages abort capture and remain visible as compensation failures", () => {
+    const script = `
+      const fs = require("node:fs");
+      const { join } = require("node:path");
+      const target = require("./src/codex/paths").CODEX_PROFILE_PATH;
+      const configPath = join(process.env.CODEX_HOME,"config.toml");
+      fs.writeFileSync(configPath,'model="test"');
+      const {injectCodexConfig,restoreNativeCodex,restoreNativeCodexAsync}=require("./src/codex/inject");
+      const initial=await injectCodexConfig(10100,{});
+      if(!initial.success) throw new Error("fixture injection failed");
+      const watched=[configPath,target,join(process.env.CODEX_HOME,"opencodex-journal.json")];
+      const original=watched.map(path=>fs.readFileSync(path,"utf8"));
+      const deny=()=>fs.chmodSync(target,0o000);
+      const allow=()=>fs.chmodSync(target,0o600);
+      const readWatched=()=>{allow();const seen=watched.map(path=>fs.readFileSync(path,"utf8"));deny();return seen;};
+      deny();
+      let unreadable=false;
+      try { fs.readFileSync(target,"utf8"); } catch(error) { unreadable=error.code==="EACCES"; }
+      const {captureCodexPreImages,restoreCodexPreImages}=require("./src/codex/inject-coordination");
+      let captureCode;
+      try { captureCodexPreImages(); } catch(error) { captureCode=error.code; }
+      const outcomes=[];
+      const unchangedAfterEach=[];
+      for(const operation of [()=>restoreNativeCodex(),()=>restoreNativeCodexAsync(),()=>injectCodexConfig(10100,{})]) {
+        try { outcomes.push((await operation()).success===false); }
+        catch(error) { outcomes.push(error.code==="EACCES"); }
+        unchangedAfterEach.push(readWatched().every((bytes,i)=>bytes===original[i]));
+      }
+      const restored=restoreCodexPreImages({config:original[0],profile:original[1],journal:original[2]});
+      const preserved=readWatched().every((bytes,i)=>bytes===original[i]);
+      allow();
+      console.log(JSON.stringify({unreadable,captureCode,restored,outcomes,unchangedAfterEach,preserved}));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({
+      unreadable: true, captureCode: "EACCES", restored: { complete: false, unrestored: ["profile"] }, outcomes: [true, true, true], unchangedAfterEach: [true, true, true], preserved: true,
+    });
+  });
+
+  for (const stage of ["before-preflight", "after-preflight", "after-config", "after-artifacts"]) {
+  test.each([false,true])(`commit-boundary history refusal returns a result after rollback (${stage}, legacy=%s)`,(legacy)=>{
+    const original=legacy ? DESIGN_B_BLOCK+"\n" : 'model="test"\n';
+    writeFileSync(join(codexHome,"config.toml"),original);
+    if(legacy) writeFileSync(join(codexHome,"opencodex.config.toml"),"[invalid profile\n");
+    const script=`
+      const {Database}=require("bun:sqlite");
+      const {join}=require("node:path");
+      const {injectCodexConfig,setBeforeHistoryArtifactCommitForTests,setHistoryArtifactStageForTests}=require("./src/codex/inject");
+      let kind;
+      const migrate=()=>{
+        const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+        db.run("INSERT INTO threads VALUES ('fixture','opencodex','paginated')");
+        db.close();
+      };
+      setBeforeHistoryArtifactCommitForTests(value=>{
+        kind=value;
+        if (${JSON.stringify(stage)} === "before-preflight") migrate();
+      });
+      setHistoryArtifactStageForTests(value=>{if(value===${JSON.stringify(stage)})migrate();});
+      const result=await injectCodexConfig(10100,{});
+      console.log(JSON.stringify({kind,result}));
+    `;
+    const child=spawnSync(process.execPath,["--eval",script],{cwd:repoRoot,env:{...process.env,CODEX_HOME:codexHome,OPENCODEX_HOME:ocxHome},encoding:"utf8",timeout:SPAWN_BUDGET_MS-5000});
+    expect(child.status).toBe(0);
+    const value=JSON.parse(child.stdout);
+    expect(value.kind).toBe(legacy?"legacy-uncoordinated":"coordinated");
+    expect(value.result).toMatchObject({success:false});
+    expect(value.result.message).toContain("history_paginated_requires_native_writer");
+    expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe(original);
+    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+    if(legacy) expect(readFileSync(join(codexHome,"opencodex.config.toml"),"utf8")).toBe("[invalid profile\n");
+    else expect(existsSync(join(codexHome,"opencodex.config.toml"))).toBe(false);
+  });
+  }
+
+  test.each(["sync", "legacy-uncoordinated", "coordinated"])("config restore failure aborts every later artifact (%s)", (kind) => {
+    const original = kind === "coordinated" ? 'model="test"\n' : DESIGN_B_BLOCK + "\n";
+    writeFileSync(join(codexHome, "config.toml"), original);
+    if (kind !== "coordinated") writeFileSync(join(codexHome, "opencodex.config.toml"), "[invalid profile\n");
+    const catalog = '{"models":[],"sentinel":"preserve"}\n';
+    writeFileSync(join(codexHome, "models_cache.json"), catalog);
+    const script = `
+      const {Database}=require("bun:sqlite");
+      const {join}=require("node:path");
+      const {restoreNativeCodex,restoreNativeCodexAsync,setBeforeRestoreConfigForTests}=require("./src/codex/inject");
+      const readState=${kind === "coordinated" ? 'require("./src/codex/transition-state").readCodexTransitionState' : "()=>null"};
+      const before=readState();
+      let observed;
+      setBeforeRestoreConfigForTests(value=>{
+        observed=value;
+        const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+        db.run("INSERT INTO threads VALUES ('fixture','opencodex','paginated')");
+        db.close();
+      });
+      const result=${kind === "sync" ? "restoreNativeCodex()" : "await restoreNativeCodexAsync()"};
+      console.log(JSON.stringify({observed,result,before,after:readState()}));
+    `;
+    const child=spawnSync(process.execPath,["--eval",script],{cwd:repoRoot,env:{...process.env,CODEX_HOME:codexHome,OPENCODEX_HOME:ocxHome},encoding:"utf8",timeout:SPAWN_BUDGET_MS-5000});
+    expect(child.status).toBe(0);
+    const value=JSON.parse(child.stdout);
+    expect(value.observed).toBe(kind);
+    expect(value.result.success).toBe(false);
+    if(kind==="coordinated") {
+      // Never advance durable generation/tx state when config restoration fails.
+      expect(value.before.state).toMatchObject({nativeGeneration:0,currentTxId:null});
+      expect(value.after.state).toEqual(value.before.state);
+    }
+    expect(value.result.artifacts.config).toMatchObject({state:"failed",changed:false});
+    for (const artifact of [value.result.artifacts.catalog, value.result.artifacts.history]) {
+      expect(artifact).toMatchObject({state:"skipped",changed:false});
+    }
+    expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe(original);
+    expect(readFileSync(join(codexHome,"models_cache.json"),"utf8")).toBe(catalog);
+    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+    if(kind!=="coordinated") expect(readFileSync(join(codexHome,"opencodex.config.toml"),"utf8")).toBe("[invalid profile\n");
+    else expect(existsSync(join(codexHome,"opencodex.config.toml"))).toBe(false);
+  });
+
+  test.each([false, true])("paginated history preserves config and profile before provider transition (authless=%s)", (authless) => {
+    const original = 'model_provider = "opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\n';
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    writeFileSync(configPath, original);
+    writeFileSync(profilePath, "# preserve profile\n");
+    const rollout = join(codexHome, "fixture.jsonl");
+    const bytes = JSON.stringify({ordinal:0,type:"session_meta",payload:{id:"fixture",history_mode:"paginated",model_provider:"opencodex"}}) + "\n";
+    writeFileSync(rollout, bytes);
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+    db.run("INSERT INTO threads VALUES ('fixture', ?, 'opencodex', 'paginated')", rollout);
+    db.close();
+    const result = runInject(codexHome, ocxHome, JSON.stringify({codexDesktopAuthless:authless}));
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({success:false});
+    expect(result.stdout).toContain("history_paginated_requires_native_writer");
+    expect(readFileSync(configPath,"utf8")).toBe(original);
+    expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
+    expect(readFileSync(rollout,"utf8")).toBe(bytes);
+    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+    const restoreScript = `
+      const { restoreNativeCodex, restoreNativeCodexAsync, removeCodexConfig } = require("./src/codex/inject");
+      const results = [restoreNativeCodex(), await restoreNativeCodexAsync(), removeCodexConfig()];
+      console.log(JSON.stringify(results));
+    `;
+    const restored = spawnSync(process.execPath, ["--eval", restoreScript], {
+      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(restored.status).toBe(0);
+    for (const outcome of JSON.parse(restored.stdout)) expect(outcome.success).toBe(false);
+    expect(readFileSync(configPath,"utf8")).toBe(original);
+    expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
+    expect(readFileSync(rollout,"utf8")).toBe(bytes);
+    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
   });
 
   test("remote target validate-only writes nothing; commit journals client ownership and restores exact preimage", () => {
@@ -760,7 +974,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
-  test("restoreNativeCodex removes a stale journal without changing external provider state", () => {
+  test.each([false,true])("restore removes a stale journal without changing external provider state (async=%s)", (asyncRestore) => {
     const configPath = join(codexHome, "config.toml");
     const config = 'model_provider = "custom"\nmodel = "third-party-model"\n';
     writeFileSync(configPath, config, "utf8");
@@ -782,7 +996,9 @@ describe("injectCodexConfig integration (Design B)", () => {
       id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, model_provider TEXT NOT NULL,
       source TEXT NOT NULL, first_user_message TEXT NOT NULL, has_user_event INTEGER NOT NULL
     )`);
-    db.run(`INSERT INTO threads VALUES ('thread-custom', ?, 'custom', 'cli', 'hello', 1)`, rolloutPath);
+      db.run(`INSERT INTO threads VALUES ('thread-custom', ?, 'custom', 'cli', 'hello', 1)`, rolloutPath);
+      db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+      db.run("INSERT INTO threads VALUES ('old-routed', ?, 'opencodex', 'cli', 'older', 1, 'paginated')", rolloutPath);
     db.close();
     const dbBefore = readFileSync(dbPath);
 
@@ -795,7 +1011,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       timestamp: new Date().toISOString(),
     }), "utf8");
 
-    const r = runRestore(codexHome, ocxHome);
+      const r = runRestore(codexHome, ocxHome, asyncRestore);
     expect(r.status).toBe(0);
     const result = JSON.parse(r.stdout);
     expect(result.success).toBe(true);

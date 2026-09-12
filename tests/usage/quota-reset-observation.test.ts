@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   clearAccountQuota,
+  getAccountQuota,
   flushQuotaObservationsForTests,
   setAccountQuotaFromParsed,
 } from "../../src/codex/quota";
@@ -55,6 +56,50 @@ afterEach(async () => {
 });
 
 describe("codex quota seam", () => {
+  test("short rollover survives repeated display eviction", async () => {
+    const start = Date.now();
+    let now = start;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(ACCOUNT, { shortPercent: 96, shortResetAt: start + 60_000,
+        shortWindowSeconds: 18_000, weeklyPercent: 20, weeklyResetAt: start + 7 * 24 * HOUR });
+      await settle();
+      for (const percent of [21, 22]) {
+        now = start + 61_000 + (percent - 21) * 1000;
+        setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: percent });
+        await settle();
+        const quota = getAccountQuota(ACCOUNT);
+        for (const key of ["shortPercent", "shortResetAt", "shortObservedAt", "shortWindowSeconds"] as const) {
+          expect(quota?.[key]).toBeUndefined();
+        }
+        expect(captured).toEqual([]);
+      }
+      now = start + 63_000;
+      const fresh = { shortPercent: 2, shortResetAt: now + 5 * HOUR, shortWindowSeconds: 18_000 };
+      setAccountQuotaFromParsed(ACCOUNT, fresh);
+      await settle();
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({ kind: "scheduled", window: "5h", percentBefore: 96, percentAfter: 2 });
+      setAccountQuotaFromParsed(ACCOUNT, fresh);
+      await settle();
+      expect(captured).toHaveLength(1);
+
+      // Leave a new high baseline whose deadline then expires, making a missed clear
+      // observable as a scheduled reset rather than an ignored two-point drop.
+      setAccountQuotaFromParsed(ACCOUNT, { shortPercent: 96, shortResetAt: now + 60_000, shortWindowSeconds: 18_000 });
+      await settle();
+      now += 61_000;
+      setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: 23 });
+      await settle();
+      clearAccountQuota(ACCOUNT);
+      await settle();
+      captured = [];
+      setAccountQuotaFromParsed(ACCOUNT, { shortPercent: 0, shortResetAt: now + 6 * HOUR });
+      await settle();
+      expect(captured).toEqual([]);
+    } finally { clock.mockRestore(); }
+  });
+
   test("a weekly rollover through the real writer fires exactly one scheduled event", async () => {
     const expired = Date.now() - 60_000;
     setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: 96, weeklyResetAt: expired });

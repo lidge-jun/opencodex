@@ -93,7 +93,7 @@ modèle couvert par le sidecar. Les combos annoncent l'entrée image seulement l
 nativement ou via un sidecar, et que le paramètre `imageInput` du combo n'est pas désactivé, afin que des clients comme
 l'application Codex autorisent les pièces jointes au lieu de les bloquer avant l'exécution du sidecar. Lorsque
 `visionSidecar.model` est absent ou vide, le chemin d'exécution OpenAI, le tableau de bord et l'API de gestion
-utilisent le modèle de repli `gpt-5.4-mini`. Au démarrage, une ancienne valeur `gpt-5.4-mini` explicitement enregistrée
+utilisent le modèle de repli `gpt-5.6-luna`. Au démarrage, une ancienne valeur `gpt-5.6-luna` explicitement enregistrée
 est toujours migrée vers `gpt-5.6-luna` ; cette migration s'applique à une valeur stockée, et non à l'absence du
 champ du modèle.
 
@@ -146,7 +146,7 @@ Un modèle est marqué en texte uniquement par fournisseur :
   "providers": {
     "ollama-cloud": {
       "baseUrl": "https://ollama.com/v1",
-      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-pro"]
+      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-flash"]
     }
   }
 }

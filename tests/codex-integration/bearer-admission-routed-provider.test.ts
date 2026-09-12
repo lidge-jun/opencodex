@@ -20,6 +20,8 @@ import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspec
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { resetVisionDescriptionCache } from "../../src/vision";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
 
 /**
  * Issue #2132: bearer admission must not require a stored ChatGPT credential.
@@ -116,6 +118,7 @@ function cursorForwardConfig(baseUrl: string, apiKey?: string): OcxConfig {
 
 async function withCursorCaptureServer<T>(
   run: (baseUrl: string, capturedAuth: Array<string | null>) => Promise<T>,
+  beforeResponse?: () => Promise<void>,
 ): Promise<T> {
   const capturedAuth: Array<string | null> = [];
   const sessions = new Set<http2.ServerHttp2Session>();
@@ -127,11 +130,16 @@ async function withCursorCaptureServer<T>(
   server.on("stream", (stream, headers) => {
     const auth = headers.authorization;
     capturedAuth.push(typeof auth === "string" ? auth : null);
-    stream.respond({
-      ":status": typeof auth === "string" ? 200 : 401,
-      "content-type": "application/connect+proto",
-    });
-    stream.end();
+    const respond = () => {
+      if (stream.destroyed || stream.closed) return;
+      stream.respond({
+        ":status": typeof auth === "string" ? 200 : 401,
+        "content-type": "application/connect+proto",
+      });
+      stream.end();
+    };
+    if (beforeResponse) void beforeResponse().then(respond).catch(error => stream.destroy(error));
+    else respond();
   });
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => reject(error);
@@ -432,16 +440,107 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
     });
   });
 
-  test.each(["owned", "fenced"])("Chat Cursor keeps stored vision auth off its primary wire (%s)", async ownership => {
+  test.each([
+    "configured-vision-text", "default-sidecars", "no-stored-main", "disabled-vision",
+    "terminal-vision", "routed-vision", "anthropic-vision", "missing-openai",
+    "noncanonical-openai", "search-runTurn", "search-tool-choice-none",
+  ])("Chat Cursor leaves native main switchable without a planned OpenAI helper (%s)", async scenario => {
+    let signalStarted!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    let releaseUpstream!: () => void;
+    const upstreamGate = new Promise<void>(resolve => { releaseUpstream = resolve; });
     await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
       const config = cursorForwardConfig(baseUrl);
+      config.openaiProviderTierVersion = 2;
       config.providers.cursorcustom!.noVisionModels = ["auto"];
       config.providers.openai = {
         adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward", codexAccountMode: "direct",
       };
+      config.visionSidecar = { enabled: true, backend: "openai", model: "gpt-5.6-luna" };
+      if (scenario === "default-sidecars") delete config.visionSidecar;
+      if (scenario === "disabled-vision") config.visionSidecar.enabled = false;
+      if (scenario === "routed-vision") {
+        config.providers.gateway = { ...mixedConfig().providers.gateway!, models: ["vision-model"] };
+        config.visionSidecar = { enabled: true, backend: "routed", model: "gateway/vision-model" };
+      }
+      if (scenario === "anthropic-vision") config.visionSidecar.backend = "anthropic";
+      if (scenario === "missing-openai") delete config.providers.openai;
+      if (scenario === "noncanonical-openai") {
+        // Keep the reserved OpenAI row absent; a custom forward provider is valid config
+        // but is not authority to inject stored ChatGPT credentials into a sidecar.
+        config.providers.mirror = { adapter: "openai-responses", authMode: "forward", baseUrl: "https://mirror.example.com/v1" };
+        delete config.providers.openai;
+      }
+      const search = scenario.startsWith("search-");
+      if (search) config.webSearchSidecar = { enabled: true, backend: "openai", model: "gpt-5.6-luna" };
+      const withImage = ["disabled-vision", "terminal-vision", "routed-vision", "anthropic-vision", "missing-openai", "noncanonical-openai"].includes(scenario);
+      saveConfig(config);
+      const stored = fakeChatGptJwt({ chatgpt_account_id: "stored_main_acc", exp: Math.floor(Date.now() / 1000) + 3600 });
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: scenario === "no-stored-main" ? {} : { access_token: stored, account_id: "stored_main_acc" },
+      }));
+      const server = await startOwnedServer();
+      let settled = false;
+      const pending = originalFetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: "Bearer cursor-upstream-token",
+          ...(scenario === "terminal-vision" ? { "x-opencodex-vision-describe": "1" } : {}),
+        },
+        body: JSON.stringify({ model: "cursorcustom/auto", stream: false, messages: [{ role: "user",
+          content: withImage ? [{ type: "text", text: "Describe this image" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=" } }] : "hi",
+        }], ...(search ? { tools: [{ type: "web_search" }] } : {}),
+        ...(scenario === "search-tool-choice-none" ? { tool_choice: "none" } : {}),
+        }),
+      }).then(response => { settled = true; return response; });
+      try {
+        await Promise.race([started, pending.then(async response => {
+          const result = await response.clone().json().catch(() => ({})) as { error?: { code?: string; message?: string } };
+          throw new Error(`Cursor response settled before its held upstream: HTTP ${response.status}, ${result.error?.code ?? ""}: ${result.error?.message ?? ""}`);
+        })]);
+        expect(settled).toBe(false);
+        expect(capturedAuth).toEqual(["Bearer cursor-upstream-token"]);
+        expect(getNativeMainProfileRequestCount()).toBe(0);
+        let switches = 0;
+        const manager = { switch: async () => { switches += 1; return { ok: true }; } } as unknown as NativeProfileManager;
+        const switchUrl = new URL("http://localhost/api/native-main-profiles/switch");
+        const switched = await handleNativeProfileAPI(new Request(switchUrl, {
+          method: "POST", body: JSON.stringify({ target: "target", confirmedStopped: true }),
+        }), switchUrl, config, { manager, drainTimeoutMs: 0 });
+        expect(switched?.status).toBe(200);
+        expect(switches).toBe(1);
+        expect(settled).toBe(false);
+        expect(nativeAuth).toEqual([]);
+      } finally {
+        releaseUpstream();
+        try { await (await pending).text(); } finally { await server.stop(true); }
+      }
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+    }, async () => { signalStarted(); await upstreamGate; });
+  }, SERVER_BUDGET_MS);
+
+  test.each(["owned", "fenced", "pool", "pool-fenced"])("Chat Cursor keeps stored vision auth off its primary wire (%s)", async ownership => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      const config = cursorForwardConfig(baseUrl);
+      const pool = ownership.startsWith("pool");
+      config.providers.cursorcustom!.noVisionModels = ["auto"];
+      config.providers.openai = {
+        adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward", codexAccountMode: pool ? "pool" : "direct",
+      };
       // Keep this auth fixture independent of the legacy sidecar model migration.
       config.visionSidecar = { enabled: true, backend: "openai", model: "gpt-5.6-luna" };
+      if (pool) {
+        config.codexAccounts = [{ id: "sidecar-pool", label: "sidecar pool", isMain: false, chatgptAccountId: "sidecar_pool_acc" }];
+        config.activeCodexAccountId = "sidecar-pool";
+        config.autoSwitchThreshold = 0;
+        saveCodexAccountCredential("sidecar-pool", {
+          accessToken: "sidecar-pool-token", refreshToken: "sidecar-pool-refresh",
+          expiresAt: Date.now() + 3_600_000, chatgptAccountId: "sidecar_pool_acc",
+        });
+      }
       saveConfig(config);
       const stored = fakeChatGptJwt({ chatgpt_account_id: "stored_main_acc", exp: Math.floor(Date.now() / 1000) + 3600 });
       writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
@@ -451,6 +550,13 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
       globalThis.fetch = (async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         if (url.hostname === "chatgpt.com") {
+          // Pool admission can probe quota independently of the vision helper.
+          if (url.pathname === "/backend-api/wham/usage") return Response.json({
+            rate_limit: { allowed: true, limit_reached: false,
+              primary_window: { used_percent: 0, reset_at: Math.floor(Date.now() / 1000) + 3600, limit_window_seconds: 18000 },
+              secondary_window: { used_percent: 0, reset_at: Math.floor(Date.now() / 1000) + 86400, limit_window_seconds: 604800 },
+            },
+          });
           const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
           sidecar.push({ authorization: headers.get("authorization"), account: headers.get("chatgpt-account-id"),
             claimed: getNativeMainProfileRequestCount() > 0 });
@@ -460,11 +566,12 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
         }
         return originalFetch(input, init);
       }) as typeof fetch;
-      const server = ownership === "owned" ? await startOwnedServer() : startServer(0, {
+      const fenced = ownership.endsWith("fenced");
+      const server = !fenced ? await startOwnedServer() : startServer(0, {
         inspectNativeCodexOwnership: () => ({ ownership: "foreign", reason: "fixture owned by another service" }),
       });
       try {
-        if (ownership === "fenced") expect(await waitForNativeMainStartupGate()).toMatchObject({ status: "blocked" });
+        if (fenced) expect(await waitForNativeMainStartupGate()).toMatchObject({ status: "blocked" });
         const response = await originalFetch(new URL("/v1/chat/completions", server.url), {
           method: "POST",
           headers: { "content-type": "application/json", "x-opencodex-api-key": ADMISSION_SECRET,
@@ -477,8 +584,9 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
         await response.text();
         // The capture-only Cursor fixture ends without a completion frame.
         expect(response.status).toBe(502);
-        expect(sidecar).toEqual(ownership === "owned"
-          ? [{ authorization: `Bearer ${stored}`, account: "stored_main_acc", claimed: true }] : []);
+        expect(sidecar).toEqual(ownership === "fenced" ? []
+          : [{ authorization: pool ? "Bearer sidecar-pool-token" : `Bearer ${stored}`,
+            account: pool ? "sidecar_pool_acc" : "stored_main_acc", claimed: !pool }]);
         expect(capturedAuth).toEqual(["Bearer cursor-upstream-token"]);
       } finally {
         await server.stop(true);
