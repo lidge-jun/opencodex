@@ -46,7 +46,7 @@ import {
 } from "./journal";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import { restoreCodexCatalogWithPermit } from "./catalog/sync";
-import { syncCodexHistoryProvider, type CodexHistoryFailureReason } from "./history-provider";
+import { preflightCodexHistoryInjection, syncCodexHistoryProvider, type CodexHistoryFailureReason } from "./history-provider";
 import {
   describeHistoryJobFailure,
   deriveCodexHistoryOperation,
@@ -75,6 +75,7 @@ import {
   parseTomlString,
   readRootTomlString,
   resolveCodexConfigPath,
+  resolveCodexStateDbPath,
   tomlString,
 } from "./paths";
 import { resolveEffectiveProjectModelProvider } from "./project-config-warnings";
@@ -929,6 +930,10 @@ export async function injectCodexConfig(
   }
 
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  const preflightTableMode = usesProviderTable(routingTarget);
+  const compactionOnly = routingTarget.clientCompaction === true
+    && routingTarget.desktopAuthless !== true
+    && routingTarget.requiresAdmissionToken !== true;
   const activeProvider = externalCodexModelProvider(rawContent);
   if (activeProvider) {
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
@@ -1138,6 +1143,29 @@ export async function injectCodexConfig(
   );
   content = applyEol(content, eol);
 
+  // Resolve storage from the normalized candidate. Owned duplicate catalog keys
+  // are repairable above and must not make this read-only preflight throw.
+  const historyPreflight = (): string | null => {
+    try {
+      return preflightCodexHistoryInjection(
+        preflightTableMode,
+        config?.syncResumeHistory !== false && !compactionOnly,
+        resolveCodexStateDbPath({ readConfig: () => content }),
+      );
+    } catch {
+      return "history_injection_preflight_unavailable";
+    }
+  };
+  const historyPreflightError = historyPreflight();
+  if (historyPreflightError) {
+    return {
+      success: false,
+      message: `Codex config injection refused: ${historyPreflightError}. `
+        + "Existing provider definitions and conversation files were preserved. "
+        + "Paginated history requires native-writer coordination; do not run legacy recovery or retry this transition blindly.",
+    };
+  }
+
   /*
    * The witness, built from the FINAL bytes. Everything it hashes is either the
    * output about to be written or evidence that can be re-read under the lock;
@@ -1228,6 +1256,8 @@ export async function injectCodexConfig(
   }
 
   const applyNativeArtifacts = (): void => {
+    const historyError = historyPreflight();
+    if (historyError) throw new Error(historyError);
     writeJournal({
       currentStateIsNative: journalBaselineIsNative(),
       configContent: baselineContent,

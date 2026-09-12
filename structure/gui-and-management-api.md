@@ -508,3 +508,5 @@ survives availability drift, while complete/native custom orders await explicit 
 ## Paginated history writer boundary
 
 Settings convergence must surface paginated-history refusal rather than claim history was migrated. See [Codex Home](codex-home.md#paginated-history-writer-boundary).
+
+Injection now preflights affected paginated threads before writing config/profile/journal, using the normalized config candidate to resolve SQLite storage. It rechecks immediately before artifact writes; this preserves provider definitions on a stable-format refusal but does not replace native-writer coordination for concurrent format changes.

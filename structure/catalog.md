@@ -265,3 +265,5 @@ provider wire mapping; unpinned native requests retain their existing pass-throu
 ## Paginated history writer boundary
 
 Catalog convergence can include a provider-history transition. Paginated history refusal is an explicit incomplete transition, not successful migration; see [Codex Home](codex-home.md#paginated-history-writer-boundary).
+
+Injection now preflights affected paginated threads before writing config/profile/journal, using the normalized config candidate to resolve SQLite storage. It rechecks immediately before artifact writes; this preserves provider definitions on a stable-format refusal but does not replace native-writer coordination for concurrent format changes.

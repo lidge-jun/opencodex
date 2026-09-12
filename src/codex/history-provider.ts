@@ -245,6 +245,42 @@ function assertLegacyHistoryWritable(path: string): void {
   }
 }
 
+/** Read-only preflight before the injector changes provider definitions.
+ * Native paginated history cannot participate in the legacy relabel protocol.
+ * Returning a refusal preserves the existing config as well as the rollout.
+ */
+export function preflightCodexHistoryInjection(
+  providerTableMode: boolean,
+  resumeHistory: boolean,
+  stateDbPath = resolveCodexStateDbPath(),
+): string | null {
+  if (!existsSync(stateDbPath)) return null;
+  let db: Database | undefined;
+  try {
+    db = new Database(stateDbPath, { readonly: true });
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
+    const paginatedColumn = columns.some(column => column.name === "history_mode");
+    const rows = db.query<{ rollout_path: string; history_mode: string | null }, []>(`
+      SELECT rollout_path, ${paginatedColumn ? "history_mode" : "NULL AS history_mode"}
+      FROM threads
+      WHERE ${providerTableMode
+        ? resumeHistory ? "model_provider IN ('openai', 'opencodex')" : "0"
+        : "model_provider = 'opencodex'"}
+    `).all();
+    for (const row of rows) {
+      if (row.history_mode === "paginated") return "history_paginated_requires_native_writer";
+      assertLegacyHistoryWritable(row.rollout_path);
+    }
+    return null;
+  } catch (error) {
+    return error instanceof CodexHistoryIntegrityError
+      ? error.message
+      : "history_injection_preflight_unavailable";
+  } finally {
+    db?.close();
+  }
+}
+
 function integrityFailureResult(error: CodexHistoryIntegrityError): CodexHistorySyncResult {
   return {
     rows: error.progress.rows,

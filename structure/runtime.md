@@ -189,3 +189,5 @@ not an authentication or entitlement decision.
 ## Paginated history writer boundary
 
 Provider-history transitions refuse paginated rollout writes before changing history state; see [Codex Home](codex-home.md#paginated-history-writer-boundary).
+
+Injection now preflights affected paginated threads before writing config/profile/journal, using the normalized config candidate to resolve SQLite storage. It rechecks immediately before artifact writes; this preserves provider definitions on a stable-format refusal but does not replace native-writer coordination for concurrent format changes.

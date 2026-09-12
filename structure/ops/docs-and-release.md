@@ -304,3 +304,5 @@ The Remote Hub guide and affected CLI, server-config, management-API, and dashbo
 ## Paginated history writer boundary
 
 History-provider regression coverage includes numbered rollout apply/restore refusal without changing source bytes or provenance. See [Codex Home](../codex-home.md#paginated-history-writer-boundary).
+
+Injection now preflights affected paginated threads before writing config/profile/journal, using the normalized config candidate to resolve SQLite storage. It rechecks immediately before artifact writes; this preserves provider definitions on a stable-format refusal but does not replace native-writer coordination for concurrent format changes.

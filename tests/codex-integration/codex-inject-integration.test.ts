@@ -68,6 +68,29 @@ describe("injectCodexConfig integration (Design B)", () => {
     removeTreeWithRetry(ocxHome);
   });
 
+  test.each([false, true])("paginated history preserves config and profile before provider transition (authless=%s)", (authless) => {
+    const original = 'model_provider = "opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\n';
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    writeFileSync(configPath, original);
+    writeFileSync(profilePath, "# preserve profile\n");
+    const rollout = join(codexHome, "fixture.jsonl");
+    const bytes = JSON.stringify({ordinal:0,type:"session_meta",payload:{id:"fixture",history_mode:"paginated",model_provider:"opencodex"}}) + "\n";
+    writeFileSync(rollout, bytes);
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+    db.run("INSERT INTO threads VALUES ('fixture', ?, 'opencodex', 'paginated')", rollout);
+    db.close();
+    const result = runInject(codexHome, ocxHome, JSON.stringify({codexDesktopAuthless:authless}));
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({success:false});
+    expect(result.stdout).toContain("history_paginated_requires_native_writer");
+    expect(readFileSync(configPath,"utf8")).toBe(original);
+    expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
+    expect(readFileSync(rollout,"utf8")).toBe(bytes);
+    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+  });
+
   test("remote target validate-only writes nothing; commit journals client ownership and restores exact preimage", () => {
     const original = '# remote baseline\nmodel_provider = "openai"\n';
     writeFileSync(join(codexHome, "config.toml"), original, "utf8");
