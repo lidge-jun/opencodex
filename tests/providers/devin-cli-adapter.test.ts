@@ -13,6 +13,7 @@ import {
 import { DEVIN_CLI_BIN_ENV, resolveDevinCliBinary } from "../../src/adapters/devin-cli/binary";
 import { createDevinCliAdapter } from "../../src/adapters/devin-cli/adapter";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { formatProviderDisplayName, providerIconSrc } from "../../gui/src/provider-icons";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -25,8 +26,22 @@ describe("devin-cli registration", () => {
     // The installed CLI carries its own credentials from `devin auth login`,
     // so the proxy must never ask for or hold a key for this provider.
     expect(entry?.authKind).toBe("local");
-    expect(entry?.dashboardPreset).toBe(false);
+    // Addable from the dashboard. It is neither `featured` nor key-auth, so this
+    // flag is the only thing that puts it in the add-provider list; without it
+    // the provider existed but could only be reached by hand-editing config.
+    expect(entry?.dashboardPreset).toBe(true);
     expect(createDevinCliAdapter({ adapter: "devin-cli", baseUrl: "https://cli.devin.ai" }).name).toBe("devin-cli");
+  });
+
+  test("both Devin providers render the Devin mark and a readable name", () => {
+    // Neither id had an icon alias, so the dashboard drew a coloured initial
+    // tile for both, and the title-cased fallback turned the local one into
+    // "Devin Cli".
+    expect(providerIconSrc("devin")).toBe("/provider-icons/devin.svg");
+    expect(providerIconSrc("devin-cli")).toBe("/provider-icons/devin.svg");
+    const englishT = ((_key: string, fallback?: string) => fallback ?? "") as Parameters<typeof formatProviderDisplayName>[1];
+    expect(formatProviderDisplayName("devin", englishT)).toBe("Cognition (Devin/Windsurf)");
+    expect(formatProviderDisplayName("devin-cli", englishT)).toBe("Devin CLI");
   });
 });
 

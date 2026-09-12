@@ -101,6 +101,24 @@ at 20px.
   `viewBox="0 0 823 823"` by centering the 823x806 trace. Named
   `hermes-agent` rather than `hermes` because Hermes is also a provider name
   and this directory is one flat namespace.
+- `devin.svg` — fetched 2026-09-12 from `https://docs.devin.ai/logo/light.svg`,
+  Devin's own documentation logo, and CROPPED to its symbol. The source is a
+  160x24 horizontal lockup: the three-leaf mark occupies the left 24 units and
+  the `devin` wordmark starts at x=34.2, so a `viewBox="0 0 24 24"` window keeps
+  the whole symbol and excludes every wordmark path. The thirteen symbol paths
+  and all seven gradients are verbatim — nothing is translated, so the
+  `userSpaceOnUse` gradient coordinates stay valid — and only the two wordmark
+  paths are dropped. Cropping a lockup to its symbol is what `cursor-color.svg`
+  and `gajae-code.svg` already do; the alternative here was a wordmark in a 20px
+  box, which this file refuses.
+
+  `devin.ai/favicon.svg` sits behind a Vercel security checkpoint that answers
+  429 with an HTML page, and `cognition.ai` publishes only a raster favicon, so
+  the docs site is the reachable first-party vector. Windsurf does publish
+  `windsurf.com/favicon.svg` — a plated `W` — but that names the retired brand
+  for a provider labelled Cognition. Multi-colour gradient, so it is drawn as an
+  image and is not a candidate for the masked set.
+
 - `gajae-code.svg` — traced 2026-08-31 from `Yeachan-Heo/gajae-code`
   `assets/character.png` (3190496 bytes, 1550x2048 RGBA), the mascot. No SVG
   exists upstream: `assets/` and `docs/` hold only raster, `public/` is a 404,
