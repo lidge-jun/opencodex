@@ -22,7 +22,15 @@ import { join } from "node:path";
 import { DEVIN_CLI_INSTALL_HINT } from "../adapters/devin-cli/binary";
 import { identityFromApiKey } from "./devin";
 import { resolveDevinApiBaseUrl } from "./devin/api-base";
-import type { OAuthController, OAuthCredentials, LoginOpts } from "./types";
+import type { OAuthController, OAuthCredentials } from "./types";
+
+/**
+ * Structurally the `LoginOpts` from `./index`, restated here rather than imported.
+ * `index.ts` imports this module to register the provider, so importing the type
+ * back would close a cycle for one optional field this flow does not branch on:
+ * an import has nothing to force, so `forceLogin` is a no-op for it.
+ */
+type DevinCliLoginOpts = { forceLogin?: boolean };
 
 /** Absolute-path override, for a CLI installed somewhere this resolver does not model. */
 export const DEVIN_CLI_CREDENTIALS_ENV = "OPENCODEX_DEVIN_CLI_CREDENTIALS";
@@ -97,7 +105,7 @@ export function devinCliSignedIn(deps: DevinCliLoginDeps = {}): boolean {
 
 export async function loginDevinCli(
   ctrl: OAuthController,
-  _opts?: LoginOpts,
+  _opts?: DevinCliLoginOpts,
   deps: DevinCliLoginDeps = {},
 ): Promise<OAuthCredentials> {
   const file = readDevinCliCredentialFile(deps);
@@ -138,4 +146,3 @@ export async function refreshDevinCliToken(
   // the request path mark the account needsReauth instead.
   throw new Error("invalid_grant: the Devin CLI owns this session. Run devin auth login again.");
 }
-
