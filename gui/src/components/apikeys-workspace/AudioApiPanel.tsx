@@ -4,25 +4,7 @@ import { IconLink, IconPlay, IconX } from "../../icons";
 import { useT } from "../../i18n/shared";
 import { CopyableExample, EndpointUrl } from "../../pages/api-keys-copy";
 import type { AudioApiInfo } from "../../pages/api-keys-utils";
-
-function socketSample(endpoint: string, live: boolean, model: string): string {
-  const url = new URL(endpoint);
-  if (live) url.searchParams.set("model", model);
-  const start = live
-    ? { type: "session.update", session: { instructions: "", audio: { output: { voice: "cove" } }, delegation: { type: "client" } } }
-    : { type: "session.start", config: { input_audio_format: "pcm16", sample_rate_hz: 48000, num_channels: 1, max_buffer_size_bytes: 4194304, max_utterance_duration_ms: 30000, session_ttl_ms: 300000, provider_mode: "streaming_sse", transcript_delivery_mode: "segment", vad: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 } } };
-  return `const key = prompt("OpenCodex data key").trim();
-const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(key)))
-  .replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
-const ws = new WebSocket(${JSON.stringify(url.href)},
-  ["opencodex-audio", "opencodex-key." + encoded]);
-ws.onopen = () => ws.send(JSON.stringify(${JSON.stringify(start)}));
-ws.onmessage = ({ data }) => console.log(JSON.parse(data).type);
-// After session.started, send your protocol's audio frames.
-// Dictation: mono PCM16 at the declared sample_rate_hz (48000 here).
-// Live Voice: input_audio.append / output_audio.delta, 24 kHz mono.
-const closeSession = () => ws.send(JSON.stringify({ type: "session.close" }));`;
-}
+import { audioSocketExample, audioUploadExample } from "../../audio-api-examples";
 
 function AudioKeyInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const t = useT();
@@ -96,14 +78,10 @@ export function DictationPanel({ audio }: { audio?: AudioApiInfo }) {
       <AudioError code={error} />
       {text !== null && <div className="audio-api-result" aria-live="polite"><h4>{t("audio.transcript")}</h4>{text ? <CopyableExample text={text} /> : <p className="muted small">{t("audio.emptyTranscript")}</p>}</div>}
       <details className="audio-api-examples"><summary>{t("audio.examples")}</summary>
-        <CopyableExample text={[
-          `curl ${JSON.stringify(audio.transcriptionEndpoint)}`,
-          '  -H "X-OpenCodex-API-Key: $OPENCODEX_API_KEY"',
-          `  -F "file=@recording.wav" -F "model=${audio.transcriptionModel}"`,
-        ].join(" \\\n")} />
+        <CopyableExample text={audioUploadExample(audio.transcriptionEndpoint, audio.transcriptionModel)} />
         <div className="audio-api-head"><h4>{t("audio.streaming")}</h4><span className="muted small">{t(audio.dictationConfigured ? "audio.configured" : "audio.notConfigured")}</span></div>
         <EndpointUrl url={audio.dictationStreamEndpoint} />
-        <CopyableExample text={socketSample(audio.dictationStreamEndpoint, false, audio.transcriptionModel)} />
+        <CopyableExample text={audioSocketExample(audio.dictationStreamEndpoint, false, audio.transcriptionModel, t("audio.key"))} />
       </details>
     </>}
   </section>;
@@ -156,7 +134,7 @@ export function LiveVoicePanel({ audio }: { audio?: AudioApiInfo }) {
       </form>
       <AudioError code={error} />
       {events.length > 0 && <pre className="audio-api-events" aria-label={t("audio.events")}>{events.join("\n")}</pre>}
-      <details className="audio-api-examples"><summary>{t("audio.examples")}</summary><CopyableExample text={socketSample(audio.liveEndpoint, true, audio.liveModel)} /></details>
+      <details className="audio-api-examples"><summary>{t("audio.examples")}</summary><CopyableExample text={audioSocketExample(audio.liveEndpoint, true, audio.liveModel, t("audio.key"))} /></details>
     </>}
   </section>;
 }

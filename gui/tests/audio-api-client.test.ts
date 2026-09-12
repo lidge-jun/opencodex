@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { AUDIO_FILE_MAX_BYTES, AudioApiError, LIVE_SESSION_UPDATE, audioSocketProtocols, connectLiveAudio, transcribeAudio } from "../src/audio-api-client";
 import { resetApiAuthFetchForTests } from "../src/api";
 import { isAudioApiInfo, type AudioApiInfo } from "../src/pages/api-keys-utils";
+import { audioSocketExample, audioUploadExample } from "../src/audio-api-examples";
 
 const originalFetch = globalThis.fetch;
 const originalSocket = globalThis.WebSocket;
@@ -71,6 +72,7 @@ test("audio metadata accepts the exact scheme/origin/path projection only", () =
   }
   expect(isAudioApiInfo(undefined, base)).toBe(false);
   expect(isAudioApiInfo({ ...audio, liveConfigured: "true" }, base)).toBe(false);
+  expect(isAudioApiInfo({ ...audio, apiKey: "sensitive-marker" }, base)).toBe(false);
 });
 
 class FakeSocket {
@@ -142,4 +144,30 @@ test("voice readiness and established-session timers release all handlers", asyn
   await new Promise(resolve => setTimeout(resolve, 20));
   expect(ready.states).toEqual(["connecting", "connected", "disconnected"]);
   expect(ready.socket.closed).toBe(true);
+});
+
+test("failed session updates remain failures even after readiness", () => {
+  for (const status of ["error", "failed"]) {
+    const { socket, states, dispose } = probe();
+    socket.open(); socket.message({ type: "session.started", session: { id: "fixture" } });
+    const oldClose = socket.onclose;
+    socket.message({ type: "session.updated", session: { id: "fixture", status } });
+    oldClose?.({ code: 1000 });
+    expect(states).toEqual(["connecting", "connected", "failed:protocol"]);
+    expect(socket.closed).toBe(true);
+    dispose();
+  }
+});
+
+test("copied socket examples are executable protocol code with a localized key prompt", () => {
+  const example = audioSocketExample("wss://gateway.example/v1/live", true, "gpt-live-1-codex", "데이터 키");
+  let label = "";
+  const run = new Function("WebSocket", "prompt", "btoa", "TextEncoder", example + "; return ws;");
+  const socket = run(FakeSocket, (value: string) => { label = value; return KEY; }, btoa, TextEncoder) as FakeSocket;
+  expect(label).toBe("데이터 키");
+  expect(socket.protocols).toEqual(audioSocketProtocols(KEY));
+  socket.open();
+  expect(JSON.parse(socket.sent[0]!)).toEqual(LIVE_SESSION_UPDATE);
+  expect(audioUploadExample(ENDPOINT, "gpt-4o-transcribe")).toContain("$OPENCODEX_API_KEY");
+  expect(audioUploadExample(ENDPOINT, "gpt-4o-transcribe")).not.toContain("\n+");
 });

@@ -88,6 +88,8 @@ export interface AudioApiInfo {
 export function isAudioApiInfo(value: unknown, baseUrl: string): value is AudioApiInfo {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const audio = value as Record<string, unknown>;
+  const fields = new Set(["transcriptionEndpoint", "dictationStreamEndpoint", "liveEndpoint", "realtimeCallsEndpoint", "transcriptionModel", "liveModel", "transcriptionConfigured", "dictationConfigured", "liveConfigured"]);
+  if (Object.keys(audio).some(field => !fields.has(field))) return false;
   try {
     const base = new URL(baseUrl);
     if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) return false;

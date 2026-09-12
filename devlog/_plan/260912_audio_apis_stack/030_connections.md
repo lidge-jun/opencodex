@@ -23,6 +23,7 @@ runs the checks; browser QA reads its built artifact with synthetic routes only.
 | MODIFY | gui/src/components/apikeys-workspace/ApiKeysWorkspace.tsx | place two unframed audio sections in existing Connections/API layout |
 | NEW | gui/src/components/apikeys-workspace/AudioApiPanel.tsx | accessible Dictation and Live Voice controls, endpoint/model display, sample copying, transient key/file controls and result/error states |
 | NEW | gui/src/audio-api-client.ts | bounded cancelable upload and socket client protocol helpers; no saved secrets |
+| NEW | gui/src/audio-api-examples.ts | executable protocol examples outside component markup; localized prompt label supplied by caller |
 | MODIFY | gui/src/api.ts | narrow audio upload fetch entry bypasses management auth injection/recovery, validates exact inference path |
 | NEW | gui/tests/audio-api-client.test.ts | request generation, cancellation and protocol readiness tests |
 | NEW | gui/tests/audio-api-panel.test.tsx | real component upload, error, cancellation, missing metadata and deactivation flows |

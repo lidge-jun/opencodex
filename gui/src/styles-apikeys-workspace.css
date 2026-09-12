@@ -107,7 +107,29 @@
 .audio-api-actions .btn { min-height: 36px; white-space: nowrap; }
 .audio-api-status { font-size: var(--text-label); }
 .audio-api-error { margin: 0; color: var(--danger); font-size: var(--text-label); }
-.audio-api-endpoints .api-endpoint-url { white-space: normal; overflow-wrap: anywhere; }
+.audio-api-section .api-endpoint-url-btn {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  text-align: left;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.audio-api-section .api-endpoint-url {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .audio-api-examples { min-width: 0; }
 .audio-api-examples summary { cursor: pointer; font-size: var(--text-label); padding: 6px 0; }
 .audio-api-examples > :not(summary) { margin-top: var(--space-2); }

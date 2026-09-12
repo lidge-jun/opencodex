@@ -82,10 +82,10 @@ async function render(active = true, apiBase = "http://localhost") {
   await act(async () => { root!.render(<LanguageProvider><ApiKeys apiBase={apiBase} active={active} /></LanguageProvider>); });
   await flush();
 }
-async function typeKey(section: string) {
+async function typeKey(section: string, value = KEY) {
   const input = container.querySelector<HTMLInputElement>(`${section} input[type=password]`)!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, KEY);
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, value);
     input.dispatchEvent(new win.Event("input", { bubbles: true }) as unknown as Event);
   });
 }
@@ -157,5 +157,57 @@ test("missing or malformed audio metadata leaves existing key management usable"
   expect(container.querySelector(DICTATION)?.textContent).toContain("Audio metadata unavailable");
   expect(container.querySelector(`${DICTATION} input`)).toBeNull();
   expect(container.textContent).toContain("Generate");
+  expect(sent).toHaveLength(0);
+});
+
+test("Cancel, key replacement and duplicate clicks cannot publish a superseded upload", async () => {
+  const replies: Array<(response: Response) => void> = [];
+  responder = () => new Promise(resolve => { replies.push(resolve); });
+  await render(); await typeKey(DICTATION); await selectFile();
+  await act(async () => {
+    const button = container.querySelector<HTMLButtonElement>(`${DICTATION} button[type=submit]`)!;
+    button.click(); button.click();
+  });
+  await flush();
+  expect(sent).toHaveLength(1);
+  await act(async () => { container.querySelector<HTMLButtonElement>(`${DICTATION} .audio-api-actions button[type=button]`)!.click(); });
+  expect(sent[0]!.signal!.aborted).toBe(true);
+  await submit(DICTATION);
+  expect(sent).toHaveLength(2);
+  await typeKey(DICTATION, KEY + "-replacement");
+  expect(sent[1]!.signal!.aborted).toBe(true);
+  await submit(DICTATION);
+  expect(sent).toHaveLength(3);
+  await act(async () => { replies[0]!(Response.json({ text: "stale A" })); replies[1]!(Response.json({ text: "stale B" })); });
+  expect(container.textContent).not.toContain("stale A"); expect(container.textContent).not.toContain("stale B");
+  await act(async () => { replies[2]!(Response.json({ text: "Current C" })); });
+  expect(container.querySelector(".audio-api-result")?.textContent).toContain("Current C");
+});
+
+test("origin changes close the prior socket and clear the transient key", async () => {
+  await render(); await typeKey(LIVE); await submit(LIVE);
+  const socket = Socket.latest!;
+  await render(true, "http://127.0.0.1");
+  expect(socket.closed).toBe(true);
+  expect(container.querySelector<HTMLInputElement>(`${LIVE} input[type=password]`)!.value).toBe("");
+});
+
+test("unknown fields cannot write secrets to the list cache", async () => {
+  audio = { ...AUDIO, apiKey: "sensitive-extra-marker" };
+  await render();
+  expect(container.querySelector(`${DICTATION} input`)).toBeNull();
+  expect(win.sessionStorage.getItem("ocx.apikeys.list.v2:http://localhost")).not.toContain("sensitive-extra-marker");
+});
+
+test("old server and malformed cache audio never invent configured support", async () => {
+  audio = undefined;
+  win.sessionStorage.setItem("ocx.apikeys.list.v2:http://localhost", JSON.stringify({
+    keys: [], claudeCodeEnabled: true,
+    authMatrix: [{ endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" }],
+    endpoints: { baseUrl: BASE, responses: `${BASE}/responses`, chatCompletions: `${BASE}/chat/completions`, messages: `${BASE}/messages`, models: `${BASE}/models`, audio: { ...AUDIO, liveConfigured: "yes" } },
+  }));
+  await render();
+  expect(container.querySelector(DICTATION)?.textContent).toContain("Audio metadata unavailable");
+  expect(container.querySelector(`${LIVE} input`)).toBeNull();
   expect(sent).toHaveLength(0);
 });

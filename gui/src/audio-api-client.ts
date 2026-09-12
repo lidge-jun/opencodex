@@ -3,7 +3,8 @@ import { createBoundedFetch } from "./bounded-fetch";
 
 export type AudioErrorCode = "auth" | "unavailable" | "rateLimit" | "invalid" | "size" | "network" | "timeout" | "protocol";
 export class AudioApiError extends Error {
-  constructor(readonly code: AudioErrorCode) { super(code); }
+  readonly code: AudioErrorCode;
+  constructor(code: AudioErrorCode) { super(code); this.code = code; }
 }
 
 export const AUDIO_FILE_MAX_BYTES = 25_000_000;
@@ -128,7 +129,11 @@ export function connectLiveAudio(options: {
     if (message.type === "error" || message.type === "protocol.error") { finish("failed", "protocol"); return; }
     if (message.type === "session.started" || message.type === "session.updated") {
       const session = message.session;
-      if (session?.status === "closed" || session?.status === "error" || session?.status === "failed") {
+      if (session?.status === "error" || session?.status === "failed") {
+        finish("failed", "protocol");
+        return;
+      }
+      if (session?.status === "closed") {
         finish(ready ? "disconnected" : "failed", ready ? undefined : "protocol");
         return;
       }
