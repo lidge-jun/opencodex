@@ -143,7 +143,9 @@ test("upload errors are localized, cancellation and inactive panels cannot publi
 test("voice reports real readiness, filters event payloads and releases on deactivation", async () => {
   await render();
   expect(Socket.latest).toBeUndefined();
-  await typeKey(LIVE); await submit(LIVE);
+  await typeKey(LIVE);
+  expect(container.querySelector(`${LIVE} [role=status]`)?.textContent).toBe("Not checked");
+  await submit(LIVE);
   const socket = Socket.latest!;
   expect(socket).toBeDefined();
   await act(async () => { socket.readyState = 1; socket.onopen?.(); });

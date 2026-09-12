@@ -250,7 +250,7 @@ export default function ApiKeysWorkspace({
           one, the pattern Usage / Logs / Subagents already use. A rail plus a
           content pane was a second vertical band competing for the same width,
           and at 1280px it cost the content column 252px it could not spare. */}
-      {!selected && <SectionTabs scope="api" items={sectionTabs} ariaLabel={t("api.workspace.sections")} />}
+      {!selected && <SectionTabs scope="api" items={sectionTabs} ariaLabel={t("api.workspace.sections")} mobileReadingLine={108} />}
       <div className="apikeys-workspace-root">
         <section className="apikeys-workspace-main" aria-label={t("api.workspace.details")}>
           {selected ? (

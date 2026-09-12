@@ -97,6 +97,7 @@ export function LiveVoicePanel({ audio }: { audio?: AudioApiInfo }) {
   const id = useId();
   useEffect(() => () => { connection.current?.dispose?.(); connection.current = null; }, []);
   const disconnect = () => {
+    if (!connection.current) return;
     connection.current?.dispose?.(); connection.current = null;
     setState("disconnected");
   };

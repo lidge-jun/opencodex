@@ -309,6 +309,9 @@ requests/sockets. Only allowlisted event types and localized error categories ar
 displayed. Tests live in `gui/tests/audio-api-client.test.ts`,
 `gui/tests/audio-api-panel.test.tsx`, `gui/tests/api-auth-memory.test.ts` and
 `tests/server/api-access-endpoints.test.ts`.
+The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
+line so scroll-spy and the top-bar offset agree; other consumers keep their
+existing reading line. The section strip stays one row at every width.
 
 Provider Overview consumes the existing shared `add-provider-presets` resource for sponsor
 presentation. `matchingWorkspacePreset` requires the configured id, adapter and normalized
