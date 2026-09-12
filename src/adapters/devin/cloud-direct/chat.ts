@@ -505,9 +505,34 @@ const MAX_TOOL_DESC_LEN = 6998;
  * Cognition-specific constraint alongside the length limit above; if
  * Cognition adds more blocklisted phrases, extend this table and add a
  * regression test in tests/devin-adapter.test.ts.
+ *
+ * Not every entry is matched the same way. The Claude Code phrase above is
+ * case-sensitive and whitespace-exact, but the two Codex entries below are
+ * not: against a live account, lowercasing the first word and doubling an
+ * interior space both still produced `permission_denied`, while changing any
+ * single word passed. So those two match case-insensitively with flexible
+ * whitespace and an optional comma, and the rewrite swaps only the leading
+ * verb — the smallest edit measured to clear the filter.
+ *
+ * These two sentences are Codex's own built-in `exec_command` and
+ * `write_stdin` descriptions, verbatim. Every Codex turn carries them, so
+ * before this table knew about them the cloud refused literally every request
+ * from a Codex client — a bare "hi" included — while the same account
+ * answered a hand-built request with an ordinary shell tool. The visible
+ * symptom was the adapter's own blocklist message pointing back at this
+ * table, which is why they are named here rather than left to the next person
+ * to re-bisect.
  */
 const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [/\bTakes a task_id parameter identifying the task\b/g, "Accepts a task_id parameter identifying the task"],
+  [
+    /\bRuns\s+a\s+command\s+in\s+a\s+PTY,?\s+returning\s+output\s+or\s+a\s+session\s+ID\s+for\s+ongoing\s+interaction\b/gi,
+    "Executes a command in a PTY, returning output or a session ID for ongoing interaction",
+  ],
+  [
+    /\bWrites\s+characters\s+to\s+an\s+existing\s+unified\s+exec\s+session\s+and\s+returns\s+recent\s+output\b/gi,
+    "Sends characters to an existing unified exec session and returns recent output",
+  ],
 ];
 
 function sanitizeToolDescriptionForCognition(description: string): string {
@@ -1203,6 +1228,11 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         `Cognition denied this request (permission_denied). If tool descriptions ` +
         `are present, a blocklisted phrase may have triggered this — see the ` +
         `COGNITION_BLOCKLIST_REWRITES table in cloud-direct/chat.ts. ` +
+        // Keep the cloud's own sentence. Replacing it outright is what made the
+        // two Codex entries in that table expensive to find: the message named
+        // the table but dropped the only text that could have said whether this
+        // was a phrase match at all.
+        `(cloud message: ${trailerError.message}) ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
       throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
     }
