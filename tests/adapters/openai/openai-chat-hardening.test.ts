@@ -140,6 +140,23 @@ describe("AgentRouter openai-chat compatibility", () => {
     expect(body.messages[0]?.content.map(part => part.text)).toEqual([preamble, "responda somente: OK"]);
     expect(rawBody.messages[0]?.content).toBe("responda somente: OK");
   });
+
+  test("passthrough chat drops reasoning_effort for an explicitly empty capability ladder", () => {
+    const rawBody = {
+      messages: [{ role: "user", content: "hi" }],
+      reasoning_effort: "xhigh",
+    };
+    const request = buildOpenAIChatPassthroughRequest(
+      provider({ reasoningEfforts: [] }),
+      rawBody,
+      "test-model",
+      false,
+    );
+    const body = JSON.parse(request.body as string) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("reasoning_effort");
+    expect(rawBody.reasoning_effort).toBe("xhigh");
+  });
 });
 
 function parsed(): OcxParsedRequest {

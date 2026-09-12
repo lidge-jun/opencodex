@@ -2924,6 +2924,7 @@ export async function handleComboResponses(
       pick.target,
       comboDefaultEffort(config, comboId),
       supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
+      combo.reasoningEffortMode,
     );
     const childHeaders = buildComboChildHeaders(req.headers);
     const childRequest = new Request(req.url, {

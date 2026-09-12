@@ -489,6 +489,15 @@ combo whose remaining eligible targets use other providers.
 
 > Decision record: [ADR-0070](../decisions/ADR-0070-same-provider-combo-quota-fallback.md)
 
+## Combo per-target reasoning controls
+
+`src/server/responses/core.ts` passes the combo's `reasoningEffortMode` and the final target's
+`supportedLadderFor` result to `src/combos/request.ts` before adapter parsing. Explicit empty
+capability ladders remove effort and thinking controls in every combo mode; adaptive mode also
+removes those controls for unknown ladders and preserves `reasoning.summary`. Known non-empty
+ladders retain the existing per-target effort resolution. This request normalization does not
+change target order, attempt accounting, or the existing provider-400 failover classification.
+
 ## Combo streaming commit boundary
 
 An HTTP 200 does not by itself commit a streaming combo child. The combo parent runs the child's

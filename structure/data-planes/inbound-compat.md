@@ -19,6 +19,9 @@ the native passthrough there is no canonical Fast injection and no wire mapping:
 and `fastMode` injects nothing here. Resolved-Fast-policy injection applies only to routes that
 take the Chat -> Responses -> Chat bridge below. `parallel_tool_calls` is emitted only for providers opted into
 parallel tools (or pinned false by the existing provider opt-out contract).
+The native passthrough still applies the existing model capability authority to reasoning: an
+explicit empty ladder removes caller `reasoning_effort`, while an unknown ladder remains
+unclassified. This guard does not alter the separate raw service-tier contract.
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
 or storage semantics retain the existing Chat -> Responses -> Chat bridge.
 

@@ -240,6 +240,11 @@ wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhig
 (`src/server/effort-policy.ts`): they lower or preserve the requested effort rather than rejecting
 the request, and they never raise it.
 
+Combo dispatch reads the final target ladder through the same `supportedLadderFor` authority. An
+explicit empty ladder means that target receives no effort control; an unknown ladder receives no
+parent effort controls only when the combo opts into `reasoningEffortMode: "adaptive"`. Known
+non-empty ladders continue through the existing per-target resolution.
+
 The `ocx effort` CLI accepts only the same canonical cap ladder before live probing or persistence.
 Its status output preserves unsupported legacy cap values and reports that those fields are ignored;
 the read does not normalize or migrate them, and an ignored subagent field does not disable a valid

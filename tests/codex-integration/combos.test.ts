@@ -297,20 +297,70 @@ describe("combo request cloning", () => {
     expect(concrete.input).not.toBe(raw.input);
   });
 
-  test("combo default respects client-owned ignored reasoning values", () => {
+  test("combo target capability strips unsupported client reasoning controls", () => {
     expect(concreteComboRequestBody({ model: "combo/x", reasoning: null }, target, "high", []).reasoning).toBeNull();
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: "" } }, target, "high", [],
-    ).reasoning).toEqual({ effort: "" });
+    ).reasoning).toBeUndefined();
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: "banana" } }, target, "high", [],
-    ).reasoning).toEqual({ effort: "banana" });
+    ).reasoning).toBeUndefined();
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: null } }, target, "high", [],
-    ).reasoning).toEqual({ effort: null });
+    ).reasoning).toBeUndefined();
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { summary: "concise" } }, target, "high", ["high"],
     ).reasoning).toEqual({ summary: "concise", effort: "high" });
+  });
+
+  test("adaptive normalization strips unsupported controls for an unknown target while preserving summary", () => {
+    const raw = {
+      model: "combo/x",
+      input: "hi",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    };
+    const concrete = concreteComboRequestBody(raw, target, null, undefined, "adaptive");
+
+    expect(concrete).toEqual({
+      model: "a/m1",
+      input: "hi",
+      reasoning: { summary: "concise" },
+    });
+    expect(raw).toEqual({
+      model: "combo/x",
+      input: "hi",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    });
+  });
+
+  test("explicit empty ladder strips unsupported controls while preserving reasoning summary", () => {
+    const concrete = concreteComboRequestBody({
+      model: "combo/x",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    }, target, "high", []);
+
+    expect(concrete).toEqual({
+      model: "a/m1",
+      reasoning: { summary: "concise" },
+    });
+  });
+
+  test("adaptive normalization preserves xhigh for a known reasoning ladder", () => {
+    const concrete = concreteComboRequestBody({
+      model: "combo/x",
+      reasoning: { effort: "xhigh", summary: "concise" },
+    }, target, null, ["low", "medium", "high", "xhigh"], "adaptive");
+
+    expect(concrete.reasoning).toEqual({ effort: "xhigh", summary: "concise" });
   });
 
   test("omits combo defaults for unset, no-reasoning, and unknown target capabilities", () => {
