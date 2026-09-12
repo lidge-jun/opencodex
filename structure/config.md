@@ -138,6 +138,13 @@ journal creation, and the background history restoration guardian.
 `ocx sync` and `ocx restore back` run the injector's non-writing preflight before provider
 discovery or catalog/cache replacement. Deterministic config and ownership refusals therefore
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
+One refusal is deliberately not terminal for an explicit `ocx sync`. When the preflight reports
+`history_paginated_requires_native_writer`, the refusal itself stands — config and conversation
+files are not touched — but the catalog and models cache still refresh through their existing
+owner, and the sync reports `catalog-only`. An explicit sync is also the refresh path for side
+profiles that read the OpenCodex catalog without injection, and a home whose history simply
+requires its native writer is not a reason to let their model list go stale. Unattended sync,
+`POST /api/sync`, and every other config or ownership refusal keep the hard failure above.
 The real injection still revalidates under its normal write boundary after catalog convergence;
 the preflight is an early no-write guard, not an authorization token for a later write.
 

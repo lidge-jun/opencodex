@@ -32,6 +32,12 @@ export interface CodexSyncResult {
   catalogExists: boolean;
   catalogWritten: boolean;
   cacheSynced: boolean;
+  /**
+   * Whether the catalog owner committed a validated catalog or refused the
+   * refresh. Only a `catalog-only` result carries it; `ok` already answers the
+   * question for callers that do not care which half refused.
+   */
+  refreshOutcome?: "committed" | "refused";
   message: string;
   warning?: string;
   comboOmissions?: ComboCatalogOmission[];
