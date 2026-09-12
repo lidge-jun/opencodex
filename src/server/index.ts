@@ -515,7 +515,8 @@ function attachLiveSidebandUpstream(
     ws.data.liveOpened = true;
     if (ws.data.liveConnectTimer !== undefined) clearTimeout(ws.data.liveConnectTimer);
     ws.data.liveConnectTimer = undefined;
-    if (ws.data.liveFinish) ws.data.liveOutcome = 200;
+    // An accepted transport alone does not prove inference/quota recovery.
+    // Keep healthy closes neutral; explicit transport failures are recorded below.
     const pending = ws.data.livePending ?? [];
     ws.data.livePending = undefined;
     ws.data.livePendingBytes = undefined;

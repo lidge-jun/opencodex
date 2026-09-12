@@ -56,6 +56,8 @@ The externally returned call ID is a proxy-generated rtc_ocx_<random> alias mapp
 
 Keyed upstreams have no verified physical account ID, so their bindings additionally retain a digest of the upstream credential. Fresh join resolution compares that digest and refuses a changed credential instead of guessing that a replacement key owns the original call. This digest is created at call registration, copied only in the in-memory registry, consumed at join and removed at expiry/shutdown; it is not serialized or exposed.
 
+Source-review refinement: normal WebSocket completion is neutral for account health because transport open can be followed by a protocol rejection. Only explicit transport failures/timeouts reach the recorder. Native platform-bearer compatibility uses equality with the configured canonical OpenAI API credential, never an sk- prefix guess; unrecognized/revoked custom bearers are rejected. The existing global listener policy still governs whether a native request is admitted without a proxy key.
+
 Standalone WS /v1/live accepts an explicit model or defaults to gpt-live-1-codex, with gpt-live-1 as documented alias if implemented. Missing V3 negotiation is added only to this Frameless path. /v1/realtime preserves its current adapter semantics. A raw live client receives delegation events; proxy does not execute tools or fabricate delegation results.
 
 WsData fields are created at server.upgrade, serialized only by Bun in process, read at open/message/close, and disposed at relay closure; no disk reviver. Call binding types are in-memory only. Public query/model and protocol inputs are validated at ingress; no secret-bearing URL query authentication is added.

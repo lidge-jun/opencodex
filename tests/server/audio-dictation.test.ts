@@ -32,7 +32,7 @@ const startEvent = { type: "session.start", config: {
   vad: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
 } };
 
-function createFixture() {
+function createFixture(options: { failDictation?: boolean } = {}) {
   const creates: Headers[] = [];
   const handshakes: Array<{ url: string; headers: Headers; protocols?: string[] }> = [];
   const frames: string[] = [];
@@ -52,6 +52,11 @@ function createFixture() {
         frames.push(message);
         let event: { type?: string };
         try { event = JSON.parse(message); } catch { ws.send(message); return; }
+        if (options.failDictation && event.type === "session.start") {
+          ws.send(JSON.stringify({ type: "session.error", sequence_no: 1, fatal: true, error: { code: "fixture_error", message: "fixture rejection", retryable: false } }));
+          ws.close(1000);
+          return;
+        }
         if (event.type === "session.start") ws.send(JSON.stringify({ type: "session.started", sequence_no: 1, session: { session_id: "fixture", status: "active", config: { provider_mode: "streaming_sse", transcript_delivery_mode: "segment" } } }));
         else if (event.type === "audio.append") ws.send(JSON.stringify({ type: "transcript.final", sequence_no: 2, utterance_id: "u1", revision: 1, text: "fixture transcript" }));
         else if (event.type === "session.close") {
@@ -170,6 +175,25 @@ describe("dictation protocol validation", () => {
 });
 
 describe("external audio sockets", () => {
+  test("native platform bearer keeps HTTP creation and WebSocket relay on its configured tier", async () => {
+    saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "openai-apikey", openaiProviderTierVersion: 2,
+      providers: { "openai-apikey": { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-fixture-native", authMode: "key" } },
+      apiKeys: [{ id: "one", name: "one", key: KEY, createdAt: "2026-09-12T00:00:00Z" }],
+    });
+    fixture = createFixture();
+    const form = new FormData(); form.set("sdp", "v=0\r\n");
+    const response = await fetchOriginal(new URL("/v1/live", fixture.server.url), {
+      method: "POST", body: form, headers: { authorization: "Bearer sk-fixture-native" },
+    });
+    expect(response.status).toBe(201);
+    await response.text();
+    expect(response.headers.get("location")).toBe("https://api.openai.com/v1/live/rtc_upstream_1");
+    const url = new URL("/v1/realtime?model=gpt-realtime-1.5", fixture.server.url); url.protocol = "ws:";
+    const ws = new WebSocket(url, { headers: { authorization: "Bearer sk-fixture-native" } } as unknown as string[]);
+    clients.add(ws);
+    await receive(ws, "native-echo", "native-echo");
+    expect(fixture.handshakes[0]!.headers.get("authorization")).toBe("Bearer sk-fixture-native");
+  });
   test("browser key carrier relays the actual dictation protocol without exposing upstream credentials", async () => {
     fixture = createFixture();
     const ws = socket("/v1/audio/transcriptions/stream", true);
@@ -190,7 +214,7 @@ describe("external audio sockets", () => {
     expect(fixture.handshakes[0]!.url).toBe("wss://api.openai.com/v1/live?model=gpt-live-1-codex");
     expect(fixture.handshakes[0]!.headers.get("openai-alpha")).toBe("quicksilver=v2");
   });
-  test("successful external sockets record one supported success outcome", async () => {
+  test("connectivity-only completion does not claim inference recovery", async () => {
     fixture = createFixture();
     const outcomes = spyOn(routing, "recordCodexUpstreamOutcome");
     try {
@@ -198,7 +222,19 @@ describe("external audio sockets", () => {
       await receive(ws, "healthy", "healthy");
       ws.close();
       await fixture.upstreamClosed;
-      expect(outcomes.mock.calls.map(call => call[2])).toEqual([200]);
+      expect(outcomes.mock.calls).toEqual([]);
+    } finally { outcomes.mockRestore(); }
+  });
+  test("protocol failure followed by a normal close never records success", async () => {
+    fixture = createFixture({ failDictation: true });
+    const before = routing.getCodexUpstreamHealth("pool-a");
+    const outcomes = spyOn(routing, "recordCodexUpstreamOutcome");
+    try {
+      const ws = socket("/v1/audio/transcriptions/stream", true);
+      await receive(ws, startEvent, "session.error");
+      await fixture.upstreamClosed;
+      expect(outcomes.mock.calls).toEqual([]);
+      expect(routing.getCodexUpstreamHealth("pool-a")).toEqual(before);
     } finally { outcomes.mockRestore(); }
   });
   test("shutdown cancellation reaches the authenticated upstream socket", async () => {

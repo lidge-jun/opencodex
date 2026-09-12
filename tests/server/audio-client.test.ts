@@ -58,4 +58,9 @@ describe("audio-only WebSocket admission", () => {
     const next = client(resolveAudioClient(request({ authorization: "Bearer ocx_data_rotated_fixture" }), rotated));
     expect(next.owner).toBe(old.owner);
   });
+  test("known native platform bearer retains legacy handling without guessing by prefix", () => {
+    const keyed: OcxConfig = { ...config, providers: { "openai-apikey": { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-fixture-native", authMode: "key" } } };
+    expect(resolveAudioClient(request({ authorization: "Bearer sk-fixture-native" }), keyed)).toBeNull();
+    expect((resolveAudioClient(request({ authorization: "Bearer sk-other-revoked" }), keyed) as Response).status).toBe(401);
+  });
 });

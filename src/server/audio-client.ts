@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import type { OcxConfig } from "../types";
-import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
-import type { DataPlaneAdmission } from "./auth-cors";
+import { captureExplicitOpenAiCallerAuth, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
+import { isProxyAdmissionSecret, type DataPlaneAdmission } from "./auth-cors";
 import { resolveAudioAdmission } from "./audio-upstream";
 
 export const AUDIO_WEBSOCKET_PROTOCOL = "opencodex-audio";
@@ -45,8 +45,12 @@ export function resolveAudioClient(req: Request, config: OcxConfig, required = f
   }
   const admission = resolveAudioAdmission(headers, config);
   if (!admission) {
+    const bearer = /^Bearer\s+([^\s,]+)$/i.exec(headers.get("authorization") ?? "")?.[1];
+    const platformKey = selectOpenAiImagesProvider(config).keyed?.apiKey;
+    const knownPlatformBearer = !!bearer && !!platformKey && !isProxyAdmissionSecret(bearer, config)
+      && timingSafeEqual(createHash("sha256").update(bearer).digest(), createHash("sha256").update(platformKey).digest());
     const explicit = headers.has("x-opencodex-api-key") || headers.has("x-api-key")
-      || (headers.has("authorization") && !captureExplicitOpenAiCallerAuth(headers, config));
+      || (headers.has("authorization") && !knownPlatformBearer && !captureExplicitOpenAiCallerAuth(headers, config));
     return required || carrier || explicit
       ? formatErrorResponse(401, "authentication_error", "opencodex API key required")
       : null;

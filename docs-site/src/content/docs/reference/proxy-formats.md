@@ -494,6 +494,12 @@ response, not by the presence of a model name in the dashboard.
 
 ### Native Codex compatibility
 
+Native API-key-mode callers on the trusted local listener may use the exact
+credential configured for the canonical OpenAI API tier. Other presented bearer
+values require a registered proxy key or an explicit, matching ChatGPT
+token/account pair; an arbitrary key prefix is not proof of native credentials.
+Credential-free trusted-local native calls retain their existing behavior.
+
 `POST /v1/live` accepts the ChatGPT/Codex App Frameless call-creation surface.
 `POST /v1/realtime/calls` accepts the OpenAI Realtime call-creation surface. opencodex selects an
 eligible OpenAI-family route, normalizes the call-creation request for the upstream authentication
