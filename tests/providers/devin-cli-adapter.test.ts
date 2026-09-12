@@ -41,7 +41,7 @@ describe("devin-cli registration", () => {
     expect(providerIconSrc("devin")).toBe("/provider-icons/devin.svg");
     expect(providerIconSrc("devin-cli")).toBe("/provider-icons/devin.svg");
     const englishT = ((_key: string, fallback?: string) => fallback ?? "") as Parameters<typeof formatProviderDisplayName>[1];
-    expect(formatProviderDisplayName("devin", englishT)).toBe("Cognition (Devin/Windsurf)");
+    expect(formatProviderDisplayName("devin", englishT)).toBe("Devin");
     expect(formatProviderDisplayName("devin-cli", englishT)).toBe("Devin CLI");
   });
 
