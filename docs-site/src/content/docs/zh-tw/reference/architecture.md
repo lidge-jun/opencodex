@@ -136,7 +136,8 @@ WebSocket bridge。
 
 當最終傳送的模型為 `gpt-5.3-codex-spark` 時，canonical ChatGPT 轉送會在 HTTP 請求標頭與
 原生 WS 訊框中繼資料中明確關閉 Responses Lite，透過別名選擇 Spark 時也一樣；但僅限於傳送本文
-不含 `additional_tools` 群組的情況。該群組本身就是 Lite 的工具傳遞形態，因此仍使用它的 Spark
+不含非空 `additional_tools` 群組的情況。`tools: []` 的群組不會開啟 Lite。非空群組本身就是
+Lite 的工具傳遞形態，因此仍使用它的 Spark
 本文會保持 Lite 開啟，無論呼叫端或設定的標頭為何。Lite 識別值
 改變時，舊 socket 會停止使用；後續識別值相同且符合重用條件的請求可以重用新 socket。
 其他模型與閘道保留既有 Lite 政策。原生中繼資料格式不合法時，仍會退回 HTTP，並保持
