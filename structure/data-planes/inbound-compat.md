@@ -33,6 +33,15 @@ request-signal cancellation contracts as routed Responses transport. Because
 call before it binds the adapter; the pick remains inert unless a strategy is configured
 and the committed key is cooling. See [`responses.md`](../transports/responses.md).
 
+## Chat conversation identity forwarding
+
+`src/server/chat-completions.ts` preserves caller `prompt_cache_key` on the Chat-to-Responses
+bridge. Canonical ChatGPT Responses forwarding preserves `session_id`, `session-id`, `thread-id`
+and per-request `x-client-request-id` under their original names. Missing conversation identity
+stays missing; a shared prefix/cache key is not converted into a session. The direct-mode
+outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`.
+This transport contract does not prove a client's emission, Pool selection stability or cache hits.
+
 ## Chat streaming client with a JSON upstream result
 
 The translated inbound path in `src/server/chat-completions.ts` may receive a complete JSON
