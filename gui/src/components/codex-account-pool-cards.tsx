@@ -83,6 +83,20 @@ export function CodexAccountPoolCards({
         const validationPending = a.health?.reason === "validation_pending";
         const healthLabel = formatOAuthHealthLabel(t, a.health);
         const healthSummary = formatOAuthHealthSummary(t, "codex", a.id, a.health);
+        const hasCustomPriority = normalizeAccountPriority(a.priority) !== DEFAULT_ACCOUNT_PRIORITY;
+        const priorityControl = (
+          <AccountPriorityControl
+            value={a.priority}
+            selectId={`codex-account-priority-${a.id}`}
+            // Every row, not just the one being written: the controller serializes order
+            // writes behind one mutation ref, so a second row's pick would come back "busy"
+            // and be dropped with no toast. Same global lock the pause button uses.
+            // A pending switch counts too — it writes the same pin this clears, so the
+            // controller refuses to overlap them, and that refusal is equally silent.
+            disabled={priorityUpdatingId !== null || switchingId !== null}
+            onChange={(priority) => onPriorityChange(a, priority)}
+          />
+        );
         return (
         <div key={a.id} className={`card ${isNext(a) ? "card-active" : ""}`} style={{ marginBottom: 8 }}>
           <div className="card-head">
@@ -153,6 +167,7 @@ export function CodexAccountPoolCards({
             >
               <summary className="btn btn-ghost btn-sm" aria-label={`${t("codexAuth.moreActions")} — ${a.email}`} title={t("codexAuth.moreActions")}>⋯</summary>
               <div className="codex-account-more-body">
+                {!hasCustomPriority && moreOpen.has(a.id) && priorityControl}
                 <span className="mono text-caption muted">{t("prov.accountId")}: {displayAccountId(a.id)}</span>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => idCopy.copy(a.id, a.id)}>
                   {idCopy.outcomeFor(a.id) === "copied" ? t("startup.copied") : t("codexAuth.copyId")}
@@ -174,19 +189,7 @@ export function CodexAccountPoolCards({
           </div>
           <div className="codex-account-identity">
             <div className="codex-account-identity-copy">{a.email}{a.plan ? ` · ${a.plan}` : ""}</div>
-            {(normalizeAccountPriority(a.priority) !== DEFAULT_ACCOUNT_PRIORITY || moreOpen.has(a.id)) && (
-            <AccountPriorityControl
-              value={a.priority}
-              selectId={`codex-account-priority-${a.id}`}
-              // Every row, not just the one being written: the controller serializes order
-              // writes behind one mutation ref, so a second row's pick would come back "busy"
-              // and be dropped with no toast. Same global lock the pause button uses.
-              // A pending switch counts too — it writes the same pin this clears, so the
-              // controller refuses to overlap them, and that refusal is equally silent.
-              disabled={priorityUpdatingId !== null || switchingId !== null}
-              onChange={(priority) => onPriorityChange(a, priority)}
-            />
-            )}
+            {hasCustomPriority && priorityControl}
           </div>
           {healthSummary && (
             <div className="card-sub faint">{healthSummary}</div>
