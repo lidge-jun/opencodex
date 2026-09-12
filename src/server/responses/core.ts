@@ -212,6 +212,7 @@ import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
   isNonReplayableResponse,
+  isTransientUpstreamStatus,
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
 import {
@@ -1146,6 +1147,28 @@ export async function shouldRetryCodexPoolAccountQuota(
   }
 }
 
+/**
+ * A pre-stream upstream 5xx another Codex account may still be able to serve.
+ *
+ * `server_is_overloaded` is the shape this exists for. The ChatGPT backend refuses in a few
+ * hundred milliseconds, the body carries no quota evidence, and nothing in that exchange is
+ * account health — so the pool keeps choosing the same account and every request fails on it
+ * while the other accounts sit idle. That is what an operator sees as the pool refusing to move.
+ *
+ * The status stays exactly as upstream sent it. `classifyCodexUpstreamOutcome` maps 5xx to the
+ * transient class, so the account earns an ordinary failure streak and `upstreamFailoverThreshold`
+ * decides when it is soft-avoided, rather than a quota cooldown it never earned.
+ *
+ * Deliberately narrow. {@link isNonReplayableResponse} still refuses: a post-send WebSocket
+ * gateway status means the body already reached the origin, so sending it from a second account
+ * could duplicate a turn the origin may still be running. A 5xx whose body confirms quota is not
+ * routed here either — {@link shouldRetryCodexPoolAccountQuota} classifies that one first and
+ * carries the cooldown with it.
+ */
+export function shouldRetryCodexPoolAccountTransient(response: Response): boolean {
+  return !isNonReplayableResponse(response) && isTransientUpstreamStatus(response.status);
+}
+
 interface CodexPoolAccountRetryArgs {
   /** Sanitized caller input, before any selected Pool credential was materialized. */
   callerAuthHeaders: Headers;
@@ -1320,6 +1343,21 @@ async function retryCodexPoolOnAlternateAccount(
   const inboundWire = options.inboundWire ?? "responses";
   const entitlementResolver = options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements;
   let retryAuthCtx: CodexAuthContext | undefined;
+  // A transient 5xx must record even when this request cannot move: the ordinary terminal
+  // recorder only fires for an OK event-stream body, so a pre-stream refusal would otherwise
+  // leave the account looking healthy no matter how many times it refused, and the pool would
+  // keep handing it the next request.
+  const recordUnmovedTransientOutcome = (): void => {
+    if (!isTransientUpstreamStatus(outcomeStatus)) return;
+    recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+      threadId: firstAuthCtx.affinityKey,
+      fixedAccount: firstAuthCtx.fixedAccount,
+      modelId: route.modelId,
+      probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+      probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+      writerGeneration: firstAuthCtx.writerGeneration,
+    });
+  };
   if (outcomeStatus === 400 && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)) {
     invalidateCodexModelEntitlementsForAccount(firstAuthCtx.accountId);
     let refreshed;
@@ -1344,6 +1382,7 @@ async function retryCodexPoolOnAlternateAccount(
   // Exact account selectors may retry the same confirmed account above, but must never resolve
   // an alternate. Quota failures and a refreshed entitlement miss remain terminal.
   if (!retryAuthCtx && (firstAuthCtx.fixedAccount || args.sameAccountOnly === true)) {
+    recordUnmovedTransientOutcome();
     return { kind: "no-alternate" };
   }
   try {
@@ -1394,6 +1433,7 @@ async function retryCodexPoolOnAlternateAccount(
         writerGeneration: firstAuthCtx.writerGeneration,
       });
     }
+    recordUnmovedTransientOutcome();
     return { kind: "no-alternate" };
   }
 
@@ -5669,6 +5709,10 @@ async function handleResponsesInner(
         // ChatGPT sometimes wraps quota exhaustion in a generic 5xx. Normalize only
         // body-confirmed cases to quota evidence so cooldown and rotation both apply.
         poolRetryOutcome = upstreamResponse.status >= 500 ? 429 : upstreamResponse.status;
+      } else if (!authCtx.fixedAccount && shouldRetryCodexPoolAccountTransient(upstreamResponse)) {
+        // A plain transient 5xx the same-account retry layer could not absorb. Keep the real
+        // status so it records as transient rather than quota.
+        poolRetryOutcome = upstreamResponse.status;
       }
 
       if (poolRetryOutcome !== undefined) {
