@@ -119,7 +119,18 @@ export function createDevinCliAdapter(provider: OcxProviderConfig, deps?: { spaw
               // otherwise inherit every credential this process holds.
               ...baseScopedEnv(),
               NO_COLOR: "1",
-              DEVIN_PERMISSION_MODE: toolsAllowed ? (process.env.DEVIN_PERMISSION_MODE ?? "bypass") : "ask",
+              // "normal" is the CLI's own refuse-by-default mode. "ask" reads like
+              // the right name for it but is not a value the binary accepts: Devin
+              // CLI 3000.10.21 exits 2 with
+              //   invalid value 'ask' for '--permission-mode <PERMISSION_MODE>'
+              //   Valid options: normal (auto), accept-edits, dangerous (yolo,
+              //   bypass), autonomous (requires --sandbox)
+              // before answering a single prompt, so every turn on this provider
+              // failed with the default (tools not allowed) configuration — the
+              // one path most operators are on. Found by running a real turn
+              // against an installed, signed-in CLI; no unit test could see it,
+              // because the spawn is injected and the fake child accepts anything.
+              DEVIN_PERMISSION_MODE: toolsAllowed ? (process.env.DEVIN_PERMISSION_MODE ?? "bypass") : "normal",
             },
           });
         } catch (error) {
