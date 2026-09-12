@@ -132,6 +132,16 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "--restart-desktop-app (Windows only, opt-in) fully restarts the Codex desktop app so its model picker re-reads the catalog. Never implied by --restart-codex: it ends live conversations.",
     ],
   },
+  {
+    name: "catalog",
+    usage: "ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]",
+    summary: "Install a validated remote /v1/catalog snapshot into Codex.",
+    details: [
+      "Authentication is read only from the named environment variable and sent as a Bearer token.",
+      "HTTPS is required except for loopback HTTP; redirects are refused.",
+      "The catalog and models_cache.json are coordinated under the Codex catalog write lock.",
+    ],
+  },
   { name: "status", usage: "ocx status", summary: "Check proxy server status." },
   {
     name: "doctor",

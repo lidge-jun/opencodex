@@ -276,6 +276,7 @@
     "catalog-input-modality-enum.test.ts": "codex-integration",
     "catalog-llamacpp-capabilities.test.ts": "codex-integration",
     "catalog-oauth-observation.test.ts": "codex-integration",
+    "catalog-remote-pull.test.ts": "codex-integration",
     "catalog-retain-models.test.ts": "codex-integration",
     "catalog-verbosity-default.test.ts": "codex-integration",
     "catalog-vision-sidecar-modalities.test.ts": "codex-integration",

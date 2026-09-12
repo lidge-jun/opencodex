@@ -278,6 +278,34 @@ were updated. Pass `--restart-codex` to send `SIGTERM` only to matching `codex â
 Invalidate Codex's local model picker cache so it is rebuilt from the active opencodex catalog. The
 same stale-`app-server` warning and optional `--restart-codex` behavior as `ocx sync` apply.
 
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]`
+
+Install a complete catalog served by another OpenCodex instance's `/v1/catalog` endpoint, then
+synchronize `models_cache.json`. Unlike `ocx sync`, this command does not discover configured
+providers or inject Codex configuration. Unlike `ocx sync-cache`, it replaces the active catalog
+before rebuilding the cache. It works even when the local Codex integration desired state is off.
+
+The URL must be HTTPS; loopback HTTP is accepted for local testing. Embedded URL credentials,
+queries, fragments, redirects, oversized responses, malformed JSON, duplicate or unsafe slugs, and
+unknown `input_modalities` are refused before any local write. Authentication is optional and is
+read only by environment-variable reference:
+
+```bash
+export OPENCODEX_CATALOG_AUTH_TOKEN='...'
+ocx catalog pull https://proxy.example.com/v1/catalog \
+  --auth-env OPENCODEX_CATALOG_AUTH_TOKEN
+```
+
+The value is sent as a Bearer token but is never accepted as an argv value. Redirects are refused,
+so authorization cannot cross origins. Catalog and cache writes use the shared Codex catalog lock
+and atomic writer. A failed fetch, validation, lock acquisition, catalog write, or cache rebuild
+preserves the last-known-good files. Identical catalog bytes are a no-op that preserves mtimes and
+never touches processes. `--restart-codex` applies only after a real write and remains explicit;
+Desktop restart is not part of this command.
+
+`--json` emits one stable envelope on stdout. The `status` field is `updated`, `unchanged`, or
+`failed`; `catalogWritten`, `cacheSynced`, and `codexRestarted` are always present.
+
 ## Background service
 
 ### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
