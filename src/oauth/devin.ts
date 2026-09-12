@@ -23,9 +23,13 @@ export { DEVIN_DEFAULT_API_SERVER } from "./devin/api-base";
  * resort; both are re-validated because neither is trusted more than the
  * network value.
  */
-export function resolveDevinApiServer(configuredBaseUrl?: string): string {
+export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "devin"): string {
   return (
-    validateDevinApiBaseUrl(getCredential("devin")?.apiBaseUrl) ??
+    // Provider-scoped. `devin` and `devin-cli` share this transport and this token
+    // format but sign in to different accounts, and an EU or FedStart tenant is
+    // recorded on the credential rather than in the registry. Reading a fixed
+    // "devin" slot sent one provider's key to the other's host.
+    validateDevinApiBaseUrl(getCredential(providerId)?.apiBaseUrl) ??
     validateDevinApiBaseUrl(configuredBaseUrl) ??
     DEVIN_DEFAULT_API_SERVER
   );
@@ -42,7 +46,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   }
 }
 
-function identityFromApiKey(apiKey: string): { accountId?: string; email?: string } {
+export function identityFromApiKey(apiKey: string): { accountId?: string; email?: string } {
   const jwtPart = apiKey.includes("$") ? apiKey.slice(apiKey.indexOf("$") + 1) : apiKey;
   const payload = decodeJwtPayload(jwtPart);
   const email = typeof payload?.email === "string" && payload.email.length > 0 ? payload.email : undefined;

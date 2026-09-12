@@ -48,6 +48,10 @@ export function resolveWireProtocolOverride(
 }
 
 /** Build the provider adapter for a resolved provider config. */
-export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
-  return createRegisteredAdapter(providerConfig, { cacheRetention });
+export function resolveAdapter(
+  providerConfig: OcxProviderConfig,
+  cacheRetention?: "none" | "short" | "long",
+  providerId?: string,
+) {
+  return createRegisteredAdapter(providerConfig, { cacheRetention, ...(providerId ? { providerId } : {}) });
 }

@@ -1436,6 +1436,7 @@ async function retryCodexPoolOnAlternateAccount(
   const retryAdapter = resolveAdapter(
     resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
     config.cacheRetention,
+    route.providerName,
   );
   bindRouteReasoningReplayScope({
     parsed,
@@ -4168,7 +4169,7 @@ async function handleResponsesInner(
       && credentialGeneration(row.credential) === binding.snapshot.generation;
   };
   const resolveSelectionAdapter = (provider: OcxProviderConfig, retention = config.cacheRetention): ProviderAdapter => {
-    const resolved = resolveAdapter(provider, retention);
+    const resolved = resolveAdapter(provider, retention, route.providerName);
     if (route.provider.authMode === "forward") return resolved;
     const binding: DispatchBinding | undefined = route.provider.authMode === "oauth"
       ? oauthSelection && servingOAuthSnapshot

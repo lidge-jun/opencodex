@@ -164,7 +164,14 @@ export function mapOcxToolsToDevin(tools: OcxTool[] | undefined): ToolDef[] | un
   }));
 }
 
-export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter {
+export function createDevinAdapter(
+  provider: OcxProviderConfig,
+  context: { providerId?: string } = {},
+): ProviderAdapter {
+  // Which credential slot holds this row's tenant. Defaults to `devin` so every
+  // existing caller — including the tests that construct this adapter directly —
+  // behaves exactly as before.
+  const credentialProviderId = context.providerId ?? "devin";
   const cascadeIds = new Map<string, string>();
   const CASCADE_ID_MAX = 256;
 
@@ -216,7 +223,7 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
       // The signed-in account's tenant decides the host, not the static registry
       // entry: an EU or FedStart account that used provider.baseUrl would send
       // every RPC to the US server it is not provisioned on.
-      const host = resolveDevinApiServer(provider.baseUrl);
+      const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId);
       const modelUid = await resolveWireModelUid(rawModelId, apiKey, host, parsed.options.reasoning);
       let openToolId: string | undefined;
       let usage: OcxUsage | undefined;
