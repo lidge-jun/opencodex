@@ -191,6 +191,17 @@ not an authentication or entitlement decision.
 
 Routed Responses continuations whose local replay state is missing resolve their recovery decision from the selected wire protocol, not the model name; the contract lives in [Responses transport](transports/responses.md).
 
+`src/cli/opencode.ts` reads its model catalogue from the authenticated management route
+`GET /api/models`, so it presents the management credential (`configuredAdminToken`:
+`OPENCODEX_ADMIN_AUTH_TOKEN`, then the hardened `admin-api-token` file) and keeps the data-plane
+admission key for the child process environment alone. The read is loopback-only — the resolved
+`/api/*` origin must be a loopback address, with `probeHostname` normalizing the wildcard and IPv6
+spellings — and it travels over `directLocalHttpFetch`, which ignores proxy environment variables
+and never follows a redirect. A process-attested proxy answers the same read over the single-use
+local management capability for `/api/models` (`src/lib/local-management-capability.ts`) rather than
+a reusable credential; a proxy without that capability falls back to the loopback token read. See
+[Config surface](config.md).
+
 ## Remote Hub hardening ownership
 
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.

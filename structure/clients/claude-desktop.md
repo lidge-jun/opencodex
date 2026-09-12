@@ -18,6 +18,13 @@ writes the resulting local Desktop configuration. No admin token, hub-profile up
 alias regeneration is part of this flow. Unsupported old hubs, invalid snapshots and unavailable
 Desktop models fail apply without a local-catalog or loopback fallback.
 
+Local launchers read hub management state only through an authenticated, loopback-only origin.
+`src/cli/opencode.ts` applies that rule to its `GET /api/models` catalogue read: the management
+credential is refused a non-loopback destination before any request is built, the transport is the
+direct local one (no proxy environment variables and no redirects), and the admission key handed to
+the child process carries no management authority. An attested proxy answers that read over a
+single-use local read capability instead of the credential itself.
+
 Date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed
 `desktop_model_mapping_unavailable` error rather than classifying it as invalid. Unknown legacy hash aliases

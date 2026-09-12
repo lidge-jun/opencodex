@@ -19,7 +19,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { loadConfig } from "../config";
+import { getConfigDir, loadConfig } from "../config";
 import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
@@ -40,9 +40,15 @@ import type {
   OpencodeV2ProviderBlock,
 } from "../clients/config-export";
 import { filterCatalogVisibleModels, visibleNativeSlugs } from "../codex/catalog";
+import { isLoopbackHostname } from "../codex/loopback-target";
+import { configuredAdminToken } from "../lib/admin-secrets";
+import { localManagementOrigin } from "../lib/local-destinations";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { commandInvocation } from "../lib/win-exec";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { providerCodexAccountMode } from "../providers/registry";
+import { directLocalHttpFetch } from "../server/direct-local-http";
+import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
@@ -306,16 +312,95 @@ function opencodeBlocks(
 /** Default deadline for authenticated GET /api/models during `ocx opencode` launch. */
 export const OPENCODE_PROXY_MODELS_TIMEOUT_MS = 8_000;
 
-/** Fetch the live model catalog from a running proxy's management API. */
+/**
+ * Fetch the live model catalog from a running proxy management API.
+ *
+ * `GET /api/models` sits behind `requireManagementAuth`, so `managementToken` has to be a
+ * management credential. It is deliberately NOT the data-plane admission key `buildOpencodeEnv`
+ * hands the child process, and two boundaries keep it local:
+ *
+ * 1. Destination — the resolved origin must be loopback. `probeHostname` already normalises every
+ *    wildcard spelling to 127.0.0.1 and brackets bare IPv6 literals, so the supported
+ *    wildcard/IPv4/IPv6 listener cases keep working, while a non-loopback bind is refused before
+ *    any token-bearing request exists.
+ * 2. Transport — `directLocalHttpFetch` never consults proxy environment variables, never follows
+ *    a redirect, and drops proxy headers. A global `fetch` can do all three, so the management
+ *    credential does not travel through one.
+ *
+ * When the live proxy is process-attested (`live.source === "runtime"`) the read goes through the
+ * single-use local management capability instead, so no reusable credential leaves this process at
+ * all. A proxy that does not recognise that capability yet (an older build) falls back to the
+ * loopback token read below.
+ */
+export interface OpencodeProxyModelsDeps {
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  /**
+   * `/api/*` origin for this read, normally `localManagementOrigin(config, live.port)`, which
+   * prefers a hub loopback management ingress. Defaults to the identity-probed proxy record.
+   */
+  origin?: string;
+  /** Capability-read seam; defaults to the real single-use capability client. */
+  boundRead?: typeof fetchBoundLocalManagementRead;
+}
+
+/** True when `origin` is a plain-HTTP loopback destination this process may carry a token to. */
+export function isLocalManagementOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" && !url.username && !url.password && isLoopbackHostname(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function opencodeProxyModelRows(response: Response, text: string): OpencodeProxyModelRow[] {
+  let body: unknown = null;
+  if (text) {
+    try { body = JSON.parse(text); }
+    catch { body = text; }
+  }
+  if (!response.ok) {
+    const message = body && typeof body === "object" && typeof (body as Record<string, unknown>).error === "string"
+      ? (body as Record<string, string>).error
+      : `Management request failed (${response.status})`;
+    throw new Error(message);
+  }
+  if (!Array.isArray(body)) {
+    throw new Error("Management API returned an unexpected /api/models payload.");
+  }
+  return body as OpencodeProxyModelRow[];
+}
+
 export async function fetchOpencodeProxyModels(
   live: LiveProxy,
-  apiKey: string,
-  deps: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  managementToken: string,
+  deps: OpencodeProxyModelsDeps = {},
 ): Promise<OpencodeProxyModelRow[]> {
-  const baseUrl = `http://${probeHostname(live.hostname)}:${live.port}`;
-  const fetchImpl = deps.fetchImpl ?? fetch;
+  const attestedOrigin = `http://${probeHostname(live.hostname)}:${live.port}`;
+  const origin = deps.origin ?? attestedOrigin;
+  if (!isLocalManagementOrigin(origin)) {
+    throw new Error(
+      `Refusing to send the opencodex management credential to ${origin}: it is not a loopback address. `
+      + "Bind the proxy to loopback, or enable the hub management ingress, so this host has a local /api/* address.",
+    );
+  }
+  const target = new URL(origin);
+  // The capability is bound to the attested pid AND to the port the request arrives on, so it can
+  // only be presented to the proxy listener that minted it, never to a separate management ingress.
+  if (live.source === "runtime"
+    && target.port === String(live.port)
+    && target.hostname === new URL(attestedOrigin).hostname) {
+    const read = await (deps.boundRead ?? fetchBoundLocalManagementRead)(
+      live,
+      LOCAL_MANAGEMENT_READ_PATHS.models,
+      { timeoutMs: deps.timeoutMs ?? OPENCODE_PROXY_MODELS_TIMEOUT_MS },
+    );
+    if (read.kind === "response") return opencodeProxyModelRows(read.response, await read.response.text());
+  }
+  const fetchImpl = deps.fetchImpl ?? directLocalHttpFetch;
   const headers = new Headers({ Accept: "application/json" });
-  const token = apiKey.trim();
+  const token = managementToken.trim();
   if (token) headers.set("X-OpenCodex-API-Key", token);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), deps.timeoutMs ?? OPENCODE_PROXY_MODELS_TIMEOUT_MS);
@@ -335,7 +420,7 @@ export async function fetchOpencodeProxyModels(
   let text: string;
   try {
     response = await Promise.race([
-      fetchImpl(`${baseUrl}/api/models`, {
+      fetchImpl(`${target.origin}/api/models`, {
         headers,
         signal: controller.signal,
       }),
@@ -352,21 +437,7 @@ export async function fetchOpencodeProxyModels(
   } finally {
     clearTimeout(timeout);
   }
-  let body: unknown = null;
-  if (text) {
-    try { body = JSON.parse(text); }
-    catch { body = text; }
-  }
-  if (!response.ok) {
-    const message = body && typeof body === "object" && typeof (body as Record<string, unknown>).error === "string"
-      ? (body as Record<string, string>).error
-      : `Management request failed (${response.status})`;
-    throw new Error(message);
-  }
-  if (!Array.isArray(body)) {
-    throw new Error("Management API returned an unexpected /api/models payload.");
-  }
-  return body as OpencodeProxyModelRow[];
+  return opencodeProxyModelRows(response, text);
 }
 
 /**
@@ -602,6 +673,26 @@ export function opencodeApiKey(config: OcxConfig, env: OpencodeLaunchEnv = proce
   return config.apiKeys?.[0]?.key || "ocx";
 }
 
+/**
+ * Credential for the launcher's `GET /api/models` read.
+ *
+ * That route is a management route, so `requireManagementAuth` only admits the admin credential —
+ * the data-plane admission key {@link opencodeApiKey} returns for the child process is refused there
+ * with `opencodex admin token required`. Prefer the configured admin token, the same credential every
+ * other headless management caller sends (`runningProxyUpdateHeaders`), and keep the admission key as
+ * the fallback for a host that has no admin token configured.
+ *
+ * The destination and transport are constrained by {@link fetchOpencodeProxyModels}: the credential
+ * only ever reaches a loopback `/api/*` origin, and an attested proxy answers the same read over a
+ * single-use capability that needs no reusable credential at all.
+ */
+export function opencodeManagementToken(config: OcxConfig, env: OpencodeLaunchEnv = process.env): string {
+  // Name the directory instead of passing `undefined`: an explicit `env` may describe a different
+  // OPENCODEX_HOME than this process, and the admin token file is read from that directory.
+  const configDir = env.OPENCODEX_HOME?.trim() || getConfigDir();
+  return configuredAdminToken(configDir, env) ?? opencodeApiKey(config, env);
+}
+
 async function ensureProxyForOpencode(config: OcxConfig): Promise<LiveProxy | null> {
   const live = await findLiveProxy();
   if (live) return live;
@@ -650,9 +741,13 @@ export async function cmdOpencode(args: string[]): Promise<number> {
   }
 
   const apiKey = opencodeApiKey(startupConfig);
+  const managementToken = opencodeManagementToken(startupConfig);
   let proxyModels: OpencodeProxyModelRow[];
   try {
-    proxyModels = await fetchOpencodeProxyModels(live, apiKey);
+    proxyModels = await fetchOpencodeProxyModels(live, managementToken, {
+      // A hub reaches its own management API through the loopback ingress, not the public bind.
+      origin: localManagementOrigin(startupConfig, live.port),
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.error(`❌ Could not fetch the model catalog from the proxy: ${reason}`);

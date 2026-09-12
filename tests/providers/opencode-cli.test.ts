@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../../src/lib/service-secrets";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../../src/lib/local-management-capability";
+import type { fetchBoundLocalManagementRead } from "../../src/server/local-management-read-client";
 import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_API_KEY_ENV_REF,
@@ -25,6 +27,7 @@ import {
   opencodeCatalogFromProxyRows,
   opencodeGlobalConfigPath,
   opencodeLaunchNativeSlugs,
+  opencodeManagementToken,
   opencodeModelKey,
   opencodeNotFoundHint,
   opencodeProviderOverridePath,
@@ -258,14 +261,22 @@ describe("ocx opencode proxy model catalog", () => {
     const rows = ["chosen", "other"].map(id => ({ provider: "pending", id, namespaced: `pending/${id}` }));
     expect(opencodeCatalogFromProxyRows(rows, pending)).toEqual([]);
     const liveness = await import("../../src/server/proxy-liveness");
-    const finder = spyOn(liveness, "findLiveProxy").mockResolvedValue({
-      port: 10123, hostname: "127.0.0.1", pid: null, source: "config",
+    // A real loopback listener: the launcher reads the catalog over the direct local transport, so
+    // the persistence side effect has to happen in a server rather than in a global-fetch mock.
+    let reads = 0;
+    const catalog = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        reads++;
+        expect(new URL(request.url).pathname).toBe("/api/models");
+        expect(JSON.parse(readFileSync(configPath, "utf8")).providers.pending.initialModelSelection.status).toBe("pending");
+        writeFileSync(configPath, JSON.stringify(ready));
+        return Response.json(rows);
+      },
     });
-    const fetcher = spyOn(globalThis, "fetch").mockImplementation(async input => {
-      expect(String(input)).toBe("http://127.0.0.1:10123/api/models");
-      expect(JSON.parse(readFileSync(configPath, "utf8")).providers.pending.initialModelSelection.status).toBe("pending");
-      writeFileSync(configPath, JSON.stringify(ready));
-      return Response.json(rows);
+    const finder = spyOn(liveness, "findLiveProxy").mockResolvedValue({
+      port: catalog.port, hostname: "127.0.0.1", pid: null, source: "config",
     });
     let inline = "";
     // Exercise cmdOpencode through env construction without launching an installed
@@ -286,14 +297,15 @@ describe("ocx opencode proxy model catalog", () => {
       writeFileSync(configPath, JSON.stringify(pending));
       expect(await cmdOpencode([])).toBe(0);
       expect(finder).toHaveBeenCalledTimes(1);
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(reads).toBe(1);
       expect(spawn).toHaveBeenCalledTimes(1);
       const injected = JSON.parse(inline);
       expect(Object.keys(injected.provider.opencodex.models)).toEqual(["pending/chosen"]);
       expect(Object.keys(injected.providers.opencodex.models)).toEqual(["pending/chosen"]);
       expect(pending.providers.pending!.initialModelSelection!.status).toBe("pending");
     } finally {
-      finder.mockRestore(); fetcher.mockRestore(); spawn.mockRestore(); stderr.mockRestore();
+      await catalog.stop(true);
+      finder.mockRestore(); spawn.mockRestore(); stderr.mockRestore();
       for (const [key, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
@@ -715,6 +727,318 @@ describe("ocx opencode admission key", () => {
 
   test("falls back to a placeholder on an open loopback proxy", () => {
     expect(opencodeApiKey(cfg(), {})).toBe("ocx");
+  });
+});
+
+describe("ocx opencode management token", () => {
+  // GET /api/models is a management route, so the launcher must present the admin credential there;
+  // sending the data-plane admission key is what produced "opencodex admin token required" (401).
+  const TOUCHED = ["OPENCODEX_ADMIN_AUTH_TOKEN", "OPENCODEX_HOME", "OPENCODEX_API_AUTH_TOKEN", "OCX_API_TOKEN_FILE"] as const;
+
+  function withEnv(overrides: Partial<Record<(typeof TOUCHED)[number], string>>, run: () => void): void {
+    const saved = new Map<string, string | undefined>(TOUCHED.map(key => [key, process.env[key]]));
+    try {
+      for (const key of TOUCHED) delete process.env[key];
+      for (const [key, value] of Object.entries(overrides)) process.env[key] = value;
+      run();
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+
+  const adminToken = `ocx_admin_${"a".repeat(43)}`;
+
+  test("the configured admin token wins over the admission key", () => {
+    withEnv({}, () => {
+      const config = cfg({ apiKeys: [{ id: "1", name: "main", key: "sk-cfg", createdAt: "2026-01-01" }] });
+      expect(opencodeManagementToken(config, { OPENCODEX_ADMIN_AUTH_TOKEN: adminToken })).toBe(adminToken);
+    });
+  });
+
+  test("falls back to the admin-api-token file in OPENCODEX_HOME", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-opencode-admin-"));
+    writeFileSync(join(dir, "admin-api-token"), `${adminToken}\n`, { mode: 0o600 });
+    try {
+      withEnv({ OPENCODEX_HOME: dir }, () => {
+        const config = cfg({ apiKeys: [{ id: "1", name: "main", key: "sk-cfg", createdAt: "2026-01-01" }] });
+        expect(opencodeManagementToken(config, { OPENCODEX_ADMIN_AUTH_TOKEN: "  " })).toBe(adminToken);
+      });
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("falls back to the admission key when no admin token is configured", () => {
+    // An explicit empty OPENCODEX_HOME keeps this independent of any admin token the runner's
+    // sandbox home may already carry.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-opencode-no-admin-"));
+    try {
+      withEnv({ OPENCODEX_HOME: dir }, () => {
+        const config = cfg({ apiKeys: [{ id: "1", name: "main", key: "sk-cfg", createdAt: "2026-01-01" }] });
+        expect(opencodeManagementToken(config, {})).toBe("sk-cfg");
+      });
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("cmdOpencode sends the admin token — not the admission key — on GET /api/models", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-opencode-admin-read-"));
+    const envKeys = [...TOUCHED, "CODEX_HOME", "XDG_CONFIG_HOME", OPENCODE_CONFIG_CONTENT_ENV];
+    const previous = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+    const liveness = await import("../../src/server/proxy-liveness");
+    // A real loopback listener, not a global-fetch mock: the launcher reads the catalog over the
+    // direct local transport now, so the header has to be observed at the socket.
+    let sentPath: string | null = null;
+    let sentKey: string | null = null;
+    const catalog = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        sentPath = new URL(request.url).pathname;
+        sentKey = request.headers.get("X-OpenCodex-API-Key");
+        return Response.json([]);
+      },
+    });
+    const finder = spyOn(liveness, "findLiveProxy").mockResolvedValue({
+      port: catalog.port, hostname: "127.0.0.1", pid: null, source: "config",
+    });
+    let spawnedEnv: Record<string, string | undefined> | undefined;
+    const spawn = spyOn(childProcess, "spawn").mockImplementation((((
+      _file: string,
+      _args: readonly string[],
+      options?: { env?: Record<string, string | undefined> },
+    ) => {
+      spawnedEnv = options?.env;
+      const child = new childProcess.ChildProcess();
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    }) as typeof childProcess.spawn));
+    const stderr = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const key of envKeys) delete process.env[key];
+      process.env.OPENCODEX_HOME = home;
+      process.env.CODEX_HOME = join(home, "codex");
+      process.env.XDG_CONFIG_HOME = join(home, "xdg");
+      process.env.OPENCODEX_ADMIN_AUTH_TOKEN = adminToken;
+      mkdirSync(process.env.CODEX_HOME);
+      writeFileSync(join(home, "config.json"), JSON.stringify(
+        cfg({ apiKeys: [{ id: "1", name: "main", key: "sk-cfg", createdAt: "2026-01-01" }] }),
+      ));
+      expect(await cmdOpencode([])).toBe(0);
+      // The management credential authenticates the launcher's own read...
+      expect(sentPath).toBe("/api/models");
+      expect(sentKey).toBe(adminToken);
+      expect(sentKey).not.toBe("sk-cfg");
+      // ...while the child receives the data-plane admission key through the env slot its provider
+      // block references. The management credential is not serialized into the inline config.
+      expect(spawnedEnv?.[OPENCODE_API_KEY_ENV]).toBe("sk-cfg");
+      const inlineConfig = spawnedEnv?.[OPENCODE_CONFIG_CONTENT_ENV] ?? "";
+      expect(inlineConfig).toContain(OPENCODE_API_KEY_ENV_REF);
+      expect(inlineConfig).not.toContain(adminToken);
+    } finally {
+      await catalog.stop(true);
+      finder.mockRestore(); spawn.mockRestore(); stderr.mockRestore();
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      removeTreeWithRetry(home);
+    }
+  });
+});
+
+describe("ocx opencode management read destination and transport", () => {
+  // The catalog read carries a reusable management credential, so the launcher owns two boundaries
+  // the transport cannot provide on its own: a loopback destination, and a transport that ignores
+  // proxy environment variables and redirects. Each test below is one of those controls.
+  const managementToken = `ocx_admin_${"b".repeat(43)}`;
+  const ROW = { namespaced: "opencode-go/glm-5.3", provider: "opencode-go", id: "glm-5.3" };
+  const PROXY_ENV = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] as const;
+
+  async function withProxyEnv(proxyUrl: string, run: () => Promise<void>): Promise<void> {
+    const saved = new Map<string, string | undefined>();
+    for (const key of [...PROXY_ENV, "NO_PROXY", "no_proxy"]) {
+      saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    for (const key of PROXY_ENV) process.env[key] = proxyUrl;
+    try {
+      await run();
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+
+  test("loads the local catalog directly while proxy env points at another server", async () => {
+    const captured: string[] = [];
+    const capture = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        captured.push(new URL(request.url).pathname);
+        return Response.json({ error: "the proxy env destination must never see this" }, { status: 502 });
+      },
+    });
+    const catalog = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json([ROW]) });
+    try {
+      await withProxyEnv(`http://127.0.0.1:${capture.port}`, async () => {
+        const rows = await fetchOpencodeProxyModels(
+          { port: catalog.port, hostname: "127.0.0.1", pid: null, source: "config" },
+          managementToken,
+        );
+        expect(rows).toEqual([ROW]);
+      });
+      expect(captured).toEqual([]);
+    } finally {
+      await capture.stop(true);
+      await catalog.stop(true);
+    }
+  });
+
+  test("refuses a redirect instead of re-sending the credential to its target", async () => {
+    const followed: string[] = [];
+    const target = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        followed.push(new URL(request.url).pathname);
+        return Response.json([ROW]);
+      },
+    });
+    const redirector = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response(null, {
+        status: 302,
+        headers: { Location: `http://127.0.0.1:${target.port}/api/models` },
+      }),
+    });
+    try {
+      await expect(fetchOpencodeProxyModels(
+        { port: redirector.port, hostname: "127.0.0.1", pid: null, source: "config" },
+        managementToken,
+      )).rejects.toThrow("Management request failed (302)");
+      expect(followed).toEqual([]);
+    } finally {
+      await redirector.stop(true);
+      await target.stop(true);
+    }
+  });
+
+  test("rejects a non-loopback destination before any token-bearing request", async () => {
+    const calls: string[] = [];
+    const fetchImpl = async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return Response.json([ROW]);
+    };
+    await expect(fetchOpencodeProxyModels(
+      { port: 10100, hostname: "192.168.4.10", pid: null, source: "config" },
+      managementToken,
+      { fetchImpl },
+    )).rejects.toThrow(/not a loopback address/);
+    await expect(fetchOpencodeProxyModels(
+      { port: 10100, hostname: "127.0.0.1", pid: null, source: "config" },
+      managementToken,
+      { fetchImpl, origin: "http://hub.example.test:10100" },
+    )).rejects.toThrow(/not a loopback address/);
+    expect(calls).toEqual([]);
+  });
+
+  test("keeps every supported local listener spelling dialing loopback", async () => {
+    const seen: string[] = [];
+    const fetchImpl = async (input: RequestInfo | URL) => {
+      seen.push(String(input));
+      return Response.json([ROW]);
+    };
+    for (const hostname of ["0.0.0.0", "::", "[::]", "localhost", "::1", "127.0.0.1", undefined]) {
+      await fetchOpencodeProxyModels({ port: 10100, hostname, pid: null, source: "config" }, managementToken, { fetchImpl });
+    }
+    expect(seen).toEqual([
+      "http://127.0.0.1:10100/api/models",
+      "http://127.0.0.1:10100/api/models",
+      "http://127.0.0.1:10100/api/models",
+      "http://localhost:10100/api/models",
+      "http://[::1]:10100/api/models",
+      "http://127.0.0.1:10100/api/models",
+      "http://127.0.0.1:10100/api/models",
+    ]);
+  });
+
+  test("an attested proxy answers over the single-use capability, never the admin token", async () => {
+    const bound: string[] = [];
+    const tokenCalls: string[] = [];
+    const boundRead: typeof fetchBoundLocalManagementRead = async (target, path) => {
+      bound.push(`${target.port}${path}`);
+      return { kind: "response", response: Response.json([ROW]), targetPid: 4242 };
+    };
+    const rows = await fetchOpencodeProxyModels(
+      { port: 10100, hostname: "127.0.0.1", pid: 4242, source: "runtime" },
+      managementToken,
+      {
+        boundRead,
+        fetchImpl: async (input: RequestInfo | URL) => {
+          tokenCalls.push(String(input));
+          return Response.json([ROW]);
+        },
+      },
+    );
+    expect(rows).toEqual([ROW]);
+    expect(bound).toEqual([`10100${LOCAL_MANAGEMENT_READ_PATHS.models}`]);
+    expect(tokenCalls).toEqual([]);
+  });
+
+  test("falls back to the loopback token read when the capability is unavailable", async () => {
+    const sent: Array<{ url: string; key: string | null }> = [];
+    const boundRead: typeof fetchBoundLocalManagementRead = async () => ({
+      kind: "unavailable",
+      reason: "capability-unavailable",
+    });
+    const rows = await fetchOpencodeProxyModels(
+      { port: 10100, hostname: "127.0.0.1", pid: 4242, source: "runtime" },
+      managementToken,
+      {
+        boundRead,
+        fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
+          sent.push({ url: String(input), key: new Headers(init?.headers).get("X-OpenCodex-API-Key") });
+          return Response.json([ROW]);
+        },
+      },
+    );
+    expect(rows).toEqual([ROW]);
+    expect(sent).toEqual([{ url: "http://127.0.0.1:10100/api/models", key: managementToken }]);
+  });
+
+  test("never presents the capability to a listener other than the attested one", async () => {
+    // A hub management ingress is the same process on another port, and the capability is bound to
+    // the port the request arrives on, so that read has to take the loopback token path instead.
+    const bound: string[] = [];
+    const sent: string[] = [];
+    const boundRead: typeof fetchBoundLocalManagementRead = async () => {
+      bound.push("capability");
+      return { kind: "response", response: Response.json([ROW]), targetPid: 4242 };
+    };
+    const rows = await fetchOpencodeProxyModels(
+      { port: 10100, hostname: "100.64.0.9", pid: 4242, source: "runtime" },
+      managementToken,
+      {
+        boundRead,
+        origin: "http://127.0.0.1:10104",
+        fetchImpl: async (input: RequestInfo | URL) => {
+          sent.push(String(input));
+          return Response.json([ROW]);
+        },
+      },
+    );
+    expect(rows).toEqual([ROW]);
+    expect(bound).toEqual([]);
+    expect(sent).toEqual(["http://127.0.0.1:10104/api/models"]);
   });
 });
 

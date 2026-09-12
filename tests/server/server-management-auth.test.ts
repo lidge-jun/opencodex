@@ -370,6 +370,26 @@ describe("management and data-plane credential separation", () => {
       });
       expect(accounts.status).toBe(200);
 
+      // `ocx opencode` reads its catalogue through the same grant, so the route has to stay
+      // capability-readable while a query-bearing variant stays outside the grant.
+      const modelsHeaders = headersFor(LOCAL_MANAGEMENT_READ_PATHS.models, server.port, "J".repeat(43));
+      const models = await fetch(new URL(LOCAL_MANAGEMENT_READ_PATHS.models, server.url), {
+        headers: modelsHeaders,
+      });
+      expect(models.status).toBe(200);
+      expect(Array.isArray(await models.json())).toBe(true);
+
+      const modelsReplay = await fetch(new URL(LOCAL_MANAGEMENT_READ_PATHS.models, server.url), {
+        headers: modelsHeaders,
+      });
+      expect(modelsReplay.status).toBe(503);
+
+      const modelsQuery = await fetch(
+        new URL(`${LOCAL_MANAGEMENT_READ_PATHS.models}?include=all`, server.url),
+        { headers: headersFor(LOCAL_MANAGEMENT_READ_PATHS.models, server.port, "K".repeat(43)) },
+      );
+      expect(modelsQuery.status).toBe(503);
+
       const query = await fetch(
         new URL(`${LOCAL_MANAGEMENT_READ_PATHS.codexAccounts}?include=all`, server.url),
         {

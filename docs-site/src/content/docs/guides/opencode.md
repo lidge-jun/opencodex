@@ -175,6 +175,22 @@ see [Remote access](/reference/configuration/#remote-access). This admission key
 own, and is unrelated to the upstream provider keys configured under
 [Providers](/guides/providers/).
 
+## How the catalogue is read
+
+The launcher's own catalogue read is a management request, not a data-plane one. `ocx opencode`
+fetches `GET /api/models` with the configured management credential (`OPENCODEX_ADMIN_AUTH_TOKEN`,
+or the `admin-api-token` file in `~/.opencodex`) and refuses to send it anywhere but a loopback
+`/api/*` origin, over a transport that ignores `HTTP(S)_PROXY` and never follows a redirect. When the
+proxy answered the launcher's identity probe itself, the read uses a single-use, process-bound
+capability instead, so no reusable credential is sent at all.
+
+If no management credential is configured, the launcher falls back to the admission key above. A
+hardened proxy refuses that key on `/api/*` with `401 opencodex admin token required`, so set
+`OPENCODEX_ADMIN_AUTH_TOKEN` (or the token file) on such a host.
+
+A non-loopback `hostname` is refused for this read. Bind the proxy to loopback, or enable a hub
+management ingress, so this machine has a local `/api/*` address.
+
 ## Reverting
 
 Nothing to undo — no generated config file is written under `~/.opencodex`. Run plain

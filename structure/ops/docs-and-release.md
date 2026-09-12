@@ -8,6 +8,12 @@ served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
+The `ocx opencode` guide (`docs-site/src/content/docs/guides/opencode.md`) documents the launcher
+management-read contract: the management credential versus the child admission key, the loopback-only
+destination, and the direct local transport. `src/cli/opencode.ts` owns that behavior, so changing
+which credential the launcher sends on `/api/*` updates that guide together with `runtime.md`,
+`config.md`, and `clients/claude-desktop.md` — the other documents assigned to `src/cli/`.
+
 ## GitHub Pages
 
 `.github/workflows/deploy-docs.yml` publishes the docs to:

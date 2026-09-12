@@ -10,6 +10,11 @@ export const LOCAL_MANAGEMENT_CAPABILITY_TTL_MS = 10_000;
 export const LOCAL_MANAGEMENT_READ_PATHS = {
   codexAccounts: "/api/codex-auth/accounts",
   systemMemory: "/api/system/memory",
+  // `ocx opencode` needs the same process-attested read the CLI already performs for memory and
+  // Codex accounts: the launcher cannot start without the catalog, and the alternative is a
+  // reusable admin credential on the wire. The route is registered `mutates: false` in
+  // `src/server/management/route-registry.ts`, which is what makes it eligible for a read grant.
+  models: "/api/models",
 } as const;
 
 export type LocalManagementReadPath =
@@ -32,7 +37,8 @@ export function parseExpectedLocalManagementPid(value: string | null): ExpectedL
 
 function isLocalManagementReadPath(path: string): path is LocalManagementReadPath {
   return path === LOCAL_MANAGEMENT_READ_PATHS.codexAccounts
-    || path === LOCAL_MANAGEMENT_READ_PATHS.systemMemory;
+    || path === LOCAL_MANAGEMENT_READ_PATHS.systemMemory
+    || path === LOCAL_MANAGEMENT_READ_PATHS.models;
 }
 
 function localReadCapabilityPayload(
