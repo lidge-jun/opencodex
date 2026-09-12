@@ -1853,6 +1853,44 @@ test("chat-native meaningful reasoning keeps a long stream alive and pauses the 
   } finally { abort.abort(); budget.dispose(); }
 });
 
+test("chat-native caller abort while the stall clock is pending wins over the later deadline", async () => {
+  const { nativeChatSse } = await import("../../src/server/chat-native-sse");
+  const budget = createTestTranslatorBudget();
+  const abort = new AbortController();
+  const terminals: Array<[number, string | undefined]> = [];
+  let cancels = 0;
+  let upstreamCancels = 0;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+    },
+    cancel() { upstreamCancels += 1; },
+  });
+  const stream = nativeChatSse(body, {
+    requestedModel: "mock/test-model", translatorBudget: budget, signal: abort.signal,
+    stallTimeoutSec: 1, onUsage() {},
+    onTerminal(status, message) { terminals.push([status, message]); },
+    onCancel() { cancels += 1; },
+  });
+  const reader = stream.getReader();
+  try {
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain("partial");
+    // Upstream now stays silent, so the next pull waits on the one-second stall clock.
+    // A caller abort during that wait must be the only reported outcome, even once the
+    // deadline it was racing has elapsed.
+    const pending = reader.read();
+    await Bun.sleep(300);
+    abort.abort("client gone");
+    const next = await pending;
+    expect(next.done).toBe(true);
+    await Bun.sleep(1_000);
+    expect(cancels).toBe(1);
+    expect(upstreamCancels).toBe(1);
+    expect(terminals).toEqual([]);
+  } finally { abort.abort(); reader.releaseLock(); budget.dispose(); }
+});
+
 test("chat-native valid terminal retains precedence over a late non-streaming abort", async () => {
   const { handleChatCompletions } = await import("../../src/server/chat-completions");
   const clientAbort = new AbortController();
