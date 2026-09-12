@@ -78,7 +78,9 @@ describe("injectCodexConfig integration (Design B)", () => {
       const { syncCodexHistoryProvider, historyBackupPathFor } = require("./src/codex/history-provider");
       const enabled = await injectCodexConfig(10100, {});
       if (!enabled.success) throw new Error("fixture injection failed");
-      const dbPath = join(process.env.CODEX_HOME, "state_5.sqlite");
+      // Match the runtime authority: Windows Temp may spell CODEX_HOME with an 8.3 alias,
+      // while getCodexHome resolves its long path. Manifest names bind to that path spelling.
+      const dbPath = require("./src/codex/paths").resolveCodexStateDbPath();
       const rollout = join(process.env.CODEX_HOME, "manifest-fixture.jsonl");
       fs.writeFileSync(rollout, JSON.stringify({type:"session_meta",payload:{id:"fixture",model_provider:"openai",source:"cli"}})+String.fromCharCode(10));
       const db = new Database(dbPath);
@@ -97,7 +99,7 @@ describe("injectCodexConfig integration (Design B)", () => {
       console.log(JSON.stringify({entries,result,preserved:paths.every((p,i)=>fs.readFileSync(p,"utf8")===before[i])}));
     `;
     const child = spawnSync(process.execPath, ["--eval", script], {
-      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, CODEX_SQLITE_HOME: "", OPENCODEX_HOME: ocxHome },
       encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
     });
     expect(child.status, child.stderr).toBe(0);
