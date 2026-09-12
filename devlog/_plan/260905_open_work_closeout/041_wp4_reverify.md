@@ -37,7 +37,7 @@ DOCEOF; cp /Users/jun/Developer/new/700_projects/opencodex/devlog/_plan/260905_o
 3. **Layer 1 docs (Medium):** folded — `464bb27b6` adds the pinned-host statement to `providers.md`.
 4. **Author identity (Medium):** the main checkout's `.git/config` carries a placeholder
    `t <a@b.com>` (user-local; not touched). Both layers re-authored with `--reset-author` under
-   `-c user.name=jun -c user.email=jun@lidge.dev`; layer-2 lane uses the same `-c` flags.
+   the maintainer's own `-c user.name` / `-c user.email` pair; layer-2 lane uses the same `-c` flags.
    Merged squashes on dev are attributed by GitHub to the PR author, so no landed commit is affected.
 5. **Trailer ids (Low):** confirmed via `gh api users/<login>`: hualiny 82697947, terrytan95 10609214.
 
