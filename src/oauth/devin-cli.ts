@@ -18,7 +18,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 import { DEVIN_CLI_INSTALL_HINT } from "../adapters/devin-cli/binary";
 import { identityFromApiKey } from "./devin";
 import { resolveDevinApiBaseUrl } from "./devin/api-base";
@@ -58,12 +58,13 @@ export function devinCliCredentialsPath(
   // Absolute only. A relative override would resolve against whatever directory
   // the proxy happens to be running in, which is not a location a user can mean.
   if (override && (override.startsWith("/") || /^[A-Za-z]:[\\/]/.test(override))) return override;
+  const paths = platform === "win32" ? win32 : posix;
   if (platform === "win32") {
-    const appData = env.APPDATA ?? join(homedir(), "AppData", "Roaming");
-    return join(appData, "devin", "credentials.toml");
+    const appData = env.APPDATA ?? paths.join(homedir(), "AppData", "Roaming");
+    return paths.join(appData, "devin", "credentials.toml");
   }
-  const dataHome = env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
-  return join(dataHome, "devin", "credentials.toml");
+  const dataHome = env.XDG_DATA_HOME ?? paths.join(homedir(), ".local", "share");
+  return paths.join(dataHome, "devin", "credentials.toml");
 }
 
 export interface DevinCliCredentialFile {

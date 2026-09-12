@@ -233,7 +233,8 @@ describe("injectCodexConfig integration (Design B)", () => {
       expect(value.before.state).toMatchObject({nativeGeneration:0,currentTxId:null});
       expect(value.after.state).toEqual(value.before.state);
     }
-    for (const artifact of Object.values(value.result.artifacts)) {
+    expect(value.result.artifacts.config).toMatchObject({state:"failed",changed:false});
+    for (const artifact of [value.result.artifacts.catalog, value.result.artifacts.history]) {
       expect(artifact).toMatchObject({state:"skipped",changed:false});
     }
     expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe(original);

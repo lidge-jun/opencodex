@@ -168,7 +168,8 @@ describe("codex-journal", () => {
     const out = JSON.parse(r.stdout);
     expect(out.result.success).toBe(false);
     expect(out.result.message).toContain("journal recovery was not verified");
-    for (const artifact of Object.values(out.result.artifacts)) {
+    expect(out.result.artifacts.config).toMatchObject({ state: "failed", changed: false });
+    for (const artifact of [out.result.artifacts.catalog, out.result.artifacts.history]) {
       expect(artifact).toMatchObject({ state: "skipped", changed: false });
     }
     expect(out.config).toBe(edited);
@@ -532,6 +533,7 @@ describe("codex-journal", () => {
     expect(out.result.message).toContain("could not be safely removed");
     expect(out.result.message).toContain("orphaned managed subagent default marker");
     expect(out.after).toEqual(out.before);
+    expect(out.result.artifacts.config.state).toBe("failed");
     const after = readFileSync(join(testDir, "config.toml"), "utf8");
     expect(after).toContain("openai_base_url");
     expect(after).toContain("# Managed by opencodex: native subagent default");

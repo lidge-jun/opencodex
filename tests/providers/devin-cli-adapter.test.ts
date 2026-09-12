@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
   ACP_SESSION_NEW_ID,
@@ -213,13 +214,20 @@ describe("devin cli discovery", () => {
 
   test("known install paths are preferred over a shadowed PATH entry, and absence is undefined", () => {
     const previous = process.env[DEVIN_CLI_BIN_ENV];
+    const previousPath = process.env.PATH;
     delete process.env[DEVIN_CLI_BIN_ENV];
+    process.env.PATH = join("/shadow", "bin");
     try {
-      const only = (p: string) => p === "/home/u/.local/bin/devin";
-      expect(resolveDevinCliBinary({ exists: only, home: "/home/u", useCache: false })).toBe("/home/u/.local/bin/devin");
+      const expected = join("/home/u", ".local", "bin", "devin");
+      const shadowed = join("/shadow", "bin", "devin");
+      const exists = (p: string) => p === expected || p === shadowed;
+      expect(resolveDevinCliBinary({ exists, home: "/home/u", useCache: false })).toBe(expected);
+      expect(resolveDevinCliBinary({ exists: p => p === shadowed, home: "/home/u", useCache: false })).toBe(shadowed);
       expect(resolveDevinCliBinary({ exists: () => false, home: "/home/u", useCache: false })).toBeUndefined();
     } finally {
       if (previous !== undefined) process.env[DEVIN_CLI_BIN_ENV] = previous;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
     }
   });
 });

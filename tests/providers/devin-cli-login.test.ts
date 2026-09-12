@@ -46,7 +46,7 @@ describe("devin-cli credentials path", () => {
 
   test("Windows uses APPDATA", () => {
     expect(devinCliCredentialsPath({ APPDATA: "C:\\Users\\u\\AppData\\Roaming" }, "win32"))
-      .toContain("devin");
+      .toBe("C:\\Users\\u\\AppData\\Roaming\\devin\\credentials.toml");
   });
 
   test("the override must be absolute", () => {
