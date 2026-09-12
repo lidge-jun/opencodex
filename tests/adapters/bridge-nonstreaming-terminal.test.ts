@@ -376,5 +376,24 @@ describe("truncated done preserves open tool integrity (#4312)", () => {
       expect(text).toContain("event: response.function_call_arguments.done");
       expect(text).toContain('"arguments":"{\\"arg\\":\\"complete\\"}","status":"completed"');
     });
+
+    test(`${stopReason}: a search still in flight is failed, not completed`, async () => {
+      // The provider cut the turn short, so the search never returned results. Reporting it as
+      // completed would leave the client showing a finished search for a truncated turn.
+      const text = await sseText([
+        { type: "web_search_call_begin", id: "search_in_flight" },
+        { type: "done", stopReason },
+      ]);
+      const item = text.split("\n\n")
+        .flatMap(frame => {
+          const data = frame.split("\n").find(line => line.startsWith("data: {"))?.slice(6);
+          return data ? [JSON.parse(data)] : [];
+        })
+        .find(frame => frame.type === "response.output_item.done"
+          && frame.item?.type === "web_search_call")?.item;
+
+      expect(terminalEventNames(text)).toEqual(["response.incomplete"]);
+      expect(item).toMatchObject({ type: "web_search_call", status: "failed" });
+    });
   }
 });
