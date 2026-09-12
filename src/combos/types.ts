@@ -1,6 +1,6 @@
 import { isCodexReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
-import type { OcxComboConfig, OcxComboDefaultEffort, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
+import type { OcxComboConfig, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
 import { COMBO_NAMESPACE, isValidComboId, targetKey } from "./identifiers";
 
 export const COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS = 0;
@@ -26,6 +26,8 @@ export interface NormalizedComboConfig {
   cooldownMs?: number;
   waitForCooldownMs: number;
   defaultEffort: OcxComboDefaultEffort | null;
+  /** Client-precedence policy; `fallback` preserves legacy behavior. */
+  defaultEffortMode: OcxComboDefaultEffortMode;
   /** Picker-ladder derivation policy; `strict` preserves the legacy intersection rule. */
   reasoningEffortMode: OcxComboReasoningEffortMode;
   /** Disable image input; `auto` preserves the intersection derived from all targets. */
@@ -167,6 +169,21 @@ export function comboConfigIssues(
       message: "defaultEffort must be one of: low, medium, high, xhigh, max, ultra",
     });
   }
+  if (body.defaultEffortMode !== undefined
+    && body.defaultEffortMode !== "fallback"
+    && body.defaultEffortMode !== "force") {
+    issues.push({
+      path: ["defaultEffortMode"],
+      message: 'defaultEffortMode must be "fallback" or "force"',
+    });
+  }
+  if (body.defaultEffortMode === "force"
+    && (typeof body.defaultEffort !== "string" || !isCodexReasoningEffort(body.defaultEffort))) {
+    issues.push({
+      path: ["defaultEffort"],
+      message: "defaultEffort is required when defaultEffortMode is force",
+    });
+  }
   if (body.imageInput !== undefined && body.imageInput !== "auto" && body.imageInput !== "disabled") {
     issues.push({ path: ["imageInput"], message: 'imageInput must be "auto" or "disabled"' });
   }
@@ -293,12 +310,16 @@ export function comboConfigError(
 export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig {
   const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
   const displayName = typeof raw.displayName === "string" ? raw.displayName.trim() : "";
+  const defaultEffort = typeof raw.defaultEffort === "string" && isCodexReasoningEffort(raw.defaultEffort)
+    ? raw.defaultEffort
+    : null;
   return {
     strategy: raw.strategy ?? "failover",
     stickyLimit: raw.stickyLimit ?? 1,
     cooldownMs: raw.cooldownMs,
     waitForCooldownMs: raw.waitForCooldownMs ?? COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS,
-    defaultEffort: raw.defaultEffort ?? null,
+    defaultEffort,
+    defaultEffortMode: raw.defaultEffortMode === "force" && defaultEffort !== null ? "force" : "fallback",
     reasoningEffortMode: raw.reasoningEffortMode === "adaptive" ? "adaptive" : "strict",
     imageInput: raw.imageInput === "disabled" ? "disabled" : "auto",
     alias: alias || null,

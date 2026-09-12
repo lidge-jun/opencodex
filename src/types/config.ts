@@ -959,6 +959,7 @@ export type OcxAccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilizatio
 
 export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+export type OcxComboDefaultEffortMode = "fallback" | "force";
 
 /**
  * How a combo derives the reasoning ladder it publishes to the picker.
@@ -993,8 +994,10 @@ export interface OcxComboConfig {
   cooldownMs?: number;
   /** Maximum wait for an eligible target cooldown to expire before failing closed. Default 0; range 0..600000, per selection attempt. */
   waitForCooldownMs?: number;
-  /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
+  /** Used as a fallback when the client omits reasoning.effort, or as an override in `force` mode. null/omitted leaves the target default unchanged. */
   defaultEffort?: OcxComboDefaultEffort | null;
+  /** `force` makes the combo default override a valid client effort. Omitted / `fallback` preserves client precedence. */
+  defaultEffortMode?: OcxComboDefaultEffortMode;
   /**
    * Picker-ladder derivation policy. Omitted / `"strict"` keeps the legacy rule where an
    * explicitly empty target ladder suppresses the whole combo's effort control.

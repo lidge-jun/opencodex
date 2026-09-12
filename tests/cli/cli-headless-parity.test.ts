@@ -520,6 +520,48 @@ describe("headless GUI parity CLI", () => {
     });
   });
 
+  test("combo set exposes the opt-in force-default policy", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleComboCommand([
+      "set", "deep", "--targets", "ark/model-a", "--effort", "max", "--effort-mode", "force", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(runtime.requests.find(request => request.method === "PUT")?.body).toMatchObject({
+      id: "deep",
+      combo: { defaultEffort: "max", defaultEffortMode: "force" },
+    });
+  });
+
+  test("combo set sends fallback when clearing an existing forced default effort", async () => {
+    const runtime = fakeRuntime(req => req.method === "GET" ? {
+      combos: [{
+        id: "deep",
+        defaultEffort: "max",
+        defaultEffortMode: "force",
+        targets: [{ provider: "ark", model: "old-model" }],
+      }],
+    } : undefined);
+    expect(await handleComboCommand([
+      "set", "deep", "--targets", "ark/model-a", "--effort", "-", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(runtime.requests).toEqual([
+      { path: "/api/combos", method: "GET", body: null },
+      {
+        path: "/api/combos",
+        method: "PUT",
+        body: {
+          id: "deep",
+          combo: {
+            strategy: "failover",
+            stickyLimit: 1,
+            targets: [{ provider: "ark", model: "model-a" }],
+            defaultEffort: null,
+            defaultEffortMode: "fallback",
+          },
+        },
+      },
+    ]);
+  });
+
   test("combo set rejects --sticky outside round-robin instead of dropping it", async () => {
     const runtime = fakeRuntime();
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});

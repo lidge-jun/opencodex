@@ -14,6 +14,7 @@ import {
   describeOutboundBodyRefusal,
 } from "./outbound-body-guard";
 import { nativeContextLimits } from "../../codex/catalog";
+import { isDeclaredReasoningEffort } from "../../reasoning-effort";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { applyAccountQuotaFromUpstreamHeaders as applyCapturedCodexQuota } from "../../codex/quota";
@@ -2908,6 +2909,25 @@ export async function handleComboResponses(
   // adoption below must never replace it with a concrete child route trace.
   logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
 
+  const originalReasoning = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { reasoning?: unknown }).reasoning
+    : undefined;
+  const originalRequestedEffortValue = originalReasoning && typeof originalReasoning === "object" && !Array.isArray(originalReasoning)
+    ? (originalReasoning as { effort?: unknown }).effort
+    : undefined;
+  const originalRequestedEffort = typeof originalRequestedEffortValue === "string"
+    && isDeclaredReasoningEffort(originalRequestedEffortValue)
+    ? originalRequestedEffortValue
+    : undefined;
+  const restoreOriginalRequestedEffort = (childLog: RequestLogContext): void => {
+    if (originalRequestedEffort === undefined) return;
+    const normalizedRequestedEffort = childLog.requestedEffort;
+    const transitionIndex = normalizedRequestedEffort?.indexOf("->") ?? -1;
+    childLog.requestedEffort = transitionIndex >= 0
+      ? `${originalRequestedEffort}${normalizedRequestedEffort!.slice(transitionIndex)}`
+      : originalRequestedEffort;
+    recordAttemptRequestedEffort(childLog);
+  };
   let lastFailure: Response | null = null;
   // The exhausted-combo mapping below runs outside the loop, where `failure.upstreamCode`
   // is gone, so carry the loop's own classification decision instead of re-deriving a
@@ -2927,6 +2947,7 @@ export async function handleComboResponses(
       pick.target,
       comboDefaultEffort(config, comboId),
       supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
+      combo.defaultEffortMode,
     );
     const childHeaders = buildComboChildHeaders(req.headers);
     const childRequest = new Request(req.url, {
@@ -2945,6 +2966,10 @@ export async function handleComboResponses(
       config.providers[pick.target.provider]!.adapter,
     );
     childLog.activeAttempt = attempt;
+    if (originalRequestedEffort !== undefined) {
+      childLog.requestedEffort = originalRequestedEffort;
+      recordAttemptRequestedEffort(childLog);
+    }
     let attemptRetained = false;
     const retainCancelledAttempt = (): void => {
       if (attemptRetained) return;
@@ -3016,6 +3041,7 @@ export async function handleComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
+      restoreOriginalRequestedEffort(childLog);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {

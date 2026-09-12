@@ -1,5 +1,5 @@
-import type { OcxComboDefaultEffort, OcxComboTarget, OcxConfig } from "../types";
-import { resolveEffortAtOrBelow } from "../reasoning-effort";
+import type { OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboTarget, OcxConfig } from "../types";
+import { isCodexReasoningEffort, resolveEffortAtOrBelow } from "../reasoning-effort";
 import { resolveComboId } from "./types";
 
 const warnedUnsupportedDefaults = new Set<string>();
@@ -59,18 +59,25 @@ export function concreteComboRequestBody(
   target: Pick<OcxComboTarget, "provider" | "model">,
   defaultEffort: OcxComboDefaultEffort | null,
   targetReasoningEfforts: readonly string[] | undefined,
+  defaultEffortMode: OcxComboDefaultEffortMode = "fallback",
 ): Record<string, unknown> {
   const clone = structuredClone(body) as Record<string, unknown>;
   clone.model = `${target.provider}/${target.model}`;
-  if (!defaultEffort) return clone;
+  if (defaultEffortMode === "force" && (!defaultEffort || !isCodexReasoningEffort(defaultEffort))) {
+    throw new Error("force combo default effort requires a valid defaultEffort");
+  }
+  if (!defaultEffort || !isCodexReasoningEffort(defaultEffort)) return clone;
   const reasoning = clone.reasoning;
-  const needsDefault = reasoning === undefined || (
-    reasoning
-    && typeof reasoning === "object"
-    && !Array.isArray(reasoning)
-    && !Object.prototype.hasOwnProperty.call(reasoning, "effort")
-  );
-  if (!needsDefault) return clone;
+  const reasoningRecord = reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)
+    ? reasoning as Record<string, unknown>
+    : undefined;
+  const hasEffort = reasoningRecord !== undefined
+    && Object.prototype.hasOwnProperty.call(reasoningRecord, "effort");
+  const callerEffort = reasoningRecord?.effort;
+  const validCallerEffort = typeof callerEffort === "string" && isCodexReasoningEffort(callerEffort);
+  const needsDefault = reasoning === undefined || (reasoningRecord !== undefined && !hasEffort);
+  const shouldForce = defaultEffortMode === "force" && validCallerEffort;
+  if (!needsDefault && !shouldForce) return clone;
   // Picker availability treats an unknown ladder as a wildcard, but runtime
   // injection stays fail-closed until this concrete target advertises support.
   //
