@@ -1937,6 +1937,12 @@ function restoreCodexConfigInlineImpl(kind: string): CodexRestoreConfigResult {
     const restored = journal.configRestored
       ? { success: true, message: "Codex config restored from opencodex journal." }
       : removeCodexConfig({ preserveProfile: journal.profileRestored || journal.profileChanged });
+    if (restored.success) {
+      // A successful journal/fallback write can race native history migration too.
+      // Refuse here while preimage compensation and the remove transaction can roll back.
+      const finalHistoryError = preflightCodexHistoryInjection(false, false);
+      if (finalHistoryError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${finalHistoryError}.` };
+    }
     return restored.success
       ? {
           state: "ok",
