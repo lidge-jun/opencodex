@@ -2157,6 +2157,7 @@ export function buildWindowsServiceScript(
   // resolve differently from the binary the caller actually baked.
   const { bun, bunRuntimeSource, cli } = entry;
   const path = process.env.PATH ?? "";
+  const pathLine = windowsBatchSet("PATH", path, "pathList");
   const lines = [
     "@echo off",
     "setlocal",
@@ -2166,7 +2167,9 @@ export function buildWindowsServiceScript(
     windowsBatchSet("OCX_SERVICE", "1"),
     windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
     windowsBatchSet(BUN_RUNTIME_PATH_ENV, bun, "path"),
-    windowsBatchSet("PATH", path, "pathList"),
+    // Keep the PATH captured at install time for the bundled launcher, then inherit the
+    // current user's PATH so a later Codex App install remains discoverable by the probe.
+    pathLine ? `${pathLine.slice(0, -1)};%PATH%"` : 'set "PATH=%PATH%"',
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
     windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),

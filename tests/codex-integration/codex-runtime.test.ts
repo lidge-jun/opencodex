@@ -15,7 +15,7 @@ import { describe, expect, test } from "bun:test";
  * qualification (#1691).
  */
 const NO_CODEX_PATH = "/usr/bin:/bin";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import {
@@ -464,6 +464,26 @@ describe("resolveCodexRuntime", () => {
     });
     expect(result.failures.some(item => item.source === "environment")).toBe(true);
     expect(result.runtime.source).not.toBe("environment");
+  });
+
+  test("discovers Codex App installs below the stable Windows root", () => {
+    const localAppData = tempConfigDir();
+    const installed = join(localAppData, "OpenAI", "Codex", "bin", "changing-hash", "codex.exe");
+    mkdirSync(dirname(installed), { recursive: true });
+    writeFileSync(installed, "");
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { LOCALAPPDATA: localAppData, PATH: NO_CODEX_PATH },
+      platform: "win32",
+      existsSync: path => String(path) === installed,
+      execFileSync: file => {
+        expect(String(file)).toBe(installed);
+        return "codex-cli 0.154.0-alpha.6.2";
+      },
+    });
+    expect(result.runtime.command).toBe(installed);
+    expect(result.runtime.source).toBe("installed");
+    expect(result.runtime.version).toBe("0.154.0-alpha.6.2");
   });
 
   test("valid configured runtime beats shim and PATH", () => {

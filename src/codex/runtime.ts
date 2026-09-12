@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
@@ -10,6 +10,7 @@ export type CodexRuntimeSource =
   | "environment"
   | "configured"
   | "shim"
+  | "installed"
   | "path"
   | "fallback";
 
@@ -111,6 +112,7 @@ function isCodexRuntimeSource(value: unknown): value is CodexRuntimeSource {
   return value === "environment"
     || value === "configured"
     || value === "shim"
+    || value === "installed"
     || value === "path"
     || value === "fallback";
 }
@@ -401,6 +403,21 @@ function pathCandidates(deps: ResolveCodexRuntimeDeps): string[] {
   return [...new Set(out)];
 }
 
+/** Windows Codex installs use a changing directory name under this stable product root. */
+function installedCodexCandidates(deps: ResolveCodexRuntimeDeps): string[] {
+  if ((deps.platform ?? process.platform) !== "win32") return [];
+  const localAppData = (deps.env ?? process.env).LOCALAPPDATA?.trim();
+  if (!localAppData) return [];
+  const root = join(localAppData, "OpenAI", "Codex", "bin");
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => join(root, entry.name, "codex.exe"));
+  } catch {
+    return [];
+  }
+}
+
 interface RankedCandidate {
   command: string;
   source: CodexRuntimeSource;
@@ -622,6 +639,9 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
   }
   for (const command of pathCandidates(deps)) {
     ordered.push({ command, source: "path" });
+  }
+  for (const command of installedCodexCandidates(deps)) {
+    ordered.push({ command, source: "installed" });
   }
   ordered.push({ command: "codex", source: "fallback" });
 

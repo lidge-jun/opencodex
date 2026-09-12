@@ -79,6 +79,24 @@ function root(): string {
   return path;
 }
 
+async function withPromptHome(
+  model: string,
+  catalog: Record<string, unknown>,
+  run: (home: string) => Promise<void>,
+): Promise<void> {
+  const home = root();
+  writeFileSync(join(home, "config.toml"), `model = "${model}"\nmodel_catalog_json = "catalog.json"\n`);
+  writeFileSync(join(home, "catalog.json"), JSON.stringify(catalog));
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    await run(home);
+  } finally {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+  }
+}
+
 afterEach(async () => {
   await resetPromptTextProbeForTests();
   while (lifecycleRoots.length) removeTreeWithRetry(lifecycleRoots.pop()!);
@@ -164,6 +182,84 @@ describe("section extraction", () => {
     const sections = extractSectionsForTests(raw);
     expect(sections.has("div")).toBe(false);
     expect(sections.get("__agents_md")).toContain("<div>");
+  });
+});
+
+describe("base prompt source", () => {
+  test("reads the selected model's published base instructions as expanded text", async () => {
+    await withPromptHome("gpt-test", {
+      client_version: "catalog-test-1",
+      models: [{ slug: "gpt-test", base_instructions: "Complete base prompt." }],
+    }, async (home) => {
+      setPromptTextProbeCommandForTests({
+        binary: process.execPath,
+        args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+      });
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(true);
+      expect(result.base).toMatchObject({
+        text: "Complete base prompt.",
+        reason: "ok",
+        model: "gpt-test",
+        sourcePath: join(home, "catalog.json"),
+        representation: "expanded",
+        catalogVersion: "catalog-test-1",
+        effectiveSourceKind: "catalog-default",
+        effectiveTextAvailable: true,
+      });
+      expect(result.layers["base-instructions"]).toMatchObject({
+        text: "Complete base prompt.",
+        reason: "ok",
+        representation: "expanded",
+      });
+    });
+  });
+
+  test("labels a nested instructions template instead of presenting it as expanded", async () => {
+    await withPromptHome("gpt-template", {
+      models: [{ slug: "gpt-template", model_messages: { instructions_template: "Template {{model}}." } }],
+    }, async () => {
+      setPromptTextProbeCommandForTests({
+        binary: process.execPath,
+        args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+      });
+      const result = await probePromptText(2_000);
+      expect(result.base).toMatchObject({
+        text: "Template {{model}}.",
+        reason: "ok",
+        representation: "template",
+        effectiveSourceKind: "catalog-default",
+      });
+      expect(result.layers["base-instructions"]?.representation).toBe("template");
+    });
+  });
+});
+
+describe("probe failure attribution", () => {
+  test.each([
+    ["program-not-found", "missing Codex program", (home: string) => ({ binary: join(home, "missing-codex.exe"), args: [] })],
+    ["command-unsupported", "unknown command: prompt-input", (_home: string) => ({
+      binary: process.execPath,
+      args: ["-e", "process.stderr.write('unknown command: prompt-input'); process.exit(2)"],
+    })],
+    ["execution-failed", "probe failed", (_home: string) => ({
+      binary: process.execPath,
+      args: ["-e", "process.stderr.write('probe failed'); process.exit(1)"],
+    })],
+    ["output-invalid", "empty probe output", (_home: string) => ({
+      binary: process.execPath,
+      args: ["-e", "process.stdout.write('{}')"],
+    })],
+  ] as const)("reports %s distinctly", async (kind, _label, commandFor) => {
+    await withPromptHome("gpt-test", {
+      models: [{ slug: "gpt-test", base_instructions: "Base." }],
+    }, async (home) => {
+      setPromptTextProbeCommandForTests(commandFor(home));
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(false);
+      expect(result.failure?.kind).toBe(kind);
+      expect(result.base.text).toBe("Base.");
+    });
   });
 });
 
