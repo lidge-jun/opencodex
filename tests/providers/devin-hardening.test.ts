@@ -5,6 +5,7 @@ import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseU
 import { registerUser } from "../../src/oauth/devin/register-user";
 import { anySignal } from "../../src/lib/abort";
 import { buildGetChatMessageRequestForTests } from "../../src/adapters/devin/cloud-direct/chat";
+import { decodeModelUsageStats } from "../../src/adapters/devin/cloud-direct/chat";
 import { iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { buildMetadata, normalizeDevinSessionToken } from "../../src/adapters/devin/cloud-direct/metadata";
 
@@ -278,5 +279,40 @@ describe("devin session-token normalization", () => {
     ]) {
       expect(normalizeDevinSessionToken(key)).toBe(key);
     }
+  });
+});
+
+describe("devin ModelUsageStats decode (response field 7)", () => {
+  function varint(num: number, value: number): Buffer {
+    const out: number[] = [(num << 3) | 0];
+    let v = value;
+    do { const b = v & 0x7f; v = Math.floor(v / 128); out.push(v > 0 ? b | 0x80 : b); } while (v > 0);
+    return Buffer.from(out);
+  }
+  const stats = (input: number, output: number, write: number, read: number) =>
+    Buffer.concat([varint(2, input), varint(3, output), varint(4, write), varint(5, read)]);
+
+  test("an exclusive frame folds cache into the inclusive input this repo reports", () => {
+    // 1k fresh + 57k cache read is the 58k prompt the user sees as one number.
+    const u = decodeModelUsageStats(stats(1_000, 200, 0, 57_000));
+    expect(u?.promptTokens).toBe(58_000);
+    expect(u?.cachedInputTokens).toBe(57_000);
+    expect(u?.totalTokens).toBe(58_200);
+  });
+
+  test("an already-inclusive frame is left alone rather than inflated", () => {
+    const u = decodeModelUsageStats(stats(58_000, 200, 0, 57_000));
+    expect(u?.promptTokens).toBe(58_000);
+    expect(u?.cachedInputTokens).toBe(57_000);
+    // normalizeCostTokens only rejects read + write > input, so an inflated
+    // input would pass validation and bill cache at the uncached rate.
+    expect(u!.cachedInputTokens! + (u!.cacheCreationInputTokens ?? 0)).toBeLessThanOrEqual(u!.promptTokens!);
+  });
+
+  test("cache write counts as prompt too, and an empty message decodes to nothing", () => {
+    const u = decodeModelUsageStats(stats(1_000, 0, 4_000, 0));
+    expect(u?.promptTokens).toBe(5_000);
+    expect(u?.cacheCreationInputTokens).toBe(4_000);
+    expect(decodeModelUsageStats(Buffer.alloc(0))).toBeNull();
   });
 });

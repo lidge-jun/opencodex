@@ -670,6 +670,26 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
  * 'stop' if no tool_call deltas were emitted).
  */
 function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
+  // Field 7 is `ModelUsageStats`, the authoritative per-turn accounting, and
+  // field 28 is `response_dimension_groups` — the rows the IDE renders. The
+  // decoder below reads 28 because a capture happened to expose metric-looking
+  // strings there (`ResponseDimension.uid` is its field 5, which is what the
+  // entry walker treats as `metric_id`), and that works only when the service
+  // chose to render cache rows. Field 7 carries cache read and cache write
+  // unconditionally, which is why a cached Devin turn used to report a bare
+  // total with no cached subset.
+  //
+  // Both fields arrive in the same message and the adapter keeps the last usage
+  // event it sees, so this cannot be a plain "decode both": field 7 has to
+  // suppress field 28 within the message, and is yielded last so ordering can
+  // never invert the precedence.
+  let authoritativeUsage: CloudChatEvent | null = null;
+  for (const f of iterFields(proto)) {
+    if (f.num === 7 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      authoritativeUsage = decodeModelUsageStats(f.value as Buffer);
+      if (authoritativeUsage) break;
+    }
+  }
   for (const f of iterFields(proto)) {
     if (f.num === 3 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       // Visible delta_text — what the user should SEE in the chat.
@@ -740,10 +760,12 @@ function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       // else stays 'stop' for 0/2/4-9/12/13
       yield { kind: 'finish', reason };
     } else if (f.num === 28 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      if (authoritativeUsage) continue;
       const usage = decodeUsageBlock(f.value as Buffer);
       if (usage) yield usage;
     }
   }
+  if (authoritativeUsage) yield authoritativeUsage;
 }
 
 /**
@@ -834,6 +856,68 @@ function decodeUsageBlock(buf: Buffer): CloudChatEvent | null {
   };
 }
 
+/**
+ * `exa.codeium_common_pb.ModelUsageStats` at GetChatMessageResponse field 7.
+ *
+ *   ModelUsageStats {
+ *     #2 input_tokens        uint64
+ *     #3 output_tokens       uint64
+ *     #4 cache_write_tokens  uint64
+ *     #5 cache_read_tokens   uint64
+ *   }
+ *
+ * Plain varints, so the field-28 entry walker — which descends a
+ * length-delimited sub-message and reads a fixed32 float — cannot read this at
+ * all. It needs its own decoder.
+ *
+ * Whether Cognition's `input_tokens` already includes the cached tokens is not
+ * settled. oh-my-pi sums all four into its total, which suggests exclusive, but
+ * that is their convention rather than a measurement of this field. Guessing
+ * wrong in the inclusive direction is the expensive mistake: `normalizeCostTokens`
+ * only rejects `read + write > input`, so an inflated input passes validation and
+ * bills cached tokens at the uncached rate.
+ *
+ * So the shape is derived from the frame instead of assumed. An input that
+ * already covers the cache is left alone; one that cannot possibly cover it is
+ * folded. Both branches agree on the case that motivated this — a 58k prompt
+ * that is 57k cache read and 1k fresh reads as 58k with a 57k cached subset —
+ * and neither can emit `read + write > input`. Replace the derivation with a
+ * fixed mapping once a live frame settles the question.
+ */
+export function decodeModelUsageStats(buf: Buffer): CloudChatEvent | null {
+  let wireInput: number | undefined;
+  let output: number | undefined;
+  let cacheWrite: number | undefined;
+  let cacheRead: number | undefined;
+  for (const f of iterFields(buf)) {
+    if (f.wire !== 0) continue;
+    const n = Number(f.value);
+    if (!Number.isFinite(n) || n < 0) continue;
+    if (f.num === 2) wireInput = n;
+    else if (f.num === 3) output = n;
+    else if (f.num === 4) cacheWrite = n;
+    else if (f.num === 5) cacheRead = n;
+  }
+  if (wireInput === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return null;
+  }
+  const read = cacheRead ?? 0;
+  const write = cacheWrite ?? 0;
+  const rawInput = wireInput ?? 0;
+  const promptTokens = rawInput >= read + write ? rawInput : rawInput + read + write;
+  const completionTokens = output ?? 0;
+  const total = promptTokens + completionTokens;
+  return {
+    kind: 'usage',
+    promptTokens,
+    completionTokens,
+    totalTokens: total > 0 ? total : undefined,
+    cachedInputTokens: cacheRead,
+    cacheCreationInputTokens: cacheWrite,
+    reasoningTokens: undefined,
+  };
+}
+
 // ----------------------------------------------------------------------------
 // Public API: streamChat
 // ----------------------------------------------------------------------------
@@ -864,7 +948,18 @@ export interface CloudChatRequest {
 }
 
 export class CloudChatError extends Error {
-  constructor(message: string, public readonly code?: string, public readonly traceId?: string) {
+  constructor(
+    message: string,
+    public readonly code?: string,
+    public readonly traceId?: string,
+    /**
+     * Upstream HTTP status, when the failure was a status line rather than a
+     * Connect trailer. Without it the adapter's message reaches
+     * `inferHttpStatusFromAdapterMessage`, which does not parse `HTTP 429`, so
+     * a live rate limit was classified 502 and core's failover never rotated.
+     */
+    public readonly status?: number,
+  ) {
     super(message);
     this.name = 'CloudChatError';
   }
@@ -987,7 +1082,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // The body is not echoed into the message. This error reaches the adapter's
     // error event and /api/logs, and a Connect error can quote the request that
     // produced it - which is the request holding the api_key.
-    throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined);
+    throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined, undefined, resp.status);
   }
   if (!resp.body) {
     throw new CloudChatError('GetChatMessage response had no body stream');
