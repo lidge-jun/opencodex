@@ -2530,9 +2530,10 @@ async function applyFinalRouteRequestNormalization(args: {
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   // Provider-opted visible thinking (e.g. google-antigravity): parseRequest hides thinking
   // whenever the client omits reasoning.summary, which is the Codex default. A provider that
-  // serves genuine user-facing reasoning opts back into the summary channel here, so thought
+  // serves genuine user-facing reasoning opts back into visible reasoning here, so thought
   // parts (Gemini thought, content-channel reasoning_text) reach the client instead of only
-  // the hidden replay envelopes. An explicit client reasoning.summary "none" still wins.
+  // the hidden replay envelopes. Which channel carries them is the bridge's decision, not
+  // this flag's. An explicit client reasoning.summary "none" still wins.
   if (route.provider.showThinkingSummary === true && parsed.options.hideThinkingSummary === true
     && !clientExplicitlyHidThinking(parsed)) {
     parsed.options.hideThinkingSummary = false;

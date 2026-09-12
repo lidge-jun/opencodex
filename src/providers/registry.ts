@@ -357,7 +357,7 @@ export interface ProviderRegistryEntry {
   preserveReasoningContentModels?: string[];
   requiresReasoningPlaceholderModels?: string[];
   /**
-   * Opt this provider into visible thinking summaries (see OcxProviderConfig.showThinkingSummary).
+   * Opt this provider into visible thinking (see OcxProviderConfig.showThinkingSummary).
    */
   showThinkingSummary?: boolean;
   reasoningSplitModels?: string[];

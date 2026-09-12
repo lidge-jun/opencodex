@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,155 +7,133 @@ import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
-// Provider-opted visible thinking (showThinkingSummary): a provider that serves
-// genuine user-facing reasoning surfaces it on the summary channel even when the
-// client omits reasoning.summary (the Codex default, which otherwise hides all
-// thinking in replay-only envelopes). An explicit client summary of "none" still
-// wins and keeps thinking hidden.
+// Provider-opted visible thinking (showThinkingSummary). parseRequest hides thinking whenever the
+// client omits `reasoning.summary`, which is the Codex default, so genuine user-facing reasoning —
+// Gemini `thought` parts on the Cloud Code Assist wire — would otherwise reach the client only as a
+// hidden replay envelope. A provider opts in; an explicit client `reasoning.summary: "none"` still
+// wins and keeps it hidden.
+//
+// The assertions deliberately do NOT pin which channel carries the text. That belongs to the
+// bridge, not to this flag: today raw reasoning rides the summary channel, and #4301 moves it to
+// the content channel (the native gpt-oss shape, where the desktop band shows the generic
+// placeholder and the CLI gates raw display behind `show_raw_agent_reasoning`). Pinning a channel
+// here would assert the opposite of whichever behaviour is current, so these tests pin what the
+// flag actually owns: visible reasoning versus the hidden envelope. The companion request-side half
+// — asking Cloud Code Assist for `includeThoughts` across the Gemini/non-Gemini wire families — is
+// pinned in tests/adapters/google/google-adapter.test.ts.
 
-function shownSeed() {
-  const seed = providerConfigSeed(getProviderRegistryEntry("deepseek")!);
-  return { ...seed, apiKey: "sk-test", showThinkingSummary: true } as OcxProviderConfig;
+const THOUGHT = "cca-think";
+
+function ccaUpstream(): Response {
+  return Response.json({
+    response: {
+      candidates: [{
+        content: { parts: [{ thought: true, text: THOUGHT }, { text: "OK" }] },
+        finishReason: "STOP",
+      }],
+      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15, thoughtsTokenCount: 3 },
+    },
+  });
 }
 
-function sseFrame(payload: unknown): string {
-  return "data: " + JSON.stringify(payload) + "\n\n";
+/** Whether the thought text is visible on whichever channel the bridge assigns it to. */
+function reasoningIsVisible(text: string): boolean {
+  return text.includes(`"summary":[{"type":"summary_text","text":"${THOUGHT}"}]`)
+    || text.includes(`"content":[{"type":"reasoning_text","text":"${THOUGHT}"}]`);
 }
 
-const SSE_UPSTREAM = [
-  sseFrame({ type: "response.created", response: { id: "resp_1", status: "in_progress", output: [] } }),
-  sseFrame({ type: "response.output_item.added", output_index: 0, item: { type: "reasoning", id: "rs_1", status: "in_progress", content: [], summary: [] } }),
-  sseFrame({ type: "response.reasoning_text.delta", content_index: 0, delta: "think", item_id: "rs_1", output_index: 0 }),
-  sseFrame({ type: "response.reasoning_text.done", content_index: 0, text: "think", item_id: "rs_1", output_index: 0 }),
-  sseFrame({ type: "response.output_item.done", output_index: 0, item: { type: "reasoning", id: "rs_1", status: "completed", content: [{ type: "reasoning_text", text: "think" }], summary: [] } }),
-  sseFrame({ type: "response.completed", response: { id: "resp_1", status: "completed", output: [{ type: "reasoning", id: "rs_1", status: "completed", content: [{ type: "reasoning_text", text: "think" }], summary: [] }] } }),
-].join("");
-
-async function runHandleResponses(body: Record<string, unknown>, seed: OcxProviderConfig) {
-  const encoder = new TextEncoder();
-  globalThis.fetch = (async () => new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(encoder.encode(SSE_UPSTREAM));
-        controller.close();
-      },
-    }),
-    { status: 200, headers: { "content-type": "text/event-stream" } },
-  )) as typeof fetch;
-  const config = { providers: { deepseek: seed } } as unknown as OcxConfig;
-  return handleResponses(
-    new Request("http://localhost/v1/responses", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    config,
-    { model: "", provider: "" },
-    { abortSignal: AbortSignal.timeout(5_000) },
-  );
+async function runCcaTurn(options: {
+  showThinkingSummary?: boolean;
+  reasoning?: Record<string, unknown>;
+} = {}): Promise<{ text: string; upstream: Array<{ url: string; body: string }> }> {
+  const home = mkdtempSync(join(tmpdir(), "ocx-show-thinking-"));
+  const prevHome = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = home;
+  writeFileSync(join(home, "auth.json"), JSON.stringify({
+    "google-antigravity": {
+      activeAccountId: "active",
+      accounts: [{
+        id: "active",
+        credential: {
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 3_600_000,
+          projectId: "project-id",
+        },
+      }],
+    },
+  }));
+  // Simulate a saved provider row written before the registry learned the flag: the routed request
+  // path backfills it from the registry entry (enrichProviderFromRegistry never runs there), while an
+  // explicit `false` still wins.
+  const seed = {
+    ...providerConfigSeed(getProviderRegistryEntry("google-antigravity")!),
+    liveModels: false,
+    models: ["gemini-3.8-flash"],
+    ...(options.showThinkingSummary === undefined ? {} : { showThinkingSummary: options.showThinkingSummary }),
+  } as OcxProviderConfig;
+  const upstream: Array<{ url: string; body: string }> = [];
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    upstream.push({ url: String(input), body: String(init?.body ?? "") });
+    return ccaUpstream();
+  }) as typeof fetch;
+  try {
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "google-antigravity/gemini-3.8-flash",
+          input: "ping",
+          stream: false,
+          reasoning: { effort: "low", ...(options.reasoning ?? {}) },
+        }),
+      }),
+      { providers: { "google-antigravity": seed } } as unknown as OcxConfig,
+      { model: "", provider: "" },
+      { abortSignal: AbortSignal.timeout(10_000) },
+    );
+    return { text: await response.text(), upstream };
+  } finally {
+    globalThis.fetch = prevFetch;
+    if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+  }
 }
 
 describe("showThinkingSummary provider option", () => {
-  const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
-
-  test("omitted client summary still surfaces thinking on the summary channel", async () => {
-    const response = await runHandleResponses(
-      { model: "deepseek-v4-flash", input: "ping", stream: true },
-      shownSeed(),
-    );
-    const text = await response.text();
-    expect(text).toContain("response.reasoning_summary_text.delta");
-    expect(text).toContain('"summary":[{"type":"summary_text","text":"think"}]');
+  test("omitted client summary still surfaces CCA thinking as visible reasoning", async () => {
+    const { text, upstream } = await runCcaTurn();
+    expect(upstream).toHaveLength(1);
+    expect(upstream[0]!.url).toContain("v1internal:generateContent");
+    // Request-side half: Cloud Code Assist reports `thoughtsTokenCount` either way but sends no
+    // `thought` text at all unless the request opts in, so the flag has to reach the wire.
+    expect(upstream[0]!.body).toContain('"includeThoughts":true');
+    expect(reasoningIsVisible(text)).toBe(true);
+    expect(text).toContain("OK");
+    // The hidden envelope is exactly what this flag takes the turn out of.
+    expect(text).not.toContain("encrypted_content");
   });
 
-  test("explicit client summary none keeps thinking hidden", async () => {
-    const response = await runHandleResponses(
-      { model: "deepseek-v4-flash", input: "ping", stream: true, reasoning: { summary: "none" } },
-      shownSeed(),
-    );
-    const text = await response.text();
-    expect(text).not.toContain("response.reasoning_summary_text.delta");
-    expect(text).toContain("response.reasoning_text.delta");
+  test("an explicit client summary none keeps thinking in the hidden envelope", async () => {
+    const { text, upstream } = await runCcaTurn({ reasoning: { summary: "none" } });
+    expect(reasoningIsVisible(text)).toBe(false);
+    expect(text).toContain("encrypted_content");
+    // ...and the turn does not pay for text nobody will render.
+    expect(upstream[0]!.body).not.toContain("includeThoughts");
   });
 
-  test("without the provider option, omitted summary stays hidden", async () => {
-    const seed = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" } as OcxProviderConfig;
-    const response = await runHandleResponses(
-      { model: "deepseek-v4-flash", input: "ping", stream: true },
-      seed,
-    );
-    const text = await response.text();
-    expect(text).not.toContain("response.reasoning_summary_text.delta");
-    expect(text).toContain("response.reasoning_text.delta");
+  test("an explicit false opts the provider back out", async () => {
+    const { text, upstream } = await runCcaTurn({ showThinkingSummary: false });
+    expect(reasoningIsVisible(text)).toBe(false);
+    expect(text).toContain("encrypted_content");
+    expect(upstream[0]!.body).not.toContain("includeThoughts");
   });
 
-  test("google-antigravity preset opts in", () => {
+  test("google-antigravity preset opts in, other providers stay untouched", () => {
     expect(providerConfigSeed(getProviderRegistryEntry("google-antigravity")!).showThinkingSummary).toBe(true);
     expect(providerConfigSeed(getProviderRegistryEntry("deepseek")!).showThinkingSummary).toBeUndefined();
-  });
-
-  test("CCA thought parts surface on the summary channel", async () => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-show-thinking-"));
-    const prevHome = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = home;
-    writeFileSync(join(home, "auth.json"), JSON.stringify({
-      "google-antigravity": {
-        activeAccountId: "active",
-        accounts: [{
-          id: "active",
-          credential: {
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 3_600_000,
-            projectId: "project-id",
-          },
-        }],
-      },
-    }));
-    const seen: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      seen.push(String(input));
-      return Response.json({
-        response: {
-          candidates: [{
-            content: { parts: [{ thought: true, text: "cca-think" }, { text: "OK" }] },
-            finishReason: "STOP",
-          }],
-          usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15, thoughtsTokenCount: 3 },
-        },
-      });
-    }) as typeof fetch;
-    try {
-      const seed = {
-        ...providerConfigSeed(getProviderRegistryEntry("google-antigravity")!),
-        liveModels: false,
-        models: ["gemini-3.8-flash"],
-      } as OcxProviderConfig;
-      // Simulate a saved provider row written before the registry learned the flag:
-      // the request path must backfill it from the registry entry (routedProviderConfig),
-      // enrichProviderFromRegistry never runs there.
-      delete (seed as Record<string, unknown>).showThinkingSummary;
-      const config = { providers: { "google-antigravity": seed } } as unknown as OcxConfig;
-      const response = await handleResponses(
-        new Request("http://localhost/v1/responses", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: "google-antigravity/gemini-3.8-flash", input: "ping", stream: false, reasoning: { effort: "low" } }),
-        }),
-        config,
-        { model: "", provider: "" },
-        { abortSignal: AbortSignal.timeout(10_000) },
-      );
-      const text = await response.text();
-      expect(seen).toHaveLength(1);
-      expect(seen[0]).toContain("v1internal:generateContent");
-      expect(text).toContain('"summary":[{"type":"summary_text","text":"cca-think"}]');
-      expect(text).toContain("OK");
-    } finally {
-      if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = prevHome;
-      rmSync(home, { recursive: true, force: true });
-    }
   });
 });
