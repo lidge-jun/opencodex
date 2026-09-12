@@ -103,7 +103,7 @@ export function SectionTabs({
         const id = visible.target.id.slice(sectionAnchorPrefix(scope).length);
         setActive(current => (current === id ? current : id));
       },
-      { rootMargin: `-${readingLine}px 0px -60% 0px`, threshold: 0 },
+      { rootMargin: [String(-readingLine) + "px", "0px", "-60%", "0px"].join(" "), threshold: 0 },
     );
     for (const node of nodes) observer.observe(node);
     return () => observer.disconnect();
