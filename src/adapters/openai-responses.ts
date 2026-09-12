@@ -3,6 +3,7 @@ import { stripBracketedModelSuffix } from "./openai-chat";
 import { normalizeOpenCodeGoAdditionalTools } from "./opencode-go-additional-tools";
 import { isXaiResponsesDestination } from "../providers/xai-transport";
 import { createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
@@ -2308,6 +2309,15 @@ function responsesErrorMessage(payload: unknown): string {
   return "upstream compaction failed";
 }
 
+/** Count an append without rescanning accumulated text, including split surrogate pairs. */
+function appendedUtf8Bytes(previousBytes: number, lastCodeUnit: number, fragment: string): number {
+  const first = fragment.charCodeAt(0);
+  // Separate lone surrogates each count as a three-byte replacement character; together
+  // they encode as one four-byte scalar. Empty fragments produce NaN and never pair.
+  const joinsSurrogatePair = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && first >= 0xdc00 && first <= 0xdfff;
+  return previousBytes + Buffer.byteLength(fragment, "utf8") - (joinsSurrogatePair ? 2 : 0);
+}
+
 export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
   return {
     name: "openai-responses",
@@ -2569,7 +2579,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       );
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
-        new TextEncoder().encode(body).byteLength,
+        Buffer.byteLength(body, "utf8"),
       );
       return {
         url,
@@ -2594,12 +2604,18 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         yield { type: "error", message: "passthrough adapter received no response body" };
         return;
       }
-      const budgetEncoder = new TextEncoder();
       let deltas = "";
+      let deltasBytes = 0;
+      let deltasLastCodeUnit = 0;
       let doneText = "";
+      let doneTextBytes = 0;
+      let doneTextLastCodeUnit = 0;
       let snapshot = "";
+      let snapshotBytes = 0;
       let usage: OcxUsage | undefined;
+      let usageRawBytes = 0;
       let compactionEncryptedContent: string | undefined;
+      let compactionEncryptedContentBytes = 0;
       let completedSeen = false;
       for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
         let payload: unknown;
@@ -2609,21 +2625,25 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           case "response.output_text.delta":
             if (typeof payload.delta === "string") {
               const next = deltas + payload.delta;
-              const previousBytes = budgetEncoder.encode(deltas).byteLength;
-              const reservation = budget.reserveTransient(budgetEncoder.encode(next).byteLength, { kind: "retained_collectors" });
+              const nextBytes = appendedUtf8Bytes(deltasBytes, deltasLastCodeUnit, payload.delta);
+              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
               deltas = next;
               reservation.commitRetained();
-              budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
+              budget.releaseRetained(deltasBytes, { kind: "retained_collectors" });
+              deltasBytes = nextBytes;
+              if (payload.delta.length > 0) deltasLastCodeUnit = payload.delta.charCodeAt(payload.delta.length - 1);
             }
             break;
           case "response.output_text.done":
             if (typeof payload.text === "string") {
               const next = doneText + payload.text;
-              const previousBytes = budgetEncoder.encode(doneText).byteLength;
-              const reservation = budget.reserveTransient(budgetEncoder.encode(next).byteLength, { kind: "retained_collectors" });
+              const nextBytes = appendedUtf8Bytes(doneTextBytes, doneTextLastCodeUnit, payload.text);
+              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
               doneText = next;
               reservation.commitRetained();
-              budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
+              budget.releaseRetained(doneTextBytes, { kind: "retained_collectors" });
+              doneTextBytes = nextBytes;
+              if (payload.text.length > 0) doneTextLastCodeUnit = payload.text.charCodeAt(payload.text.length - 1);
             }
             break;
           case "response.failed":
@@ -2641,28 +2661,28 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
               const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
               if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
                 const nextEncryptedContent = compaction.encrypted_content;
-                const previousBytes = budgetEncoder.encode(compactionEncryptedContent ?? "").byteLength;
-                const reservation = budget.reserveTransient(budgetEncoder.encode(nextEncryptedContent).byteLength, { kind: "retained_collectors" });
+                const nextEncryptedContentBytes = Buffer.byteLength(nextEncryptedContent, "utf8");
+                const reservation = budget.reserveTransient(nextEncryptedContentBytes, { kind: "retained_collectors" });
                 compactionEncryptedContent = nextEncryptedContent;
                 reservation.commitRetained();
-                budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
+                budget.releaseRetained(compactionEncryptedContentBytes, { kind: "retained_collectors" });
+                compactionEncryptedContentBytes = nextEncryptedContentBytes;
               }
               const next = responsesPayloadText(payload.response);
-              const previousBytes = budgetEncoder.encode(snapshot).byteLength;
-              const reservation = budget.reserveTransient(budgetEncoder.encode(next).byteLength, { kind: "retained_collectors" });
+              const nextBytes = Buffer.byteLength(next, "utf8");
+              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
               snapshot = next;
               reservation.commitRetained();
-              budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
+              budget.releaseRetained(snapshotBytes, { kind: "retained_collectors" });
+              snapshotBytes = nextBytes;
             }
             {
               const nextUsage = usageFromResponsesPayload(payload.response);
               // The attached raw usage object can be event-sized (unknown keys carry arbitrary
               // values); it stays reachable until the terminal yields, so charge it like the
               // adjacent retained collectors or it would defeat the per-request memory cap.
-              const previousRawBytes = usage?.rawUsage === undefined ? 0
-                : budgetEncoder.encode(JSON.stringify(usage.rawUsage)).byteLength;
               const nextRawBytes = nextUsage?.rawUsage === undefined ? 0
-                : budgetEncoder.encode(JSON.stringify(nextUsage.rawUsage)).byteLength;
+                : Buffer.byteLength(JSON.stringify(nextUsage.rawUsage), "utf8");
               if (nextRawBytes > 0) {
                 const reservation = budget.reserveTransient(nextRawBytes, { kind: "retained_collectors" });
                 usage = nextUsage;
@@ -2670,9 +2690,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
               } else {
                 usage = nextUsage;
               }
-              if (previousRawBytes > 0) {
-                budget.releaseRetained(previousRawBytes, { kind: "retained_collectors" });
+              if (usageRawBytes > 0) {
+                budget.releaseRetained(usageRawBytes, { kind: "retained_collectors" });
               }
+              usageRawBytes = nextRawBytes;
             }
             break;
         }
@@ -2694,10 +2715,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       const text = snapshot || doneText || deltas;
       if (text) yield { type: "text_delta", text };
       budget.releaseRetained(
-        budgetEncoder.encode(deltas).byteLength
-          + budgetEncoder.encode(doneText).byteLength
-          + budgetEncoder.encode(snapshot).byteLength
-          + (usage?.rawUsage === undefined ? 0 : budgetEncoder.encode(JSON.stringify(usage.rawUsage)).byteLength),
+        deltasBytes + doneTextBytes + snapshotBytes + usageRawBytes,
         { kind: "retained_collectors" },
       );
       yield {
@@ -2712,7 +2730,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       try { payload = await response.json(); } catch {
         return [{ type: "error", message: "malformed upstream compaction response" }];
       }
-      budget.chargeRetained(new TextEncoder().encode(JSON.stringify(payload)).byteLength, { kind: "retained_collectors" });
+      budget.chargeRetained(Buffer.byteLength(JSON.stringify(payload), "utf8"), { kind: "retained_collectors" });
       if (!isPlainObject(payload)) {
         return [{ type: "error", message: "malformed upstream compaction response" }];
       }
