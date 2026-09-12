@@ -19,6 +19,11 @@ redirect following; providers requiring a redirect must be configured with their
 
 ### Fetch-helper import boundary
 
+Raw-byte consumers of `src/lib/bounded-body.ts` supply their own byte and deadline budgets and
+share its [cancellation contract](inventory.md#bounded-response-ingestion-and-orcarouter-login).
+The OrcaRouter 64 KiB key-exchange budget is specific to login and does not cap Responses inference
+payloads.
+
 `src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
 Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, and
 the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges.
