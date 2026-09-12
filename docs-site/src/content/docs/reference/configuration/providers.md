@@ -382,10 +382,12 @@ need to rediscover. Every legacy variant id keeps routing unchanged.
 ### xAI Priority Processing
 
 The built-in `xai` preset supports Fast on both of its transports, with different scope.
-API-key mode targets `https://api.x.ai/v1` through the `openai-chat` adapter and
-sends `service_tier: "priority"` through Chat Completions for every routed model. `ocx login xai`
-instead stores OAuth credentials for the Grok subscription gateway, where Fast is classified
-per model (live-probed 2026-09-13): grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-reasoning,
+API-key mode targets `https://api.x.ai/v1`; routes resolved to `openai-chat` send
+`service_tier: "priority"` through Chat Completions, while model defaults and overrides can
+select the `openai-responses` transport instead. `ocx login xai`
+instead stores OAuth credentials for the Grok subscription gateway
+(`https://cli-chat-proxy.grok.com/v1`; these credentials refresh automatically), where Fast
+is classified per model (live-probed 2026-09-13): grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-reasoning,
 grok-4.20-0309-non-reasoning, grok-build-0.1, and grok-composer-2.5-fast accept
 `service_tier: "priority"` over Grok OAuth and echo it, so those rows advertise Fast, accept
 `--fast` selectors, and forward a caller-sent tier on either wire. grok-4.20-multi-agent-0309

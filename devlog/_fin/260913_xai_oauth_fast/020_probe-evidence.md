@@ -17,7 +17,7 @@ Mechanics: temporary `providers.xai.modelSupportsServiceTier` override in ~/.ope
 
 Request-id tails (ocx logs, 2026-09-13 00:4x KST): fb8c252e (4.20-non-reasoning), ffc1ac24 + f3bcff76 (multi-agent downgrades), 30869a34 + 1e2591ba (build), edc0cd22 + b2ba02e8 (composer), 6ff095a8 (4.6), 8fd2f267 (4.5), db85c0e5 (4.3, full entry captured), bf503c88 (4.20-reasoning), 54edc3de (4.20-non-reasoning r2).
 
-Chat inbound (/v1/chat/completions, --fast): grok-4.6 and grok-4.5 both 200 (chatcmpl-95b4236e…, chatcmpl-cb33c39d…). These routed over openai-responses here (config modelAdapters), so the chat-upstream echo is covered by the openai-chat rows above; hermes-agent#89440 independently reports the echo on native chat completions over SuperGrok Heavy OAuth.
+Chat inbound (/v1/chat/completions, --fast): grok-4.6 and grok-4.5 both 200 (chatcmpl-95b4236e…, chatcmpl-cb33c39d…). These two probes say nothing about the openai-chat wire — this install pins grok-4.6/4.5 to openai-responses via config modelAdapters. The chat-upstream echo evidence comes from the openai-chat rows above (4.3, 4.20, build, composer), and hermes-agent#89440 independently reports the echo on native chat completions over SuperGrok Heavy OAuth.
 
 Chat inbound direct relay probe (audit round 2): `xai/grok-4.3--fast` over /v1/chat/completions (openai-chat upstream, no modelAdapters override) — client body keys are exactly choices/created/id/model/object/usage with NO service_tier, while ocx telemetry for the same turn (request …6838b50b) records wireValue "priority", fastOutcome applied, confirmation confirmed, responseServiceTier "priority". The chat-inbound relay gap is therefore direct evidence, not code inference.
 

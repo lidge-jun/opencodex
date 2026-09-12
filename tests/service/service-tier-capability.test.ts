@@ -496,12 +496,10 @@ describe("the gate fires on the live handleResponses path", () => {
   test("xAI API-key runtime injects priority; OAuth injection is decided at policy level", async () => {
     const keyBody = await drive("xai", xaiKeyProvider(), "grok-4.6", {}, true);
     expect(keyBody.service_tier).toBe("priority");
-    // The ad-hoc OAuth fixture has no account pool, so the drive never reaches fetch
-    // (bodies stays empty); asserting on the body here was vacuous. The OAuth lane's
-    // injection decision is pinned at policy level by the describe above, and was
-    // verified against the live gateway (devlog/_fin/260913_xai_oauth_fast/020).
-    const oauthBody = await drive("xai", xaiOAuthProvider(), "grok-4.6", {}, true);
-    expect(oauthBody).not.toHaveProperty("service_tier");
+    // The ad-hoc OAuth fixture has no account pool, so the drive never reaches fetch and a
+    // body assertion would be vacuous. The wire-level OAuth pin is the real-server test at
+    // tests/server/server-xai-chat-reasoning-streaming.test.ts (outbound carries
+    // service_tier "priority"); the policy-level decision is pinned here.
     const oauthPolicy = fastPolicyForModel(xaiOAuthProvider(), "grok-4.6", "xai");
     expect(oauthPolicy.eligibility).toBe("eligible");
     expect(decideTier(oauthPolicy, true, undefined)).toEqual({ kind: "set", value: "priority" });

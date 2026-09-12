@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, translatorObservedBufferSnapshot } from "../../src/lib/translator-budget";
 import type { OcxConfig } from "../../src/types";
-import { responsesJsonToChatCompletion, collectChatCompletion, isChatCompletionsStreamError } from "../../src/chat/outbound";
+import { responsesJsonToChatCompletion, collectChatCompletion, responsesSseToChatCompletionsSse, isChatCompletionsStreamError } from "../../src/chat/outbound";
 import { jsonCompletionSse } from "../../src/server/chat-native-sse";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { readUsageEntries } from "../../src/usage/log";
@@ -338,5 +338,27 @@ describe("service_tier echo relay", () => {
       .map(line => JSON.parse(line.slice(6)));
     expect(frames.length).toBeGreaterThan(1);
     for (const frame of frames) expect(frame.service_tier).toBe("priority");
+  });
+
+  test("the live Responses-SSE translator stamps the echo on every emitted chunk", async () => {
+    const event = (type: string, data: Record<string, unknown>) =>
+      `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+    const upstreamSse = event("response.created", { response: { id: "resp_tier", service_tier: "priority" } })
+      + event("response.output_text.delta", { delta: "OK" })
+      + event("response.completed", { response: { id: "resp_tier", service_tier: "priority", usage: { input_tokens: 3, output_tokens: 1 } } });
+    const budget = createTranslatorBudget();
+    try {
+      const upstream = new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode(upstreamSse)); controller.close(); },
+      });
+      const translated = responsesSseToChatCompletionsSse(upstream, "model", { translatorBudget: budget });
+      const text = await new Response(translated).text();
+      const frames = text.split(/\r?\n/)
+        .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map(line => JSON.parse(line.slice(6)));
+      expect(frames.length).toBeGreaterThan(1);
+      for (const frame of frames) expect(frame.service_tier).toBe("priority");
+      expect(frames.at(-1)?.choices?.[0]?.finish_reason).toBe("stop");
+    } finally { budget.dispose(); }
   });
 });

@@ -182,6 +182,10 @@ export function responsesSseToChatCompletionsSse(
   let cancelled = false;
   let started = false;
   let sawToolUse = false;
+  // The upstream response-level service-tier echo (xAI Priority Processing, OpenAI
+  // fast tier), captured from any response event and stamped on every emitted chunk,
+  // matching how the source annotates its own streamed chat chunks.
+  let serviceTier: string | undefined;
   const id = completionId();
   const created = Math.floor(Date.now() / 1000);
   // tool call_id -> streaming index (OpenAI requires stable indices per tool call)
@@ -366,6 +370,9 @@ export function responsesSseToChatCompletionsSse(
   };
       const emit = (payload: Rec | "[DONE]") => {
         if (failed) return;
+        if (serviceTier !== undefined && isRec(payload) && Array.isArray(payload.choices)) {
+          payload.service_tier = serviceTier;
+        }
         if (terminalBatch) {
           const serialized = dataFrame(payload);
           const stringReservation = translatorBudget.reserveTransient(Buffer.byteLength(serialized), { kind: "live_transient" });
@@ -530,6 +537,9 @@ export function responsesSseToChatCompletionsSse(
       };
 
       const handleFrame = (eventName: string, data: Rec) => {
+        if (isRec(data.response) && typeof data.response.service_tier === "string") {
+          serviceTier = data.response.service_tier;
+        }
         switch (eventName) {
           case "response.created":
           case "response.heartbeat":
