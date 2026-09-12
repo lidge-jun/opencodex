@@ -6,6 +6,14 @@ import { registerUser } from "../../src/oauth/devin/register-user";
 import { anySignal } from "../../src/lib/abort";
 import { buildGetChatMessageRequestForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { iterFields } from "../../src/adapters/devin/cloud-direct/wire";
+import { buildMetadata, normalizeDevinSessionToken } from "../../src/adapters/devin/cloud-direct/metadata";
+
+/** Tag -> field for one encoded proto message. */
+function iterFieldMap(buf: Buffer): Record<number, { wire: number; value: unknown }> {
+  const out: Record<number, { wire: number; value: unknown }> = {};
+  for (const f of iterFields(buf)) out[f.num] = { wire: f.wire, value: f.value };
+  return out;
+}
 
 const FAKE_TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJl";
 
@@ -245,5 +253,30 @@ describe("devin cloud request shape", () => {
   test("metadata carries the fingerprint the service checks the length of", () => {
     const metadata = fields(fields(build())[1]?.value as Buffer);
     expect((metadata[31]?.value as Buffer).length).toBe(732);
+  });
+});
+
+describe("devin session-token normalization", () => {
+  test("a bare JWT regains the prefix the service reads", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJhIjoxfQ.sig";
+    expect(normalizeDevinSessionToken(jwt)).toBe("devin-session-token$" + jwt);
+    // Without this, the key goes out verbatim and Cognition answers with an
+    // opaque permission_denied, which reads as a revoked account.
+    const metadata = iterFieldMap(buildMetadata({
+      apiKey: jwt, requestId: 1, sessionId: "s", triggerId: "t", cloudChatShape: true,
+    }));
+    expect((metadata[3]?.value as Buffer).toString("utf8")).toBe("devin-session-token$" + jwt);
+  });
+
+  test("every other key format this field has carried passes through untouched", () => {
+    for (const key of [
+      "devin-session-token$eyJhbGciOiJIUzI1NiJ9.eyJhIjoxfQ.sig",
+      "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+      "sk-ws-01-abcdef",
+      "cog_abcdef",
+      "",
+    ]) {
+      expect(normalizeDevinSessionToken(key)).toBe(key);
+    }
   });
 });
