@@ -1630,7 +1630,7 @@ export const zhTW: Record<TKey, string> = {
   "api.endpointNote": "請將基礎 URL 用於 OpenAI 相容客戶端。Responses 與 Chat Completions 在 /v1 下提供。",
   "api.endpointsTitle": "閘道器端點",
   "api.authTitle": "身份驗證",
-  "api.authLoopback": "迴環繫結（127.0.0.1 或 ::1）會跳過身份驗證。遠端繫結需要生成的 ocx_ 金鑰或 OPENCODEX_API_AUTH_TOKEN。",
+  "api.authLoopback": "迴環存取的驗證要求依路徑而異；獨立音訊用戶端需要 OpenCodex 資料金鑰。遠端連線需要資料金鑰或 OPENCODEX_API_AUTH_TOKEN。",
   "api.authBaseUrlNote": "客戶端應使用基礎 URL，然後選擇下面的協議端點。",
   "api.newKeyTitle": "已建立新金鑰",
   "api.newKeyNote": "請立即複製此金鑰，它不會再次顯示。",

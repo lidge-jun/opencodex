@@ -1624,7 +1624,7 @@ export const ko: Record<TKey, string> = {
   "api.endpointsTitle": "게이트웨이 엔드포인트",
   "api.authBaseUrlNote": "클라이언트에는 기본 URL을 설정한 뒤 아래에서 프로토콜별 엔드포인트를 선택하세요.",
   "api.authTitle": "인증",
-  "api.authLoopback": "루프백 바인드(127.0.0.1 또는 ::1)는 인증을 건너뜁니다. 원격 바인드는 생성된 ocx_ 키 또는 OPENCODEX_API_AUTH_TOKEN이 필요합니다.",
+  "api.authLoopback": "루프백 인증은 경로마다 다릅니다. 독립 음성 API에는 OpenCodex 데이터 키가 필요합니다. 원격 연결에는 데이터 키 또는 OPENCODEX_API_AUTH_TOKEN이 필요합니다.",
   "api.modelsTitle": "외부 모델 카탈로그",
   "api.modelsCount": "{count}개 호출 가능",
   "api.modelsSearch": "모델 검색",

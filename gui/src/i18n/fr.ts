@@ -2091,7 +2091,7 @@ export const fr: Record<TKey, string> = {
   "api.endpointNote": "Utilisez l’URL de base avec les clients compatibles avec OpenAI. Responses et Chat Completions sont accessibles sous /v1.",
   "api.endpointsTitle": "Points de terminaison",
   "api.authTitle": "Authentification",
-  "api.authLoopback": "Les écoutes en boucle locale (127.0.0.1 ou ::1) contournent l’authentification. Les écoutes distantes nécessitent une clé ocx_ générée ou OPENCODEX_API_AUTH_TOKEN.",
+  "api.authLoopback": "L’accès local dépend de la route ; les clients audio autonomes nécessitent une clé de données OpenCodex. L’accès distant nécessite une clé de données ou OPENCODEX_API_AUTH_TOKEN.",
   "api.authBaseUrlNote": "Configurez les clients avec l’URL de base, puis choisissez ci-dessous le point de terminaison propre au protocole.",
   "api.newKeyTitle": "Nouvelle clé créée",
   "api.newKeyNote": "Copiez cette clé maintenant — elle ne sera plus affichée.",

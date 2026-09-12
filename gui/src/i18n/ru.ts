@@ -2093,7 +2093,7 @@ export const ru: Record<TKey, string> = {
   "api.endpointsTitle": "Конечные точки",
   "api.authTitle": "Аутентификация",
   "api.authBaseUrlNote": "Настройте клиентов с базовым URL, затем выберите нужный протокольный endpoint ниже.",
-  "api.authLoopback": "Loopback-привязки (127.0.0.1 или ::1) обходят аутентификацию. Для удалённых привязок нужен сгенерированный ocx_-ключ или OPENCODEX_API_AUTH_TOKEN.",
+  "api.authLoopback": "Доступ через loopback зависит от маршрута; отдельным аудиоклиентам нужен ключ данных OpenCodex. Для удалённого доступа нужен ключ данных или OPENCODEX_API_AUTH_TOKEN.",
   "api.modelsTitle": "Каталог внешних моделей",
   "api.modelsCount": "{count} доступно",
   "api.modelsSearch": "Поиск моделей",

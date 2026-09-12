@@ -1585,7 +1585,7 @@ export const de: Record<TKey, string> = {
   "api.endpointsTitle": "Gateway-Endpunkte",
   "api.authBaseUrlNote": "Konfiguriere Clients mit der Basis-URL und wähle dann den protokollspezifischen Endpunkt unten.",
   "api.authTitle": "Authentifizierung",
-  "api.authLoopback": "Loopback-Binds (127.0.0.1 oder ::1) umgehen die Authentifizierung. Remote-Binds benötigen einen generierten ocx_-Schlüssel oder OPENCODEX_API_AUTH_TOKEN.",
+  "api.authLoopback": "Loopback-Zugriff hängt von der Route ab; eigenständige Audio-Clients benötigen einen OpenCodex-Datenschlüssel. Remote-Zugriff erfordert einen Datenschlüssel oder OPENCODEX_API_AUTH_TOKEN.",
   "api.modelsTitle": "Externe Modelle",
   "api.modelsCount": "{count} aufrufbar",
   "api.modelsSearch": "Modelle suchen",

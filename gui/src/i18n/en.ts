@@ -2171,7 +2171,7 @@ export const en = {
   "api.endpointNote": "Use the base URL with OpenAI-compatible clients. Responses and Chat Completions are exposed under /v1.",
   "api.endpointsTitle": "Endpoints",
   "api.authTitle": "Authentication",
-  "api.authLoopback": "Loopback binds (127.0.0.1 or ::1) bypass authentication. Remote binds require a generated ocx_ key or OPENCODEX_API_AUTH_TOKEN.",
+  "api.authLoopback": "Loopback access is route-specific; standalone audio clients require an OpenCodex data key. Remote binds require a data key or OPENCODEX_API_AUTH_TOKEN.",
   "api.authBaseUrlNote": "Configure clients with the base URL, then choose the protocol-specific endpoint below.",
   "api.newKeyTitle": "New key created",
   "api.newKeyNote": "Copy this key now — it won't be shown again.",

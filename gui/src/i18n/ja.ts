@@ -2023,7 +2023,7 @@ export const ja: Record<TKey, string> = {
   "api.modelsEndpoint": "Models API",
   "api.authTitle": "認証",
   "api.authBaseUrlNote": "クライアントにはベース URL を設定し、下のプロトコル別エンドポイントを選んでください。",
-  "api.authLoopback": "ループバック (127.0.0.1 または ::1) は認証を省略します。リモートでは生成した ocx_ キーまたは OPENCODEX_API_AUTH_TOKEN が必要です。",
+  "api.authLoopback": "ループバックの認証は経路によって異なります。独立した音声クライアントにはOpenCodexデータキーが必要です。リモート接続にはデータキーまたはOPENCODEX_API_AUTH_TOKENが必要です。",
   "api.modelsTitle": "外部モデルカタログ",
   "api.modelsCount": "{count} 件が利用可能",
   "api.modelsSearch": "モデルを検索",

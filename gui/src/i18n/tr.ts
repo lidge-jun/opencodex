@@ -2112,7 +2112,7 @@ export const tr: Record<TKey, string> = {
   "api.endpointNote": "OpenAI uyumlu istemcilerle taban URL'yi kullanın.",
   "api.endpointsTitle": "Uç noktalar",
   "api.authTitle": "Kimlik Doğrulama",
-  "api.authLoopback": "Geri döngü (loopback) bağlantıları (127.0.0.1 / ::1) kimlik doğrulamasını atlar. Harici/ağ istemcileri x-opencodex-api-key veya Authorization başlığında bir ocx_ API anahtarı ya da OPENCODEX_API_AUTH_TOKEN göndermelidir.",
+  "api.authLoopback": "Geri döngü erişimi yola bağlıdır; bağımsız ses istemcileri OpenCodex veri anahtarı gerektirir. Uzak bağlantılar veri anahtarı veya OPENCODEX_API_AUTH_TOKEN gerektirir.",
   "api.authBaseUrlNote": "İstemcileri taban URL ile yapılandırın.",
   "api.newKeyTitle": "Yeni anahtar oluşturuldu",
   "api.newKeyNote": "Bu anahtarı şimdi kopyalayın — tekrar gösterilmeyecektir.",

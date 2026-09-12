@@ -1605,7 +1605,7 @@ export const zh: Record<TKey, string> = {
   "api.endpointsTitle": "网关端点",
   "api.authBaseUrlNote": "客户端应使用基础 URL，然后选择下面的协议端点。",
   "api.authTitle": "身份验证",
-  "api.authLoopback": "回环绑定（127.0.0.1 或 ::1）会跳过身份验证。远程绑定需要生成的 ocx_ 密钥或 OPENCODEX_API_AUTH_TOKEN。",
+  "api.authLoopback": "回环访问的认证要求因路径而异；独立音频客户端需要 OpenCodex 数据密钥。远程连接需要数据密钥或 OPENCODEX_API_AUTH_TOKEN。",
   "api.modelsTitle": "外部模型目录",
   "api.modelsCount": "{count} 个可调用",
   "api.modelsSearch": "搜索模型",
