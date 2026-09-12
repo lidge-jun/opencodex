@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
+import { formatTokensWithCache } from "../format-tokens";
 import { hashLogConversationQuery } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
@@ -363,19 +364,27 @@ function formatLogDateTime(ts: number, localeTag?: string, timeZone?: string): s
 function summarizeFilteredLogs(entries: LogEntry[]): {
   requests: number;
   totalTokens: number;
+  cachedInputTokens: number;
   estimatedCostUsd: number;
   priorityLowerBound: boolean;
   unpricedRequests: number;
   unmeteredRequests: number;
 } {
   let totalTokens = 0;
+  let cachedInputTokens = 0;
   for (const entry of entries) {
     const tokens = displayTokenTotal(entry);
     if (tokens !== undefined) totalTokens += tokens;
+    // The banner sits directly above rows that already print `c <read>`, so a
+    // total with no companion read as a different, smaller figure than the rows
+    // it summarizes.
+    const read = cacheSplit(entry).read;
+    if (read !== undefined && read > 0) cachedInputTokens += read;
   }
   return {
     requests: entries.length,
     totalTokens,
+    cachedInputTokens,
     ...summarizeEstimatedCosts(entries),
   };
 }
@@ -687,7 +696,11 @@ export default function Logs({ apiBase }: { apiBase: string }) {
           <Notice tone="ok">
             {t("logs.conversation.totals", {
               requests: conversationTotals.requests,
-              tokens: formatTokens(conversationTotals.totalTokens, localeTag ?? locale),
+              tokens: formatTokensWithCache(
+                conversationTotals.totalTokens,
+                conversationTotals.cachedInputTokens,
+                localeTag ?? locale,
+              ),
               cost: formatEstimatedUsdValue(
                 conversationTotals.estimatedCostUsd,
                 t,
