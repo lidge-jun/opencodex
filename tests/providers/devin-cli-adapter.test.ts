@@ -13,6 +13,7 @@ import {
 import { DEVIN_CLI_BIN_ENV, resolveDevinCliBinary } from "../../src/adapters/devin-cli/binary";
 import { createDevinCliAdapter } from "../../src/adapters/devin-cli/adapter";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { DEVIN_CLI_MODELS, DEVIN_CLI_MODEL_CONTEXT_WINDOWS, DEVIN_CLI_DEFAULT_MODEL } from "../../src/adapters/devin-cli/models";
 import { formatProviderDisplayName, providerIconSrc } from "../../gui/src/provider-icons";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import { EventEmitter } from "node:events";
@@ -42,6 +43,22 @@ describe("devin-cli registration", () => {
     const englishT = ((_key: string, fallback?: string) => fallback ?? "") as Parameters<typeof formatProviderDisplayName>[1];
     expect(formatProviderDisplayName("devin", englishT)).toBe("Cognition (Devin/Windsurf)");
     expect(formatProviderDisplayName("devin-cli", englishT)).toBe("Devin CLI");
+  });
+
+  test("every CLI model carries its context window", () => {
+    // The provider shipped without a window table at all, so the picker used the
+    // 128k default for the whole roster — including `swe-2`, the default model,
+    // whose real window is 262k. A model added to the roster without a window
+    // silently reintroduces that, so the table is checked against the roster
+    // rather than by spot-checking one id.
+    for (const model of DEVIN_CLI_MODELS) {
+      expect(DEVIN_CLI_MODEL_CONTEXT_WINDOWS[model]).toBeGreaterThan(0);
+    }
+    expect(Object.keys(DEVIN_CLI_MODEL_CONTEXT_WINDOWS).sort()).toEqual([...DEVIN_CLI_MODELS].sort());
+    expect(DEVIN_CLI_MODEL_CONTEXT_WINDOWS[DEVIN_CLI_DEFAULT_MODEL]).toBe(262_000);
+
+    const entry = PROVIDER_REGISTRY.find((row) => row.id === "devin-cli");
+    expect(entry?.modelContextWindows).toBe(DEVIN_CLI_MODEL_CONTEXT_WINDOWS);
   });
 });
 

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { createDevinAdapter, mapOcxMessagesToDevin, mapOcxToolsToDevin } from "../../src/adapters/devin";
 import { sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
-import { DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
+import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
+import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
+import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import type { OcxParsedRequest } from "../../src/types";
@@ -115,5 +117,46 @@ describe("devin adapter", () => {
     // merely resembles these must survive untouched.
     const nearMiss = "Runs a command in a terminal, returning output or a session ID for ongoing interaction.";
     expect(sanitizeToolDescriptionForCognitionForTests(nearMiss)).toBe(nearMiss);
+  });
+
+  test("the catalog parser reads the per-account context window", () => {
+    // ClientModelConfig #18 is the max input tokens, and it is the only
+    // first-party context-window figure Cognition exposes: the Devin CLI and
+    // Desktop model pages, the SWE-2 announcement and the Windsurf model
+    // reference all list these models without a window.
+    const withWindow = Buffer.concat([
+      encodeString(1, "SWE-2 High"),
+      encodeVarintField(18, 262_000),
+      encodeString(22, "swe-2-high"),
+    ]);
+    const withoutWindow = Buffer.concat([
+      encodeString(1, "Mystery"),
+      encodeString(22, "mystery-model"),
+    ]);
+    const catalog = parseCatalogBuffer(
+      Buffer.concat([encodeMessage(1, withWindow), encodeMessage(1, withoutWindow)]),
+      "key",
+      "https://server.codeium.com",
+    );
+    expect(catalog.byUid.get("swe-2-high")?.contextWindow).toBe(262_000);
+    // Absent rather than zero, so a caller can tell "not reported" from
+    // "reported as nothing" and keep its fallback.
+    expect(catalog.byUid.get("mystery-model")?.contextWindow).toBeUndefined();
+  });
+
+  test("the degraded-mode windows match what Cognition serves", () => {
+    // This table was wrong for nine of its eleven rows because it had been
+    // copied from each model's ORIGINAL vendor rather than measured against
+    // Cognition's catalog. The spot-checks are the three shapes of that error:
+    // a Claude row five times too small, a Grok row about half its real size,
+    // and a GPT row rounded up past what the service accepts.
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-sonnet-5"]).toBe(1_000_000);
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["grok-4-5"]).toBe(500_000);
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["gpt-5-6-sol"]).toBe(1_000_000);
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["swe-2"]).toBe(262_000);
+    // Every statically advertised model needs one, or the picker reports 128k.
+    for (const model of DEVIN_STATIC_MODELS) {
+      expect(DEVIN_MODEL_CONTEXT_WINDOWS[model]).toBeGreaterThan(0);
+    }
   });
 });

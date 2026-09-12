@@ -856,6 +856,7 @@
     "model-pinned-effort.test.ts": "codex-integration",
     "model-presets.test.ts": "providers",
     "model-rename-migration.test.ts": "providers",
+    "context-window-seed-repair.test.ts": "providers",
     "model-selection-guidance.test.ts": "cli",
     "model-visibility-management-api.test.ts": "codex-integration",
     "models-feedback-callback.test.ts": "gui",

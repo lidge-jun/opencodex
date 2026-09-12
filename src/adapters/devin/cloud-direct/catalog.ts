@@ -63,6 +63,21 @@ export interface ModelCatalogEntry {
   label: string;
   /** True when the caller's account tier cannot use this UID for chat. */
   disabled: boolean;
+  /**
+   * Maximum input tokens the account may send this model, from
+   * `ClientModelConfig` field #18.
+   *
+   * Cognition publishes no context-window numbers anywhere: not in the Devin
+   * CLI or Desktop model pages, not in the SWE-2 or SWE-1.7 announcements, and
+   * not in the Windsurf model reference, which has no such table. The only
+   * numbers on those pages are long-context PRICING thresholds, which are a
+   * different quantity. That makes this field the single first-party source,
+   * and it is per account rather than per model id.
+   *
+   * Absent when the entry omits the field, which is how a future schema change
+   * degrades: the caller keeps its static fallback instead of reporting zero.
+   */
+  contextWindow?: number;
 }
 
 export interface CacheEntry {
@@ -89,7 +104,7 @@ function flightKey(apiKey: string, host: string): string {
  * Parse a GetCascadeModelConfigsResponse buffer into a UID-keyed map.
  * A malformed catalog returns an empty map.
  */
-function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): CacheEntry {
+export function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): CacheEntry {
   // GetCascadeModelConfigsResponse #1 (repeated ClientModelConfig)
   const byUid = new Map<string, ModelCatalogEntry>();
   for (const f of iterFields(buf)) {
@@ -97,18 +112,30 @@ function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): CacheEnt
     let label = '';
     let modelUid = '';
     let disabled = false;
+    let contextWindow = 0;
     for (const sf of iterFields(f.value as Buffer)) {
       if (sf.num === 1 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
         label = (sf.value as Buffer).toString('utf8');
       } else if (sf.num === 4 && sf.wire === 0) {
         // #4 = disabled (bool, varint 0/1)
         disabled = sf.value === 1n;
+      } else if (sf.num === 18 && sf.wire === 0) {
+        // #18 = max input tokens. Identified by dumping a live catalog and
+        // reading the varints back against models whose windows are known from
+        // their upstream vendors: 1000000 on the Claude and GPT rows, 1048576
+        // on Gemini/Kimi/GLM, 500000 on Grok, 262000 on swe-2.
+        contextWindow = Number(sf.value);
       } else if (sf.num === 22 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
         modelUid = (sf.value as Buffer).toString('utf8');
       }
     }
     if (modelUid.length > 0) {
-      byUid.set(modelUid, { modelUid, label: label || modelUid, disabled });
+      byUid.set(modelUid, {
+        modelUid,
+        label: label || modelUid,
+        disabled,
+        ...(contextWindow > 0 ? { contextWindow } : {}),
+      });
     }
   }
   return { byUid, fetchedAt: Date.now(), apiKey, host };
