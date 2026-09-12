@@ -193,6 +193,8 @@ thinking 重播與提示快取仍由獨立的 [#3719](https://github.com/lidge-j
 
 下方帳戶綁定說明適用於原生 Codex 用戶端。透過外部 API 金鑰使用語音轉寫及 GPT-Live，請參閱[英文音訊 API 規格](/reference/proxy-formats/#streaming-dictation)。
 
+Connections > API keys 包含獨立的聽寫與即時語音區域。資料金鑰僅保留在表單記憶體中。聽寫會上傳選取的檔案；語音連線檢查不使用麥克風，而是等待工作階段確認。已設定不代表連線成功。
+
 `POST /v1/live` 接受 ChatGPT/Codex App Frameless call-creation 介面。
 `POST /v1/realtime/calls` 接受 OpenAI Realtime call-creation 介面。opencodex 選擇一個合格的 OpenAI 家族路由、為上游認證模式正規化 call-creation 請求，並中繼有界的回應。
 

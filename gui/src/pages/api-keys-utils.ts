@@ -69,6 +69,45 @@ export interface ApiEndpointInfo {
   chatCompletions: string;
   messages: string;
   models: string;
+  audio?: AudioApiInfo;
+}
+
+export interface AudioApiInfo {
+  transcriptionEndpoint: string;
+  dictationStreamEndpoint: string;
+  liveEndpoint: string;
+  realtimeCallsEndpoint: string;
+  transcriptionModel: string;
+  liveModel: string;
+  transcriptionConfigured: boolean;
+  dictationConfigured: boolean;
+  liveConfigured: boolean;
+}
+
+/** Both wire and cache data must keep typed credentials on the advertised inference host. */
+export function isAudioApiInfo(value: unknown, baseUrl: string): value is AudioApiInfo {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const audio = value as Record<string, unknown>;
+  try {
+    const base = new URL(baseUrl);
+    if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) return false;
+    const paths = {
+      transcriptionEndpoint: ["/audio/transcriptions", false],
+      dictationStreamEndpoint: ["/audio/transcriptions/stream", true],
+      liveEndpoint: ["/live", true],
+      realtimeCallsEndpoint: ["/realtime/calls", false],
+    } as const;
+    for (const [field, [suffix, socket]] of Object.entries(paths)) {
+      if (typeof audio[field] !== "string") return false;
+      const url = new URL(audio[field]);
+      const protocol = socket ? (base.protocol === "https:" ? "wss:" : "ws:") : base.protocol;
+      if (url.protocol !== protocol || url.username || url.password || url.search || url.hash) return false;
+      url.protocol = base.protocol;
+      if (url.origin !== base.origin || url.pathname !== `${base.pathname.replace(/\/$/, "")}${suffix}`) return false;
+    }
+    return audio.transcriptionModel === "gpt-4o-transcribe" && audio.liveModel === "gpt-live-1-codex"
+      && [audio.transcriptionConfigured, audio.dictationConfigured, audio.liveConfigured].every(flag => typeof flag === "boolean");
+  } catch { return false; }
 }
 
 export type ModelTestState = "idle" | "testing" | "ok" | "error";

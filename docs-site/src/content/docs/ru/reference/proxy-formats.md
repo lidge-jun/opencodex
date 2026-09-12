@@ -262,6 +262,8 @@ HTTP 400. В обоих случаях дата не удаляется и др�
 
 Привязка аккаунта ниже относится к штатным клиентам Codex. Для диктовки и GPT-Live с внешним API-ключом см. [спецификацию аудио API на английском](/reference/proxy-formats/#streaming-dictation).
 
+В Connections > API keys есть отдельные разделы диктовки и голоса. Ключ данных остаётся только в памяти формы. Диктовка отправляет выбранный файл, а проверка голоса ждёт подтверждения сеанса без микрофона. Наличие конфигурации не означает успешное подключение.
+
 `POST /v1/live` принимает surface Frameless call-creation из ChatGPT/Codex App.
 `POST /v1/realtime/calls` принимает surface call-creation OpenAI Realtime. opencodex выбирает
 подходящий маршрут семейства OpenAI, нормализует запрос call-creation под нужный режим

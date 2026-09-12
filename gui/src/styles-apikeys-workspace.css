@@ -69,6 +69,63 @@
   min-width: 0;
 }
 
+.audio-api-section {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-3);
+  padding: 18px 0;
+  border-top: 1px solid var(--border);
+  letter-spacing: 0;
+}
+
+.audio-api-head, .audio-api-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.audio-api-head { justify-content: space-between; }
+.audio-api-head h3, .audio-api-section h4 {
+  margin: 0;
+  font-size: var(--text-control);
+  line-height: var(--leading-ui);
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.audio-api-endpoints, .audio-api-field, .audio-api-form, .audio-api-result {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.audio-api-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.audio-api-field { font-size: var(--text-label); align-content: start; }
+.audio-api-field .input { width: 100%; min-width: 0; box-sizing: border-box; }
+.audio-api-field input[type="file"] { padding: 7px; }
+.audio-api-actions { grid-column: 1 / -1; min-height: 36px; }
+.audio-api-actions .btn { min-height: 36px; white-space: nowrap; }
+.audio-api-status { font-size: var(--text-label); }
+.audio-api-error { margin: 0; color: var(--danger); font-size: var(--text-label); }
+.audio-api-endpoints .api-endpoint-url { white-space: normal; overflow-wrap: anywhere; }
+.audio-api-examples { min-width: 0; }
+.audio-api-examples summary { cursor: pointer; font-size: var(--text-label); padding: 6px 0; }
+.audio-api-examples > :not(summary) { margin-top: var(--space-2); }
+.audio-api-events {
+  margin: 0;
+  padding: var(--space-2) 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-label);
+  color: var(--muted);
+}
+.audio-api-result .api-example-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@container apikeys-workspace (max-width: 560px) {
+  .audio-api-form { grid-template-columns: minmax(0, 1fr); }
+  .audio-api-actions .btn { min-height: 44px; }
+  .audio-api-field .input { min-height: 44px; }
+}
+
 .awi-keylist-panel .awi-keylist-name {
   appearance: none;
   background: none;

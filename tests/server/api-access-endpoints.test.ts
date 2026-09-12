@@ -7,7 +7,7 @@ import {
 
 describe("buildApiAccessEndpoints", () => {
   test("builds the external gateway URLs from hostname and port", () => {
-    expect(buildApiAccessEndpoints({ hostname: "127.0.0.1", port: 10100 })).toEqual({
+    expect(buildApiAccessEndpoints({ hostname: "127.0.0.1", port: 10100 })).toMatchObject({
       baseUrl: "http://127.0.0.1:10100/v1",
       endpoint: "http://127.0.0.1:10100/v1/responses",
       responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
@@ -19,7 +19,7 @@ describe("buildApiAccessEndpoints", () => {
   });
 
   test("falls back to the default bind when config fields are missing", () => {
-    expect(buildApiAccessEndpoints({})).toEqual({
+    expect(buildApiAccessEndpoints({})).toMatchObject({
       baseUrl: "http://127.0.0.1:10100/v1",
       endpoint: "http://127.0.0.1:10100/v1/responses",
       responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
@@ -31,7 +31,7 @@ describe("buildApiAccessEndpoints", () => {
   });
 
   test("brackets IPv6 hostnames for URL display", () => {
-    expect(buildApiAccessEndpoints({ hostname: "::1", port: 10100 })).toEqual({
+    expect(buildApiAccessEndpoints({ hostname: "::1", port: 10100 })).toMatchObject({
       baseUrl: "http://[::1]:10100/v1",
       endpoint: "http://[::1]:10100/v1/responses",
       responsesEndpoint: "http://[::1]:10100/v1/responses",
@@ -105,6 +105,36 @@ describe("buildApiAccessEndpoints", () => {
 
   test("reflects disabled Claude inbound in API access metadata", () => {
     expect(buildApiAccessEndpoints({ claudeCode: { enabled: false } }).claudeCodeEnabled).toBe(false);
+  });
+
+  test("audio metadata derives TLS and IPv6 URLs without claiming connectivity", () => {
+    const result = buildApiAccessEndpoints({ hostname: "::", port: 10100 }, { requestOrigin: "https://[2001:db8::1]:8443" });
+    expect(result.audio).toEqual({
+      transcriptionEndpoint: "https://[2001:db8::1]:8443/v1/audio/transcriptions",
+      dictationStreamEndpoint: "wss://[2001:db8::1]:8443/v1/audio/transcriptions/stream",
+      liveEndpoint: "wss://[2001:db8::1]:8443/v1/live",
+      realtimeCallsEndpoint: "https://[2001:db8::1]:8443/v1/realtime/calls",
+      transcriptionModel: "gpt-4o-transcribe", liveModel: "gpt-live-1-codex",
+      transcriptionConfigured: false, dictationConfigured: false, liveConfigured: false,
+    });
+    const companion = buildApiAccessEndpoints({ hostname: "0.0.0.0", port: 10100, unauthenticatedLoopbackListener: { enabled: true, port: 10104 } });
+    expect(companion.audio.liveEndpoint).toBe("ws://127.0.0.1:10104/v1/live");
+  });
+
+  test("audio configuration distinguishes subscription, API key and noncanonical destinations", () => {
+    const forward = { adapter: "openai-responses" as const, baseUrl: "https://chatgpt.com/backend-api/codex" };
+    const configured = buildApiAccessEndpoints({ providers: { openai: forward } }).audio;
+    expect(configured.transcriptionConfigured).toBe(true);
+    expect(configured.dictationConfigured).toBe(true);
+    expect(configured.liveConfigured).toBe(true);
+    for (const provider of [{ ...forward, disabled: true }, { ...forward, baseUrl: "https://example.test/v1" }, { ...forward, authMode: "key" as const }]) {
+      expect(buildApiAccessEndpoints({ providers: { openai: provider } }).audio.liveConfigured).toBe(false);
+    }
+    const api = buildApiAccessEndpoints({ providers: { "openai-apikey": { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "env:AUDIO_METADATA_FIXTURE" } } }).audio;
+    expect(api.transcriptionConfigured).toBe(true);
+    expect(api.dictationConfigured).toBe(false);
+    expect(api.liveConfigured).toBe(false);
+    expect(JSON.stringify(api)).not.toContain("AUDIO_METADATA_FIXTURE");
   });
 });
 

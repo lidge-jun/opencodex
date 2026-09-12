@@ -283,6 +283,8 @@ Thinking yeniden gönderimi ve önbellek, ayrı [#3719](https://github.com/lidge
 
 Aşağıdaki hesap bağlantısı yerel Codex istemcileri içindir. Harici API anahtarıyla dikte ve GPT-Live kullanımı için [İngilizce ses API belirtimine](/reference/proxy-formats/#streaming-dictation) bakın.
 
+Connections > API keys altında Dikte ve Canlı Ses bölümleri bulunur. Veri anahtarı yalnızca form belleğinde tutulur. Dikte seçilen dosyayı gönderir; ses bağlantısı kontrolü mikrofon kullanmadan oturum onayını bekler. Yapılandırılmış olması bağlantının başarılı olduğu anlamına gelmez.
+
 `POST /v1/live`, ChatGPT/Codex App Frameless çağrı oluşturma yüzeyini kabul
 eder. `POST /v1/realtime/calls`, OpenAI Realtime çağrı oluşturma yüzeyini kabul
 eder. opencodex uygun bir OpenAI ailesi rotası seçer, yukarı akış kimlik

@@ -40,6 +40,17 @@ Credential-bearing model, image, video, and search requests do not automatically
 
 ## File transcription
 
+Connections > API keys has separate **Dictation** and **Live Voice** blocks.
+Enter an OpenCodex data key, not a provider or management key. Dictation uploads
+the file you select and offers cancellation and transcript copying. Live Voice's
+**Check connection** opens a session without microphone access or audio frames,
+waits for the provider's session acknowledgment, and disconnects after one minute
+or when you leave the panel. The key remains only in that panel's memory.
+**Configured, not verified** describes provider configuration, not account
+health or entitlement. Use the explicit action to observe a result. Examples use
+key placeholders and never include the entered secret. An older server without
+audio metadata leaves these controls unavailable.
+
 `POST /v1/audio/transcriptions` accepts an OpenCodex data-plane key in
 `Authorization: Bearer`, `x-opencodex-api-key`, or `x-api-key`, including on a local
 listener. An explicitly supplied invalid key is rejected. Upload one audio file
