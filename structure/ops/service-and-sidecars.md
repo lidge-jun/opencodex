@@ -1,5 +1,7 @@
 # Background Service And Sidecars
 
+Shared parsing and streaming follow the [request-copy](../transports/responses.md#request-copy-accounting) and [stream-buffer accounting](../transports/responses.md#stream-buffer-accounting) contracts.
+
 ## Background service command selection
 
 A bare `ocx service` is an idempotent install-or-repair command. Argument validation happens before

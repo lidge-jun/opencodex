@@ -14,7 +14,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `hostname?` | `string` | `"127.0.0.1"` | Адрес bind'а. Не-loopback bind требует `OPENCODEX_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | URL исходящего HTTP(S)-прокси или `${ENV_VAR}`. Применяется к `HTTP_PROXY` / `HTTPS_PROXY` только когда эти переменные не заданы; loopback всегда остаётся в `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Явно включает один идентичный повтор Responses, если в turn нет ни текста, ни tool call, включая случай, когда stream завершается до terminal event. Повтор может тарифицироваться. `OCX_EMPTY_COMPLETION_RETRY=0` отключает его без изменения config; combo и routed-compaction turn исключены. |
-| `stallTimeoutSec?` | `number` | `300` | Секунды без upstream-данных до `response.incomplete`. Минимум 1. |
+| `stallTimeoutSec?` | `number` | `300` | Секунды без полезного прогресса upstream для Responses и нативного Chat. Минимум 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Дедлайн одной попытки DNS/TCP/TLS/final-header; он завершается до генерации тела ответа. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Дедлайн graceful-drain до принудительного прерывания активных turn'ов. |
 | `websockets?` | `boolean` | `false` | Объявляет и разрешает клиентский WebSocket-путь Responses. При false клиенты используют HTTP/SSE; это не отключает подходящую upstream WS-оптимизацию canonical ChatGPT. |
@@ -34,6 +34,10 @@ description: Listener, удалённый доступ, admission key, тайм�
 backup'а, выполните `ocx recover-history --legacy-openai --yes`, чтобы принудительно вернуть
 native-provider history.
 Команда переименовывает все строки `opencodex` с пользовательским сообщением, включая корректную историю выделенного провайдера; перед запуском прочитайте предупреждение о полном охвате в справочнике lifecycle.
+
+### Тайм-ауты и завершение нативного Chat
+
+Нативный Chat также использует `stallTimeoutSec` при ожидании вывода upstream. Непустой текст, рассуждения, отказ, обновления инструментов и события завершения обновляют время ожидания; комментарии keepalive, только роль и только статистика использования его не обновляют. Ожидание чтения медленным клиентом приостанавливает отсчёт. При зависании возникает `upstream_stall_timeout`: событие ошибки для потокового клиента или HTTP 502 без потоковой передачи. Отмена до конечного результата возвращает ошибку отмены вместо успешного частичного ответа. Непотоковый Chat поддерживает SSE с LF, CRLF и многострочными полями data.
 
 ## Удалённый доступ
 

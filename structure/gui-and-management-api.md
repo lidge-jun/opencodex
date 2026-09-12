@@ -1,5 +1,7 @@
 # GUI And Management API
 
+Shared parsing and streaming follow the [request-copy](transports/responses.md#request-copy-accounting) and [stream-buffer accounting](transports/responses.md#stream-buffer-accounting) contracts.
+
 ## Dashboard serving
 
 The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui`

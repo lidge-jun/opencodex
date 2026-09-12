@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { Buffer } from "node:buffer";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import { openaiResponsesUrl } from "../../src/adapters/openai-responses-url";
@@ -19,7 +20,7 @@ import {
   SUMMARY_PREFIX,
 } from "../../src/responses/compaction";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import type { OcxConfig } from "../../src/types";
+import type { AdapterEvent, OcxConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { restoreRoutedNamespaceCalls } from "../../src/responses/namespace-tool-compat";
 import { restoreRoutedCustomCalls } from "../../src/responses/custom-tool-compat";
@@ -32,6 +33,195 @@ const provider = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
   authMode: "forward" as const,
 };
+
+describe("Responses request and compaction byte accounting", () => {
+  const encoder = new TextEncoder();
+  const frame = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
+  const adapter = () => createResponsesPassthroughAdapterProduction(provider);
+
+  test("outbound accounting measures serialized UTF-8 without an encoded copy", () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 1 });
+    const encode = spyOn(TextEncoder.prototype, "encode");
+    try {
+      const request = adapter().buildRequest({
+        modelId: "example-model", context: { messages: [] }, stream: true, options: {},
+        _rawBody: { model: "example-model", input: "中文😀é\ud800x\udc00", temperature: 1e20 },
+      }, { headers: new Headers(), translatorBudget: budget });
+      expect(encode).not.toHaveBeenCalled();
+      encode.mockRestore();
+      expect(budget.snapshot()).toMatchObject({
+        currentBytes: encoder.encode(request.body).byteLength, overflows: 0,
+      });
+      request.releaseBodyObservation?.();
+      request.releaseBodyObservation?.();
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally { encode.mockRestore(); budget.dispose(); }
+  });
+
+  test("buffered compaction preserves the serialized payload cap without an encoded copy", async () => {
+    const payload = {
+      output: [{ type: "message", content: [{ type: "output_text", text: "中文😀\ud800" }] }],
+      usage: { input_tokens: 1e20, output_tokens: 1, metadata: "\udc00" },
+    };
+    const wire = encoder.encode(JSON.stringify(payload));
+    const budget = createTranslatorBudget({ maxTurnBytes: wire.byteLength });
+    const response = new Response(wire);
+    const encode = spyOn(TextEncoder.prototype, "encode");
+    try {
+      const events = await adapter().parseResponse!(response, budget);
+      expect(events[0]).toEqual({ type: "text_delta", text: "中文😀\ud800" });
+      expect(encode).not.toHaveBeenCalled();
+      expect(budget.snapshot()).toMatchObject({ currentBytes: wire.byteLength, overflows: 0 });
+    } finally { encode.mockRestore(); budget.dispose(); }
+    const limited = createTranslatorBudget({ maxTurnBytes: wire.byteLength - 1 });
+    try {
+      await expect(adapter().parseResponse!(new Response(wire), limited)).rejects.toMatchObject({
+        code: "translation_buffer_limit",
+      });
+    } finally { limited.dispose(); }
+  });
+
+  test("compaction counts only new fragments without request-sized encoded arrays", async () => {
+    const count = 256;
+    const fragment = "x".repeat(1024);
+    const wire = encoder.encode(frame({ type: "response.output_text.delta", delta: fragment }).repeat(count)
+      + frame({ type: "response.completed", response: { output: [] } }));
+    const response = new Response(wire);
+    const budget = createTranslatorBudget();
+    const originalByteLength = Buffer.byteLength;
+    let countedCodeUnits = 0;
+    const byteLength = spyOn(Buffer, "byteLength").mockImplementation((value, encoding) => {
+      if (typeof value === "string") countedCodeUnits += value.length;
+      return originalByteLength(value, encoding);
+    });
+    const encode = spyOn(TextEncoder.prototype, "encode");
+    try {
+      const events: AdapterEvent[] = [];
+      for await (const event of adapter().parseStream(response, budget)) events.push(event);
+      expect(events.filter(event => event.type === "heartbeat")).toHaveLength(count);
+      expect(events.at(-2)).toEqual({ type: "text_delta", text: fragment.repeat(count) });
+      expect(events.at(-1)).toEqual({ type: "done" });
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, overflows: 0 });
+      // Replacing encode with byteLength alone still recounts all preceding deltas.
+      expect(countedCodeUnits).toBeLessThanOrEqual(count * fragment.length + 1024);
+      expect(encode).not.toHaveBeenCalled();
+    } finally { byteLength.mockRestore(); encode.mockRestore(); budget.dispose(); }
+  });
+
+  test.each(["response.output_text.delta", "response.output_text.done"])(
+    "%s counts surrogate pairs joined across fragments exactly", async type => {
+      const fragments = ["中\ud83d", "", "\ude00", "\ud800", "x\udc00", "é"];
+      let combined = "";
+      const expectedBytes = fragments.map(fragment => encoder.encode(combined += fragment).byteLength);
+      const wire = encoder.encode(fragments.map(fragment => frame({
+        type, [type.endsWith("delta") ? "delta" : "text"]: fragment,
+      })).join(""));
+      const budget = createTranslatorBudget();
+      const reserve = spyOn(budget, "reserveTransient");
+      try {
+        const events: AdapterEvent[] = [];
+        for await (const event of adapter().parseStream(new Response(wire), budget)) events.push(event);
+        expect(reserve.mock.calls.filter(([, scope]) => scope.kind === "retained_collectors")
+          .map(([bytes]) => bytes)).toEqual(expectedBytes);
+        expect(events.at(-2)).toEqual({ type: "text_delta", text: combined });
+        expect(events.at(-1)).toEqual({ type: "done" });
+        expect(budget.snapshot().currentBytes).toBe(0);
+      } finally { reserve.mockRestore(); budget.dispose(); }
+    },
+  );
+
+  test("compaction replacement still admits the full old and new text overlap", async () => {
+    const fragment = "x".repeat(10_000);
+    const bytes = encoder.encode(frame({ type: "response.output_text.delta", delta: fragment }));
+    const budget = createTranslatorBudget({ maxTurnBytes: 35_000 });
+    let sent = 0;
+    let cancelled = false;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent++ < 2) controller.enqueue(bytes);
+        else controller.close();
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 }));
+    const iterator = adapter().parseStream(response, budget);
+    try {
+      expect(await iterator.next()).toEqual({ done: false, value: { type: "heartbeat" } });
+      await expect(iterator.next()).rejects.toMatchObject({ code: "translation_buffer_limit" });
+      expect(cancelled).toBe(true);
+      expect(budget.snapshot()).toMatchObject({ currentBytes: fragment.length, overflows: 1 });
+    } finally { await iterator.return(undefined); budget.dispose(); }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("terminal replacement releases old snapshot and usage while retaining the current ciphertext", async () => {
+    const oldUsage = { input_tokens: 1, output_tokens: 2, metadata: "中文\ud800" };
+    const newUsage = { input_tokens: 3, output_tokens: 4, metadata: "😀\udc00" };
+    const oldCiphertext = "old-中文";
+    const ciphertext = "new-😀";
+    const terminal = (text: string, encrypted: string, usage?: unknown) => ({
+      type: "response.completed", response: {
+        output: [
+          { type: "message", content: [{ type: "output_text", text }] },
+          { type: "compaction", encrypted_content: encrypted },
+        ], ...(usage === undefined ? {} : { usage }),
+      },
+    });
+    const wire = encoder.encode(frame({ type: "response.output_text.delta", delta: "partial" })
+      + frame({ type: "response.output_text.done", text: "fallback" })
+      + frame(terminal("old snapshot", oldCiphertext, oldUsage))
+      + frame(terminal("new snapshot", ciphertext, newUsage))
+      + frame(terminal("", ciphertext)));
+    const budget = createTranslatorBudget();
+    const reserve = spyOn(budget, "reserveTransient");
+    try {
+      const events: AdapterEvent[] = [];
+      for await (const event of adapter().parseStream(new Response(wire), budget)) events.push(event);
+      expect(events).toEqual([
+        { type: "heartbeat" }, { type: "text_delta", text: "fallback" },
+        { type: "done", compactionEncryptedContent: ciphertext },
+      ]);
+      const expected = [
+        "partial", "fallback", oldCiphertext, "old snapshot", JSON.stringify(oldUsage),
+        ciphertext, "new snapshot", JSON.stringify(newUsage), ciphertext, "",
+      ].map(text => encoder.encode(text).byteLength);
+      expect(reserve.mock.calls.filter(([, scope]) => scope.kind === "retained_collectors")
+        .map(([bytes]) => bytes)).toEqual(expected);
+      expect(budget.snapshot().currentBytes).toBe(encoder.encode(ciphertext).byteLength);
+    } finally { reserve.mockRestore(); budget.dispose(); }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test.each(["response.failed", "response.incomplete", "consumer return"])(
+    "%s leaves collector cleanup with the owning budget and cancels upstream", async ending => {
+      const partial = "中\ud800";
+      const endingPayload = ending === "response.failed"
+        ? { type: ending, response: { error: { message: "stopped" } } }
+        : { type: ending, response: { incomplete_details: { reason: "stopped" } } };
+      const bytes = encoder.encode(frame({ type: "response.output_text.delta", delta: partial })
+        + (ending === "consumer return" ? "" : frame(endingPayload)));
+      const budget = createTranslatorBudget();
+      let cancelled = false;
+      const response = new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(bytes); },
+        cancel() { cancelled = true; },
+      }, { highWaterMark: 0 }));
+      const iterator = adapter().parseStream(response, budget);
+      try {
+        expect(await iterator.next()).toEqual({ done: false, value: { type: "heartbeat" } });
+        if (ending !== "consumer return") {
+          expect(await iterator.next()).toEqual({ done: false, value: ending === "response.failed"
+            ? { type: "error", message: "stopped" } : { type: "incomplete", reason: "stopped" } });
+          expect(await iterator.next()).toEqual({ done: true, value: undefined });
+        } else {
+          await iterator.return(undefined);
+        }
+        expect(cancelled).toBe(true);
+        expect(budget.snapshot().currentBytes).toBe(encoder.encode(partial).byteLength);
+      } finally { await iterator.return(undefined); budget.dispose(); }
+      expect(budget.snapshot().currentBytes).toBe(0);
+    },
+  );
+});
 
 describe("native routed code-mode result visibility", () => {
   const routed = { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1", authMode: "key" as const };

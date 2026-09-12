@@ -1,4 +1,5 @@
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { Buffer } from "node:buffer";
 
 /**
  * Shared client-facing SSE payload rewrite shell.
@@ -37,18 +38,21 @@ export function payloadRewriteAsBlockRewrite(rewrite: SsePayloadRewrite): SseBlo
 export function composeSseBlockRewrites(...rewrites: SseBlockRewrite[]): SseBlockRewrite {
   const active = rewrites.filter(Boolean);
   if (active.length === 0) return Object.assign((block: string) => [block], {});
+  let disposed = false;
   const composed: SseBlockRewrite = (block: string) => {
     let blocks: readonly string[] = [block];
     for (const rewrite of active) {
       const next: string[] = [];
-      for (const current of blocks) next.push(...rewrite(current));
+      for (const current of blocks) {
+        if (disposed) return [];
+        next.push(...rewrite(current));
+      }
       blocks = next;
     }
     return blocks;
   };
   // Child disposal is part of the contract: one idempotent disposer for the
   // whole chain, so relay teardown never leaks a nested collector.
-  let disposed = false;
   composed.dispose = () => {
     if (disposed) return;
     disposed = true;
@@ -70,10 +74,116 @@ export function nextSseBlock(buffer: string): { block: string; delimiter: string
   };
 }
 
+/**
+ * Incremental form of nextSseBlock for bounded relays. The scan cursor visits only new text and
+ * consuming a block subtracts its byte length instead of recounting the remaining suffix.
+ * Old/new buffer overlap still requires admission before either append or consumption commits.
+ * Call compact before yielding to stop retaining an already-consumed prefix across pulls.
+ */
+export function createSseBlockBuffer(
+  budget: TranslatorBudget,
+  assertAppendSize?: (bytes: number) => void,
+): {
+  append(fragment: string): void;
+  next(): { block: string; delimiter: string } | null;
+  tail(): string;
+  compact(): void;
+  clear(): void;
+} {
+  const scope = { kind: "live_transient" as const };
+  let buffer = "";
+  let offset = 0;
+  let scanOffset = 0;
+  let bufferBytes = 0;
+
+  const compact = (): void => {
+    if (offset === 0) return;
+    buffer = buffer.slice(offset);
+    scanOffset -= offset;
+    offset = 0;
+  };
+
+  return {
+    append(fragment) {
+      if (!fragment) return;
+      let fragmentBytes = Buffer.byteLength(fragment, "utf8");
+      // Decoder output never splits a surrogate pair, but keep the helper exact for string callers.
+      const last = buffer.charCodeAt(buffer.length - 1);
+      const first = fragment.charCodeAt(0);
+      if (offset < buffer.length && last >= 0xd800 && last <= 0xdbff && first >= 0xdc00 && first <= 0xdfff) {
+        fragmentBytes -= 2;
+      }
+      const nextBytes = bufferBytes + fragmentBytes;
+      assertAppendSize?.(nextBytes);
+      const reservation = budget.reserveTransient(nextBytes, scope);
+      try {
+        compact();
+        buffer += fragment;
+        reservation.commitRetained();
+        budget.releaseRetained(bufferBytes, scope);
+        bufferBytes = nextBytes;
+      } catch (error) {
+        reservation.release();
+        throw error;
+      }
+    },
+    next() {
+      for (;;) {
+        const newline = buffer.indexOf("\n", scanOffset);
+        if (newline < 0) {
+          scanOffset = buffer.length;
+          return null;
+        }
+        let end = newline + 1;
+        if (buffer[end] === "\r") end += 1;
+        if (end === buffer.length) {
+          // Keep the candidate first newline until its possible blank-line delimiter arrives.
+          scanOffset = newline;
+          return null;
+        }
+        if (buffer[end] !== "\n") {
+          scanOffset = newline + 1;
+          continue;
+        }
+        end += 1;
+        const start = newline > offset && buffer[newline - 1] === "\r" ? newline - 1 : newline;
+        const block = buffer.slice(offset, start);
+        const delimiter = buffer.slice(start, end);
+        const nextBytes = bufferBytes - Buffer.byteLength(block, "utf8") - delimiter.length;
+        const reservation = budget.reserveTransient(nextBytes, scope);
+        reservation.commitRetained();
+        budget.releaseRetained(bufferBytes, scope);
+        bufferBytes = nextBytes;
+        offset = end;
+        scanOffset = end;
+        if (offset === buffer.length) {
+          buffer = "";
+          offset = 0;
+          scanOffset = 0;
+        }
+        return { block, delimiter };
+      }
+    },
+    tail: () => buffer.slice(offset),
+    compact,
+    clear() {
+      budget.releaseRetained(bufferBytes, scope);
+      buffer = "";
+      offset = 0;
+      scanOffset = 0;
+      bufferBytes = 0;
+    },
+  };
+}
+
 /** Join all data lines from one SSE event according to the event-stream field rules. */
 export function sseDataPayload(block: string): string | null {
   const data: string[] = [];
   for (const line of block.split(/\r?\n/)) {
+    if (line === "data") {
+      data.push("");
+      continue;
+    }
     if (!line.startsWith("data:")) continue;
     const value = line.slice(5);
     data.push(value.startsWith(" ") ? value.slice(1) : value);
@@ -88,7 +198,7 @@ export function replaceSseDataPayload(block: string, payload: string): string {
   const rewritten: string[] = [];
   let replaced = false;
   for (const line of lines) {
-    if (!line.startsWith("data:")) {
+    if (line !== "data" && !line.startsWith("data:")) {
       rewritten.push(line);
       continue;
     }
@@ -137,8 +247,7 @@ export function relaySseWithBlockRewrite(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  let buffer = "";
-  let bufferBytes = 0;
+  const buffer = createSseBlockBuffer(translatorBudget);
   // Relays have several independent teardown paths; disposal is exactly once.
   let disposed = false;
   let cancelled = false;
@@ -148,40 +257,16 @@ export function relaySseWithBlockRewrite(
     try { rewrite.dispose?.(); } catch { /* teardown must not throw */ }
   };
 
-  const appendBuffer = (fragment: string): void => {
-    if (!fragment) return;
-    const nextBytes = bufferBytes + encoder.encode(fragment).byteLength;
-    const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "live_transient" });
-    try {
-      buffer += fragment;
-      reservation.commitRetained();
-      translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
-      bufferBytes = nextBytes;
-    } catch (error) {
-      reservation.release();
-      throw error;
-    }
-  };
-
-  const replaceBuffer = (next: string): void => {
-    const nextBytes = encoder.encode(next).byteLength;
-    const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "live_transient" });
-    reservation.commitRetained();
-    buffer = next;
-    translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
-    bufferBytes = nextBytes;
-  };
-
   const enqueueText = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
   ): void => {
-    const bytes = encoder.encode(text).byteLength;
+    const bytes = Buffer.byteLength(text, "utf8");
     const reservation = translatorBudget.reserveTransient(bytes, { kind: "live_transient" });
     try {
       const encoded = encoder.encode(text);
-      reservation.commitRetained();
       controller.enqueue(encoded);
+      reservation.commitRetained();
       translatorBudget.releaseRetained(bytes, { kind: "live_transient" });
     } catch (error) {
       reservation.release();
@@ -189,35 +274,33 @@ export function relaySseWithBlockRewrite(
     }
   };
 
-  const releaseBuffer = (): void => {
-    translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
-    buffer = "";
-    bufferBytes = 0;
-  };
-
   const emitProcessedBlocks = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     flushFinal = false,
   ): number => {
     let emitted = 0;
-    let next: { block: string; delimiter: string; rest: string } | null;
-    while ((next = nextSseBlock(buffer))) {
-      replaceBuffer(next.rest);
-      for (const outBlock of rewrite(next.block)) {
+    let next: { block: string; delimiter: string } | null;
+    while (!cancelled && (next = buffer.next())) {
+      const outBlocks = rewrite(next.block);
+      if (cancelled) return emitted;
+      for (const outBlock of outBlocks) {
         enqueueText(controller, outBlock + next.delimiter);
         emitted += 1;
       }
     }
-    if (flushFinal && buffer.length > 0) {
-      const tailBlocks = rewrite(buffer);
+    buffer.compact();
+    const tail = flushFinal ? buffer.tail() : "";
+    if (tail.length > 0) {
+      const tailBlocks = rewrite(tail);
+      if (cancelled) return emitted;
       // A trailing fragment has no delimiter of its own; multiple emitted
       // blocks must still be framed as separate events (#893 review).
-      const tailDelimiter = buffer.includes("\r\n") ? "\r\n\r\n" : "\n\n";
+      const tailDelimiter = tail.includes("\r\n") ? "\r\n\r\n" : "\n\n";
       for (let i = 0; i < tailBlocks.length; i++) {
         enqueueText(controller, tailBlocks[i]! + (i < tailBlocks.length - 1 ? tailDelimiter : ""));
         emitted += 1;
       }
-      releaseBuffer();
+      buffer.clear();
     }
     return emitted;
   };
@@ -236,18 +319,20 @@ export function relaySseWithBlockRewrite(
           // after its disposal (#893 review).
           if (cancelled) return;
           if (done) {
-            appendBuffer(decoder.decode());
+            buffer.append(decoder.decode());
             emitProcessedBlocks(controller, true);
-            releaseBuffer();
+            if (cancelled) return;
+            buffer.clear();
             disposeRewrite();
             controller.close();
             return;
           }
-          appendBuffer(decoder.decode(value, { stream: true }));
-          if (emitProcessedBlocks(controller) > 0) return;
+          buffer.append(decoder.decode(value, { stream: true }));
+          const emitted = emitProcessedBlocks(controller);
+          if (cancelled || emitted > 0) return;
         }
       } catch (error) {
-        releaseBuffer();
+        buffer.clear();
         disposeRewrite();
         // Cancelling one tee branch waits for its sibling. Surface the failure
         // now so downstream can abort upstream and release the inspection branch.
@@ -257,7 +342,7 @@ export function relaySseWithBlockRewrite(
     },
     cancel(reason) {
       cancelled = true;
-      releaseBuffer();
+      buffer.clear();
       disposeRewrite();
       reader.cancel(reason).catch(() => {});
     },

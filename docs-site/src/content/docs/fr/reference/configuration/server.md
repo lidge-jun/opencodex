@@ -14,7 +14,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `hostname?` | `string` | `"127.0.0.1"` | Adresse de liaison. Les liaisons hors bouclage nécessitent `OPENCODEX_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | URL du proxy HTTP(S) sortant ou `${ENV_VAR}`. Appliquée à `HTTP_PROXY` / `HTTPS_PROXY` uniquement lorsque ces variables ne sont pas définies ; le bouclage reste dans `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Active une nouvelle tentative Responses identique lorsqu’une réponse ne contient ni texte ni appel d’outil. Cette tentative peut être facturée. `OCX_EMPTY_COMPLETION_RETRY=0` la désactive sans modifier la configuration ; les combinaisons et les tours de compactage routés restent exclus. |
-| `stallTimeoutSec?` | `number` | `300` | Nombre de secondes sans données en amont avant `response.incomplete`. Minimum : 1. |
+| `stallTimeoutSec?` | `number` | `300` | Secondes sans progression utile en amont, pour Responses et le Chat natif. Minimum : 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Délai maximal par tentative pour DNS/TCP/TLS et les en-têtes finaux ; il prend fin avant la génération du corps. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Délai de vidange gracieux avant l’annulation des tours actifs. |
 | `websockets?` | `boolean` | `false` | Annonce et autorise la route WebSocket Responses destinée aux clients. La valeur false maintient les clients sur HTTP/SSE ; elle ne désactive pas une optimisation WebSocket canonique admissible vers ChatGPT en amont. |
@@ -33,6 +33,10 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 Si une ancienne version de développement a modifié les métadonnées de l'historique de reprise avant que la prise en charge de la sauvegarde n'existe, exécutez
 `ocx recover-history --legacy-openai --yes` pour forcer la récupération du fournisseur natif.
 La commande réétiquette chaque ligne `opencodex` contenant un message utilisateur, y compris l'historique légitime d'un fournisseur dédié ; consultez l'avertissement sur la portée complète dans la référence du cycle de vie avant de l'exécuter.
+
+### Délais et fin de réponse du Chat natif
+
+Le Chat natif utilise aussi `stallTimeoutSec` pendant l’attente de la sortie amont. Le texte non vide, le raisonnement, le refus, les mises à jour d’outils et les événements de fin renouvellent ce délai ; les commentaires de maintien de connexion, le rôle seul et les statistiques seules ne le renouvellent pas. L’attente d’un client lent suspend le décompte. Un blocage produit `upstream_stall_timeout` : un événement d’erreur en streaming, ou HTTP 502 sans streaming. Une annulation avant le résultat terminal renvoie une erreur d’annulation plutôt qu’une réponse partielle réussie. Le Chat sans streaming accepte les délimiteurs SSE LF et CRLF et les champs data multilignes.
 
 ## Accès à distance
 

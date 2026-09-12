@@ -13,7 +13,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 루프백이 아닌 바인드에는 데이터 admission 토큰이 필요하며, `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 설치된 owner-only `service-api-token` 순서로 결정됩니다. 손으로 내보낼 값은 없습니다. [Remote access](#remote-access)를 보세요. |
 | `proxy?` | `string` | — | 송신용 HTTP(S) 프록시 URL 또는 `${ENV_VAR}`입니다. 해당 변수가 비어 있을 때만 `HTTP_PROXY` / `HTTPS_PROXY`에 적용되며, 루프백은 `NO_PROXY`에 그대로 남습니다. |
 | `emptyCompletionRetry?` | `boolean` | `false` | 텍스트나 도구 호출이 없는 Responses 턴을, 터미널 이벤트 전에 스트림이 종료된 경우를 포함해 동일한 요청으로 한 번 재시도하도록 선택합니다. 재시도에는 비용이 발생할 수 있습니다. `OCX_EMPTY_COMPLETION_RETRY=0`은 설정을 바꾸지 않고 비활성화하며, combo 및 routed-compaction turn은 제외됩니다. |
-| `stallTimeoutSec?` | `number` | `300` | 업스트림 데이터가 없을 때 `response.incomplete`가 되기까지의 초 수입니다. 최소 1입니다. |
+| `stallTimeoutSec?` | `number` | `300` | Responses 및 네이티브 Chat에서 유효한 업스트림 진행이 없는 시간(초). 최소 1초. |
 | `connectTimeoutMs?` | `number` | `200000` | 시도별 DNS/TCP/TLS/최종 헤더 기한입니다. 본문 생성 전에 끝납니다. |
 | `shutdownTimeoutMs?` | `number` | `5000` | 진행 중인 turn을 중단하기 전에 허용하는 정상 종료 드레인 기한입니다. |
 | `websockets?` | `boolean` | `false` | 클라이언트용 Responses WebSocket 경로를 광고하고 허용합니다. `false`이면 클라이언트는 HTTP/SSE를 사용하며, 적격 canonical ChatGPT 업스트림 WS 최적화는 비활성화하지 않습니다. |
@@ -31,6 +31,10 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 
 오래된 개발 빌드가 백업 지원이 생기기 전에 resume-history 메타데이터를 바꿨다면, native-provider 복구를 강제로 수행하려면 `ocx recover-history --legacy-openai --yes`를 실행합니다.
 이 명령은 정상적인 dedicated-provider history를 포함해 사용자 메시지가 있는 모든 `opencodex` row를 재태깅합니다. 실행하기 전에 lifecycle reference의 전체 범위 경고를 확인하세요.
+
+### 네이티브 Chat 시간 초과와 완료
+
+네이티브 Chat도 업스트림 출력을 기다릴 때 `stallTimeoutSec`를 사용합니다. 비어 있지 않은 텍스트, 추론, 거부 내용, 도구 업데이트 및 완료 이벤트는 대기 시간을 갱신하지만 연결 유지 주석, 역할만 있는 이벤트, 사용량만 있는 이벤트는 갱신하지 않습니다. 느린 클라이언트의 읽기를 기다리는 동안에는 시간이 차감되지 않습니다. 시간 초과 시 `upstream_stall_timeout`이 발생하며 스트리밍 요청은 오류 이벤트를, 비스트리밍 요청은 HTTP 502를 받습니다. 종료 결과 전에 취소하면 부분 답변을 성공으로 반환하지 않고 취소 오류를 반환합니다. 비스트리밍 Chat은 LF, CRLF 및 여러 줄 data SSE 형식을 지원합니다.
 
 ## Remote access
 

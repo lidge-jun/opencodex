@@ -1,5 +1,7 @@
 # Overview
 
+Shared parsing and streaming follow the [request-copy](transports/responses.md#request-copy-accounting) and [stream-buffer accounting](transports/responses.md#stream-buffer-accounting) contracts.
+
 ## Product boundary
 
 opencodex is a local proxy for Codex. It does not patch Codex binaries. It changes local Codex

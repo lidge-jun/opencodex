@@ -1,5 +1,7 @@
 # Model Catalog
 
+Shared parsing and streaming follow the [request-copy](transports/responses.md#request-copy-accounting) and [stream-buffer accounting](transports/responses.md#stream-buffer-accounting) contracts.
+
 ## Shared catalog
 
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:

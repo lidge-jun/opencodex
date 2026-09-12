@@ -1,5 +1,7 @@
 # Adapter Registry Authority
 
+Shared parsing and streaming follow the [request-copy](../transports/responses.md#request-copy-accounting) and [stream-buffer accounting](../transports/responses.md#stream-buffer-accounting) contracts.
+
 ## Decision
 
 Runtime adapter construction has one authority: `src/adapters/registry.ts`.

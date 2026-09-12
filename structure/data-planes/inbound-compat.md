@@ -1,5 +1,7 @@
 # Inbound Compatibility Surfaces
 
+Shared parsing and streaming follow the [request-copy](../transports/responses.md#request-copy-accounting) and [stream-buffer accounting](../transports/responses.md#stream-buffer-accounting) contracts.
+
 ## Chat Completions inbound native path
 
 `POST /v1/chat/completions` sends eligible `openai-chat` routes directly to the provider's Chat
@@ -34,6 +36,19 @@ request-signal cancellation contracts as routed Responses transport. Because
 `src/server/chat-native.ts` repeats the pre-dispatch `selectProactiveApiKeyTransport`
 call before it binds the adapter; the pick remains inert unless a strategy is configured
 and the committed key is cooling. See [`responses.md`](../transports/responses.md).
+
+### Native Chat completion lifecycle
+
+`src/server/chat-native-sse.ts` applies the resolved `stallTimeoutSec` while waiting for upstream
+progress. Nonempty text, reasoning, refusal, tool identity/arguments, and finish frames renew the
+allowance; comments, role-only frames, empty deltas, and usage alone do not. Downstream backpressure
+pauses this wait budget. A stall emits a Chat error with `upstream_stall_timeout` and logs 502;
+the non-streaming endpoint returns HTTP 502 rather than a successful partial result.
+
+`src/chat/outbound.ts` collects LF/CRLF, multiline data, and split UTF-8 through the shared SSE
+block buffer and tracks appended output bytes incrementally. A caller cancellation before a native
+terminal returns 499 / `client_cancelled`; an already accepted terminal keeps its result. Reader,
+timer, turn, and translator ownership are released through the existing lifecycle.
 
 ## Chat conversation identity forwarding
 

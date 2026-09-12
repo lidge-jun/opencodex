@@ -1,5 +1,7 @@
 # Chat Provider Compatibility
 
+Shared parsing and streaming follow the [request-copy](../transports/responses.md#request-copy-accounting) and [stream-buffer accounting](../transports/responses.md#stream-buffer-accounting) contracts.
+
 ## Reasoning and tool-result compatibility
 
 Kiro groups only consecutive original-message tool results whose raw call ID exactly matches

@@ -1,5 +1,7 @@
 # Subagents And Multi-Agent Surface
 
+Shared parsing and streaming follow the [request-copy](transports/responses.md#request-copy-accounting) and [stream-buffer accounting](transports/responses.md#stream-buffer-accounting) contracts.
+
 ## Multi-agent surface mode (3-state)
 
 `OcxConfig.multiAgentMode` controls the `multi_agent_version` field stamped on catalog entries:
