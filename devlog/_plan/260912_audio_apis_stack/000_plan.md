@@ -4,6 +4,8 @@ Expose file transcription, streaming dictation and GPT-Live to external clients 
 
 ## Loop contract
 
+Owner steering during wp1 C: no local Bun suites, product tests, typecheck, build or dependency installation. Push with --no-verify and use exact-head remote CI for remaining executable verification. This supersedes every local command example in the layer plans. Already completed checks are historical evidence only; interrupted/crashed checks are not passing evidence. All active task-owned local suites were stopped. Functional layer closure uses the completed source review and pre-restriction focused evidence; PR readiness and final completion retain the remote CI gate under wp3 publication.
+
 - Archetype: satisfy-spec, C4 API/auth and C3 dashboard integration.
 - Trigger: owner requested both audio capabilities, inherited subagent verification and a published dependent PR stack.
 - Goal: three independently reviewable ordinary PRs with protocol tests, documentation and usable client controls.
