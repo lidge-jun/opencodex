@@ -1,5 +1,4 @@
-import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1758,6 +1757,186 @@ test("chat-native request abort releases its active-turn lease and logs 499", as
   }
 });
 
+test("chat-native cancelled non-streaming SSE returns 499 instead of partial success", async () => {
+  const { handleChatCompletions } = await import("../../src/server/chat-completions");
+  const clientAbort = new AbortController();
+  let readStarted!: () => void;
+  const started = new Promise<void>(resolve => { readStarted = resolve; });
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+      readStarted();
+    },
+  }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  const result = handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST", signal: clientAbort.signal,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+  }), mockConfig("https://provider.example/v1"), {} as Parameters<typeof handleChatCompletions>[2]);
+  await started;
+  await Bun.sleep(10);
+  clientAbort.abort("client done");
+  const response = await result;
+  expect(response.status).toBe(499);
+  expect(await response.json()).toMatchObject({ error: { type: "client_cancelled" } });
+});
+
+test("chat-native SSE enforces configured stall timeout despite non-progress frames", async () => {
+  const { handleChatCompletions } = await import("../../src/server/chat-completions");
+  const { clearRequestLogsForTests, getRequestLogEntries } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  const clientAbort = new AbortController();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let cancels = 0;
+  const before = getActiveTurnCount();
+  const releaseMisses = activeRegistryMetrics().activeTurns.releaseMisses;
+  const lease = tryAdmitTurn();
+  if (!lease) throw new Error("failed to admit native Chat stall test turn");
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      const wire = new TextEncoder().encode(': heartbeat\n\ndata\n\ndata:\n\ndata: {"choices":[{"delta":{"role":"assistant","content":"","tool_calls":[{"index":0}]}}],"usage":{"prompt_tokens":1,"completion_tokens":0}}\n\n');
+      controller.enqueue(wire);
+      timer = setInterval(() => controller.enqueue(wire), 100);
+    },
+    cancel() { cancels += 1; clearInterval(timer); },
+  }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  try {
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", signal: clientAbort.signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    }), { ...mockConfig("https://provider.example/v1"), stallTimeoutSec: 1 }, {} as Parameters<typeof handleChatCompletions>[2],
+    { requestId: "chat-stall-clock", start: Date.now(), turnAdmissionLease: lease });
+    const outcome = await Promise.race([
+      response.text(), Bun.sleep(1_600).then(() => "STILL_PENDING"),
+    ]);
+    expect(outcome).toContain('"code":"upstream_stall_timeout"');
+    expect(outcome).not.toContain("[DONE]");
+    clientAbort.abort("late cancellation");
+    expect(cancels).toBe(1);
+    expect(getActiveTurnCount()).toBe(before);
+    expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(releaseMisses);
+    expect(getRequestLogEntries().filter(entry => entry.requestId === "chat-stall-clock")).toHaveLength(1);
+    expect(getRequestLogEntries().at(-1)?.status).toBe(502);
+  } finally { clientAbort.abort(); clearInterval(timer); lease.release(); }
+});
+
+test("chat-native meaningful reasoning keeps a long stream alive and pauses the stall clock under backpressure", async () => {
+  const { nativeChatSse } = await import("../../src/server/chat-native-sse");
+  const budget = createTestTranslatorBudget();
+  const abort = new AbortController();
+  const encoder = new TextEncoder();
+  let source!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; } });
+  const stream = nativeChatSse(body, {
+    requestedModel: "mock/test-model", translatorBudget: budget, signal: abort.signal,
+    stallTimeoutSec: 1, onUsage() {},
+  });
+  const reasoning = 'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}\n\n';
+  source.enqueue(encoder.encode(reasoning));
+  // One queued output applies backpressure. That interval is not upstream silence.
+  await Bun.sleep(1_100);
+  const output = new Response(stream).text();
+  try {
+    for (let index = 0; index < 3; index++) {
+      await Bun.sleep(450);
+      const delta = index === 0 ? { reasoning: "thinking" }
+        : index === 1 ? { reasoning_details: [{ text: "thinking" }] }
+          : { reasoning_content: "thinking" };
+      source.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`));
+    }
+    source.enqueue(encoder.encode('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
+    const text = await output;
+    expect(text.match(/thinking/g)).toHaveLength(4);
+    expect(text).toContain("[DONE]");
+    expect(text).not.toContain("upstream_stall_timeout");
+  } finally { abort.abort(); budget.dispose(); }
+});
+
+test("chat-native valid terminal retains precedence over a late non-streaming abort", async () => {
+  const { handleChatCompletions } = await import("../../src/server/chat-completions");
+  const clientAbort = new AbortController();
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"complete"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
+    },
+    cancel() { clientAbort.abort("late cancellation after terminal"); },
+  }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST", signal: clientAbort.signal, headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+  }), mockConfig("https://provider.example/v1"), {} as Parameters<typeof handleChatCompletions>[2]);
+  expect(clientAbort.signal.aborted).toBe(true);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ choices: [{ message: { content: "complete" } }] });
+});
+
+test("chat-native non-streaming SSE reports a typed stall failure instead of partial success", async () => {
+  const { handleChatCompletions } = await import("../../src/server/chat-completions");
+  let cancels = 0;
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+    },
+    cancel() { cancels += 1; },
+  }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+  }), { ...mockConfig("https://provider.example/v1"), stallTimeoutSec: 1 }, {} as Parameters<typeof handleChatCompletions>[2]);
+  expect(response.status).toBe(502);
+  expect(await response.json()).toMatchObject({ error: { type: "upstream_error", code: "upstream_stall_timeout" } });
+  expect(cancels).toBe(1);
+});
+
+test("chat-native SSE only encodes outbound frames and releases buffered tail on cancellation", async () => {
+  const { nativeChatSse } = await import("../../src/server/chat-native-sse");
+  const frames = Array.from({ length: 64 }, () => 'data: {"choices":[{"delta":{"content":"中文😀"}}]}\n\n');
+  const wire = new TextEncoder().encode(frames.join(""));
+  const budget = createTestTranslatorBudget();
+  const abort = new AbortController();
+  const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(wire); } });
+  const encode = spyOn(TextEncoder.prototype, "encode");
+  try {
+    const stream = nativeChatSse(body, {
+      requestedModel: "mock/test-model", translatorBudget: budget, signal: abort.signal, onUsage() {},
+    });
+    const reader = stream.getReader();
+    for (let index = 0; index < 8; index++) expect((await reader.read()).done).toBe(false);
+    await reader.cancel("done inspecting");
+    // No append/suffix-size encoding: every actual encoding is a normalized output frame.
+    expect(encode.mock.calls.length).toBeGreaterThanOrEqual(8);
+    for (const [text] of encode.mock.calls) expect(text).toContain('"object":"chat.completion.chunk"');
+    expect(budget.snapshot().currentBytes).toBe(0);
+  } finally { encode.mockRestore(); abort.abort(); budget.dispose(); }
+});
+
+test("chat-native non-streaming SSE collects CRLF multiline and split UTF-8 frames", async () => {
+  const { handleChatCompletions } = await import("../../src/server/chat-completions");
+  const frames = [
+    'data\r\n\r\ndata:\r\n\r\n',
+    'data: {"choices":\r\ndata\r\ndata: [{"delta":{"content":"中文😀"}}]}\r\n\r\n',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3}}\r\n\r\n',
+    'data: [DONE]\r\n\r\n',
+  ];
+  const wire = new TextEncoder().encode(frames.join(""));
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < wire.byteLength; offset += 7) controller.enqueue(wire.slice(offset, offset + 7));
+      controller.close();
+    },
+  }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+  }), mockConfig("https://provider.example/v1"), {} as Parameters<typeof handleChatCompletions>[2]);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    choices: [{ message: { content: "中文😀" }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 7, completion_tokens: 3 },
+  });
+});
+
 test("chat-native direct streaming without an admission lease does not record a release miss", async () => {
   const { handleChatCompletions } = await import("../../src/server/chat-completions");
   const releaseMisses = activeRegistryMetrics().activeTurns.releaseMisses;
@@ -2334,6 +2513,55 @@ test("collectChatCompletion releases every call scope after the final owner is c
   expect(budget.snapshot().currentBytes).toBe(
     Buffer.byteLength(JSON.stringify(copyA)) + Buffer.byteLength(JSON.stringify(copyB)),
   );
+});
+
+test("collectChatCompletion accounts split surrogate content incrementally and releases it on failure", async () => {
+  const { collectChatCompletion } = await import("../../src/chat/outbound");
+  for (const fail of [false, true]) {
+    const budget = createTestTranslatorBudget();
+    const frames = [
+      { choices: [{ delta: { content: "\ud83d", reasoning_content: "\ud83d", refusal: "\ud83d" } }] },
+      { choices: [{ delta: { content: "\ude00", reasoning_content: "\ude00", refusal: "\ude00" } }] },
+      ...(fail ? [{ error: { message: "upstream request failed", type: "upstream_error", code: "upstream_failure" } }]
+        : [{ choices: [{ delta: {}, finish_reason: "stop" }] }]),
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const frame of frames) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
+        controller.close();
+      },
+    });
+    try {
+      if (fail) {
+        await expect(collectChatCompletion(stream, "mock/test-model", budget)).rejects.toMatchObject({ code: "upstream_failure" });
+        expect(budget.snapshot().currentBytes).toBe(0);
+      } else {
+        expect(await collectChatCompletion(stream, "mock/test-model", budget)).toMatchObject({
+          choices: [{ message: { content: "😀", reasoning_content: "😀", refusal: "😀" } }],
+        });
+        expect(budget.snapshot().currentBytes).toBe(12);
+      }
+    } finally { budget.dispose(); }
+  }
+});
+
+test("collectChatCompletion preserves admission for a 20 MiB frame and discards an incomplete EOF frame", async () => {
+  const { collectChatCompletion } = await import("../../src/chat/outbound");
+  const text = "x".repeat(20 * 1024 * 1024);
+  const completeFrame = `data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: "stop" }] })}\n\n`;
+  const incompleteFrame = 'data: {"choices":[{"delta":{"content":"discard me"}}]}';
+  const budget = createTestTranslatorBudget();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(completeFrame));
+      controller.enqueue(new TextEncoder().encode(incompleteFrame));
+      controller.close();
+    },
+  });
+  try {
+    expect(await collectChatCompletion(stream, "mock/test-model", budget)).toMatchObject({ choices: [{ message: { content: text } }] });
+    expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(text));
+  } finally { budget.dispose(); }
 });
 
 test("collectChatCompletion final-copy overflow cleans up scopes and charges", async () => {

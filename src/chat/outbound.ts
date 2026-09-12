@@ -7,7 +7,7 @@
  */
 type Rec = Record<string, unknown>;
 
-import { decodeServerSentEvents, sseFieldValue } from "../lib/sse-decoder";
+import { decodeServerSentEvents } from "../lib/sse-decoder";
 import {
   isTranslatorBudgetExceededError,
   type TranslatorBudget,
@@ -21,6 +21,7 @@ import {
   isCyberPolicyMessage,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { createSseBlockBuffer, sseDataPayload } from "../server/sse-payload-rewrite";
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -880,129 +881,123 @@ export async function collectChatCompletion(
   model: string,
   translatorBudget: TranslatorBudget,
 ): Promise<Rec> {
+  const reader = stream.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const buffer = createSseBlockBuffer(translatorBudget);
   let content = "";
   let refusal: string | null = null;
   let reasoning = "";
+  const retainedBytes = { content: 0, refusal: 0, reasoning: 0 };
   const toolCalls = new Map<number, { id: string; name: string; arguments: string; argumentBytes: number }>();
   // Per-call budget scopes (2 MiB/call enforced by the budget): the map key is the
   // wire index, which is stable across deltas and present before the call id.
   const callScope = (index: number) => `chat_collect_${index}`;
   let finishReason = "stop";
   let usage: unknown;
-  const replaceRetained = (previous: string, next: string, kind: "live_transient" | "retained_collectors") => {
-    const reservation = translatorBudget.reserveTransient(Buffer.byteLength(next), { kind });
-    reservation.commitRetained();
-    translatorBudget.releaseRetained(Buffer.byteLength(previous), { kind });
-    return next;
+  const appendRetained = (key: keyof typeof retainedBytes, previous: string, fragment: string): string => {
+    const previousBytes = retainedBytes[key];
+    const nextBytes = appendedUtf8Bytes(previous, previousBytes, fragment);
+    const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+    try {
+      const next = previous + fragment;
+      reservation.commitRetained();
+      translatorBudget.releaseRetained(previousBytes, { kind: "retained_collectors" });
+      retainedBytes[key] = nextBytes;
+      return next;
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
   };
-  const reader = stream.getReader();
+  const releaseCollectors = () => {
+    translatorBudget.releaseRetained(retainedBytes.content + retainedBytes.refusal + retainedBytes.reasoning,
+      { kind: "retained_collectors" });
+  };
   try {
+    // Share native relay framing, while retaining the collector's existing admission
+    // order: release each consumed input frame before accumulating its output fields.
+    // CRLF and multiline data obey the same contract as the streaming response.
     for (;;) {
-      let done = false;
-      let value: Uint8Array | undefined;
-      try {
-        ({ done, value } = await reader.read());
-      } catch (err) {
-        if (isChatCompletionsStreamError(err)) throw err;
-        if (isTranslatorBudgetExceededError(err)) {
-          // Provider-controlled overflow is an upstream failure, not a client
-          // request error: match the adapter/bridge contract (502 upstream_error).
-          throw new ChatCompletionsStreamError(err.message, {
-            status: 502,
-            type: "upstream_error",
-            code: err.code,
-          });
-        }
-        throw new ChatCompletionsStreamError(err instanceof Error ? err.message : String(err));
-      }
+      const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
-      buffer = replaceRetained(buffer, buffer + decoder.decode(value, { stream: true }), "live_transient");
-      let sep: number;
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
-        const rawFrame = buffer.slice(0, sep);
-        buffer = replaceRetained(buffer, buffer.slice(sep + 2), "live_transient");
-        for (const line of rawFrame.split("\n")) {
-          const rawData = sseFieldValue(line, "data");
-          if (rawData === null) continue;
-          const data = rawData.trim();
-          if (!data || data === "[DONE]") continue;
-          let parsed: unknown;
-          try { parsed = JSON.parse(data); } catch { continue; }
-          if (!isRec(parsed)) continue;
-          if (isRec(parsed.error)) {
-            const message = typeof parsed.error.message === "string"
-              ? parsed.error.message
-              : "upstream request failed";
-            const type = typeof parsed.error.type === "string" ? parsed.error.type : "server_error";
-            const code = typeof parsed.error.code === "string" ? parsed.error.code : null;
-            const status = code === "translation_buffer_limit"
-              ? 502
-              : code === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(message)
-                ? 400
-                : streamErrorStatus(message);
-            const streamError = new ChatCompletionsStreamError(message, {
-              status,
-              type: code === "translation_buffer_limit" ? "upstream_error" : type,
-              code,
-            });
-            throw streamError;
-          }
-          if (parsed.usage) usage = parsed.usage;
-          const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
-          const choice = isRec(choices[0]) ? choices[0] : null;
-          if (!choice) continue;
-          if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
-          const delta = isRec(choice.delta) ? choice.delta : null;
-          if (!delta) continue;
-          if (typeof delta.content === "string") content = replaceRetained(content, content + delta.content, "retained_collectors");
-          if (delta.refusal !== undefined && delta.refusal !== null) {
-            if (typeof delta.refusal !== "string") throw refusalTranslationError();
-            refusal = replaceRetained(refusal ?? "", (refusal ?? "") + delta.refusal, "retained_collectors");
-          }
-          if (typeof delta.reasoning_content === "string") reasoning = replaceRetained(reasoning, reasoning + delta.reasoning_content, "retained_collectors");
-          if (Array.isArray(delta.tool_calls)) {
-            for (const tc of delta.tool_calls) {
-              if (!isRec(tc)) continue;
-              const index = typeof tc.index === "number" ? tc.index : 0;
-              let current = toolCalls.get(index);
-              if (!current) {
-                current = { id: "", name: "", arguments: "", argumentBytes: 0 };
-                toolCalls.set(index, current);
-                translatorBudget.openCall(callScope(index));
-              }
-              if (typeof tc.id === "string") current.id = tc.id;
-              const fn = isRec(tc.function) ? tc.function : {};
-              // Done-frame final arguments are authoritative last-write-wins snapshots.
-              if (typeof fn.name === "string" && fn.name.length > 0) current.name = fn.name;
-              if (typeof fn.arguments === "string") {
-                const replace = fn.arguments.startsWith("{") || fn.arguments.startsWith("[") || current.arguments.length === 0;
-                const nextBytes = replace
-                  ? Buffer.byteLength(fn.arguments)
-                  : appendedUtf8Bytes(current.arguments, current.argumentBytes, fn.arguments);
-                const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "tool_args", callId: callScope(index) });
-                try {
-                  current.arguments = replace ? fn.arguments : current.arguments + fn.arguments;
-                  reservation.commitRetained();
-                  translatorBudget.releaseRetained(current.argumentBytes, { kind: "tool_args", callId: callScope(index) });
-                  current.argumentBytes = nextBytes;
-                } catch (error) {
-                  reservation.release();
-                  throw error;
-                }
+      buffer.append(decoder.decode(value, { stream: true }));
+      for (let frame = buffer.next(); frame; frame = buffer.next()) {
+        const data = sseDataPayload(frame.block)?.trim();
+        if (!data || data === "[DONE]") continue;
+        let parsed: unknown;
+        try { parsed = JSON.parse(data); } catch { continue; }
+        if (!isRec(parsed)) continue;
+        if (isRec(parsed.error)) {
+          const message = typeof parsed.error.message === "string"
+            ? parsed.error.message
+            : "upstream request failed";
+          const type = typeof parsed.error.type === "string" ? parsed.error.type : "server_error";
+          const code = typeof parsed.error.code === "string" ? parsed.error.code : null;
+          const status = code === "translation_buffer_limit"
+            ? 502
+            : code === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(message)
+              ? 400
+              : streamErrorStatus(message);
+          const streamError = new ChatCompletionsStreamError(message, {
+            status,
+            type: code === "translation_buffer_limit" ? "upstream_error" : type,
+            code,
+          });
+          throw streamError;
+        }
+        if (parsed.usage) usage = parsed.usage;
+        const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
+        const choice = isRec(choices[0]) ? choices[0] : null;
+        if (!choice) continue;
+        if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
+        const delta = isRec(choice.delta) ? choice.delta : null;
+        if (!delta) continue;
+        if (typeof delta.content === "string") content = appendRetained("content", content, delta.content);
+        if (delta.refusal !== undefined && delta.refusal !== null) {
+          if (typeof delta.refusal !== "string") throw refusalTranslationError();
+          refusal = appendRetained("refusal", refusal ?? "", delta.refusal);
+        }
+        if (typeof delta.reasoning_content === "string") reasoning = appendRetained("reasoning", reasoning, delta.reasoning_content);
+        if (Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls) {
+            if (!isRec(tc)) continue;
+            const index = typeof tc.index === "number" ? tc.index : 0;
+            let current = toolCalls.get(index);
+            if (!current) {
+              current = { id: "", name: "", arguments: "", argumentBytes: 0 };
+              toolCalls.set(index, current);
+              translatorBudget.openCall(callScope(index));
+            }
+            if (typeof tc.id === "string") current.id = tc.id;
+            const fn = isRec(tc.function) ? tc.function : {};
+            // Done-frame final arguments are authoritative last-write-wins snapshots.
+            if (typeof fn.name === "string" && fn.name.length > 0) current.name = fn.name;
+            if (typeof fn.arguments === "string") {
+              const replace = fn.arguments.startsWith("{") || fn.arguments.startsWith("[") || current.arguments.length === 0;
+              const nextBytes = replace
+                ? Buffer.byteLength(fn.arguments)
+                : appendedUtf8Bytes(current.arguments, current.argumentBytes, fn.arguments);
+              const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "tool_args", callId: callScope(index) });
+              try {
+                current.arguments = replace ? fn.arguments : current.arguments + fn.arguments;
+                reservation.commitRetained();
+                translatorBudget.releaseRetained(current.argumentBytes, { kind: "tool_args", callId: callScope(index) });
+                current.argumentBytes = nextBytes;
+              } catch (error) {
+                reservation.release();
+                throw error;
               }
             }
           }
         }
       }
+      buffer.compact();
     }
   } catch (error) {
-    // Processing may fail between reads; cancel while we still own the lock so the
-    // upstream translator releases its maps and stops any pending provider read.
+    // Cancel while we still own the reader so a failed collection releases its upstream.
     try { await reader.cancel(error); } catch { /* preserve the original failure */ }
-    translatorBudget.releaseRetained(Buffer.byteLength(refusal ?? ""), { kind: "retained_collectors" });
+    releaseCollectors();
     // Never leak an open call scope on the error path; the turn budget's
     // dispose is a backstop, not the owner of this transfer.
     for (const index of toolCalls.keys()) translatorBudget.closeCall(callScope(index));
@@ -1015,8 +1010,12 @@ export async function collectChatCompletion(
         code: error.code,
       });
     }
-    throw error;
+    if (isChatCompletionsStreamError(error)) throw error;
+    throw new ChatCompletionsStreamError(error instanceof Error ? error.message : String(error));
   } finally {
+    // Preserve the previous EOF contract: only delimiter-terminated events are collected.
+    // A partial final frame is discarded, with its retained input ownership released.
+    buffer.clear();
     reader.releaseLock();
   }
 
@@ -1048,6 +1047,7 @@ export async function collectChatCompletion(
           return copy;
         });
     } catch (error) {
+      releaseCollectors();
       for (const copyBytes of chargedCopies) {
         translatorBudget.releaseRetained(copyBytes, { kind: "retained_collectors" });
       }

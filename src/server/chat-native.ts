@@ -262,7 +262,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     retainedRequestBytes = 0;
   };
   const retainRequest = (request: AdapterRequest) => {
-    const bytes = new TextEncoder().encode(request.body).byteLength;
+    const bytes = Buffer.byteLength(request.body);
     translatorBudget.chargeRetained(bytes, { kind: "request_copies" });
     retainedRequestBytes = bytes;
   };
@@ -501,24 +501,29 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
     if (requestedStream) transferTurnToStream();
+    let terminalStatus: number | undefined;
     const stream = nativeChatSse(response.body, {
       requestedModel,
       translatorBudget,
       signal: upstream.signal,
+      stallTimeoutSec: config.stallTimeoutSec,
       onFirstOutput: logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined,
       onUsage: usage => {
         logCtx.usage = usage;
         attempt.usage = usage;
       },
+      onTerminal: (status: number, message?: string) => {
+        terminalStatus = status;
+        if (!requestedStream) return;
+        try {
+          cleanupAbort();
+          finishLog(status, message, "terminal");
+          if (status >= 400) upstream.abort();
+        } finally {
+          releaseStreamTurn();
+        }
+      },
       ...(requestedStream ? {
-        onTerminal: (status: number, message?: string) => {
-          try {
-            cleanupAbort();
-            finishLog(status, message, "terminal");
-          } finally {
-            releaseStreamTurn();
-          }
-        },
         onCancel: () => {
           try {
             cleanupAbort();
@@ -543,11 +548,20 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     try {
       const completion = await collectChatCompletion(stream, requestedModel, translatorBudget);
       cleanupAbort();
+      // A cancelled native relay closes its downstream body. EOF alone must not
+      // promote the buffered prefix to a successful Chat completion. A terminal
+      // already accepted by the relay retains precedence over a later abort.
+      if (req.signal.aborted && terminalStatus === undefined) {
+        return fail(499, "Client cancelled request", "client_cancelled");
+      }
       finishLog(200);
       return Response.json(completion);
     } catch (error) {
       cleanupAbort();
       upstream.abort();
+      if (req.signal.aborted && terminalStatus === undefined) {
+        return fail(499, "Client cancelled request", "client_cancelled");
+      }
       if (isChatCompletionsStreamError(error)) {
         return fail(error.status, error.message, error.type, error.code);
       }
