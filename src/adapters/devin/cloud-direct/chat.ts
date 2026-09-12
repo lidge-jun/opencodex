@@ -669,7 +669,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
  * any non-zero to 'tool_calls' for now (and let the caller fall back to
  * 'stop' if no tool_call deltas were emitted).
  */
-function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
+export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
   // Field 7 is `ModelUsageStats`, the authoritative per-turn accounting, and
   // field 28 is `response_dimension_groups` — the rows the IDE renders. The
   // decoder below reads 28 because a capture happened to expose metric-looking
@@ -681,8 +681,10 @@ function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
   //
   // Both fields arrive in the same message and the adapter keeps the last usage
   // event it sees, so this cannot be a plain "decode both": field 7 has to
-  // suppress field 28 within the message, and is yielded last so ordering can
-  // never invert the precedence.
+  // suppress field 28 within the message. It is yielded before the rest of the
+  // frame rather than after it, so a frame that also carries finish (field 5)
+  // still reports usage ahead of the turn's end, and the order does not depend
+  // on where the service happens to place the field.
   let authoritativeUsage: CloudChatEvent | null = null;
   for (const f of iterFields(proto)) {
     if (f.num === 7 && f.wire === 2 && Buffer.isBuffer(f.value)) {
@@ -690,6 +692,7 @@ function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       if (authoritativeUsage) break;
     }
   }
+  if (authoritativeUsage) yield authoritativeUsage;
   for (const f of iterFields(proto)) {
     if (f.num === 3 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       // Visible delta_text — what the user should SEE in the chat.
@@ -765,7 +768,6 @@ function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       if (usage) yield usage;
     }
   }
-  if (authoritativeUsage) yield authoritativeUsage;
 }
 
 /**
@@ -1082,6 +1084,11 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // The body is not echoed into the message. This error reaches the adapter's
     // error event and /api/logs, and a Connect error can quote the request that
     // produced it - which is the request holding the api_key.
+    //
+    // Only the HTTP status line is carried here. A Connect EOS trailer that
+    // reports resource_exhausted or unavailable still arrives without a status,
+    // so a cap delivered that way keeps the older message-inference path.
+    // Mapping trailer codes onto HTTP statuses is deliberately a follow-up.
     throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined, undefined, resp.status);
   }
   if (!resp.body) {

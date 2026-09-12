@@ -19,9 +19,9 @@ import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin"
  * Devin's counters are cumulative within a turn, so a frame that reports less
  * than an earlier one is reporting a subset, not a correction.
  */
-function mergeDevinUsage(previous: OcxUsage, next: OcxUsage): OcxUsage {
+export function mergeDevinUsage(previous: OcxUsage, next: OcxUsage): OcxUsage {
   const keys = [
-    "inputTokens", "outputTokens", "totalTokens",
+    "inputTokens", "outputTokens",
     "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens",
     "reasoningOutputTokens",
   ] as const;
@@ -32,6 +32,11 @@ function mergeDevinUsage(previous: OcxUsage, next: OcxUsage): OcxUsage {
     if (typeof a === "number" && typeof b === "number") merged[key] = Math.max(a, b);
     else if (typeof a === "number" && b === undefined) merged[key] = a;
   }
+  // totalTokens is derived, not merged. Taking the max of two totals alongside
+  // per-field maxima can leave total !== input + output, and the cost and log
+  // paths read the total.
+  const total = (merged.inputTokens ?? 0) + (merged.outputTokens ?? 0);
+  if (total > 0) merged.totalTokens = total;
   return merged;
 }
 
@@ -45,7 +50,7 @@ function mergeDevinUsage(previous: OcxUsage, next: OcxUsage): OcxUsage {
 const DEVIN_CLIENT_CLOSED_MESSAGE = "client closed request";
 
 /** Map a cloud-direct failure onto the structured fields the error event carries. */
-function devinErrorClassification(error: unknown): { status?: number; errorType?: string; retryable?: boolean } {
+export function devinErrorClassification(error: unknown): { status?: number; errorType?: string; retryable?: boolean } {
   const status = error instanceof CloudChatError ? error.status : undefined;
   if (status === undefined) return {};
   if (status === 401) return { status, errorType: "authentication_error", retryable: false };
