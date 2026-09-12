@@ -47,6 +47,10 @@ contains no provider object, API key, OAuth value, custom header, reusable manag
 credential, or config digest. Both the proof and reload request use the direct local
 transport so environment HTTP proxies cannot observe or fabricate the exchange.
 
+OrcaRouter login rejects an oversized, malformed, or aborted successful key response before
+returning credentials for persistence or convergence. Its fixed body-error messages and shared
+reader cancellation behavior follow the [bounded login contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
+
 > Decision record: [ADR-0073](decisions/ADR-0073-authentication-boundaries.md)
 
 Management authentication never has a loopback bypass. If no management credential is available, or

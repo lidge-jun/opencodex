@@ -141,6 +141,10 @@ The server exposes `POST /api/stop` which restores native Codex config, stops an
 
 ## Providers and adapters
 
+OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
+64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
+the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
+
 | Path | Responsibility |
 | --- | --- |
 | `src/providers/registry.ts` | Canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata. |

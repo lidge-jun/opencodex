@@ -5,6 +5,11 @@ third-party client's existing config without taking ownership of the rest of tha
 promise is reversibility: apply snapshots first, writes atomically, records exactly what it owns,
 and refuses refresh, disable, or restore when the current file cannot be classified safely.
 
+Shared response support has a separate [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
+raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation.
+The OrcaRouter login ceiling applies to its key exchange; client configuration files retain the
+parsing and ownership rules below.
+
 ## Module Responsibilities
 
 | Module | Responsibility |

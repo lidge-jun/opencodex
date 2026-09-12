@@ -2,6 +2,7 @@
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
+import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBytes } from "../lib/bounded-body";
 
 export const ORCAROUTER_DEFAULT_API_BASE_URL = "https://api.orcarouter.ai";
 export const ORCAROUTER_DEFAULT_AUTH_BASE_URL = "https://www.orcarouter.ai";
@@ -147,6 +148,7 @@ export class OrcaRouterOAuthFlow extends OAuthCallbackFlow {
 
   async exchangeToken(code: string, _state: string, _redirectUri: string): Promise<OAuthCredentials> {
     if (!this.#verifier) throw new Error("OrcaRouter PKCE verifier was not initialized");
+    const signal = requestSignal(this.ctrl.signal);
     let response: Response;
     try {
       response = await fetch(new URL("/api/v1/auth/keys", this.#authBaseUrl), {
@@ -158,7 +160,7 @@ export class OrcaRouterOAuthFlow extends OAuthCallbackFlow {
           code_challenge_method: "S256",
         }),
         redirect: "error",
-        signal: requestSignal(this.ctrl.signal),
+        signal,
       });
     } catch (error) {
       if (this.ctrl.signal?.aborted) {
@@ -171,9 +173,20 @@ export class OrcaRouterOAuthFlow extends OAuthCallbackFlow {
       // never turn a code, verifier, or accidentally returned key into console output.
       throw new Error(`OrcaRouter key exchange failed with HTTP ${response.status}`);
     }
+    const { bytes, oversized } = await readBoundedResponseBytes(response, {
+      maxBytes: BOUNDED_BODY_MAX_BYTES,
+      signal,
+    }).catch(() => {
+      if (signal.aborted) throw signal.reason;
+      // Preserve the existing non-reflective error for response-body failures.
+      throw new Error("OrcaRouter key exchange returned invalid JSON");
+    });
+    if (oversized) {
+      throw new Error(`OrcaRouter key exchange response exceeded the ${BOUNDED_BODY_MAX_BYTES}-byte limit`);
+    }
     let payload: unknown;
     try {
-      payload = await response.json();
+      payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch {
       throw new Error("OrcaRouter key exchange returned invalid JSON");
     }
