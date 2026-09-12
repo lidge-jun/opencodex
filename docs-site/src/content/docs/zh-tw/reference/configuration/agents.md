@@ -71,4 +71,6 @@ opencodex 會跳過已停用、不可路由、不健康、冷卻中或達到配�
 
 上限僅會降低 effort。它們吸附到上限或以下的最高宣告級別。若模型沒有 effort 控制或沒有支援的級別符合，opencodex 會移除 effort 並讓供應商預設值套用。`max` 與 `ultra` 被接受，而儀表板提供 `low` 到 `xhigh`。
 
+即使沒有設定模型 effort pin，符合條件的原生 Chat Completions 回合也會套用設定的上限。套用 pin 或上限改變值時才會對應為供應商的傳輸值；兩者皆未發生時，原生呼叫端值保留原始寫法。
+
 關於 v1、default 與 v2 行為的入門導向說明，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。

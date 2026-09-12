@@ -6,7 +6,6 @@ import { createCodeBuddyAdapter } from "./codebuddy/adapter";
 import { createQoderAdapter } from "./qoder/adapter";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
-import { createDevinCliAdapter } from "./devin-cli/adapter";
 import { createDevinAdapter } from "./devin";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
@@ -44,7 +43,6 @@ export type AdapterWire =
   | "google"
   | "kiro"
   | "cursor"
-  | "devin-cli"
   | "devin";
 
 export type AdapterMutationContract =
@@ -126,11 +124,6 @@ export const ADAPTER_REGISTRY = {
     wire: "cursor",
     mutation: "codex-owned-with-gated-native-fallback",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createCursorAdapter(provider),
-  },
-  "devin-cli": {
-    wire: "devin-cli",
-    mutation: "codex-owned",
-    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createDevinCliAdapter(provider),
   },
   devin: {
     wire: "devin",

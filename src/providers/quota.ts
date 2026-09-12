@@ -20,6 +20,7 @@ import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { isCanonicalOllamaCloudUrl } from "../adapters/ollama-native-url";
 import { providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../lib/provider-outbound";
 import { apiKeyPoolEntryId } from "./api-keys";
+import { fetchMuseKeyQuotaSnapshot } from "./muse-key-quota";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
 import { getProviderRegistryEntry, providerCodexAccountMode, registryEntryForProviderDestination } from "./registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -1637,6 +1638,36 @@ async function fetchKiroQuota(provider: string): Promise<ProviderQuotaReport | n
 }
 
 /**
+ * Provider-level row probed from the key endpoint, for an account that CAN be probed.
+ *
+ * Written through the same account cache the passive path reads, so the measurement
+ * survives a restart and the per-account rows at oauth-account-routes.ts:313 pick it up
+ * with no mode change. Deliberately does not flip providerOAuthAccountQuotaMode: that
+ * mode selects readPassiveProviderAccountQuotas, and the probed per-account path it would
+ * switch to is gated on supportsPerAccountQuota, which has no meta-muse reader, so the
+ * GUI account list would go from showing observations to showing nothing.
+ */
+async function fetchMuseKeyQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  const probedAccountId = getAccountSet(provider)?.activeAccountId;
+  if (!probedAccountId) return null;
+  const oauthAccessToken = getAccountCredential(provider, probedAccountId)?.muse?.oauthAccessToken;
+  // An imported or pasted credential has no account token and never will: it is
+  // capability, not provider id, that decides whether a probe is possible.
+  if (!oauthAccessToken) return null;
+  const probedAccountKey = accountCacheKey(provider, probedAccountId);
+  const writerGeneration = captureConfigGeneration();
+  const quota = await fetchMuseKeyQuotaSnapshot(probedAccountId, oauthAccessToken);
+  if (!quota) return null;
+  if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+    // Hydrate before writing, for the same reason recordPassiveAccountQuota does:
+    // persistAccountQuotaCache serializes the whole in-memory map.
+    hydrateAccountQuotaCache();
+    accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
+    persistAccountQuotaCache();
+  }
+  return report(provider, `${provider}:key-endpoint`, quota);
+}
+/**
  * Provider-level row for a passive provider: the ACTIVE account's last observed
  * subscription windows, the same shape `fetchAnthropicQuota` and `fetchKiroQuota`
  * return.
@@ -3144,9 +3175,12 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);
     if (provider.authMode === "oauth" && name === "google-antigravity") return await fetchAntigravityQuota(name);
     if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
-    // Passive providers (meta-muse): Meta publishes no quota endpoint, so there is no
-    // probe to run — the row is the active account's last in-band observation.
-    if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) return fetchPassiveProviderQuota(name);
+    // meta-muse: a device-logged-in account can be probed at the key endpoint; an
+    // imported or pasted one cannot, and falls back to its last in-band observation.
+    // The probe is tried first and its failure is never fatal to the row.
+    if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) {
+      return (await fetchMuseKeyQuota(name)) ?? await fetchPassiveProviderQuota(name);
+    }
     const reader = keyQuotaReaderForProvider(name, provider);
     // Keep destination/auth fields bound to the same request as the reader's captured
     // bearer, even if the live provider object changes while the quota probe awaits.

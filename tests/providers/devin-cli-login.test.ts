@@ -5,6 +5,7 @@ import {
   devinCliSignedIn,
   loginDevinCli,
   readDevinCliCredentialFile,
+  readDevinCliCredentialOutcome,
   refreshDevinCliToken,
 } from "../../src/oauth/devin-cli";
 import { resolveDevinApiServer } from "../../src/oauth/devin";
@@ -135,3 +136,74 @@ describe("devin tenant selection is provider-scoped", () => {
   });
 });
 
+
+describe("devin-cli credential path and read bounds", () => {
+  const okFile = [
+    'windsurf_api_key = "devin-session-token$eyJhbGciOiJIUzI1NiJ9.eyJhIjoxfQ.sig"',
+    'api_server_url = "https://server.codeium.com"',
+    "",
+  ].join("\n");
+
+  test("an empty XDG_DATA_HOME or APPDATA does not become a cwd-relative path", () => {
+    // `??` treated "" as set, so join("", "devin", …) resolved against whatever
+    // directory the proxy was started in, and a planted file there would import
+    // as the operator's own CLI session.
+    // The fallback reads the real home directory rather than env.HOME, so the
+    // assertion is on shape: absolute, and under the home data dir.
+    for (const empty of ["", "   "]) {
+      const resolved = devinCliCredentialsPath({ HOME: "/home/u", XDG_DATA_HOME: empty }, "linux");
+      expect(resolved.startsWith("/")).toBe(true);
+      expect(resolved.endsWith("/.local/share/devin/credentials.toml")).toBe(true);
+    }
+    const win = devinCliCredentialsPath({ APPDATA: "" }, "win32");
+    expect(win.endsWith("AppData\\Roaming\\devin\\credentials.toml")).toBe(true);
+    expect(win.startsWith("devin")).toBe(false);
+  });
+
+  test("a present-but-unreadable file is not reported as a missing sign-in", async () => {
+    const deps = {
+      env: { HOME: "/home/u", XDG_DATA_HOME: "/home/u/.local/share" },
+      platform: "linux" as NodeJS.Platform,
+      exists: () => true,
+      read: () => { throw new Error("EACCES: permission denied"); },
+    };
+    expect(readDevinCliCredentialOutcome(deps)).toEqual({ kind: "unreadable" });
+    // "run devin auth login" would succeed and change nothing, so the two
+    // outcomes must not share one message.
+    await expect(loginDevinCli({} as OAuthController, undefined, deps)).rejects.toThrow(/could not read it/);
+    await expect(loginDevinCli({} as OAuthController, undefined, { ...deps, exists: () => false }))
+      .rejects.toThrow(/No signed-in Devin CLI session/);
+  });
+
+  test("a file past the parse bound is refused rather than scanned", () => {
+    const deps = {
+      env: { HOME: "/home/u", XDG_DATA_HOME: "/home/u/.local/share" },
+      platform: "linux" as NodeJS.Platform,
+      exists: () => true,
+      read: () => okFile + "#".repeat(64 * 1024),
+    };
+    expect(readDevinCliCredentialOutcome(deps).kind).toBe("unreadable");
+    expect(readDevinCliCredentialFile(deps)).toBeUndefined();
+  });
+
+  test("a file with only one of the two keys names the incomplete case", () => {
+    const deps = {
+      env: { HOME: "/home/u", XDG_DATA_HOME: "/home/u/.local/share" },
+      platform: "linux" as NodeJS.Platform,
+      exists: () => true,
+      read: () => 'api_server_url = "https://server.codeium.com"\n',
+    };
+    expect(readDevinCliCredentialOutcome(deps).kind).toBe("incomplete");
+  });
+
+  test("no thrown message repeats the key", async () => {
+    const deps = {
+      env: { HOME: "/home/u", XDG_DATA_HOME: "/home/u/.local/share" },
+      platform: "linux" as NodeJS.Platform,
+      exists: () => true,
+      read: () => { throw new Error("EACCES"); },
+    };
+    const err = await loginDevinCli({} as OAuthController, undefined, deps).catch((e: unknown) => e);
+    expect(String(err)).not.toContain("devin-session-token");
+  });
+});

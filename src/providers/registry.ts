@@ -1320,19 +1320,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // The CLI writes a `devin-session-token$<JWT>` to its own credentials.toml,
     // which is the same credential RegisterUser hands `ocx login devin` and which
     // the cloud-direct client already speaks. So this provider imports that token
-    // and streams over Connect-RPC like its browser-login sibling, rather than
-    // spawning `devin acp`.
+    // and streams over Connect-RPC like its browser-login sibling.
     //
     // `oauth` classifies the ACCOUNT, not the transport. This is not a local
     // runtime: unlike Ollama or LM Studio it cannot answer at all until a vendor
     // account is signed in, and `local` grouped it with things that have no
     // account. It is also the only classification that reaches the dashboard
     // Accounts tab, which is built from OAUTH_PROVIDERS.
-    //
-    // The ACP adapter stays registered and tested. It is no longer reachable
-    // under THIS id — `routedProviderConfig` pins the adapter from the registry
-    // for any row whose name is a registry id — but a custom-named row such as
-    // `{"devin-acp": {"adapter": "devin-cli", ...}}` is not pinned and still gets it.
     id: "devin-cli",
     label: "Devin CLI",
     adapter: "devin",
@@ -1343,7 +1337,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // flag, so leaving it true would draw the row twice: an Accounts login row and
     // a preset tile.
     dashboardPreset: false,
-    note: "Imports the credential your installed Devin CLI already holds (`devin auth login`), then streams over Cognition's Connect-RPC api-server like the `devin` provider. No browser sign-in and no key to paste. For the CLI's own local agent loop over ACP stdio instead, configure a custom-named provider row with \"adapter\": \"devin-cli\".",
+    note: "Imports the credential your installed Devin CLI already holds (`devin auth login`), then streams over Cognition's Connect-RPC api-server like the `devin` provider. No browser sign-in and no key to paste.",
     // Degraded-mode seed only; `liveModels` discovers the account's real roster,
     // which is where `swe-2` and the rest of the current catalog come from.
     models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6"],
@@ -1748,6 +1742,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     label: "Meta Muse Code (CLI credential)",
     adapter: "openai-responses",
     baseUrl: "https://api.meta.ai/v1",
+    // Meta own client sends this on every Muse Code call. We never have, so a future
+    // server-side requirement would break every Muse request with no local signal.
+    // Declared here rather than in a transport hook so it also covers model discovery
+    // (src/oauth/index.ts:1176) and still yields to a user-set header
+    // (mergeRegistryStaticHeaders, src/providers/registry.ts:3494).
+    staticHeaders: { "x-api-version": "1.0.0" },
     authKind: "oauth",
     oauthId: "meta-muse",
     dashboardUrl: "https://dev.meta.ai",
@@ -1760,7 +1760,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: Object.fromEntries(META_MUSE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
     modelReasoningEfforts: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORTS])),
     modelReasoningEffortMap: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORT_MAP])),
-    note: "Reuses the API key the Muse Code CLI stores after `muse login` (macOS only; requires the CLI installed and signed in). Meta ships no native Windows CLI and the Linux credential storage has not been measured, so on those platforms OpenCodex asks you to paste the Muse Code API key from https://dev.meta.ai instead of importing one; a pasted key faces the same format check and live validation as an imported one. Meta scopes that credential to the Muse Code CLI, so this is an UNSUPPORTED use: Meta does not authorize subscription coverage outside its own CLI, how these calls settle is not observable from the API, and you should treat every call as billable against your account. The key, imported or pasted, is copied into OpenCodex's auth store. OpenCodex reads Meta's subscription windows from streaming responses and shows the last observed value with its age; there is no endpoint to query them on demand, so refreshing one requires another streaming turn, and translated (non-passthrough) turns report none. Rate limits apply per team, not per key. For a supported path use the meta-model provider with your own key (export it as META_MODEL_API_KEY).",
+    note: "Signs in to Meta with a browser device code on any platform, then mints the Muse Code subscription key. That grant is reimplemented from the one the Muse Code CLI performs and has NOT been exercised against Meta from OpenCodex, so treat the first login as unverified. If the Muse Code CLI is already signed in on macOS, the existing key is imported instead of starting a new grant. A pasted key from https://dev.meta.ai still works as a fallback when a device login cannot complete, and faces the same format check and live validation. A device login authenticates as Meta own Muse Code client, which is a stronger claim than reusing a key the CLI already minted. Meta scopes that credential to the Muse Code CLI, so this is an UNSUPPORTED use: Meta does not authorize subscription coverage outside its own CLI, how these calls settle is not observable from the API, and you should treat every call as billable against your account. The key, imported or pasted, is copied into OpenCodex's auth store. For an account signed in with the device login, OpenCodex refreshes Meta's subscription windows on demand from the same key endpoint the login uses, at most once every five minutes. For an imported or pasted key there is no endpoint to query them on demand, so OpenCodex reads them from streaming responses and shows the last observed value with its age; refreshing one then requires another streaming turn, and translated (non-passthrough) turns report none. Rate limits apply per team, not per key. For a supported path use the meta-model provider with your own key (export it as META_MODEL_API_KEY).",
   },
   {
     id: "umans",

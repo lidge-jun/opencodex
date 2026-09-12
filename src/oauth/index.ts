@@ -277,7 +277,9 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultRefreshPolicy: "disabled",
   },
   "meta-muse": {
-    login: ctrl => loginMetaMuse(ctrl),
+    // Add-account/reauth must not reimport the credential already on disk; it starts the
+    // device grant instead, the same mapping command-code uses above.
+    login: (ctrl, opts) => loginMetaMuse(ctrl, {}, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
     refresh: refreshMetaMuseToken,
     providerConfig: oauthConfig("meta-muse"),
     defaultModel: oauthDefaultModel("meta-muse"),

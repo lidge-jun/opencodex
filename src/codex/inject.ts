@@ -895,6 +895,8 @@ export function chooseCatalogPathForInjection(
 export interface CodexInjectResult {
   success: boolean;
   message: string;
+  /** Structured read-only history preflight refusal; never parsed from display text. */
+  historyPreflightFailureReason?: string;
   status?: "skipped";
   /** `hub-gated` is the hub-role gate (#4236), distinct from the user's own OFF switch. */
   skippedReason?: "desired_disabled" | "desired_enabled" | "hub-gated";
@@ -1192,6 +1194,7 @@ async function injectCodexConfigImpl(
   if (historyPreflightError) {
     return {
       success: false,
+      historyPreflightFailureReason: historyPreflightError,
       message: `Codex config injection refused: ${historyPreflightError}. `
         + "Existing provider definitions and conversation files were preserved. "
         + "Paginated history requires native-writer coordination; do not run legacy recovery or retry this transition blindly.",
@@ -1949,6 +1952,12 @@ function restoreCodexConfigInlineImpl(kind: string): CodexRestoreConfigResult {
     const restored = journal.configRestored
       ? { success: true, message: "Codex config restored from opencodex journal." }
       : removeCodexConfig({ preserveProfile: journal.profileRestored || journal.profileChanged });
+    if (restored.success) {
+      // A successful journal/fallback write can race native history migration too.
+      // Refuse here while preimage compensation and the remove transaction can roll back.
+      const finalHistoryError = preflightCodexHistoryInjection(false, false);
+      if (finalHistoryError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${finalHistoryError}.` };
+    }
     return restored.success
       ? {
           state: "ok",

@@ -10,6 +10,10 @@ while accepting the client hint and translating the ordinary tool catalog normal
 
 > Decision record: [ADR-0060](../decisions/ADR-0060-kiro-client-parallel-tool-hint.md)
 
+Kiro's own `kiroToolName` rewrite in `src/adapters/kiro-wire.ts` is CodeWhisperer-only and
+reserves the private completion tool. Meta Muse 64-character MCP aliases live in
+`src/responses/muse-tool-name-alias.ts` and must not import that Kiro helper.
+
 ## Kiro Responses text controls
 
 Kiro refuses structured output and tolerates every other Responses `text` member. `text.format`

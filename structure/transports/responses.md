@@ -327,6 +327,21 @@ Muse Spark's Responses sanitizer also drops the provider-rejected `search_conten
 `indexed_web_access` fields from plain `web_search` tools while preserving preview tools and
 unrelated models.
 
+Direct Meta Muse / Meta Model Responses (`https://api.meta.ai/v1`) also rejects function tool
+names longer than 64 characters or containing characters outside `[a-zA-Z0-9_-]`. After namespace
+flattening, `src/responses/muse-tool-name-alias.ts` rewrites those identities on the `api.meta.ai`
+host only — every model, including default `muse-spark-1.3` — and records
+`convertedMuseToolNameAliases` on the adapter request. Restore runs hashed-to-original before
+namespace restore and before the undeclared-tool guard, covering stream payloads, non-stream JSON,
+continuation cache, inspection, and failover rebuilds.
+Restore matches the tool identity on `function_call`, `custom_tool_call`, `function`, and
+`custom` objects and on `response.function_call_arguments.{done,delta}`, whose `name` sits
+outside any item and is read directly by the undeclared-tool guard.
+The restorable map is narrowed by `tool_choice` the same way `authorizedAliases` narrows the
+namespace layer: upstream still receives the whole aliased catalog, but a tool the caller
+disabled for the turn cannot be restored back into an executable client name.
+Arguments, user text, and schema property names are never rewritten.
+
 > Decision record: [ADR-0042](../decisions/ADR-0042-responses-http-sse.md)
 
 > Decision record: [ADR-0043](../decisions/ADR-0043-responses-http-sse.md)
@@ -523,3 +538,4 @@ see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routi
 
 Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
+Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
