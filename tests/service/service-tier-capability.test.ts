@@ -110,21 +110,22 @@ describe("xAI Fast capability follows the captured authentication transport", ()
       supportsServiceTier: true,
       chatServiceTier: true,
     });
-    expect(entry.supportsServiceTier).toBeUndefined();
-    expect(entry.chatServiceTier).toBeUndefined();
+    // Provider-level: after a 2026-09-09 live probe showed the OAuth Responses gateway
+    // honors service_tier "priority", support is declared auth-agnostically.
+    expect(entry.supportsServiceTier).toBe(true);
 
     const keyPolicy = fastPolicyForModel(xaiProvider("key"), "grok-4.6", "xai");
     expect(keyPolicy).toMatchObject({
       capability: true,
       eligibility: "eligible",
       forwardCallerTier: true,
-      fastTierDescription: "Priority processing, 2x token price",
+      fastTierDescription: "Priority processing; tier pricing applies on key auth only",
     });
 
     const oauthPolicy = fastPolicyForModel(xaiProvider("oauth"), "grok-4.6", "xai");
-    expect(oauthPolicy.capability).toBeUndefined();
-    expect(oauthPolicy.eligibility).toBe("unclassified");
-    expect(oauthPolicy.forwardCallerTier).toBe(false);
+    expect(oauthPolicy.capability).toBe(true);
+    expect(oauthPolicy.eligibility).toBe("eligible");
+    expect(oauthPolicy.forwardCallerTier).toBe(true);
   });
 
   test("catalog and runtime publish the same key/OAuth conclusion", async () => {
@@ -135,7 +136,7 @@ describe("xAI Fast capability follows the captured authentication transport", ()
     expect(keyCatalog?.service_tiers).toEqual([{
       id: "priority",
       name: "Fast",
-      description: "Priority processing, 2x token price",
+      description: "Priority processing; tier pricing applies on key auth only",
     }]);
     expect(keyCatalog?.additional_speed_tiers).toEqual(["fast"]);
     expect(decideTier(keyPolicy, true, undefined)).toEqual({ kind: "set", value: "priority" });
@@ -143,10 +144,16 @@ describe("xAI Fast capability follows the captured authentication transport", ()
     const oauthProvider = xaiProvider("oauth");
     const oauthPolicy = fastPolicyForModel(oauthProvider, "grok-4.6", "xai");
     const oauthCatalog = await catalogEntry(oauthProvider);
-    expect(serviceTierSupportFromPolicy(oauthPolicy)).toBe(false);
-    expect(oauthCatalog).not.toHaveProperty("service_tiers");
-    expect(oauthCatalog).not.toHaveProperty("additional_speed_tiers");
-    expect(decideTier(oauthPolicy, true, undefined)).toEqual({ kind: "drop" });
+    // With auth-agnostic supportsServiceTier the OAuth row now publishes the same Fast
+    // capability as key auth, and a caller tier is forwarded rather than dropped.
+    expect(serviceTierSupportFromPolicy(oauthPolicy)).toBe(true);
+    expect(oauthCatalog?.service_tiers).toEqual([{
+      id: "priority",
+      name: "Fast",
+      description: "Priority processing; tier pricing applies on key auth only",
+    }]);
+    expect(oauthCatalog?.additional_speed_tiers).toEqual(["fast"]);
+    expect(decideTier(oauthPolicy, true, undefined)).toEqual({ kind: "set", value: "priority" });
   });
 
   test("explicit supportsServiceTier=false wins in policy and catalog for both transports", async () => {

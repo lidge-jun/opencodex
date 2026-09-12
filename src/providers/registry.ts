@@ -1366,14 +1366,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api.x.ai/v1",
     authKind: "oauth",
     allowKeyAuthOverride: true,
-    // Priority Processing is documented for xAI's public API-key Chat Completions and
-    // Responses endpoints. OAuth is a separate Grok CLI subscription gateway and remains
-    // unclassified; do not turn this into a provider-wide supportsServiceTier declaration.
+    // Priority Processing is offered on both xAI endpoints — the public api.x.ai key-auth
+    // lane and the Grok CLI OAuth gateway cli-chat-proxy.grok.com. A 2026-09-09 live probe
+    // against the OAuth gateway carrying service_tier "priority" completed with
+    // response.service_tier "priority" while the same request without the field completed
+    // with "default". Declare Fast support auth-agnostically so OAuth callers (grok-4.6,
+    // grok-4.5, grok-4.20-*, grok-composer-2.5-fast) can pass a caller/pinned tier through;
+    // keyAuthServiceTier stays as the chat-encoding carrier for the key lane.
+    supportsServiceTier: true,
     keyAuthServiceTier: {
       supportsServiceTier: true,
       chatServiceTier: true,
     },
-    fastTierDescription: "Priority processing, 2x token price",
+    fastTierDescription: "Priority processing; tier pricing applies on key auth only",
     featured: true,
     oauthId: "xai",
     jawcodeBundle: "xai",
@@ -1413,20 +1418,21 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Grok 4.6/4.5 subscription Responses callers use the native wire with the existing
     // namespace/web-search/replay normalization. Chat remains an explicit modelAdapters
     // opt-in. Multi-agent has no Chat wire and uses Responses under both auth modes.
-    // Caller-owned service tiers stay off the unclassified OAuth subscription route; key-auth
-    // Fast remains proxy-owned and is still selected through keyAuthServiceTier above.
+    // The unclassified-subscription comment above is retired: the OAuth Responses gateway
+    // demonstrably honors service_tier "priority". Caller-owned tiers therefore pass on
+    // the routes below; no wire default stays drop-for-tiers.
     modelWireDefaults: {
       "grok-4.6": {
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
-        forwardCallerServiceTier: false,
+        forwardCallerServiceTier: true,
       },
       "grok-4.5": {
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
-        forwardCallerServiceTier: false,
+        forwardCallerServiceTier: true,
       },
       "grok-4.20-multi-agent-0309": {
         // Even at high effort it emits no reasoning-summary deltas or encrypted replay
@@ -1439,7 +1445,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         // openai-chat adapter and sent this model to the wire it 400s on.
         wire: "openai-responses",
         inbound: ["responses", "chat", "anthropic"],
-        forwardCallerServiceTier: false,
+        forwardCallerServiceTier: true,
       },
     },
     // Vision lineup per docs.x.ai model-capabilities/images/understanding: the grok-4.x chat

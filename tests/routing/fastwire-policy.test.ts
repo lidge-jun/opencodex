@@ -259,6 +259,9 @@ describe("resolveFastPolicy matrix", () => {
   test("locks the five-row xAI and DeepSeek wire/tier regression matrix", () => {
     const rows = [
       {
+        // 2026-09-09 live probe: the OAuth Responses gateway honors service_tier "priority"
+        // (returns service_tier "priority", matches "default" without the field), so the
+        // previously drop-by-default OAuth route now forwards caller tiers like key auth.
         name: "xAI OAuth default",
         providerName: "xai",
         modelIds: ["grok-4.6", "grok-4.5"],
@@ -268,9 +271,9 @@ describe("resolveFastPolicy matrix", () => {
           authMode: "oauth" as const,
         },
         adapter: "openai-responses",
-        forwardCallerTier: false,
+        forwardCallerTier: true,
         callerTier: "flex",
-        settledCallerTier: undefined,
+        settledCallerTier: "flex",
       },
       {
         name: "xAI OAuth Responses override",
@@ -283,9 +286,9 @@ describe("resolveFastPolicy matrix", () => {
           modelAdapters: { "grok-4.6": "openai-responses", "grok-4.5": "openai-responses" },
         },
         adapter: "openai-responses",
-        forwardCallerTier: false,
+        forwardCallerTier: true,
         callerTier: "flex",
-        settledCallerTier: undefined,
+        settledCallerTier: "flex",
       },
       {
         // B2: key-auth Chat Completions is a documented Priority Processing transport.
