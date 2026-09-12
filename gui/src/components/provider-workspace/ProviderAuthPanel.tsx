@@ -3,7 +3,7 @@
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
  * handlers via props-down; no internal auth machinery.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
@@ -21,7 +21,9 @@ import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
+import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
+import { useGrokResetCoupons } from "../../hooks/useGrokResetCoupons";
 import { Switch } from "../../ui";
 import type {
   AccountLoadState,
@@ -36,6 +38,15 @@ import type {
 const COCKPIT_IMPORT_MAX_BYTES = 256 * 1024;
 const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
 const EMPTY_API_KEYS: ApiKeyRow[] = [];
+
+/**
+ * One predicate for "this row cannot spend a coupon right now". The read set and
+ * the badge must agree: a row fetched here and hidden there is a billing RPC
+ * spent on a 401.
+ */
+function accountShowsReauth(account: OAuthAccountRow): boolean {
+  return Boolean(account.needsReauth) || oauthHealthShowsReauth(account.health?.status);
+}
 
 function XaiChatOptInControl({
   initialState,
@@ -207,6 +218,22 @@ export default function ProviderAuthPanel({
   }, [connectionIdentity]);
 
   const onRefreshQuota = authHandlers?.onRefreshQuota;
+  const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
+  const isOauth = surface === "oauth-accounts";
+  const isKeyAuth = surface === "api-keys";
+  // Grok reset coupons live behind a billing RPC rather than the quota payload,
+  // so the xAI rows read them once per roster instead of riding the quota probe.
+  // The gate names the OAuth surface here rather than relying on the roster
+  // loader three files away to leave `accounts` empty for key-auth xAI.
+  const grokCouponsEnabled = isOauth && item.name === "xai" && accounts.length > 0;
+  const grokAccountIds = useMemo(
+    () => (grokCouponsEnabled
+      ? accounts.filter(account => !accountShowsReauth(account)).map(account => account.id)
+      : []),
+    [grokCouponsEnabled, accounts],
+  );
+  const grokCoupons = useGrokResetCoupons({ apiBase, accountIds: grokAccountIds, enabled: grokCouponsEnabled });
+  const [couponAccount, setCouponAccount] = useState<OAuthAccountRow | null>(null);
   const refreshQuota = async () => {
     if (!onRefreshQuota || refreshingQuota) return;
     const generation = ++quotaRefreshGeneration.current;
@@ -221,10 +248,6 @@ export default function ProviderAuthPanel({
         result: { ok: false, text: t("codexAuth.quotaRefreshFailed") } });
     }
   };
-
-  const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
-  const isOauth = surface === "oauth-accounts";
-  const isKeyAuth = surface === "api-keys";
 
   if (surface === "codex-accounts") {
     return (
@@ -495,7 +518,7 @@ export default function ProviderAuthPanel({
                   const label = oauthAccountDisplayLabel(accounts, account, t);
                   const switching = switchingAccountId === account.id;
                   const healthStatus = account.health?.status;
-                  const showReauth = Boolean(account.needsReauth) || oauthHealthShowsReauth(healthStatus);
+                  const showReauth = accountShowsReauth(account);
                   const inCooldown = oauthHealthIsCooldown(healthStatus);
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);
@@ -536,6 +559,13 @@ export default function ProviderAuthPanel({
                         {t("pws.reauthenticate")}
                       </button>
                     )}
+                    {grokCouponsEnabled && !showReauth && (
+                      <GrokCouponBadge
+                        entry={grokCoupons.entries[account.id]}
+                        t={t}
+                        onClick={() => setCouponAccount(account)}
+                      />
+                    )}
                     <button type="button" className="btn btn-ghost btn-sm"
                       onClick={() => void authHandlers.onEditAlias(item.name, "oauth", account.id, account.alias)}>
                       {t("prov.editAlias")}
@@ -556,6 +586,15 @@ export default function ProviderAuthPanel({
                   );
                 })}
               </ul>
+            )}
+            {couponAccount && (
+              <GrokResetCouponModal
+                accountId={couponAccount.id}
+                accountLabel={oauthAccountDisplayLabel(accounts, couponAccount, t)}
+                entry={grokCoupons.entries[couponAccount.id]}
+                controller={grokCoupons}
+                onClose={() => setCouponAccount(null)}
+              />
             )}
             {accountLoadState === "ready" && loggedIn && accounts.length === 0 && (
               <div className="pwi-auth-state pwi-auth-state--empty">{t("pws.noAccounts")}</div>

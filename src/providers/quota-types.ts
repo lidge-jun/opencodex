@@ -8,6 +8,13 @@
  * blocks any later attempt to load one side without the other.
  */
 
+export const PROVIDER_QUOTA_MAX_AGE_MS = 30 * 60_000;
+
+/** Management-only eligibility evidence; private credential binding never leaves the server. */
+export type ProviderRoutingQuota =
+  | { state: "unknown" }
+  | { state: "available" | "exhausted"; updatedAt: number; validUntil: number };
+
 export interface ProviderQuotaWindow {
   label: string;
   percent: number;

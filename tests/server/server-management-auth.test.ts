@@ -1,3 +1,4 @@
+// Holds INV-AUTH-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";

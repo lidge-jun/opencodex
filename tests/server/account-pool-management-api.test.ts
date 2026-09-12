@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../../src/codex/auth-api";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -439,7 +439,13 @@ describe("Anthropic account pool strategy management API", () => {
     // reading `inert` as covering `enabled` would render a live control as decorative.
     const source = await Bun.file("src/oauth/pool-settings-capability.ts").text();
     const start = source.indexOf("autoSwitchThreshold: number | null;");
-    const marker = source.slice(start, source.indexOf("inert: true;", start));
+    // Anchored on the CURRENT literal. When this type read `inert: true;` and the field became
+    // `inert: boolean;`, indexOf returned -1 and slice(start, -1) handed back almost the whole
+    // file -- which still contains all three words, so every assertion below passed while the
+    // test had stopped checking anything. Fail closed on a missing anchor instead.
+    const end = source.indexOf("inert: boolean;", start);
+    expect(end).toBeGreaterThan(start);
+    const marker = source.slice(start, end);
     expect(marker).toContain("strategy");
     expect(marker).toContain("autoSwitchThreshold");
     expect(marker).toContain("enabled");
@@ -474,7 +480,10 @@ describe("generic OAuth pool-settings contract (#695)", () => {
     try {
       const absent = await fetch(new URL("/api/oauth/accounts/pool?provider=google-antigravity", server.url));
       expect(absent.status).toBe(200);
-      expect(await absent.json()).toEqual({ provider: "google-antigravity", kind: "generic", enabled: null, strategy: null, autoSwitchThreshold: null, inert: true });
+      expect(await absent.json()).toEqual({
+        provider: "google-antigravity", kind: "generic", enabled: null, strategy: null,
+        autoSwitchThreshold: null, stickyLimit: null, inert: true,
+      });
 
       const put = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
         method: "PUT", headers: { "Content-Type": "application/json" },
@@ -488,7 +497,8 @@ describe("generic OAuth pool-settings contract (#695)", () => {
       for (const body of [
         { provider: "google-antigravity", strategy: "weighted" },
         { provider: "google-antigravity", autoSwitchThreshold: 101 },
-        { provider: "google-antigravity", stickyLimit: 3 },
+        { provider: "google-antigravity", stickyLimit: 0 },
+        { provider: "google-antigravity", quotaWindow: "weekly" },
         { provider: "deepseek", strategy: "quota" },
       ]) {
         const bad = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
@@ -504,6 +514,261 @@ describe("generic OAuth pool-settings contract (#695)", () => {
       });
       expect(clear.status).toBe(200);
       expect(await clear.json()).toMatchObject({ strategy: null, autoSwitchThreshold: null, enabled: true });
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("legacy pool contract goldens (#wp5)", () => {
+  /**
+   * Exact-body pins for the three pool contracts, written BEFORE anything is shared between
+   * them. The existing coverage could not serve as the compatibility net it was assumed to be:
+   * the Codex and Anthropic assertions use toMatchObject, which passes when extra keys appear,
+   * and PUT /api/codex-auth/auto-switch checked only the status code. A refactor guarded by
+   * those would not have noticed the regression it was supposed to catch.
+   *
+   * GET /api/codex-auth/active is deliberately absent: it already carries a full toEqual in
+   * tests/codex-integration/codex-auth-api.test.ts.
+   */
+  test("PUT /api/codex-auth/auto-switch answers exactly { ok: true }", async () => {
+    const req = new Request("http://localhost/api/codex-auth/auto-switch", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threshold: 70 }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toEqual({ ok: true });
+  });
+
+  test("PUT /api/codex-auth/pool-strategy answers exactly its three keys", async () => {
+    const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strategy: "round-robin", stickyLimit: 5 }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toEqual({
+      ok: true,
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 5,
+    });
+  });
+
+  test("GET /api/oauth/accounts/pool answers exactly the anthropic shape", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        provider: "anthropic",
+        enabled: false,
+        autoSwitchThreshold: 80,
+        strategy: "quota",
+        stickyLimit: 1,
+        quotaWindow: "five-hour",
+        experimental: true,
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT /api/oauth/accounts/pool answers exactly the anthropic shape", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: "anthropic", enabled: true, autoSwitchThreshold: 70,
+          strategy: "round-robin", stickyLimit: 4,
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        ok: true,
+        provider: "anthropic",
+        enabled: true,
+        autoSwitchThreshold: 70,
+        strategy: "round-robin",
+        stickyLimit: 4,
+        quotaWindow: "five-hour",
+        experimental: true,
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a bad strategy and a bad stickyLimit are rejected identically on every kind", async () => {
+    // One validator, three adapters. The kinds keep their own request and response shapes --
+    // that is what the goldens above pin -- but the VALUE rules are now a single implementation,
+    // so "quota, round-robin, fill-first" and the 1..100 sticky bound cannot drift apart per
+    // kind. Before this, the generic kind carried a private copy of both.
+    const codex = async (payload: Record<string, unknown>) => {
+      const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
+      return resp!.status;
+    };
+    const server = startServer(0);
+    try {
+      const oauth = async (payload: Record<string, unknown>) => {
+        const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+        });
+        return res.status;
+      };
+      for (const strategy of ["weighted", "", 3, null]) {
+        expect(await codex({ strategy })).toBe(400);
+        expect(await oauth({ provider: "anthropic", strategy })).toBe(400);
+        expect(await oauth({ provider: "google-antigravity", strategy })).toBe(400);
+      }
+      // 0 and 101 sit just outside the shared bound; 1 and 100 are the edges that must pass.
+      for (const stickyLimit of [0, 101, 1.5]) {
+        expect(await codex({ stickyLimit })).toBe(400);
+        expect(await oauth({ provider: "anthropic", stickyLimit })).toBe(400);
+        expect(await oauth({ provider: "google-antigravity", stickyLimit })).toBe(400);
+      }
+      for (const stickyLimit of [1, 100]) {
+        expect(await codex({ stickyLimit })).toBe(200);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+});
+
+describe("unified pool-settings contract (#695 wp5c)", () => {
+  let previousHome2: string | undefined;
+  let dir = "";
+  beforeEach(() => {
+    previousHome2 = process.env.OPENCODEX_HOME;
+    dir = mkdtempSync(join(tmpdir(), "ocx-pool-unified-"));
+    process.env.OPENCODEX_HOME = dir;
+    saveConfig({
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" },
+        deepseek: { adapter: "openai-chat", baseUrl: "https://api.deepseek.com/v1", apiKey: "deepseek-key-fixture" },
+      },
+    } as OcxConfig);
+  });
+  afterEach(() => {
+    if (previousHome2 === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome2;
+    if (dir) removeTreeWithRetry(dir);
+  });
+
+  test("every kind answers with the same keys and declares what it supports", async () => {
+    const server = startServer(0);
+    try {
+      for (const [provider, kind, supported] of [
+        ["openai", "codex", ["strategy", "stickyLimit", "autoSwitchThreshold"]],
+        ["anthropic", "anthropic", ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow"]],
+        ["google-antigravity", "generic", ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold"]],
+      ] as const) {
+        const res = await fetch(new URL(`/api/pool/settings?provider=${provider}`, server.url));
+        expect(res.status).toBe(200);
+        const dto = await res.json() as Record<string, unknown>;
+        // Same key set for every kind. An unsupported field is a declared null, not an absence,
+        // which is the whole difference between a consolidation and a fourth contract.
+        expect(Object.keys(dto).sort()).toEqual([
+          "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "provider",
+          "quotaWindow", "stickyLimit", "strategy", "supported",
+        ]);
+        expect(dto.kind).toBe(kind);
+        expect(dto.supported).toEqual([...supported]);
+        // quotaWindow belongs to anthropic alone; the others state null rather than omitting it.
+        if (kind !== "anthropic") expect(dto.quotaWindow).toBeNull();
+      }
+      // An API-key provider has no pool at all and is refused rather than answered with nulls.
+      expect((await fetch(new URL("/api/pool/settings?provider=deepseek", server.url))).status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a generic pool with no stored override reports the inherited global", async () => {
+    const config = loadConfig();
+    config.oauthAccountFailover = { enabled: true };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const dto = await (await fetch(new URL("/api/pool/settings?provider=google-antigravity", server.url))).json() as Record<string, unknown>;
+      // The defect this field closes: `enabled: null` means "nothing stored here", which alone
+      // cannot distinguish a disabled pool from one inheriting a global true.
+      expect(dto.enabled).toBeNull();
+      expect(dto.enabledEffective).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a global false leaves an unset generic pool effectively off", async () => {
+    const config = loadConfig();
+    config.oauthAccountFailover = { enabled: false };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const dto = await (await fetch(new URL("/api/pool/settings?provider=google-antigravity", server.url))).json() as Record<string, unknown>;
+      expect(dto.enabled).toBeNull();
+      expect(dto.enabledEffective).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a stored provider override beats the global in both directions", async () => {
+    const config = loadConfig();
+    config.oauthAccountFailover = { enabled: true };
+    config.providers["google-antigravity"]!.oauthAccountFailover = { enabled: false };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const dto = await (await fetch(new URL("/api/pool/settings?provider=google-antigravity", server.url))).json() as Record<string, unknown>;
+      expect(dto.enabled).toBe(false);
+      expect(dto.enabledEffective).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a write reaches each kind's own storage and is refused identically on bad values", async () => {
+    const server = startServer(0);
+    try {
+      const put = async (payload: Record<string, unknown>) => {
+        const res = await fetch(new URL("/api/pool/settings", server.url), {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+        });
+        return { status: res.status, body: await res.json() as Record<string, unknown> };
+      };
+      // Consolidating the contract does not consolidate the persistence: each kind still lands
+      // in its own place, which is what keeps the legacy paths answering byte-identically.
+      expect((await put({ provider: "openai", strategy: "round-robin", stickyLimit: 5 })).body).toMatchObject({ strategy: "round-robin", stickyLimit: 5 });
+      expect((await put({ provider: "anthropic", strategy: "fill-first", quotaWindow: "weekly" })).body).toMatchObject({ strategy: "fill-first", quotaWindow: "weekly" });
+      expect((await put({ provider: "google-antigravity", strategy: "round-robin", enabled: true })).body).toMatchObject({ strategy: "round-robin", enabled: true, enabledEffective: true });
+      const saved = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      expect(saved.accountPoolStrategy).toBe("round-robin");
+      expect(saved.anthropicAccountPool.strategy).toBe("fill-first");
+      expect(saved.providers["google-antigravity"].oauthAccountFailover.strategy).toBe("round-robin");
+
+      for (const provider of ["openai", "anthropic", "google-antigravity"]) {
+        expect((await put({ provider, strategy: "weighted" })).status).toBe(400);
+        expect((await put({ provider, stickyLimit: 0 })).status).toBe(400);
+      }
+      // quotaWindow and enabled are declared unsupported for the kinds that lack them, and the
+      // route says so instead of silently dropping the field.
+      expect((await put({ provider: "openai", quotaWindow: "weekly" })).status).toBe(400);
+      expect((await put({ provider: "openai", enabled: true })).status).toBe(400);
+      expect((await put({ provider: "google-antigravity", quotaWindow: "weekly" })).status).toBe(400);
     } finally {
       await server.stop(true);
     }

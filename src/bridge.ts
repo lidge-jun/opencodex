@@ -1293,7 +1293,10 @@ export function bridgeToResponsesSSE(
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
-              if (currentToolCall) closeCurrentToolCall();
+              if (currentToolCall) {
+                if (isTruncatedStopReason(event.stopReason)) failCurrentToolCall();
+                else closeCurrentToolCall();
+              }
               if (currentWebSearch) closeCurrentWebSearch("completed", []);
               releasePendingWebSources();
               // Redacted-only turns (or hidden thinking without a trailing signature event) still
@@ -2055,7 +2058,10 @@ function buildResponseJSONWithBudget(
   // must one left open by a stream that stopped without any terminal at all. That case previously
   // fell through to "completed", handing back a function_call whose arguments were half-written
   // JSON, inside a turn also marked completed.
-  if (currentToolCallId) flushToolCall(errorEvent || incompleteEvent || !sawTerminal ? "incomplete" : "completed");
+  if (currentToolCallId) {
+    flushToolCall(errorEvent || incompleteEvent || !sawTerminal || isTruncatedStopReason(rawStopReason)
+      ? "incomplete" : "completed");
+  }
   if (batchKiroRedacted) {
     // pushOutput reserves the item itself and releases the retained raw blob it replaces.
     pushOutput({

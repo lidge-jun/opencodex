@@ -9,6 +9,7 @@ import {
   hasFailoverAccountQuorum,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
+  noteGenericPoolSelection,
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../../src/oauth/generic-account-failover";
@@ -523,5 +524,133 @@ describe("#2807 a 429 rotation pairs the bearer with its OWN origin", () => {
       resolveCopilotApiBaseUrl("https://attacker.example.com"),
     ) as OcxProviderConfig;
     expect(rotated.baseUrl).toBe(CANONICAL);
+  });
+});
+
+describe("#695 the generic pool consumes its persisted strategy behind pool.kernel", () => {
+  /** Proactive preference on, plus whichever strategy this case is about. */
+  function kernelConfig(strategy?: "quota" | "round-robin" | "fill-first", extra: Record<string, unknown> = {}): OcxConfig {
+    return {
+      pool: { kernel: true },
+      providers: {
+        xai: {
+          ...OAUTH_PROVIDER,
+          oauthAccountFailover: { enabled: true, ...(strategy ? { strategy } : {}), ...extra },
+        },
+      },
+    } as unknown as OcxConfig;
+  }
+
+  test("round-robin rotates a provider with no quota data at all", async () => {
+    const ids = await seed(3);
+    await setActiveAccount("xai", ids[0]!);
+    // Deliberately NO quota is cached. This is the case the evidence guard refuses outright,
+    // and it is exactly where round-robin is the point: with nothing measured there is no
+    // ranking to make, only a turn to take.
+    const cfg = kernelConfig("round-robin");
+
+    const served: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const preferred = preferredInitialAccount(cfg, "xai");
+      const account = preferred ?? getAccountSet("xai")!.activeAccountId!;
+      served.push(account);
+      // Admission is what advances the ring; the proposal above only peeks.
+      noteGenericPoolSelection(cfg, "xai", account);
+    }
+    expect(new Set(served).size).toBeGreaterThan(1);
+  });
+
+  test("round-robin is a no-op while pool.kernel is off", async () => {
+    const ids = await seed(3);
+    await setActiveAccount("xai", ids[0]!);
+    const off = {
+      providers: { xai: { ...OAUTH_PROVIDER, oauthAccountFailover: { enabled: true, strategy: "round-robin" } } },
+    } as unknown as OcxConfig;
+
+    for (let i = 0; i < 4; i += 1) {
+      // Same roster, same strategy, flag off: the pre-kernel answer is null every time,
+      // because no quota was ever measured. Reversibility is the whole point of the flag.
+      expect(preferredInitialAccount(off, "xai")).toBeNull();
+      noteGenericPoolSelection(off, "xai", ids[0]!);
+    }
+  });
+
+  test("fill-first holds the active account under its threshold and advances over it", async () => {
+    const ids = await seed(3);
+    const sorted = [...ids].sort((left, right) => left.localeCompare(right));
+    const active = sorted[0]!;
+    await setActiveAccount("xai", active);
+    const cfg = kernelConfig("fill-first", { autoSwitchThreshold: 80 });
+
+    setCachedProviderAccountQuotaForTests("xai", active, { weeklyPercent: 40, updatedAt: Date.now() });
+    // Under threshold: fill-first is supposed to keep filling this one.
+    expect(preferredInitialAccount(cfg, "xai")).toBeNull();
+
+    setCachedProviderAccountQuotaForTests("xai", active, { weeklyPercent: 90, updatedAt: Date.now() });
+    // Over threshold: it advances, and to the NEXT account in the sorted roster rather than
+    // to whichever id the login order happened to put first.
+    expect(preferredInitialAccount(cfg, "xai")).toBe(sorted[1]!);
+  });
+
+  test("fill-first advances through the sorted roster, not the eligible subset", async () => {
+    const ids = await seed(3);
+    const sorted = [...ids].sort((left, right) => left.localeCompare(right));
+    const active = sorted[0]!;
+    await setActiveAccount("xai", active);
+    const cfg = kernelConfig("fill-first", { autoSwitchThreshold: 80 });
+    setCachedProviderAccountQuotaForTests("xai", active, { weeklyPercent: 95, updatedAt: Date.now() });
+
+    // The successor is out of service, so the walk has to step OVER it and land on the third
+    // account. Walking the eligible subset instead would wrap from a shorter list and pick a
+    // different account -- the bug the shared kernel carries a stableAll argument to avoid.
+    await markAccountNeedsReauth("xai", sorted[1]!, true);
+    expect(preferredInitialAccount(cfg, "xai")).toBe(sorted[2]!);
+  });
+
+  test("quota keeps its pre-kernel answer with the flag on", async () => {
+    const ids = await seed(2);
+    await setActiveAccount("xai", ids[0]!);
+    // 100, not 99: the quota path only leaves an active account once it is exhausted or
+    // cooled. A merely busy account keeps serving, and that is the pre-kernel rule this case
+    // is here to pin.
+    setCachedProviderAccountQuotaForTests("xai", ids[0]!, { weeklyPercent: 100, updatedAt: Date.now() });
+    setCachedProviderAccountQuotaForTests("xai", ids[1]!, { weeklyPercent: 10, updatedAt: Date.now() });
+
+    // An explicit "quota" and no strategy at all must answer identically: quota IS the
+    // pre-kernel path, so the flag must not change it.
+    expect(preferredInitialAccount(kernelConfig("quota"), "xai")).toBe(ids[1]!);
+    expect(preferredInitialAccount(kernelConfig(), "xai")).toBe(ids[1]!);
+  });
+
+  test("a 429 under round-robin rotates instead of ranking", async () => {
+    const ids = await seed(3);
+    await setActiveAccount("xai", ids[0]!);
+    // Quota evidence pointing SOMEWHERE ELSE is what makes this case mean anything. With no
+    // evidence the pre-kernel path hands the ring back untouched and lands on the same
+    // account round-robin would, so the test would pass whether or not the branch exists.
+    setCachedProviderAccountQuotaForTests("xai", ids[1]!, { weeklyPercent: 80, updatedAt: Date.now() });
+    setCachedProviderAccountQuotaForTests("xai", ids[2]!, { weeklyPercent: 5, updatedAt: Date.now() });
+    const next = rotateGenericOAuthAccountOn429(kernelConfig("round-robin"), "xai", ids[0]!, null);
+    expect(next).not.toBeNull();
+    expect(next).not.toBe(ids[0]!);
+    // Round-robin takes its turn. Quota would have chased the roomier third account.
+    expect(next).toBe(ids[1]!);
+  });
+
+  test("a 429 under fill-first leaves the cooled account rather than holding it", async () => {
+    const ids = await seed(3);
+    const sorted = [...ids].sort((left, right) => left.localeCompare(right));
+    await setActiveAccount("xai", sorted[0]!);
+    const cfg = kernelConfig("fill-first", { autoSwitchThreshold: 80 });
+    // Well under threshold: the initial-preference rule would keep this account. The 429 path
+    // must not, because the account it would hold is the one that just failed.
+    setCachedProviderAccountQuotaForTests("xai", sorted[0]!, { weeklyPercent: 10, updatedAt: Date.now() });
+    // The successor is the BUSIER of the two survivors, so quota ranking would skip past it.
+    // Fill-first still takes it: filling one account before opening the next is the point.
+    setCachedProviderAccountQuotaForTests("xai", sorted[1]!, { weeklyPercent: 70, updatedAt: Date.now() });
+    setCachedProviderAccountQuotaForTests("xai", sorted[2]!, { weeklyPercent: 5, updatedAt: Date.now() });
+
+    const next = rotateGenericOAuthAccountOn429(cfg, "xai", sorted[0]!, null);
+    expect(next).toBe(sorted[1]!);
   });
 });

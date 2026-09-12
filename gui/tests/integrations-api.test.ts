@@ -16,9 +16,9 @@ import {
 
 const originalFetch = globalThis.fetch;
 
-test("DSH, Aside and Raycast are file integration clients", () => {
+test("all registered export clients include Cline in file integrations", () => {
   expect(FILE_INTEGRATION_CLIENTS).toEqual([
-    "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast",
+    "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline",
   ]);
 });
 

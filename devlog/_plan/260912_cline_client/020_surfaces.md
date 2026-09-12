@@ -1,0 +1,14 @@
+# Existing CLI, catalog and dashboard surfaces
+
+Depends on contract; re-read source after 010 before B. Extend existing entry maps, no new endpoint/component architecture.
+
+Keep Cline out of unattended catalog-refresh default ids because the client must be stopped. MODIFY explicit sync lists src/cli/dispatch.ts and src/server/management/config-routes.ts: append cline. Keep lazy owned-only refresh and foreign-edit refusal; regression in tests/clients/cline-writer.test.ts verifies unowned untouched, owned refresh changes both files, model removal and endpoint changes.
+MODIFY src/cli/registry.ts export usage/summary: append cline/Cline. Existing integration verbs remain --client cline and restore --op ID; documentation must not invent positional arguments. Update focused CLI export/list expectations and existing sync source fixtures.
+
+MODIFY gui/src/pages/integrations/integration-api.ts client tuple, integration-tabs.ts TABS/FILE_CLIENTS, gui/src/app-routing.ts hash list, overview-clients.ts label map, FileIntegrationPage.tsx semantics/label maps, gui/src/components/apikeys-workspace/client-config-clients.ts CLIENTS/labels/marks, gui/src/components/integration-marks.ts exhaustive map: append cline. Reuse existing page and consequence/rollback dialogs. Reuse the existing gui/public/provider-icons/cline-color.svg already used by provider-icons.ts; no new brand asset.
+MODIFY all gui/src/i18n locale modules: append integrations.tab.cline, integrations.semantics.cline, api.clientConfig.clientCline. Copy states: current Cline CLI provider store; both files; stop before mutations, restart after; Undo restores both originals; default provider remains user-controlled. Parent handoff records these exact shared-file touches.
+MODIFY docs-site/src/content/docs/guides/integrations.md: documented installation contract, env precedence, --client verbs, conflict opt-in, --op restore/drift, two-file export format and running-client limitation. Update structure/runtime.md and structure GUI/CLI ownership docs where applicable with factual links to canonical integration contract.
+
+Verification: existing GUI client-list/route/i18n assertions extended for cline. No local GUI tests/build. Final hosted GUI build/lint/tests; obtain hosted screenshot artifact where available and inspect it. If unavailable report missing visual evidence rather than fabricate screenshot. No real user server configuration is used for capture.
+
+Surfaces P resumes 019: "next cycle wires existing CLI/dashboard surfaces and explicit catalog sync." Source lists still end in omo; append Cline only. Existing cline-color.svg is reused. Public guide path verified as guides/integrations.md. Independent core audit corrections remain mandatory in the final verification cycle; these list/copy changes do not depend on its implementation details.

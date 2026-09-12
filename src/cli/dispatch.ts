@@ -302,8 +302,20 @@ const commandRunners: Record<string, CommandRunner> = {
     return Number(process.exitCode ?? 0);
   },
   login: async deps => {
+    const loginArgs = deps.args.slice(1);
+    // 'ocx login codex' is the command people type first, and until now it answered with
+    // the full provider wall because the Codex pool lives behind 'ocx account login'.
+    // Route the three Codex spellings to that flow instead of making the user discover
+    // a second noun. Everything else stays on the local OAuth/API-key path.
+    const { isCodexAccountLoginName, handleAccountAuthCommand } = await import("./account-auth");
+    if (isCodexAccountLoginName(loginArgs[0] ?? "")) {
+      // null means "unknown subcommand", which "login" never is; the coalesce exists because
+      // the shared signature serves callers that do pass an unknown one.
+      const code = await handleAccountAuthCommand("login", loginArgs, { findLiveProxy: deps.findLiveProxy });
+      return code ?? 1;
+    }
     const { handleLogin } = await import("../oauth/login-cli");
-    await handleLogin(deps.args[1]);
+    await handleLogin(loginArgs[0]);
     return 0;
   },
   logout: async deps => {
@@ -440,7 +452,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }

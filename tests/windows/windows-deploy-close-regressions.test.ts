@@ -59,7 +59,8 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     // matching rules themselves are covered by windows-service-wrappers.test.ts.
     expect(src).toContain("killWindowsSchedulerWrappers");
     expect(read("src/lib/windows-service-wrappers.ts")).toContain("$_.ProcessId -eq $PID");
-    expect(src).toContain("lastChild?.pid && aliveFn(lastChild.pid)");
+    // Pinned-child cleanup is exercised through the retry loop in update/update-job.test.ts,
+    // including exited children, live retry/final cleanup, and successful health probes.
   });
 });
 

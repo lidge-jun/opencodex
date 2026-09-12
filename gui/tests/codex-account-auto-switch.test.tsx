@@ -245,9 +245,12 @@ describe("Codex account auto-switch threshold", () => {
     };
 
     expect(await putAutoSwitchThreshold("http://localhost:10100", 95, fetchImpl)).toBe(true);
-    expect(request?.input).toBe("http://localhost:10100/api/codex-auth/auto-switch");
+    expect(request?.input).toBe("http://localhost:10100/api/pool/settings");
     expect(request?.init.method).toBe("PUT");
-    expect(request?.init.body).toBe(JSON.stringify({ threshold: 95 }));
+    // Mapped, not forwarded: the contract field is autoSwitchThreshold and the provider is
+    // always sent. A body that still said `threshold` would be ignored and the save would
+    // report success while changing nothing.
+    expect(request?.init.body).toBe(JSON.stringify({ provider: "openai", autoSwitchThreshold: 95 }));
   });
 
   test("reports HTTP and network failures without accepting the write", async () => {

@@ -1377,6 +1377,55 @@ describe("openai-chat response_format emission", () => {
     });
   });
 
+  // Narrower neighbour of the kill switch: the upstream rejects the json_schema TYPE, so the
+  // request is downgraded to json_object rather than stripped. Both wires must agree.
+  describe("json_schema downgrade for noJsonSchemaModels", () => {
+    const schemaFormat = {
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    };
+    const passthrough = (
+      modelId: string,
+      providerOverrides: Partial<OcxProviderConfig>,
+      responseFormat: unknown = schemaFormat,
+    ) => JSON.parse(buildOpenAIChatPassthroughRequest(
+      provider(providerOverrides),
+      { messages: [{ role: "user", content: "hi" }], response_format: responseFormat },
+      modelId,
+      false,
+    ).body as string) as Record<string, unknown>;
+
+    test("downgrades json_schema to json_object on the native wire", () => {
+      expect(passthrough("test-model", { noJsonSchemaModels: ["test-model"] }).response_format)
+        .toEqual({ type: "json_object" });
+    });
+
+    test("leaves a json_object request untouched", () => {
+      expect(passthrough("test-model", { noJsonSchemaModels: ["test-model"] }, { type: "json_object" }).response_format)
+        .toEqual({ type: "json_object" });
+    });
+
+    test("keeps the schema for a :tag sibling the operator never listed", () => {
+      expect(passthrough("test-model:structured", { noJsonSchemaModels: ["test-model"] }).response_format)
+        .toEqual(schemaFormat);
+    });
+
+    test("the full kill switch still wins when a model is on both lists", () => {
+      expect(passthrough("test-model", {
+        noJsonSchemaModels: ["test-model"],
+        noStructuredOutputModels: ["test-model"],
+      }).response_format).toBeUndefined();
+    });
+
+    test("the translated wire downgrades the same request", () => {
+      const built = createOpenAIChatAdapter(provider({ noJsonSchemaModels: ["test-model"] })).buildRequest({
+        ...parsed(),
+        options: { textFormat: { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true } },
+      });
+      expect(bodyOf(built).response_format).toEqual({ type: "json_object" });
+    });
+  });
+
 // Tool-call deltas are BUFFERED until a terminal signal, so this adapter can consume upstream
 // frames for a long time while yielding nothing downstream. The Responses bridge arms its
 // stall watchdog on ADAPTER activity, not socket activity, so a model streaming a large

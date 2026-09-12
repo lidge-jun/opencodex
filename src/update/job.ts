@@ -983,6 +983,11 @@ export interface RestartIo {
   spawnStart?: (job: UpdateJobState, installer: Installer, port?: number, launcher?: string) => void;
   /** The package launcher verified after a pnpm group switch or rollback. */
   packageLauncherPathFn?: () => string;
+  /** Exercise pinned-start retries without spawning, reclaiming, or killing real processes. */
+  spawnDetachedStartFn?: typeof spawnDetachedStart;
+  preparePortForPinnedStartFn?: typeof preparePortForPinnedStart;
+  waitForGhostListenClearFn?: typeof waitForGhostListenClear;
+  killProxyFn?: typeof killProxy;
   serviceInstalledFn?: () => boolean;
   /**
    * After a service reinstall exits 0, only trust the service path when this is true.
@@ -1332,9 +1337,20 @@ async function restartAfterUpdate(
     }
   }
   const attempts = 3;
+  const now = io.now ?? (() => Date.now());
+  const spawnPinnedStart = io.spawnDetachedStartFn ?? spawnDetachedStart;
+  const preparePort = io.preparePortForPinnedStartFn ?? preparePortForPinnedStart;
+  const waitForGhost = io.waitForGhostListenClearFn ?? waitForGhostListenClear;
   // Longer than published hard-pin reclaim (30s) so a slow start can still report healthy.
   const perAttemptHealthMs = 70_000;
   let lastChild: ChildProcess | null = null;
+  const killSpawnAttempt = (child: ChildProcess | null): void => {
+    // A numeric PID can be reused once this particular child has exited.
+    if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
+    if (aliveFn(child.pid)) {
+      try { (io.killProxyFn ?? killProxy)(child.pid); } catch { /* best-effort */ }
+    }
+  };
   for (let attempt = 1; attempt <= attempts; attempt++) {
     if (attempt > 1) {
       updateJob(
@@ -1343,13 +1359,11 @@ async function restartAfterUpdate(
         `Pinned start attempt ${attempt - 1} did not become healthy on port ${port}; `
           + `retrying (${attempt}/${attempts}).`,
       );
-      if (lastChild?.pid && aliveFn(lastChild.pid)) {
-        try { killProxy(lastChild.pid); } catch { /* best-effort */ }
-      }
+      killSpawnAttempt(lastChild);
       lastChild = null;
     }
-    preparePortForPinnedStart(job, port, listPids, aliveFn, verifyOcx);
-    const ready = await waitForGhostListenClear(
+    preparePort(job, port, listPids, aliveFn, verifyOcx);
+    const ready = await waitForGhost(
       port,
       hostname,
       listPids,
@@ -1365,17 +1379,25 @@ async function restartAfterUpdate(
       );
       continue;
     }
-    lastChild = spawnDetachedStart(job, job.installer, port, launcher);
-    const healthDeadline = Date.now() + perAttemptHealthMs;
-    while (Date.now() < healthDeadline) {
+    const child = spawnPinnedStart(job, job.installer, port, launcher);
+    lastChild = child;
+    const retireChild = () => {
+      if (lastChild === child) lastChild = null;
+      child.removeListener("exit", retireChild);
+      child.removeListener("error", retireChild);
+      child.removeListener("close", retireChild);
+    };
+    child.once("exit", retireChild);
+    child.once("error", retireChild);
+    child.once("close", retireChild);
+    const healthDeadline = now() + perAttemptHealthMs;
+    while (now() < healthDeadline) {
       if (await probe(port, hostname)) return;
       await sleep(500);
     }
   }
   // Exhausted retries: do not leave a hung pinned-start child owning the port.
-  if (lastChild?.pid && aliveFn(lastChild.pid)) {
-    try { killProxy(lastChild.pid); } catch { /* best-effort */ }
-  }
+  killSpawnAttempt(lastChild);
 }
 
 /** Compact listen-holder summary for update-job logs when reclaim fails. */

@@ -21,12 +21,15 @@ describe("claude context-window map (devlog 260712 B2)", () => {
   });
 
   test("registers native slugs (bare + desktop alias + legacy alias)", () => {
-    const map = buildClaudeContextWindows(["gpt-5.6-sol", "gpt-5.4"], []);
-    // Authoritative native overrides: gpt-5.6 natives follow Codex 272k, gpt-5.4 native 1M.
+    const map = buildClaudeContextWindows(["gpt-5.6-sol", "gpt-5.3-codex-spark", "gpt-5.4"], []);
+    // Authoritative native overrides: gpt-5.6 natives follow Codex 272k, spark 100k.
+    // gpt-5.4 was the only 1M native override; that window is gone, so a retired
+    // slug passed here does not register.
     expect(map["gpt-5.6-sol"]).toBe(272_000);
     expect(map[desktop3pAlias("native", "gpt-5.6-sol")]).toBe(272_000);
     expect(map["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
-    expect(map["gpt-5.4"]).toBe(1_000_000);
+    expect(map["gpt-5.3-codex-spark"]).toBe(100_000);
+    expect(map["gpt-5.4"]).toBeUndefined();
   });
 
   test("first-wins on alias collisions (registry policy)", () => {

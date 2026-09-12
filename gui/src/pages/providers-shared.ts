@@ -54,6 +54,10 @@ const OAUTH_LABELS: Record<string, string> = {
   "google-antigravity": "Google Antigravity",
   "github-copilot": "GitHub Copilot",
   cursor: "Cursor",
+  // Accounts rows title through this map, not `formatProviderDisplayName`.
+  // Without an entry the row reads its raw id.
+  devin: "Devin",
+  "devin-cli": "Devin CLI",
 };
 
 export const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;

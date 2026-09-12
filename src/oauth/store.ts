@@ -29,6 +29,7 @@ import {
   type GenerationContext,
 } from "../lib/state-store-sweeper";
 import { validateCopilotApiBaseUrl } from "./github-copilot";
+import { validateDevinApiBaseUrl } from "./devin/api-base";
 import type { OAuthAccountSelection, OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
 export type AuthStore = Record<string, ProviderAccountSet>;
@@ -459,9 +460,12 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
   if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
-    // Persist only allowlisted Copilot origins; drop anything else so auth.json cannot
-    // become an SSRF springboard across reloads.
-    const validated = validateCopilotApiBaseUrl(candidate.apiBaseUrl);
+    // Persist only allowlisted origins; drop anything else so auth.json cannot
+    // become an SSRF springboard across reloads. Copilot and Devin are the two
+    // providers whose host comes back from the network, and each owns its own
+    // allowlist.
+    const validated =
+      validateCopilotApiBaseUrl(candidate.apiBaseUrl) ?? validateDevinApiBaseUrl(candidate.apiBaseUrl);
     if (validated) normalized.apiBaseUrl = validated;
   }
   if (candidate.kiro && typeof candidate.kiro === "object") {

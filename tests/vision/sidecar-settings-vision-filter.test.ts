@@ -134,7 +134,7 @@ describe("sidecar-settings vision model filter", () => {
     const body = await response.json() as { vision: { model: string } };
     // Empty string clears the override; the effective reported model is the fallback.
     expect(config.visionSidecar?.model).toBeUndefined();
-    expect(body.vision.model).toBe("gpt-5.4-mini");
+    expect(body.vision.model).toBe("gpt-5.6-luna");
   });
 
   test("6. catalog failure degrades to baselines", async () => {
@@ -186,7 +186,7 @@ describe("sidecar-settings vision model filter", () => {
   test("9. GET reports the effective Anthropic default for an explicitly selected backend", async () => {
     // Reports what the runtime WOULD use for this backend. No OAuth account is set up
     // here, so no plan would run; the point is that the projection stops answering
-    // gpt-5.4-mini for a configuration the OpenAI describer does not own.
+    // gpt-5.6-luna for a configuration the OpenAI describer does not own.
     const config = emptyConfig({ visionSidecar: { backend: "anthropic" } });
     const response = await getSidecarSettings(config);
     expect(response.status).toBe(200);

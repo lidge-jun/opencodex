@@ -190,6 +190,8 @@ indique la réinitialisation de fenêtre à venir la plus proche (cinq heures, h
 Le fournisseur dont le quota se renouvelle en premier est ainsi sollicité. Les cibles dépourvues de données de quota
 récentes et les égalités conservent l’ordre de configuration. `weight` et `stickyLimit` n’affectent pas cette stratégie.
 
+Ce classement et l’exclusion des fournisseurs avant l’envoi exigent des limites récentes d’inférence de modèles applicables dans leur ensemble à l’unique clé API actuelle. Les résumés OAuth ou du compte courant, les routes transmettant les identifiants de l’appelant, les configurations à plusieurs clés et les instantanés dont les identifiants ou la destination ont changé servent uniquement à l’affichage pour cette décision préalable. Il en va de même lorsque les en-têtes `Authorization`, `x-api-key` ou `x-goog-api-key` remplacent les identifiants ; les fenêtres réservées à la recherche ou à MCP sont exclues. Si aucune cible admissible n’a de réinitialisation applicable, l’ordre de configuration prévaut. La sélection des comptes et les nouvelles tentatives appliquent toujours leurs limites habituelles.
+
 ## Que se passe-t-il lorsqu'une cible échoue
 
 Les échecs d’un combo se répartissent entre ceux qui entraînent un **basculement** et les échecs **terminaux**.
@@ -279,9 +281,7 @@ Ouvrez le tableau de bord local et choisissez **Modèles → Combos**. L'espace 
 combos, et son sélecteur de cible exclut les modèles désactivés et les combos imbriqués.
 
 Chaque cible affiche aussi un badge de quota en direct : **Disponible**, **Quota épuisé** ou **Quota inconnu**.
-Enregistrer et Créer ne sont désactivés que lorsque chaque cible activée dispose de preuves fraîches et complètes
-que son quota est épuisé. Les données manquantes, obsolètes, mal formées ou agrégées de façon incomplète restent
-inconnues et ne verrouillent jamais un contrôle. La récupération du quota réactive automatiquement l’action.
+L’éditeur bloque Enregistrer et Créer pour une raison de quota uniquement lorsque chaque cible utilisable dispose d’une confirmation serveur encore valide indiquant que la limite d’inférence liée à ses identifiants configurés est épuisée. Les quotas de compte, de modèle, de recherche et de MCP fournis uniquement à titre d’affichage, ainsi que les informations de routage absentes ou expirées, ne déclenchent pas ce blocage. Le blocage expire à la réinitialisation applicable ou à l’expiration de la validité des données et fait l’objet d’une nouvelle vérification lorsque la page devient active ou visible ; Actualiser recharge à la fois les données des combos et les quotas.
 
 ### CLI
 

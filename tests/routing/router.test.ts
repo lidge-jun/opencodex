@@ -447,7 +447,7 @@ describe("routeModel registry effort defaults", () => {
     const route = routeModel(config, "deepseek/deepseek-v4-flash");
 
     expect(route.provider.noVisionModels).toEqual([
-      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro", "deepseek-v4-flash",
+      "deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash",
     ]);
   });
 

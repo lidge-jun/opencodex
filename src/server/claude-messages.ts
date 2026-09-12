@@ -30,7 +30,6 @@ import {
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
-import { registryEntryForProviderDestination } from "../providers/registry";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
@@ -38,6 +37,7 @@ import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-dec
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
 import {
   conversationIdFromClaudeMetadata,
+  getOrAllocateRequestSessionLane,
   linkRequestSessionLane,
   normalizeLogConversationId,
   sessionLaneIdFromRequest,
@@ -637,6 +637,12 @@ export async function handleClaudeMessages(
   }
 }
 
+/**
+ * Translate a Claude Messages request, route it through the Responses pipeline,
+ * and translate the reply back. Runs under a translator budget owned by the
+ * caller; Go session affinity is derived here and handed to the final Go
+ * transport out of band rather than through replay headers.
+ */
 async function handleClaudeMessagesWithBudget(
   req: Request,
   config: OcxConfig,
@@ -791,19 +797,13 @@ async function handleClaudeMessagesWithBudget(
   // Native ChatGPT passthrough (openai-responses forward) accepts only Codex-shaped
   // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
-  let nativeRoute = false;
-  let opencodeGoRoute = false;
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
-    // Match the fixed key-auth destination before per-model wire overrides, including
-    // renamed Go providers without treating custom or lookalike URLs as Go.
-    opencodeGoRoute = registryEntryForProviderDestination(route.provider)?.id === "opencode-go";
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
     logCtx.routeDecision = route.routeDecision;
     if (route.provider.adapter === "openai-responses") {
-      nativeRoute = true;
       delete internalBody.max_output_tokens;
       delete internalBody.temperature;
       delete internalBody.top_p;
@@ -867,30 +867,23 @@ async function handleClaudeMessagesWithBudget(
       };
     }
   }
-  if (opencodeGoRoute) {
-    const session = req.headers.get("x-opencode-session");
-    if (session) headers.set("x-opencode-session", session);
-  }
-  const hasExplicitGoSession = opencodeGoRoute
-    && (sessionLaneIdFromRequest(headers) !== undefined
-      || normalizeLogConversationId(headers.get("x-opencode-session")) !== undefined);
-  const synthesizeGoSession = opencodeGoRoute && !hasExplicitGoSession
+  // Carry Go identity out of band: a combo's preflight target may differ from its
+  // actual dispatch/fallback target. Never add Go-only identity to replay headers.
+  const claudeNativeSessionId = cacheKeySource === "metadata"
+    && typeof internalBody.prompt_cache_key === "string"
     && isRec(anthropicBody)
-    && conversationIdFromClaudeMetadata(isRec(anthropicBody.metadata) ? anthropicBody.metadata : undefined) !== undefined;
-  // Go can also use the Responses adapter; its eligibility gate must win on both wires.
-  if (opencodeGoRoute ? synthesizeGoSession : nativeRoute) {
-    // ChatGPT-backend prompt-cache affinity rides the session_id HEADER (codex
-    // clients always send their session uuid; devlog 090 follow-up: body-level
-    // prompt_cache_key alone still yielded cached_tokens:0). Claude Code never sends
-    // the header, so synthesize a stable per-session uuid from the same cache key.
-    // Routed Go requests need this lane too for their x-opencode-session affinity —
-    // but ONLY for a real per-session key (metadata.user_id). The system-hash fallback
-    // key is shared across Desktop conversations, and a shared session_id's backend
-    // semantics are unproven (audit 133 R2#3): body prompt_cache_key only there.
-    if (cacheKeySource === "metadata" && (synthesizeGoSession || !headers.has("session_id")) && typeof internalBody.prompt_cache_key === "string") {
-      headers.set("session_id", uuidFromHex(internalBody.prompt_cache_key));
-    }
-  }
+    && conversationIdFromClaudeMetadata(isRec(anthropicBody.metadata) ? anthropicBody.metadata : undefined) !== undefined
+    ? uuidFromHex(internalBody.prompt_cache_key)
+    : undefined;
+  const metadataGoLane = normalizeLogConversationId(claudeNativeSessionId);
+  // Without any valid conversation identity, fall back to the request-scoped lane
+  // allocated on the admitted client request (#4172): stable across retries and
+  // route reconstruction, distinct per request, and never derived from a shared
+  // system-prompt cache key or from a later synthesized native session_id header.
+  const claudeGoSessionLane = sessionLaneIdFromRequest(headers)
+    ?? normalizeLogConversationId(req.headers.get("x-opencode-session"))
+    ?? metadataGoLane
+    ?? getOrAllocateRequestSessionLane(req);
   let internalReq: Request;
   try {
     // The UTF-16 JSON string and the Request's UTF-8 body coexist until dispatch.
@@ -934,6 +927,8 @@ async function handleClaudeMessagesWithBudget(
     // Without this the replay would look native and a Responses-scoped wire default
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
+    claudeGoAffinity: { sessionLane: claudeGoSessionLane },
+    claudeNativeSessionId,
     stripClaudeMainAuthForNoncanonicalForward: true,
     ...(trustedClaudeMainAuth ? { trustedClaudeMainAuth } : {}),
     // Claude's internal stored-main enrichment is not an original caller credential.

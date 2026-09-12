@@ -78,7 +78,7 @@ export default function ClientConfigDialog({
             {t("api.clientConfig.missingLimits", { count: envelope.modelsWithoutLimits, total: envelope.modelCount })}
           </p>
         )}
-        {!hasKeys && (
+        {!hasKeys && client !== "cline" && (
           // Informational, never blocking: an agent may legitimately want the shape
           // first, so both actions stay enabled.
           <p className="muted small awi-clientconfig-nokey">
@@ -91,14 +91,14 @@ export default function ClientConfigDialog({
           <CopyableExample text={envelope.destination} />
         </div>
         <div className="awi-clientconfig-line">
-          <span className="muted text-label">{t("api.clientConfig.envHint")}</span>
+          {client !== "cline" && <span className="muted text-label">{t("api.clientConfig.envHint")}</span>}
           <CopyableExample text={envelope.exportHint} />
         </div>
-        <p className="muted small awi-clientconfig-merge">{t("api.clientConfig.mergeWarning")}</p>
+        <p className="muted small awi-clientconfig-merge">{t(client === "cline" ? "api.clientConfig.clineBundle" : "api.clientConfig.mergeWarning")}</p>
         {/* The old <details> is gone — this is the one place the answer lives now,
             so it is a labelled paragraph rather than a fold. */}
         <p className="muted text-label awi-clientconfig-where-title">{t("api.clientConfig.whereDisclosure")}</p>
-        <p className="muted small">{t("api.clientConfig.whereBody")}</p>
+        <p className="muted small">{t(client === "cline" ? "integrations.semantics.cline" : "api.clientConfig.whereBody")}</p>
 
         <div className="modal-actions">
           <button type="button" className="btn btn-primary btn-sm" onClick={onCopy}>

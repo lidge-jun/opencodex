@@ -1,5 +1,5 @@
 import { usageSummary30dResourceKey } from "../usage-summary-resource";
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { IconX } from "../icons";
 import { useT } from "../i18n/shared";
 import { useKeyedClientResource } from "../client-resource";
@@ -12,6 +12,7 @@ import {
 import { oauthTosRisk } from "../oauth-tos-risk";
 import OAuthTosWarningModal from "./OAuthTosWarningModal";
 import ProviderCatalog from "./provider-catalog/ProviderCatalog";
+import ProviderNoteModal from "./provider-catalog/ProviderNoteModal";
 import type { AccountLoginRow, AccountLoginStatus } from "./provider-catalog/ProviderCatalog";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility";
@@ -62,6 +63,13 @@ export default function AddProviderModal({
   const aliveRef = useRef(true);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  // The full-note popup is owned here, not in the catalog: it has to render as a sibling
+  // of this overlay, and its open state has to be visible to the Escape handler below.
+  const [notePreset, setNotePreset] = useState<Preset | null>(null);
+  // The unified search text is owned here for the same reason: Escape has to clear a
+  // non-empty query instead of closing the dialog, and the handler that decides is this
+  // component's.
+  const [catalogQuery, setCatalogQuery] = useState("");
 
   const oauthPoll = useKeyedClientResource(
     `add-provider-oauth:${apiBase}`,
@@ -125,11 +133,23 @@ export default function AddProviderModal({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !oauthTosPending) onClose();
+      // This listener is on `window` and does not read `defaultPrevented`, so a native
+      // <dialog> cancel does not stop it. Every stacked overlay has to be named here or
+      // Escape closes the whole add-provider modal out from under it.
+      // Kept as a `!oauthTosPending` expression on purpose: tests/gui/oauth-tos-warning.test.ts
+      // source-scans this file for that exact substring, because the guard is the only thing
+      // stopping Escape from closing the modal out from under a stacked overlay.
+      const noOverlayOpen = !oauthTosPending && !notePreset;
+      if (e.key !== "Escape" || !noOverlayOpen) return;
+      // Escape unwinds one layer at a time: the note popup, then a live search, then the
+      // dialog. Closing the modal on the keystroke that was meant to clear a query throws
+      // away everything the user typed into the form behind it.
+      if (catalogQuery) { setCatalogQuery(""); return; }
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, oauthTosPending]);
+  }, [onClose, oauthTosPending, notePreset, catalogQuery]);
 
   const presetDescription = (candidate: Preset): string | undefined => {
     const key = codexPresetDescriptionKey(candidate);
@@ -256,8 +276,11 @@ export default function AddProviderModal({
             usageRank={usageRank}
             presetsLoading={presetsLoading}
             initialTier={initialTier}
+            query={catalogQuery}
+            onQueryChange={setCatalogQuery}
             onSelectPreset={p => choosePreset(p)}
             onSelectCustom={() => choosePreset(fallbackPresets[0]!)}
+            onShowNote={p => setNotePreset(p)}
             accountRows={accountRows}
             accountStatus={accountStatus}
             busyProvider={accountBusy}
@@ -337,6 +360,16 @@ export default function AddProviderModal({
           dispatch({ type: "set-oauth-tos-pending", providerId: null });
           void loginOAuth(id, oauthSetters);
         }}
+      />
+    )}
+    {notePreset?.note && (
+      <ProviderNoteModal
+        key={notePreset.id}
+        providerId={notePreset.id}
+        label={notePreset.label}
+        adapter={notePreset.adapter}
+        note={notePreset.note}
+        onClose={() => setNotePreset(null)}
       />
     )}
     </>

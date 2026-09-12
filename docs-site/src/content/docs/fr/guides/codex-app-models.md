@@ -130,8 +130,8 @@ service OpenAI.
 
 ## Couverture stable actuelle des modèles
 
-L'ensemble natif de secours comprend `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark` et GPT-5.6
-Sol/Terra/Luna. Pour la famille GPT-5.5/5.4, opencodex conserve les entrées dynamiques plus riches du
+L'ensemble natif de secours comprend `gpt-5.5`, `gpt-5.3-codex-spark` et GPT-5.6
+Sol/Terra/Luna. Pour la famille GPT-5.5, opencodex conserve les entrées dynamiques plus riches du
 catalogue Codex installé et ne synthétise qu'une entrée manquante. L'instantané amont fourni n'est employé
 que pour GPT-5.6, auquel il apporte l'identité et les métadonnées réelles de chaque modèle plutôt qu'une
 approximation fondée sur un ancien modèle d'entrée.

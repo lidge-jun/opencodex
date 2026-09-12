@@ -10,7 +10,6 @@ export const QODER_GLOBAL_MODELS = [
   "Kimi-K2.7-Code",
   "GLM-5.3",
   "GLM-5.2",
-  "DeepSeek-V4-Pro",
 ] as const;
 
 /** Live Qoder CN roster captured from the official CLI on 2026-09-03. */

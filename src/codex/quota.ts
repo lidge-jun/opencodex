@@ -44,6 +44,21 @@ const MONTHLY_WINDOW_MIN_MINUTES = MONTHLY_WINDOW_MIN_SECONDS / 60;
 // Derived, never written as a literal: the header parser and the WHAM parser must not be able
 // to drift to different thresholds, which is the class of defect this pair exists to prevent.
 const WEEKLY_WINDOW_MIN_MINUTES = WEEKLY_WINDOW_MIN_SECONDS / 60;
+/**
+ * Seconds/milliseconds split for a stored reset instant: below it the value is Unix seconds,
+ * at or above it milliseconds.
+ *
+ * Both units reach storage — `normalizeResetAt` does not scale, and the GUI disambiguates by
+ * magnitude at read time — so a comparison written against one assumption is off by 1000x
+ * against the other. In the seconds-read-as-milliseconds direction every reading looks like it
+ * elapsed in 1970, which is a check that passes its own test and does nothing. Exported so
+ * `isTerminalShortWindow` in routing.ts shares this one split instead of repeating the literal.
+ */
+const RESET_AT_SECONDS_MAX = 10_000_000_000;
+
+export function resetAtToMs(resetAt: number): number {
+  return resetAt < RESET_AT_SECONDS_MAX ? resetAt * 1000 : resetAt;
+}
 
 const accountQuota = new Map<string, StoredAccountQuota>();
 let lastReconciledGeneration = 0;
@@ -221,6 +236,25 @@ function snapshotHasShort(quota: Omit<StoredAccountQuota, "updatedAt">): boolean
     || quota.shortWindowSeconds !== undefined;
 }
 
+function shortResetHasElapsed(resetAt: number | undefined, now: number): boolean {
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= 0) return false;
+  return resetAtToMs(resetAt) <= now;
+}
+
+/** Display/rotation carry expires; a reset clock cannot retract hard-lock evidence. */
+function assignCarriedShort(
+  next: StoredAccountQuota,
+  existing: StoredAccountQuota | undefined,
+  now: number,
+  policyEvidence = false,
+): void {
+  if (!existing || (!policyEvidence && shortResetHasElapsed(existing.shortResetAt, now))) return;
+  if (existing.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+  if (existing.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
+  if (existing.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
+  if (existing.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
+}
+
 function snapshotHasCustom(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
   return quota.customWindows !== undefined;
 }
@@ -282,10 +316,7 @@ function mergeAccountQuota(
     if (existing?.monthlyPercent !== undefined) next.monthlyPercent = existing.monthlyPercent;
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing?.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
-    if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
-    if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
-    if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
-    if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
+    assignCarriedShort(next, existing, updatedAt, policyEvidence);
     if (existing?.customWindows !== undefined) next.customWindows = existing.customWindows;
     next.resetCredits = quota.resetCredits;
     return next;
@@ -329,10 +360,10 @@ function mergeAccountQuota(
   } else {
     // Unknown usage is not a lower reading. Retain the entire known tuple: pairing
     // its percentage with new metadata would silently extend or shorten its reset.
-    if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
-    if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
-    if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
-    if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
+    // An elapsed reset is the exception. It describes a window that has already rolled over,
+    // and carrying it republishes updatedAt, which is exactly what kept a Spark-polluted Pro
+    // row alive past the six-hour disk TTL that #4122 expected to expire it.
+    assignCarriedShort(next, existing, updatedAt, policyEvidence);
   }
 
   if (snapshotHasCustom(quota)) next.customWindows = quota.customWindows;
@@ -394,6 +425,7 @@ function notifyCodexQuotaSnapshot(accountId: string, next: StoredAccountQuota): 
         scope: "codex",
         accountKey: accountId,
         windows: codexWindowObservations(snapshot),
+        retainAbsentShortWindow: true,
       });
     })
     .catch(() => {
@@ -561,14 +593,11 @@ export function updateAccountQuota(
       : {}),
     ...(existing?.weeklyResetAt !== undefined ? { weeklyResetAt: existing.weeklyResetAt } : {}),
     ...(existing?.monthlyResetAt !== undefined ? { monthlyResetAt: existing.monthlyResetAt } : {}),
-    ...(existing?.shortPercent !== undefined ? { shortPercent: existing.shortPercent } : {}),
-    ...(existing?.shortObservedAt !== undefined ? { shortObservedAt: existing.shortObservedAt } : {}),
-    ...(existing?.shortResetAt !== undefined ? { shortResetAt: existing.shortResetAt } : {}),
-    ...(existing?.shortWindowSeconds !== undefined ? { shortWindowSeconds: existing.shortWindowSeconds } : {}),
     ...(existing?.customWindows !== undefined ? { customWindows: existing.customWindows } : {}),
     ...(existing?.resetCredits !== undefined ? { resetCredits: existing.resetCredits } : {}),
     updatedAt: Date.now(),
   };
+  assignCarriedShort(quota, existing, quota.updatedAt);
 
   const nextWeeklyResetAt = normalizeResetAt(weeklyResetAt);
   const nextMonthlyResetAt = normalizeResetAt(monthlyResetAt);

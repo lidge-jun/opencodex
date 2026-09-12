@@ -273,7 +273,7 @@ describe("cyber_policy error fidelity", () => {
     });
 
     expect(events.find(e => e.type === "error")).toMatchObject({ errorType: "invalid_request" });
-    const frames = await collectSse(bridgeToResponsesSSE(replay(events), "openai/gpt-5.4"));
+    const frames = await collectSse(bridgeToResponsesSSE(replay(events), "openai/gpt-5.6-luna"));
     const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
     expect(failed.error).toMatchObject({
       type: "invalid_request",
@@ -287,7 +287,7 @@ describe("cyber_policy error fidelity", () => {
   test("message-only cyber adapter error still classifies (no silent 502)", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "error", message: SECRET_CYBER_MESSAGE, retryable: true },
-    ]), "openai/gpt-5.4"));
+    ]), "openai/gpt-5.6-luna"));
     const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
     expect(failed.error).toMatchObject({
       type: CYBER_POLICY_ERROR_CODE,
@@ -299,7 +299,7 @@ describe("cyber_policy error fidelity", () => {
 
     const buffered = buildResponseJSON([
       { type: "error", message: SECRET_CYBER_MESSAGE, retryable: true },
-    ], "openai/gpt-5.4");
+    ], "openai/gpt-5.6-luna");
     expect(buffered).toMatchObject({
       status: "failed",
       retryable: false,
@@ -311,7 +311,7 @@ describe("cyber_policy error fidelity", () => {
     async function* throwingEvents(): AsyncGenerator<AdapterEvent> {
       throw new Error(SECRET_CYBER_MESSAGE);
     }
-    const frames = await collectSse(bridgeToResponsesSSE(throwingEvents(), "openai/gpt-5.4"));
+    const frames = await collectSse(bridgeToResponsesSSE(throwingEvents(), "openai/gpt-5.6-luna"));
     const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
     expect(failed).toMatchObject({
       status: "failed",
@@ -386,7 +386,7 @@ describe("cyber_policy error fidelity", () => {
           controller.close();
         },
       }),
-      "gpt-5.4",
+      "gpt-5.6-luna",
     );
     const frames = await collectSse(chatSse);
     const errorFrame = frames.find(frame => frame.data.error);

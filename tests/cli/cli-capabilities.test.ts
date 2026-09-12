@@ -310,7 +310,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "PUT /api/codex-auth/accounts/alias",
   "PUT /api/codex-auth/accounts/priority",
   "PUT /api/codex-auth/active",
-  "PUT /api/codex-auth/auto-switch",
   "PUT /api/codex-auth/failover",
   "PUT /api/combos",
   "PUT /api/custom-models/{id}",

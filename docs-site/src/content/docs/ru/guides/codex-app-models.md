@@ -77,8 +77,8 @@ visibility = "list"
 
 ## Текущее покрытие стабильных моделей
 
-Нативный fallback-набор включает `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-`gpt-5.3-codex-spark` и GPT-5.6 Sol/Terra/Luna. Для семейства GPT-5.5/5.4 opencodex сохраняет
+Нативный fallback-набор включает `gpt-5.5`,
+`gpt-5.3-codex-spark` и GPT-5.6 Sol/Terra/Luna. Для семейства GPT-5.5 opencodex сохраняет
 более богатые живые записи установленного каталога Codex и синтезирует только отсутствующую
 запись. Bundled upstream-snapshot используется только для GPT-5.6, где он даёт настоящую
 per-model identity и метаданные вместо приближения по старому шаблону.

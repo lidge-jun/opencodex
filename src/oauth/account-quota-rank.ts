@@ -67,6 +67,17 @@ function headroomOf(provider: string, accountId: string): number | null {
   return 100 - Math.max(...percents);
 }
 
+/**
+ * Remaining headroom percent for one account, or null when nothing has measured it.
+ *
+ * Exported for the generic fill-first threshold, which needs the measurement itself rather
+ * than an ordering. Null stays null all the way out: a caller must decide what "unmeasured"
+ * means for its own rule instead of being handed a fabricated 0 or 100.
+ */
+export function accountHeadroomPercent(provider: string, accountId: string): number | null {
+  return headroomOf(provider, accountId);
+}
+
 /** Unknown usage is not exhaustion; Kiro's explicit overage verdict is authoritative. */
 export function isAccountQuotaExhausted(provider: string, accountId: string): boolean {
   const exhaustion = provider === "kiro" ? getKiroAccountExhaustion(`${provider}\u0000${accountId}`) : null;

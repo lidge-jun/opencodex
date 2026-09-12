@@ -23,11 +23,11 @@ const poolAuthContext = {
 
 function minimalParsed(): OcxParsedRequest {
   return {
-    modelId: "gpt-5.4",
+    modelId: "gpt-5.6-luna",
     context: { messages: [] },
     stream: false,
     options: {},
-    _rawBody: { model: "gpt-5.4", input: [] },
+    _rawBody: { model: "gpt-5.6-luna", input: [] },
   };
 }
 
@@ -184,7 +184,7 @@ describe("Codex request transport metadata", () => {
 
   test("canonical adapter forwards Lite through selected auth and derives the final wire tier/model", async () => {
     const parsed = minimalParsed();
-    parsed.modelId = "gpt-5.4";
+    parsed.modelId = "gpt-5.6-luna";
     parsed._rawBody = { model: "gpt-5.6-sol", input: [], service_tier: "flex" };
     parsed.options.tierDecision = { kind: "set", value: "priority" };
     const before = JSON.stringify(parsed._rawBody);
@@ -298,7 +298,7 @@ describe("Codex request transport metadata", () => {
     for (const lite of [undefined, "yes", "1", "TRUE", "true, false"]) {
       const headers = new Headers({ "openai-beta": "responses_websockets=existing" });
       if (lite !== undefined) headers.set(liteHeader, lite);
-      const prepared = prepareCodexWsRequest(url, { headers, body: JSON.stringify({ model: "gpt-5.4",
+      const prepared = prepareCodexWsRequest(url, { headers, body: JSON.stringify({ model: "gpt-5.6-luna",
         client_metadata: { [liteKey]: "false", thread_id: "thread-fixture" }, stream: true,
       }) })!;
       expect(JSON.parse(prepared.frameText).client_metadata).toEqual({ [liteKey]: "false", thread_id: "thread-fixture" });
@@ -306,10 +306,10 @@ describe("Codex request transport metadata", () => {
       expect(new Headers(prepared.headers).has("originator")).toBe(false);
       expect(new Headers(prepared.headers).has("user-agent")).toBe(false);
     }
-    const absent = prepareCodexWsRequest(url, { body: '{"model":"gpt-5.4","stream":true}' })!;
+    const absent = prepareCodexWsRequest(url, { body: '{"model":"gpt-5.6-luna","stream":true}' })!;
     expect(JSON.parse(absent.frameText).client_metadata).toBeUndefined();
     const explicit = prepareCodexWsRequest(url, {
-      headers: { [liteHeader]: "true" }, body: '{"model":"gpt-5.4","stream":true}',
+      headers: { [liteHeader]: "true" }, body: '{"model":"gpt-5.6-luna","stream":true}',
     })!;
     expect(JSON.parse(explicit.frameText).client_metadata).toEqual({ [liteKey]: "true" });
   });
@@ -336,7 +336,7 @@ describe("Codex request transport metadata", () => {
       expect(prepareCodexWsRequest(url, { body })).toBeNull();
     }
     for (const client_metadata of [null, [], true, 1, "text", { unrelated: false }, { [liteKey]: true }]) {
-      const init = { body: JSON.stringify({ model: "gpt-5.4", client_metadata }), headers: { [liteHeader]: "true" } };
+      const init = { body: JSON.stringify({ model: "gpt-5.6-luna", client_metadata }), headers: { [liteHeader]: "true" } };
       const before = JSON.stringify(init);
       expect(prepareCodexWsRequest(url, init)).toBeNull();
       expect(JSON.stringify(init)).toBe(before);
@@ -347,8 +347,8 @@ describe("Codex request transport metadata", () => {
     const { applyCodexRoutingHint } = await import("../../src/codex/forward-transport-headers");
     const invalid = ["", " ", "model;service_tier=priority", "model=tier", "a b", "a\t", "a\n", "a\r", "a\0", "a\x7f", "é", null, 42];
     for (const body of [null, [], "text", {}, ...invalid.map(model => ({ model })),
-      ...invalid.map(service_tier => ({ model: "gpt-5.4", service_tier })),
-      { model: "m".repeat(257) }, { model: "gpt-5.4", service_tier: "t".repeat(65) }]) {
+      ...invalid.map(service_tier => ({ model: "gpt-5.6-luna", service_tier })),
+      { model: "m".repeat(257) }, { model: "gpt-5.6-luna", service_tier: "t".repeat(65) }]) {
       const headers = new Headers({ [hintHeader]: "model=stale;service_tier=priority", originator: "unchanged" });
       const before = JSON.stringify(body);
       applyCodexRoutingHint(headers, body);
@@ -359,7 +359,7 @@ describe("Codex request transport metadata", () => {
     const headers = new Headers();
     applyCodexRoutingHint(headers, { model: "m".repeat(256), service_tier: "t".repeat(64) });
     expect(headers.get(hintHeader)).toBe(`model=${"m".repeat(256)};tier=${"t".repeat(64)}`);
-    applyCodexRoutingHint(headers, { model: "gpt-5.4" });
-    expect(headers.get(hintHeader)).toBe("model=gpt-5.4");
+    applyCodexRoutingHint(headers, { model: "gpt-5.6-luna" });
+    expect(headers.get(hintHeader)).toBe("model=gpt-5.6-luna");
   });
 });

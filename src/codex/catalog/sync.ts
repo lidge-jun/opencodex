@@ -260,7 +260,7 @@ export function finishUpstreamNativeEntry(clone: RawEntry, priority: number, con
   if (priority !== 9) clone.priority = priority;
   applyNativeOpenAiContextOverride(clone, contextCap);
   // GPT-5.6 natives keep their exact upstream ladders (e.g. luna has max but no ultra).
-  // Older natives (gpt-5.5 / 5.4 / 5.4-mini / 5.3-codex-spark) get mock max + ultra
+  // Older natives (gpt-5.5 / 5.3-codex-spark) get mock max + ultra
   // (wire-clamped to xhigh). Ultra is always advertised regardless of v2 toggle.
   if (!isGpt56NativeSlug(String(clone.slug ?? ""))) ensureUltraReasoningLevel(clone);
   return ensureStrictCatalogFields(normalizeServiceTiers(clone));

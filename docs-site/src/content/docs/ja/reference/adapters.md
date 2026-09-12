@@ -175,6 +175,16 @@ model discovery の両方に適用されます。
   モデルを送信し、個別の `effort` および `fast=true` 値は `requested_model.parameters` に格納します。
 - Cursor ネイティブのローカルファイルシステム/shell/network 実行はデフォルトで拒否します。明示的な `mcpServers` と `desktopExecutor` 統合はそれぞれ別の opt-in です。`nativeLocalExec: "on"` はより広い組み込み executor を有効にし、Codex の承認/サンドボックスルールを迂回します。従来の `unsafeAllowNativeLocalExec: true` は、`nativeLocalExec` が設定されていない場合にのみ同等です。
 
+## `devin`
+
+**対象:** Cognition の `exa.api_server_pb.ApiServerService/GetChatMessage`（`server.codeium.com`、Connect ストリーミング）。
+**認証:** `provider.apiKey` または転送された authorization ヘッダーの Devin/Cognition API キー。ログインは Auth0 のブラウザサインインを開き、`SeatManagementService.RegisterUser` で長期キーに交換します。
+
+- 通常の fetch/parse ではなく `runTurn` を使います。リクエストとサーバーイベントは `devin/cloud-direct/wire.ts` の手動 protobuf フレーミングで扱います。
+- `GetCascadeModelConfigs` でアカウントごとにモデルを取得し、プランに含まれないモデルはリクエスト時ではなく一覧の段階で外れます。
+- Cognition はツール説明の長さ制限と完全一致のブロックリストを課します。アダプターが既知の語句を書き換え、長すぎる説明を切り詰めます。
+- キーは更新されません。失効したら `ocx login devin` をやり直してください。
+
 ## `azure-openai`（別名: `azure`）
 
 **対象:** **Azure OpenAI**。`openai-responses` を包むため、同じく `passthrough: true` です。

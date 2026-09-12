@@ -444,7 +444,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
   const visionEnabled = sidecar?.vision.enabled !== false;
-  const visionModel = visionEnabled ? (sidecar?.vision.model ?? "gpt-5.4-mini") : "";
+  const visionModel = visionEnabled ? (sidecar?.vision.model ?? "gpt-5.6-luna") : "";
   const persistedVisionReasoning = sidecar?.vision.reasoning ?? "low";
   const visionLadder = visionReasoningLadder(models, visionModel);
   const visionReasoning = clampVisionReasoningToLadder(visionLadder, persistedVisionReasoning);

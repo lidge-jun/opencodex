@@ -100,7 +100,7 @@ export interface OcxParsedRequest {
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and
-   * executes searches via the gpt-5.4-mini sidecar (see src/web-search). Absent when not requested.
+   * executes searches via the gpt-5.6-luna sidecar (see src/web-search). Absent when not requested.
    */
   _webSearch?: Record<string, unknown>;
   /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */

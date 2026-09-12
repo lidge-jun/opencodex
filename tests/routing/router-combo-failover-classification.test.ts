@@ -129,6 +129,16 @@ describe("combo failure hop/stop verdicts", () => {
   test("INVARIANT: a structured model lifecycle 410 still hops", () => {
     expect(comboFailureDecision(410, "model retired", { code: "model_end_of_life" })).toBe("hop");
   });
+
+  test("a post-send gateway status from the Codex WebSocket relay never hops", () => {
+    // The relay sent the create frame and the origin never acknowledged it (504) or the
+    // transport closed first (502). The turn may still be executing at the first target, so
+    // a second target must not receive the same request; the client decides the retry.
+    expect(comboFailureDecision(504, "Provider error 504", { code: "upstream_no_response" })).toBe("stop");
+    expect(comboFailureDecision(502, "Provider error 502", { code: "upstream_closed_before_response" })).toBe("stop");
+    // The same statuses without the structured code keep the ordinary transient hop.
+    expect(comboFailureDecision(504, "Provider error 504")).toBe("hop");
+  });
 });
 
 describe("cooled targets are not selectable", () => {

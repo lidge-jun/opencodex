@@ -41,8 +41,11 @@ import { DEFAULT_SUBAGENT_MODELS, migrateSubagentModels } from "../../src/config
 import { migrateStartupSubagentModels } from "../../src/server/subagent-models-startup";
 import { migrateXaiResponsesDefault } from "../../src/providers/xai-responses-opt-in";
 import { migrateStartupXaiResponses } from "../../src/server/xai-responses-startup";
+import { migrateZaiResponsesDefault } from "../../src/providers/zai-responses-migration";
+import { migrateStartupZaiResponses } from "../../src/server/zai-responses-startup";
 import * as configStore from "../../src/config";
 import { runClaudeAuthModeMigration } from "../../src/claude/auth-mode-migration";
+import { runRetiredCodexModelMigration, RETIRED_MODEL_MIGRATION_CUTOFF } from "../../src/codex/retired-model-migration";
 import { providerManagementConfigError } from "../../src/server/auth-cors";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 let testDir = "";
@@ -186,6 +189,41 @@ describe("Astra-first subagent upgrade", () => {
     expect(loadConfig().subagentModels).toEqual(migrated.subagentModels);
   });
 
+  test("a stored retired model moves to the live floor, including the pool warmup slug", () => {
+    const after = RETIRED_MODEL_MIGRATION_CUTOFF + 1;
+    const stored = {
+      ...getDefaultConfig(),
+      webSearchSidecar: { model: "gpt-5.4-mini", reasoning: "low" },
+      visionSidecar: { model: "gpt-5.4-mini" },
+      tokenGuardian: { codexWarmupEnabled: true, codexWarmupModel: "gpt-5.4-mini" },
+    } as never as ReturnType<typeof getDefaultConfig>;
+
+    expect(runRetiredCodexModelMigration(stored, after)).toBe(true);
+    expect(stored.webSearchSidecar?.model).toBe("gpt-5.6-luna");
+    expect(stored.visionSidecar?.model).toBe("gpt-5.6-luna");
+    expect(stored.tokenGuardian?.codexWarmupModel).toBe("gpt-5.6-luna");
+    // Sibling keys survive: this rewrites one slug, it does not rebuild the block.
+    expect(stored.webSearchSidecar?.reasoning).toBe("low");
+    expect(stored.tokenGuardian?.codexWarmupEnabled).toBe(true);
+    // Idempotent, so a second start does not report a write it does not need.
+    expect(runRetiredCodexModelMigration(stored, after)).toBe(false);
+  });
+
+  test("the retired-model migration leaves any other stored slug alone", () => {
+    const after = RETIRED_MODEL_MIGRATION_CUTOFF + 1;
+    const chosen = {
+      ...getDefaultConfig(),
+      webSearchSidecar: { model: "claude-sonnet-5" },
+      visionSidecar: { model: "gpt-5.6-terra" },
+      tokenGuardian: { codexWarmupModel: "gpt-5.5" },
+    } as never as ReturnType<typeof getDefaultConfig>;
+
+    expect(runRetiredCodexModelMigration(chosen, after)).toBe(false);
+    expect(chosen.webSearchSidecar?.model).toBe("claude-sonnet-5");
+    expect(chosen.visionSidecar?.model).toBe("gpt-5.6-terra");
+    expect(chosen.tokenGuardian?.codexWarmupModel).toBe("gpt-5.5");
+  });
+
   test("unavailable persistence leaves malformed disk bytes untouched", () => {
     const legacy = { ...getDefaultConfig(), subagentModelsVersion: undefined, subagentModels: ["one"] };
     writeConfig("{ invalid");
@@ -303,6 +341,64 @@ describe("one-time Grok Responses upgrade", () => {
   });
 });
 
+describe("one-time Z.AI Responses upgrade", () => {
+  const CANONICAL = { adapter: "openai-responses", baseUrl: "https://api.z.ai" };
+  const RETIRED = { adapter: "openai-chat", baseUrl: "https://api.z.ai/api/coding/paas/v4" };
+
+  function legacy() {
+    return {
+      ...getDefaultConfig(),
+      providers: {
+        zai: { ...RETIRED, authMode: "key" as const, defaultModel: "glm-5.3" },
+      },
+      defaultProvider: "zai",
+    };
+  }
+
+  test("read-only load keeps the retired endpoint; startup persists the canonical wire once", () => {
+    saveConfig(legacy());
+    const before = readFileSync(getConfigPath(), "utf8");
+    const config = loadConfig();
+    expect(config.providers.zai).toMatchObject(RETIRED);
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+
+    const upgraded = migrateStartupZaiResponses(config);
+    expect(upgraded.providers.zai).toMatchObject({ ...CANONICAL, zaiResponsesDefaultVersion: 1 });
+    expect(upgraded.providers.zai!.defaultModel).toBe("glm-5.3");
+    expect(loadConfig().providers.zai).toEqual(upgraded.providers.zai);
+    // The caller's snapshot is not mutated in place, and a second boot is a no-op.
+    expect(config.providers.zai).toMatchObject(RETIRED);
+    expect(migrateZaiResponsesDefault(upgraded)).toBe(false);
+  });
+
+  test.each([1, 2])("an existing marker of version %i blocks a second rewrite", version => {
+    const config = legacy();
+    config.providers.zai.zaiResponsesDefaultVersion = version;
+    saveConfig(config);
+    expect(migrateStartupZaiResponses(loadConfig()).providers.zai).toEqual(config.providers.zai);
+    expect(loadConfig().providers.zai!.zaiResponsesDefaultVersion).toBe(version);
+  });
+
+  test("a custom-named row at the retired endpoint keeps its configured wire", () => {
+    const source = legacy();
+    const custom = { ...source, defaultProvider: "my-zai", providers: { "my-zai": source.providers.zai } };
+    const before = structuredClone(custom);
+    expect(migrateZaiResponsesDefault(custom)).toBe(false);
+    expect(custom).toEqual(before);
+  });
+
+  test("unavailable persistence preserves disk and returns an isolated projection", () => {
+    const config = legacy();
+    writeConfig("{ invalid");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(migrateStartupZaiResponses(config).providers.zai).toMatchObject(CANONICAL);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe("{ invalid");
+      expect(config.providers.zai).toMatchObject(RETIRED);
+    } finally { warn.mockRestore(); }
+  });
+});
+
 function writeConfig(content: unknown): void {
   writeFileSync(
     getConfigPath(),
@@ -319,6 +415,20 @@ function writeResponsesPathConfig(responsesPath: string): void {
         adapter: "openai-responses",
         baseUrl: "https://example.test/api/v3",
         responsesPath,
+      },
+    },
+    defaultProvider: "custom",
+  });
+}
+
+function writeChatCompletionsPathConfig(chatCompletionsPath: string): void {
+  writeConfig({
+    port: 12345,
+    providers: {
+      custom: {
+        adapter: "openai-chat",
+        baseUrl: "https://example.test",
+        chatCompletionsPath,
       },
     },
     defaultProvider: "custom",
@@ -1498,6 +1608,40 @@ describe("opencodex config defaults", () => {
       ["/responses#section", "responsesPath must not include query strings or fragments"],
     ] as const) {
       writeResponsesPathConfig(responsesPath);
+
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("fallback");
+      expect(diagnostics.error).toContain(expectedError);
+    }
+  });
+
+  // chatCompletionsPath is the openai-chat mirror of responsesPath and shares its shape
+  // rules, so the same three cases have to hold on that side too.
+  test("accepts a relative chatCompletionsPath", () => {
+    writeChatCompletionsPathConfig("/api/coding/paas/v4/chat/completions");
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.config.providers.custom.chatCompletionsPath).toBe("/api/coding/paas/v4/chat/completions");
+  });
+
+  test("rejects chatCompletionsPath without a leading slash", () => {
+    writeChatCompletionsPathConfig("chat/completions");
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain("chatCompletionsPath must start with /");
+  });
+
+  test("rejects chatCompletionsPath containing a URL scheme, query, or fragment", () => {
+    for (const [chatCompletionsPath, expectedError] of [
+      ["https://other-origin.example/chat/completions", "chatCompletionsPath must be a relative path without a URL scheme"],
+      ["/https://other-origin.example/chat/completions", "chatCompletionsPath must be a relative path without a URL scheme"],
+      ["/chat/completions?api-version=v1", "chatCompletionsPath must not include query strings or fragments"],
+      ["/chat/completions#section", "chatCompletionsPath must not include query strings or fragments"],
+    ] as const) {
+      writeChatCompletionsPathConfig(chatCompletionsPath);
 
       const diagnostics = readConfigDiagnostics();
       expect(diagnostics.source).toBe("fallback");

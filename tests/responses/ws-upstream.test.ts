@@ -3,7 +3,7 @@ import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import { handleResponses } from "../../src/server/responses";
 import { isEagerRelaySseResponse } from "../../src/server/relay";
 import { isWin32EagerRewrite } from "../../src/lib/bun-stream-caps";
-import { fetchWithTransientRetry } from "../../src/lib/upstream-retry";
+import { fetchWithTransientRetry, isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
 import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
@@ -20,6 +20,7 @@ import {
   MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES,
   CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
+  CODEX_WS_LIVENESS_PING_INTERVAL_MS,
   shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
 } from "../../src/server/responses/ws-upstream";
 import type { OcxProviderConfig } from "../../src/types";
@@ -798,9 +799,14 @@ describe("codexWsUpstreamFetch", () => {
         for (const [name, value] of Object.entries(headers)) expect(response.headers.get(name)).toBe(value);
         expect(await response.json()).toEqual({ error: refusal.error });
       } else {
-        expect(response.status).toBe(200);
-        expect(isCodexWsUpstreamResponse(response)).toBe(true);
-        await expect(response.text()).rejects.toThrow("metadata");
+        // The overflow lands before any response event: an honest 502, never a 200 whose
+        // body then fails, and never the HTTP fallback (the frame was sent).
+        expect(response.status).toBe(502);
+        expect(isCodexWsUpstreamResponse(response)).toBe(false);
+        expect(response.headers.get("content-type")).toBe("application/json");
+        const failure = ((await response.json()) as { error: { code: string; message: string } }).error;
+        expect(failure.code).toBe("upstream_closed_before_response");
+        expect(failure.message).toContain("metadata");
       }
     });
 
@@ -808,8 +814,8 @@ describe("codexWsUpstreamFetch", () => {
       const response = await receive({ ...refusal, headers: boundedHeaders(5, "x".repeat(4096)) }, [
         { type: "codex.response.metadata", headers: boundedHeaders(4, "y".repeat(4096)) },
       ]);
-      expect(response.status).toBe(200);
-      await expect(response.text()).rejects.toThrow("metadata");
+      expect(response.status).toBe(502);
+      expect(((await response.json()) as { error: { message: string } }).error.message).toContain("metadata");
     });
 
     test.each([
@@ -896,8 +902,11 @@ describe("codexWsUpstreamFetch", () => {
         expect(session.reserve()).toBe(true);
         const response = await codexWsExchange(options);
         if (foreign) {
-          expect(response.status).toBe(200);
-          await expect(response.text()).rejects.toThrow("identity mismatch");
+          // A foreign stream before any response event is a transport that misbehaved after
+          // the send: non-replayable 502, and never the 4xx refusal projection.
+          expect(response.status).toBe(502);
+          expect(isCodexWsUpstreamResponse(response)).toBe(false);
+          expect(((await response.json()) as { error: { message: string } }).error.message).toContain("identity mismatch");
         } else {
           expect(response.status).toBe(429);
           expect(isCodexWsUpstreamResponse(response)).toBe(false);
@@ -1070,7 +1079,10 @@ describe("codexWsUpstreamFetch", () => {
       throw new Error("fallback must not run after open");
     }) as unknown as typeof fetch);
 
-    await expect(response.text()).rejects.toThrow("frame exceeds the response size limit");
+    // No response event preceded the oversized frame, so the exchange never owed a stream.
+    expect(response.status).toBe(502);
+    expect(((await response.json()) as { error: { message: string } }).error.message)
+      .toContain("frame exceeds the response size limit");
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
@@ -1189,9 +1201,9 @@ describe("codexWsUpstreamFetch", () => {
 
     await opened.promise;
     controller.abort(new Error("turn cancelled"));
-    const response = await pending;
-
-    await expect(response.text()).rejects.toThrow("turn cancelled");
+    // Sent and unacknowledged: the caller's abort is the caller's decision, so the fetch
+    // itself rejects with that reason and closing the socket cancels the upstream turn.
+    await expect(pending).rejects.toThrow("turn cancelled");
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
@@ -1215,7 +1227,7 @@ describe("codexWsUpstreamFetch", () => {
     await response.text();
   });
 
-  test("post-send prelude overflow settles as an errored body without HTTP fallback", async () => {
+  test("post-send prelude overflow settles as a non-replayable 502 without HTTP fallback", async () => {
     installFake(ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "codex.response.metadata", headers: { "x-models-etag": "x".repeat(CODEX_WS_METADATA_MAX_BYTES) } }) });
@@ -1225,9 +1237,10 @@ describe("codexWsUpstreamFetch", () => {
       resends++;
       return new Response("unexpected resend");
     }) as typeof fetch);
-    expect(response.status).toBe(200);
-    expect(isCodexWsUpstreamResponse(response)).toBe(true);
-    await expect(response.text()).rejects.toThrow("metadata");
+    expect(response.status).toBe(502);
+    expect(isCodexWsUpstreamResponse(response)).toBe(false);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toContain("metadata");
     expect(resends).toBe(0);
     expect(FakeWebSocket.instances[0].sent).toHaveLength(1);
   });
@@ -1259,7 +1272,7 @@ describe("codexWsUpstreamFetch", () => {
     }
   });
 
-  test("the first-response deadline settles a sent request through the outer retry wrapper without resending", async () => {
+  test("the first-response deadline settles a sent request as a 504 the outer retry wrapper does not resend", async () => {
     const { fetchWithTransientRetry } = await import("../../src/lib/upstream-retry");
     jest.useFakeTimers();
     const opened = Promise.withResolvers<void>();
@@ -1277,13 +1290,122 @@ describe("codexWsUpstreamFetch", () => {
       await opened.promise;
       jest.advanceTimersByTime(CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS);
       const response = await pending;
-      expect(response.status).toBe(200);
-      await expect(response.text()).rejects.toThrow("prelude timed out");
+      // 504 is a transient status for the wrapper; the non-replayable marker is what stops
+      // the second send, and the status is what lets the client apply its own policy.
+      expect(response.status).toBe(504);
+      expect(isNonReplayableResponse(response)).toBe(true);
+      const failure = ((await response.json()) as { error: { code: string; message: string } }).error;
+      expect(failure.code).toBe("upstream_no_response");
+      expect(failure.message).toContain("prelude timed out");
+      expect(failure.message).toContain("cause=no-upstream-frame");
       expect(sends).toBe(1);
       expect(http).toBe(0);
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  describe("prelude liveness", () => {
+    // The 90 s bound is a silence bound, not a deadline: a peer that answers pings is alive,
+    // and how long an alive origin may take before response.created belongs to the client's
+    // own deadline and the operator's connectTimeoutMs, not to a fixed number in the proxy.
+    const noResend = (counter: { http: number }) => (async () => {
+      counter.http++;
+      return new Response("must not resend");
+    }) as typeof fetch;
+
+    test("a peer that answers pings stays alive past the silence bound and still completes with one send", async () => {
+      jest.useFakeTimers();
+      const opened = Promise.withResolvers<void>();
+      let pingsSent = 0;
+      installFake(ws => {
+        Object.assign(ws, { ping: () => { pingsSent++; ws.emit("pong", {}); } });
+        ws.emit("open", {});
+        opened.resolve();
+      });
+      const counter = { http: 0 };
+      try {
+        const pending = codexWsUpstreamFetch(CODEX_URL, streamingInit(), noResend(counter));
+        await opened.promise;
+        const ws = FakeWebSocket.instances[0];
+        // Seven steps: 105 s of no message frames, well past the 90 s bound, every step ponged.
+        for (let step = 0; step < 7; step++) jest.advanceTimersByTime(CODEX_WS_LIVENESS_PING_INTERVAL_MS);
+        expect(pingsSent).toBe(7);
+        ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+        ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
+        const response = await pending;
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain("event: response.completed");
+        expect(ws.sent).toHaveLength(1);
+        expect(counter.http).toBe(0);
+        // The pinger stops once the response has started.
+        jest.advanceTimersByTime(CODEX_WS_LIVENESS_PING_INTERVAL_MS * 4);
+        expect(pingsSent).toBe(7);
+        expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    test("a peer that never pongs keeps the previous 90 s bound and names the unanswered pings", async () => {
+      jest.useFakeTimers();
+      const opened = Promise.withResolvers<void>();
+      let pingsSent = 0;
+      installFake(ws => {
+        Object.assign(ws, { ping: () => { pingsSent++; } });
+        ws.emit("open", {});
+        opened.resolve();
+      });
+      const counter = { http: 0 };
+      try {
+        const pending = codexWsUpstreamFetch(CODEX_URL, streamingInit(), noResend(counter));
+        await opened.promise;
+        // Step the clock so each chained ping timer is scheduled and fired in turn.
+        for (let elapsed = 0; elapsed < CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS; elapsed += CODEX_WS_LIVENESS_PING_INTERVAL_MS) {
+          jest.advanceTimersByTime(CODEX_WS_LIVENESS_PING_INTERVAL_MS);
+        }
+        const response = await pending;
+        expect(response.status).toBe(504);
+        const failure = ((await response.json()) as { error: { code: string; message: string } }).error;
+        expect(failure.code).toBe("upstream_no_response");
+        expect(failure.message).toContain("prelude timed out");
+        expect(failure.message).toMatch(/pings=[56] pongs=0\]/);
+        expect(pingsSent).toBeGreaterThanOrEqual(5);
+        expect(FakeWebSocket.instances[0].sent).toHaveLength(1);
+        expect(counter.http).toBe(0);
+        expect(FakeWebSocket.instances[0].closed).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    test("a control frame is proof of life too: quota keeps the exchange waiting", async () => {
+      jest.useFakeTimers();
+      const opened = Promise.withResolvers<void>();
+      installFake(ws => { ws.emit("open", {}); opened.resolve(); });
+      const counter = { http: 0 };
+      try {
+        const pending = codexWsUpstreamFetch(CODEX_URL, streamingInit(), noResend(counter));
+        await opened.promise;
+        const ws = FakeWebSocket.instances[0];
+        // No ping() on this socket. Quota at 60 s and 120 s resets the silence clock each time.
+        jest.advanceTimersByTime(60_000);
+        ws.emit("message", { data: JSON.stringify({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 10, window_minutes: 10080 } } }) });
+        jest.advanceTimersByTime(60_000);
+        ws.emit("message", { data: JSON.stringify({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 11, window_minutes: 10080 } } }) });
+        jest.advanceTimersByTime(60_000);
+        ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+        ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
+        const response = await pending;
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-codex-primary-used-percent")).toBe("11");
+        expect(await response.text()).toContain("event: response.completed");
+        expect(ws.sent).toHaveLength(1);
+        expect(counter.http).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   test("malformed native WS metadata still normalizes the real HTTP fallback routing hint", async () => {
@@ -1539,7 +1661,8 @@ describe("oversized Codex create frames", () => {
       throw new Error("fallback must not run after open");
     }) as unknown as typeof fetch);
 
-    await expect(response.text()).rejects.toThrow(
+    expect(response.status).toBe(502);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toMatch(
       /rejected the request frame as too large \(close 1009 Message Too Big\)/,
     );
   });
@@ -1553,7 +1676,10 @@ describe("oversized Codex create frames", () => {
       throw new Error("fallback must not run after open");
     }) as unknown as typeof fetch);
 
-    await expect(response.text()).rejects.toThrow("closed before a Responses terminal event (close 1006)");
+    expect(response.status).toBe(502);
+    const failure = ((await response.json()) as { error: { code: string; message: string } }).error;
+    expect(failure.code).toBe("upstream_closed_before_response");
+    expect(failure.message).toContain("closed before a Responses terminal event (close 1006)");
   });
 
   test("dials the configured provider's own wss URL for an opt-in upstream", async () => {

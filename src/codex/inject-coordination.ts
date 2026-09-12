@@ -172,8 +172,9 @@ export interface CodexPreImages {
 function readOrNull(path: string): string | null {
   try {
     return readFileSync(path, "utf-8");
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 

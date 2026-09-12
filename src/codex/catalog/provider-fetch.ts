@@ -54,6 +54,7 @@ import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
+import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -1698,6 +1699,62 @@ async function fetchProviderModelsWithAuth(
     return observed(withConfiguredRetention(
       stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
     ), "degraded");
+  }
+  if (prov.adapter === "devin") {
+    if (!apiKey) return observed(configured, "degraded");
+    const cachedDevin = getFreshCached(name, ttlMs);
+    if (cachedDevin) {
+      return observed(
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedDevin)),
+        "authoritative",
+      );
+    }
+    if (isModelsFetchCoolingDown(name)) {
+      const cooling = getStaleCached(name);
+      return observed(
+        withConfiguredRetention(
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured,
+        ),
+        "degraded",
+      );
+    }
+    const liveResult = await fetchDevinUsableModels({ apiKey, baseUrl: prov.baseUrl });
+    if (liveResult.ok) {
+      // Live catalog is the source of truth — use the discovered base models
+      // directly, not a filtered subset of the static seed.
+      //
+      // That extends to the context window. Cognition publishes no window
+      // anywhere, so the per-account catalog is the only first-party number,
+      // and the shipped static table is a degraded-mode guess that was wrong
+      // for nine of its eleven rows. The live value is applied first and the
+      // config hints run after it, so an explicit per-model override and an
+      // enabled Context cap still win — this only replaces the number nobody
+      // chose.
+      const result = liveResult.models.map((id) => {
+        const liveWindow = liveResult.contextWindows[id];
+        return {
+          id,
+          provider: name,
+          ...(liveWindow ? { contextWindow: liveWindow } : {}),
+          ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        } as CatalogModel;
+      });
+      const forCache = withConfiguredRetention(result, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, liveResult.models.length);
+      return observed(withConfiguredRetention(forCache), "authoritative");
+    }
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name);
+      markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
+    }
+    const stale = getStaleCached(name);
+    return observed(
+      withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured),
+      "degraded",
+    );
   }
   if (prov.adapter === "cursor") {
     if (!apiKey) return observed(configured, "degraded");

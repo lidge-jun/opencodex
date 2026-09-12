@@ -188,8 +188,8 @@ including OpenAI service-tier metadata.
 
 ## Current stable model coverage
 
-The native fallback set includes `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-`gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna. For the GPT-5.5/5.4 family, opencodex preserves
+The native fallback set includes `gpt-5.5`, `gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna.
+For the GPT-5.5 family, opencodex preserves
 the installed Codex catalog's richer live entries and only synthesizes a missing entry. The bundled
 upstream snapshot is used only for GPT-5.6, where it supplies the real per-model identity and
 metadata instead of an older-template approximation.

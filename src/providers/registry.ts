@@ -1,6 +1,7 @@
 import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
 import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
+import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
@@ -230,6 +231,19 @@ export interface ProviderRegistryEntry {
    */
   responsesPath?: string;
   /**
+   * Relative send path for the `openai-chat` wire, seeded into saved config exactly like
+   * `responsesPath`. Needed when one upstream serves both wires under different prefixes,
+   * because a per-model wire override changes the adapter and not the base URL.
+   */
+  chatCompletionsPath?: string;
+  /**
+   * Endpoints this entry used to live at, kept so a saved custom provider that still points
+   * at one keeps receiving this row's metadata through `registryEntryForProviderDestination`.
+   * Destination matching is by adapter plus normalized base URL, so moving a row's wire or
+   * prefix would otherwise orphan every config a user wrote against the old address.
+   */
+  destinationAliases?: readonly { readonly baseUrl: string; readonly adapter: string }[];
+  /**
    * Responses upstream that stores nothing server-side. Stateful request parameters
    * are dropped and `store` is pinned false, and orphaned tool results left by a
    * replay miss are repaired rather than forwarded.
@@ -321,6 +335,12 @@ export interface ProviderRegistryEntry {
   noTemperatureModels?: string[];
   noTopPModels?: string[];
   noPenaltyModels?: string[];
+  /**
+   * Registry-only seed for `OcxProviderConfig.noJsonSchemaModels`. Merged into the
+   * resolved provider at route time rather than persisted as user config, the same way
+   * `directReasoningEffortModels` above is registry-owned.
+   */
+  noJsonSchemaModels?: string[];
   /** Opt this provider into parallel tool calls (see OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
   /** Opt this provider into forwarding prompt_cache_key (OpenAI-specific; strict backends reject it). */
@@ -354,7 +374,7 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
-  "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
+  "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "chatCompletionsPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelDisplayNames"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
@@ -437,6 +457,30 @@ const ZAI_GLM_5X_MODELS = [...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
  * `preserveReasoningContentModels`, where flash DOES belong.
  */
 const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => id !== "glm-5.3-flash");
+/**
+ * Positive input-modality declaration for the Chat-path GLM rows.
+ *
+ * `noVisionModels` already keeps Flash out of the vision sidecar, but that is a NEGATIVE
+ * statement: it stops a detour without telling the catalog what the model can read. With
+ * no `modelInputModalities` entry, `configuredInputModalities` returns undefined and the
+ * catalog falls through to the `["text"]` floor, so every client export (ZCode, Pi, OMP)
+ * listed a native VLM as text-only and its picker refused to attach an image.
+ *
+ * The Responses sibling row below already declares this positively, so the same model was
+ * described two different ways in one registry.
+ *
+ * Authoritative source: `GET https://api.z.ai/api/v1/models` returns `input_modalities:
+ * ["text"]` for glm-5.3 and `["text", "image"]` for glm-5.3-flash (captured in
+ * devlog/_plan/260912_zcode_protocol_and_catalog/evidence/zai-responses-models.json).
+ * docs.z.ai/devpack/latest-model says the same in prose: "GLM-5.3 is a text-only model...
+ * GLM-5.3-FLASH is a multimodal model". Upstream also lists video and file for Flash;
+ * neither the internal vocabulary nor the export vocabulary can express them, so `image`
+ * is where this stops.
+ */
+const ZAI_GLM_5X_INPUT_MODALITIES: Record<string, string[]> = {
+  ...Object.fromEntries(ZAI_GLM_5X_SIDECAR_VISION_MODELS.map(id => [id, ["text"]])),
+  "glm-5.3-flash": ["text", "image"],
+};
 const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /**
  * GLM-5.3 does NOT share 5.2's five-tier ladder. docs.z.ai/devpack/latest-model folds every
@@ -610,7 +654,30 @@ const THINKING_BUDGET_MODELS = [
   "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus",
 ];
 const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"];
-const DEEPSEEK_THINKING_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
+/*
+ * DeepSeek moved the whole V4 name set on 2026-09-10. V4.1-Flash ships as deepseek-flash
+ * on the first-party API; deepseek-v4-flash and the vision preview retire as models but
+ * keep routing there as compatibility aliases, and deepseek-v4-pro follows from
+ * 2026-09-14 04:00 UTC. Evidence: https://api-docs.deepseek.com/news/news260910/.
+ *
+ * The spelling differs by who serves it, so one shared list cannot express it: the
+ * first-party API answers to deepseek-flash, while the Zen gateway exposes the route as
+ * deepseek-v4.1-flash (issue #4253, PR #4258). Vendor-hosted rosters (Volcengine plan
+ * snapshots, Alibaba) publish on their own schedule and keep the legacy set until they say
+ * otherwise - a first-party retirement notice does not end their deployment.
+ */
+const DEEPSEEK_V4_LEGACY_MODELS = ["deepseek-v4-flash"];
+/*
+ * `deepseek-v4-pro` is deliberately absent from both live sets. DeepSeek retires it from
+ * 2026-09-14 04:00 UTC and routes its requests to V4.1-Flash until a V4.1 Pro exists, so a
+ * row here would advertise a Pro context window and Pro pricing for a route that serves
+ * Flash. The retirement is followed through every roster in this file, including the
+ * vendor-hosted ones; providers that discover their models live are handled by
+ * `ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS` because deleting a row there removes the
+ * model's capabilities rather than the model.
+ */
+const DEEPSEEK_NATIVE_THINKING_MODELS = ["deepseek-flash", "deepseek-v4-flash"];
+const DEEPSEEK_GATEWAY_THINKING_MODELS = ["deepseek-v4.1-flash", "deepseek-v4-flash"];
 /*
  * DeepSeek's experimental vision preview (released 2026-08-21, api-docs.deepseek.com):
  * text+image input on the V4 Flash base. DeepSeek positions it as a preview id;
@@ -622,7 +689,7 @@ const DEEPSEEK_VISION_PREVIEW_MODEL = "deepseek-v4-flash-vision-exp";
  * CommandCode routes verified to accept image input end-to-end (#2406).
  *
  * Verified-negative and therefore deliberately ABSENT: deepseek/deepseek-v4-flash,
- * deepseek/deepseek-v4-pro, zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6. Those
+ * zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6. Those
  * routes accept the request and drop the image, which is worse than declining it — the
  * model answers about an image it never saw. Do not add an id here on family resemblance;
  * capability intersection trusts this map.
@@ -710,7 +777,7 @@ const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
 };
 /**
  * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
- * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
+ * (`deepseek/deepseek-v4.1-flash`) and suffixed (`deepseek-v4-flash-free`) forms.
  * `tests/providers/provider-registry-parity.test.ts` enumerates every id the registry
  * actually passes here, so a future id this substring test would misread cannot
  * land silently.
@@ -727,7 +794,7 @@ const deepseekReasoningMapFor = (modelId: string): Record<string, string> =>
 //           https://help.aliyun.com/en/model-studio/token-plan-quickstart
 const ALIBABA_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-  "glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro",
+  "glm-5.3", "glm-5.3-flash", "glm-5.2", 
 ];
 const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
   "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
@@ -740,7 +807,6 @@ const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "glm-5.3": ["text"],
   "glm-5.3-flash": ["text", "image"],
   "glm-5.2": ["text"],
-  "deepseek-v4-pro": ["text"],
 };
 
 // 260721 Alibaba Token Plan International (ap-southeast-1 / Singapore, hardened 260721).
@@ -749,7 +815,7 @@ const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 //           https://qwencloud.com/pricing/token-plan (qwen3.8 metadata)
 const ALIBABA_INTL_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2",
+  "deepseek-v4-flash", "deepseek-v3.2",
   "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
   "glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5",
   "MiniMax-M2.5",
@@ -782,7 +848,6 @@ const VOLCENGINE_ARK_MODELS = [
   "doubao-seed-2-1-pro-260628",
   "doubao-seed-2-1-turbo-260628",
   "doubao-seed-evolving",
-  "deepseek-v4-pro-260425",
   "deepseek-v4-flash-260425",
   "deepseek-v3-2-251201",
   // No glm-5-3 row: Ark pins date-stamped snapshot ids (glm-5-2-260617) that cannot be
@@ -798,7 +863,6 @@ const VOLCENGINE_DOUBAO_THINKING_MODELS = [
 const VOLCENGINE_CODING_PLAN_MODELS = [
   "ark-code-latest",
   "doubao-seed-2.0-code",
-  "deepseek-v4-pro",
   "deepseek-v4-flash",
   "glm-5.3",
   "glm-5.3-flash",
@@ -807,7 +871,6 @@ const VOLCENGINE_CODING_PLAN_MODELS = [
   "minimax-m3",
 ];
 const VOLCENGINE_AGENT_PLAN_MODELS = [
-  "deepseek-v4-pro",
   "deepseek-v4-flash",
   "glm-5.3",
   "glm-5.3-flash",
@@ -829,7 +892,6 @@ const VOLCENGINE_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 const VOLCENGINE_PLAN_TEXT_ONLY_MODELS = [
   "ark-code-latest",
   "doubao-seed-2.0-code",
-  "deepseek-v4-pro",
   "deepseek-v4-flash",
   "glm-5.3",
   "glm-5.2",
@@ -841,7 +903,6 @@ const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "qwen3.7-plus": ["text", "image"],
   "qwen3.6-plus": ["text", "image"],
   "qwen3.6-flash": ["text", "image"],
-  "deepseek-v4-pro": ["text"],
   "deepseek-v4-flash": ["text"],
   "deepseek-v3.2": ["text"],
   "kimi-k2.7-code": ["text", "image"],
@@ -960,7 +1021,7 @@ const NVIDIA_NIM_VISION_INPUT_MODALITIES: Record<string, string[]> = Object.from
  * reasoning suppression regardless of which list they appear in here.
  */
 const NVIDIA_NIM_NO_VISION_MODELS = [
-  "deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4-pro",
+  "deepseek-ai/deepseek-v4-flash",
   "google/codegemma-7b",
   "meta/llama-3.1-70b-instruct", "meta/llama-3.1-8b-instruct",
   "meta/llama-3.2-1b-instruct", "meta/llama-3.2-3b-instruct",
@@ -1001,7 +1062,6 @@ const NEURALWATT_REASONING_HISTORY_MODELS = [
 //           https://docs.baseten.co/inference/model-apis/vision
 const BASETEN_FULL_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const BASETEN_MODEL_REASONING_EFFORTS: Record<string, string[]> = {
-  "deepseek-ai/DeepSeek-V4-Pro": BASETEN_FULL_REASONING_EFFORTS,
   "thinkingmachines/inkling": BASETEN_FULL_REASONING_EFFORTS,
   "openai/gpt-oss-120b": BASETEN_FULL_REASONING_EFFORTS,
   "moonshotai/Kimi-K3": ["low", "high", "max"],
@@ -1012,7 +1072,6 @@ const BASETEN_MODEL_REASONING_EFFORTS: Record<string, string[]> = {
   "zai-org/GLM-5.2-Fast": ["high", "max"],
 };
 const BASETEN_MODEL_REASONING_EFFORT_MAP: Record<string, Record<string, string>> = {
-  "deepseek-ai/DeepSeek-V4-Pro": { none: "none", minimal: "minimal" },
   "thinkingmachines/inkling": { none: "none", minimal: "minimal" },
   "openai/gpt-oss-120b": { none: "none", minimal: "minimal" },
   "moonshotai/Kimi-K3": { none: "none" },
@@ -1022,7 +1081,6 @@ const BASETEN_MODEL_REASONING_EFFORT_MAP: Record<string, Record<string, string>>
   "zai-org/GLM-5.2-Fast": { none: "none" },
 };
 const BASETEN_MODEL_DEFAULT_REASONING_EFFORTS: Record<string, string> = {
-  "deepseek-ai/DeepSeek-V4-Pro": "medium",
   "thinkingmachines/inkling": "high",
   "openai/gpt-oss-120b": "medium",
   "moonshotai/Kimi-K3": "max",
@@ -1050,7 +1108,6 @@ const DIGITALOCEAN_CHAT_COMPLETION_MODELS = [
   "openai-gpt-5.6-luna",
   "qwen3-coder-flash",
   "qwen3.5-397b-a17b",
-  "deepseek-v4-pro",
   "deepseek-4-flash",
   "deepseek-3.2",
   "gemma-4-31B-it",
@@ -1135,7 +1192,6 @@ const CLINE_PASS_MODELS = [
   "cline-pass/kimi-k3",
   "cline-pass/kimi-k2.7-code",
   "cline-pass/kimi-k2.6",
-  "cline-pass/deepseek-v4-pro",
   "cline-pass/deepseek-v4-flash",
   "cline-pass/mimo-v2.5",
   "cline-pass/mimo-v2.5-pro",
@@ -1171,17 +1227,11 @@ const ORCAROUTER_MODELS = [
   "openai/gpt-5.5",
   "anthropic/claude-opus-4.8",
   "google/gemini-3.5-flash",
-  "deepseek/deepseek-v4-pro",
   "orcarouter/auto",
 ];
-const ORCAROUTER_TEXT_ONLY_MODELS = ["deepseek/deepseek-v4-pro"];
 const ORCAROUTER_MODEL_REASONING_EFFORTS = {
   // Live /models currently exposes ids and modalities, not the accepted reasoning ladder.
   "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
-  "deepseek/deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek/deepseek-v4-pro"),
-};
-const ORCAROUTER_MODEL_REASONING_EFFORT_MAP = {
-  "deepseek/deepseek-v4-pro": deepseekReasoningMapFor("deepseek/deepseek-v4-pro"),
 };
 const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "cline-pass/glm-5.3": 1_048_576,
@@ -1190,7 +1240,6 @@ const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "cline-pass/kimi-k3": 1_048_576,
   "cline-pass/kimi-k2.7-code": 262_144,
   "cline-pass/kimi-k2.6": 262_144,
-  "cline-pass/deepseek-v4-pro": 1_048_576,
   "cline-pass/deepseek-v4-flash": 1_048_576,
   "cline-pass/mimo-v2.5": 1_050_000,
   "cline-pass/mimo-v2.5-pro": 1_050_000,
@@ -1264,6 +1313,57 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
     // still advertises image for noVision members so Codex can attach (sidecar option B).
     noVisionModels: [...CURSOR_NO_VISION_MODELS],
+  },
+  {
+    // The signed-in Devin CLI as an account source.
+    //
+    // The CLI writes a `devin-session-token$<JWT>` to its own credentials.toml,
+    // which is the same credential RegisterUser hands `ocx login devin` and which
+    // the cloud-direct client already speaks. So this provider imports that token
+    // and streams over Connect-RPC like its browser-login sibling, rather than
+    // spawning `devin acp`.
+    //
+    // `oauth` classifies the ACCOUNT, not the transport. This is not a local
+    // runtime: unlike Ollama or LM Studio it cannot answer at all until a vendor
+    // account is signed in, and `local` grouped it with things that have no
+    // account. It is also the only classification that reaches the dashboard
+    // Accounts tab, which is built from OAUTH_PROVIDERS.
+    //
+    // The ACP adapter stays registered and tested. It is no longer reachable
+    // under THIS id — `routedProviderConfig` pins the adapter from the registry
+    // for any row whose name is a registry id — but a custom-named row such as
+    // `{"devin-acp": {"adapter": "devin-cli", ...}}` is not pinned and still gets it.
+    id: "devin-cli",
+    label: "Devin CLI",
+    adapter: "devin",
+    baseUrl: "https://server.codeium.com",
+    authKind: "oauth",
+    featured: false,
+    // Off, like `devin`. `deriveProviderPresets` keys the preset catalog off this
+    // flag, so leaving it true would draw the row twice: an Accounts login row and
+    // a preset tile.
+    dashboardPreset: false,
+    note: "Imports the credential your installed Devin CLI already holds (`devin auth login`), then streams over Cognition's Connect-RPC api-server like the `devin` provider. No browser sign-in and no key to paste. For the CLI's own local agent loop over ACP stdio instead, configure a custom-named provider row with \"adapter\": \"devin-cli\".",
+    // Degraded-mode seed only; `liveModels` discovers the account's real roster,
+    // which is where `swe-2` and the rest of the current catalog come from.
+    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6"],
+    liveModels: true,
+    defaultModel: "swe-2",
+    modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
+  },
+  {
+    id: "devin",
+    label: "Cognition (Devin/Windsurf)",
+    adapter: "devin",
+    baseUrl: "https://server.codeium.com",
+    authKind: "oauth",
+    featured: false,
+    dashboardPreset: false,
+    note: "Experimental unofficial Cognition/Devin bridge. ocx login devin opens Auth0 browser sign-in, then exchanges the token via Cognition's RegisterUser for a long-lived API key.",
+    models: ["swe-1-7", "swe-1-7-lightning", "gpt-5-6-sol", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "claude-fable-5-1", "claude-sonnet-5", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    liveModels: true,
+    defaultModel: "swe-1-7",
+    modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
   },
   {
     id: "xai",
@@ -1434,10 +1534,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: ORCAROUTER_MODELS,
     liveModels: true,
     modelDiscovery: ORCAROUTER_MODEL_DISCOVERY,
-    noVisionModels: ORCAROUTER_TEXT_ONLY_MODELS,
     modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
-    modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
-    preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
     note: "Connect your OrcaRouter account with OAuth 2.0 + PKCE; the issued API key is stored in OpenCodex's existing credential store.",
   },
   {
@@ -1751,7 +1848,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "kimi-k2.7-code-highspeed": [],
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
-      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+      ...Object.fromEntries(DEEPSEEK_GATEWAY_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     },
     modelDefaultReasoningEfforts: { "grok-4.6": "high", "kimi-k3": "max" },
     // glm-5.2 uses identity labels now that `max` is a native Codex level (no alias map);
@@ -1759,7 +1856,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: {
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORT_MAP,
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_MAP])),
-      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
+      ...Object.fromEntries(DEEPSEEK_GATEWAY_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     },
     modelSupportsReasoningSummaries: {
       "glm-5.3": true,
@@ -1767,17 +1864,24 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "glm-5.2": true,
       "glm-5.1": true,
       "glm-5": true,
-      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, true])),
+      ...Object.fromEntries(DEEPSEEK_GATEWAY_THINKING_MODELS.map(id => [id, true])),
     },
     thinkingToggleModels: OPENCODE_GO_THINKING_TOGGLE_MODELS,
-    thinkingBudgetModels: THINKING_BUDGET_MODELS,
+    /*
+     * The Go-specific list, not the shared one. The shared `THINKING_BUDGET_MODELS` also
+     * carries Neuralwatt-only ids (`qwen3.5-397b`, `qwen3.6-35b`) that this preset never
+     * gives a ladder to, so a live roster serving one of them armed the thinking-budget
+     * wire path with nothing to advertise: the catalog showed no effort control while the
+     * adapter still translated effort into `thinking_budget`.
+     */
+    thinkingBudgetModels: OPENCODE_GO_THINKING_BUDGET_MODELS,
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     // Text-only Zen Go models (jawcode metadata) — the vision sidecar describes images for
     // every model listed here (and the catalog advertises image input on their behalf).
     // Kimi K2.7 Code accepts text+image+video: do NOT list it here.
     noVisionModels: [
       "glm-5.3", "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4-flash", "deepseek-v4-pro",
+      "deepseek-v4.1-flash", "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
@@ -1787,7 +1891,17 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noPenaltyModels: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     autoToolChoiceOnlyModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     // Issue #78: DeepSeek V4 thinking mode requires reasoning_content replay on tool-call turns.
-    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", ...DEEPSEEK_THINKING_MODELS],
+    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", ...DEEPSEEK_GATEWAY_THINKING_MODELS],
+    /*
+     * Issues #1338 / #1415: this gateway answers a `response_format` of type
+     * `json_schema` with HTTP 400 `This response_format type is unavailable now`
+     * (quoted from the upstream body as `Error from provider (Console Go)`), which
+     * breaks every Codex auto-review turn on a DeepSeek route. #1424 shipped the
+     * operator-side opt-out; operators have been applying it by hand ever since.
+     * The reported rejection is type-specific, so this narrower list downgrades the
+     * request to `json_object` instead of claiming the whole field is unavailable.
+     */
+    noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS],
   },
   {
     id: "neuralwatt",
@@ -1934,10 +2048,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDiscovery: ORCAROUTER_MODEL_DISCOVERY,
     // Catalog discovery owns WHICH models exist. These entries only retain verified
     // request-shaping facts that the upstream catalog does not currently publish.
-    noVisionModels: ORCAROUTER_TEXT_ONLY_MODELS,
     modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
-    modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
-    preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
     note: "OpenAI-compatible adaptive router. Models and multimodal capabilities are discovered live from the public chat catalog. Use the OrcaRouter account entry for PKCE login.",
   },
   {
@@ -1994,7 +2105,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
-  { id: "google-antigravity", alias: "agy", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", allowBaseUrlOverride: true, dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: true, defaultModel: "gemini-3.8-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelInputModalities: ANTIGRAVITY_MODEL_INPUT_MODALITIES, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
+  // Antigravity discovers models with a POST to the CCA `:fetchAvailableModels` RPC, which
+  // `buildModelsRequest` already built by hand. Declaring it here changes no request URL — the
+  // relative path resolves to the same destination — but it lets `isRegistryModelDiscoveryUrl`
+  // prove that URL, which is what admits a Clash/Surge/Mihomo TUN fake-IP answer (#4261). The
+  // path must stay RELATIVE: this row sets `allowBaseUrlOverride`, and an absolute `url` would
+  // retarget a user's custom base back to Google. A leading `./` is required because a bare
+  // `v1internal:` reads as a URL scheme and `providerModelDiscoverySpecError` rejects it.
+  { id: "google-antigravity", alias: "agy", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", allowBaseUrlOverride: true, dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: true, defaultModel: "gemini-3.8-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelInputModalities: ANTIGRAVITY_MODEL_INPUT_MODALITIES, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"], modelDiscovery: { path: "./v1internal:fetchAvailableModels" } },
   { id: "azure-openai", label: "Azure OpenAI", adapter: "azure-openai", baseUrl: "https://{resource}.openai.azure.com/openai", authKind: "key", featured: true, dashboardUrl: "https://portal.azure.com" },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
@@ -2012,18 +2130,20 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // verified 2026-08-08).
     jawcodeBundle: "deepseek",
     // deepseek-chat/deepseek-reasoner were deprecated upstream on 2026-07-24 15:59 UTC;
-    // official identifiers are now deepseek-v4-flash / deepseek-v4-pro. They stay in
+    // the current official identifier is deepseek-flash. They stay in
     // the list only as compatibility aliases so existing saved configs and requests
     // keep validating and routing (they previously mapped to v4-flash; devlog
     // _fin/260710_provider_hardening/002_research_cn.md). The current offerings are
     // the V4 ids — defaultModel and the model-specific wiring above use them.
     // deepseek-v4-flash-vision-exp: experimental vision preview (2026-08-21) —
     // expected to merge into deepseek-v4-flash later; see DEEPSEEK_VISION_PREVIEW_MODEL.
-    models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS, DEEPSEEK_VISION_PREVIEW_MODEL],
-    defaultModel: "deepseek-v4-flash",
+    models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_NATIVE_THINKING_MODELS, DEEPSEEK_VISION_PREVIEW_MODEL],
+    // V4.1-Flash is the current first-party offering; `deepseek-v4-flash` now routes there
+    // as a compatibility alias, so a new install should ask for the live id by name.
+    defaultModel: "deepseek-flash",
     // Official DeepSeek Codex setup (codex-deepseek-setup.sh) advertises 1,048,576
     // for both V4 models; the older 1,000,000 figure was a rounded approximation.
-    modelContextWindows: { "deepseek-v4-flash": 1_048_576, "deepseek-v4-pro": 1_048_576, [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576 },
+    modelContextWindows: { "deepseek-flash": 1_048_576, "deepseek-v4-flash": 1_048_576, [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576 },
     modelInputModalities: { [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"] },
     // DeepSeek documents both V4 models as native Responses API models adapted for Codex
     // (model table marks Responses API ✓ for flash and pro; the /responses reference lists
@@ -2037,7 +2157,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       // translating them into Responses would add a hop onto our newest upstream path
       // for no gain.
       "deepseek-v4-flash": { wire: "openai-responses", inbound: ["responses"] },
-      "deepseek-v4-pro": { wire: "openai-responses", inbound: ["responses"] },
+      // Same Responses contract as the V4 ids it succeeds; without this row the new
+      // default would fall back to the provider-wide Chat wire.
+      "deepseek-flash": { wire: "openai-responses", inbound: ["responses"] },
     },
     // The #875-era bounded-JSON force (`modelResponsesUpstreamStreaming`) is retired
     // for this entry: the official guide documents a `response.completed` /
@@ -2052,7 +2174,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // devlog/_fin/260807_deepseek_responses_streaming/000_plan.md.
     // Current official streams normally carry a real terminal; retain a narrow grace
     // repair for the historical shape that closes after a complete graph without one.
-    modelResponsesTerminalRepair: { "deepseek-v4-flash": { graceMs: 5_000 }, "deepseek-v4-pro": { graceMs: 5_000 } },
+    modelResponsesTerminalRepair: { "deepseek-flash": { graceMs: 5_000 }, "deepseek-v4-flash": { graceMs: 5_000 } },
     // DeepSeek's Responses route emits bare UUID item ids, which leave Codex
     // clients stuck on an uncommitted turn (#938). Client-facing only — raw
     // continuation snapshots keep the upstream ids.
@@ -2088,14 +2210,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
     - 선택 근거: DeepSeek V4 thinking mode requires history replay, while older DeepSeek reasoner has different compatibility rules. A model-scoped registry flag fixes built-in and stale saved configs without broad provider regressions.
     */
-    modelReasoningEfforts: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
-    modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
-    modelSupportsReasoningSummaries: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, true])),
-    preserveReasoningContentModels: DEEPSEEK_THINKING_MODELS,
+    modelReasoningEfforts: Object.fromEntries(DEEPSEEK_NATIVE_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+    modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_NATIVE_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
+    modelSupportsReasoningSummaries: Object.fromEntries(DEEPSEEK_NATIVE_THINKING_MODELS.map(id => [id, true])),
+    preserveReasoningContentModels: DEEPSEEK_NATIVE_THINKING_MODELS,
     // Issue #88: every DeepSeek API model is text-only input (no image support upstream) — the
     // vision sidecar describes attached images for them, and the catalog advertises image input
     // on their behalf (same treatment as opencode-go's DeepSeek V4 entries above).
-    noVisionModels: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
+    noVisionModels: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_NATIVE_THINKING_MODELS],
   },
   // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },
@@ -2279,7 +2401,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Official Command Code model-profile reasoning facts (shared with the OAuth
     // `command-code` entry). Without them the API-key preset never advertises a
     // reasoning picker, and the router's known-ids decode source misses the native
-    // slash ids — so a Codex-facing slug like `commandcode/deepseek-deepseek-v4-pro`
+    // slash ids — so a Codex-facing slug like `commandcode/deepseek-deepseek-v4-flash`
     // is sent upstream verbatim and rejected with `unsupported_model`.
     modelReasoningEfforts: COMMAND_CODE_MODEL_REASONING_EFFORTS,
     // The DeepSeek vision preview id is preemptive for when the catalog serves it
@@ -2541,19 +2663,43 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // exact 131_072 every other source in this repo uses for that model. Coding Plan pricing stays
   // unpublished, so no cost entry is asserted.
   {
-    id: "zai", label: "Z.AI — GLM Coding Plan", baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat", authKind: "key",
+    id: "zai", label: "Z.AI — GLM Coding Plan", baseUrl: "https://api.z.ai", adapter: "openai-responses", authKind: "key",
+    // One subscription and one key, three protocols. docs.z.ai/guides/llm/glm-5.3 lists them:
+    // Chat Completions at /api/coding/paas/v4, Responses at /api/v1, Anthropic Messages at
+    // /api/anthropic. docs.z.ai/devpack/latest-model points Codex-family clients at /api/v1,
+    // and the Chat path is the one that misbehaves in practice.
+    //
+    // Responses is the default and Chat stays reachable per model through `modelAdapters`.
+    // The two wires sit under different prefixes, and a wire override swaps the adapter
+    // without touching baseUrl, so each wire carries its own relative send path.
+    //
+    // Measured 2026-09-12 against a live key: every roster id answers 200 on
+    // /api/v1/responses, and every one also answers 200 on the Chat prefix, so no model
+    // needs a `modelWireDefaults` pin. /api/v1/chat/completions returns 403
+    // model_access_denied, which is why the Chat path cannot simply hang off the new base.
+    responsesPath: "/api/v1/responses",
+    chatCompletionsPath: "/api/coding/paas/v4/chat/completions",
+    // The address this row occupied before the move. A saved custom provider still pointing
+    // at the Chat endpoint keeps receiving this row's metadata (#1100).
+    destinationAliases: [{ baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat" }],
     dashboardUrl: "https://z.ai/manage-apikey/apikey-list", defaultModel: "glm-5.3",
     note: "GLM-5.3 coding subscription",
     models: ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
-    modelContextWindows: { "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
-    // Z.AI's OpenAI path returns 400 code 1211 for bracketed model ids.
+    // The upstream catalog reports 1_048_576 for the 5.3 family, which is what the domestic
+    // Responses row already carries. Both are documented as "1M"; this is that number.
+    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    // Z.AI returns 400 for bracketed model ids on both wires; the aliases are local.
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
+    modelInputModalities: ZAI_GLM_5X_INPUT_MODALITIES,
     modelReasoningEfforts: ZAI_GLM_5X_REASONING_EFFORTS,
     modelDefaultReasoningEfforts: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, "max"])),
     modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, 131_072])),
     modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_5X_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: ZAI_GLM_5X_MODELS,
+    // Responses replay uses this provider-level flag; the model list above still covers a
+    // caller who opts back into Chat.
+    preserveResponsesReasoningContent: true,
   },
   // Zhipu's domestic BigModel platform: OpenAI-compatible pay-as-you-go on open.bigmodel.cn — a
   // different host and billing product from the `zai` coding-plan subscription above.
@@ -2630,6 +2776,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: { "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
+    modelInputModalities: ZAI_GLM_5X_INPUT_MODALITIES,
     modelReasoningEfforts: ZAI_GLM_5X_REASONING_EFFORTS,
     modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_5X_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: ZAI_GLM_5X_MODELS,
@@ -2759,13 +2906,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     ),
     thinkingToggleModels: VOLCENGINE_DOUBAO_THINKING_MODELS,
     preserveReasoningContentModels: [
-      "deepseek-v4-pro-260425",
       "deepseek-v4-flash-260425",
       "glm-5-2-260617",
       "glm-4-7-251222",
     ],
     noVisionModels: [
-      "deepseek-v4-pro-260425",
       "deepseek-v4-flash-260425",
       "deepseek-v3-2-251201",
       "glm-5-2-260617",
@@ -2787,12 +2932,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: VOLCENGINE_PLAN_INPUT_MODALITIES,
     noVisionModels: VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
     modelReasoningEfforts: Object.fromEntries(
-      DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)]),
+      DEEPSEEK_V4_LEGACY_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)]),
     ),
     modelReasoningEffortMap: Object.fromEntries(
-      DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)]),
+      DEEPSEEK_V4_LEGACY_MODELS.map(id => [id, deepseekReasoningMapFor(id)]),
     ),
-    preserveReasoningContentModels: DEEPSEEK_THINKING_MODELS,
+    preserveReasoningContentModels: DEEPSEEK_V4_LEGACY_MODELS,
     note: "Coding tools only. Volcengine restricts Coding Plan quota to supported AI coding tools and warns that using this key for general API calls may suspend the subscription or ban the account. Use the plan key issued by the Ark console.",
   },
   {
@@ -2806,7 +2951,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     supportsServiceTier: false,
     preserveCustomDestination: true,
     dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
-    defaultModel: "deepseek-v4-pro",
+    // Was `deepseek-v4-pro` until DeepSeek retired it; the plan roster's other DeepSeek
+    // entry takes over so a fresh install still lands on a working default.
+    defaultModel: "deepseek-v4-flash",
     models: VOLCENGINE_AGENT_PLAN_MODELS,
     liveModels: false,
     modelInputModalities: VOLCENGINE_PLAN_INPUT_MODALITIES,
@@ -2831,7 +2978,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
     modelContextWindows: {
       "qwen3.8-max": 983_616, "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000,
-      "qwen3.6-flash": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "deepseek-v4-pro": 1_000_000,
+      "qwen3.6-flash": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, 
     },
     modelReasoningEfforts: {
       ...Object.fromEntries(ALIBABA_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
@@ -2839,14 +2986,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
-      "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
     },
     modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh" },
-    modelReasoningEffortMap: { "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro") },
     directReasoningEffortModels: ["qwen3.8-max"],
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS.filter(id => id !== "qwen3.8-max"),
-    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"],
-    noVisionModels: ["glm-5.3", "glm-5.2", "deepseek-v4-pro"],
+    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"],
+    noVisionModels: ["glm-5.3", "glm-5.2"],
   },
   {
     id: "alibaba-token-plan-intl",
@@ -2866,7 +3011,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: {
       "qwen3.8-max": 983_616,
       "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000, "qwen3.6-plus": 1_000_000, "qwen3.6-flash": 1_000_000,
-      "deepseek-v4-pro": 1_000_000, "deepseek-v4-flash": 1_000_000, "deepseek-v3.2": 131_072,
+      "deepseek-v4-flash": 1_000_000, "deepseek-v3.2": 131_072,
       "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 262_144,
       "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.1": 1_000_000, "glm-5": 1_000_000,
       "MiniMax-M2.5": 204_800,
@@ -2877,17 +3022,15 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
-      "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
       "deepseek-v4-flash": deepseekThinkingEffortsFor("deepseek-v4-flash"),
     },
     modelReasoningEffortMap: {
-      "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro"),
       "deepseek-v4-flash": deepseekReasoningMapFor("deepseek-v4-flash"),
     },
     directReasoningEffortModels: ["qwen3.8-max"],
     thinkingBudgetModels: ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS.filter(id => id !== "qwen3.8-max"),
-    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash"],
-    noVisionModels: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
+    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-flash", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash"],
+    noVisionModels: ["deepseek-v4-flash", "deepseek-v3.2", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "deepseek-v3.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
     modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh" },
   },
@@ -2925,7 +3068,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://ollama.com/settings/keys",
     // Live IDs verified 2026-07-10; qwen3-coder:480b retires 2026-07-15.
-    models: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
+    models: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "qwen3-coder:480b", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
     defaultModel: "glm-5.3",
     // Owner-audited exact outage fallback: these current Ollama Cloud GLM-5.3 rows have
     // 1,048,576-token context windows. Live discovery and successful /api/show enrichment keep
@@ -2937,7 +3080,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
       "minimax-m2.7", "minimax-m2.5", "minimax-m2.1",
       "nemotron-3-ultra", "nemotron-3-super",
-      "deepseek-v4-pro", "deepseek-v4-flash",
+      "deepseek-v4-flash",
       "gpt-oss", "qwen3-coder:480b",
     ],
     // Ollama's native chat API has no `text.verbosity` equivalent and the ollama-native adapter
@@ -3021,12 +3164,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Zen DeepSeek thinking models — never serialize a bare tool-call turn.
     note: "Keyed OpenCode Zen gateway. Free models on this tier are often short-window rate-limited at roughly 15-20 requests/minute (community-measured; OpenCode does not publish RPM). Zen may return generic 429s without Retry-After / X-RateLimit headers; when Retry-After is omitted, opencodex adds a synthetic backoff hint (upstream Retry-After still wins). Distinct from the keyless opencode-free desktop quota (~200 Big Pickle/free-model requests per 5 hours). Docs: https://opencode.ai/docs/zen/. Free-model prompts may be retained for training — do not send confidential material.",
     modelReasoningEfforts: Object.fromEntries(
-      [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekThinkingEffortsFor(id)]),
+      [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekThinkingEffortsFor(id)]),
     ),
     modelReasoningEffortMap: Object.fromEntries(
-      [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekReasoningMapFor(id)]),
+      [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekReasoningMapFor(id)]),
     ),
-    preserveReasoningContentModels: [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
+    preserveReasoningContentModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
     // Same Zen gateway as opencode-free: the DeepSeek vision preview id
     // (merges into deepseek-v4-flash later).
     modelContextWindows: {
@@ -3035,7 +3178,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: {
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
     },
-    noVisionModels: [...OPENCODE_ZEN_TEXT_ONLY_MODELS, ...DEEPSEEK_THINKING_MODELS],
+    noVisionModels: [...OPENCODE_ZEN_TEXT_ONLY_MODELS, ...DEEPSEEK_GATEWAY_THINKING_MODELS],
+    // Same DeepSeek routes as the Go preset above, behind the same vendor, so they carry
+    // the same json_schema rejection (#1338 / #1415).
+    noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
   {
@@ -3076,6 +3222,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Same Zen roster behind the same base URL, so it carries the same measured
     // text-only list rather than only its DeepSeek member (#1043).
     noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,
+    // Same reasoning: the free tier is the same Zen roster, so its DeepSeek members get
+    // the keyed tier's json_schema treatment and its reasoning contract rather than a
+    // narrower table that silently falls behind whenever the keyed one is updated.
+    noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
   { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
   // Xiaomi's public OpenAI-compatible endpoint is a distinct transport from both the Anthropic
@@ -3417,12 +3567,22 @@ export function registryEntryForProviderDestination(
   if (typeof provider.baseUrl !== "string" || !provider.baseUrl) return undefined;
   if (provider.authMode !== undefined && provider.authMode !== "key") return undefined;
   const endpoint = normalizedProviderEndpoint(provider.baseUrl);
-  return PROVIDER_REGISTRY.find(entry =>
+  const eligible = (entry: ProviderRegistryEntry): boolean =>
     entry.authKind === "key"
     && !entry.allowBaseUrlOverride
-    && !/\{[^}]*\}/.test(entry.baseUrl)
+    && !/\{[^}]*\}/.test(entry.baseUrl);
+  const direct = PROVIDER_REGISTRY.find(entry =>
+    eligible(entry)
     && entry.adapter === provider.adapter
     && normalizedProviderEndpoint(entry.baseUrl) === endpoint);
+  if (direct) return direct;
+  // A row that moved keeps answering for the address it used to occupy, so an existing
+  // custom provider written against the old endpoint does not silently lose its metadata.
+  return PROVIDER_REGISTRY.find(entry =>
+    eligible(entry)
+    && (entry.destinationAliases ?? []).some(alias =>
+      alias.adapter === provider.adapter
+      && normalizedProviderEndpoint(alias.baseUrl) === endpoint));
 }
 
 /**

@@ -422,6 +422,65 @@ bare `exec_command` and `shell_command` names are reserved for non-freeform shel
 bridges. Namespace a custom freeform tool that uses either name. These schema
 declarations do not grant approval or change execution policy.
 
+## `devin`
+
+**Targets:** Cognition's `exa.api_server_pb.ApiServerService/GetChatMessage` over HTTPS Connect
+streaming at `server.codeium.com`.
+**Auth:** Devin/Cognition API key from `provider.apiKey` or the forwarded authorization header.
+Login opens Auth0 browser sign-in, then exchanges the Firebase ID token via
+`SeatManagementService.RegisterUser` for a long-lived API key.
+
+- Uses `runTurn` rather than the ordinary fetch/parse path. Requests and server events are encoded
+  with manual protobuf framing in `devin/cloud-direct/wire.ts`; the ordinary `buildRequest` /
+  `parseStream` path is disabled.
+- Live model discovery via `GetCascadeModelConfigs`; the static seed is filtered against the
+  account's live roster so models not on the plan drop out instead of failing at request time.
+- Tool definitions are encoded in the request and tool-call events are decoded from the response
+  stream. Cognition enforces a per-tool-description length limit (6,998 chars) and an exact-phrase
+  blocklist; the adapter sanitizes known triggers and truncates over-long descriptions before
+  encoding.
+- Devin/Cognition API keys do not refresh. Run `ocx login devin` again when the key expires or is
+  revoked.
+- The chat request is calibrated, not guessed. Three things gate it together: the credential is the
+  session token doubled and dash-joined in an `Authorization: Basic` header while the protobuf body
+  keeps one copy, the request envelope goes up uncompressed, and `Metadata` #31 carries a
+  732-character device fingerprint whose length — not value — the service checks. Inside
+  `CompletionConfiguration`, #2 is the output cap and #3 is the context window; swapping those two
+  makes every turn fail with an opaque `invalid_argument`. A temperature of exactly 0 is refused, so
+  it is clamped to the smallest accepted value.
+- Experimental unofficial bridge; not shown in the dashboard preset by default. See the
+  [provider guide](/guides/providers/) for login instructions.
+
+## `devin-cli`
+
+**Targets:** Cognition's `exa.api_server_pb.ApiServerService/GetChatMessage`, the same Connect
+streaming endpoint the `devin` provider uses.
+**Auth:** imported from the installed Devin CLI. After `devin auth login` the CLI writes a
+`devin-session-token` to its own `credentials.toml`, which is the same credential
+`SeatManagementService.RegisterUser` mints for `ocx login devin`; signing in from the dashboard
+adopts it, with no browser step and no key to paste. opencodex reads only that token and the
+api-server URL beside it, and never the file's other fields.
+
+- Uses `runTurn` on the shared cloud-direct client, so it inherits that adapter's live catalog,
+  per-account context windows and tool-description handling.
+- For the CLI's own local agent loop over ACP stdio instead, configure a **custom-named** provider
+  row with `"adapter": "devin-cli"` — for example `"devin-acp"`. A row named `devin-cli` cannot
+  select it, because the router pins the adapter from the registry for any registry id.
+- One turn is one ACP session: `initialize`, `session/new`, `session/prompt`, with `session/update`
+  notifications streaming in between and a unary reply carrying the stop reason and usage. The
+  conversation is flattened into the single prompt string a session takes, with role labels fenced
+  so a message body cannot forge one.
+- The CLI's own tool calls stay internal. Devin executes them inside its session, so forwarding
+  them as client tools would either fail the turn — the bridge rejects a tool Codex never declared —
+  or ask Codex to run something the agent already ran.
+- **Permission requests are refused by default.** This provider runs an agent in the operator's own
+  tree, so `session/request_permission` is answered with `cancelled` unless
+  `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1` is set. The child also gets a scoped environment rather than
+  the proxy's, and `OPENCODEX_DEVIN_CLI_CWD` chooses where it runs.
+- Binary discovery prefers `OPENCODEX_DEVIN_CLI_BIN`, then the paths the official installer and the
+  Homebrew cask use, then `PATH`. Install with `curl -fsSL https://cli.devin.ai/install.sh | bash`
+  or `brew install --cask devin-cli`.
+
 ## `azure-openai` (alias: `azure`)
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).

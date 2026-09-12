@@ -24,6 +24,7 @@ import { grokDefaultReasoningEffort } from "../grok/effort";
 import { flushConfigDirHardening } from "../config/paths";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
+import { migrateStartupZaiResponses } from "./zai-responses-startup";
 import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
@@ -192,6 +193,7 @@ import { anthropicErrorResponse } from "../claude/outbound";
 import { buildDesktop3pRegistry, generateDesktop3pModels } from "../claude/desktop-3p";
 import { buildDesktopDiscoveryInputs } from "../claude/desktop-discovery-inputs";
 import { runClaudeAuthModeMigration } from "../claude/auth-mode-migration";
+import { runRetiredCodexModelMigration } from "../codex/retired-model-migration";
 import {
   bindNativeMainStartupLifecycle,
   blockNativeMainStartupForUnownedServiceHome,
@@ -666,7 +668,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Reconcile disk-backed presets first: it replaces provider rows and must not undo
   // an in-memory wire upgrade when that upgrade's persistence is temporarily unavailable.
   reconcileOAuthProviders(startupConfig);
-  const config = migrateStartupXaiResponses(startupConfig);
+  const config = migrateStartupZaiResponses(migrateStartupXaiResponses(startupConfig));
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
@@ -682,24 +684,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // indistinguishable from "never chose". Pin those to subscription once so an upgrade
   // never silently moves a deliberate subscriber onto proxy.
   if (runClaudeAuthModeMigration(config)) saveConfig(config);
-  // Sidecar model migration (KST 2026-07-10 06:00 = UTC 2026-07-09 21:00): auto-migrate the old
-  // gpt-5.4-mini default to gpt-5.6-luna for both search and vision sidecars. Only touches configs
-  // still on the old default — explicit user choices are preserved.
-  {
-    const SIDECAR_MIGRATION_CUTOFF = Date.UTC(2026, 6, 9, 21, 0); // July 9 21:00 UTC = KST July 10 06:00
-    if (Date.now() >= SIDECAR_MIGRATION_CUTOFF) {
-      let migrated = false;
-      if (config.webSearchSidecar?.model === "gpt-5.4-mini") {
-        config.webSearchSidecar = { ...config.webSearchSidecar, model: "gpt-5.6-luna" };
-        migrated = true;
-      }
-      if (config.visionSidecar?.model === "gpt-5.4-mini") {
-        config.visionSidecar = { ...config.visionSidecar, model: "gpt-5.6-luna" };
-        migrated = true;
-      }
-      if (migrated) saveConfig(config);
-    }
-  }
+  // Retired Codex-login models: a stored gpt-5.4-mini is a guaranteed 404 for the search and
+  // vision sidecars and for pool warmup, so it moves to gpt-5.6-luna. Extracted so the rule is
+  // testable on its own; see src/codex/retired-model-migration.ts for why exact equality also
+  // rewrites an explicit choice.
+  if (runRetiredCodexModelMigration(config)) saveConfig(config);
   // Resolve unattended service-home authority before any Codex lock, cache, owner,
   // journal, or credential path. Both positive foreign evidence and an unprovable
   // ownership state are non-authority.

@@ -140,13 +140,13 @@ function generatedRoutedEntry(slug: string, marker?: string): RawEntry {
 }
 
 function nativeMetadataEntry(
-  slug: "gpt-5.5" | "gpt-5.4",
+  slug: "gpt-5.5" | "gpt-5.6-luna",
   baseInstructions: string,
   priority: number,
 ): RawEntry {
   return {
     slug,
-    display_name: slug === "gpt-5.5" ? "GPT-5.5 Live" : "GPT-5.4 Live",
+    display_name: slug === "gpt-5.5" ? "GPT-5.5 Live" : "GPT-5.6-Luna Live",
     description: `${slug} installed metadata`,
     priority,
     visibility: "list",
@@ -201,7 +201,7 @@ function writeAutoReviewModel(value?: string): void {
 
 function autoReviewSeed(routeOverride: string | null = "stale-override"): RawEntry[] {
   return [
-    { ...nativeEntry(), slug: "gpt-5.4", auto_review_model_override: "native-upstream" },
+    { ...nativeEntry(), slug: "gpt-5.5", auto_review_model_override: "native-upstream" },
     {
       ...generatedRoutedEntry("static/deepseek-v4-flash"),
       auto_review_model_override: routeOverride,
@@ -693,7 +693,7 @@ test("retained and convergence writers resolve, clear, reject, and recover auto-
     writeAutoReviewModel();
     writeCatalog(autoReviewSeed());
     catalog = await write(autoReviewConfig(["deepseek-v4-flash"]));
-    expect(catalog.models?.find(entry => entry.slug === "gpt-5.4"))
+    expect(catalog.models?.find(entry => entry.slug === "gpt-5.5"))
       .toHaveProperty("auto_review_model_override", "native-upstream");
     expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-flash"))
       .toHaveProperty("auto_review_model_override", null);
@@ -994,19 +994,19 @@ test("generated account rows silently win freshly gathered provider collisions",
 
 test("qualified rows retain the matching installed metadata for each native model", async () => {
   const gpt55Instructions = "Installed instructions unique to GPT-5.5.";
-  const gpt54Instructions = "Installed instructions unique to GPT-5.4.";
+  const lunaInstructions = "Installed instructions unique to GPT-5.6-Luna.";
   writeCatalog([
     nativeMetadataEntry("gpt-5.5", gpt55Instructions, 3),
-    nativeMetadataEntry("gpt-5.4", gpt54Instructions, 4),
+    nativeMetadataEntry("gpt-5.6-luna", lunaInstructions, 4),
   ]);
 
   const catalog = await convergeCatalog(config(true));
   const models = catalog.models ?? [];
 
   expect(models.find(entry => entry.slug === "gpt-5.5")?.base_instructions).toBe(gpt55Instructions);
-  expect(models.find(entry => entry.slug === "gpt-5.4")?.base_instructions).toBe(gpt54Instructions);
+  expect(models.find(entry => entry.slug === "gpt-5.6-luna")?.base_instructions).toBe(lunaInstructions);
   expect(models.find(entry => entry.slug === "team/gpt-5.5")?.base_instructions).toBe(gpt55Instructions);
-  expect(models.find(entry => entry.slug === "team/gpt-5.4")?.base_instructions).toBe(gpt54Instructions);
+  expect(models.find(entry => entry.slug === "team/gpt-5.6-luna")?.base_instructions).toBe(lunaInstructions);
 });
 
 test("a missing supported native is backfilled and restored when the picker is disabled", async () => {

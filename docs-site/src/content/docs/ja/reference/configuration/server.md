@@ -153,7 +153,7 @@ OpenAI バックエンドには、ChatGPT ログインと有効な ChatGPT `forw
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` |使用可能な場合はオン |マスターイメージと説明のスイッチ。 |
 | `backend?` | `"openai" \| "anthropic"` |自動 | 明示的な値が優先されます。未設定の場合、使用可能な保存済み Anthropic OAuth 認証情報が優先され、それ以外は `openai` になります。 |
-| `model?` | `string` |バックエンド依存 | OpenAI の場合は `gpt-5.4-mini`、Anthropic の場合は `claude-sonnet-5`。 |
+| `model?` | `string` |バックエンド依存 | OpenAI の場合は `gpt-5.6-luna`、Anthropic の場合は `claude-sonnet-5`。 |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses の推論負荷。Anthropic は無視します。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` |新しい説明のキャッシュミスはメインターンごとに許可されます。 `0` は通話を無効にします。無効な値にはデフォルトが使用されます。 |
 | `timeoutMs?` | `number` | `45000` |サイドカーのフェッチタイムアウト。整数 1–2147483647。 |

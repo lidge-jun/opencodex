@@ -96,8 +96,11 @@ Le catalogue du transfert ChatGPT ajoute également les identifiants non qualifi
 
 Huit préréglages de fournisseurs utilisent une connexion OAuth. GitHub Copilot s'y ajoute au moyen d'un pont
 expérimental et non officiel reposant sur un flux d'autorisation d'appareil. opencodex enregistre leurs identifiants dans
-`~/.opencodex/auth.json` et les actualise automatiquement. La CLI de connexion accepte également `chatgpt` ;
-elle obtient un identifiant ChatGPT tout en créant une entrée de fournisseur en mode `forward`.
+`~/.opencodex/auth.json` et les actualise automatiquement. La CLI de connexion accepte également
+`ocx login codex`, qui n'est pas l'un des fournisseurs ci-dessus : la commande est routée vers la
+connexion au pool de comptes Codex (le même flux que `ocx account login codex`). Ce pool tient son
+propre registre de comptes, donc cette route nécessite un proxy en cours d'exécution. `chatgpt` et
+`openai` sont des alias de la même route.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -108,8 +111,9 @@ ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
+ocx login devin       # Connexion navigateur Auth0 Cognition/Devin
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
-ocx login chatgpt      # standalone ChatGPT OAuth login
+ocx login codex        # pool de comptes Codex (alias : chatgpt, openai ; nécessite un proxy en cours d'exécution)
 ocx logout <provider>
 ```
 
@@ -122,6 +126,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | La connexion initiale importe la session de l'installation locale de `kiro-cli`, déjà authentifiée (sous Unix, installez avec `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; puis exécutez `kiro-cli login`). **Ajouter un compte** déconnecte `kiro-cli`, lance une nouvelle connexion dans le navigateur qui change le compte utilisé par `kiro-cli`, puis enregistre les métadonnées propres au profil. Les comptes OpenCodex existants sont préservés ; une annulation ou un échec restaure la session `kiro-cli` précédente. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Connexion PKCE expérimentale, transport HTTP/2 en direct et découverte de modèles filtrés par compte. |
+| `devin` | `devin` | `https://server.codeium.com` | Passerelle Cognition/Devin non officielle et expérimentale. La connexion ouvre l'authentification Auth0 dans le navigateur, puis échange le jeton via `RegisterUser` contre une clé d'API durable. Les modèles sont découverts par compte avec `GetCascadeModelConfigs` ; le streaming passe uniquement par `runTurn` sur Connect-RPC. Absente du préréglage du tableau de bord par défaut. |
+| `devin-cli` | `devin` | `https://server.codeium.com` | Importe l'identifiant que votre Devin CLI installé détient déjà (`devin auth login` l'écrit dans son propre `credentials.toml`), puis diffuse via l'api-server Connect-RPC de Cognition comme le fournisseur `devin` — sans connexion navigateur ni clé à coller. La liste des modèles et les fenêtres de contexte proviennent du catalogue de votre compte. Pour la boucle d'agent locale du CLI (ACP stdio), utilisez une entrée nommée différemment avec `"adapter": "devin-cli"`. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Expérimental. Flux d'appareil GitHub et échange `copilot_internal` (client OAuth de VS Code). Nécessite un abonnement Copilot actif ; il ne s'agit pas d'une API tierce officielle. |
 
 Les vérifications de quota Google Antigravity utilisent des points de terminaison Google fixes, y compris le repli vers la liste des modèles. Elles prennent en charge le DNS Fake-IP transparent pour ces destinations en conservant la vérification TLS, le refus des redirections et les contrôles des adresses privées. Une URL de base personnalisée ne modifie que les requêtes de modèles ; `NO_PROXY` conserve la politique de connexion directe.
@@ -213,7 +219,8 @@ identifiants de compte expurgés, aucun jeton. `ocx doctor` ajoute une section s
 contrôles du magasin accessible en écriture et de l'appel unique, ainsi que des lignes WARN qui indiquent une
 action de récupération. Lorsqu'un compte de fournisseur OAuth doit être réauthentifié, exécutez
 `ocx login <provider>` ou utilisez **Réauthentifier** dans le tableau de bord. Les comptes du pool Codex ne
-constituent pas un fournisseur `ocx login` : réauthentifiez-les dans le groupe de comptes Codex du tableau de bord. Consultez
+font pas partie de ces fournisseurs, mais `ocx login codex --reauth` est routé vers leur réauthentification
+dans le pool de comptes, ce que fait aussi le pool de comptes Codex du tableau de bord. Consultez
 [`ocx status` / `ocx doctor`](/fr/reference/cli/) dans la référence CLI.
 
 ### Importation des identifiants Kiro
@@ -366,7 +373,7 @@ modèle ; les flux mal formés ou partiels sont fermés comme incomplets, et non
 > des ressources d'embedding, d'image, de vidéo et de 3D, la passerelle Coding renvoie le même catalogue étendu,
 > et la passerelle Agent Plan ne possède aucune ressource `/models`. Le modèle par défaut de la route facturée à
 > l'usage est `doubao-seed-2-1-pro-260628` ; son catalogue sélectionné comprend également les modèles de texte
-> DeepSeek et GLM actuels. Coding Plan utilise `ark-code-latest` par défaut, et Agent Plan `deepseek-v4-pro`.
+> DeepSeek et GLM actuels. Coding Plan utilise `ark-code-latest` par défaut, et Agent Plan `deepseek-v4-flash`.
 
 > **Restriction d'utilisation des forfaits Volcengine :** selon la documentation de Volcengine, les quotas
 > Coding Plan et Agent Plan ne sont valables que dans les outils de programmation par IA pris en charge. Elle
@@ -600,7 +607,7 @@ native d'Ollama (`POST /api/chat`) plutôt que via la surface compatible OpenAI,
 liste des modèles auprès du fournisseur : les nouveaux modèles Ollama Cloud apparaissent sans
 modifier la configuration. opencodex classe les modèles cloud selon leurs
 capacités visuelles, afin que le [service auxiliaire de vision](/fr/guides/sidecars/) n'intervienne que pour les modèles
-exclusivement textuels. Ces derniers, par exemple `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`,
+exclusivement textuels. Ces derniers, par exemple `glm-5.2`, `deepseek-v4-flash`, `gpt-oss`, `qwen3-coder`,
 `minimax-m2.x` et `nemotron-3-*`, figurent dans `noVisionModels` ; les modèles à vision native, comme
 `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5` et `gemini-3-flash-preview`, n'y figurent pas. La correspondance
 tolère les balises `:size` d'Ollama : `gpt-oss` couvre donc `gpt-oss:120b` et `gpt-oss:20b`.

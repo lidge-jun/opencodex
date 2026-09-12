@@ -59,9 +59,10 @@ export function nativeEffortClamp(slug: string, effort: string | undefined): str
     : [];
   if (levels.length === 0) {
     // Not snapshot-covered. gpt-5.6 natives have a REAL max rung (ensureGpt56ReasoningLevels
-    // restores it even off-snapshot) -> never clamp. Every other bare native (gpt-5.5/5.4/
-    // 5.4-mini/5.3-codex-spark and future old-ladder slugs) really stops at xhigh — the
-    // ChatGPT backend error names exactly none..xhigh — so clamp the synthetic top tier.
+    // restores it even off-snapshot) -> never clamp. Every other bare native (gpt-5.5,
+    // 5.3-codex-spark, a retired slug a client still asks for, and future old-ladder slugs)
+    // really stops at xhigh — the ChatGPT backend error names exactly none..xhigh — so clamp
+    // the synthetic top tier.
     return isGpt56NativeSlug(slug) ? null : "xhigh";
   }
   const supported = levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);

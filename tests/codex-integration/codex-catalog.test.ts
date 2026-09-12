@@ -1,3 +1,4 @@
+// Holds INV-WS-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import { isGpt56NativeSlug } from "../../src/codex/catalog/effort";
 import { nativeOpenAiContextTier, nativeOpenAiMaxInputTokens } from "../../src/codex/catalog";
 import { shouldUpgradeToUpstreamEntry } from "../../src/codex/catalog/metadata";
 import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_DAYBREAK_BLUE_MODEL, NATIVE_GPT6_ASTRA_MODEL, NATIVE_OPENAI_MODELS, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiCapabilitySourceSlug, nativeOpenAiContextWindow, nativeReasoningEfforts, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel, upstreamNativeEntry } from "../../src/codex/catalog";
+import { accountBoundNativeOpenAiSlugsBySelector, observedAccountBoundNativeEntries } from "../../src/codex/catalog";
 import { applyProviderConfigHints, fetchProviderModels, mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/provider-fetch";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
@@ -1171,7 +1173,7 @@ describe("combo catalog capability intersection", () => {
           adapter: "openai-chat",
           baseUrl: "https://nova.example/v1",
           liveModels: false,
-          models: ["codex/gpt-5.6-sol", "codex/gpt-5.4-mini"],
+          models: ["codex/gpt-5.6-sol", "codex/gpt-5.5"],
         },
       },
       combos: {
@@ -1181,11 +1183,14 @@ describe("combo catalog capability intersection", () => {
           displayName: "Nova1 - codex-gpt-5.6-sol",
           targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
         },
-        "nova-mini": {
-          alias: "gpt-5.4-mini",
+        // gpt-5.5 stands in for the retired gpt-5.4-mini here: same pinned shape
+        // (272k window, low..xhigh, default medium), and it is still a native, so
+        // the alias has real capabilities to fall back to.
+        "nova-old-ladder": {
+          alias: "gpt-5.5",
           nativeAlias: true,
-          displayName: "Nova1 - codex-gpt-5.4-mini",
-          targets: [{ provider: "Nova1", model: "codex/gpt-5.4-mini" }],
+          displayName: "Nova1 - codex-gpt-5.5",
+          targets: [{ provider: "Nova1", model: "codex/gpt-5.5" }],
         },
       },
     };
@@ -1200,8 +1205,8 @@ describe("combo catalog capability intersection", () => {
       reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       defaultReasoningEffort: "low",
     });
-    expect(rows.find(row => row.provider === "combo" && row.id === "nova-mini")).toMatchObject({
-      alias: "gpt-5.4-mini",
+    expect(rows.find(row => row.provider === "combo" && row.id === "nova-old-ladder")).toMatchObject({
+      alias: "gpt-5.5",
       nativeAlias: true,
       contextWindow: 272_000,
       maxInputTokens: 272_000,
@@ -2223,16 +2228,16 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
   test("Command Code routed models relabel the picker row with distinguishable slugs", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "command-code", id: "deepseek/deepseek-v4-flash", owned_by: "command-code" },
-      { provider: "commandcode", id: "deepseek/deepseek-v4-pro", owned_by: "commandcode" },
+      { provider: "commandcode", id: "deepseek/deepseek-v4.1-flash", owned_by: "commandcode" },
     ]);
     const auth = entries.find(e => e.slug === "command-code/deepseek-deepseek-v4-flash");
-    const api = entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4-pro");
+    const api = entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4.1-flash");
 
     // Display-only relabel + redundant vendor-prefix drop: routing slugs stay untouched.
     expect(auth?.display_name).toBe("commandcode-auth/deepseek-v4-flash");
     expect(auth?.slug).toBe("command-code/deepseek-deepseek-v4-flash");
-    expect(api?.display_name).toBe("commandcode-api/deepseek-v4-pro");
-    expect(api?.slug).toBe("commandcode/deepseek-deepseek-v4-pro");
+    expect(api?.display_name).toBe("commandcode-api/deepseek-deepseek-v4.1-flash");
+    expect(api?.slug).toBe("commandcode/deepseek-deepseek-v4.1-flash");
   });
 
   test("Google Antigravity routed models relabel the picker row with compact agy prefix", () => {
@@ -2918,6 +2923,33 @@ describe("legacy custom-model catalog ownership", () => {
     }));
   });
 
+  test("a persisted row for a retired native is not re-observed back into the catalog", () => {
+    const retiredAccountRow = {
+      // A stale on-disk row for a retired native is the one way membership removal can be undone:
+      // an observation admits any native NOT in the supported set, which a retired slug also is not.
+      ...nativeTemplate(),
+      slug: "team/gpt-5.4",
+      display_name: "team / GPT-5.4",
+      supported_in_api: true,
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+    };
+    const retiredBareRow = {
+      ...nativeTemplate(),
+      slug: "gpt-5.4-mini",
+      display_name: "GPT-5.4-Mini",
+      supported_in_api: true,
+    };
+    const bySelector = accountBoundNativeOpenAiSlugsBySelector(
+      { codexAccounts: { team: { accountId: "acct_team" } } } as never,
+      [retiredAccountRow, retiredBareRow] as never,
+    );
+    for (const slugs of bySelector.values()) {
+      expect(slugs).not.toContain("gpt-5.4");
+      expect(slugs).not.toContain("gpt-5.4-mini");
+    }
+    expect(observedAccountBoundNativeEntries([retiredBareRow] as never)).toEqual([]);
+  });
+
   test("legacy evidence cannot claim account-selector or combo rows", () => {
     const account = {
       ...nativeTemplate(),
@@ -3455,18 +3487,28 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.auto_compact_token_limit).toBe(115_200);
   });
 
-  test("native gpt-5.4 uses its 1M context window override", () => {
+  test("retired gpt-5.4 no longer has a 1M native context override", () => {
+    expect(NATIVE_OPENAI_MODELS).not.toContain("gpt-5.4");
+    expect(NATIVE_OPENAI_MODELS).not.toContain("gpt-5.4-mini");
+    expect(nativeOpenAiContextWindow("gpt-5.4")).toBeUndefined();
+    expect(nativeOpenAiContextWindow("gpt-5.4-mini")).toBeUndefined();
+
+    // gpt-5.4 was the only native 1M override. Nothing replaces it: remaining
+    // natives keep their own windows even when cloned from a 1M template or
+    // given a 2M cap large enough to raise a long-window family.
     const template = {
       ...nativeTemplate(),
       context_window: 272_000,
       max_context_window: 1_000_000,
     };
-    const entries = buildCatalogEntries(template, ["gpt-5.4"], []);
-    const native = entries.find(e => e.slug === "gpt-5.4");
-
-    expect(native?.context_window).toBe(1_000_000);
-    expect(native?.max_context_window).toBe(1_000_000);
-    expect(native?.auto_compact_token_limit).toBe(900_000);
+    const entries = buildCatalogEntries(template, [...NATIVE_OPENAI_MODELS], []);
+    for (const slug of NATIVE_OPENAI_MODELS) {
+      const native = entries.find(e => e.slug === slug);
+      expect(native?.context_window).toBeDefined();
+      expect(native!.context_window as number).toBeLessThan(1_000_000);
+      expect(native!.max_context_window as number).toBeLessThan(1_000_000);
+      expect(nativeOpenAiContextWindow(slug, 2_000_000)).toBeLessThan(1_000_000);
+    }
   });
 
   test("native gpt-5.3-codex-spark uses its 100k context window instead of inherited codex max", () => {
@@ -3636,11 +3678,14 @@ describe("Codex catalog routed normalization", () => {
     expect(luna?.auto_compact_token_limit).toBe(244_800);
   });
 
-  test("preserved gpt-5.4-mini rows get the openai cap without a hardcoded override (#1430)", () => {
+  test("preserved old-ladder native rows get the openai cap; retired gpt-5.4-mini is dropped (#1430)", () => {
     const cap = 200_000;
     const template = nativeTemplate();
-    // gpt-5.4-mini has no NATIVE_OPENAI_CONTEXT_OVERRIDES entry; its windows come
-    // from the preserved disk row and must still be capped on merge.
+    // gpt-5.4-mini is no longer a supported native, so merge drops it
+    // (CANONICAL_NATIVE_CATALOG_CONTENT_POLICY.unsupportedNativeEntries = "drop").
+    // The #1430 cap still applies to a preserved old-ladder native without a
+    // long-window opt-in: gpt-5.5's hardcoded override is 272k/272k, so a 200k
+    // cap must still win.
     const genuine54Mini = {
       ...template,
       slug: "gpt-5.4-mini",
@@ -3649,8 +3694,16 @@ describe("Codex catalog routed normalization", () => {
       max_context_window: 272_000,
       auto_compact_token_limit: 244_800,
     };
+    const genuine55 = {
+      ...template,
+      slug: "gpt-5.5",
+      display_name: "GPT-5.5",
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 244_800,
+    };
     const merged = mergeCatalogEntriesForSync(
-      [genuine54Mini],
+      [genuine54Mini, genuine55],
       [],
       new Map(),
       [],
@@ -3668,10 +3721,11 @@ describe("Codex catalog routed normalization", () => {
       new Set(),
       cap,
     );
-    const mini = merged.find(e => e.slug === "gpt-5.4-mini");
-    expect(mini?.context_window).toBe(cap);
-    expect(mini?.max_context_window).toBe(cap);
-    expect(mini?.auto_compact_token_limit).toBe(180_000);
+    expect(merged.find(e => e.slug === "gpt-5.4-mini")).toBeUndefined();
+    const gpt55 = merged.find(e => e.slug === "gpt-5.5");
+    expect(gpt55?.context_window).toBe(cap);
+    expect(gpt55?.max_context_window).toBe(cap);
+    expect(gpt55?.auto_compact_token_limit).toBe(180_000);
   });
 
   test("nativeOpenAiContextWindow applies the openai cap as a ceiling only when provided", () => {
@@ -3681,8 +3735,11 @@ describe("Codex catalog routed normalization", () => {
     expect(nativeOpenAiContextWindow("gpt-5.6-sol", 500_000)).toBe(500_000);
     // A cap ABOVE the native value is a ceiling, not a floor.
     expect(nativeOpenAiContextWindow("gpt-5.6-sol", 2_000_000)).toBe(922_000);
-    // Non-5.6 natives are capped the same way.
-    expect(nativeOpenAiContextWindow("gpt-5.4", 272_000)).toBe(272_000);
+    // Non-5.6 natives have no long-window opt-in: a cap may only lower.
+    expect(nativeOpenAiContextWindow("gpt-5.5", 200_000)).toBe(200_000);
+    expect(nativeOpenAiContextWindow("gpt-5.5", 2_000_000)).toBe(272_000);
+    // The retired 1M native is gone; a cap cannot invent a window for it.
+    expect(nativeOpenAiContextWindow("gpt-5.4", 272_000)).toBeUndefined();
   });
 
   // Owner decision (devlog 260816_.../011 §4-bis): Daybreak Blue is now a GLOBALLY
@@ -4334,41 +4391,43 @@ describe("Codex catalog routed normalization", () => {
       base_instructions: "installed native instructions",
       genuine_marker: "installed-native",
     };
-    const nativeMini = {
+    // The second native is a surviving slug: a retired one would be dropped as an
+    // unsupported native before this test could say anything about adoption.
+    const nativeSpark = {
       ...nativeTemplate(),
-      slug: "gpt-5.4-mini",
-      display_name: "gpt-5.4-mini",
+      slug: "gpt-5.3-codex-spark",
+      display_name: "gpt-5.3-codex-spark",
       priority: 6,
     };
     const routedCursorRows = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "cursor", id: "gpt-5.5", owned_by: "cursor" },
-      { provider: "cursor", id: "gpt-5.4-mini", owned_by: "cursor" },
+      { provider: "cursor", id: "gpt-5.3-codex-spark", owned_by: "cursor" },
     ]);
 
     const merged = mergeCatalogEntriesForSync(
-      [native, nativeMini, { slug: "cursor/old", visibility: "list" }],
+      [native, nativeSpark, { slug: "cursor/old", visibility: "list" }],
       routedCursorRows,
       new Map([
         ["gpt-5.5", 9],
-        ["gpt-5.4-mini", 10],
+        ["gpt-5.3-codex-spark", 10],
       ]),
       [],
       false,
-      new Set(["gpt-5.5", "gpt-5.4-mini"]),
+      new Set(["gpt-5.5", "gpt-5.3-codex-spark"]),
     );
     const slugs = merged.map(entry => entry.slug);
 
     expect(slugs).toContain("gpt-5.5");
-    expect(slugs).toContain("gpt-5.4-mini");
+    expect(slugs).toContain("gpt-5.3-codex-spark");
     expect(slugs).toContain("cursor/gpt-5.5");
-    expect(slugs).toContain("cursor/gpt-5.4-mini");
+    expect(slugs).toContain("cursor/gpt-5.3-codex-spark");
     expect(slugs).not.toContain("cursor/old");
     expect(merged.find(entry => entry.slug === "gpt-5.5")?.priority).toBe(9);
     expect(merged.find(entry => entry.slug === "gpt-5.5")?.base_instructions)
       .toBe("installed native instructions");
     expect(merged.find(entry => entry.slug === "gpt-5.5")?.genuine_marker)
       .toBe("installed-native");
-    expect(merged.find(entry => entry.slug === "gpt-5.4-mini")?.priority).toBe(10);
+    expect(merged.find(entry => entry.slug === "gpt-5.3-codex-spark")?.priority).toBe(10);
   });
 
   test("buildCatalogEntries advertises supports_websockets only on explicit opt-in", () => {
@@ -5986,9 +6045,9 @@ describe("Codex catalog routed normalization", () => {
   test("built-in DeepSeek and GLM effort models opt into Codex reasoning propagation (#1100)", async () => {
     const expected = [
       { slug: "deepseek/deepseek-v4-flash", efforts: ["low", "high", "max", "ultra"] },
-      { slug: "deepseek/deepseek-v4-pro", efforts: ["low", "high", "max", "ultra"] },
+      { slug: "deepseek/deepseek-flash", efforts: ["low", "high", "max", "ultra"] },
       { slug: "opencode-go/deepseek-v4-flash", efforts: ["low", "high", "max"] },
-      { slug: "opencode-go/deepseek-v4-pro", efforts: ["low", "high", "max"] },
+      { slug: "opencode-go/deepseek-v4.1-flash", efforts: ["low", "high", "max"] },
       { slug: "opencode-go/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max"] },
       { slug: "opencode-go/glm-5.1", efforts: ["low", "medium", "high", "xhigh", "max"] },
       { slug: "opencode-go/glm-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -6007,7 +6066,7 @@ describe("Codex catalog routed normalization", () => {
           authMode: "key",
           apiKey: "sk-test",
           liveModels: false,
-          models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+          models: ["deepseek-v4-flash", "deepseek-flash"],
         },
         "opencode-go": {
           adapter: "openai-chat",
@@ -6015,7 +6074,7 @@ describe("Codex catalog routed normalization", () => {
           authMode: "key",
           apiKey: "sk-test",
           liveModels: false,
-          models: ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5.2", "glm-5.1", "glm-5"],
+          models: ["deepseek-v4-flash", "deepseek-v4.1-flash", "glm-5.2", "glm-5.1", "glm-5"],
         },
         zai: {
           adapter: "openai-chat",
@@ -6173,7 +6232,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(provider.modelSupportsReasoningSummaries).toEqual({
       "deepseek-v4-flash": false,
-      "deepseek-v4-pro": true,
+      "deepseek-flash": true,
     });
   });
 
@@ -6950,7 +7009,7 @@ describe("native slug allowlist", () => {
     ];
 
     expect(filterSupportedNativeSlugs(liveModels)).toEqual([
-      "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
+      "gpt-5.5", "gpt-5.3-codex-spark",
     ]);
   });
 

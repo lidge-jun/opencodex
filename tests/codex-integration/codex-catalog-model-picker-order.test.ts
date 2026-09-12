@@ -150,10 +150,10 @@ describe("modelPickerOrder (#1649)", () => {
   test("the builder leaves a bare native row unchanged before the complete-order pass", () => {
     const entries = buildCatalogEntriesFromObservedState({
       template: template() as never,
-      gptSlugs: ["gpt-5.5", "gpt-5.4"],
+      gptSlugs: ["gpt-5.5", "gpt-5.3-codex-spark"],
       goModels: [{ id: "glm-5.2", provider: "jd-chat", owned_by: "jd" }] as unknown as CatalogModel[],
       featured: [],
-      modelPickerOrder: ["gpt-5.4", "jd-chat/glm-5.2"],
+      modelPickerOrder: ["gpt-5.3-codex-spark", "jd-chat/glm-5.2"],
       wsEnabled: false,
       multiAgentMode: "default",
       exactComboSlugs: new Set(),
@@ -164,7 +164,7 @@ describe("modelPickerOrder (#1649)", () => {
     });
     const p = Object.fromEntries((entries as Record<string, unknown>[]).map(e => [e.slug as string, e.priority as number]));
     // The native row keeps its native priority (9), untouched by modelPickerOrder.
-    expect(p["gpt-5.4"]).toBe(9);
+    expect(p["gpt-5.3-codex-spark"]).toBe(9);
     // The routed row IS placed in the high picker tier.
     expect(p["jd-chat/glm-5.2"]).toBeGreaterThanOrEqual(1000);
   });

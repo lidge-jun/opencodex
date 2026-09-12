@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXPORT_CLIENTS, EXPORT_CLIENT_IDS, type ExportModel } from "../../src/clients/config-export";
+import { createClineIO } from "../../src/integrations/cline-io";
+import { parseClineDocument } from "../../src/integrations/cline-document";
 import { parseConfig } from "../../src/integrations/config-io";
 import { INTEGRATION_CLIENTS, INTEGRATION_CLIENT_IDS, type IntegrationClientId } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -78,9 +80,9 @@ afterEach(() => {
 });
 
 describe("the client registries cannot drift apart", () => {
-  test("every list of clients holds exactly the same thirteen ids", async () => {
+  test("every list of clients holds exactly the same registered ids", async () => {
     /*
-     * Five lists name the same thirteen clients, and two of them are maintained by
+     * Five lists name the same registered clients, and two of them are maintained by
      * hand: the GUI cannot import the backend registry, because that would
      * pull node:os and node:path into the browser bundle. A client added
      * server-side renders no row until someone remembers the tuple, and the
@@ -91,7 +93,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(13);
+    expect(expected).toHaveLength(15);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -115,7 +117,7 @@ describe("the client registries cannot drift apart", () => {
     expect(INTEGRATION_CLIENTS.dsh.sourcePreservingYaml?.path).toEqual([
       "llm-pi-ai", "providers", "opencodex",
     ]);
-    expect(INTEGRATION_CLIENT_IDS.filter(id => INTEGRATION_CLIENTS[id].writerLock)).toEqual(["dsh", "mcode"]);
+    expect(INTEGRATION_CLIENT_IDS.filter(id => INTEGRATION_CLIENTS[id].writerLock)).toEqual(["dsh", "mcode", "cline"]);
     expect(INTEGRATION_CLIENTS.dsh.writerLock).toEqual({ suffix: ".lock" });
     expect(INTEGRATION_CLIENTS.mcode.writerLock).toEqual({ suffix: ".lock" });
   });
@@ -157,6 +159,7 @@ describe("the journal is metadata, never a copy of the file", () => {
 describe("every client survives a full lifecycle", () => {
   /** A pre-existing user document in each client's own format. */
   const SEED: Record<IntegrationClientId, string> = {
+    cline: '{"version":1,"modes":{},"providers":{"mine":{"settings":{"provider":"mine"},"updatedAt":"2026-01-01T00:00:00.000Z","tokenSource":"manual"}}}\n',
     opencode: '{\n  "provider": {\n    "mine": { "npm": "keep-me" }\n  }\n}\n',
     pi: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
     omp: "providers:\n  mine:\n    api: http://keep-me\n",
@@ -174,6 +177,10 @@ describe("every client survives a full lifecycle", () => {
     // Raycast's `providers` is a SEQUENCE keyed by `id`, so the user's entry is
     // a sibling element rather than a sibling map key.
     raycast: "providers:\n  - id: lmstudio\n    name: LM Studio\n    base_url: http://localhost:1234/v1\n    models: []\n",
+    // omo is senpi under an omo brand, and senpi reads Pi's models.json
+    // contract -- verified against senpi's own compiled validator, not assumed
+    // from the family resemblance (260912 plan unit, 001).
+    omo: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
   };
   /** Where the seed's user-owned entry lives when the seed is a sequence. */
   const USER_ELEMENT: Partial<Record<IntegrationClientId, readonly string[]>> = {
@@ -186,7 +193,15 @@ describe("every client survives a full lifecycle", () => {
       const seed = SEED[clientId];
       writeFileSync(configPath, seed);
       const format = EXPORT_CLIENTS[clientId].format;
-      const original = parseConfig(seed, format);
+      // Paired Cline files are one logical ownership document, but remain native files on disk.
+      if (clientId === "cline") writeFileSync(join(dirname(configPath), "models.json"), '{"version":1,"providers":{}}\n');
+      const readDocument = () => {
+        if (clientId !== "cline") return parseConfig(readFileSync(configPath, "utf8"), format);
+        const read = createClineIO(store.io(), configPath, store).readText(configPath);
+        if (read.kind !== "text") throw new Error("missing Cline fixture pair");
+        return parseClineDocument(read.text);
+      };
+      const original = readDocument();
 
       const applied = applyIntegration({
         clientId, models: MODELS, config: CONFIG, port: 10100,
@@ -195,7 +210,7 @@ describe("every client survives a full lifecycle", () => {
       expect(applied.ok).toBe(true);
 
       // Our fragments are present…
-      const afterApply = parseConfig(readFileSync(configPath, "utf8"), format);
+      const afterApply = readDocument();
       const record = store.readRecords()[clientId]!;
       expect(record.fragmentPaths.length).toBeGreaterThan(0);
       // Read through the writer's own segment grammar: Raycast's path holds a
@@ -227,7 +242,7 @@ describe("every client survives a full lifecycle", () => {
        * that is what the snapshot is for. What disable owes the user is that
        * every value they had is still there and ours is gone.
        */
-      const afterDisable = parseConfig(readFileSync(configPath, "utf8"), format);
+      const afterDisable = readDocument();
       expect(afterDisable).toEqual(original);
     });
   }

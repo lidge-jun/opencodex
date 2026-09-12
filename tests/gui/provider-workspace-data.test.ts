@@ -34,6 +34,11 @@ import {
   bucketPresets,
   filterPresets,
   presetTier,
+  noteNeedsReveal,
+  matchesCatalogQuery,
+  sortCatalogMatches,
+  filterAccountRows,
+  dropPresetsCoveredByAccounts,
   type CatalogPreset,
 } from "../../gui/src/components/provider-catalog/provider-presets";
 import { isLocalProvider, providerKind } from "../../gui/src/provider-workspace/kind";
@@ -520,17 +525,40 @@ describe("add-provider catalog presets (WP050a)", () => {
     expect(presetTier(preset({ id: "xai", auth: "oauth" }))).toBe("paid");
   });
 
-  test("bucketPresets partitions all three tiers preserving input order", () => {
+  test("bucketPresets partitions all four catalog tabs preserving input order", () => {
     const rows = [
       preset({ id: "venice" }),
       preset({ id: "openai", adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", auth: "forward" }),
       preset({ id: "nvidia", freeTier: true }),
       preset({ id: "groq" }),
+      preset({ id: "ollama", auth: "local", baseUrl: "http://localhost:11434/v1" }),
+      preset({ id: "vllm", baseUrl: "http://127.0.0.1:8000/v1" }),
     ];
     const buckets = bucketPresets(rows);
     expect(buckets.accounts.map(p => p.id)).toEqual(["openai"]);
     expect(buckets.free.map(p => p.id)).toEqual(["nvidia"]);
     expect(buckets.paid.map(p => p.id)).toEqual(["venice", "groq"]);
+    // The Local tab is a catalog-only split: a loopback base URL alone is enough, and a
+    // local row must not also appear under Free even though `presetTier` still calls it free.
+    expect(buckets.local.map(p => p.id)).toEqual(["ollama", "vllm"]);
+    expect(presetTier(rows[4]!)).toBe("free");
+  });
+
+  // A forward guard, not a live case: `isAccountProvider` requires the exact ChatGPT base
+  // URL, so no row is both accounts-tier and loopback today. This pins the ordering so a
+  // future widening of that classifier cannot quietly move an account row into Local.
+  test("the accounts classifier outranks the local peel", () => {
+    const buckets = bucketPresets([
+      preset({
+        id: "openai",
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        auth: "forward",
+      }),
+      preset({ id: "lm-studio", auth: "local", baseUrl: "http://localhost:1234/v1" }),
+    ]);
+    expect(buckets.accounts.map(p => p.id)).toEqual(["openai"]);
+    expect(buckets.local.map(p => p.id)).toEqual(["lm-studio"]);
   });
 
   test("search matches label and id only, never adapter or baseUrl", () => {
@@ -541,6 +569,69 @@ describe("add-provider catalog presets (WP050a)", () => {
     expect(filterPresets(rows, "nvidia").map(p => p.id)).toEqual(["nvidia"]);
     expect(filterPresets(rows, "NIM").map(p => p.id)).toEqual(["nvidia"]);
     expect(filterPresets(rows, "").map(p => p.id)).toEqual(["nvidia", "groq"]);
+  });
+
+  test("every nonempty note remains readable regardless of rendered width", () => {
+    expect(noteNeedsReveal("Local — key usually blank")).toBe(true);
+    expect(noteNeedsReveal("Short")).toBe(true);
+    expect(noteNeedsReveal("x".repeat(1126))).toBe(true);
+    expect(noteNeedsReveal(undefined)).toBe(false);
+    expect(noteNeedsReveal("   ")).toBe(false);
+  });
+
+  test("unified search widens by adapter EQUALITY, never by adapter prefix or base URL", () => {
+    const ollama = preset({ id: "ollama", label: "Ollama (local)", auth: "local", baseUrl: "http://localhost:11434/v1" });
+    const cursor = preset({ id: "cursor", label: "Cursor", adapter: "cursor", baseUrl: "https://api.cursor.com/v1" });
+
+    // The whole reason the haystack is not the adapter: openai-chat is the adapter of
+    // Ollama, vLLM, LM Studio, Groq, Cerebras and PackyCode, so a prefix match on
+    // "openai" would return half the catalog.
+    expect(matchesCatalogQuery(ollama, "openai")).toBe(false);
+    expect(matchesCatalogQuery(ollama, "openai-chat")).toBe(true);
+    expect(matchesCatalogQuery(cursor, "cursor")).toBe(true);
+
+    // Base URLs stay out of the haystack: otherwise "api" returns most of the Paid tab.
+    expect(matchesCatalogQuery(cursor, "api.cursor.com")).toBe(false);
+
+    // Aliases reach the Local group through the classifier, not through a substring.
+    expect(matchesCatalogQuery(ollama, "localhost")).toBe(true);
+    expect(matchesCatalogQuery(ollama, "self-hosted")).toBe(true);
+    expect(matchesCatalogQuery(cursor, "localhost")).toBe(false);
+
+    // Label and id remain the ordinary path, case-insensitively.
+    expect(matchesCatalogQuery(cursor, "CURS")).toBe(true);
+    expect(matchesCatalogQuery(cursor, "")).toBe(true);
+  });
+
+  test("search ranking is exact, then prefix, then the order the caller already chose", () => {
+    // Incoming order carries the sponsor pin, then usage rank, then label — this must
+    // only reorder for exact and prefix hits, never re-rank the tail.
+    const rows = [
+      preset({ id: "groq-cloud", label: "Groq Cloud" }),
+      preset({ id: "xyz", label: "Not a groq thing" }),
+      preset({ id: "groq", label: "Groq" }),
+    ];
+    expect(sortCatalogMatches(rows, "groq").map(p => p.id)).toEqual(["groq", "groq-cloud", "xyz"]);
+    // An empty query is browse mode: the caller's order is returned untouched.
+    expect(sortCatalogMatches(rows, "").map(p => p.id)).toEqual(["groq-cloud", "xyz", "groq"]);
+  });
+
+  test("a login in flight survives a query that does not match it", () => {
+    const rows = [
+      { id: "cursor", label: "Cursor" },
+      { id: "anthropic", label: "Anthropic (Claude)" },
+    ];
+    expect(filterAccountRows(rows, "claude").map(r => r.id)).toEqual(["anthropic"]);
+    // The busy row owns the authorization URL and the paste field; unmounting it
+    // mid-login throws away what the user is in the middle of doing.
+    expect(filterAccountRows(rows, "claude", "cursor").map(r => r.id)).toEqual(["cursor", "anthropic"]);
+    expect(filterAccountRows(rows, "").map(r => r.id)).toEqual(["cursor", "anthropic"]);
+  });
+
+  test("a provider that already has a login row is not also listed as a preset", () => {
+    const presets = [preset({ id: "openai", label: "OpenAI" }), preset({ id: "groq", label: "Groq" })];
+    expect(dropPresetsCoveredByAccounts(presets, [{ id: "openai" }]).map(p => p.id)).toEqual(["groq"]);
+    expect(dropPresetsCoveredByAccounts(presets, []).map(p => p.id)).toEqual(["openai", "groq"]);
   });
 
 });

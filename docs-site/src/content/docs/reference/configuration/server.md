@@ -35,16 +35,19 @@ runs helper features around provider requests.
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
 
-The canonical ChatGPT upstream WebSocket has a fixed 90-second response-prelude deadline,
-measured after sending the create frame. Quota and response-metadata control frames do not
-reset it; the first non-control Responses event ends it. This is not a total generation
-deadline, and neither `connectTimeoutMs` nor `stallTimeoutSec` retunes the 90 seconds
-themselves. That constant is only the WebSocket-specific upper bound: the exchange runs under
-the signal `connectTimeoutMs` (default 200s) aborts, and that abort cancels an already-sent
-create before the prelude timer can fire. A `connectTimeoutMs` below 90 seconds therefore
-ends the wait earlier, so the deadline a request actually gets is the shorter of the two. If
-either expires after sending, the stream fails without an HTTP resend, avoiding duplicate
-inference.
+While the canonical ChatGPT upstream WebSocket waits for the first Responses event after
+sending the create frame, it watches for liveness rather than a fixed deadline. When the socket
+supports protocol pings, the proxy pings it every 15 seconds. Any inbound frame — quota,
+response metadata, or a pong — resets a 90-second silence clock, so a socket without ping
+support still stays alive on its own frames, and only 90 seconds with nothing at all settles the request as an
+HTTP 504 with an `upstream_no_response` error. A slow but alive origin therefore waits for the
+client's own deadline or for `connectTimeoutMs` (default 200s), whichever comes first; a
+connect timeout that fires after the create frame was sent settles as the same 504. A socket
+that closes or errors before the first Responses event settles as an HTTP 502 with
+`upstream_closed_before_response`. These statuses are never retried inside the proxy — the
+frame may already be executing upstream, so the client applies its own retry policy exactly as
+it would when connected to the backend directly. Once the response has started, a later drop
+surfaces inside the stream as before. `stallTimeoutSec` is unrelated to this window.
 
 `noProxy` accepts either a comma-separated string or an array. Both forms add entries without
 replacing an inherited `NO_PROXY`:
@@ -507,7 +510,7 @@ an inactivity guard, not a total generation deadline.
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master image-description switch. |
 | `backend?` | `"openai" \| "anthropic"` | auto | Explicit wins; unset prefers a usable stored Anthropic OAuth credential, else `openai`. |
-| `model?` | `string` | backend-dependent | `gpt-5.4-mini` for OpenAI or `claude-sonnet-5` for Anthropic. |
+| `model?` | `string` | backend-dependent | `gpt-5.6-luna` for OpenAI or `claude-sonnet-5` for Anthropic. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | New description cache misses admitted per main turn. `0` disables calls; invalid values use default. |
 | `timeoutMs?` | `number` | `45000` | Sidecar fetch timeout. Integer 1–2147483647. |
 

@@ -6,9 +6,9 @@ import {
 
 describe("classifyExternalModel", () => {
   test("keeps bare native OpenAI ids and marks them native via owned_by", () => {
-    expect(classifyExternalModel({ id: "gpt-5.4", owned_by: "openai" })).toEqual({
-      id: "gpt-5.4",
-      displayName: "gpt-5.4",
+    expect(classifyExternalModel({ id: "gpt-5.5", owned_by: "openai" })).toEqual({
+      id: "gpt-5.5",
+      displayName: "gpt-5.5",
       provider: "openai",
       native: true,
       custom: false,

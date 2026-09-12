@@ -156,9 +156,11 @@ async function mountHarness(): Promise<Harness> {
         accountPoolStickyLimit: 1,
       });
     }
-    if (url.endsWith("/api/codex-auth/auto-switch") && method === "PUT") {
-      const body = JSON.parse(String(init?.body)) as { threshold: number };
-      writes.push(body.threshold);
+    if (url.endsWith("/api/pool/settings") && method === "PUT") {
+      // The unified contract field, not the GUI one: the client maps it, and a harness
+      // still reading `threshold` would record undefined for every save.
+      const body = JSON.parse(String(init?.body)) as { autoSwitchThreshold: number };
+      writes.push(body.autoSwitchThreshold);
       const response = putResponses.shift();
       if (!response) throw new Error("unexpected auto-switch write");
       return await response;
@@ -321,9 +323,9 @@ describe("Codex auto-switch controller interactions", () => {
           accountPoolStickyLimit: 1,
         });
       }
-      if (url.endsWith("/api/codex-auth/auto-switch") && method === "PUT") {
-        const body = JSON.parse(String(init?.body)) as { threshold: number };
-        writes.push(body.threshold);
+      if (url.endsWith("/api/pool/settings") && method === "PUT") {
+        const body = JSON.parse(String(init?.body)) as { autoSwitchThreshold: number };
+        writes.push(body.autoSwitchThreshold);
         const response = putResponses.shift();
         if (!response) throw new Error("unexpected auto-switch write");
         return await response;

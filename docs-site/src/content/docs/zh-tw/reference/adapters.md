@@ -166,6 +166,16 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
   executor，並繞過 Codex 審批和 sandbox 語義；舊的 `unsafeAllowNativeLocalExec: true` 僅在
   `nativeLocalExec` 未設定時等效。
 
+## `devin`
+
+**目標：** Cognition 的 `exa.api_server_pb.ApiServerService/GetChatMessage`（`server.codeium.com`，Connect 串流）。
+**認證：** 來自 `provider.apiKey` 或轉送 authorization 標頭的 Devin/Cognition API 金鑰。登入會開啟 Auth0 瀏覽器頁面，再透過 `SeatManagementService.RegisterUser` 換取長期金鑰。
+
+- 使用 `runTurn` 而非一般的 fetch/parse 路徑。請求與伺服器事件由 `devin/cloud-direct/wire.ts` 手寫的 protobuf 分幀處理。
+- 以 `GetCascadeModelConfigs` 依帳號取得模型；方案未涵蓋的模型在清單階段就被濾除。
+- Cognition 對工具說明設有長度上限與完全比對的封鎖清單。轉接器會改寫已知語句並截斷過長說明。
+- 金鑰不會更新。失效後請重新執行 `ocx login devin`。
+
 ## `azure-openai`（別名：`azure`）
 
 **目標：** **Azure OpenAI**。封裝 `openai-responses`，因此同樣是 `passthrough: true`。

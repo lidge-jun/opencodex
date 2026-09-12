@@ -57,7 +57,10 @@ import {
 import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { clearKeyCooldowns } from "../../providers/key-failover";
+import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
+import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
+import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
@@ -112,6 +115,7 @@ import {
   XAI_RESPONSES_DEFAULT_VERSION,
   xaiResponsesOptInState,
 } from "../../providers/xai-responses-opt-in";
+import { ZAI_PROVIDER_ID } from "../../providers/zai-responses-migration";
 import { dropProviderCustomModels } from "../../providers/provider-id-rewrite";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
@@ -573,6 +577,19 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "noJsonSchemaModels")) {
+    const value = rawBody.noJsonSchemaModels;
+    if (value === null) {
+      delete next.noJsonSchemaModels;
+    } else {
+      const error = nonBlankStringArrayConfigError(value, "noJsonSchemaModels");
+      if (error) return { error };
+      const models = normalizeNonBlankStringArray(value as string[]);
+      if (models.length > 0) next.noJsonSchemaModels = models;
+      else delete next.noJsonSchemaModels;
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "retainModels")) {
     const value = rawBody.retainModels;
     if (value === null) {
@@ -689,12 +706,54 @@ function canonicalOpenAiBudgetPatchError(
     ?? providerEmptyToolOutputConfigError("openai", applied.next);
 }
 
+function providerRoutingQuota(config: OcxConfig, name: string, now: number): ProviderRoutingQuota {
+  const provider = hasOwnProvider(config.providers, name) ? config.providers[name] : undefined;
+  const quota = getCachedProviderRoutingQuota(name, provider, now);
+  if (!quota || !Number.isFinite(quota.updatedAt) || quota.updatedAt < 0 || quota.updatedAt > now
+    || now >= quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS) return { state: "unknown" };
+
+  // Removing search/MCP windows may leave only a timestamp. That is not inference evidence.
+  const percentages = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent,
+    ...(quota.customWindows ?? []).map(window => window.percent)];
+  const hasPercentage = percentages.some(value => typeof value === "number" && Number.isFinite(value) && value >= 0);
+  const credits = quota.creditsUsd;
+  const hasCredits = credits !== undefined && Number.isFinite(credits.percent)
+    && credits.percent >= 0 && Number.isFinite(credits.remaining);
+  if (!hasPercentage && !hasCredits) return { state: "unknown" };
+
+  const state = cachedProviderQuotaIsExhausted(quota, now) ? "exhausted" : "available";
+  let validUntil = quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS;
+  if (state === "exhausted") {
+    const resets = [quota.fiveHourResetAt, quota.weeklyResetAt, quota.monthlyResetAt,
+      ...(quota.customWindows ?? []).map(window => window.resetAt)]
+      .filter((reset): reset is number => typeof reset === "number" && Number.isFinite(reset)
+        && reset > now && reset < validUntil)
+      .sort((left, right) => left - right);
+    // Reuse dispatch's predicate: another exhausted window or USD cap may still block.
+    for (const reset of resets) {
+      if (!cachedProviderQuotaIsExhausted(quota, reset)) {
+        validUntil = reset;
+        break;
+      }
+    }
+  }
+  return { state, updatedAt: quota.updatedAt, validUntil };
+}
+
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
-    return jsonResponse(await fetchProviderQuotaReports(config, forceRefresh));
+    const snapshot = await fetchProviderQuotaReports(config, forceRefresh);
+    const now = Date.now();
+    return jsonResponse({
+      ...snapshot,
+      reports: snapshot.reports.map(report => ({
+        ...report,
+        routingQuota: providerRoutingQuota(config, report.provider, now),
+      })),
+    });
   }
 
   if (url.pathname === "/api/provider-request-pacing" && req.method === "GET") {
@@ -730,6 +789,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
       modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
+      noJsonSchemaModels: p.noJsonSchemaModels,
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
@@ -816,6 +876,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
     clearAccountQuotaCache(name);
     clearKeyCooldowns(name);
+    // The rotation cursor describes a pool this edit just changed; keeping it would let a
+    // stale position steer the next proactive pick.
+    forgetApiKeyRotationCursor(name);
     clearModelCache(name);
     if (name === "openai") (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
     const catalogRefresh = await convergeCodexCatalog();
@@ -915,6 +978,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
     clearAccountQuotaCache();
     clearKeyCooldowns();
+    // Cursors too, for the same reason the cooldown clear above takes no name: this PUT
+    // replaces the whole roster, and a cursor that outlives it still names a real id, so
+    // round-robin would resume after the pre-edit position instead of the new roster head.
+    forgetApiKeyRotationCursor();
     clearModelCache();
     (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
     const catalogRefresh = await convergeCodexCatalog();
@@ -1059,6 +1126,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }
       if (latest?.xaiResponsesDefaultVersion !== undefined) {
         prov.xaiResponsesDefaultVersion = latest.xaiResponsesDefaultVersion;
+      }
+    }
+    // Same reason for the Z.AI marker: the provider form never carries it, and losing it on an
+    // unrelated edit would let the one-time wire rewrite run a second time.
+    if (name === ZAI_PROVIDER_ID) {
+      const latest = config.providers[name];
+      if (latest?.zaiResponsesDefaultVersion !== undefined) {
+        prov.zaiResponsesDefaultVersion = latest.zaiResponsesDefaultVersion;
       }
     }
     // Reapply pins to the latest live row after DNS/import awaits, then validate the
