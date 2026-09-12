@@ -1,5 +1,8 @@
 # Cursor Provider
 
+Cursor's direct adapter does not enter the OpenAI Chat serializer's
+[OpenCode Go instruction ordering](chat-compat.md#opencode-go-chronological-instructions).
+
 ## Cursor Native Exec
 
 Cursor's experimental live transport can receive server-driven local read/write/delete/ls/grep,

@@ -1,5 +1,9 @@
 # Runtime
 
+Chat request serialization owns the destination-scoped
+[OpenCode Go instruction ordering](providers/chat-compat.md#opencode-go-chronological-instructions);
+it requires no runtime lifecycle change or new configuration option.
+
 ## Entrypoints
 
 | Path | Responsibility |

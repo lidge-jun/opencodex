@@ -2,6 +2,7 @@ import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { registryEntryForProviderDestination } from "../providers/registry";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -733,10 +734,14 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
   };
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
+  // Hoisting a newly appended reminder rewrites the reusable prompt prefix.
+  // Keep this compatibility exception on the destination/model tested with OCG.
+  const chronologicalSystem = parsed.modelId === "deepseek-v4.1-flash"
+    && registryEntryForProviderDestination(provider)?.id === "opencode-go";
   const toolCatalogNudge = shouldInjectNonOpenAIToolCatalogNudge(provider)
     ? buildNonOpenAIToolCatalogNudgeForTools(context.tools, options.toolChoice)
     : undefined;
-  const developerSystemParts = nativeOpenAI
+  const developerSystemParts = nativeOpenAI || chronologicalSystem
     ? []
     : context.messages
       .map(developerSystemText)
@@ -762,11 +767,11 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
         const hasImages = parts?.some(p => p.type === "image") ?? false;
         let chatMsg: Record<string, unknown>;
         if (msg.role === "developer" && !hasImages) {
-          if (!nativeOpenAI) break;
+          if (!nativeOpenAI && !chronologicalSystem) break;
           const text = typeof msg.content === "string"
             ? msg.content
             : parts!.map(p => (p as OcxTextContent).text).join("");
-          chatMsg = { role: "developer", content: text };
+          chatMsg = { role: nativeOpenAI ? "developer" : "system", content: text };
         } else if (typeof msg.content === "string") {
           chatMsg = { role: "user", content: msg.content };
         } else if (!hasImages) {

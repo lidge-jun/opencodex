@@ -1,5 +1,9 @@
 # Responses Transport
 
+When internal Responses messages are translated to Chat, the adapter applies
+[OpenCode Go instruction ordering](../providers/chat-compat.md#opencode-go-chronological-instructions).
+Native Responses transport does not enter that conversion.
+
 ## Responses HTTP/SSE
 
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
