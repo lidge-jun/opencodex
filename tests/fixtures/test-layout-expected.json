@@ -886,6 +886,7 @@
   "raycast-detect.test.ts": "clients",
   "reasoning-effort.test.ts": "codex-integration",
   "reasoning-envelope.test.ts": "responses",
+  "reasoning-metadata.test.ts": "codex-integration",
   "reasoning-replay-identity.test.ts": "adapters",
   "reasoning-replay-robustness.test.ts": "adapters",
   "reasoning-replay-scope-source.test.ts": "lib",

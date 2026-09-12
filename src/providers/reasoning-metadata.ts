@@ -1,5 +1,5 @@
 /**
- * Data-driven reasoning ladders for routed providers (2026-09-12 local patch).
+ * Data-driven reasoning ladders for routed providers.
  *
  * Routed providers rarely publish per-model effort ladders: OpenCode Zen Go answers /models
  * with ids only (id/object/created/owned_by), so opencodex had to hardcode ladders in
@@ -95,6 +95,17 @@ let snapshotMemo: MetadataSnapshot | null | undefined;
 let supportMemo: Map<string, number> | undefined;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshInFlight: Promise<unknown> | null = null;
+
+/** Test seam: drop the memoised snapshot/support caches so a suite can drive the load paths. */
+export function resetReasoningMetadataCachesForTests(): void {
+  snapshotMemo = undefined;
+  supportMemo = undefined;
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  refreshInFlight = null;
+}
 
 function readJsonFile<T>(filename: string): T | null {
   try {
