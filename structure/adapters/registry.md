@@ -4,6 +4,9 @@
 
 Runtime adapter construction has one authority: `src/adapters/registry.ts`.
 
+The OpenCode Go [chronological instruction exception](../providers/chat-compat.md#opencode-go-chronological-instructions)
+uses the provider registry's destination identity inside the Chat adapter; it adds no adapter factory.
+
 `src/server/adapter-resolve.ts` may resolve a provider/model onto an adapter id, but it does not maintain a second adapter factory inventory. The selected persisted/configured adapter id remains an untrusted string until the registry lookup succeeds. Unknown ids fail with the existing `Unknown adapter: <id>` error instead of widening configuration types around a closed compile-time union.
 
 ## Semantic inheritance is not constructor inheritance

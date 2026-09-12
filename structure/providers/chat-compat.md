@@ -1,5 +1,18 @@
 # Chat Provider Compatibility
 
+## OpenCode Go chronological instructions
+
+For the registry-recognized OpenCode Go Chat destination and exact model
+`deepseek-v4.1-flash`, `src/adapters/openai-chat.ts` keeps text-only timeline
+developer messages in place as system messages. Appending a reminder therefore
+does not hoist new text into the leading system prompt and rewrite the existing
+serialized message prefix. Pending tool results still precede deferred reminders.
+The base system prompt, vision conversion and native OpenAI developer roles retain
+their existing behavior; other Chat destinations and models retain leading-system
+folding. This is independent of the Claude trailing-notice stabilization option
+and does not guarantee upstream cache hits. Regression coverage is in
+`tests/adapters/openai/openai-chat-system-order.test.ts`.
+
 ## Reasoning and tool-result compatibility
 
 Kiro groups only consecutive original-message tool results whose raw call ID exactly matches
