@@ -24,6 +24,7 @@ let container: HTMLDivElement;
 let audio: unknown;
 let sent: RequestInit[];
 let responder: (init: RequestInit) => Promise<Response>;
+let holdKeys: Promise<void> | null;
 
 class Socket {
   static OPEN = 1;
@@ -49,11 +50,14 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: Socket });
   win.localStorage.setItem("ocx-lang", "en");
-  audio = AUDIO; sent = []; Socket.latest = undefined;
+  audio = AUDIO; sent = []; Socket.latest = undefined; holdKeys = null;
   responder = async () => Response.json({ text: "Synthetic transcript" });
   Object.defineProperty(globalThis, "fetch", { configurable: true, writable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.endsWith("/api/keys")) return Response.json({ keys: [], baseUrl: BASE, endpoint: `${BASE}/responses`, authMatrix: [{ endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" }], ...(audio === undefined ? {} : { audio }) });
+    if (url.endsWith("/api/keys")) {
+      if (holdKeys) await holdKeys;
+      return Response.json({ keys: [], baseUrl: BASE, endpoint: `${BASE}/responses`, authMatrix: [{ endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" }], ...(audio === undefined ? {} : { audio }) });
+    }
     if (url.endsWith("/v1/models")) return Response.json({ data: [] });
     if (url.endsWith("/v1/audio/transcriptions")) { sent.push(init!); return responder(init!); }
     return new Response(null, { status: 404 });
@@ -180,6 +184,10 @@ test("Cancel, key replacement and duplicate clicks cannot publish a superseded u
   expect(sent).toHaveLength(3);
   await act(async () => { replies[0]!(Response.json({ text: "stale A" })); replies[1]!(Response.json({ text: "stale B" })); });
   expect(container.textContent).not.toContain("stale A"); expect(container.textContent).not.toContain("stale B");
+  expect(container.querySelector<HTMLButtonElement>(`${DICTATION} button[type=submit]`)!.disabled).toBe(true);
+  expect(container.querySelector(`${DICTATION} .audio-api-actions button[type=button]`)?.textContent).toContain("Cancel");
+  await submit(DICTATION);
+  expect(sent).toHaveLength(3);
   await act(async () => { replies[2]!(Response.json({ text: "Current C" })); });
   expect(container.querySelector(".audio-api-result")?.textContent).toContain("Current C");
 });
@@ -201,6 +209,8 @@ test("unknown fields cannot write secrets to the list cache", async () => {
 
 test("old server and malformed cache audio never invent configured support", async () => {
   audio = undefined;
+  let release!: () => void;
+  holdKeys = new Promise(resolve => { release = resolve; });
   win.sessionStorage.setItem("ocx.apikeys.list.v2:http://localhost", JSON.stringify({
     keys: [], claudeCodeEnabled: true,
     authMatrix: [{ endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" }],
@@ -208,6 +218,10 @@ test("old server and malformed cache audio never invent configured support", asy
   }));
   await render();
   expect(container.querySelector(DICTATION)?.textContent).toContain("Audio metadata unavailable");
+  expect(container.querySelector(`${LIVE} input`)).toBeNull();
+  expect(container.textContent).toContain("Generate");
+  release();
+  await flush();
   expect(container.querySelector(`${LIVE} input`)).toBeNull();
   expect(sent).toHaveLength(0);
 });
