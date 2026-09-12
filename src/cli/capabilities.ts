@@ -260,6 +260,27 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary."],
   },
   {
+    command: ["account", "grok-reset-coupons"],
+    summary: "Inspect or redeem Grok billing reset coupons; redemption is journaled and idempotent.",
+    routes: [
+      { method: "GET", path: "/api/grok/reset-coupons" },
+      { method: "POST", path: "/api/grok/reset-coupons/consume" },
+    ],
+    flags: [
+      { name: "--consume", value: "boolean", summary: "Redeem one reset coupon; requires --yes." },
+      { name: "--yes", value: "boolean", summary: "Explicit confirmation required by --consume." },
+      { name: "--token-id", value: "string", summary: "Redeem a specific reset token instead of the default selection." },
+      { name: "--operation-id", value: "string", summary: "UUIDv4 making a redemption idempotent: retries replay the journaled outcome." },
+      { name: "--json", value: "boolean", summary: "Emit the coupon list or redemption result as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "Without --consume this is a read: remaining coupons and their validity windows.",
+      "The operation is journaled before the upstream call, so retrying the same --operation-id replays the recorded outcome instead of spending a second coupon.",
+    ],
+  },
+  {
     command: ["usage"],
     summary: "Token and estimated-cost report over a time range.",
     routes: [{ method: "GET", path: "/api/usage" }],
@@ -316,10 +337,9 @@ export const CAPABILITIES: readonly Capability[] = [
     // Both pools, because both have the setting. The Codex pool reads its applied values
     // from the active payload; the Anthropic pool has its own GET.
     routes: [
-      { method: "GET", path: "/api/codex-auth/active" },
-      { method: "PUT", path: "/api/codex-auth/pool-strategy" },
-      { method: "GET", path: "/api/oauth/accounts/pool" },
-      { method: "PUT", path: "/api/oauth/accounts/pool" },
+      { method: "GET", path: "/api/pool/settings" },
+      { method: "PUT", path: "/api/pool/settings" },
+      { method: "PATCH", path: "/api/pool/settings" },
     ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the applied strategy and sticky limit as JSON." }],
     mutates: true,
@@ -328,23 +348,45 @@ export const CAPABILITIES: readonly Capability[] = [
       "A bare invocation reads and never writes.",
       "The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.",
       "Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.",
-      "`anthropic` owns the full pool contract. Other OAuth providers reach the same endpoint with a generic subset (enabled/strategy/autoSwitchThreshold) whose settings persist but do not yet steer selection; `sticky` and `quotaWindow` are refused for them.",
+      "One route answers for every pool kind and declares which fields that kind honours in `supported`, so an unsupported field is a stated null rather than an absence. `anthropic` alone carries `quotaWindow`. Generic-provider settings steer selection only while `pool.kernel` is on. The legacy per-pool paths still work and are unchanged.",
     ],
   },
   {
     command: ["account", "sticky"],
     summary: "Show or set how many consecutive requests stay on one account.",
     routes: [
-      { method: "GET", path: "/api/codex-auth/active" },
-      { method: "PUT", path: "/api/codex-auth/pool-strategy" },
-      { method: "GET", path: "/api/oauth/accounts/pool" },
-      { method: "PUT", path: "/api/oauth/accounts/pool" },
+      { method: "GET", path: "/api/pool/settings" },
+      { method: "PUT", path: "/api/pool/settings" },
+      { method: "PATCH", path: "/api/pool/settings" },
     ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the applied strategy and sticky limit as JSON." }],
     mutates: true,
     json: "envelope",
     details: ["Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting."],
   },
+  {
+    command: ["account", "auto-switch"],
+    summary: "Show or set the usage percentage at which a pool moves to another account.",
+    // Declared here rather than riding on `account strategy`, which is what it did before the
+    // unified route existed. `auto-switch` genuinely drives these three: the Codex pool reads
+    // its applied threshold from the active payload and writes through its own route, and a
+    // generic OAuth pool reads and writes the per-provider pool settings.
+    routes: [
+      { method: "GET", path: "/api/codex-auth/active" },
+      { method: "PUT", path: "/api/codex-auth/auto-switch" },
+      { method: "GET", path: "/api/oauth/accounts/pool" },
+      { method: "PUT", path: "/api/oauth/accounts/pool" },
+    ],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the stored threshold and whether it is applied." }],
+    mutates: true,
+    json: "envelope",
+    details: [
+      "A bare invocation reads and never writes.",
+      "`on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0-100.",
+      "For a generic OAuth pool, `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability.",
+    ],
+  },
+
   {
     command: ["logs"],
     summary: "Recent request log rows, filterable by provider, model, conversation, account, and status.",

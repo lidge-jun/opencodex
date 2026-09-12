@@ -194,6 +194,16 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
   executor，并绕过 Codex 审批和 sandbox 语义；旧的 `unsafeAllowNativeLocalExec: true` 仅在
   `nativeLocalExec` 未设置时等同。
 
+## `devin`
+
+**目标：** Cognition 的 `exa.api_server_pb.ApiServerService/GetChatMessage`（`server.codeium.com`，Connect 流式）。
+**认证：** 来自 `provider.apiKey` 或转发的 authorization 头的 Devin/Cognition API 密钥。登录会打开 Auth0 浏览器页面，再通过 `SeatManagementService.RegisterUser` 换取长期密钥。
+
+- 使用 `runTurn` 而非常规的 fetch/parse 路径。请求与服务端事件由 `devin/cloud-direct/wire.ts` 手写的 protobuf 分帧处理。
+- 通过 `GetCascadeModelConfigs` 按账号获取模型；不在套餐内的模型在列表阶段就被过滤，而不是到请求时才失败。
+- Cognition 对工具说明有长度上限和精确短语黑名单。适配器会改写已知短语并截断过长的说明。
+- 密钥不会刷新。失效后请重新执行 `ocx login devin`。
+
 ## `azure-openai`（别名：`azure`）
 
 **目标：** **Azure OpenAI**。封装 `openai-responses`，因此同样是 `passthrough: true`。

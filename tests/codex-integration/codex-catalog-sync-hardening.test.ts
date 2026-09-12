@@ -115,8 +115,8 @@ describe("Codex catalog sync hardening", () => {
     writeFileSync(catalogPath, JSON.stringify({
       models: [
         nativeEntry("gpt-5.5", 0),
-        nativeEntry("gpt-5.4", 1),
-        nativeEntry("gpt-5.4-mini", 2),
+        nativeEntry("gpt-5.4", 1),            // retired -> drop
+        nativeEntry("gpt-5.4-mini", 2),       // retired -> drop
         nativeEntry("gpt-5.3-codex-spark", 3),
         nativeEntry("gpt-5.6-sol", 4),
         nativeEntry("gpt-5.6-terra", 5),
@@ -136,8 +136,10 @@ describe("Codex catalog sync hardening", () => {
 
     const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).toContain("gpt-5.5");
-    expect(slugs).toContain("gpt-5.4");
-    expect(slugs).toContain("gpt-5.4-mini");
+    // Retired from NATIVE_OPENAI_MODELS. A pinned upstream snapshot row is not catalog
+    // membership, so these drop with the other unsupported gpt-/codex- natives.
+    expect(slugs).not.toContain("gpt-5.4");
+    expect(slugs).not.toContain("gpt-5.4-mini");
     expect(slugs).toContain("gpt-5.3-codex-spark");
     // This isolated fixture has no authenticated ChatGPT roster. The flagship natives list
     // anyway (owner decision 2026-09-04): asking upstream under an adequate client version
@@ -272,13 +274,13 @@ describe("Codex catalog sync hardening", () => {
           auto_compact_token_limit: 115_200,
         },
         {
-          ...nativeEntry("gpt-5.4", 1),
-          comp_hash: "native-5.4-hash",
-          base_instructions: "Native 5.4 instructions",
-          model_messages: { instructions_template: "Native 5.4 instructions" },
+          ...nativeEntry("gpt-5.3-codex-spark", 1),
+          comp_hash: "native-spark-hash",
+          base_instructions: "Native spark instructions",
+          model_messages: { instructions_template: "Native spark instructions" },
           tool_mode: "code_mode_only",
         },
-        nativeEntry("gpt-5.4-mini", 2),
+        nativeEntry("gpt-5.6-luna", 2),
         routedEntry("vendor/stable-model", 5),
         { ...routedEntry("foreign/gpt-5.5", 6), description: "Foreign provider description" },
         {
@@ -370,10 +372,10 @@ describe("Codex catalog sync hardening", () => {
     expect(team?.description).toBe(bare?.description);
     expect(rows.filter(row => row.slug === "team/gpt-5.5")).toHaveLength(1);
     for (const selector of ["desktop", "team"]) {
-      expect(rows.some(row => row.slug === `${selector}/gpt-5.4`)).toBe(true);
-      expect(rows.some(row => row.slug === `${selector}/gpt-5.4-mini`)).toBe(true);
+      expect(rows.some(row => row.slug === `${selector}/gpt-5.3-codex-spark`)).toBe(true);
+      expect(rows.some(row => row.slug === `${selector}/gpt-5.6-luna`)).toBe(true);
     }
-    for (const nativeSlug of ["gpt-5.5", "gpt-5.4"]) {
+    for (const nativeSlug of ["gpt-5.5", "gpt-5.3-codex-spark"]) {
       const native = rows.find(row => row.slug === nativeSlug);
       const qualified = rows.find(row => row.slug === `team/${nativeSlug}`);
       expect(qualified).toMatchObject({
@@ -726,7 +728,7 @@ describe("Codex catalog sync hardening", () => {
     writeFileSync(catalogPath, JSON.stringify({
       models: [
         { ...nativeEntry("gpt-5.5", 0), visibility: "hide" },
-        nativeEntry("gpt-5.4", 1),
+        nativeEntry("gpt-5.3-codex-spark", 1),
       ],
     }, null, 2) + "\n");
 
@@ -740,7 +742,7 @@ describe("Codex catalog sync hardening", () => {
             liveModels: false
           }
         },
-        disabledModels: ["gpt-5.4", "team/gpt-5.5"],
+        disabledModels: ["gpt-5.3-codex-spark", "team/gpt-5.5"],
         codexAccounts: [{ id: "stored-side-account", isMain: false }],
         codexAccountNamespaces: { desktop: "@main", team: "stored-side-account" }
       }).then(res => console.log(JSON.stringify(res)));
@@ -762,7 +764,7 @@ describe("Codex catalog sync hardening", () => {
       visibility: "list",
       opencodex_catalog_kind: "account-selector-v1",
     });
-    expect(rows.find(row => row.slug === "team/gpt-5.4")?.visibility).toBe("hide");
+    expect(rows.find(row => row.slug === "team/gpt-5.3-codex-spark")?.visibility).toBe("hide");
   });
 
   test("default catalog path merges from disk instead of replacing it with bundled rows", () => {

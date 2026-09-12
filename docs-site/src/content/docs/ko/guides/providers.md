@@ -85,8 +85,9 @@ ChatGPT 패스스루 카탈로그에는 GPT-5.6 Sol/Terra/Luna의 네임스페�
 
 OAuth 로그인을 사용하는 프로바이더 프리셋은 여덟 개이며, 여기에 실험적 비공식 디바이스 플로우
 브리지를 쓰는 GitHub Copilot이 추가됩니다. 자격 증명은 `~/.opencodex/auth.json`에 저장되고
-자동으로 갱신됩니다. 로그인 CLI는 `chatgpt`도 받습니다. 이 명령은 ChatGPT 자격 증명을
-발급받고 `forward` 모드 프로바이더 항목을 만듭니다.
+자동으로 갱신됩니다. `ocx login codex`도 받지만 이건 위 프로바이더가 아닙니다. Codex 계정 풀
+로그인(`ocx account login codex`와 같은 흐름)으로 연결되고, 이 풀은 자체 계정 원장을 쓰기 때문에
+프록시가 실행 중이어야 합니다. `chatgpt`와 `openai`는 같은 경로의 별칭입니다.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -97,8 +98,9 @@ ocx login kiro         # kiro-cli 자격 증명 가져오기(토큰 폴백 지�
 ocx login google-antigravity
 ocx login cursor       # Cursor 전용 PKCE 로그인
 ocx login command-code # Command Code 브라우저 OAuth (또는 ~/.commandcode/auth.json 가져오기)
+ocx login devin       # Cognition/Devin Auth0 브라우저 로그인
 ocx login github-copilot  # GitHub 디바이스 플로우 → Copilot 토큰 (Copilot Pro/Business)
-ocx login chatgpt      # 별도 ChatGPT OAuth 로그인
+ocx login codex        # Codex 계정 풀 (별칭: chatgpt, openai / 프록시가 실행 중이어야 함)
 ocx logout <provider>
 ```
 
@@ -111,6 +113,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 설치하고 로그인한 `kiro-cli` 세션을 가져옵니다(Unix에서는 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`로 설치한 뒤 `kiro-cli login` 실행). **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 OpenCodex 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. 실시간 탐색은 인증된 CCA `v1internal:fetchAvailableModels` 엔드포인트를 사용하며 로그인한 계정에서 사용할 수 있는 agent 모델만 게시합니다. 유지 관리되는 카탈로그는 폴백으로 남습니다. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 실험적 PKCE 로그인, HTTP/2 전송, 계정별 모델 탐색을 지원합니다. |
+| `devin` | `devin` | `https://server.codeium.com` | 실험적인 비공식 Cognition/Devin 브리지. 로그인은 Auth0 브라우저 사인인을 열고, 받은 토큰을 `RegisterUser`로 교환해 장기 API 키를 얻습니다. 모델 목록은 `GetCascadeModelConfigs`로 계정마다 조회하며, 스트리밍은 Connect-RPC 위에서 `runTurn` 경로만 씁니다. 대시보드 프리셋에는 기본으로 없으니 직접 추가하세요. |
+| `devin-cli` | `devin` | `https://server.codeium.com` | 설치된 Devin CLI가 이미 들고 있는 자격증명을 가져옵니다(`devin auth login`이 자기 `credentials.toml`에 씁니다). 그다음은 `devin` 프로바이더와 똑같이 Cognition의 Connect-RPC api-server로 스트리밍합니다. 브라우저 로그인도, 붙여넣을 키도 없습니다. 모델 목록과 컨텍스트 윈도우는 계정 카탈로그에서 실시간으로 옵니다. CLI 자체의 로컬 에이전트 루프(ACP stdio)를 쓰려면 이름이 다른 행에 `"adapter": "devin-cli"`를 지정하세요. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 실험적. GitHub 디바이스 플로우 + `copilot_internal` 교환(VS Code OAuth 클라이언트). 활성 Copilot 구독 필요; 공식 서드파티 API가 아닙니다. |
 
 Google Antigravity 계정·제공자 할당량 확인은 모델 목록 폴백을 포함해 고정된 Google 회계 엔드포인트를 사용합니다. 해당 목적지의 투명 Fake-IP DNS를 지원하며 TLS 검증, 리다이렉트 거부, 사설 주소 검사는 유지합니다. 사용자 지정 base URL은 모델 요청에만 적용되며 할당량 목적지는 바꾸지 않습니다. `NO_PROXY`는 기존 직접 연결 정책을 유지합니다.
@@ -247,7 +251,7 @@ Volcengine Agent Plan은 `openai-responses` 어댑터로 네이티브 Responses 
 > Embedding, 이미지, 비디오, 3D 리소스도 반환하고 Coding 게이트웨이도 같은 광범위한 카탈로그를
 > 반환합니다. Agent Plan 게이트웨이에는 `/models` 리소스가 없습니다. 종량제 기본값은
 > `doubao-seed-2-1-pro-260628`이며 정적 카탈로그에는 현재 DeepSeek와 GLM 텍스트 모델도
-> 포함됩니다. Coding Plan의 기본값은 `ark-code-latest`, Agent Plan은 `deepseek-v4-pro`입니다.
+> 포함됩니다. Coding Plan의 기본값은 `ark-code-latest`, Agent Plan은 `deepseek-v4-flash`입니다.
 
 **Chutes 검색:** `chutes` 프리셋은 Chutes의 고정된 공유 OpenAI 호환 LLM gateway를 사용합니다.
 공개 `/v1/models` catalog에서 `supported_features`가 `tools`를 명시한 행만 유지하고, 슬래시가 포함된
@@ -416,7 +420,7 @@ Ollama Cloud는 호스팅형(로컬이 아님) Ollama입니다. `https://ollama.
 표면이 아니라 Ollama 자체 REST API(`POST /api/chat`)로 연결하며, 모델 목록을 공급자에서 직접
 발견하므로 새 Ollama Cloud 모델이 설정 변경 없이 나타납니다. opencodex는 클라우드
 라인업을 비전 기능에 따라 분류하여 [비전 사이드카](/ko/guides/sidecars/)가 텍스트 전용 모델에만
-작동하도록 합니다. 텍스트 전용 모델(예: `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`,
+작동하도록 합니다. 텍스트 전용 모델(예: `glm-5.2`, `deepseek-v4-flash`, `gpt-oss`, `qwen3-coder`,
 `minimax-m2.x`, `nemotron-3-*`)은 `noVisionModels`에 나열되며, 비전 네이티브 모델(예:
 `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`, `gemini-3-flash-preview`)은 포함되지 않습니다. 매칭은
 Ollama의 `:size` 태그에 관대하므로 `gpt-oss`는 `gpt-oss:120b`와 `gpt-oss:20b`를 모두 포괄합니다.

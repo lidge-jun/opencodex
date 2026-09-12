@@ -222,7 +222,7 @@ describe("vision eligibility core", () => {
   test("14. a non-native row's explicit text-only modality wins over a colliding native slug", () => {
     expect(modelAcceptsImageInput(emptyConfig, {
       provider: "custom-openai-compatible",
-      id: "gpt-5.4-mini",
+      id: "gpt-5.6-luna",
       inputModalities: ["text"],
     })).toBe(false);
   });

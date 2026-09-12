@@ -18,7 +18,7 @@ import {
   seedPoolRotationAccount,
   selectPriorityTier,
 } from "./pool-rotation";
-import { CODEX_EXHAUSTED_USAGE_PERCENT, CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, resetAtToMs } from "./quota";
 import { codexPlanKey, isThirtyDayOnlyCodexPlan } from "./plan";
 import {
   MAIN_CODEX_ACCOUNT_ID,
@@ -63,6 +63,25 @@ type CodexUpstreamHealth = {
   lastFailureAt?: number;
   /** Hard cooldown (quota 429). Survives a later 2xx; blocks auth + selection. */
   cooldownUntil?: number;
+  /**
+   * How long a quota refusal keeps selection away from this account (or this native quota
+   * group), as opposed to how long it is hard-blocked.
+   *
+   * The two are deliberately different lengths. {@link CODEX_MAX_RESET_DERIVED_COOLDOWN_MS}
+   * caps the hard cooldown at 15 minutes because a reset announcement is advisory and plan
+   * quota usually frees up before it — an account must stay reachable so the pool can find
+   * that out (#433). The window the refusal announced is not 15 minutes, though, so once the
+   * cooldown lapses the account is selectable again while its burst window is still spent,
+   * and the strategy picks it straight back: this proxy reads a weekly bar a burst limit never
+   * touches, so a refused account still scores as the coolest in the pool. Every request then
+   * earns the same 429 until the process restarts, which is the only thing that drops this map.
+   *
+   * So the announcement governs avoidance and the cap still governs blocking. Avoidance is soft
+   * in the {@link softAvoidUntil} sense: it reorders the pool and releases a bound thread, and
+   * the last-resort paths still reach the account when nothing else can serve, so one pessimistic
+   * announcement cannot stall routing.
+   */
+  quotaAvoidUntil?: number;
   /** When the current cooldown was recorded; origin of the probe interval clock. */
   cooldownSince?: number;
   /**
@@ -112,6 +131,12 @@ const CODEX_MAX_QUOTA_COOLDOWN_MS = 24 * 60 * 60_000;
  * the Retry-After ceiling (#433).
  */
 const CODEX_MAX_RESET_DERIVED_COOLDOWN_MS = 15 * 60_000;
+/**
+ * Ceiling on quota-refusal avoidance. Generous enough to cover a full five-hour burst window,
+ * tight enough that a weekly or monthly reset four days out cannot take an account out of
+ * rotation for the {@link CODEX_MAX_QUOTA_COOLDOWN_MS} day the Retry-After ceiling allows.
+ */
+const CODEX_MAX_QUOTA_AVOID_MS = 6 * 60 * 60_000;
 /** Minimum gap between probe leases for one cooled-down account. */
 export const CODEX_QUOTA_PROBE_INTERVAL_MS = 5 * 60_000;
 export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
@@ -315,14 +340,30 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
 }
 
 export function clearCodexUpstreamHealth(): void {
+  // Operator preferences are routing state, not health, but they live and die with the same
+  // reset points. Leaving them behind lets a selection from one context suppress the
+  // automatic cursor in the next one.
+  manualPreference.clear();
   upstreamHealth.clear();
   quotaScopedHealth.clear();
   runtimeActiveCodexAccountId = undefined;
+  // The reconcile watermark is part of this state, not something that outlives it. Keeping
+  // it across a full reset is incoherent: there is no health left to protect, yet
+  // recordCodexUpstreamOutcome would still drop a writer whose generation predates the
+  // watermark for any account missing from the equally stale live set. Left behind, it also
+  // leaks between test files, which is how it was found.
+  lastReconciledGeneration = 0;
+  liveHealthAccountIds = new Set();
 }
 
 export function clearCodexUpstreamHealthForAccount(accountId: string): void {
   upstreamHealth.delete(accountId);
   quotaScopedHealth.delete(accountId);
+  // Deletion is the third operator exit, next to pause and exclusion, and it is the one
+  // with no reconcile path behind it: once the account is gone nothing can succeed on it,
+  // so an unspent preference naming it would suppress the automatic cursor for every other
+  // account until the process restarts.
+  forgetManualPreference(accountId);
 }
 
 export function reconcileCodexRoutingHealth(context: GenerationContext): number {
@@ -337,6 +378,14 @@ export function reconcileCodexRoutingHealth(context: GenerationContext): number 
     if (context.codexAccountIds.has(accountId)) continue;
     quotaScopedHealth.delete(accountId);
     removed += 1;
+  }
+  // Sweep preferences the same way, for the account set this generation actually has. The
+  // delete path above is the direct route; this is the one that catches an account removed
+  // by an edit the runtime never saw. Deliberately not counted in `removed`, which reports
+  // health rows.
+  for (const [poolKey, preferred] of manualPreference) {
+    if (context.codexAccountIds.has(preferred)) continue;
+    manualPreference.delete(poolKey);
   }
   liveHealthAccountIds = new Set(context.codexAccountIds);
   lastReconciledGeneration = context.generation;
@@ -405,9 +454,11 @@ export function computeCodexUsageScore(quota: {
  * A short-only reading that proves the account is blocked NOW.
  *
  * Freshness is not optional. `getAccountQuota` performs no expiry check, partial updates
- * carry the old short tuple forward, and disk hydration accepts a persisted reading for
+ * carry a still-open short tuple forward, and disk hydration accepts a persisted reading for
  * hours — so scoring 100 from `shortPercent` alone would keep excluding an account whose
- * five-hour window has since reset. That is #3029 pointed the other way: the issue is that
+ * five-hour window has since reset. Merge no longer carries an elapsed shortResetAt, but an
+ * explicit incoming elapsed tuple is still stored, and a missing reset cannot be aged there.
+ * That is #3029 pointed the other way: the issue is that
  * an exhausted account stays selected, and "a recovered account stays excluded" trades one
  * unusable pool for another.
  *
@@ -433,12 +484,9 @@ function isTerminalShortWindow(
     const age = now - observedAt;
     return age >= 0 && age <= TERMINAL_SHORT_WINDOW_FRESHNESS_MS;
   }
-  // Both units reach storage: `normalizeResetAt` does not scale, and the GUI disambiguates
-  // by magnitude at read time. A comparison written against one assumption is off by 1000x
-  // against the other, and in the seconds-read-as-milliseconds direction every terminal
-  // reading looks like it reset in 1970 — a fix that passes its own test and does nothing.
-  const resetAtMs = resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
-  return resetAtMs > now;
+  // Seconds and milliseconds both reach storage, so the split lives in one place next to the
+  // merge that also ages a stored reset instant (`resetAtToMs`, src/codex/quota.ts).
+  return resetAtToMs(resetAt) > now;
 }
 
 export function classifyCodexUpstreamOutcome(
@@ -521,6 +569,51 @@ export function computeQuotaCooldown(meta: CodexUpstreamOutcomeMeta = {}): {
   const resetCooldownMs = parseResetCooldownMs(meta.resetAt, now);
   if (resetCooldownMs !== undefined) return { until: now + resetCooldownMs, source: "reset-derived" };
   return { until: now + CODEX_DEFAULT_QUOTA_COOLDOWN_MS, source: "default" };
+}
+
+/**
+ * When the pool should stop preferring an account after it refused on quota.
+ *
+ * The earliest window the refusal actually announced, bounded by {@link CODEX_MAX_QUOTA_AVOID_MS},
+ * and never shorter than the cooldown the same refusal produced — a Retry-After directive that
+ * outlasts every announcement still governs.
+ */
+function quotaAvoidUntilFor(meta: CodexUpstreamOutcomeMeta, now: number, cooldownUntil: number): number {
+  const values = Array.isArray(meta.resetAt) ? meta.resetAt : [meta.resetAt];
+  let announced: number | undefined;
+  for (const value of values) {
+    const timestamp = resetTimestampMs(value);
+    if (timestamp === undefined) continue;
+    const delay = timestamp - now;
+    if (delay <= 0) continue;
+    const until = now + Math.min(delay, CODEX_MAX_QUOTA_AVOID_MS);
+    if (announced === undefined || until < announced) announced = until;
+  }
+  return Math.max(cooldownUntil, announced ?? 0);
+}
+
+/** Live quota-refusal avoidance for an account, including the lane the request belongs to. */
+function codexQuotaAvoidUntil(
+  accountId: string,
+  quotaScope: CodexQuotaScope | undefined,
+  now: number,
+): number | null {
+  const live = (value: number | undefined): number | null =>
+    typeof value === "number" && Number.isFinite(value) && value > now ? value : null;
+  const account = live(upstreamHealth.get(accountId)?.quotaAvoidUntil);
+  const scoped = quotaScope === undefined
+    ? null
+    : live(scopedHealthFor(accountId, quotaScope)?.quotaAvoidUntil);
+  if (account === null) return scoped;
+  return scoped === null ? account : Math.max(account, scoped);
+}
+
+function isCodexQuotaAvoided(
+  accountId: string,
+  quotaScope: CodexQuotaScope | undefined,
+  now: number,
+): boolean {
+  return codexQuotaAvoidUntil(accountId, quotaScope, now) !== null;
 }
 
 export function computeQuotaCooldownUntil(meta: CodexUpstreamOutcomeMeta = {}): number {
@@ -764,6 +857,10 @@ function settleCooldownRecoveryLease(claim: CooldownRecoveryLease, recovered: bo
       cooldownSource: _source,
       probeLeaseId: _leaseId,
       probeLeaseGeneration: _leaseGeneration,
+      // "The quota window moved" is a statement about the whole refusal, so the avoidance it
+      // announced goes with the block it produced. Leaving it would make this escape hatch stop
+      // escaping: the account would still be passed over by every selection it is meant to win.
+      quotaAvoidUntil: _avoid,
       ...rest
     } = health;
     upstreamHealth.set(claim.accountId, {
@@ -871,6 +968,14 @@ export function resetCodexRoutingForManualSelection(accountId: string): void {
   clearThreadAccountMap();
   // Manual selection is the operator source of truth — drop any automatic runtime cursor.
   runtimeActiveCodexAccountId = undefined;
+  // Record the pick as an unspent one-shot on the SHARED scope only. An independent scope
+  // gets no entry on purpose: every write site the guard protects is already skipped for
+  // independent scopes, so an entry there would be state nothing reads — and state nothing
+  // reads is what the next reader mistakes for a rule.
+  //
+  // Seeding happens ONLY here. A pool-driven promote must never create or move a preference,
+  // or the pool would manufacture an operator intent nobody expressed.
+  manualPreference.set(POOL_KEY_CODEX, accountId);
   // Seed the RR ring so the next unbound new session honors the manually selected account
   // under round-robin (affinity-cleared threads / null threadId). Fill-first already follows
   // config.activeCodexAccountId, which the caller persists before invoking this.
@@ -880,11 +985,27 @@ export function resetCodexRoutingForManualSelection(accountId: string): void {
       seedPoolRotationAccount(codexPoolKeyForScope(scope), accountId);
     }
   }
+  // Quota avoidance is a preference, like the soft avoid dropped above, and an operator naming
+  // this account has overruled it. The hard cooldown is the part that survives.
+  const overrule = (health: CodexUpstreamHealth) => {
+    const { quotaAvoidUntil: _avoid, ...retained } = preservedCooldownFields(health);
+    return retained;
+  };
   const current = upstreamHealth.get(accountId);
-  if (!current) return;
-  const preserved = preservedCooldownFields(current);
-  if (Object.keys(preserved).length === 0) upstreamHealth.delete(accountId);
-  else upstreamHealth.set(accountId, { consecutiveFailures: 0, ...preserved });
+  if (current) {
+    const retained = overrule(current);
+    if (Object.keys(retained).length === 0) upstreamHealth.delete(accountId);
+    else upstreamHealth.set(accountId, { consecutiveFailures: 0, ...retained });
+  }
+  // A reset-derived refusal records its avoidance on the SCOPED map and returns before the
+  // account-wide entry is written, so naming the account has to reach that map too. Stopping
+  // at `upstreamHealth` — and returning early when it holds nothing — overruled nothing in
+  // the case that produces the avoidance this function exists to overrule.
+  for (const [scope, health] of [...(quotaScopedHealth.get(accountId) ?? [])]) {
+    const retained = overrule(health);
+    if (Object.keys(retained).length === 0) deleteScopedHealth(accountId, scope);
+    else setScopedHealth(accountId, scope, { consecutiveFailures: 0, ...retained });
+  }
 }
 
 export function getCodexAccountCooldownUntil(accountId: string, now = Date.now()): number | null {
@@ -953,18 +1074,31 @@ export function isCodexAccountInCooldown(accountId: string, now = Date.now()): b
  *   bumps it in {@link recordCodexUpstreamOutcome}, so the bump here is not load-bearing
  *   today and is kept so the invariant survives a future change that retains the lease.
  *
- * Returns false when the account carried no live cooldown (already expired or never set).
+ * Returns false when the account carried neither a live cooldown nor a live avoidance window.
+ * The window outlives the cooldown by design — the cooldown caps at fifteen minutes and the
+ * window runs up to six hours — so the moment an operator actually reaches for this escape
+ * hatch is usually after the cooldown lapsed and only the window is still keeping the account
+ * out of rotation. Refusing to look at the window then would leave the hatch shut in the one
+ * case it exists for.
  */
 export function clearCodexAccountCooldown(accountId: string, now = Date.now()): boolean {
   const clear = (health: CodexUpstreamHealth): CodexUpstreamHealth | null => {
     const cooldownUntil = health.cooldownUntil;
-    if (typeof cooldownUntil !== "number" || !Number.isFinite(cooldownUntil) || cooldownUntil <= now) return null;
+    const liveCooldown = typeof cooldownUntil === "number" && Number.isFinite(cooldownUntil) && cooldownUntil > now;
+    const avoidUntil = health.quotaAvoidUntil;
+    const liveAvoidance = typeof avoidUntil === "number" && Number.isFinite(avoidUntil) && avoidUntil > now;
+    if (!liveCooldown && !liveAvoidance) return null;
     const {
       cooldownUntil: _until,
       cooldownSince: _since,
       cooldownSource: _source,
       probeLeaseId: _leaseId,
       probeLeaseGeneration: _leaseGeneration,
+      // Same reasoning as the probe recovery above: "the quota window moved" is a statement
+      // about the whole refusal, so the avoidance it announced goes with the block it
+      // produced. Keeping it would leave this escape hatch not escaping, because selection
+      // would still pass over the account for as long as the announced window runs.
+      quotaAvoidUntil: _avoid,
       ...rest
     } = health;
     return {
@@ -1058,6 +1192,7 @@ function isCodexAccountSelectable(
   return !isCodexAccountPaused(config, accountId)
     && !isCodexAccountPlanExcluded(config, accountId)
     && getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
+    && !isCodexQuotaAvoided(accountId, quotaScope, now)
     && !isCodexAccountSoftAvoided(accountId, now)
     && isCodexAccountUsable(config, accountId, selectionOptions);
 }
@@ -1297,6 +1432,7 @@ function getEligiblePoolAccounts(
       && (!skipFailoverReadyCandidates || !shouldFailover(config, account.id, now)))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
+    .filter(account => !isCodexQuotaAvoided(account.id, quotaScope, now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
     .map(account => account.id);
   // The main Codex account is not stored in config.codexAccounts; include it as a
@@ -1307,6 +1443,12 @@ function getEligiblePoolAccounts(
     && (!isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID) || hasMainAccountRefreshGrant())
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
+    // The main login is not in `config.codexAccounts`, so it never passes through the
+    // filters above and this is the only place an avoidance window can exclude it. Without
+    // this the window a refusal announced applies to the pool but not to the account that
+    // earned it: the cooldown caps at fifteen minutes, the window runs up to six hours, and
+    // in between the main account returns as a first-class candidate.
+    && !isCodexQuotaAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope, now)
     && (!skipFailoverReadyCandidates || !shouldFailover(config, MAIN_CODEX_ACCOUNT_ID, now))
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)
   ) {
@@ -1467,7 +1609,10 @@ function pickUnboundStrategyAccount(
     picked = pickRoundRobinAccount(poolKey, eligible, limit);
     if (!picked) return null;
     if (commitSharedActive) {
-      if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
+      if (!isIndependentCodexQuotaScope(quotaScope)
+        && !manualPreferenceBlocks(codexPoolKeyForScope(quotaScope), picked)) {
+        rememberActiveCodexAccount(config, picked);
+      }
     }
     if (commitAffinity && threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
     notePoolRotationSuccess(poolKey, picked, limit);
@@ -1478,7 +1623,10 @@ function pickUnboundStrategyAccount(
     picked = pickFillFirstCodexAccount(config, now, quotaScope, selectionOptions);
     if (!picked) return null;
     if (commitSharedActive) {
-      if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
+      if (!isIndependentCodexQuotaScope(quotaScope)
+        && !manualPreferenceBlocks(codexPoolKeyForScope(quotaScope), picked)) {
+        rememberActiveCodexAccount(config, picked);
+      }
     }
     if (commitAffinity && threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
     return picked;
@@ -1622,6 +1770,53 @@ export function pickAlternateCodexAccount(
 }
 
 /** Effective active: automatic runtime cursor, else operator/persisted selection. */
+/**
+ * Unspent operator selections, keyed by pool scope.
+ *
+ * Codex has no account-side equivalent of the Anthropic `selectionRevision`, so staleness
+ * cannot be detected by comparing values: a pool-driven promote legitimately moves the
+ * persisted active account, and reading that as staleness would silently spend the
+ * operator's one-shot. Invalidation is keyed to the OPERATOR path instead — another manual
+ * selection, the account leaving the pool, or a successful dispatch on it.
+ */
+const manualPreference = new Map<string, string>();
+
+/**
+ * Spend the one-shot for a pool scope once a dispatch on that account actually succeeded.
+ * This is the Codex analogue of `commitAnthropicSelectionRouting`, which Codex lacks.
+ *
+ * Wiring this BEFORE the guard below is not a style choice. Measured: with the guard in
+ * place and no consume site, the first manual selection freezes the automatic cursor
+ * permanently and 15 of 69 rotation tests fail.
+ */
+function consumeManualPreference(accountId: string, poolKey: string): void {
+  if (manualPreference.get(poolKey) === accountId) manualPreference.delete(poolKey);
+}
+
+/**
+ * Drop an account's preference in every scope. Pause and exclusion do not route through
+ * `resetCodexRoutingForManualSelection`, so without this a preference could outlive the
+ * account it names and keep suppressing the automatic cursor.
+ */
+function forgetManualPreference(accountId: string): void {
+  for (const [poolKey, preferred] of manualPreference) {
+    if (preferred === accountId) manualPreference.delete(poolKey);
+  }
+}
+
+/**
+ * True while an unspent operator selection for this scope names a DIFFERENT account than
+ * the automatic pick about to be recorded.
+ *
+ * Callers pass their own scope: an independent quota scope keeps its own entry and must
+ * never read the shared one. The failover promote does NOT consult this — see its call
+ * site for why.
+ */
+function manualPreferenceBlocks(poolKey: string, accountId: string): boolean {
+  const preferred = manualPreference.get(poolKey);
+  return preferred !== undefined && preferred !== accountId;
+}
+
 export function getEffectiveActiveCodexAccountId(config: OcxConfig): string | undefined {
   return runtimeActiveCodexAccountId ?? config.activeCodexAccountId;
 }
@@ -1690,6 +1885,10 @@ export function reconcileCodexActiveAfterExclusion(
   now = Date.now(),
 ): string | null {
   const wasEffective = (getEffectiveActiveCodexAccountId(config) ?? MAIN_CODEX_ACCOUNT_ID) === excludedAccountId;
+  // Exclusion does not route through resetCodexRoutingForManualSelection, so the one-shot is
+  // revoked here too. A preference naming an account that can no longer serve would keep
+  // suppressing the automatic cursor with no way to clear it.
+  forgetManualPreference(excludedAccountId);
   if (config.activeCodexAccountId === excludedAccountId) {
     config.activeCodexAccountId = undefined;
   }
@@ -1892,6 +2091,45 @@ export function resolveCodexAccountForThread(
   return resolution.status === "selected" ? resolution.accountId : null;
 }
 
+function carriesQuotaRefusal(health: CodexUpstreamHealth | undefined): boolean {
+  return health?.lastFailureStatus === 429 || health?.lastFailureStatus === 402;
+}
+
+/**
+ * Has this account refused a request on quota without serving one since?
+ *
+ * Thread affinity is a prompt-cache optimization and every rule around it is a preference:
+ * `autoSwitchThreshold` is a hint that an account is getting busy, and `pool.cacheAffinity`
+ * deliberately raises that bar further. A refusal is not a preference, and once the account has
+ * told THIS thread it cannot serve, the binding has nothing left to optimize.
+ *
+ * The distinction matters because the cooldown a 429 writes is deliberately short. A reset
+ * announcement is advisory — plan quota routinely frees up before the advertised instant — so
+ * {@link CODEX_MAX_RESET_DERIVED_COOLDOWN_MS} caps it at 15 minutes. The five-hour window that
+ * announcement describes is not capped, so an account whose burst window is spent looks
+ * selectable again long before it is. For an unbound request that is correct: going back to find
+ * out is how the pool learns the window moved. For a BOUND thread it is a loop with no exit —
+ * the cooldown lapses, the account still scores lowest on the only window this proxy has a
+ * reading for (its weekly bar, untouched by a burst limit), the thread rebinds, and earns the
+ * identical 429. Cleared affinity does not help: the next request re-derives the same choice.
+ * From the Codex side that reads exactly as reported — a new session rotates normally while an
+ * existing one is locked to an exhausted account until the proxy is restarted, because a restart
+ * is the only thing that drops the binding and the stale health together.
+ *
+ * `lastFailureStatus` is the right evidence because of when it ends: {@link preservedCooldownFields}
+ * strips it from every recovery write, so it survives exactly until the account actually serves a
+ * request again. Nothing here blocks that — selection is untouched, so unbound traffic still probes
+ * the account and the first success releases every thread this refused.
+ *
+ * Scope follows where the refusal was recorded. An account-wide throttle lands in
+ * `upstreamHealth` and releases every lane; a reset-derived refusal lands against one native
+ * quota group, so a spent Spark window still cannot displace the same thread's Terra binding.
+ */
+function hasUnrecoveredCodexQuotaRefusal(accountId: string, quotaScope?: CodexQuotaScope): boolean {
+  if (carriesQuotaRefusal(upstreamHealth.get(accountId))) return true;
+  return quotaScope !== undefined && carriesQuotaRefusal(scopedHealthFor(accountId, quotaScope));
+}
+
 function previewReusableAffinityAccount(
   entry: ThreadAffinityEntry | undefined,
   config: OcxConfig,
@@ -1904,6 +2142,7 @@ function previewReusableAffinityAccount(
     || isThreadAffinityExpired(entry, now)
     || !isThreadAffinityGenerationLive(entry)
     || !isCodexAccountSelectable(config, entry.accountId, now, quotaScope, selectionOptions)
+    || hasUnrecoveredCodexQuotaRefusal(entry.accountId, quotaScope)
     || shouldFailover(config, entry.accountId, now)
   ) {
     return null;
@@ -1918,7 +2157,9 @@ function previewReusableAffinityAccount(
         getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions),
       now,
       );
-      if (!isUnknownUsage(usage) && usage >= threshold) {
+      // Preview must agree with resolve: this is the second copy of the same rule, and the
+      // suite asserts the two answer identically.
+      if (mayRebindAffinityForQuota(config, entry.accountId, usage, threshold, selectionOptions)) {
         const best = pickLowerUsageAccount(
           config,
           entry.accountId,
@@ -1933,6 +2174,32 @@ function previewReusableAffinityAccount(
     }
   }
   return entry.accountId;
+}
+
+/**
+ * May a LIVE binding be moved for quota reasons?
+ *
+ * Default: yes once usage crosses `autoSwitchThreshold`, which is the historical rule.
+ *
+ * With `pool.cacheAffinity` on, the bar becomes genuine exhaustion. Moving a bound
+ * conversation discards the prompt cache warmed on its account, so a threshold crossing -- a
+ * hint that the account is getting busy -- does not justify paying that cost; the account has
+ * to be unable to serve. Deliberately NOT `hasCodexQuotaHeadroom`, which reads
+ * `usage < autoSwitchThreshold` and would reproduce the old rule under a new name.
+ */
+function mayRebindAffinityForQuota(
+  config: OcxConfig,
+  accountId: string,
+  usage: number,
+  threshold: number,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): boolean {
+  const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
+  if (config.pool?.cacheAffinity !== true) return overThreshold;
+  // The usable half is already guaranteed by both callers, which gate on
+  // isCodexAccountSelectable; kept explicit so the predicate reads correctly on its own.
+  return !isCodexAccountUsable(config, accountId, selectionOptions)
+    || (!isUnknownUsage(usage) && usage >= 100);
 }
 
 /**
@@ -1955,15 +2222,18 @@ function reevaluateAffinityQuota(
       now,
       )
     : 0;
-  const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
+  // One bar, used for BOTH the rebind decision and the re-score interval. Keying the short
+  // circuit off the old threshold while the rebind bar moved would re-score a bound thread on
+  // every request through the whole 80-99% band instead of once a minute.
+  const mayRebind = mayRebindAffinityForQuota(config, entry.accountId, usage, threshold, selectionOptions);
   if (
-    !overThreshold
+    !mayRebind
     && now - entry.lastReevalAt < CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS
   ) {
     return null;
   }
   entry.lastReevalAt = now;
-  if (!overThreshold) return null;
+  if (!mayRebind) return null;
   const best = pickLowerUsageAccount(
     config,
     entry.accountId,
@@ -2106,6 +2376,7 @@ export function resolveCodexAccountForThreadDetailed(
       const detourReusable = !isThreadAffinityExpired(detourEntry, now)
         && isThreadAffinityGenerationLive(detourEntry)
         && isCodexAccountSelectable(config, detourEntry.accountId, now, quotaScope, selectionOptions)
+        && !hasUnrecoveredCodexQuotaRefusal(detourEntry.accountId, quotaScope)
         && !shouldFailover(config, detourEntry.accountId, now);
       if (detourReusable) {
         detourEntry.lastUsedAt = now;
@@ -2143,11 +2414,16 @@ export function resolveCodexAccountForThreadDetailed(
     const selectableForRequest = selectableForSharedState
       && isCodexAccountSelectable(config, entry.accountId, now, quotaScope, selectionOptions);
     const failoverReady = shouldFailover(config, entry.accountId, now);
+    // A quota refusal outranks every affinity preference, including `pool.cacheAffinity`:
+    // the account has already told this thread it cannot serve it.
+    const quotaRefused = hasUnrecoveredCodexQuotaRefusal(entry.accountId, quotaScope);
     const healthyForSharedAffinity = selectableForSharedState
       && hasCodexQuotaHeadroom(config, entry.accountId, sharedSelectionOptions, now)
+      && !quotaRefused
       && !failoverReady;
     if (
       selectableForRequest
+      && !quotaRefused
       // Affined threads must leave a failing account once the streak trips failover
       // (soft-avoid covers the first-hit case; this catches post-avoid residual streaks).
       && !failoverReady
@@ -2210,6 +2486,13 @@ export function resolveCodexAccountForThreadDetailed(
       && !preserveSharedSelectionForModelDetour
       && !isIndependentCodexQuotaScope(quotaScope)
     ) {
+      // NOT guarded by manualPreferenceBlocks, unlike preemption below. Measured: guarding
+      // it fails 8 cases in tests/codex-integration/codex-routing.test.ts, because a model
+      // detour is not the pool exercising discretion — the operator's account cannot serve
+      // this model at all. Under a rotating strategy this promote only moves the
+      // process-local cursor to whoever is actually serving and releases the pin; the
+      // operator's persisted activeCodexAccountId is left untouched either way, which is
+      // the thing the preference exists to protect.
       promoteActiveCodexAccount(config, strategyPick);
     }
     return { status: "selected", accountId: strategyPick };
@@ -2283,7 +2566,10 @@ export function resolveCodexAccountForThreadDetailed(
       !preserveSharedSelectionForModelDetour
       && !isIndependentCodexQuotaScope(quotaScope)
     ) {
-      rememberActiveCodexAccount(config, preempted);
+      // Preemption is an automatic pick competing with the operator, so it yields.
+      if (!manualPreferenceBlocks(POOL_KEY_CODEX, preempted)) {
+        rememberActiveCodexAccount(config, preempted);
+      }
     }
     active = preempted;
   }
@@ -2354,6 +2640,9 @@ export function recordCodexUpstreamOutcome(
    */
   dropSpentCredentialFailure(accountId);
   if (outcomeClass === "success") {
+    // The operator's one-shot is spent by a dispatch that actually worked, and only by that.
+    // A failed lookup leaves it unspent so the intent survives the failure.
+    consumeManualPreference(accountId, codexPoolKeyForScope(quotaScope));
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)
       : undefined;
@@ -2363,6 +2652,20 @@ export function recordCodexUpstreamOutcome(
       } else if (ownsProbeLease(scopedProbe, meta)) {
         setScopedHealth(accountId, meta.probeQuotaScope, withProbeLeaseReleased(scopedProbe, now));
       }
+    }
+    // A served request is what ends the refusal marker the quota branch left on this lane.
+    // The probe contract above owns the scoped COOLDOWN; this owns only the field
+    // {@link hasUnrecoveredCodexQuotaRefusal} reads, which would otherwise keep threads away
+    // from an account that is demonstrably serving them again. The account-wide marker needs
+    // no equivalent: every recovery write below runs it through preservedCooldownFields.
+    const refusedScope = quotaScope ? scopedHealthFor(accountId, quotaScope) : undefined;
+    if (quotaScope && refusedScope && carriesQuotaRefusal(refusedScope)) {
+      const {
+        lastFailureStatus: _refusal, lastFailureAt: _refusedAt, quotaAvoidUntil: _avoid, ...retained
+      } = refusedScope;
+      // A live cooldown and its probe bookkeeping survive; an entry that held nothing else goes.
+      if (Object.keys(retained).length > 1) setScopedHealth(accountId, quotaScope, retained);
+      else deleteScopedHealth(accountId, quotaScope);
     }
     const current = upstreamHealth.get(accountId);
     const cooldownUntil = getCodexAccountCooldownUntil(accountId, now);
@@ -2507,6 +2810,7 @@ export function recordCodexUpstreamOutcome(
         lastFailureStatus,
         lastFailureAt: now,
         cooldownUntil: until,
+        quotaAvoidUntil: quotaAvoidUntilFor(meta, now, until),
         cooldownSince: now,
         cooldownSource: source,
         cooldownGeneration,
@@ -2555,6 +2859,7 @@ export function recordCodexUpstreamOutcome(
       lastFailureStatus,
       lastFailureAt: now,
       cooldownUntil: until,
+      quotaAvoidUntil: quotaAvoidUntilFor(meta, now, until),
       cooldownSince: now,
       cooldownSource: source,
       cooldownGeneration,

@@ -21,7 +21,7 @@
  */
 import { homedir } from "node:os";
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
@@ -42,11 +42,12 @@ export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } 
 
 import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
 import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, GAJAE_API_KEY_ENV, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV } from "./config-export/constants";
-import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, normalizeExportModels, inputModalitiesForClient, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
+import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./config-export/omp";
 import { buildDshClientConfig, summarizeDsh, buildDshContribution } from "./config-export/dsh";
 import { buildMcodeClientConfig, summarizeMcode, buildMcodeContribution } from "./config-export/mcode";
 import { buildZcodeClientConfig, summarizeZcode, buildZcodeContribution } from "./config-export/zcode";
+import { buildClineClientConfig, summarizeCline, buildClineContribution } from "./config-export/cline";
 import { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
 
 
@@ -54,6 +55,14 @@ import { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } 
 export interface OpencodeModelEntry {
   name: string;
   limit?: { context: number; output: number };
+  /**
+   * opencode's own capability fields, derived from the catalog row's declared input
+   * modalities. Written only when the row declares at least one — an entry without them is
+   * what opencode already treats as text-only, and omitting them keeps an undeclared model
+   * byte-identical to what shipped before.
+   */
+  attachment?: boolean;
+  modalities?: { input: string[]; output: string[] };
 }
 
 /**
@@ -459,6 +468,51 @@ export function primeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
 }
 
 /**
+ * omo resolves its agent directory from THREE variables, in its own order:
+ * `OMO_CODING_AGENT_DIR`, then `SENPI_CODING_AGENT_DIR`, then
+ * `PI_CODING_AGENT_DIR`, falling back to `~/.omo/agent`. That is not an
+ * inference from the family resemblance — `bin/lib/agent-dir.js` publishes the
+ * list as `AGENT_DIR_ENV_NAMES` and the launcher pins the first two to whatever
+ * it resolves before spawning senpi, so the engine can never disagree with it.
+ *
+ * The order is load-bearing rather than cosmetic. A user with both
+ * `PI_CODING_AGENT_DIR` and `OMO_CODING_AGENT_DIR` set runs omo out of the omo
+ * one; checking Pi's first would have us write a catalog omo never reads.
+ *
+ * Each variable reports under its OWN name, because telling someone that
+ * `PI_CODING_AGENT_DIR` is relative when they set `OMO_CODING_AGENT_DIR` sends
+ * them to the wrong line of their shell profile. An empty or whitespace value
+ * falls through to the next name, which is what omo's own `.trim()`-then-test
+ * loop does.
+ *
+ * One divergence is deliberate: omo `resolve()`s a relative override against its
+ * own cwd and does not expand `~`. We refuse the relative form and do expand
+ * `~`, exactly as Pi, Prime, MCode and ZCode already do, because a background
+ * proxy and a foreground client have different working directories and would
+ * otherwise disagree about which file is named.
+ *
+ * Consequence worth knowing: a user who sets only `PI_CODING_AGENT_DIR` has Pi
+ * and omo reading ONE `models.json`. Both clients emit the same provider block
+ * through the same builder so the bytes agree; what cannot be shared is the
+ * ownership record, since two enabled clients would claim one file. That is
+ * omo's contract, not ours to paper over.
+ */
+export function omoAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const omo = env.OMO_CODING_AGENT_DIR?.trim();
+  if (omo) return absoluteClientPath(omo, home, "OMO_CODING_AGENT_DIR");
+  const senpi = env.SENPI_CODING_AGENT_DIR?.trim();
+  if (senpi) return absoluteClientPath(senpi, home, "SENPI_CODING_AGENT_DIR");
+  const pi = env.PI_CODING_AGENT_DIR?.trim();
+  if (pi) return absoluteClientPath(pi, home, "PI_CODING_AGENT_DIR");
+  return join(home, ".omo", "agent");
+}
+
+/** omo's canonical custom-provider catalog, read by the senpi engine it wraps. */
+export function omoConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(omoAgentDir(env, home), "models.json");
+}
+
+/**
  * Aside's state root. Unlike every other client here, Aside ships NO variable
  * that relocates it: its CLI carries `ASIDE_DAEMON_BASE_URL`,
  * `ASIDE_PRODUCT_VARIANT` and similar, and the only `.aside` path baked into the
@@ -614,13 +668,30 @@ export function opencodeProviderBlocks(
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context) };
     }
+    // `attachment` / `modalities` are fields of opencode's V1 model schema — the shape its
+    // published config.json defines and the one its loader reads (verified against opencode
+    // 1.18.30, src/provider/provider.ts: `model.attachment ?? …` / `model.modalities?.input`).
+    // They ride on both generations anyway: the two blocks are two spellings of one model list,
+    // and the V2 model schema (capabilities.{tools,input,output}, which opencode fills by
+    // migrating this same `modalities` field) ignores keys it does not define — its loader
+    // decodes with `onExcessProperty: "ignore"`. Same values on both, so a merge cannot make
+    // the two entries disagree.
+    const capabilities = opencodeModelCapabilities(model.inputModalities);
+    if (capabilities) {
+      entry.attachment = capabilities.attachment;
+      entry.modalities = capabilities.modalities;
+    }
     v1Models[key] = entry;
     const variants = opencodeEffortVariants(model);
-    // Own `limit` object, not a shared reference: the two blocks are serialized and reasoned
-    // about separately, and an in-place edit of one must never move the other.
+    // Own `limit` and `modalities` objects, not shared references: the two blocks are
+    // serialized and reasoned about separately, and an in-place edit of one must never move
+    // the other.
     v2Models[key] = {
       ...entry,
       ...(entry.limit ? { limit: { ...entry.limit } } : {}),
+      ...(entry.modalities
+        ? { modalities: { input: [...entry.modalities.input], output: [...entry.modalities.output] } }
+        : {}),
       ...(variants ? { variants } : {}),
     };
   }
@@ -1109,6 +1180,44 @@ function buildAsideContribution(ctx: ExportContext): ManagedContribution {
   return singleFragment("aside", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
+/**
+ * omo is the Pi document again, and this time the engine was checked rather
+ * than inferred: `omo-ai@beta` is a launcher around `@code-yeongyu/senpi`, and
+ * senpi's compiled validator accepts what `buildPiClientConfig` emits verbatim —
+ * the keyed `providers`, the `models` ARRAY whose identity is `id`, the
+ * `openai-completions` dialect, the loopback placeholder, and the
+ * `thinkingLevelMap` levels. Evidence:
+ * `devlog/_plan/260912_omo_client_integration/001_omo_contract.md`.
+ *
+ * The flag is passed HERE as well as in the spec's `build`, which is the one
+ * thing Prime and Aside do not do. They pass the default on both paths, so they
+ * are consistent; passing it on only one would make `ocx export --client omo`
+ * emit a `compat` block while enable and refresh wrote a file without it, and
+ * the two would drift apart at the first refresh.
+ */
+function buildOmoContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildPiClientConfig(ctx, true);
+  return singleFragment("omo", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+/** Cline's shared SDK store; command-local --config must be mirrored by the env override. */
+export function clineConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const explicit = env.CLINE_PROVIDER_SETTINGS_PATH?.trim();
+  const data = env.CLINE_DATA_DIR?.trim();
+  const root = env.CLINE_DIR?.trim();
+  const path = explicit ? absoluteClientPath(explicit, home, "CLINE_PROVIDER_SETTINGS_PATH")
+    : join(data ? absoluteClientPath(data, home, "CLINE_DATA_DIR")
+      : join(root ? absoluteClientPath(root, home, "CLINE_DIR") : join(home, ".cline"), "data"), "settings", "providers.json");
+  if (basename(path).toLowerCase() === "models.json") {
+    throw new ClientPathError("CLINE_PROVIDER_SETTINGS_PATH must differ from the sibling models.json catalog");
+  }
+  return path;
+}
+
+export function clineSettingsDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return dirname(clineConfigPath(env, home));
+}
+
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
   opencode: {
     id: "opencode",
@@ -1295,6 +1404,49 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // Raycast's provider entry has no header field, and its `api_keys` value
     // is read literally (no env interpolation), so the only way to admit a
     // remote bind would be a plaintext secret on disk. Refuse instead.
+    loopbackOnly: true,
+  },
+  /*
+   * Appended rather than filed beside the other Pi-family clients on purpose.
+   * `EXPORT_CLIENT_IDS` is `Object.keys(EXPORT_CLIENTS)`, so this object's
+   * insertion order IS the public order, and three tests assert it exactly. The
+   * existing sequence is landing order — `pi` second, `prime` eleventh — not a
+   * grouping, so appending is the edit that leaves the other thirteen alone.
+   */
+  omo: {
+    id: "omo",
+    // Not a bare `models.json`: same Downloads-folder collision argument as
+    // `prime-models.json` and `aside-models.json`.
+    filename: "omo-models.json",
+    destination: env => omoConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "omo reads a non-secret placeholder from models.json; loopback needs no key.",
+    build: ctx => buildPiClientConfig(ctx, true),
+    format: "json",
+    summarize: summarizePi,
+    buildContribution: buildOmoContribution,
+    /*
+     * Loopback-only for OMP's and Prime's reason, NOT Pi's and Aside's. senpi's
+     * provider block does accept a `headers` map and does interpolate `$ENV` in
+     * its values, so unlike Aside there is somewhere the dedicated admission
+     * header could live. What does not exist is a builder that emits one:
+     * `buildPiClientConfig` writes no headers at all, which is why `pi` is
+     * loopback-only too. Teaching the shared builder to emit them would change
+     * four clients at once, so remote wiring is deferred and a non-loopback bind
+     * refuses rather than generating a config that 401s.
+     */
+    loopbackOnly: true,
+  },
+  cline: {
+    id: "cline",
+    filename: "cline-config-bundle.json",
+    destination: env => clineConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Cline CLI bundle: settings goes in providers.json, catalog in sibling models.json. Stop Cline before enabling/syncing/restoring, then restart. Select --provider opencodex; the default provider stays unchanged. Loopback only.",
+    build: buildClineClientConfig,
+    format: "json",
+    summarize: summarizeCline,
+    buildContribution: buildClineContribution,
     loopbackOnly: true,
   },
 };

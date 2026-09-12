@@ -1,5 +1,6 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
+import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
@@ -413,6 +414,10 @@ export function comboFailureDecision(
 ): ComboFailureDecision {
   if (status === 499) return "stop";
   if (message.toLowerCase().includes("origin_rejected")) return "stop";
+  // The origin may already be executing this turn (the Codex WebSocket relay sent the create
+  // frame and never saw a response event). Hopping would send the same request to a second
+  // target while the first may still be generating; the honest status goes to the client.
+  if (isNonReplayableUpstreamCode(options?.code)) return "stop";
   // Cyber policy is a hard non-retryable refusal — honor structured code even when
   // classificationText was truncated before the JSON code field.
   if (isCyberPolicyCode(options?.code)) return "stop";

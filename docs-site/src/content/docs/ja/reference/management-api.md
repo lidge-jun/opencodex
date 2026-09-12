@@ -64,10 +64,14 @@ Authorization: Bearer <admin-token>
 | `GET /api/grok` | Grok 管理対象設定のステータスと候補モデルを読む | 400 ステータス読み取り失敗 |
 | `PUT /api/grok/selection` |除外された Grok モデルを永続化します。 400 個の無効な選択またはサイズが大きすぎる選択 |
 | `POST /api/grok/apply` |管理された同期を通じて永続的な Grok 設定を適用する | 409 `grok_apply_busy`; 400/500 適用失敗 |
+| `GET /api/grok/reset-coupons?accountId=...` | アクティブまたは指定された xAI アカウントの残り Grok 請求リセット トークンと有効期限ウィンドウを読む | 400 アカウントがありません; 401 未認証; 502 上流 gRPC-Web エラー |
+| `POST /api/grok/reset-coupons/consume` | 対象となるリセット クーポンを換金します。本文は `{ accountId?, tokenId?, operationId? }`。任意の `operationId`（UUIDv4）により換金は冪等になります: 同じ ID を繰り返すと、二重換金せずに永続化された結果を再生します。 | 400 無効な JSON/UUID; 401 未認証; 409 `identity_mismatch`; 502 上流エラー; 503 台帳容量 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop のルーティング/ネイティブ プロファイルを読み取るか永続化する | 400 無効または使用できない割り当て |
 | `POST /api/claude-desktop/apply` |保存したプロファイルを Claude Desktop の管理対象設定に書き込みます。 400/500 書き込み失敗 |
 | `GET /api/claude-desktop/status` |保存済みプロファイルと適用済みプロファイルおよびデスクトップの健全性を検査する | 400 ステータス読み取り失敗 |
 | `GET, PUT /api/claude-code` |クロード コードのゲートウェイ、認証モード、モデル マップ、コンテキスト、エージェント、サイドカー設定の読み取りまたは更新 | 400 無効なフィールドまたは図形 |
+
+ダッシュボードは **Providers > xAI Grok > Accounts** から両方のクーポン パスを操作します。サインイン済みの各アカウント行には残りのクーポン数を示すチケット バッジがあり、バッジは有効期限ウィンドウを一覧し、期限が最も近いクーポンを換金するダイアログを開きます。ダイアログはクライアントが発行した `operationId` を送り、再試行せずタイムアウト後に送信を止めます。ジャーナル記録がまだ開いている換金は再実行されてしまうためです。`ocx account grok-reset-coupons` はターミナル側の同等コマンドです。
 
 モデルロスターと暗号化されたワーカータスクの動作の背後にある概念については、「[サブエージェントサーフェス](/guides/sub-agent-surface/)」を参照してください。
 

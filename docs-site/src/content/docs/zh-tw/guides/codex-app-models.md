@@ -80,8 +80,8 @@ visibility = "list"
 
 ## 目前穩定模型涵蓋範圍
 
-原生回退列表包含 `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、
-`gpt-5.3-codex-spark` 以及 GPT-5.6 Sol/Terra/Luna。對於 GPT-5.5/5.4 系列，opencodex 會
+原生回退列表包含 `gpt-5.5`、
+`gpt-5.3-codex-spark` 以及 GPT-5.6 Sol/Terra/Luna。對於 GPT-5.5 系列，opencodex 會
 保留已安裝 Codex 目錄中資訊更完整的即時條目，僅在條目缺失時才合成。內建的上游快照只用於
 GPT-5.6，以便提供每個模型真實的身份和後設資料，而不是套用舊模板近似生成。
 

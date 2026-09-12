@@ -14,7 +14,7 @@ import {
   enrichProviderFromRegistry,
   providerConfigSeed,
 } from "../../src/providers/derive";
-import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "../../src/providers/registry";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
 import { routeModel } from "../../src/router";
@@ -73,12 +73,87 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).toEqual([
       "glm-5.3",
       "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4-flash", "deepseek-v4-pro",
+      "deepseek-v4.1-flash", "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("kimi-k2.7-code");
+    // #1338 / #1415: the Zen gateway rejects json_schema on its DeepSeek routes. The three
+    // presets that share that gateway carry the narrow opt-out as a registry-only seed, so
+    // an operator no longer has to disable structured output by hand. Registry-only means
+    // it is asserted here against the raw entry, not the derived key-login map.
+    const zenDeepseekJsonSchema: Record<string, string[]> = {
+      "opencode-go": ["deepseek-v4.1-flash", "deepseek-v4-flash"],
+      "opencode-zen": ["deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+      "opencode-free": ["deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+    };
+    for (const [id, expected] of Object.entries(zenDeepseekJsonSchema)) {
+      expect(PROVIDER_REGISTRY.find(entry => entry.id === id)?.noJsonSchemaModels).toEqual(expected);
+    }
+    /*
+     * DeepSeek's V4.1 transition (2026-09-10) split the spelling by who serves the route:
+     * the first-party API answers to `deepseek-flash`, the Zen gateway exposes
+     * `deepseek-v4.1-flash`. A single shared list cannot express that, and the earlier
+     * draft that tried it would have leaked the gateway spelling into the native preset.
+     * Pin both directions, including the negatives — a future edit that collapses the two
+     * constants back together fails here rather than in a user's request.
+     */
+    const nativeDeepseek = PROVIDER_REGISTRY.find(entry => entry.id === "deepseek");
+    expect(nativeDeepseek?.defaultModel).toBe("deepseek-flash");
+    expect(nativeDeepseek?.models).toContain("deepseek-flash");
+    for (const map of [
+      nativeDeepseek?.modelReasoningEfforts,
+      nativeDeepseek?.modelReasoningEffortMap,
+      nativeDeepseek?.modelSupportsReasoningSummaries,
+      nativeDeepseek?.modelContextWindows,
+    ]) {
+      expect(Object.keys(map ?? {})).toContain("deepseek-flash");
+    }
+    expect(nativeDeepseek?.preserveReasoningContentModels).toContain("deepseek-flash");
+    expect(nativeDeepseek?.noVisionModels).toContain("deepseek-flash");
+    // The new id keeps the Flash ladder, not the Pro one, through isDeepseekFlashModel.
+    expect(nativeDeepseek?.modelReasoningEfforts?.["deepseek-flash"])
+      .toEqual(nativeDeepseek?.modelReasoningEfforts?.["deepseek-v4-flash"]);
+
+    const zenGo = PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go");
+    expect(zenGo?.preserveReasoningContentModels).toContain("deepseek-v4.1-flash");
+    expect(zenGo?.noVisionModels).toContain("deepseek-v4.1-flash");
+    expect(Object.keys(zenGo?.modelReasoningEfforts ?? {})).toContain("deepseek-v4.1-flash");
+
+    // Negatives: neither spelling crosses into the other side.
+    expect(JSON.stringify(nativeDeepseek)).not.toContain("deepseek-v4.1-flash");
+    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+      expect(JSON.stringify(PROVIDER_REGISTRY.find(entry => entry.id === id)))
+        .not.toContain("\"deepseek-flash\"");
+    }
+    // Vendor-hosted rosters publish on their own schedule and keep the legacy set.
+    expect(PROVIDER_REGISTRY.find(entry => entry.id === "volcengine-coding-plan")?.preserveReasoningContentModels)
+      .toEqual(["deepseek-v4-flash"]);
+    // A model can only be gated onto the thinking-budget or thinking-toggle wire if the same
+    // preset also gives it an effort ladder — otherwise the adapter translates effort into a
+    // wire field for a model whose picker is empty. opencode-go carried the shared budget list
+    // while seeding only its own four ladders, so a live roster serving qwen3.5-397b armed the
+    // budget path with nothing to advertise.
+    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+      const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === id);
+      const ladders = Object.keys(entry?.modelReasoningEfforts ?? {});
+      const gated = [...entry?.thinkingBudgetModels ?? [], ...entry?.thinkingToggleModels ?? []];
+      expect({ id, ungated: gated.filter(model => !ladders.includes(model)) })
+        .toEqual({ id, ungated: [] });
+    }
+    // Issue #78 / #950: a DeepSeek route that advertises a thinking ladder must also replay
+    // reasoning_content on tool-call continuations, or the gateway answers 400 on the second
+    // turn. The three Zen presets seed those two tables by hand, so this pins the pairing
+    // instead of trusting that whoever adds the next route remembers both.
+    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+      const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === id);
+      const replayed = entry?.preserveReasoningContentModels ?? [];
+      const thinkingDeepseek = Object.keys(entry?.modelReasoningEfforts ?? {})
+        .filter(model => model.startsWith("deepseek-"));
+      expect({ id, unreplayed: thinkingDeepseek.filter(model => !replayed.includes(model)) })
+        .toEqual({ id, unreplayed: [] });
+    }
     expect(KEY_LOGIN_PROVIDERS.mimo.noVisionModels).toEqual(["mimo-v2.5-pro"]);
     expect(KEY_LOGIN_PROVIDERS.mimo.noVisionModels).not.toContain("mimo-v2.5");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"]).toMatchObject({
@@ -145,23 +220,26 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-sol"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-terra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-luna"]).toBe(1_050_000);
-    expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-v4-pro");
+    // Retired from the first-party API on 2026-09-14; the vendor-hosted rosters keep it.
+    expect(KEY_LOGIN_PROVIDERS.deepseek.models).not.toContain("deepseek-v4-pro");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-flash");
     // #1057: DeepSeek's ladder is low/high/max and the two V4 models resolve it
     // differently (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-06).
     // `xhigh` is an alias, so it stays in the wire map but is not advertised. Pro
     // does not honor `low` (the vendor maps it to `high`), so Pro must not offer it.
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-flash"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-flash"]).toEqual(["low", "high", "max"]);
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.low).toBe("low");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.xhigh).toBe("high");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.max).toBe("max");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.low).toBe("low");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.xhigh).toBe("high");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.max).toBe("max");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels)
+      .toEqual(["deepseek-flash", "deepseek-v4-flash"]);
     // Issue #88: every DeepSeek API model is text-only input — the vision sidecar covers them.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
-      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro", "deepseek-v4-flash",
+      "deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash",
     ]);
   });
 
@@ -270,10 +348,9 @@ describe("provider registry parity", () => {
     expect(deepseek).toMatchObject({
       adapter: "openai-chat",
       baseUrl: "https://api.deepseek.com",
-      defaultModel: "deepseek-v4-flash",
+      defaultModel: "deepseek-flash",
       modelContextWindows: {
         "deepseek-v4-flash": 1_048_576,
-        "deepseek-v4-pro": 1_048_576,
       },
     });
 
@@ -322,7 +399,7 @@ describe("provider registry parity", () => {
       liveModels: false,
       models: [
         "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro",
+        "glm-5.3", "glm-5.3-flash", "glm-5.2",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
@@ -335,9 +412,8 @@ describe("provider registry parity", () => {
       modelContextWindows: {
         "qwen3.8-max": 983_616,
         "qwen3.7-max": 1_000_000,
-        "deepseek-v4-pro": 1_000_000,
       },
-      noVisionModels: ["glm-5.3", "glm-5.2", "deepseek-v4-pro"],
+      noVisionModels: ["glm-5.3", "glm-5.2"],
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
@@ -383,7 +459,9 @@ describe("provider registry parity", () => {
     const optedInProviders = PROVIDER_REGISTRY
       .filter(entry => entry.modelSuffixBracketStrip)
       .map(entry => entry.id);
-    expect(zai?.modelContextWindows).toEqual({ "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
+    // The 5.3 family carries the number its own catalog reports, 1_048_576, which is what the
+    // domestic Responses row already used. 5.2 keeps the round figure it was seeded with.
+    expect(zai?.modelContextWindows).toEqual({ "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
     // BUG-R5: glm-5.3-flash is a native VLM (docs.z.ai/guides/vlm/glm-5.3-flash), so it
     // must never sit in noVisionModels - that list routes a model's images through the
     // proxy's vision sidecar, which hands the model a text description of a picture it
@@ -406,6 +484,21 @@ describe("provider registry parity", () => {
     // The sibling it is most often confused with stays text-only, so the assertion above
     // cannot pass by making every GLM row a VLM.
     expect(zai?.noVisionModels ?? []).toContain("glm-5.3");
+    // The global loop above accepts an ABSENT declaration, which is exactly how the Chat
+    // rows shipped: Flash was kept out of the sidecar but never told the catalog it could
+    // read an image, so `configuredInputModalities` returned undefined and every client
+    // export listed a native VLM as text-only. Pin the positive declaration so the two
+    // Chat rows cannot drift back to describing Flash only by what it is not.
+    for (const id of ["zai", "zhipu-bigmodel-coding"] as const) {
+      const row = PROVIDER_REGISTRY.find(entry => entry.id === id);
+      expect(row?.modelInputModalities?.["glm-5.3-flash"]).toEqual(["text", "image"]);
+      expect(row?.modelInputModalities?.["glm-5.3"]).toEqual(["text"]);
+      // The bracketed aliases are looked up by their exact catalog id, not a stripped one,
+      // so they need their own text-only entries.
+      expect(row?.modelInputModalities?.["glm-5.3[1m]"]).toEqual(["text"]);
+      expect(row?.modelInputModalities?.["glm-5.2[1m]"]).toEqual(["text"]);
+      expect(row?.noVisionModels ?? []).not.toContain("glm-5.3-flash");
+    }
     // `glm-5.3-flash` belongs in all three maps. It was seeded into the model list
     // and the context map alone, so it advertised a 1M window with no effort ladder,
     // no default effort and no output cap - and this assertion pinned that gap in
@@ -421,6 +514,27 @@ describe("provider registry parity", () => {
       expect(zai?.modelMaxOutputTokens?.[id]).toBe(131_072);
     }
     expect(providerConfigSeed(zai!).modelSuffixBracketStrip).toBe(true);
+    // Responses is the default wire and Chat stays reachable per model. The two live under
+    // different prefixes on one host, so each carries its own relative send path; a wire
+    // override swaps the adapter and leaves baseUrl alone.
+    expect(zai?.adapter).toBe("openai-responses");
+    expect(zai?.baseUrl).toBe("https://api.z.ai");
+    expect(zai?.responsesPath).toBe("/api/v1/responses");
+    expect(zai?.chatCompletionsPath).toBe("/api/coding/paas/v4/chat/completions");
+    expect(providerConfigSeed(zai!).responsesPath).toBe("/api/v1/responses");
+    expect(providerConfigSeed(zai!).chatCompletionsPath).toBe("/api/coding/paas/v4/chat/completions");
+    // A config saved against the address this row used to occupy still resolves to it,
+    // so an existing custom provider does not quietly lose its metadata (#1100).
+    expect(registryEntryForProviderDestination({
+      adapter: "openai-chat",
+      baseUrl: "https://api.z.ai/api/coding/paas/v4",
+      authMode: "key",
+    })?.id).toBe("zai");
+    expect(registryEntryForProviderDestination({
+      adapter: "openai-responses",
+      baseUrl: "https://api.z.ai",
+      authMode: "key",
+    })?.id).toBe("zai");
     expect(providerConfigSeed(zai!).modelDefaultReasoningEfforts?.["glm-5.3"]).toBe("max");
     expect(deriveKeyLoginMap().zai.modelMaxOutputTokens?.["glm-5.3[1m]"]).toBe(131_072);
     // `zhipu-bigmodel-coding` opts in for the same reason `zai` does: it serves the same
@@ -782,7 +896,7 @@ describe("provider registry parity", () => {
     const ollamaCloud = PROVIDER_REGISTRY.find(entry => entry.id === "ollama-cloud");
 
     expect(ollamaCloud?.models).toEqual([
-      "glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b",
+      "glm-5.3", "glm-5.3-flash", "glm-5.2", "qwen3-coder:480b", "gpt-oss:120b",
       "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b",
     ]);
     expect(ollamaCloud?.models).not.toContain("qwen3-coder");
@@ -1386,15 +1500,11 @@ describe("free-provider directory isolation", () => {
     const flashLadder = ["low", "high", "max"];
     const proLadder = ["low", "high", "max"];
     const cases: Array<{ provider: string; model: string; flash: boolean }> = [
-      { provider: "deepseek", model: "deepseek-v4-pro", flash: false },
+      { provider: "deepseek", model: "deepseek-flash", flash: true },
       { provider: "deepseek", model: "deepseek-v4-flash", flash: true },
-      { provider: "opencode-go", model: "deepseek-v4-pro", flash: false },
+      { provider: "opencode-go", model: "deepseek-v4.1-flash", flash: true },
       { provider: "opencode-go", model: "deepseek-v4-flash", flash: true },
-      { provider: "orcarouter", model: "deepseek/deepseek-v4-pro", flash: false },
-      { provider: "volcengine-coding-plan", model: "deepseek-v4-pro", flash: false },
       { provider: "volcengine-coding-plan", model: "deepseek-v4-flash", flash: true },
-      { provider: "alibaba-token-plan", model: "deepseek-v4-pro", flash: false },
-      { provider: "alibaba-token-plan-intl", model: "deepseek-v4-pro", flash: false },
       { provider: "alibaba-token-plan-intl", model: "deepseek-v4-flash", flash: true },
       { provider: "opencode-free", model: "deepseek-v4-flash-free", flash: true },
     ];

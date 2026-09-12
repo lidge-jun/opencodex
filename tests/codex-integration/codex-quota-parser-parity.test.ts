@@ -6,10 +6,19 @@ import {
   parseUpstreamQuotaHeaders,
   parseUsageQuota,
   setAccountQuotaFromParsed,
+  updateAccountQuota,
 } from "../../src/codex/quota";
 import { codexPoolQuotaEvidence } from "../../src/routing/quota";
 
 describe("Spark quota survives partial header updates", () => {
+  it.each([1, 1000])("legacy quota updates expire short reset units (divisor %s)", divisor => {
+    clearAccountQuota();
+    setAccountQuotaFromParsed("legacy-expiry", { shortPercent: 4,
+      shortResetAt: (Date.now() - 60_000) / divisor, shortWindowSeconds: 18_000 });
+    updateAccountQuota("legacy-expiry", 29);
+    expect(getAccountQuota("legacy-expiry")).toEqual({ weeklyPercent: 29, updatedAt: expect.any(Number) });
+  });
+
   it("keeps the WHAM Spark window when an ordinary response updates standard quota", () => {
     clearAccountQuota();
     const refreshed = parseUsageQuota({
@@ -123,6 +132,141 @@ describe("Spark-model header responses attribute the 5h window to the model limi
     }));
     expect(getAccountQuota("legacy-5h")?.shortPercent).toBe(97);
     expect(getAccountQuota("legacy-5h")?.shortWindowSeconds).toBe(18_000);
+  });
+
+  it("drops an elapsed account-level short tuple when a Spark refresh omits the account short slot", () => {
+    // #4122 stopped new Spark writes into short*, but mergeAccountQuota kept carrying the
+    // already-polluted tuple and rewriting updatedAt, so the six-hour disk TTL never fired.
+    clearAccountQuota();
+    setAccountQuotaFromParsed("spark-stale", {
+      weeklyPercent: 29,
+      weeklyResetAt: 1789436116,
+      shortPercent: 4,
+      shortObservedAt: 1788956674678,
+      shortResetAt: 1788974652,
+      shortWindowSeconds: 18_000,
+    });
+    applyAccountQuotaFromUpstreamHeaders("spark-stale", new Headers(SPARK_HEADERS), undefined, undefined, {
+      modelId: "gpt-5.3-codex-spark",
+    });
+    const quota = getAccountQuota("spark-stale");
+    expect(quota?.shortPercent).toBeUndefined();
+    expect(quota?.shortResetAt).toBeUndefined();
+    expect(quota?.shortObservedAt).toBeUndefined();
+    expect(quota?.shortWindowSeconds).toBeUndefined();
+    expect(quota?.weeklyPercent).toBe(21);
+    expect(quota?.customWindows).toEqual([{ label: "GPT-5.3-Codex-Spark 5h", percent: 4, resetAt: 1788974652 }]);
+  });
+
+  it("drops an elapsed account-level short tuple on a WHAM weekly+Spark refresh", () => {
+    // Live path for the 2026-09-12 Pro row: WHAM reports weekly primary + Spark additional
+    // limits and never rewrites shortObservedAt, so merge must drop the elapsed carry.
+    clearAccountQuota();
+    setAccountQuotaFromParsed("wham-stale", {
+      weeklyPercent: 29,
+      shortPercent: 4,
+      shortObservedAt: 1788956674678,
+      shortResetAt: 1788974652,
+      shortWindowSeconds: 18_000,
+    });
+    const refreshed = parseUsageQuota({
+      plan_type: "pro",
+      rate_limit: { primary_window: { used_percent: 29, limit_window_seconds: 604_800, reset_at: 1789436116 } },
+      additional_rate_limits: [{
+        metered_feature: "codex_bengalfox",
+        limit_name: "GPT-5.3-Codex-Spark",
+        rate_limit: {
+          primary_window: { used_percent: 0, reset_at: 1789200311, limit_window_seconds: 18_000 },
+          secondary_window: { used_percent: 2, reset_at: 1789561452, limit_window_seconds: 604_800 },
+        },
+      }],
+    });
+    setAccountQuotaFromParsed("wham-stale", refreshed);
+    const quota = getAccountQuota("wham-stale");
+    expect(quota?.shortPercent).toBeUndefined();
+    expect(quota?.shortResetAt).toBeUndefined();
+    expect(quota?.shortObservedAt).toBeUndefined();
+    expect(quota?.shortWindowSeconds).toBeUndefined();
+    expect(quota?.weeklyPercent).toBe(29);
+    expect(quota?.customWindows?.map(window => window.label)).toEqual([
+      "GPT-5.3-Codex-Spark 5h",
+      "GPT-5.3-Codex-Spark Weekly",
+    ]);
+  });
+
+  it("drops an elapsed account-level short tuple on a weekly-only refresh", () => {
+    clearAccountQuota();
+    const elapsedSec = Math.floor(Date.now() / 1000) - 60;
+    setAccountQuotaFromParsed("pro-stale", {
+      weeklyPercent: 29,
+      shortPercent: 4,
+      shortObservedAt: Date.now() - 3 * 60 * 60_000,
+      shortResetAt: elapsedSec,
+      shortWindowSeconds: 18_000,
+    });
+    applyAccountQuotaFromUpstreamHeaders("pro-stale", new Headers({
+      "x-codex-primary-used-percent": "31",
+      "x-codex-primary-window-minutes": "10080",
+    }));
+    const quota = getAccountQuota("pro-stale");
+    expect(quota?.shortPercent).toBeUndefined();
+    expect(quota?.shortResetAt).toBeUndefined();
+    expect(quota?.shortWindowSeconds).toBeUndefined();
+    expect(quota?.weeklyPercent).toBe(31);
+  });
+
+  it("keeps a still-open account-level short window across a weekly-only refresh", () => {
+    clearAccountQuota();
+    const futureSec = Math.floor(Date.now() / 1000) + 3600;
+    setAccountQuotaFromParsed("plus-live", {
+      weeklyPercent: 4,
+      shortPercent: 0,
+      shortObservedAt: Date.now(),
+      shortResetAt: futureSec,
+      shortWindowSeconds: 18_000,
+    });
+    applyAccountQuotaFromUpstreamHeaders("plus-live", new Headers({
+      "x-codex-primary-used-percent": "5",
+      "x-codex-primary-window-minutes": "10080",
+    }));
+    const quota = getAccountQuota("plus-live");
+    expect(quota?.shortPercent).toBe(0);
+    expect(quota?.shortResetAt).toBe(futureSec);
+    expect(quota?.shortWindowSeconds).toBe(18_000);
+    expect(quota?.weeklyPercent).toBe(5);
+  });
+
+  it("still stores an explicit incoming short tuple even when its reset is already elapsed", () => {
+    clearAccountQuota();
+    const elapsedSec = Math.floor(Date.now() / 1000) - 60;
+    setAccountQuotaFromParsed("incoming-elapsed", {
+      shortPercent: 100,
+      shortResetAt: elapsedSec,
+      shortWindowSeconds: 18_000,
+    });
+    const quota = getAccountQuota("incoming-elapsed");
+    expect(quota?.shortPercent).toBe(100);
+    expect(quota?.shortResetAt).toBe(elapsedSec);
+    expect(quota?.shortWindowSeconds).toBe(18_000);
+  });
+
+  it("drops an elapsed short tuple on a credits-only update", () => {
+    clearAccountQuota();
+    const elapsedSec = Math.floor(Date.now() / 1000) - 60;
+    setAccountQuotaFromParsed("credits-stale", {
+      weeklyPercent: 29,
+      shortPercent: 4,
+      shortObservedAt: Date.now() - 3 * 60 * 60_000,
+      shortResetAt: elapsedSec,
+      shortWindowSeconds: 18_000,
+    });
+    setAccountQuotaFromParsed("credits-stale", { resetCredits: 2 });
+    const quota = getAccountQuota("credits-stale");
+    expect(quota?.shortPercent).toBeUndefined();
+    expect(quota?.shortResetAt).toBeUndefined();
+    expect(quota?.shortWindowSeconds).toBeUndefined();
+    expect(quota?.weeklyPercent).toBe(29);
+    expect(quota?.resetCredits).toBe(2);
   });
 });
 

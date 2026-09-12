@@ -4,6 +4,10 @@ import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCo
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import type { OcxConfig } from "../../src/types";
 import { runGuiCommand } from "../../src/cli/gui";
+import { isCodexAccountLoginName } from "../../src/cli/account-auth";
+import { listOAuthProviders } from "../../src/oauth";
+import { isKeyLoginProvider } from "../../src/oauth/key-providers";
+import { loginUsageMessage } from "../../src/oauth/login-cli";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -719,5 +723,138 @@ describe("GUI command delegation", () => {
       logSpy.mockRestore();
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("login routes the Codex account names instead of printing the provider wall", () => {
+  /**
+   * `ocx login codex` used to fall through to handleLogin, which knows only the public
+   * OAuth and API-key providers, and answered with a ~90-name usage list that never
+   * contains the word the user typed. The Codex pool is reachable (`ocx account login
+   * codex`), so the dead end was vocabulary, not capability.
+   *
+   * The observable proof that the routing happened is the account path's own precondition:
+   * that flow runs inside the proxy, so with no live proxy it reports "Proxy is not
+   * running" and exits 1. handleLogin would have printed "Usage: ocx login <provider>"
+   * and killed the process with process.exit(1) instead, which is also why these cases
+   * cannot simply assert on a non-Codex name here.
+   */
+  const runLogin = async (args: string[]): Promise<{ code: number; err: string }> => {
+    const err: string[] = [];
+    const errorSpy = spyOn(console, "error").mockImplementation((...v: unknown[]) => { err.push(v.join(" ")); });
+    try {
+      const argv = ["login", ...args];
+      const code = await dispatchCommand(
+        { kind: "command", command: "login", args: argv },
+        { ...fakeDeps, args: argv, findLiveProxy: async () => null } as unknown as CliDispatchDeps,
+      );
+      return { code, err: err.join("\n") };
+    } finally {
+      errorSpy.mockRestore();
+    }
+  };
+
+  test("every Codex spelling reaches the account-pool login", async () => {
+    for (const name of ["codex", "chatgpt", "openai", "CODEX", " codex "]) {
+      const result = await runLogin([name]);
+      expect(result.code, `${name} must route to the account login`).toBe(1);
+      expect(result.err).toContain("Proxy is not running");
+      expect(result.err).not.toContain("Usage: ocx login <provider>");
+    }
+  });
+
+  test("account-login flags ride into the request body, not just past the parser", async () => {
+    // An earlier version of this case asserted the 503 path with --reauth/--id attached and
+    // called that "flags survive". It could not fail: dropping the flags at the dispatch seam
+    // leaves an empty leftover list, so rejectArgs stays quiet and the liveness probe prints
+    // the same message. The only falsifiable proof is the request the flags are supposed to
+    // reach, so this one answers the probe with a live proxy and reads the POST body.
+    const calls: { url: string; method?: string; body?: string }[] = [];
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method, body: typeof init?.body === "string" ? init.body : undefined });
+      return new Response(JSON.stringify({ flowId: "flow-1", url: "https://example.invalid/auth" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch);
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const argv = ["login", "codex", "--reauth", "--id", "acct-1", "--no-wait", "--json"];
+      const code = await dispatchCommand(
+        { kind: "command", command: "login", args: argv },
+        {
+          ...fakeDeps,
+          args: argv,
+          findLiveProxy: async () => ({ hostname: "127.0.0.1", port: 65500 }),
+        } as unknown as CliDispatchDeps,
+      );
+      expect(code).toBe(0);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toContain("/api/codex-auth/login");
+      expect(calls[0]?.method).toBe("POST");
+      expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual({ id: "acct-1", reauth: true });
+    } finally {
+      logSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test("an unsupported flag is still rejected as a usage error", async () => {
+    const result = await runLogin(["codex", "--nope"]);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("Unexpected argument(s): --nope");
+  });
+
+  test("a name that is not a Codex spelling still gets the provider wall, not the account path", async () => {
+    // Closes the other half of the routing claim: the predicate is the gate, so a regression
+    // that sent every 'ocx login' through the account command would print "Proxy is not
+    // running" here instead of the wall. handleLogin ends in process.exit, which a test
+    // cannot survive, so the exit is spied and turned into a throw.
+    const err: string[] = [];
+    const errorSpy = spyOn(console, "error").mockImplementation((...v: unknown[]) => { err.push(v.join(" ")); });
+    const exitSpy = spyOn(process, "exit").mockImplementation(((exitCode?: number) => {
+      throw new Error(`process.exit:${exitCode}`);
+    }) as never);
+    try {
+      const argv = ["login", "definitely-not-a-provider"];
+      await expect(dispatchCommand(
+        { kind: "command", command: "login", args: argv },
+        { ...fakeDeps, args: argv, findLiveProxy: async () => null } as unknown as CliDispatchDeps,
+      )).rejects.toThrow("process.exit:1");
+      const printed = err.join("\n");
+      expect(printed).toContain("Usage: ocx login <provider>");
+      expect(printed).toContain("ocx login codex");
+      expect(printed).toContain("openai-apikey");
+      expect(printed).not.toContain("Proxy is not running");
+    } finally {
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("the provider wall names the Codex route without joining the public OAuth surface", () => {
+    const usage = loginUsageMessage();
+    expect(usage).toContain("ocx login codex");
+    // The wall is what the production path prints (asserted above through console.error);
+    // this reads the same source so a wording regression names the field that changed.
+    expect(usage).toContain("openai-apikey");
+    // Routing must not re-open the generic OAuth path for the pool credential:
+    // tests/oauth/oauth-public-surface.test.ts owns that exclusion.
+    expect(listOAuthProviders()).not.toContain("chatgpt");
+    expect(listOAuthProviders()).not.toContain("codex");
+    // The other table the routing silently shadows: if a key-login provider ever took one of
+    // these ids, 'ocx login <that id>' would become unreachable with no other failing test.
+    for (const name of ["openai", "codex", "chatgpt"]) expect(isKeyLoginProvider(name)).toBe(false);
+    expect(isKeyLoginProvider("openai-apikey")).toBe(true);
+    expect(isCodexAccountLoginName("codex")).toBe(true);
+    expect(isCodexAccountLoginName("xai")).toBe(false);
+  });
+
+  test("the registry entry keeps documenting the Codex route", () => {
+    // help.ts and registry.ts carry the only discoverability text a user sees before typing;
+    // the existing help/registry suites only require that an 'ocx login' line exists at all.
+    const details = (CLI_COMMANDS.find(entry => entry.name === "login")?.details ?? []).join(" ");
+    expect(details).toContain("ocx login codex");
+    expect(details).toContain("openai-apikey");
   });
 });

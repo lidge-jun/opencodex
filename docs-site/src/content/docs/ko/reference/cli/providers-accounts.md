@@ -61,7 +61,7 @@ ocx models live --provider ark --json
 
 제공자에 등록된 로그인 흐름을 시작합니다. OAuth 제공자는 브라우저를 열고 자동 갱신되는 자격 증명을 `~/.opencodex/` 아래에 저장합니다. API 키 로그인 제공자는 키 대시보드를 열고, 키 입력을 요청한 뒤, 가능한 경우 검증하고, 그 결과 나온 제공자 설정을 저장합니다. 이름이 없거나 알 수 없으면 현재 허용되는 OAuth 및 API 키 제공자 id를 출력합니다.
 
-`ocx status` / `ocx doctor`가 재인증 필요 또는 터미널 새로고침 실패를 보고한 뒤에는 같은 명령으로 **재인증**하면 됩니다(대시보드의 Reauthenticate를 써도 됩니다). Codex 풀 계정은 공개 `ocx login` 제공자가 아닙니다. 대신 대시보드의 Codex 계정 풀(Reauthenticate)이나 헤드리스 `ocx account reauth` 흐름으로 재인증해야 합니다.
+`ocx status` / `ocx doctor`가 재인증 필요 또는 터미널 새로고침 실패를 보고한 뒤에는 같은 명령으로 **재인증**하면 됩니다(대시보드의 Reauthenticate를 써도 됩니다). Codex 풀 계정은 위 OAuth·API 키 제공자 중 하나가 아니지만 `ocx login codex`로 닿습니다. 이 명령은 계정 풀 로그인으로 연결되므로 `ocx login codex --reauth`는 `ocx account reauth codex`와 같습니다. 대시보드의 Codex 계정 풀(Reauthenticate)로도 됩니다. 이 경로는 프록시 안에서 돌기 때문에 프록시가 실행 중이어야 합니다.
 
 ```bash
 ocx login xai
@@ -145,7 +145,7 @@ Luna 메타데이터임을 표시해 사용합니다. 목록에 보인다는 사
 실행 중인 프록시를 통해 제공자 계정과 API 키 풀을 나열하고 전환합니다. 제공되는 도움말 표면은 다음과 같습니다:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -157,6 +157,7 @@ remove <provider> <id> --yes  Remove a stored account or key after an existence 
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
@@ -218,11 +219,11 @@ OAuth 및 API 키 제공자에는 제공자의 할당량 보고 엔드포인트�
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-`openai` Codex 풀의 임계값을 제어하거나 일반 OAuth 풀의 임계값을 저장합니다. `on`은 80%, `off`는 0%, `threshold <n>`은 0–100을 저장합니다. 일반 풀의 임계값은 현재 동작에 적용되지 않습니다. 저장해도 임계값 기반 전환이나 제공자 활성화 설정이 바뀌지 않고, 429 오류에 따른 회전도 비활성화되지 않습니다. 일반 풀의 조회와 변경 결과는 서버가 확인한 값을 사용합니다. 일반 풀의 `poolEnabled`는 저장된 제공자별 설정이며 `null`은 미지정입니다. 전역 설정을 상속한 실제 상태를 뜻하지 않습니다. `inert: true`이면 임계값이 적용되지 않으며, 기능 지원을 알 수 없을 때도 `enabled: true`로 표시하지 않습니다. API 키 제공자, Anthropic 및 잘못된 값은 거부합니다.
+`openai` Codex 풀의 임계값을 제어하거나 일반 OAuth 풀의 임계값을 저장합니다. `on`은 80%, `off`는 0%, `threshold <n>`은 0–100을 저장합니다. 일반 풀의 임계값은 `pool.kernel`이 켜져 있고 `strategy: "fill-first"`일 때만 선택에 반영됩니다. 플래그가 꺼져 있으면 저장해도 임계값 기반 전환이 켜지지 않습니다. 어느 쪽이든 제공자 활성화 설정은 바뀌지 않고, 429 오류에 따른 회전도 비활성화되지 않습니다. 일반 풀의 조회와 변경 결과는 서버가 확인한 값을 사용합니다. 일반 풀의 `poolEnabled`는 저장된 제공자별 설정이며 `null`은 미지정입니다. 전역 설정을 상속한 실제 상태를 뜻하지 않습니다. `inert: true`는 임계값이 저장만 되고 적용되지 않는 상태, `inert: false`는 풀이 실제로 적용하고 있는 상태를 뜻합니다. `inert`가 아예 없으면 기능 지원을 알 수 없는 경우이며, 이때도 `enabled: true`로 표시하지 않습니다. API 키 제공자, Anthropic 및 잘못된 값은 거부합니다.
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }
-generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: true | null }
+generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -277,6 +278,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
 계정의 Codex reset credits를 확인합니다. credit을 소비하는 동작은 파괴적이므로 `--consume`와 `--yes`를 둘 다 요구합니다.
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+xAI / Grok 계정의 남은 reset coupon을 확인하거나 하나를 교환합니다.
+
+`--consume` 없이 실행하면 사용 가능한 쿠폰 토큰과 유효 기간을 반환합니다:
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+reset coupon을 교환하면 billing 상태가 변경되고 쿠폰 토큰 하나를 영구적으로 소진합니다. `--consume`에는 `--yes`가 엄격하게 요구됩니다:
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+`--operation-id <uuid>`(유효한 UUIDv4여야 함)를 전달하면 멱등한 정산이 보장됩니다. 네트워크가 끊기거나 명령이 재시도되더라도 동일한 operation id는 쿠폰을 다시 소진하는 대신 저장된 결과를 재생합니다.
 
 ### `ocx account main <subcommand>`
 

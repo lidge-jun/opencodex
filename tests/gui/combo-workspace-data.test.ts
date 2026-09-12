@@ -13,6 +13,7 @@ import {
   isValidComboId,
   parseComboList,
   providerQuotaStatesFromReports,
+  nextProviderQuotaStateExpiration,
   toPutBody,
   updateComboAliasDraft,
   validateComboDraft,
@@ -41,6 +42,31 @@ function quotaReport(
     ...overrides,
   };
 }
+
+describe("server-scoped Combo quota", () => {
+  test("display exhaustion without routing authority stays unknown", () => {
+    expect(providerQuotaStatesFromReports([
+      quotaReport("oauth", { fiveHourPercent: 100 }),
+      quotaReport("search", { customWindows: [{ label: "Search", percent: 100 }] }),
+    ], QUOTA_NOW)).toEqual({ oauth: "unknown", search: "unknown" });
+  });
+
+  test("uses current server routing state instead of display windows", () => {
+    expect(providerQuotaStatesFromReports([
+      quotaReport("search", { customWindows: [{ label: "Search", percent: 100 }] }, {
+        routingQuota: { state: "available", updatedAt: QUOTA_NOW, validUntil: QUOTA_NOW + 60_000 },
+      }),
+    ], QUOTA_NOW)).toEqual({ search: "available" });
+  });
+
+  test("expires routing authority at its reset boundary", () => {
+    expect(providerQuotaStatesFromReports([
+      quotaReport("spent", { fiveHourPercent: 100 }, {
+        routingQuota: { state: "exhausted", updatedAt: QUOTA_NOW - 100, validUntil: QUOTA_NOW },
+      }),
+    ], QUOTA_NOW)).toEqual({ spent: "unknown" });
+  });
+});
 
 function combo(overrides: Partial<ComboItem> = {}): ComboItem {
   return {
@@ -297,87 +323,57 @@ describe("combo-workspace-data", () => {
     ]);
   });
 
-  test("derives exhausted state from USD, percentage, and custom-window evidence", () => {
+  test("accepts known routing states independently of display data", () => {
     expect(providerQuotaStatesFromReports([
-      quotaReport("usd", {
-        creditsUsd: { used: 10, limit: 10, remaining: 0, percent: 100 },
+      quotaReport("  keyed  ", { fiveHourPercent: 0 }, {
+        routingQuota: { state: "exhausted", updatedAt: QUOTA_NOW, validUntil: QUOTA_NOW + 60_000 },
       }),
-      quotaReport("percent", { fiveHourPercent: 100 }),
-      quotaReport("custom", { customWindows: [{ label: "Daily", percent: 101 }] }),
-    ], QUOTA_NOW)).toEqual({
-      usd: "exhausted",
-      percent: "exhausted",
-      custom: "exhausted",
-    });
+      quotaReport("unlimited", { creditsUsd: { remaining: 0, unlimited: true } }, {
+        routingQuota: { state: "available", updatedAt: QUOTA_NOW, validUntil: QUOTA_NOW + 60_000 },
+      }),
+    ], QUOTA_NOW)).toEqual({ keyed: "exhausted", unlimited: "available" });
   });
 
-  test("keeps unlimited credits available and stale or malformed evidence unknown", () => {
-    expect(providerQuotaStatesFromReports([
-      quotaReport("unlimited", {
-        creditsUsd: { used: 0, limit: 0, remaining: 0, percent: 0, unlimited: true },
-      }),
-      quotaReport("stale", { weeklyPercent: 100 }, { updatedAt: QUOTA_NOW - 30 * 60_000 }),
-      quotaReport("malformed", { fiveHourPercent: "100" }),
-      quotaReport("missing", {}),
-    ], QUOTA_NOW)).toEqual({
-      unlimited: "available",
-      stale: "unknown",
-      malformed: "unknown",
-      missing: "unknown",
-    });
+  test("rejects malformed, future, stale and overlong routing lifetimes", () => {
+    const fresh = { state: "exhausted", updatedAt: QUOTA_NOW, validUntil: QUOTA_NOW + 1000 };
+    const bad = [
+      undefined, null, [], { ...fresh, state: "maybe" },
+      { ...fresh, updatedAt: "100" }, { ...fresh, updatedAt: NaN },
+      { ...fresh, updatedAt: -1 }, { ...fresh, updatedAt: QUOTA_NOW + 1 },
+      { ...fresh, updatedAt: QUOTA_NOW - 30 * 60_000 },
+      { ...fresh, validUntil: undefined }, { ...fresh, validUntil: Infinity },
+      { ...fresh, validUntil: QUOTA_NOW }, { ...fresh, validUntil: QUOTA_NOW + 30 * 60_000 + 1 },
+    ];
+    for (const routingQuota of bad) {
+      expect(providerQuotaStatesFromReports([
+        quotaReport("keyed", { weeklyPercent: 100 }, { routingQuota }),
+      ], QUOTA_NOW)).toEqual({ keyed: "unknown" });
+    }
   });
 
-  test("trims provider ids and rejects incomplete aggregate quota evidence", () => {
+  test("complete display aggregates cannot authorize a provider-wide block", () => {
     expect(providerQuotaStatesFromReports([
-      quotaReport("  openai  ", { weeklyPercent: 75 }),
       quotaReport("pool", { weeklyPercent: 100 }, {
         aggregation: {
-          kind: "capacity-weighted-v1",
-          scope: "routable-known",
-          presentation: "aggregate",
-          incomplete: true,
-          excludedAccounts: 1,
-          unknownPlanAccounts: 0,
+          kind: "capacity-weighted-v1", scope: "routable-known", presentation: "aggregate",
+          incomplete: false, includedAccounts: 2, excludedAccounts: 0, unknownPlanAccounts: 0,
+          missingQuotaAccounts: 0, pausedAccounts: 0, reauthAccounts: 0, staleQuotaAccounts: 0,
           partialWindowAccounts: 0,
+          weekly: { usedPercent: 100, includedAccounts: 2, excludedAccounts: 0, incomplete: false, updatedAt: QUOTA_NOW },
         },
       }),
-      quotaReport("malformed-pool", { weeklyPercent: 100 }, {
-        aggregation: {
-          kind: "capacity-weighted-v1",
-          scope: "routable-known",
-          presentation: "aggregate",
-          incomplete: false,
-        },
-      }),
-      quotaReport("complete-pool", { weeklyPercent: 100 }, {
-        aggregation: {
-          kind: "capacity-weighted-v1",
-          scope: "routable-known",
-          presentation: "aggregate",
-          incomplete: false,
-          includedAccounts: 2,
-          excludedAccounts: 0,
-          unknownPlanAccounts: 0,
-          missingQuotaAccounts: 0,
-          pausedAccounts: 0,
-          reauthAccounts: 0,
-          staleQuotaAccounts: 0,
-          partialWindowAccounts: 0,
-          weekly: {
-            usedPercent: 100,
-            includedAccounts: 2,
-            excludedAccounts: 0,
-            incomplete: false,
-            updatedAt: QUOTA_NOW,
-          },
-        },
-      }),
-    ], QUOTA_NOW)).toEqual({
-      openai: "available",
-      pool: "unknown",
-      "malformed-pool": "unknown",
-      "complete-pool": "exhausted",
-    });
+    ], QUOTA_NOW)).toEqual({ pool: "unknown" });
+  });
+
+  test("conflicting duplicate rows stay unknown and the next valid expiry is selected", () => {
+    const rows = [
+      quotaReport("keyed", {}, { routingQuota: { state: "available", updatedAt: QUOTA_NOW, validUntil: QUOTA_NOW + 5000 } }),
+      quotaReport("keyed", {}, { routingQuota: { state: "exhausted", updatedAt: QUOTA_NOW, validUntil: QUOTA_NOW + 1000 } }),
+      quotaReport("bad", {}, { routingQuota: { state: "exhausted", updatedAt: QUOTA_NOW, validUntil: QUOTA_NOW - 1 } }),
+    ];
+    expect(providerQuotaStatesFromReports(rows, QUOTA_NOW)).toEqual({ keyed: "unknown", bad: "unknown" });
+    expect(nextProviderQuotaStateExpiration(rows, QUOTA_NOW)).toBe(QUOTA_NOW + 1000);
+    expect(nextProviderQuotaStateExpiration(rows, QUOTA_NOW + 5000)).toBeUndefined();
   });
 
   test("combo quota excludes disabled targets and disables only when every usable target is exhausted", () => {

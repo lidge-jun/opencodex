@@ -188,7 +188,7 @@ OpenAI backend 需要 ChatGPT 登入與啟用的 ChatGPT `forward` 供應商。C
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | 可用時開啟 | 主圖片描述開關。 |
 | `backend?` | `"openai" \| "anthropic"` | 自動 | 明確值優先；未設定時優先使用可用的已儲存 Anthropic OAuth 憑證，否則使用 `openai`。 |
-| `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.4-mini` 或 Anthropic 為 `claude-sonnet-5`。 |
+| `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.6-luna` 或 Anthropic 為 `claude-sonnet-5`。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 每個主回合允許的新描述快取未命中。`0` 停用呼叫；無效值使用預設。 |
 | `timeoutMs?` | `number` | `45000` | Sidecar 擷取逾時。整數 1–2147483647。 |
 

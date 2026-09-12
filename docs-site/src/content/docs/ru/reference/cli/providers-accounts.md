@@ -71,9 +71,11 @@ API-key-провайдеров.
 
 Ту же команду используйте и для **reauthentication**, когда `ocx status` / `ocx doctor`
 сообщают, что нужна переавторизация или refresh завершился терминальной ошибкой (либо используйте
-Reauthenticate в дашборде). Аккаунты пула Codex не являются публичным провайдером для `ocx login`
-— переавторизовать их нужно либо через пул аккаунтов Codex в дашборде, либо через headless-flow
-`ocx account reauth`.
+Reauthenticate в дашборде). Аккаунты пула Codex не входят в список OAuth- и API-key-провайдеров выше,
+но `ocx login codex` до них доходит: команда направляется во вход пула аккаунтов, поэтому
+`ocx login codex --reauth` — это то же самое, что `ocx account reauth codex`. Пул аккаунтов Codex в
+дашборде (Reauthenticate) делает то же. Этот маршрут работает внутри прокси, поэтому ему нужен
+запущенный прокси.
 
 ```bash
 ocx login xai
@@ -92,7 +94,7 @@ ocx login anthropic
 Поставляемая help-surface выглядит так:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -104,6 +106,7 @@ remove <provider> <id> --yes  Remove a stored account or key after an existence 
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
+grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
@@ -190,11 +193,11 @@ quota-bar'ов дашборда.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Управляет порогом пула Codex `openai` или сохраняет порог общего пула OAuth. `on` сохраняет 80 %, `off` — 0 %, а `threshold <n>` принимает 0–100. Пороги общих пулов пока не применяются: сохранение не включает переключение по порогу, не меняет настройку включения провайдера и не отключает ротацию после ошибки 429. Для общего пула результат чтения и изменения берётся из подтверждённого ответа сервера. Для общего пула `poolEnabled` — сохранённая настройка провайдера (`null` означает отсутствие настройки), а не итоговое унаследованное состояние. `inert: true` означает, что порог не применяется; неизвестная возможность также не даёт `enabled: true`. Провайдеры с ключом API, Anthropic и неверные значения отклоняются.
+Управляет порогом пула Codex `openai` или сохраняет порог общего пула OAuth. `on` сохраняет 80 %, `off` — 0 %, а `threshold <n>` принимает 0–100. Порог общего пула влияет на выбор только при включённом `pool.kernel` и `strategy: "fill-first"`; при выключенном флаге сохранение не включает переключение по порогу. В обоих случаях оно не меняет настройку включения провайдера и не отключает ротацию после ошибки 429. Для общего пула результат чтения и изменения берётся из подтверждённого ответа сервера. Для общего пула `poolEnabled` — сохранённая настройка провайдера (`null` означает отсутствие настройки), а не итоговое унаследованное состояние. `inert: true` означает, что порог сохранён, но не применяется, а `inert: false` — что пул его применяет. Отсутствие `inert` означает неизвестную возможность, которая также не даёт `enabled: true`. Провайдеры с ключом API, Anthropic и неверные значения отклоняются.
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }
-generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: true | null }
+generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -269,6 +272,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 Проверить reset-credit'ы Codex для аккаунта. Расходование кредита разрушительно и требует сразу
 оба флага: и `--consume`, и `--yes`.
+
+### `ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <id>] [--operation-id <uuid>]] [--json]`
+
+Показывает оставшиеся купоны сброса или обменивает один для аккаунта xAI / Grok.
+
+Без `--consume` команда возвращает доступные токены купонов и окна их действия:
+
+```bash
+ocx account grok-reset-coupons
+ocx account grok-reset-coupons acc_xai_01 --json
+```
+
+Обмен купона сброса изменяет платежное состояние и безвозвратно расходует один токен купона. Для `--consume` строго требуется `--yes`:
+
+```bash
+ocx account grok-reset-coupons --consume --yes
+ocx account grok-reset-coupons --consume --yes --token-id <token-id>
+```
+
+Передайте `--operation-id <uuid>` (должен быть корректным UUIDv4), чтобы гарантировать идемпотентное завершение. При обрыве сети или повторном запуске команды одинаковые идентификаторы операции воспроизводят сохраненный результат вместо расходования второго купона.
 
 ### `ocx account main <subcommand>`
 

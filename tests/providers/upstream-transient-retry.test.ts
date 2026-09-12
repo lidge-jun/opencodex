@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { fetchWithTransientRetry, isTransientUpstreamStatus } from "../../src/lib/upstream-retry";
+import {
+  fetchWithTransientRetry,
+  isNonReplayableResponse,
+  isNonReplayableUpstreamCode,
+  isTransientUpstreamStatus,
+  markResponseNonReplayable,
+} from "../../src/lib/upstream-retry";
 import { transientRetryPolicyFor } from "../../src/providers/key-failover";
 import type { OcxProviderConfig } from "../../src/types";
 
@@ -50,6 +56,40 @@ describe("transientRetryPolicyFor", () => {
 });
 
 describe("fetchWithTransientRetry", () => {
+  test("a non-replayable gateway status is returned after one send, body intact", async () => {
+    // The Codex WebSocket relay settles a 504 when the origin never acknowledged a frame it
+    // already sent. 504 is transient by status, but the origin may be executing that turn:
+    // the marker, not the status, decides that this layer must not send the body again.
+    let sends = 0;
+    const res = await fetchWithTransientRetry(async () => {
+      sends += 1;
+      const response = bodyResponse(504);
+      markResponseNonReplayable(response);
+      return response;
+    }, { attempts: 3, slowAttemptMs: 60_000 });
+    expect(sends).toBe(1);
+    expect(res.status).toBe(504);
+    expect(isNonReplayableResponse(res)).toBe(true);
+    expect((res as Response & { __wasCancelled: () => boolean }).__wasCancelled()).toBe(false);
+  });
+
+  test("an unmarked 504 keeps the transient retry", async () => {
+    let sends = 0;
+    const res = await fetchWithTransientRetry(async () => {
+      sends += 1;
+      return bodyResponse(504);
+    }, { attempts: 2, slowAttemptMs: 60_000 });
+    expect(sends).toBe(2);
+    expect(res.status).toBe(504);
+  });
+
+  test("the structured codes name exactly the two post-send verdicts", () => {
+    expect(isNonReplayableUpstreamCode("upstream_no_response")).toBe(true);
+    expect(isNonReplayableUpstreamCode("upstream_closed_before_response")).toBe(true);
+    expect(isNonReplayableUpstreamCode("upstream_error")).toBe(false);
+    expect(isNonReplayableUpstreamCode(undefined)).toBe(false);
+  });
+
   test("attempts is one total-send budget, not a per-layer multiplier", async () => {
     // The two layers used to multiply: attempts:3 meant 3 transient rounds each independently
     // retrying 3 connection resets, so a single call could emit up to 9 upstream sends. All

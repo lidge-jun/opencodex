@@ -325,6 +325,10 @@ test("Codex discovery restores account rows for supported natives hidden on disk
   expect(listCatalogNativeSlugs()).toContain("gpt-5.5");
   expect(listCatalogNativeSlugs()).not.toContain("gpt-99-internal");
   expect(listCatalogNativeSlugs()).not.toContain("provider/gpt-5.5");
+  // Retired slugs may still sit in a custom catalog or the upstream pin; membership
+  // does not follow either of those.
+  expect(listCatalogNativeSlugs()).not.toContain("gpt-5.4");
+  expect(listCatalogNativeSlugs()).not.toContain("gpt-5.4-mini");
   expect(visibleNativeSlugs(config)).toContain("gpt-5.5");
   expect(visibleNativeSlugs({ ...config, disabledModels: ["gpt-5.5"] })).not.toContain("gpt-5.5");
 
@@ -332,6 +336,7 @@ test("Codex discovery restores account rows for supported natives hidden on disk
   try {
     const plain = await fetch(new URL("/v1/models", server.url))
       .then(response => response.json()) as { data: Array<{ id: string }> };
+    expect(plain.data.some(model => model.id === "gpt-5.4")).toBe(false);
     expect(plain.data.some(model => model.id === "gpt-5.4-mini")).toBe(false);
 
     const catalog = await fetch(new URL("/v1/models?client_version=1.0.0", server.url))
@@ -344,10 +349,11 @@ test("Codex discovery restores account rows for supported natives hidden on disk
   }
 
   config.codexAccountNamespaces = { team: "@main" };
-  config.disabledModels = ["gpt-5.4"];
+  config.disabledModels = ["gpt-5.6-sol"];
   saveConfig(config);
   resetCatalogRuntimeStateForTests();
   expect(visibleNativeSlugs(config)).toContain("gpt-5.5");
+  expect(visibleNativeSlugs(config)).not.toContain("gpt-5.6-sol");
   expect(visibleNativeSlugs(config)).not.toContain("gpt-5.4");
   server = startServer(0);
   try {
@@ -362,10 +368,10 @@ test("Codex discovery restores account rows for supported natives hidden on disk
     expect(plain.data.some(model => model.id === "team/gpt-5.4")).toBe(false);
     // Activating account selectors makes both bare and qualified discovery mirror the complete
     // enabled supported set, even when a partial custom catalog omitted this native.
-    expect(plain.data.find(model => model.id === "gpt-5.4-mini")?.reasoning_efforts)
+    expect(plain.data.find(model => model.id === "gpt-5.6-luna")?.reasoning_efforts)
       .toBeArray();
-    expect(plain.data.find(model => model.id === "team/gpt-5.4-mini")?.reasoning_efforts)
-      .toEqual(plain.data.find(model => model.id === "gpt-5.4-mini")?.reasoning_efforts);
+    expect(plain.data.find(model => model.id === "team/gpt-5.6-luna")?.reasoning_efforts)
+      .toEqual(plain.data.find(model => model.id === "gpt-5.6-luna")?.reasoning_efforts);
 
     const catalog = await fetch(new URL("/v1/models?client_version=1.0.0", server.url))
       .then(response => response.json()) as {
@@ -380,9 +386,11 @@ test("Codex discovery restores account rows for supported natives hidden on disk
       visibility: "list",
       opencodex_catalog_kind: "account-selector-v1",
     });
-    expect(catalog.models.find(model => model.slug === "team/gpt-5.4")?.visibility)
+    expect(catalog.models.find(model => model.slug === "team/gpt-5.6-sol")?.visibility)
       .toBe("hide");
-    expect(catalog.models.find(model => model.slug === "team/gpt-5.4-mini")?.visibility)
+    expect(catalog.models.find(model => model.slug === "team/gpt-5.4")?.visibility)
+      .toBeUndefined();
+    expect(catalog.models.find(model => model.slug === "team/gpt-5.6-luna")?.visibility)
       .toBe("list");
   } finally {
     await server.stop(true);

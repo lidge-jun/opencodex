@@ -712,6 +712,11 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     "noStructuredOutputModels",
   );
   if (structuredOutputOptOutError) return `provider ${name} ${structuredOutputOptOutError}`;
+  const jsonSchemaOptOutError = nonBlankStringArrayConfigError(
+    raw.noJsonSchemaModels,
+    "noJsonSchemaModels",
+  );
+  if (jsonSchemaOptOutError) return `provider ${name} ${jsonSchemaOptOutError}`;
   const retainModelsError = nonBlankStringArrayConfigError(raw.retainModels, "retainModels");
   if (retainModelsError) return `provider ${name} ${retainModelsError}`;
   const toolReasoningOptOutError = nonBlankStringArrayConfigError(
@@ -794,6 +799,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   fastWire: "editor",
   baseUrl: "editor",
   responsesPath: "editor",
+  chatCompletionsPath: "editor",
   commandCodeVersion: "editor",
   statelessResponses: "editor",
   requiresAdjacentResponsesToolResults: "editor",
@@ -812,6 +818,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   apiKey: "redacted",
   apiKeyTransport: "editor",
   apiKeyPool: "redacted",
+  // Ordering preference only; it names no key material, so an editor may read and set it.
+  apiKeyPoolStrategy: "editor",
   apiKeySelectionRevision: "runtime",
   _apiKeyAttempt: "runtime",
   defaultModel: "editor",
@@ -855,6 +863,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   supportsOpenAiWebSearchToolFields: "editor",
   xaiResponsesXSearch: "editor",
   xaiResponsesDefaultVersion: "runtime",
+  zaiResponsesDefaultVersion: "runtime",
   supportsResponsesCustomTools: "editor",
   responsesSnapshotRepair: "editor",
   webSearchBridge: "editor",
@@ -866,6 +875,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   noTopPModels: "editor",
   noPenaltyModels: "editor",
   noStructuredOutputModels: "editor",
+  noJsonSchemaModels: "editor",
   omitReasoningEffortWithToolsModels: "editor",
   parallelToolCalls: "editor",
   pinParallelToolCallsFalse: "editor",

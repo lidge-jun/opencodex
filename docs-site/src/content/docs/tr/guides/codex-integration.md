@@ -425,7 +425,7 @@ Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ## Codex hesap ısınması
 
-Hesap ekleme veya yeniden kimlik doğrulama, normalde kaydetmeden önce `response.completed` bekleyen küçük bir model isteğiyle doğrulanır. Varsayılan model `gpt-5.4-mini` olup HTTP 400 veya HTTP 404 durumunda `gpt-5.5` ve `gpt-5.6-luna` denenir. Genel hatalar ham yanıt gövdesi yerine sabit hata kategorilerini içerir.
+Hesap ekleme veya yeniden kimlik doğrulama, normalde kaydetmeden önce `response.completed` bekleyen küçük bir model isteğiyle doğrulanır. Varsayılan model `gpt-5.6-luna` olup HTTP 400 veya HTTP 404 durumunda `gpt-5.5` denenir. Genel hatalar ham yanıt gövdesi yerine sabit hata kategorilerini içerir.
 
 Yeni OAuth belirteciyle yapılan kota sorgusu 5 saatlik, haftalık veya aylık kotanın tükendiğini doğrularsa hesap model çağrısı olmadan kaydedilir ve **Doğrulama bekleniyor** gösterilir. Yeniden başlatma veya belirteç yenileme yönlendirmeyi açmaz. Kota geri geldiğinde kotaları yenileyin: kullanılabilir kapasite gösteren eksiksiz güncel veri küçük bir doğrulama isteğine izin verir. Yalnızca tamamlanan yanıt hesabı etkinleştirir. Hatalarda kısıtlama korunur. Pasif sorgulama bu isteği göndermez. İlk kayıtta bilinmeyen kota normal doğrulamayı gerektirir.
 
@@ -447,7 +447,7 @@ Tamamlanmayan bir ana hesap yenilemesi, yeniden denemede başarılı olabileceğ
 ocx config set codexPool '{"excludedPlans":["free"]}'
 ```
 
-Bu bir engelleme değil, seçim politikasıdır. Dışarıda bırakılan hesap kimlik bilgisini, kota geçmişini ve iş parçacığı bağını korur, hesap listesinde görünmeye devam eder ve `work/gpt-5.4` gibi açık bir seçimle hâlâ erişilebilir. Değişen tek şey, otomatik rotasyonun onu artık seçmemesidir; hesap zaten etkin olsa ya da bir iş parçacığına bağlı olsa bile. Süresi dolan bir abonelik tam olarak bu durumu bırakır.
+Bu bir engelleme değil, seçim politikasıdır. Dışarıda bırakılan hesap kimlik bilgisini, kota geçmişini ve iş parçacığı bağını korur, hesap listesinde görünmeye devam eder ve `work/gpt-5.5` gibi açık bir seçimle hâlâ erişilebilir. Değişen tek şey, otomatik rotasyonun onu artık seçmemesidir; hesap zaten etkin olsa ya da bir iş parçacığına bağlı olsa bile. Süresi dolan bir abonelik tam olarak bu durumu bırakır.
 
 İki kasıtlı sınır var. Ana Codex hesabı plana göre hiçbir zaman dışarıda bırakılmaz: yalnızca-seçim yönlendirmesi korunan yerel kimlik bilgisini okumamak için planını saklar, dolayısıyla ana hesabı kapsayan bir kural kendisiyle çelişirdi. Ayrıca dışarıda bırakılmamış hiçbir hesap kalmadığında, dışarıda bırakılan hesap başarısız olmak yerine yine yanıt verir; hizmeti tamamen durdurmak için hâlâ tüm hesapları duraklatmak gerekir. `minimumPlan` karşılığı yoktur, çünkü ChatGPT planlarını sıralamak burada bulunmayan bir tam sıralama gerektirir.
 
@@ -467,3 +467,9 @@ opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/#ocx-service)
 olarak çalıştığında `OCX_SERVICE=1` ayarlar, böylece servis odaklı bir yeniden
 başlatma Codex yapılandırmasını **bozmaz** — yalnızca açık bir `ocx stop` / `ocx
 service stop` yerel Codex'i geri yükler.
+
+## Sayfalanmış geçmiş için güvenlik reddi
+
+Etkilenen geçmiş deposu sayfalamayı destekliyorsa sağlayıcı değişimi `history_paginated_requires_native_writer` döndürebilir; legacy satırlar da buna dahildir. OpenCodex, Codex dışında sıra numarası atamak yerine yapılandırmayı, profili, kataloğu, geçmişi ve geri yükleme kanıtlarını korur. Harici sağlayıcıyı korumak gibi değişim yapmayan yollar kullanılabilir.
+
+Konuşmanın kullandığı sağlayıcı tanımını silmeyin, `ocx sync` veya legacy kurtarmayı tekrarlamayın ve etkin geçmişi yeniden yazmayın. Dosyaları koruyun, kurtarmadan önce konuşmayı kapatın ve özel geçmişi yayımlamadan tam hatayı ve sürümleri bildirin. Yerel yazıcıyla koordineli, doğrulanmış bir düzeltme gerekir. Yedek veya başarılı betik görüntünün düzeldiğini kanıtlamaz; Codex’i yeniden açıp konuşmayı kontrol edin.

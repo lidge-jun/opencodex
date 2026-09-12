@@ -288,6 +288,15 @@ The cache remains bounded; this does not extend retention or recover history the
 longer has. HTTP clients must handle the error explicitly and resend their full context without
 `previous_response_id`. Retrying only the same ID cannot recover missing state.
 
+The same recovery signal applies to routed Responses providers configured with
+`statelessResponses: true`, and to routed requests where a custom tool was lowered to a function
+but a delta result has no local call to establish its original type. Full replay preserves the
+call, result, and reasoning together; opencodex does not guess the result type or drop it.
+Stateful providers still resolve native function and native-only custom continuations themselves.
+These checks follow the selected wire protocol and tool declarations, not the model name. For a
+gateway that cannot resolve stored response IDs, enable `statelessResponses` on that provider;
+other providers keep their defaults.
+
 ### Client-side compaction (opt-in)
 
 Authenticated loopback routing normally keeps Codex on its built-in `openai` provider identity.
@@ -706,7 +715,7 @@ Catalog sync makes the selected sub-agent models available to Codex; see [Codex 
 
 ## Codex account warmup
 
-When a ChatGPT account is added or reauthenticated, OpenCodex normally verifies it before saving with a small streaming request to the Codex Responses backend. It waits for `response.completed`, defaults to `gpt-5.4-mini`, and retries with `gpt-5.5` and `gpt-5.6-luna` on HTTP 400 or HTTP 404. Public errors contain fixed failure categories rather than raw upstream response bodies.
+When a ChatGPT account is added or reauthenticated, OpenCodex normally verifies it before saving with a small streaming request to the Codex Responses backend. It waits for `response.completed`, defaults to `gpt-5.6-luna`, and retries with `gpt-5.5` on HTTP 400 or HTTP 404. Public errors contain fixed failure categories rather than raw upstream response bodies.
 
 If the new OAuth credential's authenticated usage lookup confirms an exhausted 5-hour, weekly, or monthly quota, the account is saved without this model request and shows **Validation pending**. It cannot serve pool requests, even after a restart or token refresh. Once quota recovers, **Refresh quotas** finishes validation: a fresh, complete usage reading with headroom permits one small model request, and only a completed response enables the account. Failed or incomplete readings and failed validation preserve the restriction. Passive account polling does not trigger deferred validation. Unknown usage during initial registration retains the normal warmup gate.
 
@@ -728,7 +737,7 @@ A main-account refresh that does not complete still answers `503` with `Retry-Af
 ocx config set codexPool '{"excludedPlans":["free"]}'
 ```
 
-This is a selection policy, not a block. An excluded account keeps its credential, quota history, and thread affinity, stays visible on the account surface, and is still reachable by explicit account selection such as `work/gpt-5.4`. What changes is that automatic rotation stops choosing it, including when it is already the active account or already bound to a thread — which is the state a lapsed subscription leaves behind.
+This is a selection policy, not a block. An excluded account keeps its credential, quota history, and thread affinity, stays visible on the account surface, and is still reachable by explicit account selection such as `work/gpt-5.5`. What changes is that automatic rotation stops choosing it, including when it is already the active account or already bound to a thread — which is the state a lapsed subscription leaves behind.
 
 Two deliberate limits. The main Codex account is never excluded by plan, because selection-only routing withholds its plan rather than reading the fenced native credential, so a rule covering it would disagree with itself. And when no unexcluded account remains, the excluded one still answers rather than failing closed; pausing every account is still the way to stop serving entirely. There is no `minimumPlan` counterpart, because ranking ChatGPT plans against each other needs a total ordering that does not exist here.
 
@@ -772,3 +781,9 @@ injection. Explicit external-provider opt-out behavior is unchanged.
 In **Subagents → Delegation settings**, edit the ordered fallback chain and its availability polling interval (5000–600000 ms), then save it separately from the featured roster. A configured target that is no longer advertised remains in the chain until you remove it. The roster and fallback chain are separate settings; this editor does not make the roster replace the fallback policy.
 
 When a routed preferred model may receive V2 work from a native ChatGPT parent, the panel explains the upstream encrypted-task limitation. Readable tasks from routed parents are unaffected. The guidance uses `/api/v2` mode and native V1 pin state; the current API does not expose recovery activation or request-specific eligibility, so the panel reports those as unknown. V1/plaintext-compatible delegation remains an alternative. Experimental V2 recovery, where eligible and explicitly enabled, adds quota usage, latency, backend dependence and possible fidelity loss; it does not repair the upstream protocol. See [sub-agent surfaces](/guides/sub-agent-surface/) and [the upstream limitation](https://github.com/lidge-jun/opencodex/issues/92).
+
+## Paginated history safety refusal
+
+When an affected history store supports paginated records, a provider transition may return `history_paginated_requires_native_writer`. OpenCodex preserves the current configuration, profile, catalog, rollout and restore provenance instead of assigning ordinals outside Codex. This includes legacy rows in a migration-capable store. No-transition exits, such as preserving an external provider, remain available.
+
+Do not delete a provider definition still referenced by a conversation, repeatedly run `ocx sync` or legacy recovery, or rewrite an active rollout to work around this refusal. Keep the current files, close the affected conversation before any recovery, and report the exact error and versions without uploading private history. Use a verified fix with native-writer coordination; a backup or a successful script alone does not prove the conversation is visible again. Check the restored conversation in Codex after reopening.

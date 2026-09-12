@@ -60,6 +60,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json]
   ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ocx account grok-reset-coupons [<account-id>] [--consume --yes] [--token-id <token-id>] [--json]
   ocx account main <doctor|list|register|add|switch|recover> ...
 
 List and switch provider accounts and API-key pools (masked output only).
@@ -355,7 +356,7 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
       const { cmdNativeMainAccount } = await import("./account-main");
       return await cmdNativeMainAccount(rest, deps);
     }
-    if (["login", "reauth", "code", "cancel", "reset-credits"].includes(sub ?? "")) {
+    if (["login", "reauth", "code", "cancel", "reset-credits", "grok-reset-coupons"].includes(sub ?? "")) {
       const { handleAccountAuthCommand } = await import("./account-auth");
       return await handleAccountAuthCommand(sub!, rest, deps) ?? 1;
     }

@@ -1,5 +1,6 @@
 import { isGenericFailoverProvider } from "./generic-account-failover";
-import type { OcxProviderConfig } from "../types";
+import { parseAccountPoolStickyLimit, parseAccountPoolStrategy } from "./pool-kernel";
+import type { OcxConfig, OcxProviderConfig } from "../types";
 
 /**
  * Which pool-settings contract a provider speaks (#695, slice 1).
@@ -28,14 +29,57 @@ export function poolSettingsCapability(name: string, provider: OcxProviderConfig
 }
 
 export function parseGenericPoolStrategy(value: unknown): GenericPoolStrategy | null {
-  return typeof value === "string" && (GENERIC_POOL_STRATEGIES as readonly string[]).includes(value)
-    ? value as GenericPoolStrategy
-    : null;
+  // Delegated, not re-implemented. Three pools accepting the same three names from three
+  // private copies of the same check is how they drift apart: the Codex and Anthropic kinds
+  // already shared this parser while the generic kind carried its own. The names and the
+  // 1..100 bound live in pool-kernel.ts, once.
+  return parseAccountPoolStrategy(value) as GenericPoolStrategy | null;
 }
 
 export function parseGenericAutoSwitchThreshold(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100 ? value : null;
 }
+
+export function parseGenericStickyLimit(value: unknown): number | null {
+  return parseAccountPoolStickyLimit(value);
+}
+
+/** Fields the unified pool-settings contract can carry, per kind. */
+export const POOL_SETTINGS_FIELDS = [
+  "enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow",
+] as const;
+export type PoolSettingsField = typeof POOL_SETTINGS_FIELDS[number];
+
+/**
+ * One shape for all three pool kinds.
+ *
+ * `supported` is the reason this is a consolidation rather than a fourth contract: a field a
+ * kind does not honour is DECLARED unsupported instead of being omitted, so a dashboard can
+ * tell "this pool has no quotaWindow" from "this response forgot to send one". Every kind
+ * answers with the same keys.
+ */
+export interface PoolSettingsDto {
+  provider: string;
+  kind: PoolSettingsKind;
+  supported: PoolSettingsField[];
+  /** The STORED override. null means nothing is stored here, not "off". */
+  enabled: boolean | null;
+  /**
+   * What the runtime actually resolves for `enabled`, after the global default.
+   *
+   * The generic kind inherits `config.oauthAccountFailover.enabled` when it stores no override
+   * of its own, so `enabled: null` alone cannot distinguish a disabled pool from an inherited
+   * one. This resolves exactly that config question and nothing else -- deliberately NOT the
+   * roster quorum the dispatch predicate also applies, because a settings field that folded in
+   * "how many accounts are logged in" would be answering a different question than it asks.
+   */
+  enabledEffective: boolean;
+  strategy: string | null;
+  stickyLimit: number | null;
+  autoSwitchThreshold: number | null;
+  quotaWindow: string | null;
+}
+
 
 export interface GenericPoolSettingsDto {
   provider: string;
@@ -43,18 +87,27 @@ export interface GenericPoolSettingsDto {
   enabled: boolean | null;
   strategy: GenericPoolStrategy | null;
   autoSwitchThreshold: number | null;
+  stickyLimit: number | null;
   /**
-   * Slice-1 marker for `strategy` and `autoSwitchThreshold` only: persisted, not yet consumed
-   * by the selector.
+   * Marker for `strategy`, `autoSwitchThreshold` and `stickyLimit` only: true while they are
+   * persisted but not consumed by the selector, false once `pool.kernel` is on and they
+   * actually choose an account.
    *
    * It deliberately does NOT describe `enabled`, which governs the pre-dispatch preference.
    * Widening it to the whole DTO would tell a dashboard that `enabled` changes nothing, which
    * has been false since reactive and proactive activation were split.
+   *
+   * Computed, never a literal: the flag is reversible, so a DTO that hard-codes either answer
+   * would be lying in one of the two states.
    */
-  inert: true;
+  inert: boolean;
 }
 
-export function genericPoolSettingsDto(name: string, provider: OcxProviderConfig): GenericPoolSettingsDto {
+export function genericPoolSettingsDto(
+  name: string,
+  provider: OcxProviderConfig,
+  kernelEnabled = false,
+): GenericPoolSettingsDto {
   const failover = provider.oauthAccountFailover ?? {};
   return {
     provider: name,
@@ -62,6 +115,71 @@ export function genericPoolSettingsDto(name: string, provider: OcxProviderConfig
     enabled: typeof failover.enabled === "boolean" ? failover.enabled : null,
     strategy: parseGenericPoolStrategy(failover.strategy),
     autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
-    inert: true,
+    stickyLimit: parseGenericStickyLimit(failover.stickyLimit),
+    inert: kernelEnabled !== true,
   };
 }
+
+/** Which fields each kind actually honours. Declared, never silently omitted. */
+const SUPPORTED_BY_KIND: Record<PoolSettingsKind, PoolSettingsField[]> = {
+  codex: ["strategy", "stickyLimit", "autoSwitchThreshold"],
+  anthropic: ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow"],
+  generic: ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold"],
+};
+
+/**
+ * The one projection behind `/api/pool/settings`.
+ *
+ * Reads each kind's own storage -- this consolidates the CONTRACT, not the persistence -- and
+ * answers with identical keys plus a `supported` list, so an unsupported field is a declared
+ * `null` rather than an absence a caller has to guess about.
+ */
+export function unifiedPoolSettingsDto(
+  config: OcxConfig,
+  provider: string,
+  kind: PoolSettingsKind,
+): PoolSettingsDto {
+  const base = { provider, kind, supported: SUPPORTED_BY_KIND[kind] };
+  if (kind === "codex") {
+    return {
+      ...base,
+      // The Codex pool has no enablement switch: it is on whenever accounts exist, so the
+      // honest answer is "not a field here" rather than a fabricated true.
+      enabled: null,
+      enabledEffective: true,
+      strategy: parseGenericPoolStrategy(config.accountPoolStrategy) ?? "quota",
+      stickyLimit: parseGenericStickyLimit(config.accountPoolStickyLimit) ?? 1,
+      autoSwitchThreshold: parseGenericAutoSwitchThreshold(config.autoSwitchThreshold) ?? 80,
+      quotaWindow: null,
+    };
+  }
+  if (kind === "anthropic") {
+    const pool = config.anthropicAccountPool ?? {};
+    const enabled = typeof pool.enabled === "boolean" ? pool.enabled : null;
+    return {
+      ...base,
+      enabled,
+      enabledEffective: enabled === true,
+      strategy: parseGenericPoolStrategy(pool.strategy) ?? "quota",
+      stickyLimit: parseGenericStickyLimit(pool.stickyLimit) ?? 1,
+      autoSwitchThreshold: parseGenericAutoSwitchThreshold(pool.autoSwitchThreshold) ?? 80,
+      quotaWindow: typeof pool.quotaWindow === "string" ? pool.quotaWindow : "five-hour",
+    };
+  }
+  const failover = config.providers?.[provider]?.oauthAccountFailover ?? {};
+  const stored = typeof failover.enabled === "boolean" ? failover.enabled : null;
+  return {
+    ...base,
+    enabled: stored,
+    // The defect this field exists to close: a generic provider with no stored override
+    // inherits the global, so `enabled: null` alone cannot tell a disabled pool from an
+    // inherited one. Config only -- the roster quorum the dispatch predicate also applies is a
+    // different question and stays out of a settings field.
+    enabledEffective: stored ?? (config.oauthAccountFailover?.enabled === true),
+    strategy: parseGenericPoolStrategy(failover.strategy),
+    stickyLimit: parseGenericStickyLimit(failover.stickyLimit),
+    autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
+    quotaWindow: null,
+  };
+}
+

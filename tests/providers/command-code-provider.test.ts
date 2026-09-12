@@ -79,7 +79,6 @@ describe("Command Code provider", () => {
     // rejected with `unsupported_model`.
     expect(apiKey?.modelReasoningEfforts).toEqual(oauth?.modelReasoningEfforts);
     expect(apiKey?.modelReasoningEfforts).toMatchObject({
-      "deepseek/deepseek-v4-pro": ["high", "max"],
       "zai-org/GLM-5": ["high", "max"],
       "zai-org/GLM-5.1": ["high", "max"],
       "zai-org/GLM-5.2-Fast": ["high", "max"],
@@ -112,6 +111,39 @@ describe("Command Code provider", () => {
     expect(commandCodeReasoningEfforts("z-ai/glm-5.3-flash-vision")).toBeUndefined();
   });
 
+  /*
+   * deepseek/deepseek-v4.1-flash and Qwen/Qwen3.8-Flash are live routes that had
+   * no row in the official table, so `supportedCommandCodeEffort` dropped the
+   * field — a client's `max` reached /alpha/generate as no reasoning parameter
+   * at all. The two presets are constructed separately and must each carry the
+   * rows; the request assertions pin that the effort survives construction.
+   */
+  test("the live v4.1-flash and Qwen3.8-Flash routes forward their own ladder", async () => {
+    const oauth = PROVIDER_REGISTRY.find(row => row.id === "command-code");
+    const apiKey = PROVIDER_REGISTRY.find(row => row.id === "commandcode");
+    for (const [label, entry] of [["oauth", oauth], ["api-key", apiKey]] as const) {
+      expect(entry?.modelReasoningEfforts?.["deepseek/deepseek-v4.1-flash"], `${label} preset ladder`)
+        .toEqual(["high", "max"]);
+      expect(entry?.modelReasoningEfforts?.["Qwen/Qwen3.8-Flash"], `${label} preset ladder`)
+        .toEqual(["low", "medium", "high", "max"]);
+    }
+    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4.1-flash")).toEqual(["high", "max"]);
+    expect(commandCodeReasoningEfforts("Qwen/Qwen3.8-Flash")).toEqual(["low", "medium", "high", "max"]);
+    // The live-discovered id may arrive in any case; the lookup folds it.
+    expect(commandCodeReasoningEfforts("qwen/qwen3.8-flash")).toEqual(["low", "medium", "high", "max"]);
+
+    const deepseekMax = await builtRequest({
+      ...parsed("deepseek/deepseek-v4.1-flash"),
+      options: { reasoning: "max", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(deepseekMax.body).params.reasoning_effort).toBe("max");
+    const qwenMax = await builtRequest({
+      ...parsed("Qwen/Qwen3.8-Flash"),
+      options: { reasoning: "max", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(qwenMax.body).params.reasoning_effort).toBe("max");
+  });
+
   test("OAuth and API-key presets share only verified image capabilities", () => {
     const oauth = PROVIDER_REGISTRY.find(row => row.id === "command-code");
     const apiKey = PROVIDER_REGISTRY.find(row => row.id === "commandcode");
@@ -128,7 +160,6 @@ describe("Command Code provider", () => {
     ];
     const verifiedTextOnlyModels = [
       "deepseek/deepseek-v4-flash",
-      "deepseek/deepseek-v4-pro",
       "zai-org/GLM-5.2",
       "zai-org/GLM-5.3",
       "xai/grok-4.6",

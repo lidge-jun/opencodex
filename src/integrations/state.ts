@@ -8,6 +8,8 @@
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/021 §3.
  */
+import { createClineIO } from "./cline-io";
+import { parseClineDocument } from "./cline-document";
 import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
@@ -487,7 +489,7 @@ function retentionOf(
 export function readIntegrationState(input: IntegrationStateInput): IntegrationStatus {
   const store = input.store ?? createIntegrationStateStore();
   retryPendingPrunesOnce(store);
-  const io = input.io ?? store.io();
+  let io = input.io ?? store.io();
   const spec = INTEGRATION_CLIENTS[input.clientId];
   const exportSpec = EXPORT_CLIENTS[input.clientId];
   const retention = retentionOf(input.clientId, store);
@@ -529,6 +531,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     };
   }
 
+  if (input.clientId === "cline") io = createClineIO(io, configPath, store);
   const target = loadTarget(io, configPath);
   if (!target.ok) {
     return {
@@ -541,7 +544,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     };
   }
 
-  const parsed = parseConfig(target.before, exportSpec.format);
+  const parsed = input.clientId === "cline" ? parseClineDocument(target.before) : parseConfig(target.before, exportSpec.format);
   const contribution = exportSpec.buildContribution(exportContextOf(input));
   const record = store.readRecords()[input.clientId] ?? null;
   const { state, reason } = classifyIntegration({

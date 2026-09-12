@@ -11,7 +11,7 @@ import { resolveSidecarAuth } from "../sidecar/auth";
 import { DEFAULT_VISION_TIMEOUT_MS, MAX_VISION_TIMEOUT_MS, MIN_VISION_TIMEOUT_MS } from "./timeout-bounds";
 import { carriesImages } from "./image-rewrite";
 
-const DEFAULT_VISION_MODEL = "gpt-5.4-mini";
+const DEFAULT_VISION_MODEL = "gpt-5.6-luna";
 const DEFAULT_ANTHROPIC_VISION_MODEL = "claude-sonnet-5";
 const DEFAULT_REASONING: VisionReasoningEffort = "low";
 export const DEFAULT_MAX_DESCRIPTIONS_PER_TURN = 8;
@@ -92,6 +92,20 @@ function messagesHaveImage(parsed: OcxParsedRequest): boolean {
     carriesImages(m.role) && Array.isArray(m.content) && (m.content as OcxContentPart[]).some(p => p.type === "image"));
 }
 
+/** Shared by auth admission and planning so a routed describer never borrows OpenAI auth. */
+function usableRoutedVisionModel(config: OcxConfig): string | undefined {
+  const cfg = config.visionSidecar;
+  if (cfg?.backend !== "routed") return undefined;
+  const routedModel = cfg.model;
+  const sep = routedModel ? routedModel.indexOf("/") : -1;
+  if (!routedModel || sep <= 0) return undefined;
+  const targetProvider = routedModel.slice(0, sep);
+  const targetId = routedModel.slice(sep + 1);
+  const targetProviderConfig = config.providers?.[targetProvider];
+  return modelAcceptsImageInput(config, { provider: targetProvider, id: targetId }) !== false
+    && !(targetProviderConfig && isModelTextOnly(targetProviderConfig, targetId)) ? routedModel : undefined;
+}
+
 export function shouldResolveOpenAiVisionSidecar(
   config: OcxConfig,
   provider: OcxProviderConfig,
@@ -101,6 +115,7 @@ export function shouldResolveOpenAiVisionSidecar(
   if (!isModelTextOnly(provider, modelId) || !messagesHaveImage(parsed)) return false;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
+  if (usableRoutedVisionModel(config)) return false;
   return resolveVisionBackend(cfg.backend, findAnthropicVisionProvider(config)) === "openai";
 }
 
@@ -140,43 +155,31 @@ export function planVisionSidecar(
   // fence: the target must not be provably blind, and must not itself be a
   // model this planner would re-enter for (belt; the terminal marker on the
   // loopback request is the braces).
-  if (cfg.backend === "routed") {
-    const routedModel = cfg.model;
-    const sep = routedModel ? routedModel.indexOf("/") : -1;
-    if (routedModel && sep > 0) {
-      const targetProvider = routedModel.slice(0, sep);
-      const targetId = routedModel.slice(sep + 1);
-      const targetProviderConfig = config.providers?.[targetProvider];
-      const targetVisible = modelAcceptsImageInput(config, { provider: targetProvider, id: targetId }) !== false
-        && !(targetProviderConfig && isModelTextOnly(targetProviderConfig, targetId));
-      if (targetVisible) {
-        return {
-          backend: "routed",
-          routedModel,
-          routedConfig: {
-            port: config.port,
-            ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}),
-            // The self-fetch has to honor the unauthenticated loopback listener AND, with no
-            // listener, the bind address — so BOTH fields the destination resolver reads have to
-            // survive the narrowing or it silently resolves to the wrong local socket (#4236).
-            ...(config.hostname ? { hostname: config.hostname } : {}),
-            ...(config.unauthenticatedLoopbackListener
-              ? { unauthenticatedLoopbackListener: config.unauthenticatedLoopbackListener }
-              : {}),
-          },
-          settings: {
-            model: routedModel,
-            reasoning: DEFAULT_REASONING,
-            timeoutMs: resolveVisionTimeoutMs(cfg.timeoutMs),
-          },
-          maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn),
-        };
-      }
-    }
-    // Misconfigured routed backend (bare id, unknown provider, or provably
-    // blind target): fall through to the legacy default order below rather
-    // than dispatching a describe that cannot work.
+  const routedModel = usableRoutedVisionModel(config);
+  if (routedModel) {
+    return {
+      backend: "routed",
+      routedModel,
+      routedConfig: {
+        port: config.port,
+        ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}),
+        // The self-fetch has to honor the unauthenticated loopback listener AND, with no
+        // listener, the bind address — so BOTH fields the destination resolver reads have to
+        // survive the narrowing or it silently resolves to the wrong local socket (#4236).
+        ...(config.hostname ? { hostname: config.hostname } : {}),
+        ...(config.unauthenticatedLoopbackListener
+          ? { unauthenticatedLoopbackListener: config.unauthenticatedLoopbackListener }
+          : {}),
+      },
+      settings: {
+        model: routedModel,
+        reasoning: DEFAULT_REASONING,
+        timeoutMs: resolveVisionTimeoutMs(cfg.timeoutMs),
+      },
+      maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn),
+    };
   }
+  // A non-dispatchable routed configuration keeps the legacy backend fallback below.
 
   const anthropicSidecar = findAnthropicVisionProvider(config);
   const backend = resolveVisionBackend(cfg.backend, anthropicSidecar);

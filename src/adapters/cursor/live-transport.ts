@@ -115,6 +115,15 @@ const CLIENT_TOOL_FINALIZE_GRACE_MS = 50;
 const GENERIC_TOOL_COUNT_MIN_FINALIZE_GRACE_MS = 750;
 const GENERIC_TOOL_COUNT_MAX_FINALIZE_GRACE_MS = 1_800;
 const GENERIC_TOOL_COUNT_PER_TOOL_GRACE_MS = 125;
+/**
+ * A client-tool turn suspends before `turnEnded`, and upstream sends that turn's conversation
+ * checkpoint right after `toolCallStarted` — after the 50 ms drain grace, so it used to be
+ * cancelled away and every such turn full-replayed with `cached_tokens: 0`. Measured on a live
+ * account with the tool catalog held constant: 50 ms captures nothing, 1500 ms captures 3036
+ * bytes (#4245, devlog 260911_cursor_checkpoint_capture). This window is paid only by a turn
+ * that never sends one; `handleServerMessage` finalizes early as soon as the frame lands.
+ */
+const CHECKPOINT_CAPTURE_GRACE_MS = 1_500;
 const cursorContextUsageTracker = createCursorContextUsageTracker();
 
 /**
@@ -413,6 +422,28 @@ export function finalizeAfterDrain(state: ReturnType<typeof createCursorProtobuf
   return finalizeTurnEvents(state);
 }
 
+/**
+ * Whether a drained client-tool turn should wait one more bounded window for the conversation
+ * checkpoint instead of cancelling now.
+ *
+ * This mirrors `finalizeAfterDrain`'s two guards rather than calling it, and that is load-bearing:
+ * `finalizeAfterDrain` reaches `finalizeTurnEvents`, which sets `state.terminated`, and then returns
+ * `[]` for a terminated state. Draining first and re-arming would make the retry return early at the
+ * length check and leave the stream uncancelled. Pure for unit testing.
+ */
+export function shouldExtendForCheckpointCapture(input: {
+  /** Optional on the event state, so accept its real shape rather than forcing a cast at the call site. */
+  terminated: boolean | undefined;
+  openToolCallCount: number;
+  wantsCheckpointCapture: boolean;
+  hasCapturedCheckpoint: boolean;
+  alreadyExtended: boolean;
+}): boolean {
+  if (input.terminated || input.openToolCallCount > 0) return false;
+  if (!input.wantsCheckpointCapture || input.hasCapturedCheckpoint) return false;
+  return !input.alreadyExtended;
+}
+
 export function clientToolFinalizeGraceMsForRequest(request: CursorRunRequest, baseGraceMs = CLIENT_TOOL_FINALIZE_GRACE_MS): number {
   if (request.rawMessages?.at(-1)?.role === "toolResult") return baseGraceMs;
   const text = activePromptText(request);
@@ -468,6 +499,10 @@ class LiveCursorTransport implements CursorTransport {
    */
   private emittedTerminal = false;
   private pendingFinalize?: ReturnType<typeof setTimeout>;
+  /** The armed finalize body, so the checkpoint frame can run it early instead of waiting out the window. */
+  private pendingFinalizeRun?: () => void;
+  private checkpointGraceExtended = false;
+  private wantsCheckpointCapture = false;
   private readonly clientToolFinalizeGraceMs: number;
   private activeClientToolFinalizeGraceMs: number;
   private readonly token: string;
@@ -641,6 +676,7 @@ class LiveCursorTransport implements CursorTransport {
     };
     const activeText = activePromptText(activeRequest);
     this.activeClientToolFinalizeGraceMs = clientToolFinalizeGraceMsForRequest(activeRequest, this.clientToolFinalizeGraceMs);
+    this.wantsCheckpointCapture = activeRequest.contextUsageStoreCheckpoints !== false;
     const cursorVisibleTools = cursorToolsForActivePrompt(activeRequest.tools, activeText, activeRequest.toolChoice);
     const clientToolDefs = buildCursorToolDefinitions(cursorVisibleTools, activeRequest.toolChoice);
     // `request.tools` is the catalog already filtered and budgeted by request-builder. Derive
@@ -981,6 +1017,7 @@ class LiveCursorTransport implements CursorTransport {
       clearTimeout(this.pendingFinalize);
       this.pendingFinalize = undefined;
     }
+    this.pendingFinalizeRun = undefined;
   }
 
   /**
@@ -1001,11 +1038,26 @@ class LiveCursorTransport implements CursorTransport {
   private scheduleClientToolFinalize(
     state: ReturnType<typeof createCursorProtobufEventState>,
     push: (message: CursorServerMessage) => void,
+    graceMsOverride?: number,
   ): void {
     this.clearPendingFinalize();
-    this.pendingFinalize = setTimeout(() => {
+    const run = (): void => {
       this.pendingFinalize = undefined;
+      this.pendingFinalizeRun = undefined;
       if (this.expectedClose) return;
+      // The checkpoint for THIS turn is the one we most want and the one we used to throw
+      // away. Extend once, bounded, before draining (#4245).
+      if (shouldExtendForCheckpointCapture({
+        terminated: state.terminated,
+        openToolCallCount: state.openToolCalls.size,
+        wantsCheckpointCapture: this.wantsCheckpointCapture,
+        hasCapturedCheckpoint: this.capturedCheckpointBytes !== undefined,
+        alreadyExtended: this.checkpointGraceExtended,
+      })) {
+        this.checkpointGraceExtended = true;
+        this.scheduleClientToolFinalize(state, push, CHECKPOINT_CAPTURE_GRACE_MS);
+        return;
+      }
       const terminal = finalizeAfterDrain(state);
       if (terminal.length === 0) return;
       for (const event of terminal) push(event);
@@ -1013,9 +1065,13 @@ class LiveCursorTransport implements CursorTransport {
         reason: "Responses bridge owns client tools; ending turn without fake mcpResult",
         framesReceived: this.framesReceived,
         elapsedMs: Date.now() - this.turnStartedAt,
+        graceMs: graceMsOverride ?? this.activeClientToolFinalizeGraceMs,
+        checkpointGraceExtended: this.checkpointGraceExtended,
       });
       this.cancelCursorRun();
-    }, this.activeClientToolFinalizeGraceMs);
+    };
+    this.pendingFinalizeRun = run;
+    this.pendingFinalize = setTimeout(run, graceMsOverride ?? this.activeClientToolFinalizeGraceMs);
   }
 
   private open(
@@ -1032,6 +1088,10 @@ class LiveCursorTransport implements CursorTransport {
     }
     this.turnStartedAt = Date.now();
     this.framesReceived = 0;
+    this.checkpointGraceExtended = false;
+    // A turn must not inherit the previous one's snapshot: a stale capture would make
+    // shouldExtendForCheckpointCapture skip the wait this turn actually needs.
+    this.capturedCheckpointBytes = undefined;
     this.sawAssistantText = false;
     this.emittedTerminal = false;
     this.firstFrameAt = undefined;
@@ -1449,6 +1509,18 @@ class LiveCursorTransport implements CursorTransport {
         this.capturedCheckpointBytes = toBinary(ConversationStateStructureSchema, message.message.value);
       } catch {
         this.capturedCheckpointBytes = undefined;
+      }
+      // We are only still open because the grace was extended waiting for exactly this frame.
+      // Stop waiting, so a turn that does send a checkpoint pays arrival latency rather than the
+      // whole window. Deferred one tick so this frame finishes being mapped and pushed first;
+      // finalizing inline would emit the terminal events ahead of it.
+      if (this.checkpointGraceExtended && this.pendingFinalizeRun && this.capturedCheckpointBytes) {
+        const run = this.pendingFinalizeRun;
+        this.clearPendingFinalize();
+        this.pendingFinalize = setTimeout(run, 0);
+        // Keep the pair in step: clearPendingFinalize() drops the callback, and every other
+        // owner of pendingFinalize expects pendingFinalizeRun to describe it.
+        this.pendingFinalizeRun = run;
       }
     }
     if (message.message.case === "kvServerMessage") {

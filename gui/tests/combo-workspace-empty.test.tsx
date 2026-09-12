@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import ComboWorkspace from "../src/components/ComboWorkspace";
 import { LanguageProvider } from "../src/i18n/provider";
+import { providerQuotaStatesFromReports } from "../src/combo-workspace-data";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -134,11 +135,14 @@ test("first-combo Create disables only while every usable target is known exhaus
   document.body.append(container);
   const root = createRoot(container);
 
-  const render = (quotaState: "available" | "exhausted") => (
+  const now = Date.now();
+  const display = { provider: "openai", updatedAt: now,
+    quota: { updatedAt: now, customWindows: [{ label: "Search", percent: 100 }] } };
+  const render = (routingQuota?: Record<string, unknown>) => (
     <LanguageProvider>
       <ComboWorkspace
         combos={[]}
-        providerQuotaStates={{ openai: quotaState }}
+        providerQuotaStates={providerQuotaStatesFromReports([{ ...display, routingQuota }], now)}
         providers={[{ name: "openai" }]}
         models={[{ provider: "openai", id: "gpt-5" }]}
         loading={false}
@@ -153,7 +157,7 @@ test("first-combo Create disables only while every usable target is known exhaus
     </LanguageProvider>
   );
 
-  await act(async () => { root.render(render("exhausted")); });
+  await act(async () => { root.render(render({ state: "exhausted", updatedAt: now, validUntil: now + 60_000 })); });
   await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
 
   const providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!;
@@ -167,7 +171,11 @@ test("first-combo Create disables only while every usable target is known exhaus
   expect(createButton.disabled).toBe(true);
   expect(container.textContent).toContain("All enabled targets are out of quota");
 
-  await act(async () => { root.render(render("available")); });
+  await act(async () => { root.render(render()); });
+  expect(container.querySelector<HTMLButtonElement>("#cwi-edit-create")!.disabled).toBe(false);
+  expect(container.textContent).not.toContain("All enabled targets are out of quota");
+
+  await act(async () => { root.render(render({ state: "available", updatedAt: now, validUntil: now + 60_000 })); });
   expect(container.querySelector<HTMLButtonElement>("#cwi-edit-create")!.disabled).toBe(false);
   expect(container.textContent).not.toContain("All enabled targets are out of quota");
 

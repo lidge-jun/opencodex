@@ -1,9 +1,9 @@
 ---
 title: 整合
-description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、Gajae Code、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside 與 Raycast——每個客戶端一個開關，每次寫入前都會先備份。
+description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast 與 omo——每個客戶端一個開關，每次寫入前都會先備份。
 ---
 
-**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十三個客戶端以這種方式運作，每個都有一個開關：
+**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十五個客戶端以這種方式運作，每個都有一個開關：
 
 | 客戶端 | 設定檔 | 格式 | 變更生效時機 | 憑證 |
 |---|---|---|---|---|
@@ -13,13 +13,15 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 | Hermes | `~/.hermes/config.yaml` | YAML | 新 sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | 立即，在執行中的 gateway 上 | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | 重新啟動時，或 `/reload` | loopback 佔位符 |
-| Gajae Code | `~/.gjc/agent/models.yml` | YAML | 新 sessions，或當你開啟 `/model` 時 | `OPENCODEX_GAJAE_API_KEY` |
+| gjc | `~/.gjc/agent/models.yml` | YAML | 新 sessions，或當你開啟 `/model` 時 | `OPENCODEX_GAJAE_API_KEY` |
 | DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml`（預設 `~/.dsh/settings.yaml`） | YAML | 熱重載 | 非秘密的 loopback bearer 佔位符 |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | 新 sessions，或開啟模型選擇器後 | loopback 佔位符 |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | 新 sessions | loopback 佔位符 |
 | ZCode | `~/.zcode/v2/config.json` | JSON | 重新啟動時 | loopback 佔位符 |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | 完全結束並重新開啟 Aside 後 | loopback 佔位符 |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 儲存後立即生效——Raycast 會監看該檔案 | 無——僅限 loopback |
+| omo | `~/.omo/agent/models.json` | JSON | 新工作階段 | loopback 佔位符 |
+| Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | 結束並重新啟動後 | 僅限 loopback |
 
 受管理 DSH 支援的相容性下限是 **DSH 0.1.0-rc.6**。OpenCodex 只擁有
 `llm-pi-ai.providers.opencodex`：Apply 與 Refresh 會取代該片段，Disable 只移除該片段，
@@ -80,7 +82,7 @@ opencodex 從自己的環境讀取這些變數。如果你的 gateway 以 profil
 - **Restore this point…** 會出現在較舊的操作上，或當檔案在那次操作之後有變更時。跨過這樣的變更做回復會再詢問一次，才覆蓋你的較新編輯——並且也會備份它們，所以那次的回復本身也可以復原。
 - 每個客戶端保留十份備份。超過之後，最舊的快照檔案會被移除，其歷史列顯示為 **Backup expired**。
 
-停用只移除 opencodex 記錄為自己寫入的條目。如果你的檔案在我們寫入之後有變更，後續行為取決於我們自己的條目是否完好，以及檔案的格式。對於嚴格 JSON 設定檔（OpenCode、Pi），在我們的區塊**旁邊**進行的編輯——例如新增 MCP 伺服器或你自己的 provider——會顯示為**需要更新**：重新整理會在保留你的條目的前提下合併寫入，但格式可能會被正規化。例外情況是 JSON 無法精確重寫的內容——例如 `1e999` 這類非有限數字、重寫會被四捨五入的數字（極大的整數，或小到會塌縮成零的數字）、`-0`、同一個物件裡重複出現的鍵，或巢狀層數超過 1000 層——此時開關會鎖定，確保沒有任何值被悄悄改動或刪除。**OMP、DSH 與 Hermes** 同樣不受旁邊編輯影響，但原因不同：它們的 writer 只逐位元組修補自己的 `providers.opencodex` 範圍，檔案其餘部分從不會被重寫。至於其餘可以包含註解的格式（OpenClaw、Kimi Code、Gajae Code、MiniMax Code、Raycast——以整份文件寫出的 YAML、JSON5 與 TOML），或當我們自己的條目被編輯過時，開關會鎖定，停用會拒絕執行，而不是猜測哪些編輯是你的。
+停用只移除 opencodex 記錄為自己寫入的條目。如果你的檔案在我們寫入之後有變更，後續行為取決於我們自己的條目是否完好，以及檔案的格式。對於嚴格 JSON 設定檔（OpenCode、Pi），在我們的區塊**旁邊**進行的編輯——例如新增 MCP 伺服器或你自己的 provider——會顯示為**需要更新**：重新整理會在保留你的條目的前提下合併寫入，但格式可能會被正規化。例外情況是 JSON 無法精確重寫的內容——例如 `1e999` 這類非有限數字、重寫會被四捨五入的數字（極大的整數，或小到會塌縮成零的數字）、`-0`、同一個物件裡重複出現的鍵，或巢狀層數超過 1000 層——此時開關會鎖定，確保沒有任何值被悄悄改動或刪除。**OMP、DSH 與 Hermes** 同樣不受旁邊編輯影響，但原因不同：它們的 writer 只逐位元組修補自己的 `providers.opencodex` 範圍，檔案其餘部分從不會被重寫。至於其餘可以包含註解的格式（OpenClaw、Kimi Code、gjc、MiniMax Code、Raycast——以整份文件寫出的 YAML、JSON5 與 TOML），或當我們自己的條目被編輯過時，開關會鎖定，停用會拒絕執行，而不是猜測哪些編輯是你的。
 
 ## 誠實的預期
 
@@ -90,7 +92,7 @@ opencodex 從自己的環境讀取這些變數。如果你的 gateway 以 profil
 
 TOML 日期與時間值也會阻止自動重寫：合併步驟會將這些帶有型別的值轉成加引號的字串，陣列和行內表格中的值也一樣。原本就加引號的日期字串仍受支援；若要保留不加引號的日期型別，請手動編輯設定。
 
-**Pi、Kimi Code、Gajae Code、MiniMax Code 與受管理 DSH 整合只能對 loopback bind 運作。** 前四者的設定沒有非 loopback bind 所需的 `x-opencodex-api-key` header 欄位。DSH 雖然提供通用 headers map，但 rc.6 並未把這個專用准入 header 記錄為受支援的整合契約，因此受管理 writer 會選擇安全拒絕，而不自行猜測。請改用 SSH tunnel，或由本機 forwarder 加上該 header 後再以 loopback 存取。
+**Pi、Kimi Code、gjc、MiniMax Code 與受管理 DSH 整合只能對 loopback bind 運作。** 前四者的設定沒有非 loopback bind 所需的 `x-opencodex-api-key` header 欄位。DSH 雖然提供通用 headers map，但 rc.6 並未把這個專用准入 header 記錄為受支援的整合契約，因此受管理 writer 會選擇安全拒絕，而不自行猜測。請改用 SSH tunnel，或由本機 forwarder 加上該 header 後再以 loopback 存取。
 
 **產生的 OMP 整合也刻意只支援 loopback。** OMP 確實支援 provider 層級的 headers，但這個最初的整合不會發出遠端 `x-opencodex-api-key` 憑證連線。手動的遠端 OMP 設定目前不在受管理的整合範圍內。
 
@@ -127,8 +129,8 @@ ocx mcode
 ```
 
 完成一次連接後，`ocx sync` 與 `POST /api/sync` 會更新 OpenCodex 已擁有的
-MCode、Pi、Aside 與 Raycast 目錄。proxy 啟動也會更新已擁有的 Raycast 目錄。
-模型可見性、provider 或 preset 變更會更新 Pi、Aside 與 Raycast。若區塊已刪除、
+MCode、Pi、Aside、Raycast 與 omo 目錄。proxy 啟動也會更新已擁有的 Raycast 目錄。
+模型可見性、provider 或 preset 變更會更新 Pi、Aside、Raycast 與 omo。若區塊已刪除、
 遭外部修改、不安全或由你手動移除，sync 會保持原檔不動；只有在你確定要重新
 連接時才再次執行 enable。
 
@@ -147,3 +149,15 @@ OAuth 或 API key，並拒絕 `--api-key`、`--base-url` 與 `--region` 覆寫�
 `--confirm-drift` 永遠不會被擅自假設。如果檔案在你正要回復的操作之後有變更，指令會拒絕並告訴你，因為覆蓋你較新的編輯是你的決定。
 
 客戶端細節是針對各專案自己的設定格式驗證過的；檢查了什麼、何時檢查，請見 `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md` 中的研究筆記。
+
+## Cline CLI
+
+Cline CLI 使用 providers.json 與 models.json。修改或同步前請結束 Cline，完成後重新啟動。復原會還原兩個原始檔案，預設供應商保持不變。此整合不會遷移舊版 VS Code 擴充功能的儲存資料。
+
+```bash
+ocx integration client enable --client cline
+ocx integration client history --client cline
+ocx integration client restore --op <operation-id>
+```
+
+[CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).

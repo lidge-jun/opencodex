@@ -35,7 +35,7 @@ describe("codex warmup", () => {
     expect(requests).toBe(1);
   });
 
-  test("posts a minimal gpt-5.4-mini Responses stream request and accepts response.completed", async () => {
+  test("posts a minimal gpt-5.6-luna Responses stream request and accepts response.completed", async () => {
     let body: Record<string, unknown> | undefined;
     let auth: string | null = null;
     let account: string | null = null;
@@ -52,7 +52,7 @@ describe("codex warmup", () => {
     expect(auth).toBe("Bearer access-test");
     expect(account).toBe("acct-test");
     expect(body).toMatchObject({
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-luna",
       instructions: "Reply with OK.",
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
       stream: true,

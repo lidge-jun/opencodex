@@ -18,10 +18,14 @@ import {
   parseXaiCreditsResponse,
   QUOTA_RESPONSE_MAX_BYTES,
   readProviderQuotaJsonForTests,
+  publishKeyReportForTests,
   setAntigravityAccountQuotaTransportForTests,
   setProviderQuotaBeforePublishForTests,
 } from "../../src/providers/quota";
 import type { OcxConfig } from "../../src/types";
+import { clearComboTargetCooldowns, coolComboTarget, pickComboTarget, pickComboTargetWithWait } from "../../src/combos";
+import { routedProviderConfig } from "../../src/router";
+import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { repoPath } from "../helpers/repo-root";
 const proxyKeys = PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]);
@@ -95,6 +99,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearComboTargetCooldowns();
   for (const key of proxyKeys) {
     if (originalProxyEnv[key] === undefined) delete process.env[key];
     else process.env[key] = originalProxyEnv[key];
@@ -703,6 +708,241 @@ describe("fetchProviderQuotaReports", () => {
     } as OcxConfig;
   }
 
+  function quotaCombo(config: OcxConfig): OcxConfig {
+    const provider = config.defaultProvider;
+    return {
+      ...config,
+      providers: {
+        ...config.providers,
+        fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", apiKey: "fallback-key" },
+      },
+      combos: { "quota-scope": { strategy: "failover", targets: [
+        { provider, model: "primary-model" }, { provider: "fallback", model: "fallback-model" },
+      ] } },
+    };
+  }
+
+  test("routing quota scope keeps Synthetic search exhaustion out of model selection", async () => {
+    globalThis.fetch = (async () => Response.json({
+      data: { rollingFiveHourLimit: 20, weeklyTokenLimit: 30, search: { hourly: 100 } },
+    })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("synthetic", "https://api.synthetic.new/v2"));
+    const reports = await fetchProviderQuotaReports(config, true);
+    expect(reports.reports[0]?.quota.customWindows?.[0]?.percent).toBe(100);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("synthetic");
+  });
+
+  test("routing quota scope keeps ZAI legacy MCP exhaustion out of model selection", async () => {
+    globalThis.fetch = (async () => Response.json({
+      success: true, data: { fiveHourPercent: 20, weeklyPercent: 30, monthlyMCPUsage: 100 },
+    })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("zai", "https://api.z.ai/api/coding/paas/v4"));
+    const reports = await fetchProviderQuotaReports(config, true);
+    expect(reports.reports[0]?.quota.monthlyPercent).toBe(100);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("zai");
+  });
+
+  test("routing quota scope keeps a key-bound display-only report out of model selection", async () => {
+    // MiniMax publishes its Token Plan countdown through the display-only path. The provider
+    // is single-key `key` auth, so ownership alone would resolve a routing binding; without
+    // an inference projection the exhausted row must still not rank or veto the target.
+    globalThis.fetch = (async () => Response.json({
+      success: true, data: { remains_time: 0, total_time: 1_000_000_000 },
+    })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("minimax", "https://api.minimax.io/v1"));
+    const reports = await fetchProviderQuotaReports(config, true);
+    expect(reports.reports[0]?.quota.customWindows?.[0]?.percent).toBe(100);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("minimax");
+  });
+
+  test("routing quota scope retains the OpenRouter single-key spending cap", async () => {
+    globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1"));
+    await fetchProviderQuotaReports(config, true);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test("keyReport publishes routing evidence only for an explicit inference projection", () => {
+    // The MiniMax case above rides the display-only `report()` path, so it would still pass if
+    // `keyReport`'s projection were quietly defaulted back to the display quota. This drives the
+    // credential-bound helper directly: the binding resolves for BOTH calls (same single-key
+    // provider and probed credential), so the only variable left is the projection itself.
+    const provider = keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1").providers.openrouter!;
+    const exhausted = { monthlyPercent: 100, updatedAt: Date.now() };
+
+    const omitted = publishKeyReportForTests("openrouter", "openrouter:key-info", exhausted, provider, "openrouter-secret");
+    expect(omitted.report?.quota.monthlyPercent).toBe(100);
+    expect(omitted.routing).toBeUndefined();
+
+    const projected = { monthlyPercent: 100, updatedAt: Date.now() };
+    const explicit = publishKeyReportForTests(
+      "openrouter", "openrouter:key-info", exhausted, provider, "openrouter-secret", projected,
+    );
+    expect(explicit.routing?.quota).toBe(projected);
+    expect(typeof explicit.routing?.binding).toBe("string");
+  });
+
+  test("routing quota scope does not apply a probed key cap to an Authorization override", async () => {
+    const probeAuth: Array<string | null> = [];
+    globalThis.fetch = (async (_input, init) => {
+      probeAuth.push(new Headers(init?.headers).get("authorization"));
+      return Response.json({ data: { limit: 20, limit_remaining: 0 } });
+    }) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1", "spent-A"));
+    config.providers.openrouter!.headers = { Authorization: "Bearer live-B" };
+    await fetchProviderQuotaReports(config, true);
+    const request = buildOpenAIChatPassthroughRequest(routedProviderConfig("openrouter", config.providers.openrouter!), {
+      messages: [{ role: "user", content: "synthetic" }],
+    }, "primary-model", false);
+    expect(probeAuth).toEqual(["Bearer spent-A"]);
+    expect(new Headers(request.headers).get("authorization")).toBe("Bearer live-B");
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("openrouter");
+
+    delete config.providers.openrouter!.headers;
+    await fetchProviderQuotaReports(config, true);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test("routing quota scope rechecks an Authorization override added after publication", async () => {
+    globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1", "spent-A"));
+    await fetchProviderQuotaReports(config, true);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+    config.providers.openrouter!.headers = { aUtHoRiZaTiOn: "Bearer live-B" };
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("openrouter");
+    delete config.providers.openrouter!.headers;
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test("routing quota scope does not apply a probed key cap to an Anthropic x-api-key override", async () => {
+    const probeAuth: Array<string | null> = [];
+    globalThis.fetch = (async (_input, init) => {
+      probeAuth.push(new Headers(init?.headers).get("authorization"));
+      return Response.json({ usage: { limit: "100", used: "100" } });
+    }) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("kimi-code", "https://api.kimi.com/coding/v1", "spent-A"));
+    config.providers["kimi-code"]!.adapter = "anthropic";
+    config.providers["kimi-code"]!.headers = { "x-api-key": "live-B" };
+    await fetchProviderQuotaReports(config, true);
+    expect(probeAuth).toEqual(["Bearer spent-A"]);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("kimi-code");
+    delete config.providers["kimi-code"]!.headers;
+    await fetchProviderQuotaReports(config, true);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test.each(["key", "omitted", "custom-key"])("routing quota scope follows effective Kimi authentication: %s", async mode => {
+    globalThis.fetch = (async () => Response.json({ usage: { limit: "100", used: "100" } })) as typeof fetch;
+    const name = mode === "custom-key" ? "kimi-code" : "kimi";
+    const config = quotaCombo(keyQuotaConfig(name, "https://api.kimi.com/coding/v1", "spent-A"));
+    if (mode === "omitted") delete config.providers[name]!.authMode;
+    expect(routedProviderConfig(name, config.providers[name]!).authMode).toBe(mode === "custom-key" ? "key" : "oauth");
+    const report = await fetchProviderQuotaReports(config, true);
+    expect(report.reports[0]?.quota.weeklyPercent).toBe(100);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe(mode === "custom-key" ? "fallback" : "kimi");
+  });
+
+  test("routing quota scope keeps an exhausted Gemini group from vetoing an Antigravity Claude target", async () => {
+    await saveCredential("google-antigravity", {
+      access: "synthetic-agy-access", refresh: "synthetic-agy-refresh",
+      expires: Date.now() + 3600_000, projectId: "synthetic-project",
+    });
+    const resetTime = new Date(Date.now() + 3600_000).toISOString();
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async url => {
+        expect(url.endsWith("retrieveUserQuotaSummary")).toBe(true);
+        return Response.json({ groups: [
+          { displayName: "Gemini Models", buckets: [{ window: "5h", remainingFraction: 0, resetTime }] },
+          { displayName: "Claude and GPT models", buckets: [{ window: "5h", remainingFraction: 1, resetTime }] },
+        ] });
+      },
+    });
+    const config = quotaCombo({ defaultProvider: "google-antigravity", providers: {
+      "google-antigravity": { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" },
+    } } as OcxConfig);
+    config.combos!["quota-scope"]!.targets[0]!.model = "claude-sonnet-4.6";
+    const report = await fetchProviderQuotaReports(config, true);
+    expect(report.reports[0]?.quota.customWindows).toEqual([
+      { label: "Gem", percent: 100, resetAt: Date.parse(resetTime) },
+      { label: "Cla", percent: 0, resetAt: Date.parse(resetTime) },
+    ]);
+    expect(pickComboTarget(config, "quota-scope")?.target).toMatchObject({ provider: "google-antigravity", model: "claude-sonnet-4.6" });
+  });
+
+  test("routing quota scope keeps an active Anthropic account report out of whole-provider selection", async () => {
+    await saveCredential("anthropic", {
+      access: "synthetic-claude-access", refresh: "synthetic-claude-refresh", expires: Date.now() + 3600_000,
+    });
+    globalThis.fetch = (async input => {
+      expect(String(input)).toBe("https://api.anthropic.com/api/oauth/usage");
+      return Response.json({ five_hour: { utilization: 100, resets_at: new Date(Date.now() + 3600_000).toISOString() } });
+    }) as typeof fetch;
+    const config = quotaCombo({ defaultProvider: "anthropic", providers: {
+      anthropic: { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com/v1" },
+    } } as OcxConfig);
+    const report = await fetchProviderQuotaReports(config, true);
+    expect(report.reports[0]?.quota.fiveHourPercent).toBe(100);
+    // Account selection and its exhaustion rules still decide whether this route can dispatch.
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("anthropic");
+    config.providers.fallback!.disabled = true;
+    const now = Date.now();
+    const waits: number[] = [];
+    coolComboTarget("quota-scope", config.combos!["quota-scope"]!.targets[0]!, { now, cooldownMs: 1_000 });
+    const afterWait = await pickComboTargetWithWait(config, "quota-scope", {
+      now, waitForCooldownMs: 1_000, sleep: async ms => { waits.push(ms); },
+    });
+    expect(waits).toEqual([1_000]);
+    expect(afterWait?.target.provider).toBe("anthropic");
+  });
+
+  test("routing quota scope retains a verified cap through a transient refresh failure", async () => {
+    let transient = false;
+    globalThis.fetch = (async () => transient
+      ? new Response("unavailable", { status: 503 })
+      : Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1"));
+    await fetchProviderQuotaReports(config, true);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+    transient = true;
+    await fetchProviderQuotaReports(config, true);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test("routing quota scope stops vetoing the provider when a second key is added", async () => {
+    globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1"));
+    await fetchProviderQuotaReports(config, true);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("fallback");
+    config.providers.openrouter!.apiKeyPool = [
+      { id: "old", key: "openrouter-secret" }, { id: "new", key: "second-key" },
+    ];
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("openrouter");
+  });
+
+  test("routing quota scope rejects a cached cap after the active key changes", async () => {
+    globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1"));
+    await fetchProviderQuotaReports(config, true);
+    config.providers.openrouter!.apiKey = "replacement-key";
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("openrouter");
+  });
+
+  test("routing quota scope rejects a cached cap after an env key resolves differently", async () => {
+    const previous = process.env.OCX_TEST_ROUTING_QUOTA_KEY;
+    try {
+      process.env.OCX_TEST_ROUTING_QUOTA_KEY = "first-key";
+      globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
+      const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1", "$OCX_TEST_ROUTING_QUOTA_KEY"));
+      await fetchProviderQuotaReports(config, true);
+      process.env.OCX_TEST_ROUTING_QUOTA_KEY = "replacement-key";
+      expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("openrouter");
+    } finally {
+      if (previous === undefined) delete process.env.OCX_TEST_ROUTING_QUOTA_KEY;
+      else process.env.OCX_TEST_ROUTING_QUOTA_KEY = previous;
+    }
+  });
+
   test("OpenRouter quota renders a credit window against the per-key cap", async () => {
     const seen: Array<{ url: string; authorization?: string; redirect?: RequestRedirect }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1012,6 +1252,70 @@ describe("fetchProviderQuotaReports", () => {
     expect(seen[0]?.url).toBe("https://api.z.ai/api/monitor/usage/quota/limit");
     expect(seen[0]?.authorization).toBe("Bearer zai-secret");
     expect(seen[0]?.redirect).toBe("error");
+  });
+
+  test.each([
+    ["https://api.z.ai/api/anthropic", "anthropic"],
+    ["https://api.z.ai/api/v1", "openai-responses"],
+    ["https://API.Z.AI/api/anthropic/", "anthropic"],
+    ["https://api.z.ai/api/v1/", "openai-responses"],
+  ] as const)("Z.AI quota uses the international monitor for %s (%s)", async (baseUrl, adapter) => {
+    const seen: Array<{ url: string; authorization: string | null; redirect?: RequestRedirect }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization"), redirect: init?.redirect });
+      return Response.json({ success: true, data: { limits: [
+        { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 25 },
+      ] } });
+    }) as typeof fetch;
+    const config = keyQuotaConfig("zai", baseUrl);
+    config.providers.zai!.adapter = adapter;
+
+    const result = await fetchProviderQuotaReports(config, true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("zai:quota-limit");
+    expect(result.reports[0]?.quota.fiveHourPercent).toBe(25);
+    expect(seen).toEqual([{
+      url: "https://api.z.ai/api/monitor/usage/quota/limit",
+      authorization: "Bearer zai-secret",
+      redirect: "error",
+    }]);
+  });
+
+  test.each([
+    "https://api.z.ai.example/api/anthropic",
+    "http://api.z.ai/api/anthropic",
+    "https://api.z.ai:8443/api/v1",
+    "https://api.z.ai/api/anthropic?region=cn",
+    "https://api.z.ai/api/v1#fragment",
+    "https://api.z.ai/api/anthropic/v1/messages",
+    "https://api.z.ai/api/v1/responses",
+    "https://api.z.ai/api/paas/v4",
+    "https://open.bigmodel.cn/api/anthropic",
+  ])("Z.AI quota does not probe unsupported base %s", async baseUrl => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    expect((await fetchProviderQuotaReports(keyQuotaConfig("zai", baseUrl), true)).reports).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  test.each(["username", "password"] as const)("Z.AI quota rejects URL %s before probing", async field => {
+    // Construct dummy userinfo instead of embedding an email-shaped fixture in source.
+    // Keep this distinct from host/path rejection: the monitor host would otherwise match.
+    const url = new URL("https://api.z.ai/api/anthropic");
+    url[field] = "fixture";
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    expect((await fetchProviderQuotaReports(keyQuotaConfig("zai", url.href), true)).reports).toEqual([]);
+    expect(calls).toBe(0);
   });
 
   test("Z.AI quota probes the BigModel region from the provider's own host", async () => {

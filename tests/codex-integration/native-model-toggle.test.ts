@@ -68,8 +68,8 @@ function nativeTemplate(): Record<string, unknown> {
 
 describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   test("disabledNativeSlugs picks bare ids only; routed namespaced ids are ignored", () => {
-    const set = disabledNativeSlugs({ disabledModels: ["gpt-5.4", "kiro/claude-opus-4.6", "gpt-5.6-luna"] });
-    expect([...set].sort()).toEqual(["gpt-5.4", "gpt-5.6-luna"]);
+    const set = disabledNativeSlugs({ disabledModels: ["gpt-5.5", "kiro/claude-opus-4.6", "gpt-5.6-luna"] });
+    expect([...set].sort()).toEqual(["gpt-5.5", "gpt-5.6-luna"]);
   });
 
   test("visibleNativeSlugs omits disabled natives from the bare availability list", () => {
@@ -230,8 +230,12 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   });
 
   test("the on-disk catalog preserves a lower retained native compaction threshold", () => {
+    // A retired slug is no longer a valid subject: nativeOpenAiAutoCompactTokenLimit
+    // requires a known native window, so a configured lowering would not apply to
+    // gpt-5.4-mini after its override and membership were removed. gpt-5.5 is the
+    // surviving old-ladder native whose 272k window matches this retained row.
     const retained = {
-      slug: "gpt-5.4-mini",
+      slug: "gpt-5.5",
       context_window: 272_000,
       max_context_window: 272_000,
       auto_compact_token_limit: 100_000,
@@ -240,7 +244,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(retained.auto_compact_token_limit).toBe(100_000);
 
     const configured = {
-      providers: { openai: { modelAutoCompactTokenLimits: { "gpt-5.4-mini": 80_000 } } },
+      providers: { openai: { modelAutoCompactTokenLimits: { "gpt-5.5": 80_000 } } },
     } as never;
     const lowered = { ...retained };
     applyNativeOpenAiContextOverride(lowered as never, nativeContextLimits(configured));
@@ -296,7 +300,10 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     const over = nativeModelRows({ providerContextCaps: { openai: 2_000_000 } });
     expect(over.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(922_000);
     expect(raised.find(r => r.slug === "gpt-5.5")?.contextWindow).toBe(272_000);
-    expect(raised.find(r => r.slug === "gpt-5.4")?.contextWindow).toBe(922_000);
+    // gpt-5.4 was the only native with a 1M override. Retirement deleted that
+    // membership and the override; nothing else inherits a 1M window.
+    expect(raised.find(r => r.slug === "gpt-5.4")).toBeUndefined();
+    expect(raised.every(r => (r.contextWindow ?? 0) <= 922_000)).toBe(true);
   });
 
   test("nativeModelRows applies providerContextCaps.openai as a ceiling (#1430)", () => {

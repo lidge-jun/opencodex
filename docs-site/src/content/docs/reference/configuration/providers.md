@@ -21,6 +21,18 @@ ocx models provider openrouter on
 
 After GUI registration or OAuth login, the confirmation dialog lets you open the Models page. CLI registration and login print model-management commands; JSON includes structured next steps. `--no-wait` reports pending login, not completion. Start the proxy with `ocx start` before using live model commands.
 
+## Z.ai Coding Plan quota endpoints
+
+The Z.ai quota probe recognizes the international coding Chat base
+`https://api.z.ai/api/coding/paas/v4`, the documented
+[Claude Code Anthropic base](https://docs.z.ai/devpack/tool/claude)
+`https://api.z.ai/api/anthropic`, and the documented
+[Codex Responses base](https://docs.z.ai/devpack/tool/codex)
+`https://api.z.ai/api/v1`. All three read quota from the international monitor with
+Bearer authentication; this does not change the inference URL or imply different
+quota consumption between adapters. Existing BigModel CN monitor selection remains
+separate. Full request URLs such as `/api/v1/responses` are not provider base URLs.
+
 ## Provider-related top-level fields
 
 | Field | Type | Default | Meaning |
@@ -39,8 +51,9 @@ After GUI registration or OAuth login, the confirmation dialog lets you open the
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account for the next request. Selection clears thread affinity; in-flight requests keep captured credentials. |
 | `codexAccountPriorities?` | `Record<string, number>` | — | Per-account selection order for the Codex pool: account id → integer from `-100` to `100`, **higher is used earlier**, absent means `0`. This is an ordering boundary, not an eligibility one: selection narrows the already-eligible accounts to the highest tier that still has quota headroom, and `accountPoolStrategy` then picks within that tier. A tier is skipped only when every member is over `autoSwitchThreshold`, cooling down, soft-avoided, paused, or needs reauthentication — unknown quota never drains a tier. Ordering never makes an ineligible account selectable and never re-binds a thread that already has an account. The main `__main__` account participates on equal terms, which is how the Codex Desktop login can be set to drain last. With no entries the pool behaves exactly as before. A malformed map is ignored with a console warning (ordering off, no config repair). Managed by `ocx account priority` and the Codex Auth page. |
 | `activeCodexAccountPinned?` | `string` | — | Account id the operator last selected by hand. While set, a higher `codexAccountPriorities` tier cannot preempt it until the pin is released by drain, exclusion, deletion, or an explicit failover/promotion away. Ordinary round-robin movement inside the capped tier does not release it. Writing any `codexAccountPriorities` entry also releases the pin, so a pin made before an order existed cannot outrank one set afterward. `GET /api/codex-auth/active` reports both whether the effective account is pinned (`pinned`) and the account carrying the ceiling (`pinnedAccountId`). |
-| `autoSwitchThreshold?` | `number` | `80` | Usage threshold for proactive switching. `quota` can re-evaluate both bound and unbound tasks on their next request; `fill-first` uses it only as the drain point for unbound assignment; normal `round-robin` selection does not use it. The score uses the hottest known 5h, weekly, or 30d quota window. `0` disables usage-based proactive switching only, not unbound assignment or failure recovery. |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Assignment strategy for new/unbound Codex requests. A request is unbound when it has no live (parent thread id, quota scope) affinity; a visible existing task can become unbound after proxy restart or affinity reset. `quota` picks the lowest-usage eligible account when no active account exists, keeps an eligible active account below `autoSwitchThreshold`, and after the threshold may move an unbound request or proactively rebind a bound task to a lower-usage eligible account. `round-robin` distributes unbound requests evenly; `fill-first` keeps assigning unbound requests to the active account until cooldown, unavailability, or the configured drain threshold. |
+| `autoSwitchThreshold?` | `number` | `80` | Usage threshold for proactive switching. `quota` can re-evaluate unbound tasks on their next request, and by default also re-evaluates bound tasks once usage crosses this threshold. With `pool.cacheAffinity` on, a bound task keeps its account past the threshold until that account is exhausted or otherwise cannot serve. `fill-first` uses it only as the drain point for unbound assignment; normal `round-robin` selection does not use it. The score uses the hottest known 5h, weekly, or 30d quota window. `0` disables usage-based proactive switching only, not unbound assignment or failure recovery. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Assignment strategy for new/unbound Codex requests. A request is unbound when it has no live (parent thread id, quota scope) affinity; a visible existing task can become unbound after proxy restart or affinity reset. `quota` picks the lowest-usage eligible account when no active account exists, keeps an eligible active account below `autoSwitchThreshold`, and after the threshold may move an unbound request or — unless `pool.cacheAffinity` is on — proactively rebind a bound task to a lower-usage eligible account. With `pool.cacheAffinity` on, a bound task stays until its account is exhausted (known usage at 100%) or otherwise cannot serve. `round-robin` distributes unbound requests evenly; `fill-first` keeps assigning unbound requests to the active account until cooldown, unavailability, or the configured drain threshold. |
+| `pool.cacheAffinity?` | `boolean` | `false` | Opt-in cache-affinity ordering for bound Codex threads, independent of `pool.kernel`. Off by default; a malformed value reads as off. With it on, a live binding outranks quota headroom: `quota` does not move the thread merely because usage crossed `autoSwitchThreshold`. The thread still leaves if that account cannot serve — paused, unusable, or genuinely exhausted (known usage at 100%) — so affinity is a reordering, not a pin. |
 | `accountPoolStickyLimit?` | `number` | `1` | New/unbound task assignments retained on one round-robin selection before advancing; the counter advances when a task is bound, not after an upstream success. Range 1–100. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient failures before future new sessions fail over. Set `0` to disable. For regular Responses and native compact sends, proven pre-connection DNS/TCP reachability failures are tracked at the provider-host level: they never affect account health, account cooldowns, thread/session affinity, active-account selection, or Pool routing, and never count toward this threshold. |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | Opt-in circuit threshold for proven pre-connection DNS/TCP failures on native OpenAI forward Responses and compact sends. `0` disables it; `1`–`20` opens a 30-second provider-origin cooldown after that many terminal logical requests. While open, requests receive `503` with `Retry-After` before account selection or upstream send; after cooldown, one half-open request is admitted. Timeouts and HTTP responses never count, and any HTTP response closes the circuit. Applies only to Codex Pool routing with no pinned account; it is inert for `codexAccountMode: "direct"` and account-qualified selectors. |
@@ -130,6 +143,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | Optional client-side outbound request-start pacing, separate from upstream usage, billing, and rate-limit indicators. RPM is converted to an even interval; `minIntervalMs` may impose a longer interval. Provider limits apply across all models, while `models` entries use exact upstream model IDs (for example `nvidia/llama-3.1-nemotron-ultra-253b-v1`) and can only add delay. Queue waits do not consume the upstream response-header timeout. HTTP, Responses WebSocket, and explicit adapter `fetchResponse`/`runTurn` dispatches are covered. |
 | `upstreamHttpVersion?` | `"auto" \| "http1.1" \| "h1" \| "http2" \| "h2"` | Pin the HTTP version used for upstream requests to this provider. Defaults to `auto`, which lets Bun negotiate. An explicit pin requires an HTTPS target and fails locally when it cannot be honored. Set `http1.1` when a provider's HTTP/2 SSE stream stalls instead of delivering events — the symptom is a long-running streaming request that produces nothing and eventually times out. For Cursor, `http1.1`/`h1` selects its `RunSSE` + `BidiAppend` compatibility transport for inference and also pins live model discovery. Management `POST`/`PATCH` accept `null` to clear it back to `auto`. |
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
+| `chatCompletionsPath?` | `string` | Relative resource path for `openai-chat` requests, the mirror of `responsesPath` and subject to the same shape rules. Needed when one upstream serves Chat Completions and Responses under different prefixes: a per-model wire override changes the adapter and leaves `baseUrl` alone, so without this an opted-in Chat request would be sent to the Responses base. Z.AI is the shipped example. |
 | `allowEncryptedV2AgentTasks?` | `boolean` | Disabled by default. Trust a direct key-auth `openai-responses` provider to consume or relay opaque encrypted V2 sub-agent tasks unchanged. Eligible routes skip `agentTaskRecovery`; all other routes keep the existing recovery or fail-closed behavior. OpenCodex does not decrypt, translate, or recover tasks sent through this opt-in. |
 | `upstreamWebsocket?` | `boolean` | Opt-in upstream Responses WebSocket transport for `openai-responses` requests (default false). When the upstream supports the Responses WebSocket protocol, streaming POST requests to the configured Responses path (default `/v1/responses`) are dialed as WSS over an HTTPS base URL and re-encoded to SSE for the usual pipeline. Forward providers use `{baseUrl}/responses`; key-auth providers use `responsesPath`, or the legacy `/v1/responses` fallback. This mirrors the canonical ChatGPT backend optimization for OpenAI-compatible gateways (for example sub2api) whose WebSocket ingress is measurably faster than its SSE queue. Plain HTTP remains on SSE; non-Responses paths and `openai-chat` requests stay on HTTP. |
 | `supportsServiceTier?` | `boolean` | Tri-state canonical Fast capability fallback. `true` publishes Fast in the catalog, satisfies service-tier routing requirements, contributes a supported fingerprint, and lets fast mode inject the provider's canonical wire value on a compatible final adapter. `false` strips the field and never injects, and exact model declarations cannot reopen it. Absent leaves the provider unclassified: fast mode does not inject or normalize a canonical caller value, and caller values obey the final wire's forwarding permission (`chatServiceTier` on Chat; passthrough on Responses). The registry classifies canonical OpenAI (`true`), DeepSeek, and Volcengine Ark (`false`); set it explicitly only for custom gateways that genuinely support tiers. |
@@ -141,6 +155,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `apiKey?` | `string` | API key, an `${ENV_VAR}` / `$ENV_VAR` reference, or a `keychain:<provider>` reference written by `ocx provider keychain <name> store`. References resolve at request time. See [Storing keys in the OS keychain](#storing-keys-in-the-os-keychain). |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
+| `apiKeyPoolStrategy?` | `"round-robin" \| "fill-first" \| "quota"` | How a warm key is chosen **before** the first attempt when the committed key is already cooling. Omitted keeps rotation reactive-only: the pool moves after a 429 or 401 and not before. `round-robin` takes the next key in the pool, `fill-first` keeps the first eligible one, and `quota` prefers the key with the most remaining headroom, falling back to `fill-first` order for a provider whose per-key quota is unknown. A healthy committed key is never overridden, so a manual key selection stands. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
 | `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, a nonempty `models` list is followed by `retainModels`; an empty or omitted `models` list instead seeds `defaultModel` (if configured), then `retainModels`, removing duplicate ids in first-seen order. |
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |
@@ -180,6 +195,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `noTopPModels?` | `string[]` | Models that reject caller-specified `top_p`. |
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. |
 | `noStructuredOutputModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects `response_format`. Only an exact requested-model match omits the field; structured-output translation stays enabled for every other `openai-chat` model. |
+| `noJsonSchemaModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects a `json_schema` `response_format` but still accepts `json_object`. Such a request is downgraded to `json_object` instead of being dropped, so a caller asking for JSON still gets JSON. `noStructuredOutputModels` wins when a model is on both lists. The `opencode go`, `opencode zen`, and `opencode free` presets ship this for their DeepSeek routes. |
 | `omitReasoningEffortWithToolsModels?` | `string[]` | Exact `openai-chat` model IDs that accept a reasoning-effort field on an ordinary turn but reject it once function tools are present. The model keeps its advertised effort ladder; OpenCodex omits the wire field for tool-bearing requests only and the upstream default applies. Narrower than `noReasoningModels`, which strips reasoning from every request and costs the model its picker entirely. |
 | `parallelToolCalls?` | `boolean` | Toggle parallel tool calls. OpenAI Chat defaults on; non-chat adapters advertise only on explicit `true`. |
 | `terminalContinuationGuard?` | `boolean` | Opt in an `openai-chat` provider to one bounded internal re-ask when an actionable turn announces work, then cleanly stops without a tool call. Defaults to `false`; explicit `false` behaves like omission. Combo attempts and routed compaction turns are excluded, and non-`openai-chat` adapters ignore this option. |
@@ -462,9 +478,10 @@ validation never applies the IPv6 accommodation.
 Use **Codex Auth** in the dashboard to add pool accounts and refresh quotas. `config.json` stores
 non-secret metadata; access and refresh tokens use the hardened credential store. Pool routing
 separates new/unbound assignment, usage-based proactive switching, and failure recovery. A bound task
-normally keeps affinity, but `quota` may rebind it on its next request after the usage threshold is
-crossed, while pause, cooldown, reauthentication, and failure handling can clear or move routing
-independently. An unbound request has no live account binding; this can include an existing visible
+normally keeps affinity. By default `quota` may rebind it on its next request after the usage
+threshold is crossed; with `pool.cacheAffinity` on, that rebind waits until the bound account is
+exhausted or otherwise cannot serve. Pause, cooldown, reauthentication, and failure handling can
+clear or move routing independently. An unbound request has no live account binding; this can include an existing visible
 task after proxy restart or affinity reset. A pre-stream 429 or 402, or a 5xx response whose bounded
 body explicitly reports quota exhaustion, retries once on an eligible alternate account in the same
 request, even when usage-based proactive switching is off. The ordinary transient-5xx policy runs
@@ -485,7 +502,7 @@ and pauses only accounts freshly confirmed at 100%; unknown or failed refreshes 
 
 | Strategy | Behaviour |
 | --- | --- |
-| `quota` (default) | If no active account exists, choose the lowest-usage eligible account across 5-hour, weekly, and 30-day windows. Otherwise retain an eligible active account below `autoSwitchThreshold`; after it crosses the threshold, an unbound request or a bound task's next request can move to a lower-usage eligible account. `0` disables this usage-driven re-evaluation, not failure recovery. |
+| `quota` (default) | If no active account exists, choose the lowest-usage eligible account across 5-hour, weekly, and 30-day windows. Otherwise retain an eligible active account below `autoSwitchThreshold`; after it crosses the threshold, an unbound request can move to a lower-usage eligible account, and a bound task's next request can too unless `pool.cacheAffinity` is on. With that flag on, cache affinity outranks quota headroom and the bound task stays until the account is exhausted (known usage at 100%) or cannot serve (paused, unusable). `0` disables this usage-driven re-evaluation, not failure recovery. |
 | `round-robin` | Evenly assign unbound requests across eligible accounts. `autoSwitchThreshold` does not change normal round-robin selection. `accountPoolStickyLimit` (1–100) counts assignments on one pick, not successful upstream responses. |
 | `fill-first` | Assign unbound requests to the active account until cooldown, reauthentication, or the configured drain threshold; unknown usage does not force a switch. Healthy bound tasks keep affinity. |
 
@@ -552,8 +569,9 @@ second account.
 | --- | --- | --- | --- |
 | `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override for the **pre-dispatch account preference** only. `false` stops a healthy request being steered toward the account with more known headroom. It does **not** disable 429 rotation. |
 | `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override for the same preference; beats the global setting in either direction. `false` declines the preference for this provider even when the global setting is `true`, and `true` opts this provider in even when the global setting is `false`. Reactive 429 rotation is unaffected either way. |
-| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | — | Declared pool strategy for a generic OAuth provider (#695). Persisted through `ocx account strategy <provider> <name>` or `PUT /api/oauth/accounts/pool`; the generic selector does not act on it yet, so omitted and set behave the same today. |
-| `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | — | Declared 0–100 usage percent for a proactive switch on a generic OAuth provider (#695). Set with `ocx account auto-switch <provider> threshold <n>`; inert until the selector consumes it. |
+| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | — | Pool strategy for a generic OAuth provider (#695). Persisted through `ocx account strategy <provider> <name>` or `PUT /api/oauth/accounts/pool`. The selector acts on it only while `pool.kernel` is on; with the flag off, omitted and set behave the same. `quota` is the pre-kernel behaviour either way. |
+| `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | `80` | 0–100 usage percent at which `fill-first` advances off the active account (#695). Set with `ocx account auto-switch <provider> threshold <n>`. Read only under `pool.kernel` with `strategy: "fill-first"`; an account with no measured usage counts as under the threshold. |
+| `providers.<name>.oauthAccountFailover.stickyLimit?` | `number` | `1` | Successful dispatches retained on one `round-robin` selection, 1–100 (#695). Read only under `pool.kernel` with `strategy: "round-robin"`. |
 
 To decline proactive account steering for one provider whose terms you would rather not test,
 while still recovering from a rate limit:
@@ -573,10 +591,10 @@ That setting survives logging in, adding an account, and reauthenticating.
 Generic OAuth providers (Google Antigravity, xAI, Cursor, Kimi, GitHub Copilot, Nous, and any
 other OAuth provider outside the Codex and Anthropic pools) also accept `strategy` and
 `autoSwitchThreshold` on the same key, through `GET`/`PUT /api/oauth/accounts/pool?provider=<name>`
-and the `ocx account strategy` / `ocx account auto-switch` verbs. The response carries
-`"inert": true` for those two fields only — `enabled` is live and governs the pre-dispatch
-preference. `stickyLimit` and
-`quotaWindow` are not part of the generic contract. Codex (`/api/codex-auth`) and Anthropic
+and the `ocx account strategy` / `ocx account auto-switch` / `ocx account sticky` verbs. The response carries
+`"inert"` for those three fields only — `true` while they are stored but not consumed,
+`false` once `pool.kernel` is on and they actually select an account — `enabled` is live and governs the pre-dispatch
+preference. `quotaWindow` is not part of the generic contract. Codex (`/api/codex-auth`) and Anthropic
 (`anthropicAccountPool`) keep their own contracts unchanged.
 
 Deliberately narrower than `anthropicAccountPool`: no session affinity, no quota-ranked
@@ -625,7 +643,7 @@ provider in question.
 | `failureBackoffMaxSeconds?` | `number` | `3600` | Backoff ceiling and permanent-failure delay. |
 | `codexWarmupEnabled?` | `boolean` | `false` | Opt into synthetic Codex pool-account validation. |
 | `codexWarmupMaxAgeSeconds?` | `number` | `691200` | Revalidate an account after 8 days. |
-| `codexWarmupModel?` | `string` | `gpt-5.4-mini` | Native model used for optional warmup. |
+| `codexWarmupModel?` | `string` | `gpt-5.6-luna` | Native model used for optional warmup. |
 
 ## Fixed provider endpoints
 
@@ -908,7 +926,7 @@ ids with context `922000` and max input `922000`; OpenRouter seeds `openai/gpt-5
       "baseUrl": "https://ollama.com/v1",
       "apiKey": "${OLLAMA_API_KEY}",
       "defaultModel": "glm-5.2",
-      "noVisionModels": ["glm-5.2", "glm-5.3", "gpt-oss", "qwen3-coder", "deepseek-v4-pro"]
+      "noVisionModels": ["glm-5.2", "glm-5.3", "gpt-oss", "qwen3-coder", "deepseek-v4-flash"]
     }
   },
   "subagentModels": ["anthropic/claude-opus-5", "ollama-cloud/glm-5.2"],
@@ -940,7 +958,8 @@ representation returned to the client, including the visible content-to-summary 
 echoing full history with `previous_response_id` does not duplicate that history. Hidden-summary
 requests and opaque reasoning blobs retain their existing representation. Cache hits can also
 supply earlier history for delta continuations;
-after a cache miss, resend the complete conversation without `previous_response_id`. Stateless
+after a cache miss, the proxy returns `previous_response_not_found` before upstream dispatch so the
+client can resend the complete conversation without `previous_response_id`. Stateless
 repair labels orphan results and missing tool results; it cannot reconstruct lost history or
 prove whether a missing tool execution succeeded.
 

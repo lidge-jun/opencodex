@@ -24,9 +24,11 @@ import {
 import {
   commitCursorCheckpoint,
   cursorCheckpointRefHash,
+  cursorCheckpointShape,
   invalidateCursorCheckpoint,
 } from "./cursor/checkpoint-store";
 import { debugProviderDiagnostic } from "../lib/debug";
+import { isDebugEnabled } from "../lib/debug-settings";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { estimateTokens } from "../lib/token-estimate";
 import { rememberCursorThreadConversation } from "./cursor/thread-continuity";
@@ -208,6 +210,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               externalModel: isCursorExternalWireModel(activeRequest.modelId),
               storeCheckpoints: activeRequest.contextUsageStoreCheckpoints !== false,
               capturedBytes: lastTransport?.captured?.byteLength ?? 0,
+              // Byte length says nothing about coverage. `pendingToolCalls` does: it is what
+              // distinguishes a snapshot that knows about the suspended call from one that merely
+              // arrived after it (#4245). Counts only; the decode is skipped unless debug is on.
+              capturedShape: isDebugEnabled() ? cursorCheckpointShape(lastTransport?.captured) : undefined,
             });
             return;
           }

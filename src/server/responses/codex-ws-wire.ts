@@ -1,7 +1,23 @@
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
+import {
+  markResponseNonReplayable,
+  UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+  UPSTREAM_NO_RESPONSE_CODE,
+} from "../../lib/upstream-retry";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
 export const UPGRADE_DEADLINE_MS = 10_000;
+// Liveness while the exchange waits for its first response event. The proxy cannot know
+// how long the origin legitimately needs before `response.created` (a multi-image replay
+// spends that time in prefill; #4083 measured 30 s), and it is not the party that owns
+// the slowness policy — the client holds its own deadline and the operator holds
+// `connectTimeoutMs`. What the proxy can decide is whether the peer is still there, and
+// WebSocket has a native answer: ping. While waiting, the exchange pings every
+// CODEX_WS_LIVENESS_PING_INTERVAL_MS on sockets that expose `ping()`; any inbound frame
+// or pong resets the silence clock, and only CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS of
+// nothing at all settles the exchange as an origin-silence 504. A peer that never pongs
+// keeps exactly the previous 90 s bound; a peer that does can never trip it while alive.
+export const CODEX_WS_LIVENESS_PING_INTERVAL_MS = 15_000;
 export const CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS = 90_000;
 // Keep the push-based WS transport inside the same memory envelope as the
 // bounded SSE relays that consume this response. Unlike fetch response bodies,
@@ -48,6 +64,35 @@ export function markCodexWsResponse(response: Response, observed: boolean): void
   if (observed) quotaObservedResponses.add(response);
 }
 
+/**
+ * The honest settlement for an exchange that sent its create frame and never saw a
+ * response event.
+ *
+ * Before this existed the relay committed a 200 SSE Response and errored its body, on the
+ * reasoning that a 5xx could make the pre-stream retry wrapper resend the frame. That
+ * reasoning was right about the resend and wrong about the status: it turned "no response"
+ * into "a response that failed", removed the code a user agent uses for its own retry
+ * policy, and neutered the client's first-byte timeout with chunked headers. The client
+ * on the direct path receives a gateway status in this situation and retries under its own
+ * policy; this response restores that equivalence. The resend is forbidden by the
+ * non-replayable marker instead (see upstream-retry.ts), and the structured code lets the
+ * combo failover reach the same verdict after it re-parses the body.
+ *
+ * 504 is the origin's silence (nothing at all, or nothing but liveness, for the tolerated
+ * window); 502 is a transport that closed or misbehaved after the send. Both carry the
+ * content-free stage detail in the message and the metadata snapshot in the headers, the
+ * same way a refused create does, so quota captured during the prelude is not lost.
+ */
+export function codexWsPreResponseFailure(status: 502 | 504, message: string, prelude: Headers): Response {
+  const headers = new Headers(prelude);
+  headers.set("content-type", "application/json");
+  headers.set("cache-control", "no-store");
+  const code = status === 504 ? UPSTREAM_NO_RESPONSE_CODE : UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE;
+  const response = new Response(JSON.stringify({ error: { type: "upstream_error", code, message } }), { status, headers });
+  markResponseNonReplayable(response);
+  return response;
+}
+
 const CLOSED_BEFORE_TERMINAL = "codex websocket closed before a Responses terminal event";
 
 /**
@@ -78,6 +123,10 @@ export type CodexWsFailureStage = {
   firstFrameMs: number | null;
   /** Milliseconds from send to this failure; null when the failure predates the send. */
   elapsedMs: number | null;
+  /** Liveness pings the exchange sent while waiting for the first response event. */
+  pings: number;
+  /** Pongs the peer answered with; zero on a peer that never answers pings. */
+  pongs: number;
 };
 
 /**
@@ -113,7 +162,8 @@ export function codexWsFailureDetail(stage: CodexWsFailureStage): string {
   return ` [cause=${classifyCodexWsFailure(stage)} request=${stage.requestBytes}B`
     + ` sent=${stage.sent ? "yes" : "no"} frames=${stage.upstreamFrames}`
     + ` control=${stage.controlFrames} relayed=${stage.relayedEvents}`
-    + ` first-frame=${duration(stage.firstFrameMs)} elapsed=${duration(stage.elapsedMs)}]`;
+    + ` first-frame=${duration(stage.firstFrameMs)} elapsed=${duration(stage.elapsedMs)}`
+    + ` pings=${stage.pings} pongs=${stage.pongs}]`;
 }
 
 export type ResponsesWsRelayEvent = {

@@ -36,7 +36,7 @@ const initialSidecar: SidecarData = {
   },
   visionModels: [
     { value: "gpt-5.6-luna", label: "gpt-5.6-luna", backend: "openai", baseline: true },
-    { value: "gpt-5.4-mini", label: "gpt-5.4-mini", backend: "openai", baseline: true },
+    { value: "gpt-5.6-terra", label: "gpt-5.6-terra", backend: "openai", baseline: true },
   ],
 };
 
@@ -104,7 +104,7 @@ function harness(sidecar: SidecarData = initialSidecar) {
     visionModels: sidecar.visionModels ?? [],
     models: [
       { id: "gpt-5.6-luna", provider: "openai", namespaced: "gpt-5.6-luna", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-      { id: "gpt-5.4-mini", provider: "openai", namespaced: "gpt-5.4-mini", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      { id: "gpt-5.6-terra", provider: "openai", namespaced: "gpt-5.6-terra", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
     ],
     saveSidecar,
     shadowCall: { enabled: false, model: "" },
@@ -304,11 +304,11 @@ test("choosing a model from Off sends enabled:true plus that model and backend",
   const { d, patches } = harness({ ...initialSidecar, vision: { ...initialSidecar.vision, enabled: false } });
   await mount(d);
   await act(async () => { modelTrigger().click(); });
-  const next = pickOption("gpt-5.4-mini");
+  const next = pickOption("gpt-5.6-terra");
   expect(next).toBeTruthy();
   await act(async () => { next!.click(); });
   expect(patches).toEqual([
-    { vision: { model: "gpt-5.4-mini", backend: "openai", reasoning: "medium", enabled: true } },
+    { vision: { model: "gpt-5.6-terra", backend: "openai", reasoning: "medium", enabled: true } },
   ]);
 });
 
@@ -369,12 +369,12 @@ test("model and reasoning saves still omit enabled, limit, and timeout", async (
   ) as HTMLButtonElement;
 
   await act(async () => { modelTrigger.click(); });
-  const nextModel = pickOption("gpt-5.4-mini");
+  const nextModel = pickOption("gpt-5.6-terra");
   expect(nextModel).toBeTruthy();
   await act(async () => { nextModel!.click(); });
   expect(patches).toHaveLength(1);
   expect(patches[0]).toEqual({
-    vision: { model: "gpt-5.4-mini", backend: "openai", reasoning: "medium" },
+    vision: { model: "gpt-5.6-terra", backend: "openai", reasoning: "medium" },
   });
   assertVisionControlFieldsOmitted(patches[0]!);
 

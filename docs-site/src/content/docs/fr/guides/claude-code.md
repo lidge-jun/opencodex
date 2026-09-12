@@ -623,3 +623,5 @@ par défaut par un contenu minimal (`blockedSkills: ["claude-api"]`).
 **Les sous-agents sont envoyés au mauvais modèle** — Les agents de la liste (`ocx-*`) utilisent les directives
 `<!-- ocx-route: ... -->`, et non l'argument `model` de l'outil Agent. Vérifiez que la directive désigne la route voulue.
 Utilisez `"haiku"` comme valeur de remplacement pour le modèle.
+
+Dans `config.json`, `claudeCode.stabilizePromptCache: true` déplace les notices Claude reconnues en fin des instructions système vers un dernier message utilisateur sur les routes traduites. La valeur par défaut est `false`. Activez cette option seulement si ce changement de rôle convient à vos clients. Les exemples dans des blocs de code et le texte non reconnu sont conservés ; le transfert Anthropic natif reste inchangé. Sans métadonnées, la clé de cache suit les instructions stabilisées. Cette option ne crée pas une identité de conversation et ne garantit aucun succès du cache amont.

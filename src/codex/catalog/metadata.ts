@@ -48,6 +48,7 @@ import {
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
   SUPPORTED_NATIVE_OPENAI_SLUGS,
+  RETIRED_NATIVE_OPENAI_MODELS,
   hasNativeOpenAiCapabilityMetadata,
   isNativeOpenAiCapabilityAliasModel,
   nativeOpenAiAliasPresentation,
@@ -63,6 +64,7 @@ export {
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
   SUPPORTED_NATIVE_OPENAI_SLUGS,
+  RETIRED_NATIVE_OPENAI_MODELS,
   hasNativeOpenAiCapabilityMetadata,
   isNativeOpenAiCapabilityAliasModel,
   nativeOpenAiAliasPresentation,
@@ -120,8 +122,7 @@ export function isUnsupportedOpenAiNativeSlug(slug: string): boolean {
  *
  * This is an OPERATING CAP, not the hard ceiling — the same shape upstream uses. The live
  * catalog reports `context_window: 272000` against a `max_context_window: 872000` for these
- * slugs, and gpt-5.4 runs 272,000 against 1,000,000: the advertised window is always well
- * inside what the model can take.
+ * slugs: the advertised window is always well inside what the model can take.
  *
  * The hard ceiling here was measured on 2026-08-17 against a real Codex-login account:
  * `POST /backend-api/codex/responses` admitted 921,508 input tokens and refused 922,013 with
@@ -162,7 +163,6 @@ const NATIVE_GPT56_FAMILY = new Set<string>([
 
 export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: number; maxContextWindow?: number; maxInputTokens?: number }> = {
   "gpt-5.5": { contextWindow: 272_000, maxContextWindow: 272_000 },
-  "gpt-5.4": { contextWindow: 1_000_000, maxContextWindow: 1_000_000 },
   "gpt-5.3-codex-spark": { contextWindow: 100_000, maxContextWindow: 100_000 },
   "gpt-5.6-sol": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
   "gpt-5.6-terra": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_MAX_INPUT_TOKENS, maxInputTokens: NATIVE_GPT56_MAX_INPUT_TOKENS },
@@ -537,7 +537,7 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   const sourceSlug = nativeOpenAiCapabilitySourceSlug(slug);
   // A self-described native returns its OWN pinned row; the alias-cloning branch below stays
   // reserved for slugs that genuinely borrow another model's identity. The allowlist is explicit
-  // rather than "has a pinned entry", which would also admit gpt-5.5/gpt-5.4/gpt-5.4-mini into
+  // rather than "has a pinned entry", which would also admit gpt-5.5/gpt-5.2/codex-auto-review into
   // the sync-replacement authority this map carries.
   if (!sourceSlug.startsWith("gpt-5.6-") && !SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(slug)) {
     return undefined;
@@ -696,6 +696,10 @@ function hasNativeCatalogRowShape(entry: RawEntry): boolean {
 function observedAccountBoundNativeSlug(entry: RawEntry): string | undefined {
   const accountBound = trustedAccountBoundNativeCatalogSlug(entry);
   const slug = accountBound ?? (typeof entry.slug === "string" ? entry.slug : "");
+  // A retired native is refused at this one choke point rather than at each call site: every
+  // observation path funnels through here, and an admitted retired slug comes back as a real
+  // catalog row — bare or account-qualified — with capabilities synthesized from the template.
+  if (RETIRED_NATIVE_OPENAI_MODELS.has(slug)) return undefined;
   if (!isAccountBoundOpenAiNativeSlug(slug)
     || (entry.supported_in_api !== true && !(slug === NATIVE_RESERVE_MODEL && entry.supported_in_api === false))
     || (slug === NATIVE_RESERVE_MODEL && entry[RESERVE_METADATA_SOURCE_FIELD] !== undefined

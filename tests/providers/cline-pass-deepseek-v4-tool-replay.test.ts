@@ -9,7 +9,6 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const TARGET_MODELS = [
   "cline-pass/deepseek-v4-flash",
-  "cline-pass/deepseek-v4-pro",
 ] as const;
 
 const provider = {

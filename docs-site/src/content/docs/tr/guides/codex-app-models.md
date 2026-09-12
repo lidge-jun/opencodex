@@ -144,8 +144,8 @@ yerel yetenekleri kaldırır.
 
 ## Mevcut kararlı model kapsamı
 
-Yerel geri dönüş kümesi `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-`gpt-5.3-codex-spark` ve GPT-5.6 Sol/Terra/Luna modellerini içerir. GPT-5.5/5.4
+Yerel geri dönüş kümesi `gpt-5.5`,
+`gpt-5.3-codex-spark` ve GPT-5.6 Sol/Terra/Luna modellerini içerir. GPT-5.5
 ailesi için opencodex, kurulu Codex kataloğunun daha zengin canlı girdilerini
 korur ve yalnızca eksik bir girdiyi sentezler. Paketlenmiş yukarı akış anlık
 görüntüsü yalnızca eski şablon yaklaşımı yerine gerçek model başına kimliği ve

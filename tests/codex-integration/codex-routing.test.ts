@@ -948,6 +948,147 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("quota-next", config)).toBe("b");
   });
 
+  test("a bound thread does not return to the quota group that refused it once the capped cooldown lapses", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("spark-refused", config, now, "spark")).toBe("a");
+
+    // The refusal announces a window that reopens in four hours, but a reset-derived cooldown is
+    // capped at 15 minutes so the account is selectable again long before that window moves.
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      threadId: "spark-refused",
+      modelId: "gpt-5.3-codex-spark",
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+
+    // Usage is still the lowest in the pool and well under the threshold, so nothing else would
+    // move this thread: without the refusal it rebinds to the account that just turned it away.
+    expect(resolveCodexAccountForThread("spark-refused", config, now + 16 * 60_000, "spark")).toBe("b");
+    // The shared lane never refused this thread, so a spent Spark window leaves it alone.
+    expect(resolveCodexAccountForThread("spark-refused", config, now + 16 * 60_000, "shared")).toBe("a");
+  });
+
+  test("the main login is passed over by the window its own refusal announced", () => {
+    // The main account is not in `config.codexAccounts`, so it reaches selection through a
+    // separate re-insertion branch. That branch is the only place an avoidance window can
+    // exclude it, and it is the case the pool filters above cannot cover.
+    writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-chatgpt-id" },
+    }));
+    const config = makeConfig({
+      codexAccounts: [{ id: "a", email: "a@test", isMain: false }],
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+    });
+    const now = 1_800_000_000_000;
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 10);
+    updateAccountQuota("a", 20);
+    expect(resolveCodexAccountForThread("main-spark-first", config, now, "spark")).toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    recordCodexUpstreamOutcome(config, MAIN_CODEX_ACCOUNT_ID, 429, {
+      now,
+      threadId: "main-spark-first",
+      modelId: "gpt-5.3-codex-spark",
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+
+    // Selection has to actually reach the re-insertion branch for this to prove anything.
+    // Leaving the main login active would exclude it by id on the fallback instead, so move
+    // the active account and put it over the switch threshold: now a cooler candidate is
+    // wanted, and the only thing that can keep the main login out is its avoidance window.
+    config.activeCodexAccountId = "a";
+    updateAccountQuota("a", 85);
+
+    // The capped cooldown has lapsed and the weekly bar still reads coolest, so without the
+    // window this request goes straight back to the account that just refused one.
+    expect(resolveCodexAccountForThread("main-spark-next", config, now + 16 * 60_000, "spark")).toBe("a");
+  });
+
+  test("naming the account overrules an avoidance the refusal recorded on the scoped lane", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      threadId: "scoped-manual",
+      modelId: "gpt-5.3-codex-spark",
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+    expect(resolveCodexAccountForThread("scoped-avoided", config, now + 16 * 60_000, "spark")).toBe("b");
+
+    // A reset-derived refusal writes only the scoped entry, so an operator naming the account
+    // has to reach that map. Stopping at the account-wide entry leaves the pick refused.
+    config.activeCodexAccountId = "a";
+    resetCodexRoutingForManualSelection("a");
+
+    expect(resolveCodexAccountForThread("scoped-named", config, now + 17 * 60_000, "spark")).toBe("a");
+  });
+
+  test("clearing the cooldown also lifts the avoidance that refusal announced", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      modelId: "gpt-5.3-codex-spark",
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+    expect(resolveCodexAccountForThread("cleared-before", config, now + 16 * 60_000, "spark")).toBe("b");
+
+    // The escape hatch has to escape. Automatic probe recovery already drops the window; an
+    // operator lifting the same cooldown by hand was leaving it in place for up to six hours.
+    expect(clearCodexAccountCooldown("a", now + 60_000)).toBe(true);
+
+    expect(resolveCodexAccountForThread("cleared-after", config, now + 61_000, "spark")).toBe("a");
+  });
+
+  test("clearing a lapsed cooldown still lifts the avoidance it left behind", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      modelId: "gpt-5.3-codex-spark",
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+
+    // The capped cooldown is already gone and only the announced window is still holding the
+    // account out, which is exactly when an operator reaches for this button. Reading the
+    // cooldown alone made the call a no-op for the next several hours.
+    expect(isCodexAccountInCooldown("a", now + 16 * 60_000)).toBe(false);
+    expect(resolveCodexAccountForThread("lapsed-before", config, now + 16 * 60_000, "spark")).toBe("b");
+
+    expect(clearCodexAccountCooldown("a", now + 16 * 60_000)).toBe(true);
+
+    expect(resolveCodexAccountForThread("lapsed-after", config, now + 17 * 60_000, "spark")).toBe("a");
+  });
+
+  test("a request the account serves releases the threads its quota refusal moved", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("spark-recovered", config, now, "spark")).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      threadId: "spark-recovered",
+      modelId: "gpt-5.3-codex-spark",
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+    expect(resolveCodexAccountForThread("spark-recovered", config, now + 16 * 60_000, "spark")).toBe("b");
+
+    // Selection never stopped offering the account to unbound requests, and the first one it
+    // serves is what ends the refusal — a rebound thread then keeps it across turns.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 17 * 60_000, modelId: "gpt-5.3-codex-spark" });
+    expect(resolveCodexAccountForThread("spark-rebound", config, now + 18 * 60_000, "spark")).toBe("a");
+    expect(resolveCodexAccountForThread("spark-rebound", config, now + 19 * 60_000, "spark")).toBe("a");
+  });
+
   test("shared native reset cooldown clears affinity and rotates the active account", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;

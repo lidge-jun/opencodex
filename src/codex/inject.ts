@@ -46,7 +46,7 @@ import {
 } from "./journal";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import { restoreCodexCatalogWithPermit } from "./catalog/sync";
-import { syncCodexHistoryProvider, type CodexHistoryFailureReason } from "./history-provider";
+import { preflightCodexHistoryInjection, syncCodexHistoryProvider, type CodexHistoryFailureReason } from "./history-provider";
 import {
   describeHistoryJobFailure,
   deriveCodexHistoryOperation,
@@ -75,6 +75,7 @@ import {
   parseTomlString,
   readRootTomlString,
   resolveCodexConfigPath,
+  resolveCodexStateDbPath,
   tomlString,
 } from "./paths";
 import { resolveEffectiveProjectModelProvider } from "./project-config-warnings";
@@ -899,7 +900,34 @@ export interface CodexInjectResult {
   nativeSubagentDefaultsWarning?: string;
 }
 
+class CodexHistoryPreflightRefusal extends Error {}
+class CodexRestoreRefusal extends Error {}
+let historyArtifactStageForTests: ((stage: string) => void) | undefined;
+export function setHistoryArtifactStageForTests(hook: typeof historyArtifactStageForTests): void {
+  historyArtifactStageForTests = hook;
+}
+let beforeRestoreConfigForTests: ((kind: string) => void) | undefined;
+export function setBeforeRestoreConfigForTests(hook: typeof beforeRestoreConfigForTests): void {
+  beforeRestoreConfigForTests = hook;
+}
+let beforeHistoryArtifactCommitForTests: ((kind: string) => void) | undefined;
+export function setBeforeHistoryArtifactCommitForTests(hook: typeof beforeHistoryArtifactCommitForTests): void {
+  beforeHistoryArtifactCommitForTests = hook;
+}
+
 export async function injectCodexConfig(
+  port: number,
+  config?: OcxConfig,
+  options: InjectCodexOptions = {},
+): Promise<CodexInjectResult> {
+  try { return await injectCodexConfigImpl(port, config, options); }
+  catch (error) {
+    if (error instanceof CodexHistoryPreflightRefusal) return { success: false, message: `Codex config injection refused: ${error.message}. Existing configuration and history were preserved.` };
+    throw error;
+  }
+}
+
+async function injectCodexConfigImpl(
   port: number,
   config?: OcxConfig,
   options: InjectCodexOptions = {},
@@ -929,6 +957,10 @@ export async function injectCodexConfig(
   }
 
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  const preflightTableMode = usesProviderTable(routingTarget);
+  const compactionOnly = routingTarget.clientCompaction === true
+    && routingTarget.desktopAuthless !== true
+    && routingTarget.requiresAdmissionToken !== true;
   const activeProvider = externalCodexModelProvider(rawContent);
   if (activeProvider) {
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
@@ -1138,6 +1170,29 @@ export async function injectCodexConfig(
   );
   content = applyEol(content, eol);
 
+  // Resolve storage from the normalized candidate. Owned duplicate catalog keys
+  // are repairable above and must not make this read-only preflight throw.
+  const historyPreflight = (): string | null => {
+    try {
+      return preflightCodexHistoryInjection(
+        preflightTableMode,
+        config?.syncResumeHistory !== false && !compactionOnly,
+        resolveCodexStateDbPath({ readConfig: () => content }),
+      );
+    } catch {
+      return "history_injection_preflight_unavailable";
+    }
+  };
+  const historyPreflightError = historyPreflight();
+  if (historyPreflightError) {
+    return {
+      success: false,
+      message: `Codex config injection refused: ${historyPreflightError}. `
+        + "Existing provider definitions and conversation files were preserved. "
+        + "Paginated history requires native-writer coordination; do not run legacy recovery or retry this transition blindly.",
+    };
+  }
+
   /*
    * The witness, built from the FINAL bytes. Everything it hashes is either the
    * output about to be written or evidence that can be re-read under the lock;
@@ -1228,6 +1283,12 @@ export async function injectCodexConfig(
   }
 
   const applyNativeArtifacts = (): void => {
+    beforeHistoryArtifactCommitForTests?.(eligibility.kind);
+    const historyError = historyPreflight();
+    if (historyError) throw new CodexHistoryPreflightRefusal(historyError);
+    const preImages = captureCodexPreImages();
+    try {
+    historyArtifactStageForTests?.("after-preflight");
     writeJournal({
       currentStateIsNative: journalBaselineIsNative(),
       configContent: baselineContent,
@@ -1237,6 +1298,7 @@ export async function injectCodexConfig(
     // must not gain the new injection's hash and later overwrite preserved user edits.
     if (hasUnverifiedJournalBaseline(baselineContent, readCurrentProfile())) throw new Error(unverifiedJournalMessage);
     atomicWriteFile(CODEX_CONFIG_PATH, content);
+    historyArtifactStageForTests?.("after-config");
     atomicWriteFile(CODEX_PROFILE_PATH, profileContent);
     markJournalInjectedState(content, profileContent, {
       // A root override is ours whenever we wrote one and no user-owned value won. That is
@@ -1257,6 +1319,16 @@ export async function injectCodexConfig(
       // already points at that path and therefore needs no textual rewrite.
       injectedCatalogPath: catalogPath,
     });
+    historyArtifactStageForTests?.("after-artifacts");
+    // Detect migration throughout the artifact transaction, not just at entry.
+    // This is compensation, not a native-writer lock or permission to append ordinals.
+    const finalHistoryError = historyPreflight();
+    if (finalHistoryError) throw new CodexHistoryPreflightRefusal(finalHistoryError);
+    } catch (error) {
+      const compensated = restoreCodexPreImages(preImages);
+      if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
+      throw error;
+    }
   };
 
   /*
@@ -1638,6 +1710,8 @@ function hasOpencodexRouting(content: string): boolean {
 export function removeCodexConfig(
   options: { preserveProfile?: boolean } = {},
 ): { success: boolean; message: string } {
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
   if (!existsSync(CODEX_CONFIG_PATH)) {
     if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
       unlinkSync(CODEX_PROFILE_PATH);
@@ -1838,8 +1912,21 @@ export function skippedRestoreEnvelope(success: boolean, message: string): Codex
 }
 
 /** The config/profile half of a native restore, reported as one artifact. */
-function restoreCodexConfigInline(): CodexRestoreConfigResult {
+function restoreCodexConfigInline(kind = "sync"): CodexRestoreConfigResult {
+  const preImages = captureCodexPreImages();
+  const result = restoreCodexConfigInlineImpl(kind);
+  if (result.state === "failed") {
+    const compensated = restoreCodexPreImages(preImages);
+    if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
+  }
+  return result;
+}
+
+function restoreCodexConfigInlineImpl(kind: string): CodexRestoreConfigResult {
   try {
+    beforeRestoreConfigForTests?.(kind);
+    const historyError = preflightCodexHistoryInjection(false, false);
+    if (historyError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${historyError}.` };
     const journal = restoreJournalState();
     if (journal.unverified) {
       return {
@@ -1913,6 +2000,17 @@ function restoreCodexCatalogArtifact(
 export async function restoreNativeCodexAsync(
   options: { revalidateDesiredState?: boolean } = {},
 ): Promise<CodexNativeRestoreResult> {
+  try {
+    return await restoreNativeCodexAsyncImpl(options);
+  } catch (error) {
+    if (!(error instanceof CodexRestoreRefusal)) throw error;
+    return skippedRestoreEnvelope(false, error.message);
+  }
+}
+
+async function restoreNativeCodexAsyncImpl(
+  options: { revalidateDesiredState?: boolean },
+): Promise<CodexNativeRestoreResult> {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     // External-provider courtesy: only the stale journal is removed. The
@@ -1929,7 +2027,11 @@ export async function restoreNativeCodexAsync(
   if (options.revalidateDesiredState) {
     const ownership = inspectNativeCodexOwnership();
     if (ownership.ownership === "foreign") return foreignOwnershipRestoreRefusal(ownership.reason);
+    if (shouldSyncCodexOnStart(loadConfig())) return desiredEnabledRestoreSkip();
   }
+
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
 
   const eligibility = codexWriteCoordinationEligibility({
     coordinatorPath: () =>
@@ -1980,7 +2082,9 @@ export async function restoreNativeCodexAsync(
         const preImages = captureCodexPreImages();
         let restored: CodexRestoreConfigResult;
         try {
-          restored = restoreCodexConfigInline();
+          restored = restoreCodexConfigInline(eligibility.kind);
+          // Throw inside N so the published remove transition rolls back too.
+          if (restored.state === "failed") throw new CodexRestoreRefusal(restored.message);
         } catch (error) {
           const compensated = restoreCodexPreImages(preImages);
           if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
@@ -2021,9 +2125,10 @@ export async function restoreNativeCodexAsync(
     if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
       return desiredEnabledRestoreSkip();
     }
-    config = restoreCodexConfigInline();
+    config = restoreCodexConfigInline(eligibility.kind);
   }
 
+  if (config.state === "failed") return skippedRestoreEnvelope(false, config.message);
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   const outcome = await runCodexHistoryJob({
     ...resolveCodexHistoryJobTarget(),
@@ -2055,8 +2160,7 @@ export async function restoreNativeCodexAsync(
   const base = catalog.removed > 0
     ? `${config.message} Catalog restored to ${catalog.kept} native model(s) (dropped ${catalog.removed} proxy-routed).`
     : config.message;
-  const success = config.state !== "failed"
-    && catalog.state !== "failed"
+  const success = catalog.state !== "failed"
     && history.state !== "failed";
   return {
     success,
@@ -2074,11 +2178,14 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
   if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
     return desiredEnabledRestoreSkip();
   }
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
   // Captured before the config half: a successful journal restore DELETES the journal, and
   // restoring the config can drop `model_catalog_json`. Either one would hide the routed
   // catalog we actually wrote (#1798).
   const journaledCatalogPath = journaledInjectedCatalogPath();
   const config = restoreCodexConfigInline();
+  if (config.state === "failed") return skippedRestoreEnvelope(false, config.message);
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   // Design B (loopback) steady state: threads are already tagged openai, so prove the
   // no-op with a readonly probe instead of write-opening a DB the Codex app may hold
@@ -2115,7 +2222,7 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
     ? `${config.message} Catalog restored to ${catalog.kept} native model(s) (dropped ${catalog.removed} proxy-routed).`
     : config.message;
   return {
-    success: config.state !== "failed" && catalog.state !== "failed" && history.state !== "failed",
+    success: catalog.state !== "failed" && history.state !== "failed",
     message,
     artifacts: { config, catalog, history },
   };

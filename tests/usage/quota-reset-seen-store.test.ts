@@ -7,6 +7,7 @@ import {
   claimCountForTests,
   claimQuotaReset,
   forgetLastObservedWindows,
+  flushQuotaResetStoreForTests,
   hasSeenQuotaReset,
   listRecentQuotaResetEvents,
   recordQuotaResetEvent,
@@ -37,6 +38,27 @@ function event(key: string): QuotaResetEvent {
 
 beforeEach(() => {
   resetQuotaResetStoreForTests();
+});
+
+test("opted-in missing short history keeps its observation clock across persistence", () => {
+  const short = { window: "5h", percent: 96, resetAt: NOW + 60_000, observedAt: NOW };
+  const weekly = { window: "weekly", percent: 20, observedAt: NOW + 61_000 };
+  swapLastObservedWindows("codex", "retain00", [short], true);
+  swapLastObservedWindows("codex", "retain00", [weekly], true);
+  flushQuotaResetStoreForTests();
+  resetQuotaResetStoreForTests();
+  expect(swapLastObservedWindows("codex", "retain00", [weekly], true)).toContainEqual(short);
+  expect(swapLastObservedWindows("codex", "retain00", [weekly], true)).toContainEqual(short);
+  forgetLastObservedWindows("codex", "retain00");
+  expect(swapLastObservedWindows("codex", "retain00", [weekly], true)).toBeUndefined();
+});
+
+test("omitted windows are still replaced when retention is not requested", () => {
+  const short = { window: "5h", percent: 96, observedAt: NOW };
+  const weekly = { window: "weekly", percent: 20, observedAt: NOW + 61_000 };
+  swapLastObservedWindows("provider", "replace0", [short]);
+  swapLastObservedWindows("provider", "replace0", [weekly]);
+  expect(swapLastObservedWindows("provider", "replace0", [weekly])).toEqual([weekly]);
 });
 
 describe("quota reset claim store", () => {
