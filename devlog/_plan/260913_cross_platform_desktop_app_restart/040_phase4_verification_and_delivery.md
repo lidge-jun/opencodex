@@ -127,3 +127,19 @@ gate is re-read at the new sha.
 
 Anything missing is named as missing. A platform without a pid change is not
 described as working.
+
+## 8. What is proven by test rather than by a live host
+
+Named here so the PR does not imply live coverage it does not have. These rest on the
+focused tests in `030` §6 plus hosted CI:
+
+- `--restart-desktop-app` still working and printing its deprecation line.
+- `--restart-app-server-only` reproducing the old narrow behaviour.
+- `POST /api/machine/sync`'s `restartCodex` staying unhonored (`030` §4.1).
+- The `restart_in_flight` singleton refusal.
+
+`catalog pull --restart-codex` is the one borderline case: it is a real behaviour
+change to a real command, so it gets one live invocation on `lidge` against a
+loopback catalog URL, checked for the desktop pid change and the
+`desktopAppRestarted` envelope field. A flag whose meaning changed deserves better
+than a unit test on the host where the change is observable anyway.

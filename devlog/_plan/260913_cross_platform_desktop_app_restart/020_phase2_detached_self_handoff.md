@@ -137,6 +137,14 @@ The helper never takes the lock; it inherits one already made out to it. A concu
 caller arriving at any point sees a lock owned by a live pid and reports
 `restart_in_flight`, which is the behaviour B2 asked for.
 
+Mechanically this is **own-pid reentrancy**, not a second code path. Step 0 of the
+ladder (`010` §3.2) runs unconditionally in every process, and acquisition treats a
+lock already naming *this* pid as successfully held rather than as contention. The
+helper therefore executes the same step 0 as everyone else and finds the lock the
+caller made out to it. A helper invoked directly, with no lock waiting for it,
+acquires one normally. One acquisition rule covers all three cases, which is why
+there is no "helper mode" branch to get wrong.
+
 If the spawn fails, the caller releases the lock on the ordinary `finally` path and
 reports `self_ancestry`. The rewrite happens only after a successful spawn, so a
 failed handoff can never strand the lock on a pid that does not exist.
