@@ -268,6 +268,7 @@ describe("truncated-stop-reason classifier", () => {
       "length", "content-filter",                   // Command Code / AI SDK
       "pause_turn",                                 // Anthropic: turn needs continuation
       "refusal", "model_context_window_exceeded",   // Anthropic
+      "max_output_tokens",                          // Anthropic: same spelling as the mapped reason
       "MAX_TOKENS", "SAFETY", "MALFORMED_FUNCTION_CALL", "IMAGE_SAFETY", "LANGUAGE", // Gemini
       "Safety", "safety",                           // mixed case must not slip through
     ]) {
@@ -285,6 +286,7 @@ describe("truncated-stop-reason classifier", () => {
   test("truncation maps to the right incomplete_details reason", () => {
     expect(truncationReasonFor("length")).toBe("max_output_tokens");
     expect(truncationReasonFor("model_context_window_exceeded")).toBe("max_output_tokens");
+    expect(truncationReasonFor("max_output_tokens")).toBe("max_output_tokens");
     expect(truncationReasonFor("refusal")).toBe("content_filter");
     expect(truncationReasonFor("SAFETY")).toBe("content_filter");
     expect(truncationReasonFor("end_turn")).toBeUndefined();
@@ -318,6 +320,7 @@ describe("truncated done preserves open tool integrity (#4312)", () => {
     ["content_filter", "content_filter"],
     ["max_tokens", "max_output_tokens"],
     ["length", "max_output_tokens"],
+    ["max_output_tokens", "max_output_tokens"],
   ] as const;
   for (const [stopReason, reason] of cases) {
     for (const kind of ["function_call", "custom_tool_call", "tool_search_call"] as const) {
