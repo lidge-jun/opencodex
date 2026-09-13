@@ -10,6 +10,7 @@ import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, Ocx
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import { getCachedCatalog } from "./devin/cloud-direct/catalog";
+import { collapseDevinModelUid } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
 
@@ -66,7 +67,15 @@ export function devinErrorClassification(error: unknown): { status?: number; err
 
 export const DEVIN_API_SERVER = DEVIN_DEFAULT_API_SERVER;
 
-const EFFORT_SUFFIXES = new Set(["low", "medium", "high", "xhigh", "max", "none", "1m", "max-1m", "none-1m", "fast"]);
+/**
+ * Reasoning-effort values a CALLER may name. Deliberately not the same set as
+ * the catalog suffix tokens: `priority` is a service tier that appears in a UID
+ * but is not something a caller asks for as effort, and `max-1m` / `none-1m`
+ * are compound values a caller can send that never appear as a trailing token.
+ * The two sets share most members and mean different things; merging them would
+ * both admit a tier as an effort and silently drop the compound values.
+ */
+const CALLER_EFFORT_VALUES = new Set(["low", "medium", "high", "xhigh", "max", "none", "1m", "max-1m", "none-1m", "fast"]);
 
 /**
  * Cognition's catalog spells model ids with hyphens (`swe-1-7`), but the same
@@ -79,9 +88,18 @@ export function normalizeDevinModelId(modelId: string): string {
   return modelId.replace(/\./g, "-");
 }
 
+/**
+ * Does this id already carry a catalog effort/variant suffix?
+ *
+ * Delegates to the collapser so there is one answer to "what is a suffix".
+ * The previous local set had drifted: it was missing `priority`, so
+ * `gpt-5-6-sol-medium-priority` read as unsuffixed and got a second suffix
+ * appended, producing a UID Cognition answers with an opaque permission_denied.
+ * Delegating also handles compound suffixes, which testing only the final
+ * hyphen-separated token never could.
+ */
 function hasEffortSuffix(modelId: string): boolean {
-  const parts = modelId.split("-");
-  return parts.length > 1 && EFFORT_SUFFIXES.has(parts[parts.length - 1]!);
+  return collapseDevinModelUid(modelId) !== modelId;
 }
 
 /**
@@ -89,8 +107,9 @@ function hasEffortSuffix(modelId: string): boolean {
  * not as a separate effort field, so an explicit caller effort has to be resolved
  * to the UID before the suffix shortcut below accepts whatever the picker sent.
  *
- * Kept as a named table rather than an inline branch because EFFORT_SUFFIXES does
- * not carry `ultra`, `off`, or `minimal`, so the two would drift apart silently.
+ * Kept as a named table rather than an inline branch because the caller-effort
+ * set does not carry `ultra`, `off`, or `minimal`, so the two would drift apart
+ * silently.
  * Values below Medium select Medium: SWE-2 has no lane under it, and rounding down
  * to nothing would quietly disable its reasoning.
  */
@@ -145,7 +164,7 @@ async function resolveWireModelUid(
   const catalog = await getCachedCatalog(apiKey, host);
   if (catalog) {
     if (catalog.byUid.has(modelId)) return modelId;
-    const effort = reasoningEffort && EFFORT_SUFFIXES.has(reasoningEffort) ? reasoningEffort : "medium";
+    const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
     const suffixed = `${modelId}-${effort}`;
     if (catalog.byUid.has(suffixed)) return suffixed;
     // Fall back to any enabled variant of this base model.
@@ -154,7 +173,7 @@ async function resolveWireModelUid(
     }
   }
   // Degraded mode: append the default effort suffix.
-  const effort = reasoningEffort && EFFORT_SUFFIXES.has(reasoningEffort) ? reasoningEffort : "medium";
+  const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
   return `${modelId}-${effort}`;
 }
 

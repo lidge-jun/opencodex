@@ -236,3 +236,47 @@ describe("SWE-2 wire effort selection", () => {
     }
   });
 });
+
+describe("effort suffix detection and caller effort values are different sets", () => {
+  // The two had drifted: the request path was missing `priority`, so a UID that
+  // already carried it read as unsuffixed and got a second suffix appended —
+  // the exact shape Cognition answers with an opaque permission_denied.
+  test("a UID carrying the priority tier is recognised as already suffixed", async () => {
+    for (const uid of ["gpt-5-6-sol-priority", "gpt-5-6-sol-medium-priority"]) {
+      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(uid);
+    }
+  });
+
+  test("detection handles a compound suffix, which a last-token test could not", async () => {
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol-medium-priority", "unused", "unused")).toBe(
+      "gpt-5-6-sol-medium-priority",
+    );
+  });
+
+  test("a bare model still receives the caller effort", async () => {
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "high")).toBe("gpt-5-6-sol-high");
+  });
+
+  // `priority` is a service tier, not something a caller asks for as effort.
+  // Sharing one set between detection and caller validity would admit it.
+  test("priority is not accepted as a caller reasoning effort", async () => {
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "priority")).toBe(
+      "gpt-5-6-sol-medium",
+    );
+  });
+
+  // These never appear as a trailing token, so they are meaningless to detection,
+  // but a caller can still name them and they must survive.
+  test.each(["max-1m", "none-1m", "1m", "fast"])("the compound caller value %p is preserved", async (effort) => {
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", effort)).toBe(
+      `gpt-5-6-sol-${effort}`,
+    );
+  });
+
+  test("a model name is never mistaken for a suffix", async () => {
+    // Greedy collapse must not eat part of a real model name.
+    for (const uid of ["claude-opus-5", "swe-1-7", "glm-5-3"]) {
+      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(`${uid}-high`);
+    }
+  });
+});

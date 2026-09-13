@@ -72,7 +72,7 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
  * Trailing tokens that the Cognition catalog appends as effort/variant
  * suffixes. Stripped to collapse suffixed UIDs to their base id.
  */
-const EFFORT_TOKENS = new Set([
+export const EFFORT_TOKENS = new Set([
   "low", "medium", "high", "xhigh", "max", "none", "fast", "priority", "1m",
 ]);
 
