@@ -424,6 +424,7 @@ const commandRunners: Record<string, CommandRunner> = {
       // Explicit sync with the integration OFF still refreshes the catalog/cache
       // for side profiles that consume the proxy without injection.
       console.log(synced.message ?? "Codex integration is OFF; catalog refreshed, Codex config untouched.");
+      if (!synced.ok) code = 1;
     } else if (!synced.ok) {
       code = 1;
       console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");

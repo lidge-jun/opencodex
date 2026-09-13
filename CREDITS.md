@@ -155,6 +155,22 @@ use the source authors' verified numeric GitHub account identities.
 A delivered slice is not a statement that every requirement in its original PR
 or umbrella issue is complete. The table deliberately retains the unadopted scope.
 
+### 2026-09-13 follow-up: landing trailer dropped at merge
+
+The last 3,000 commits reachable from current `dev` were scanned the same way
+as the 2026-09-07 audit: carry/reimplement language on the landing, then the
+**actual landing commit**, then GitHub's commit-author mapping. One new miss
+is not already on this page.
+
+[#4031](https://github.com/lidge-jun/opencodex/pull/4031)'s own description
+named the trailer. The merge commit did not keep it. The cherry-picked object
+is authored as an unmapped machine identity, which GitHub maps to no account.
+The only remaining trailer is automation.
+
+| Pull request | Author | Landed as | What landed |
+| --- | --- | --- | --- |
+| [#3988](https://github.com/lidge-jun/opencodex/pull/3988) | [@rrmlima](https://github.com/rrmlima) | [`e2bf1672c`](https://github.com/lidge-jun/opencodex/commit/e2bf1672c974611f8db736cd64a90e1dc443924a) / [`14ce693e5`](https://github.com/lidge-jun/opencodex/commit/14ce693e5846596c823941ce90add538713a25b1) | "Carries #3988 by @rrmlima (`cherry-pick -x`)" — Gemini/CCA/Vertex/AI Studio model-tail `(continue)` nudge in `messagesToGeminiFormat`. |
+
 ## Report and diagnosis
 
 These fixes exist because of the report. The branch's own approach was not the

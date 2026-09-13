@@ -11,22 +11,26 @@ Runtime adapter construction has one authority: `src/adapters/registry.ts`.
 Some adapters share another adapter's routed-tool semantics while retaining independent runtime construction:
 
 - `azure` and `azure-openai` inherit the `openai-responses` contract.
+  The inherited contract includes Meta Muse's host-gated 64-character tool-name alias when the
+  constructed send URL is `api.meta.ai` (`src/responses/muse-tool-name-alias.ts`).
 - `mimo-free` inherits the `openai-chat` contract.
 - `cursor` stays direct because its `runTurn` transport and gated native-file fallback are distinct.
-- `devin-cli` stays direct for the same reason, one layer further out: it has no HTTP transport at
-  all. The turn runs as an Agent Client Protocol session against a local `devin acp` child process,
-  so `buildRequest` returns a placeholder and `parseStream` is disabled. Its registry `baseUrl` is a
-  canonical identity URL rather than a destination anything connects to, which is what keeps the
-  generated configuration loadable: `providerBaseUrlConfigError` accepts only `http(s)` schemes.
-- `devin` is the cloud half of the same family and is also direct. It streams Cognition's
+- `devin` is direct for a related reason. It streams Cognition's
   `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
-  framing, so like Cursor and `devin-cli` it never travels the `buildRequest`/`parseStream` path.
-  The `devin-cli` PRESET streams over this same adapter: the installed CLI's own
-  `credentials.toml` holds an ordinary `devin-session-token`, so that provider imports the token
-  rather than spawning a child, and the two rows differ only in where the credential came from —
-  a browser sign-in versus a signed-in local CLI. The ACP adapter above remains registered and is
-  selected by a custom-named row, never by the `devin-cli` id, because `routedProviderConfig` pins
-  the adapter from the registry for any registry id.
+  framing, so like Cursor it never travels the `buildRequest`/`parseStream` path. Both Devin
+  provider rows share it. The installed CLI's own `credentials.toml` holds an ordinary
+  `devin-session-token`, the same credential `RegisterUser` mints for a browser sign-in, so
+  `devin-cli` imports that token and the two rows differ only in where the credential came from.
+  `AdapterFactoryContext.providerId` is what keeps them apart: the Cognition tenant is recorded on
+  the credential, not in the registry, so the adapter has to know which row it is serving before it
+  can resolve a host.
+
+  There is no second Devin transport. An Agent Client Protocol adapter that spawned a local
+  `devin acp` child once existed under the `devin-cli` adapter id and was removed: the CLI's
+  credential turned out to be the ordinary cloud token, so the child process bought nothing that
+  importing the token did not, and it cost a placeholder `buildRequest`, a disabled
+  `parseStream`, an identity-only `baseUrl`, and a subprocess running in the operator's tree.
+  `projectDevinCliAuthMode` rewrites any saved row that still names the retired adapter id.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
@@ -70,3 +74,4 @@ see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routi
 
 Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
+Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.

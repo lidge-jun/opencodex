@@ -45,8 +45,8 @@ export function isMuseSubscriptionUsagePayload(payload: unknown): boolean {
  * `subscription.tier` is deliberately dropped. It is an opaque numeric id, not the plan
  * label the Muse CLI prints, so surfacing it would show a meaningless number.
  */
-export function parseMuseSubscriptionUsage(payload: unknown): ProviderQuota | null {
-  const subscription = asRecord(asRecord(payload)?.subscription);
+export function museUsageWindowsToQuota(usage: unknown): ProviderQuota | null {
+  const subscription = asRecord(usage);
   if (!subscription) return null;
 
   const quota: ProviderQuota = { updatedAt: Date.now() };
@@ -92,4 +92,16 @@ export function parseMuseSubscriptionUsage(payload: unknown): ProviderQuota | nu
   // nothing — returning a bare `updatedAt` would publish an empty row that the GUI
   // would render as a quota with no bars.
   return sawWindow ? quota : null;
+}
+
+/**
+ * The streaming-frame entry point.
+ *
+ * Kept as a thin adapter over the shared mapper: the frame nests the same two windows
+ * under `subscription`, the muse-code/key response nests them under `subs_usage`
+ * (devlog/_plan/260912_muse_device_oauth/001 C). Two parsers would drift, and the
+ * five-hour-window discrimination above is the part that must not.
+ */
+export function parseMuseSubscriptionUsage(payload: unknown): ProviderQuota | null {
+  return museUsageWindowsToQuota(asRecord(payload)?.subscription);
 }

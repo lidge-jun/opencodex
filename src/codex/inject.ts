@@ -1,3 +1,4 @@
+import { contextCompatibleBaseLine } from "./context-compat";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import {
   atomicWriteFile,
@@ -396,7 +397,7 @@ export function setRootOpenaiBaseUrl(
   const lines = content.split("\n");
   const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = buildOpenaiBaseUrlLine(portOrTarget, hostname);
+  const key = contextCompatibleBaseLine(content, buildOpenaiBaseUrlLine(portOrTarget, hostname));
 
   for (let i = 0; i < rootEnd; i++) {
     if (!isRootOpenaiBaseUrlLine(lines[i])) continue;
@@ -431,7 +432,7 @@ function setRootOpenaiBaseUrlForTarget(
   const lines = content.split("\n");
   const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = buildOpenaiBaseUrlLineForTarget(target);
+  const key = contextCompatibleBaseLine(content, buildOpenaiBaseUrlLineForTarget(target));
   for (let index = 0; index < rootEnd; index += 1) {
     if (!isRootOpenaiBaseUrlLine(lines[index])) continue;
     const markerOwned = index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER);
@@ -894,6 +895,8 @@ export function chooseCatalogPathForInjection(
 export interface CodexInjectResult {
   success: boolean;
   message: string;
+  /** Structured read-only history preflight refusal; never parsed from display text. */
+  historyPreflightFailureReason?: string;
   status?: "skipped";
   /** `hub-gated` is the hub-role gate (#4236), distinct from the user's own OFF switch. */
   skippedReason?: "desired_disabled" | "desired_enabled" | "hub-gated";
@@ -901,7 +904,11 @@ export interface CodexInjectResult {
 }
 
 class CodexHistoryPreflightRefusal extends Error {}
-class CodexRestoreRefusal extends Error {}
+class CodexRestoreRefusal extends Error {
+  constructor(readonly config: CodexRestoreConfigResult) {
+    super(config.message);
+  }
+}
 let historyArtifactStageForTests: ((stage: string) => void) | undefined;
 export function setHistoryArtifactStageForTests(hook: typeof historyArtifactStageForTests): void {
   historyArtifactStageForTests = hook;
@@ -1187,6 +1194,7 @@ async function injectCodexConfigImpl(
   if (historyPreflightError) {
     return {
       success: false,
+      historyPreflightFailureReason: historyPreflightError,
       message: `Codex config injection refused: ${historyPreflightError}. `
         + "Existing provider definitions and conversation files were preserved. "
         + "Paginated history requires native-writer coordination; do not run legacy recovery or retry this transition blindly.",
@@ -1911,6 +1919,13 @@ export function skippedRestoreEnvelope(success: boolean, message: string): Codex
   };
 }
 
+/** Config was attempted and failed; downstream artifacts were never attempted. */
+function failedConfigRestoreEnvelope(config: CodexRestoreConfigResult): CodexNativeRestoreResult {
+  const result = skippedRestoreEnvelope(false, config.message);
+  result.artifacts.config = config;
+  return result;
+}
+
 /** The config/profile half of a native restore, reported as one artifact. */
 function restoreCodexConfigInline(kind = "sync"): CodexRestoreConfigResult {
   const preImages = captureCodexPreImages();
@@ -1937,6 +1952,12 @@ function restoreCodexConfigInlineImpl(kind: string): CodexRestoreConfigResult {
     const restored = journal.configRestored
       ? { success: true, message: "Codex config restored from opencodex journal." }
       : removeCodexConfig({ preserveProfile: journal.profileRestored || journal.profileChanged });
+    if (restored.success) {
+      // A successful journal/fallback write can race native history migration too.
+      // Refuse here while preimage compensation and the remove transaction can roll back.
+      const finalHistoryError = preflightCodexHistoryInjection(false, false);
+      if (finalHistoryError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${finalHistoryError}.` };
+    }
     return restored.success
       ? {
           state: "ok",
@@ -2004,7 +2025,7 @@ export async function restoreNativeCodexAsync(
     return await restoreNativeCodexAsyncImpl(options);
   } catch (error) {
     if (!(error instanceof CodexRestoreRefusal)) throw error;
-    return skippedRestoreEnvelope(false, error.message);
+    return failedConfigRestoreEnvelope(error.config);
   }
 }
 
@@ -2084,7 +2105,7 @@ async function restoreNativeCodexAsyncImpl(
         try {
           restored = restoreCodexConfigInline(eligibility.kind);
           // Throw inside N so the published remove transition rolls back too.
-          if (restored.state === "failed") throw new CodexRestoreRefusal(restored.message);
+          if (restored.state === "failed") throw new CodexRestoreRefusal(restored);
         } catch (error) {
           const compensated = restoreCodexPreImages(preImages);
           if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
@@ -2128,7 +2149,7 @@ async function restoreNativeCodexAsyncImpl(
     config = restoreCodexConfigInline(eligibility.kind);
   }
 
-  if (config.state === "failed") return skippedRestoreEnvelope(false, config.message);
+  if (config.state === "failed") return failedConfigRestoreEnvelope(config);
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   const outcome = await runCodexHistoryJob({
     ...resolveCodexHistoryJobTarget(),
@@ -2185,7 +2206,7 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
   // catalog we actually wrote (#1798).
   const journaledCatalogPath = journaledInjectedCatalogPath();
   const config = restoreCodexConfigInline();
-  if (config.state === "failed") return skippedRestoreEnvelope(false, config.message);
+  if (config.state === "failed") return failedConfigRestoreEnvelope(config);
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   // Design B (loopback) steady state: threads are already tagged openai, so prove the
   // no-op with a readonly probe instead of write-opening a DB the Codex app may hold

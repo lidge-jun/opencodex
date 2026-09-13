@@ -1,0 +1,13 @@
+# Pending browser authentication guidance
+
+Class C3; dependency roadmap. Reuse existing connected-client state and browser-auth components. Target #4206 and #4208 together because both concern the same pending local-dashboard pairing journey.
+
+MODIFY owning dashboard pending-auth component and bootstrap state: distinguish a reachable connected machine awaiting hub browser authentication from a stopped standalone proxy. Show configured hub identity/origin, explain that machine enrollment and browser session are separate, offer the current origin-specific existing pairing/authentication action. Preserve revoked/expired/unreachable states and their existing retry actions; do not suggest ocx start while the local runtime is reachable. Derive the next action from current origin + configured hub instead of a hardcoded localhost URL. No credentials appear in visible copy/URLs.
+
+MODIFY all gui/src/i18n locale dictionaries with meaningful labels. Extend existing pending-auth/dashboard tests for local origin, remote hub origin, pending, authenticated, expired/revoked and unavailable standalone; positive browser auth transitions into connected dashboard. Exact files: gui/src/App.tsx, api.ts, pages/dashboard-core-poll.ts, pages/use-dashboard-data.ts and pages/Dashboard.tsx consume a classified authentication/error state instead of a boolean. Existing connect-pairing.ts and connect-pairing-transport.ts own hub identity and origin-specific action. Define the error classification in api.ts at response ingress; consume in polling and Dashboard; reset on authenticated success and pairing completion. No persistence/serialization for this UI state. Keep cached data with stale labeling when auth fails; do not erase a known hub into standalone offline. Public hub/browser-pairing guidance is updated with the same distinction. No service restart or live auth reconfiguration.
+
+Hosted component suite and screenshot artifact of the rendered pending state required for final delivery; local GUI tests/build NOT RUN. Static source or mockup is not rendered application evidence.
+
+Accepted OPS-PAIR-01/02. Cases include browser session expiry and post-pairing refresh, local and hub origin guidance, code versus API/admin-key explanation, and operator handoff text. Prefer existing component tests; new test files only where needed.
+
+Reflection amendments: reuse existing api.ts SESSION_UNAVAILABLE_EVENT and App sharedSessionReady; subscribe in App, emit on terminal 401 expiry (not aborted requests), reset/read refresh on successful pairing. Do not create duplicate auth state. Poll classification and pairing errors distinguish HTTP auth refusal, transport/network, and invalid responses; aborted work does not show a failure.

@@ -91,6 +91,8 @@ export interface AdapterRequest {
     convertedRoutedToolSearchNames?: ReadonlySet<string>;
     /** Upstream-only aliases for namespace tools flattened in this request. */
     convertedRoutedNamespaceToolAliases?: ReadonlyMap<string, { namespace: string; name: string; kind: "function" | "custom" }>;
+    /** Upstream-only <=64-char aliases for Meta Muse tool names rewritten in this request. */
+    convertedMuseToolNameAliases?: ReadonlyMap<string, string>;
     /** Releases observation of a serialized request body after its final fetch attempt settles. */
     releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */

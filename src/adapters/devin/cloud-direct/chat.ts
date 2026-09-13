@@ -120,6 +120,9 @@ export function allocateCascadeId(): string {
  *   #4 num_tokens: int                          (rough estimate)
  *   #5 safe_for_code_telemetry: bool            (1 = ok to log)
  *   #10 images: repeated ImageData              (multimodal)
+ *   #11 thinking: string                        (assistant reasoning, replayed)
+ *   #12 signature: string                       (opaque attestation for #11)
+ *   #18 signature_type: string
  * }
  *
  * ImageData (exa.codeium_common_pb.ImageData) {
@@ -153,7 +156,13 @@ function encodeChatToolCall(tc: { id: string; name: string; arguments: string })
 function encodeChatMessagePrompt(
   content: ContentPart[],
   source: number,
-  opts?: { toolCallId?: string; toolCalls?: Array<{ id: string; name: string; arguments: string }> },
+  opts?: {
+    toolCallId?: string;
+    toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    thinking?: string;
+    signature?: string;
+    signatureType?: string;
+  },
 ): Buffer {
   const textParts = content.filter((p): p is { type: 'text'; text: string } => p.type === 'text');
   const imageParts = content.filter((p): p is { type: 'image'; mimeType: string; base64Data: string; caption?: string } => p.type === 'image');
@@ -178,6 +187,14 @@ function encodeChatMessagePrompt(
   for (const img of imageParts) {
     parts.push(encodeMessage(10, encodeImageData(img)));
   }
+  // Reasoning replay. This adapter used to assert that Cognition has no
+  // reasoning-replay field and drop the assistant's own thinking, so a
+  // reasoning model restarted its chain on every turn of a tool loop. Two
+  // independent clients of the same service write it here: #11 thinking,
+  // #12 signature, #18 signature_type on the assistant prompt.
+  if (opts?.thinking) parts.push(encodeString(11, opts.thinking));
+  if (opts?.signature) parts.push(encodeString(12, opts.signature));
+  if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
   return Buffer.concat(parts);
 }
 
@@ -342,6 +359,15 @@ export interface ChatHistoryItem {
    * each ChatToolCall has #1 id, #2 name, #3 arguments_json).
    */
   tool_calls?: Array<{ id: string; name: string; arguments: string }>;
+  /**
+   * For `role: 'assistant'` only — the model's own reasoning from that turn,
+   * replayed so a reasoning model does not restart its chain on the next one.
+   * Encoded as ChatMessagePrompt #11 with its #12 signature and #18
+   * signature_type.
+   */
+  thinking?: string;
+  signature?: string;
+  signature_type?: string;
 }
 
 /**
@@ -399,6 +425,12 @@ export interface ToolDef {
 export type CloudChatEvent =
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
+  /**
+   * `delta_signature` (#10) — the opaque attestation for the reasoning this
+   * turn produced. Without decoding it there is nothing to put in the prompt's
+   * #12 on the next turn, so the replay would always be unsigned.
+   */
+  | { kind: 'reasoning_signature'; signature: string }
   | { kind: 'tool_call_start'; id: string; name: string }
   | {
       kind: 'tool_call_args';
@@ -592,6 +624,9 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
         {
           toolCallId: m.role === 'tool' ? m.tool_call_id : undefined,
           toolCalls: m.role === 'assistant' ? m.tool_calls : undefined,
+          thinking: m.role === 'assistant' ? m.thinking : undefined,
+          signature: m.role === 'assistant' ? m.signature : undefined,
+          signatureType: m.role === 'assistant' ? m.signature_type : undefined,
         },
       ),
     ),
@@ -669,7 +704,30 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
  * any non-zero to 'tool_calls' for now (and let the caller fall back to
  * 'stop' if no tool_call deltas were emitted).
  */
-function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
+export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
+  // Field 7 is `ModelUsageStats`, the authoritative per-turn accounting, and
+  // field 28 is `response_dimension_groups` — the rows the IDE renders. The
+  // decoder below reads 28 because a capture happened to expose metric-looking
+  // strings there (`ResponseDimension.uid` is its field 5, which is what the
+  // entry walker treats as `metric_id`), and that works only when the service
+  // chose to render cache rows. Field 7 carries cache read and cache write
+  // unconditionally, which is why a cached Devin turn used to report a bare
+  // total with no cached subset.
+  //
+  // Both fields arrive in the same message and the adapter keeps the last usage
+  // event it sees, so this cannot be a plain "decode both": field 7 has to
+  // suppress field 28 within the message. It is yielded before the rest of the
+  // frame rather than after it, so a frame that also carries finish (field 5)
+  // still reports usage ahead of the turn's end, and the order does not depend
+  // on where the service happens to place the field.
+  let authoritativeUsage: CloudChatEvent | null = null;
+  for (const f of iterFields(proto)) {
+    if (f.num === 7 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      authoritativeUsage = decodeModelUsageStats(f.value as Buffer);
+      if (authoritativeUsage) break;
+    }
+  }
+  if (authoritativeUsage) yield authoritativeUsage;
   for (const f of iterFields(proto)) {
     if (f.num === 3 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       // Visible delta_text — what the user should SEE in the chat.
@@ -693,6 +751,9 @@ function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       // block instead of inline with the answer.
       const s = (f.value as Buffer).toString('utf8');
       if (s) yield { kind: 'reasoning', text: s };
+    } else if (f.num === 10 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      const s = (f.value as Buffer).toString('utf8');
+      if (s) yield { kind: 'reasoning_signature', signature: s };
     } else if (f.num === 6 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       let id: string | undefined;
       let name: string | undefined;
@@ -740,6 +801,7 @@ function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       // else stays 'stop' for 0/2/4-9/12/13
       yield { kind: 'finish', reason };
     } else if (f.num === 28 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      if (authoritativeUsage) continue;
       const usage = decodeUsageBlock(f.value as Buffer);
       if (usage) yield usage;
     }
@@ -834,6 +896,68 @@ function decodeUsageBlock(buf: Buffer): CloudChatEvent | null {
   };
 }
 
+/**
+ * `exa.codeium_common_pb.ModelUsageStats` at GetChatMessageResponse field 7.
+ *
+ *   ModelUsageStats {
+ *     #2 input_tokens        uint64
+ *     #3 output_tokens       uint64
+ *     #4 cache_write_tokens  uint64
+ *     #5 cache_read_tokens   uint64
+ *   }
+ *
+ * Plain varints, so the field-28 entry walker — which descends a
+ * length-delimited sub-message and reads a fixed32 float — cannot read this at
+ * all. It needs its own decoder.
+ *
+ * Whether Cognition's `input_tokens` already includes the cached tokens is not
+ * settled. oh-my-pi sums all four into its total, which suggests exclusive, but
+ * that is their convention rather than a measurement of this field. Guessing
+ * wrong in the inclusive direction is the expensive mistake: `normalizeCostTokens`
+ * only rejects `read + write > input`, so an inflated input passes validation and
+ * bills cached tokens at the uncached rate.
+ *
+ * So the shape is derived from the frame instead of assumed. An input that
+ * already covers the cache is left alone; one that cannot possibly cover it is
+ * folded. Both branches agree on the case that motivated this — a 58k prompt
+ * that is 57k cache read and 1k fresh reads as 58k with a 57k cached subset —
+ * and neither can emit `read + write > input`. Replace the derivation with a
+ * fixed mapping once a live frame settles the question.
+ */
+export function decodeModelUsageStats(buf: Buffer): CloudChatEvent | null {
+  let wireInput: number | undefined;
+  let output: number | undefined;
+  let cacheWrite: number | undefined;
+  let cacheRead: number | undefined;
+  for (const f of iterFields(buf)) {
+    if (f.wire !== 0) continue;
+    const n = Number(f.value);
+    if (!Number.isFinite(n) || n < 0) continue;
+    if (f.num === 2) wireInput = n;
+    else if (f.num === 3) output = n;
+    else if (f.num === 4) cacheWrite = n;
+    else if (f.num === 5) cacheRead = n;
+  }
+  if (wireInput === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return null;
+  }
+  const read = cacheRead ?? 0;
+  const write = cacheWrite ?? 0;
+  const rawInput = wireInput ?? 0;
+  const promptTokens = rawInput >= read + write ? rawInput : rawInput + read + write;
+  const completionTokens = output ?? 0;
+  const total = promptTokens + completionTokens;
+  return {
+    kind: 'usage',
+    promptTokens,
+    completionTokens,
+    totalTokens: total > 0 ? total : undefined,
+    cachedInputTokens: cacheRead,
+    cacheCreationInputTokens: cacheWrite,
+    reasoningTokens: undefined,
+  };
+}
+
 // ----------------------------------------------------------------------------
 // Public API: streamChat
 // ----------------------------------------------------------------------------
@@ -864,13 +988,63 @@ export interface CloudChatRequest {
 }
 
 export class CloudChatError extends Error {
-  constructor(message: string, public readonly code?: string, public readonly traceId?: string) {
+  constructor(
+    message: string,
+    public readonly code?: string,
+    public readonly traceId?: string,
+    /**
+     * Upstream HTTP status, when the failure was a status line rather than a
+     * Connect trailer. Without it the adapter's message reaches
+     * `inferHttpStatusFromAdapterMessage`, which does not parse `HTTP 429`, so
+     * a live rate limit was classified 502 and core's failover never rotated.
+     */
+    public readonly status?: number,
+  ) {
     super(message);
     this.name = 'CloudChatError';
   }
 }
 
 const TRACE_ID_RE = /\(trace ID: ([0-9a-f]+)\)/i;
+
+/**
+ * A quota refusal Cognition delivers as `permission_denied`.
+ *
+ * "Your limit will reset in 13 minutes" and "Reached overall message rate
+ * limit" are caps, not authorization failures. Classified as 403 they invite
+ * the client to retry straight into a live cap; as 429 the proxy backs off and
+ * can rotate.
+ */
+const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of credits)\b/i;
+
+/**
+ * Connect error code to HTTP status.
+ *
+ * Without this only the HTTP status line reached the adapter, so a cap or an
+ * expired credential delivered as an EOS trailer fell through to
+ * `inferHttpStatusFromAdapterMessage` and became a generic 502 — which is not
+ * retryable-with-backoff, not an auth prompt, and not something core's failover
+ * acts on.
+ */
+export function connectTrailerHttpStatus(code: string | undefined, message: string): number | undefined {
+  if (code === 'permission_denied' && TRAILER_QUOTA_RE.test(message)) return 429;
+  switch (code) {
+    case 'unauthenticated': return 401;
+    case 'permission_denied': return 403;
+    case 'resource_exhausted': return 429;
+    case 'not_found': return 404;
+    case 'unavailable': return 503;
+    case 'deadline_exceeded': return 504;
+    case 'unimplemented': return 501;
+    case 'invalid_argument':
+    case 'failed_precondition':
+    case 'out_of_range': return 400;
+    case 'internal':
+    case 'unknown':
+    case 'data_loss': return 502;
+    default: return undefined;
+  }
+}
 
 /**
  * Stream chat events from the cloud. Yields CloudChatEvent (text deltas, tool
@@ -987,7 +1161,11 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // The body is not echoed into the message. This error reaches the adapter's
     // error event and /api/logs, and a Connect error can quote the request that
     // produced it - which is the request holding the api_key.
-    throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined);
+    //
+    // The status line is carried on the error. A cap or an expired credential
+    // delivered instead as a Connect EOS trailer is mapped by
+    // connectTrailerHttpStatus at the trailer sites below.
+    throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined, undefined, resp.status);
   }
   if (!resp.body) {
     throw new CloudChatError('GetChatMessage response had no body stream');
@@ -1214,7 +1392,12 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         `service accepts. If the request is unchanged and this is new, the ` +
         `account's model access is the next thing to check. ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
-      throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
+      throw new CloudChatError(
+        enriched,
+        trailerError.code,
+        trailerError.traceId,
+        connectTrailerHttpStatus(trailerError.code, trailerError.message),
+      );
     }
     // Cognition also returns `permission_denied` when a tool description
     // contains a blocklisted phrase that the sanitizer above did not catch
@@ -1234,9 +1417,19 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         // was a phrase match at all.
         `(cloud message: ${trailerError.message}) ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
-      throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
+      throw new CloudChatError(
+        enriched,
+        trailerError.code,
+        trailerError.traceId,
+        connectTrailerHttpStatus(trailerError.code, trailerError.message),
+      );
     }
-    throw new CloudChatError(trailerError.message, trailerError.code, trailerError.traceId);
+    throw new CloudChatError(
+      trailerError.message,
+      trailerError.code,
+      trailerError.traceId,
+      connectTrailerHttpStatus(trailerError.code, trailerError.message),
+    );
   }
   // Truncation detection: the cloud always terminates a successful stream
   // with an EOS trailer. If we hit `done` from the body reader without one,

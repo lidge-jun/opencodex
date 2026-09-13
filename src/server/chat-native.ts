@@ -105,19 +105,27 @@ function normalizePinnedChatEffort(options: HandleNativeChatOptions): void {
   const from = typeof chatBody.reasoning_effort === "string" ? chatBody.reasoning_effort : undefined;
   logCtx.requestedEffort = from;
   // Compaction is normally excluded by native-route eligibility; preserve that boundary here too.
-  const pinned = chatBody.compaction_trigger === undefined
+  const compaction = chatBody.compaction_trigger !== undefined;
+  const pinned = !compaction
     ? resolvePinnedEffort(route, selector, config)
     : undefined;
+  let normalizeForWire = false;
   if (pinned !== undefined) {
     logCtx.requestedEffort = from ? `${from}->${pinned}` : pinned;
     if (pinned === "none") delete chatBody.reasoning_effort;
     else chatBody.reasoning_effort = pinned;
-    // The native lane historically passes caller effort through, including with caps set.
-    // Only a newly operator-pinned value enters the cap and provider-mapping pipeline.
-    if (effortCapAppliesTo(chatCollabSurface(chatBody), req.headers, config)) {
-      const capped = applyChatEffortCap(chatBody, req.headers, config, supportedLadderFor(route));
-      if (capped) logCtx.requestedEffort = `${logCtx.requestedEffort}->${capped.to}`;
+    normalizeForWire = true;
+  }
+  // A qualifying turn's ceiling is independent of whether an operator pin resolved.
+  if (effortCapAppliesTo(chatCollabSurface(chatBody), req.headers, config, compaction)) {
+    const capped = applyChatEffortCap(chatBody, req.headers, config, supportedLadderFor(route));
+    if (capped) {
+      logCtx.requestedEffort = `${logCtx.requestedEffort ?? capped.from}->${capped.to}`;
+      normalizeForWire = true;
     }
+  }
+  // Normalize operator-pinned values and cap rewrites; otherwise preserve caller spelling.
+  if (normalizeForWire) {
     const effort = typeof chatBody.reasoning_effort === "string" ? chatBody.reasoning_effort : undefined;
     const wireEffort = mapReasoningEffort(route.provider, route.modelId, effort);
     if (wireEffort === undefined) delete chatBody.reasoning_effort;

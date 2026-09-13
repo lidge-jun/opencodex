@@ -11,7 +11,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -33,11 +33,13 @@
     },
     "codex-integration": {
       "match": [
+        "^context-compat\\.test\\.ts$",
         "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
       ]
     },
     "server": {
       "match": [
+        "^context-history\\.test\\.ts$",
         "^aside-profiles-routes",
         "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-"
       ]
@@ -109,7 +111,7 @@
     "clients": {
       "match": [
         "^aside-profile(?!s-routes)",
-        "^cline-(?:client|writer)\\.test\\.ts$",
+        "^cline-(?:client|writer)(?:-|[.])",
         "^(?:desktop|omp|pi|prime|remote|sync)-"
       ]
     },
@@ -217,7 +219,6 @@
     "antigravity-baseurl-override.test.ts": "adapters/google",
     "antigravity-static-catalog.test.ts": "adapters/google",
     "api-access-endpoints.test.ts": "server",
-    "audio-transcriptions.test.ts": "server",
     "api-catalog-route.test.ts": "server",
     "api-codex-log-guard-compact.test.ts": "server",
     "api-codex-log-guard-protection.test.ts": "server",
@@ -245,6 +246,7 @@
     "aside-profiles-routes.test.ts": "server",
     "aside-profiles.test.ts": "clients",
     "assert-mergeable-review.test.ts": "ci-workflows",
+    "audio-transcriptions.test.ts": "server",
     "auto-compact-budget.test.ts": "providers",
     "autostart-health.test.ts": "service",
     "azure-adapter.test.ts": "providers",
@@ -280,6 +282,7 @@
     "catalog-vision-sidecar-modalities.test.ts": "codex-integration",
     "catalog-zero-credit-picker.test.ts": "codex-integration",
     "chat-completions-endpoint.test.ts": "responses",
+    "chat-conversation-affinity.test.ts": "responses",
     "chat-json-sse-fallback.test.ts": "responses",
     "chat-refusal.test.ts": "responses",
     "chatgpt-device-auth.test.ts": "oauth",
@@ -420,6 +423,7 @@
     "codex-cli-update-zero-effect.test.ts": "codex-integration",
     "codex-composed-acceptance.test.ts": "codex-integration",
     "codex-config-generation.test.ts": "codex-integration",
+    "codex-context-owner.test.ts": "codex-integration",
     "codex-convergence-account-selectors.test.ts": "codex-integration",
     "codex-convergence-contract.test.ts": "codex-integration",
     "codex-cooldown-recovery.test.ts": "codex-integration",
@@ -537,6 +541,10 @@
     "consume-for-inspection-cancel.test.ts": "server",
     "container-bootstrap.test.ts": "service",
     "context-cap-unknown-window.test.ts": "providers",
+    "context-compat.test.ts": "codex-integration",
+    "context-history-ownership.test.ts": "server",
+    "context-history.test.ts": "server",
+    "context-window-seed-repair.test.ts": "providers",
     "continuation-dedup.test.ts": "responses",
     "core-lab-boundary.test.ts": "lab",
     "cost-cap-unknown-evidence.test.ts": "usage",
@@ -626,7 +634,8 @@
     "desktop-remote-store.test.ts": "clients",
     "destination-policy-resolved.test.ts": "routing",
     "devin-adapter.test.ts": "providers",
-    "devin-cli-adapter.test.ts": "providers",
+    "devin-cli-authmode-migration.test.ts": "providers",
+    "devin-cli-login.test.ts": "providers",
     "devin-hardening.test.ts": "providers",
     "digitalocean-scaleway-provider.test.ts": "providers",
     "docs-429-failover-claims.test.ts": "ci-workflows",
@@ -674,7 +683,6 @@
     "gemini-inline.test.ts": "images",
     "gemini-web-search.test.ts": "adapters/google",
     "generic-oauth-failover.test.ts": "oauth",
-    "pool-kernel-generic-sweep.test.ts": "oauth",
     "github-copilot-account-origin.test.ts": "providers/github-copilot",
     "github-copilot-oauth.test.ts": "providers/github-copilot",
     "github-copilot-sse-rewrite.test.ts": "providers/github-copilot",
@@ -862,7 +870,6 @@
     "model-pinned-effort.test.ts": "codex-integration",
     "model-presets.test.ts": "providers",
     "model-rename-migration.test.ts": "providers",
-    "context-window-seed-repair.test.ts": "providers",
     "model-selection-guidance.test.ts": "cli",
     "model-visibility-management-api.test.ts": "codex-integration",
     "models-feedback-callback.test.ts": "gui",
@@ -877,6 +884,7 @@
     "muse-passive-quota-observation.test.ts": "providers",
     "muse-spark-web-search-compat.test.ts": "providers",
     "muse-subscription-usage.test.ts": "providers",
+    "muse-tool-name-alias.test.ts": "providers",
     "namespace-tool-compat.test.ts": "responses",
     "native-alias-maintainer-regressions.test.ts": "codex-integration",
     "native-claude-code-toggle.test.ts": "codex-integration",
@@ -948,9 +956,9 @@
     "openai-chat-hardening.test.ts": "adapters/openai",
     "openai-chat-invalid-tool-call-diagnostics.test.ts": "adapters/openai",
     "openai-chat-model-suffix.test.ts": "adapters/openai",
-    "openai-chat-path-override.test.ts": "adapters/openai",
     "openai-chat-native-policy.test.ts": "adapters/openai",
     "openai-chat-parallel-stream.test.ts": "adapters/openai",
+    "openai-chat-path-override.test.ts": "adapters/openai",
     "openai-chat-system-order.test.ts": "adapters/openai",
     "openai-chat-tool-result-images.test.ts": "adapters/openai",
     "openai-chat-url.test.ts": "adapters/openai",
@@ -989,6 +997,7 @@
     "plan-video.test.ts": "videos",
     "plan.test.ts": "images",
     "policy-execution.test.ts": "routing",
+    "pool-kernel-generic-sweep.test.ts": "oauth",
     "port-reclaim.test.ts": "server",
     "ports.test.ts": "server",
     "prime-client.test.ts": "clients",
@@ -1057,6 +1066,9 @@
     "release-notes.test.ts": "ci-workflows",
     "release-version-line.test.ts": "ci-workflows",
     "remote-catalog.test.ts": "clients",
+    "remote-control-prototype.test.ts": "clients",
+    "remote-workspace-protocol.test.ts": "clients",
+    "remote-workspace-rpc-framing.test.ts": "clients",
     "remove-tree-helper.test.ts": "lib",
     "repo-hygiene.test.ts": "ci-workflows",
     "request-decompress.test.ts": "usage",
@@ -1095,6 +1107,7 @@
     "responses-inbound-store-default.test.ts": "responses",
     "responses-item-id-repair.test.ts": "responses",
     "responses-json-events.test.ts": "responses",
+    "responses-muse-tool-name-alias.test.ts": "responses",
     "responses-native-main-refresh.test.ts": "responses",
     "responses-opaque-blob-recovery.test.ts": "responses",
     "responses-parser-agent-message.test.ts": "responses",
@@ -1195,7 +1208,6 @@
     "sidecar-settings-web-search-stream.test.ts": "vision",
     "sidecar-tracker.test.ts": "vision",
     "skill-ocx.test.ts": "ci-workflows",
-    "structure-ssot.test.ts": "ci-workflows",
     "slug-codec.test.ts": "codex-integration",
     "sponsor-presets.test.ts": "providers",
     "sse-client-frame-bounds.test.ts": "responses",
@@ -1227,6 +1239,7 @@
     "storage-worker-teardown-isolate.test.ts": "storage",
     "stream-aborted-marker.test.ts": "server",
     "strict-semver.test.ts": "lib",
+    "structure-ssot.test.ts": "ci-workflows",
     "subagent-context-staleness.test.ts": "routing",
     "subagent-defaults.test.ts": "routing",
     "subagent-fallback-handle-responses.test.ts": "routing",
@@ -1360,9 +1373,7 @@
     "zhipu-bigmodel-responses-quota.test.ts": "providers",
     "zz-ci-api-usage-isolation.test.ts": "ci-workflows",
     "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
-    "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
-    "devin-cli-login.test.ts": "providers",
-    "devin-cli-authmode-migration.test.ts": "providers"
+    "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
   },
   "migrated": [
     "adapters",

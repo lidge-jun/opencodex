@@ -12,10 +12,8 @@ License/source notes for the additional candidates are recorded in
 
 Export-client marks (used by the API tab's connect rows, not the provider list):
 
-- `cline-color.svg` is reused from the existing provider-icon baseline described
-  above for Cline CLI, the same Cline brand. Its repository history predates this
-  client integration (blob introduced in `e088d46e94b453b848bf7e46dfc5bb069d64503b`).
-  The integration does not modify the SVG or claim a new asset license.
+- `cline-color.svg` — reuses the existing provider mark already tracked in this directory
+  for Cline CLI; no new image was imported for the file integration.
 
 - `pi.svg` — fetched 2026-08-02 from `https://pi.dev/favicon.svg`, the Pi
   project's own favicon, unmodified. Pi is `earendil-works/pi`

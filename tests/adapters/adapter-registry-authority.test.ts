@@ -21,7 +21,6 @@ const EXPECTED_ADAPTER_NAMES = {
   azure: "azure-openai",
   "azure-openai": "azure-openai",
   cursor: "cursor",
-  "devin-cli": "devin-cli",
   devin: "devin",
   "mimo-free": "mimo-free",
   qoder: "qoder",
