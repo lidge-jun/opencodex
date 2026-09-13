@@ -77,6 +77,17 @@ export async function handleRestartScopeAfterWrite(
   log: Pick<Console, "log" | "error">,
 ): Promise<RestartScopeOutcome> {
   const { listCodexDesktopAppPids } = await import("../codex/desktop-app-restart");
+  // KNOWN LIMITATION on Windows. The exclusion matches pids against the discovered
+  // desktop tree, and the Windows probe enumerates only ChatGPT.exe, while Windows
+  // app-servers run as codex.exe / codex-code-mode-host. They therefore never match and
+  // still receive SIGTERM before the app quits, so Windows keeps the double interruption
+  // this exclusion removes on macOS and Linux - where the app-server executable does live
+  // under the bundle or install root and is enumerated.
+  //
+  // Closing it means widening the Windows probe past ChatGPT.exe, which is the same query
+  // that decides what may be killed, so it needs its own verification rather than being
+  // appended here. The restart itself is correct on Windows either way; the cost is one
+  // extra interrupted turn.
   const excludePids = scope.desktopApp ? (listCodexDesktopAppPids() ?? []) : [];
   const appServers = afterCatalogWriteHandleAppServers({
     restart: scope.appServers, log, excludePids,
