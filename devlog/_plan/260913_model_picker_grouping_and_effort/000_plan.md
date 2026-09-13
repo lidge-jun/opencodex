@@ -79,3 +79,20 @@ omp에 프로바이더 화이트리스트는 없다. `ompEfforts()`가 `ExportMo
 wp2와 wp3은 같은 한 줄짜리 원인을 공유하므로 PR 하나로 착지한다. 나누면 두 번째
 PR이 빈 변경이 된다.
 
+
+## wp1 종료 — 선례 확정
+
+| 찾는 것 | 결과 | 위치 |
+|---|---|---|
+| "Gemini 처리" 그룹핑 | Antigravity 전용 구현, 공용 프레임 아님 | 도입 `c07f2d63dc`, 회귀 복구 `06f8e7a944` |
+| 그 구현의 두 조각 | collapse + `modelReasoningEfforts` | `antigravity-models.ts:140-156`, `registry.ts:2139` |
+| Pi 추론 피커 선례 | Anthropic 동일 결함 수정 | `df416a439c` (#3454), 주석이 `registry.ts:403-408`에 남아 있음 |
+
+`registry.ts:403-408` 주석이 이번 건을 그대로 예고하고 있었다.
+
+> Without this the providers advertised no ladder at all, so every client that
+> keys its effort control off `reasoningEfforts` — Aside and the rest of the
+> Pi-shaped exports — wrote these models with no control.
+
+Devin은 그 문장의 다음 피해자였다.
+
