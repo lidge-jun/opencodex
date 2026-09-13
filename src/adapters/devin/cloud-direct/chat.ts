@@ -77,16 +77,34 @@ export const cloudStreamHeadersMsForTests = cloudStreamHeadersMs;
 const MAX_FRAME_LEN = 16 * 1024 * 1024;
 
 /**
- * Per-(apiKey, host) session/cascade ID cache. Cloud uses these for
- * server-side context caching across turns of the same conversation; if we
- * mint a fresh sessionId on every call (which we used to), every turn looks
- * like a brand-new session and the prompt-cache hit ratio is zero.
+ * PromptCacheOptions.type = EPHEMERAL. Marks the system prefix as a cache entry
+ * the server may reuse on the next turn of the same session.
+ */
+const PROMPT_CACHE_EPHEMERAL = 1;
+
+/**
+ * Per-identity session/cascade ID cache. Cloud uses these for server-side
+ * context caching across turns of the same conversation; if we mint a fresh
+ * sessionId on every call (which we used to), every turn looks like a
+ * brand-new session and the prompt-cache hit ratio is zero.
  * Single-process scope is enough: opencode lives in one runtime for a TUI
  * session, and CLI one-shots don't benefit from caching anyway.
  */
 interface SessionIds {
   sessionId: string;
   cascadeId: string;
+}
+
+/**
+ * Cache key for one Devin credential on one host.
+ *
+ * The credential itself used to be the Map key. Hashing it keeps the raw token
+ * out of any structure a heap dump or debugger would walk, and gives the other
+ * per-account caches a name they can share. 16 hex is 64 bits, which against a
+ * bounded single-process map is not a collision risk worth widening the key for.
+ */
+export function devinCacheIdentity(apiKey: string, host: string): string {
+  return crypto.createHash('sha256').update(`${host}\x1f${apiKey}`).digest('hex').slice(0, 16);
 }
 /**
  * Bounded the same way the adapter bounds its cascade-id map: a long-running
@@ -95,7 +113,7 @@ interface SessionIds {
 const SESSION_CACHE_MAX = 256;
 const sessionCache = new Map<string, SessionIds>();
 function getOrAllocateSessionIds(apiKey: string, host: string, cascadeIdOverride?: string): SessionIds {
-  const key = `${host}\x1f${apiKey}`;
+  const key = devinCacheIdentity(apiKey, host);
   let ids = sessionCache.get(key);
   if (!ids) {
     ids = {
@@ -115,9 +133,21 @@ function getOrAllocateSessionIds(apiKey: string, host: string, cascadeIdOverride
   return ids;
 }
 
-/** Drop the cached session IDs — call after logout so a new sign-in starts fresh. */
-export function clearSessionIds(): void {
-  sessionCache.clear();
+/**
+ * Drop the cached session for ONE identity, after that account signs out or is
+ * switched away from.
+ *
+ * This replaces a global clear(). The proxy serves several accounts from one
+ * process, so clearing every entry on a per-provider logout would strip the
+ * session and cascade of accounts that were mid-turn. That is why the global
+ * version was never safe to call, and why nothing ever called it.
+ *
+ * A turn already in flight is unaffected: it received its SessionIds object at
+ * request start and never re-reads the map, so it finishes on the session it
+ * began with and the next turn allocates fresh.
+ */
+export function invalidateSessionIdentity(identity: string): void {
+  sessionCache.delete(identity);
 }
 
 // ----------------------------------------------------------------------------
@@ -669,6 +699,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   //   #7  request_type (varint enum)
   //   #8  completion_configuration
   //   #10 tools (repeated ChatToolDefinition)
+  //   #13 prompt_cache_options
   //   #16 cascade_id (string)
   //   #21 chat_model_uid (string)
   //   #22 prompt_id (string)
@@ -682,6 +713,13 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     encodeVarintField(7, args.requestType ?? 5),
     encodeMessage(8, completion),
     ...toolParts,
+    // #13 prompt_cache_options: { type: EPHEMERAL }. Reusing a session id is only
+    // half of prompt caching — without this the server creates no cache entry and
+    // every turn re-reads the whole prefix, which is why the sessionId reuse above
+    // was not producing the hit ratio its comment claims. The native client sends
+    // it and records real savings; sending it unconditionally matches both the
+    // native client and CLIProxyAPIPlus, which places it outside its tools gate.
+    encodeMessage(13, encodeVarintField(1, PROMPT_CACHE_EPHEMERAL)),
     // #15 session model config: { id, turn, 4 }. Present on every verified
     // request.
     encodeMessage(15, Buffer.concat([

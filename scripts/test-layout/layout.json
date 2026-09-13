@@ -646,6 +646,7 @@
     "devin-cli-authmode-migration.test.ts": "providers",
     "devin-cli-login.test.ts": "providers",
     "devin-hardening.test.ts": "providers",
+    "devin-prompt-cache.test.ts": "providers",
     "devin-stream-deadline.test.ts": "providers",
     "digitalocean-scaleway-provider.test.ts": "providers",
     "docs-429-failover-claims.test.ts": "ci-workflows",
