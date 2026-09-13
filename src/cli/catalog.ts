@@ -82,7 +82,12 @@ export async function handleCatalogCommand(args: string[]): Promise<number> {
       // A desktop restart that was asked for and did not relaunch is an incomplete
       // restart, exactly like a surviving app-server. Without this the pull reports
       // ok: true while the picker the operator was fixing is still stale.
-      if (restartScope.desktopApp && !desktopAppRestarted) restartIncomplete = true;
+      // "Desktop app is not running" is the same nothing-to-do the app-server half
+      // already treats as success, so it must not read as an incomplete restart.
+      if (restartScope.desktopApp && !desktopAppRestarted
+        && outcome.desktopApp?.reason !== "no_targets") {
+        restartIncomplete = true;
+      }
       if (restart) {
         // A partial stop is not a restart. `restartCodexAppServers` reports failures and
         // survivors without throwing, so counting `stopped` alone reported success while a
@@ -90,7 +95,9 @@ export async function handleCatalogCommand(args: string[]): Promise<number> {
         codexRestarted = restart.failed.length === 0
           && restart.surviving.length === 0
           && restart.stopped.length === (processResult?.processes.length ?? -1);
-        restartIncomplete = !codexRestarted;
+        // Do not ASSIGN here: the desktop half may already have set this, and assigning
+        // would discard a failed desktop restart whenever any app-server was signalled.
+        if (!codexRestarted) restartIncomplete = true;
       }
     }
     if (restartIncomplete) {

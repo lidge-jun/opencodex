@@ -711,16 +711,16 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
 
   test("ocx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
     const syncCase = dispatchSource.slice(dispatchSource.indexOf("sync: async"), dispatchSource.indexOf("v2: async"));
-    expect(syncCase).toContain('includes("--restart-codex")');
+    expect(syncCase).toContain("readRestartScope(syncArgs");
     expect(syncCase).toContain("synced.catalogWritten || synced.cacheSynced");
-    expect(syncCase).toContain("afterCatalogWriteHandleAppServers");
-    expect(syncCase).toContain("restart: restartCodex");
+    expect(syncCase).toContain("handleRestartScopeAfterWrite");
+    expect(syncCase).toContain("handleRestartScopeAfterWrite(restartScope");
     expect(syncCase.indexOf("catalogWritten || synced.cacheSynced"))
-      .toBeLessThan(syncCase.indexOf("afterCatalogWriteHandleAppServers"));
+      .toBeLessThan(syncCase.indexOf("handleRestartScopeAfterWrite"));
     // No-write path must not call the handler outside the gate.
     const gatedBlock = syncCase.slice(syncCase.indexOf("if (synced.catalogWritten"));
-    expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
-    expect(syncCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
+    expect(gatedBlock).toContain("handleRestartScopeAfterWrite");
+    expect(syncCase.replace(gatedBlock, "")).not.toContain("handleRestartScopeAfterWrite");
   });
 
   test("--restart-codex restarts the desktop app on every platform (#2292 follow-up)", () => {
@@ -775,11 +775,11 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, { allowWhenDesiredDisabled: true })");
     const gate = 'if (invalidated.kind === "completed" && invalidated.value)';
     expect(syncCacheCase).toContain(gate);
-    expect(syncCacheCase).toContain("afterCatalogWriteHandleAppServers");
+    expect(syncCacheCase).toContain("handleRestartScopeAfterWrite");
     expect(syncCacheCase.indexOf(gate))
-      .toBeLessThan(syncCacheCase.indexOf("afterCatalogWriteHandleAppServers"));
+      .toBeLessThan(syncCacheCase.indexOf("handleRestartScopeAfterWrite"));
     const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf(gate));
-    expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
+    expect(gatedBlock).toContain("handleRestartScopeAfterWrite");
     expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });
 
