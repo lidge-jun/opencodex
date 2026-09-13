@@ -1,7 +1,7 @@
 import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
 import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
-import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../adapters/devin/live-models";
+import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_MODEL_EFFORTS, DEVIN_DEFAULT_EFFORTS } from "../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
@@ -1356,6 +1356,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     liveModels: true,
     defaultModel: "swe-2",
     modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
+    // Degraded-mode ladders only. Once a credential is present the account
+    // catalog supplies each base model its measured rungs; these two fields are
+    // what a signed-out picker and the Pi-shaped client exports fall back to.
+    modelReasoningEfforts: DEVIN_MODEL_EFFORTS,
+    reasoningEfforts: DEVIN_DEFAULT_EFFORTS,
   },
   {
     id: "xai",

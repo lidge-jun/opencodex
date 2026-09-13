@@ -1739,6 +1739,12 @@ async function fetchProviderModelsWithAuth(
           id,
           provider: name,
           ...(liveWindow ? { contextWindow: liveWindow } : {}),
+          // The account catalog names the effort variants each base model has, so
+          // its ladder is measured rather than assumed. Without this the entry
+          // inherits the generic routed ladder and offers rungs the model rounds
+          // away, and every client that keys an effort control off this field —
+          // the Pi-shaped exports — renders no control at all.
+          ...(liveResult.efforts[id]?.length ? { reasoningEfforts: liveResult.efforts[id] } : {}),
           ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
         } as CatalogModel;
       });

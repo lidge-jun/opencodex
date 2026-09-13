@@ -85,8 +85,61 @@ export function collapseDevinModelUid(uid: string): string {
   return parts.join("-");
 }
 
+/**
+ * The subset of catalog suffix tokens that are reasoning rungs.
+ *
+ * `fast`, `priority` and `1m` are service tiers and context variants, not effort.
+ * Offering them on a reasoning control would name a setting that does something
+ * else, so the collapse keeps stripping them while the ladder ignores them.
+ */
+const REASONING_RUNG_TOKENS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * The reasoning rungs a catalog UID carries, in ladder order.
+ *
+ * Cognition spells effort as a suffix on the model id, so the variants an account
+ * actually has ARE its ladder — and collapseDevinModelUid() was throwing exactly
+ * that evidence away. Reading it back is what lets every model advertise the rungs
+ * it can really run instead of inheriting the generic six-rung default.
+ */
+export function devinReasoningRungsOf(uid: string): string[] {
+  const parts = uid.split("-");
+  const rungs: string[] = [];
+  while (parts.length > 1 && EFFORT_TOKENS.has(parts[parts.length - 1]!)) {
+    const token = parts.pop()!;
+    if (REASONING_RUNG_TOKENS.has(token)) rungs.push(token);
+  }
+  return rungs;
+}
+
+/** Ladder order for display, matching the Codex rung order. */
+const RUNG_ORDER = ["none", "low", "medium", "high", "xhigh", "max"];
+export function sortDevinRungs(rungs: Iterable<string>): string[] {
+  return [...new Set(rungs)].sort((a, b) => RUNG_ORDER.indexOf(a) - RUNG_ORDER.indexOf(b));
+}
+
+/**
+ * Degraded-mode ladders, used only before the account catalog is readable.
+ *
+ * Only measured entries belong here. SWE-2 ships exactly three native lanes
+ * (see SWE2_EFFORT in src/adapters/devin.ts); inventing ladders for the rest
+ * would advertise rungs nobody verified, and the live catalog replaces this
+ * table as soon as a credential is present.
+ */
+export const DEVIN_MODEL_EFFORTS: Record<string, string[]> = {
+  "swe-2": ["medium", "high", "max"],
+};
+
+/**
+ * Provider-level fallback ladder. No `ultra`: Cognition has no such lane, and
+ * the Codex catalog re-adds its own top rungs anyway (src/codex/catalog/effort.ts).
+ * Clients that key an effort control off this list — the Pi-shaped exports — get
+ * a control instead of none.
+ */
+export const DEVIN_DEFAULT_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
 export type DevinUsableModelsResult =
-  | { ok: true; models: string[]; contextWindows: Record<string, number> }
+  | { ok: true; models: string[]; contextWindows: Record<string, number>; efforts: Record<string, string[]> }
   | { ok: false; error: "auth" | "http" | "empty" | "unknown"; detail?: string };
 
 /**
@@ -105,6 +158,8 @@ export async function fetchDevinUsableModels(opts: {
     if (!catalog) return { ok: false, error: "empty" };
     const bases = new Set<string>();
     const contextWindows: Record<string, number> = {};
+    // Effort rungs per base, recovered from the suffixes the collapse strips.
+    const rungs = new Map<string, Set<string>>();
     for (const entry of catalog.byUid.values()) {
       if (entry.disabled) continue;
       // Skip internal enum constants (e.g. MODEL_GPT_5_2_LOW, MODEL_PRIVATE_*).
@@ -112,6 +167,12 @@ export async function fetchDevinUsableModels(opts: {
       if (entry.modelUid.startsWith("MODEL_")) continue;
       const base = collapseDevinModelUid(entry.modelUid);
       bases.add(base);
+      const found = devinReasoningRungsOf(entry.modelUid);
+      if (found.length > 0) {
+        let set = rungs.get(base);
+        if (!set) { set = new Set(); rungs.set(base, set); }
+        for (const rung of found) set.add(rung);
+      }
       if (entry.contextWindow && entry.contextWindow > 0) {
         // Variants of one base can disagree: the opt-in `-1m` rows report a
         // larger window than the plain row of the same base, and both collapse
@@ -124,7 +185,13 @@ export async function fetchDevinUsableModels(opts: {
       }
     }
     if (bases.size === 0) return { ok: false, error: "empty" };
-    return { ok: true, models: [...bases].sort(), contextWindows };
+    const efforts: Record<string, string[]> = {};
+    for (const [base, set] of rungs) {
+      // A single rung is not a choice, so it is not a control. Advertising one
+      // would draw a picker whose only option is the value already in effect.
+      if (set.size > 1) efforts[base] = sortDevinRungs(set);
+    }
+    return { ok: true, models: [...bases].sort(), contextWindows, efforts };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/unauth|401|invalid token|login/i.test(message)) return { ok: false, error: "auth", detail: message };
