@@ -7,7 +7,7 @@
  * that attribution to a user as an explanation.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,6 +27,7 @@ const VALID_PROBE_OUTPUT = JSON.stringify([{
   role: "developer",
   content: [{ type: "input_text", text: "<skills_instructions>Skill text.</skills_instructions>" }],
 }]);
+const OVERSIZED_SOURCE_BYTES = 8 * 1024 * 1024 + 1;
 
 function message(text: string): string {
   return JSON.stringify([{ type: "message", role: "developer", content: [{ type: "input_text", text }] }]);
@@ -234,6 +235,38 @@ describe("base prompt source", () => {
       expect(result.layers["base-instructions"]).toMatchObject({
         text: null,
         reason: "unavailable",
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test.each([
+    ["catalog", "model_catalog_json", "catalog.json", "catalog-too-large"],
+    ["override", "model_instructions_file", "override.md", "override-too-large"],
+  ] as const)("reports an oversized %s source as unavailable", async (_label, key, fileName, reason) => {
+    const home = root();
+    const sourcePath = join(home, fileName);
+    writeFileSync(join(home, "config.toml"), `model = "gpt-test"\n${key} = "${fileName}"\n`);
+    writeFileSync(sourcePath, "", "utf8");
+    truncateSync(sourcePath, OVERSIZED_SOURCE_BYTES);
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.base).toMatchObject({
+        text: null,
+        reason,
+        model: "gpt-test",
+        sourcePath,
+        effectiveSourcePath: sourcePath,
+        representation: "unavailable",
+        effectiveTextAvailable: false,
       });
     } finally {
       if (previousHome === undefined) delete process.env.CODEX_HOME;

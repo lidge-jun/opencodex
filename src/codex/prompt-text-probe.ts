@@ -108,9 +108,12 @@ export interface BasePromptText {
     | "model-not-found"
     | "catalog-not-found"
     | "catalog-unreadable"
+    | "catalog-too-large"
     | "not-published"
+    | "config-too-large"
     | "override-empty"
     | "override-not-found"
+    | "override-too-large"
     | "override-unreadable";
   bytes: number;
   model: string | null;
@@ -149,15 +152,29 @@ function entryText(entry: RawEntry | null, key: string): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/** Keep local source reads bounded to the same size as the subprocess response. */
+const MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+function readBoundedPromptSource(path: string): string {
+  const metadata = statSync(path);
+  if (metadata.isFile() && metadata.size > MAX_PROBE_OUTPUT_BYTES) {
+    const error = new Error(`prompt source exceeds ${MAX_PROBE_OUTPUT_BYTES} bytes`) as NodeJS.ErrnoException;
+    error.code = "EFBIG";
+    throw error;
+  }
+  return readFileSync(path, "utf8");
+}
+
 function readBasePrompt(codexHome: string): BasePromptText {
   const configPath = join(codexHome, "config.toml");
   let configText: string;
   try {
-    configText = readFileSync(configPath, "utf8");
+    configText = readBoundedPromptSource(configPath);
   } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
     return {
       text: null,
-      reason: (error as NodeJS.ErrnoException).code === "ENOENT" ? "config-not-found" : "config-unreadable",
+      reason: code === "ENOENT" ? "config-not-found" : code === "EFBIG" ? "config-too-large" : "config-unreadable",
       bytes: 0,
       model: null,
       modelSource: configPath,
@@ -172,7 +189,15 @@ function readBasePrompt(codexHome: string): BasePromptText {
 
   const model = readRootTomlString(configText, "model");
   const catalogPath = readCodexCatalogPathForHome(codexHome);
-  const catalog = readCatalog(catalogPath);
+  const catalogTooLarge = (() => {
+    try {
+      const metadata = statSync(catalogPath);
+      return metadata.isFile() && metadata.size > MAX_PROBE_OUTPUT_BYTES;
+    } catch {
+      return false;
+    }
+  })();
+  const catalog = catalogTooLarge ? null : readCatalog(catalogPath);
   const catalogVersion = typeof catalog?.client_version === "string" ? catalog.client_version : null;
   const unavailable = (
     reason: BasePromptText["reason"],
@@ -204,7 +229,7 @@ function readBasePrompt(codexHome: string): BasePromptText {
       return unavailable("override-unreadable", configuredOverride, configuredOverride, "model-instructions-file");
     }
     try {
-      const text = readFileSync(overridePath, "utf8");
+      const text = readBoundedPromptSource(overridePath);
       if (text.trim().length === 0) {
         return unavailable("override-empty", overridePath, overridePath, "model-instructions-file");
       }
@@ -221,9 +246,10 @@ function readBasePrompt(codexHome: string): BasePromptText {
         effectiveSourceKind: "model-instructions-file",
         effectiveTextAvailable: true,
       };
-    } catch {
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
       return unavailable(
-        existsSync(overridePath) ? "override-unreadable" : "override-not-found",
+        code === "ENOENT" ? "override-not-found" : code === "EFBIG" ? "override-too-large" : "override-unreadable",
         overridePath,
         overridePath,
         "model-instructions-file",
@@ -231,7 +257,12 @@ function readBasePrompt(codexHome: string): BasePromptText {
     }
   }
 
-  if (!catalog) return unavailable(existsSync(catalogPath) ? "catalog-unreadable" : "catalog-not-found", catalogPath);
+  if (!catalog) {
+    return unavailable(
+      catalogTooLarge ? "catalog-too-large" : existsSync(catalogPath) ? "catalog-unreadable" : "catalog-not-found",
+      catalogPath,
+    );
+  }
   const entry = catalog.models?.find(candidate => candidate.slug === model || candidate.id === model) ?? null;
   if (!entry) return unavailable("model-not-found", catalogPath);
   const topLevel = entryText(entry, "base_instructions");
@@ -259,9 +290,6 @@ function readBasePrompt(codexHome: string): BasePromptText {
     effectiveTextAvailable: true,
   };
 }
-
-/** 8 MiB is far above any real prompt and far below anything that hurts the server. */
-const MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 interface ProbeCommand {
   binary: string;
