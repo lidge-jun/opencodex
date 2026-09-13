@@ -846,6 +846,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   defaultAliases: "editor",
   adapter: "editor",
   codexToolMode: "editor",
+  projectContext: "editor",
   requestPacing: "editor",
   mcpMaxTools: "editor",
   mcpMaxSchemaBytes: "editor",

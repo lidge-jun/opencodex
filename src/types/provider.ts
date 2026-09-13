@@ -289,6 +289,8 @@ export interface OcxProviderConfig {
    * version here instead of waiting for a code change. Absent uses the adapter's current default.
    */
   commandCodeVersion?: string;
+  /** Include bounded repository context in Command Code envelopes. Default omitted/off sends empty memory/taste/skills. */
+  projectContext?: "off" | "on";
   /**
    * Responses upstream that stores nothing server-side (DeepSeek documents "the API
    * is stateless"). Stateful request parameters are dropped, `store` is pinned false,
