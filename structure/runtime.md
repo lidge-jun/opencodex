@@ -208,6 +208,11 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 ## Remote Hub hardening ownership
 
+`src/cli/connect.ts` resolves only through the first valid local Codex runtime for catalog
+readiness, then reads that runtime's effort ladder without persisting its selection. Rejected
+preferred candidates still fall back in priority order. General `ocx status` retains full runtime
+discovery; its resolver cache mode is distinct from this selected-runtime observation.
+
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.
 
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the
