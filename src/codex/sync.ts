@@ -209,25 +209,12 @@ export async function syncModelsToCodex(
   // working catalog/cache into the partial result of an otherwise unnecessary refresh.
   const preflight = await deps.injectCodexConfig(p, config, { validateOnly: true });
   if (!preflight.success) {
-    // Explicit model refresh does not require legacy history relabeling. Keep the
-    // injector's refusal intact and publish only through the existing catalog owner.
-    // Unattended sync and other config/integrity refusals retain their hard failure.
-    if (catalogEvenWhenNotInjected
-      && preflight.historyPreflightFailureReason === "history_paginated_requires_native_writer") {
-      applyProxyEnv(config);
-      const refreshed = await refreshCatalogForSync(config, deps, undefined, log);
-      const ok = refreshed.refreshOutcome === "committed" && refreshed.catalogExists;
-      const message = ok
-        ? "Model catalog synchronized; Codex config and conversation history left unchanged because paginated history requires its native writer."
-        : "Model catalog refresh did not complete; Codex config and conversation history were left unchanged.";
-      reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
-      return {
-        ...refreshed,
-        status: "catalog-only",
-        ok,
-        message,
-      };
-    }
+    // A paginated-history refusal used to be downgraded here to a `catalog-only` success.
+    // That is what made the model picker regression silent: the catalog file was rewritten
+    // and reported synchronized while config.toml kept no provider table and no catalog
+    // path, so Codex offered only its native models. The injector now writes config and
+    // stands the relabel unit down instead, so nothing reaches this branch for that reason
+    // and a surviving refusal is a real config/integrity failure again.
     log?.error(preflight.message);
     reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
     return {
@@ -300,6 +287,12 @@ export async function syncModelsToCodex(
   }
   if (result.success) log?.log(result.message);
   else log?.error(result.message);
+  // The config was written; only the relabel unit stood down. Carry that as a warning so a
+  // caller reading the structured result sees it without parsing the display message.
+  if (result.success && result.historyPreflightFailureReason) {
+    const historyWarning = `Codex conversation-history relabel left to Codex's native writer: ${result.historyPreflightFailureReason}.`;
+    warning = warning ? `${warning} ${historyWarning}` : historyWarning;
+  }
   reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
   const projectConfigWarnings = printProjectCodexConfigWarnings(log, { cwd: process.cwd() });
   return {

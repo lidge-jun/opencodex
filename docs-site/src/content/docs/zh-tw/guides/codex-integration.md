@@ -363,6 +363,6 @@ ocx restore back # 讓普通 Codex 再次指向仍在執行的 proxy
 
 ## 分頁歷史記錄安全拒絕
 
-如果受影響的歷史儲存區支援分頁，提供者切換可能傳回 `history_paginated_requires_native_writer`。OpenCodex 會保留目前設定、設定檔、模型目錄、歷史檔案及復原依據，而不在 Codex 之外分配序號；可遷移儲存區中的 legacy 記錄也受保護。不執行切換、僅保留外部提供者的路徑仍可使用。
+如果受影響的歷史儲存區支援分頁，提供者切換可能傳回 `history_paginated_requires_native_writer`。此原因不再拒絕寫入 Codex 設定、參考設定檔與模型目錄。`ocx sync` 與 `ocx start` 仍會寫入這些檔案並設定 `model_catalog_json`，因此 Codex 模型選擇器會繼續顯示所有經 OpenCodex 路由的模型。僅對話歷史的重新標記會停手，因為分頁歷史序號可能只能由 Codex 自己的寫入器分配。在此狀態下，OpenCodex 不會修改分頁歷史檔案或執行緒列。既有對話保留已標記的提供者，不會被遷移；新對話仍正常經代理路由。可遷移儲存區中的 legacy 記錄也適用。CLI 會印出 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore` 與移除 Codex 設定也不再因此被阻擋：設定與模型目錄會還原，對話歷史則留給 Codex 的原生寫入器。
 
-請勿刪除對話仍參照的提供者定義、反覆執行 `ocx sync` 或舊版復原，也不要改寫使用中的歷史檔案來繞過拒絕。保留檔案，復原前關閉相關對話，只回報確切錯誤與版本，不要公開私人歷史。需要與原生寫入器協調的已驗證修正。備份或指令碼成功不能證明顯示已復原；重新開啟 Codex 後確認對話。
+請勿改寫使用中的分頁歷史檔案或執行緒列來自行遷移這些對話。復原前關閉相關對話，只回報確切錯誤與版本，不要公開私人歷史。備份或指令碼成功不能證明顯示已復原；重新開啟 Codex 後確認對話。

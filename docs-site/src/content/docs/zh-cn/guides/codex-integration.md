@@ -356,6 +356,6 @@ ocx restore back # point plain Codex at the running proxy again
 
 ## 分页历史记录安全拒绝
 
-如果受影响的历史存储支持分页，提供商切换可能返回 `history_paginated_requires_native_writer`。OpenCodex 会保留当前配置、配置档、模型目录、历史文件及恢复依据，而不是在 Codex 之外分配序号；可迁移存储中的 legacy 记录也受保护。仅保留外部提供商而不执行切换的路径仍然可用。
+如果受影响的历史存储支持分页，提供商切换可能返回 `history_paginated_requires_native_writer`。该原因不再拒绝写入 Codex 配置、参考配置档和模型目录。`ocx sync` 与 `ocx start` 仍会写入这些文件并设置 `model_catalog_json`，因此 Codex 模型选择器会继续显示所有经 OpenCodex 路由的模型。仅会话历史的重新标记会停手，因为分页历史序号可能只能由 Codex 自己的写入器分配。在此状态下，OpenCodex 不会修改分页历史文件或线程行。现有会话保留已标记的提供商，不会被迁移；新会话仍正常经代理路由。可迁移存储中的 legacy 记录也适用。CLI 会打印 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore` 和移除 Codex 配置也不再因此被阻止：配置和模型目录会还原，会话历史则留给 Codex 的原生写入器。
 
-不要删除会话仍在引用的提供商定义、反复运行 `ocx sync` 或旧版恢复，也不要改写正在使用的历史文件来绕过拒绝。保留文件，在恢复前关闭相关会话，并只报告准确的错误和版本，不要公开私人历史。需要与原生写入器协调的已验证修复。备份或脚本成功并不能证明显示已恢复；重新打开 Codex 后检查会话。
+不要改写正在使用的分页历史文件或线程行来自行迁移这些会话。恢复前关闭相关会话，并只报告准确的错误和版本，不要公开私人历史。备份或脚本成功并不能证明显示已恢复；重新打开 Codex 后检查会话。

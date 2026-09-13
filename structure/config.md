@@ -158,13 +158,25 @@ journal creation, and the background history restoration guardian.
 `ocx sync` and `ocx restore back` run the injector's non-writing preflight before provider
 discovery or catalog/cache replacement. Deterministic config and ownership refusals therefore
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
-One refusal is deliberately not terminal for an explicit `ocx sync`. When the preflight reports
-`history_paginated_requires_native_writer`, the refusal itself stands — config and conversation
-files are not touched — but the catalog and models cache still refresh through their existing
-owner, and the sync reports `catalog-only`. An explicit sync is also the refresh path for side
-profiles that read the OpenCodex catalog without injection, and a home whose history simply
-requires its native writer is not a reason to let their model list go stale. Unattended sync,
-`POST /api/sync`, and every other config or ownership refusal keep the hard failure above.
+A conversation-history preflight refusal scopes the history relabel unit and nothing else. It
+does not refuse the config, profile, or catalog write, in either direction. When the preflight
+reports `history_paginated_requires_native_writer`, the transition still writes config and
+`model_catalog_json`, the relabel job is skipped without spawning its Worker, and the reason
+travels in the human message and in the structured `historyPreflightFailureReason` field
+*alongside* `success: true`. Restore and removal behave the same way: the config and catalog
+halves revert while the history is left to Codex's native writer. Paginated rollout bytes and
+thread rows are never modified in this state.
+
+Scoping it is not a relaxation, it is the correct boundary. `removeCodexConfig` and the config
+half of restore open no state database and no rollout, so a history preflight never authorized
+them. Treating the refusal as a veto is what made every current Codex home unusable: paginated
+rollouts refuse unconditionally, so `model_catalog_json` never reached config.toml and both the
+app and the CLI fell back to their built-in model list. `ocx sync` reported success anyway,
+because that reason was special-cased into a `catalog-only` result — the downgrade is gone, so a
+refusal that survives is a real config or integrity failure again. Three routed thread rows out
+of 14164 were enough to deadlock apply, removal, and restore at once.
+Unattended sync, `POST /api/sync`, and every other config or ownership refusal keep the hard
+failure above.
 The real injection still revalidates under its normal write boundary after catalog convergence;
 the preflight is an early no-write guard, not an authorization token for a later write.
 
