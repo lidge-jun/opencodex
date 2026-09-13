@@ -35,11 +35,16 @@ opencodex 按以下顺序解析请求的模型：
 
 ### 被阻止模型重定向
 
-`blockedModelRedirects` 是可选的顶层 `Record<string, string>`，用于精确替换已解析的模型 ID，默认未设置。它在上述解析顺序之后运行：匹配后会保留已选定的提供方和账户路由，仅替换上游模型 ID，并记录路由原因 `blocked-model-redirect`。省略该键则路由保持不变。
+`blockedModelRedirects` 是可选的顶层 `Record<string, string>`，用于定义模型 ID 的替换规则，默认未设置。当传入的模型匹配键值时，将被重定向至目标替代模型。目标模型可在同一提供方内替换或跨提供方重新路由（例如 `google-antigravity/gemini-3.8-flash-high`），并支持多跳链式重定向（具有循环检测和最多 5 跳深度限制）。路由原因记录为 `blocked-model-redirect`。省略该键则路由保持不变。
+
+匹配也会针对从别名解析出的原生模型进行，因此解析为被阻止原生模型的别名也会相应重定向。限定账户的跨提供方重定向需要精确键值（例如 `side/gpt-5.6-terra`）；在账户命名空间下裸键会 fail closed，且跨提供方目标直接使用目标提供方，不继承来源提供方凭据、身份验证资料、来源账户字段（`codexAccountId`、`codexAccountNamespace`）或配额。
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": {
+    "gpt-5.6-terra": "gpt-5.6-luna",
+    "gpt-5.6-anon": "google-antigravity/gemini-3.8-flash-high"
+  }
 }
 ```
 
@@ -133,3 +138,4 @@ CLI：`ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs ind
 ## 迁移
 
 `routingProfiles` 是可选的增量配置：现有配置文件与旧 `usage.jsonl` 行均可原样加载。索引是一次性的——删除后会在下次查询时从 `usage.jsonl` 自动重建。系统不会自动调优。
+

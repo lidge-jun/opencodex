@@ -31,11 +31,16 @@ opencodex 依此順序解析請求的模型：
 
 ### 封鎖模型重新導向
 
-`blockedModelRedirects` 是選用的頂層 `Record<string, string>`，用於精確替換已解析的模型 id，預設不設定。它在上述解析順序後執行：符合時會保留已選取的供應商與帳號路由，僅替換上游模型 id，並記錄路由原因 `blocked-model-redirect`。省略此鍵時，路由維持不變。
+`blockedModelRedirects` 是選用的頂層 `Record<string, string>`，用於定義模型 ID 的替換規則，預設不設定。當傳入的模型符合鍵值時，將重新導向至目標替代模型。目標模型可維持在相同供應商或重新路由至其他供應商（例如 `google-antigravity/gemini-3.8-flash-high`），並支援多跳鏈式重新導向（具備循環偵測與最多 5 次跳轉深度限制）。路由原因將記錄為 `blocked-model-redirect`。省略此鍵時，路由維持不變。
+
+比對亦會針對別名解析出的原生模型進行，因此解析為受封鎖原生模型的別名也會依規則重新導向。帳號限定的跨供應商重新導向需要精確鍵值（例如 `side/gpt-5.6-terra`）；在帳號命名空間下裸鍵會 fail closed，且跨供應商目標直接使用目標供應商，不繼承來源供應商憑證、身分驗證資料、來源帳號欄位（`codexAccountId`、`codexAccountNamespace`）或配額。
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": {
+    "gpt-5.6-terra": "gpt-5.6-luna",
+    "gpt-5.6-anon": "google-antigravity/gemini-3.8-flash-high"
+  }
 }
 ```
 
@@ -163,3 +168,4 @@ CLI：`ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs ind
 ## 遷移
 
 `routingProfiles` 為可選且附加式：既有設定檔載入不變。舊 `usage.jsonl` 列（無 `routeDecision`）解析不變。歷史索引可拋棄——刪除 `routing-history.sqlite` 會在下一次查詢時從 `usage.jsonl` 自動重建；`ocx logs rebuild-index` 強制執行一次。此系統中沒有任何東西會自動調校權重、預算或候選集。
+

@@ -31,11 +31,16 @@ opencodex は、要求されたモデルを次の順序で解決します。
 
 ### ブロック対象モデルのリダイレクト
 
-`blockedModelRedirects` は、完全一致する解決済みモデル ID の置換を指定する任意のトップレベル `Record<string, string>` で、デフォルトでは未設定です。上記の解決順序の後に適用されます。一致した場合、すでに選択されたプロバイダーとアカウントのルートは維持され、上流モデル ID のみが置き換えられ、ルート理由として `blocked-model-redirect` が記録されます。このキーを省略すると、ルーティングは変更されません。
+`blockedModelRedirects` は、モデル ID の置換を指定する任意のトップレベル `Record<string, string>` で、デフォルトでは未設定です。受信したモデルがキーに一致した場合、対象の置換モデルにリダイレクトされます。対象モデルは同一プロバイダー内での置換だけでなく、別プロバイダーへの再ルーティング（例: `google-antigravity/gemini-3.8-flash-high`）も可能で、複数ホップの連鎖リダイレクト（ループ検出および最大 5 ホップ制限）をサポートします。ルート理由として `blocked-model-redirect` が記録されます。このキーを省略すると、ルーティングは変更されません。
+
+マッチングはエイリアスから解決されたネイティブ モデルに対しても実行されるため、ブロック対象のネイティブ モデルに解決されるエイリアスも同様にリダイレクトされます。アカウント修飾されたクロスプロバイダー リダイレクトには完全一致するキー（例: `side/gpt-5.6-terra`）が必要であり、アカウント名前空間付きのベア キーは fail closed します。クロスプロバイダーの宛先は、ソース プロバイダーの資格情報や認証情報、アカウント フィールド（`codexAccountId`、`codexAccountNamespace`）、クォータを継承せずにターゲット プロバイダーを直接使用します。
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": {
+    "gpt-5.6-terra": "gpt-5.6-luna",
+    "gpt-5.6-anon": "google-antigravity/gemini-3.8-flash-high"
+  }
 }
 ```
 
@@ -125,3 +130,4 @@ CLI: `ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs inde
 ## 移行
 
 `routingProfiles` は任意の追加設定です。既存の設定ファイルと古い `usage.jsonl` 行はそのまま読み込めます。インデックスは使い捨てで、削除すると次回クエリ時に `usage.jsonl` から自動再構築されます。自動チューニングは行われません。
+

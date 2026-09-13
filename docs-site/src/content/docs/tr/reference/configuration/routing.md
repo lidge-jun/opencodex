@@ -43,17 +43,23 @@ olabileceğinde açık ad alanları kullanın.
 
 ### Engellenen model yeniden yönlendirmeleri
 
-`blockedModelRedirects`, varsayılan olarak ayarlanmamış, tam çözümlenmiş model
-kimliği değiştirmelerinden oluşan isteğe bağlı üst düzey bir
-`Record<string, string>` eşlemesidir. Yukarıdaki çözümleme sırasından sonra
-çalışır: bir eşleşme önceden seçilmiş sağlayıcı ve hesap rotasını korur, yalnızca
-yukarı akış model kimliğini değiştirir ve rota nedenini
-`blocked-model-redirect` olarak kaydeder. Anahtarın atlanması yönlendirmeyi
-değiştirmez.
+`blockedModelRedirects`, varsayılan olarak ayarlanmamış, model kimliği
+değiştirmelerinden oluşan isteğe bağlı üst düzey bir `Record<string, string>`
+eşlemesidir. Gelen bir model anahtarla eşleştiğinde, hedef yedek modele yeniden
+yönlendirilir. Hedef modeller aynı sağlayıcı içinde çözülebilir veya farklı bir
+sağlayıcıya yeniden yönlendirilebilir (ör. `google-antigravity/gemini-3.8-flash-high`).
+Döngü algılama ve en fazla 5 atlama derinliği ile çoklu atlamalı zincirleme
+yeniden yönlendirmeler desteklenir. Rota nedeni `blocked-model-redirect` olarak
+kaydedilir. Anahtarın atlanması yönlendirmeyi değiştirmez.
+
+Eşleştirme ayrıca bir takma addan çözümlenen yerel model için de gerçekleştirilir; bu nedenle engellenen yerel modellere çözümlenen takma adlar da uygun şekilde yeniden yönlendirilir. Hesap nitelikli sağlayıcılar arası yeniden yönlendirmeler tam bir anahtar gerektirir (ör. `side/gpt-5.6-terra`); hesap ad alanında yalın anahtarlar güvenli şekilde başarısız olur (fail closed) ve sağlayıcılar arası hedefler, kaynak sağlayıcı kimlik bilgilerini, kimlik doğrulama materyallerini, kaynak hesap alanlarını (`codexAccountId`, `codexAccountNamespace`) veya kotaları devralmadan doğrudan hedef sağlayıcıyı kullanır.
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": {
+    "gpt-5.6-terra": "gpt-5.6-luna",
+    "gpt-5.6-anon": "google-antigravity/gemini-3.8-flash-high"
+  }
 }
 ```
 
@@ -310,4 +316,5 @@ değişmeden ayrıştırılır. Geçmiş dizini tek kullanımlıktır -
 otomatik bir yeniden oluşturmayı tetikler; `ocx logs rebuild-index` bunu zorlar.
 Bu sistemdeki hiçbir şey ağırlıkları, bütçeleri veya aday kümelerini otomatik
 olarak ayarlamaz.
+
 

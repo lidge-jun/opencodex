@@ -34,7 +34,7 @@ import {
 } from "./providers/openai-tiers";
 import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
 import { resolveModelAlias } from "./providers/default-aliases";
-import { resolveBlockedModelRedirect } from "./lib/shadow-call";
+import { resolveBlockedModelRedirectChain, type BlockedModelRedirectState } from "./lib/shadow-call";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
@@ -543,23 +543,19 @@ function isBareOpenAiFamilyModel(modelId: string): boolean {
 }
 
 function routeResult(
-  config: OcxConfig | undefined,
   providerName: string,
   provider: OcxProviderConfig,
   modelId: string,
   routeKind: RouteDecisionKind,
   routeReason: string,
 ): RouteResult {
-  const redirected = resolveBlockedModelRedirect(config, modelId);
-  const effectiveModelId = redirected ?? modelId;
-  const effectiveRouteReason = redirected ? "blocked-model-redirect" : routeReason;
   const codexAccountMode = providerCodexAccountMode(providerName, provider);
   return {
     providerName,
     provider: routedProviderConfig(providerName, provider),
-    modelId: effectiveModelId,
+    modelId,
     routeKind,
-    routeReason: effectiveRouteReason,
+    routeReason,
     ...(codexAccountMode ? { codexAccountMode } : {}),
   };
 }
@@ -603,13 +599,36 @@ function comboRouteCandidates(
   });
 }
 
+function wrapRedirectedRoute(
+  targetRoute: RouteResult,
+  requestedModel: string,
+): RouteResult {
+  const routeDecision = targetRoute.routeDecision
+    ? {
+        ...targetRoute.routeDecision,
+        requestedModel,
+        selected: {
+          ...targetRoute.routeDecision.selected,
+          reason: "blocked-model-redirect",
+        },
+      }
+    : undefined;
+  return {
+    ...targetRoute,
+    routeReason: "blocked-model-redirect",
+    ...(routeDecision ? { routeDecision } : {}),
+  };
+}
+
 function routeModelInternal(
   config: OcxConfig,
   modelId: string,
   bypassCombos: boolean,
   policyEvidence?: PolicyRequestEvidence,
   allowCompactionNativeFallback = false,
+  redirectState?: BlockedModelRedirectState,
 ): RouteResult {
+  const sharedRedirectState = redirectState ?? { visited: new Set<string>(), edges: 0 };
   const slash = modelId.indexOf("/");
   // Policy namespace is system-reserved: an explicit `policy/<id>` or a
   // configured profile alias executes the policy evaluator and routes the
@@ -635,12 +654,23 @@ function routeModelInternal(
     }
     const selected = evaluation.candidates[evaluation.selectedIndex]!;
     const concrete = `${selected.provider}/${selected.model}`;
-    const routed = routeModelInternal(config, concrete, true);
+    const routed = routeModelInternal(config, concrete, true, undefined, false, sharedRedirectState);
+    const routeReason = routed.routeReason === "blocked-model-redirect"
+      ? "blocked-model-redirect"
+      : "policy-selected";
     return {
       ...routed,
       routeKind: "policy" as const,
-      routeReason: "policy-selected",
-      routeDecision: evaluation.trace,
+      routeReason,
+      routeDecision: {
+        ...evaluation.trace,
+        selected: {
+          ...evaluation.trace.selected,
+          provider: routed.providerName,
+          model: routed.modelId,
+          reason: routeReason,
+        },
+      },
     };
   }
   if (slash > 0) {
@@ -648,13 +678,19 @@ function routeModelInternal(
     const binding = codexAccountNamespaceEntries(config)
       .find(([candidate]) => candidate === namespace);
     if (binding) {
+      const fullRedirect = resolveBlockedModelRedirectChain(config, modelId, sharedRedirectState);
+      if (fullRedirect.redirected) {
+        return wrapRedirectedRoute(routeModelInternal(config, fullRedirect.targetModel, bypassCombos, policyEvidence, allowCompactionNativeFallback, sharedRedirectState), modelId);
+      }
       const nativeModelId = modelId.slice(slash + 1);
-      if (!isBareOpenAiFamilyModel(nativeModelId)) {
+      const redirect = resolveBlockedModelRedirectChain(config, nativeModelId, sharedRedirectState);
+      const effectiveNativeModelId = redirect.targetModel;
+      if (!isBareOpenAiFamilyModel(effectiveNativeModelId)) {
         throw new Error(`Codex account namespace ${namespace} only supports native OpenAI model ids`);
       }
       const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
       if (!provider || provider.disabled === true) {
-        throw new NoEnabledOpenAiProviderError(nativeModelId);
+        throw new NoEnabledOpenAiProviderError(effectiveNativeModelId);
       }
       // Registry routing backfills an omitted authMode on the built-in OpenAI row to forward.
       // Mirror only that default here; explicit non-forward modes still fail closed.
@@ -662,10 +698,16 @@ function routeModelInternal(
         ? { ...provider, authMode: "forward" as const }
         : provider;
       if (!isCanonicalOpenAiForwardProvider(providerForCanonicalCheck)) {
-        throw new NoEnabledOpenAiProviderError(nativeModelId);
+        throw new NoEnabledOpenAiProviderError(effectiveNativeModelId);
       }
       return {
-        ...routeResult(config, OPENAI_CODEX_PROVIDER_ID, provider, nativeModelId, "explicit-account", "account-namespace"),
+        ...routeResult(
+          OPENAI_CODEX_PROVIDER_ID,
+          provider,
+          effectiveNativeModelId,
+          "explicit-account",
+          redirect.redirected ? "blocked-model-redirect" : "account-namespace",
+        ),
         // Exact account injection uses the pool credential machinery even when the canonical
         // provider is globally Direct. The fixed id bypasses pool selection entirely.
         codexAccountMode: "pool",
@@ -675,14 +717,30 @@ function routeModelInternal(
     }
   }
 
+  const redirect = resolveBlockedModelRedirectChain(config, modelId, sharedRedirectState);
+  if (redirect.redirected) {
+    const targetRoute = routeModelInternal(
+      config,
+      redirect.targetModel,
+      bypassCombos,
+      policyEvidence,
+      allowCompactionNativeFallback,
+      sharedRedirectState,
+    );
+    return wrapRedirectedRoute(targetRoute, modelId);
+  }
+
   if (!bypassCombos && !preservesPhysicalComboProvider(config)) {
     const combo = tryPickComboModel(config, modelId);
     if (combo) {
       const concrete = `${combo.target.provider}/${combo.target.model}`;
       // The selected target is already a concrete provider/model reference. Resolve it without
       // consulting combo aliases again, otherwise an alias that shadows the target can recurse.
-      const routed = routeModelInternal(config, concrete, true, undefined);
-      return { ...routed, combo, routeKind: "combo" as const, routeReason: "combo-pick" };
+      const routed = routeModelInternal(config, concrete, true, undefined, false, sharedRedirectState);
+      const routeReason = routed.routeReason === "blocked-model-redirect"
+        ? "blocked-model-redirect"
+        : "combo-pick";
+      return { ...routed, combo, routeKind: "combo" as const, routeReason };
     }
   }
 
@@ -742,7 +800,7 @@ function routeModelInternal(
       // itself a known model (e.g. orcarouter/auto). Route it whole instead of stripping to the
       // remainder, which would send a bare `auto` the upstream cannot resolve.
       if (known.includes(modelId)) {
-        return routeResult(config, provName, prov, modelId, "explicit-provider", "explicit-provider-namespace");
+        return routeResult(provName, prov, modelId, "explicit-provider", "explicit-provider-namespace");
       }
       // Codex-facing alias ids (`provider/vendor-model`) decode back to the native
       // slash id via an exact known-id lookup; raw full-slash selectors keep working.
@@ -751,8 +809,19 @@ function routeModelInternal(
       const nativeModel = known.includes(decoded)
         ? decoded
         : resolveModelAlias(config, prov, known, requestedModel) ?? decoded;
+      const providerQualifiedId = `${provName}/${nativeModel}`;
+      const qualifiedRedirect = resolveBlockedModelRedirectChain(config, providerQualifiedId, sharedRedirectState);
+      if (qualifiedRedirect.redirected) {
+        return wrapRedirectedRoute(routeModelInternal(
+          config,
+          qualifiedRedirect.targetModel,
+          bypassCombos,
+          policyEvidence,
+          allowCompactionNativeFallback,
+          sharedRedirectState,
+        ), modelId);
+      }
       return routeResult(
-        config,
         provName,
         prov,
         nativeModel,
@@ -766,7 +835,7 @@ function routeModelInternal(
   if (isBareOpenAiFamilyModel(modelId)) {
     const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
     if (provider && provider.disabled !== true) {
-      return routeResult(config, OPENAI_CODEX_PROVIDER_ID, provider, modelId, "native", "native-family");
+      return routeResult(OPENAI_CODEX_PROVIDER_ID, provider, modelId, "native", "native-family");
     }
     // Codex chooses a bare native model for compaction even when the operator's
     // ordinary route is a third-party provider. Keep the native reservation
@@ -781,7 +850,6 @@ function routeModelInternal(
       if (defaultProvider.disabled !== true) {
         warnCompactionDefaultProviderFallbackOnce(config.defaultProvider);
         return routeResult(
-          config,
           config.defaultProvider,
           defaultProvider,
           modelId,
@@ -796,7 +864,7 @@ function routeModelInternal(
   for (const [provName, prov] of activeProviderEntries(config)) {
     if (prov.defaultModel === modelId
       || (typeof prov.defaultModel === "string" && encodeRoutedModelId(prov.defaultModel) === modelId)) {
-      return routeResult(config, provName, prov, prov.defaultModel as string, "explicit-provider", "configured-default-model");
+      return routeResult(provName, prov, prov.defaultModel as string, "explicit-provider", "configured-default-model");
     }
   }
 
@@ -807,7 +875,7 @@ function routeModelInternal(
     if (prov.models && Array.isArray(prov.models)) {
       const hit = (prov.models as string[]).find(id => id === modelId || encodeRoutedModelId(id) === modelId);
       if (hit !== undefined) {
-        return routeResult(config, provName, prov, hit, "explicit-provider", "configured-model-list");
+        return routeResult(provName, prov, hit, "explicit-provider", "configured-model-list");
       }
     }
   }
@@ -827,7 +895,23 @@ function routeModelInternal(
   }
   if (aliasMatches[0]) {
     const match = aliasMatches[0];
-    return routeResult(config, match.provider, config.providers[match.provider], match.model, "explicit-provider", "model-alias");
+    const providerQualifiedKey = `${match.provider}/${match.model}`;
+    const qualifiedRedirect = resolveBlockedModelRedirectChain(config, providerQualifiedKey, sharedRedirectState);
+    const effectiveAliasRedirect = qualifiedRedirect.redirected
+      ? qualifiedRedirect
+      : resolveBlockedModelRedirectChain(config, match.model, sharedRedirectState);
+    if (effectiveAliasRedirect.redirected) {
+      const targetRoute = routeModelInternal(
+        config,
+        effectiveAliasRedirect.targetModel,
+        bypassCombos,
+        policyEvidence,
+        allowCompactionNativeFallback,
+        sharedRedirectState,
+      );
+      return wrapRedirectedRoute(targetRoute, modelId);
+    }
+    return routeResult(match.provider, config.providers[match.provider], match.model, "explicit-provider", "model-alias");
   }
 
   if (config.defaultProvider === LEGACY_CHATGPT_PROVIDER_ID) {
@@ -836,7 +920,7 @@ function routeModelInternal(
   if (hasOwnProvider(config.providers, config.defaultProvider)) {
     const defaultProv = config.providers[config.defaultProvider];
     if (defaultProv.disabled === true) throw new Error(`Default provider is disabled: ${config.defaultProvider}`);
-    return routeResult(config, config.defaultProvider, defaultProv, modelId, "default-provider", "default-provider");
+    return routeResult(config.defaultProvider, defaultProv, modelId, "default-provider", "default-provider");
   }
 
   throw new Error(`No provider configured for model: ${modelId}`);
@@ -905,7 +989,7 @@ function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResu
       );
       if (matchingProvider) {
         const [provName, prov] = matchingProvider;
-        return routeResult(config, provName, prov, modelId, "explicit-provider", "model-pattern");
+        return routeResult(provName, prov, modelId, "explicit-provider", "model-pattern");
       }
       // Deliberately no "first provider with an Anthropic adapter" fallback here. Picking by
       // object insertion order, without checking `models`, `selectedModels`, `disabledModels` or

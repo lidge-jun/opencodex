@@ -30,11 +30,16 @@ opencodex는 요청된 model을 다음 순서로 해석합니다:
 
 ### 차단된 모델 리디렉션
 
-`blockedModelRedirects`는 기본적으로 설정되지 않는 선택적 최상위 `Record<string, string>`이며, 정확히 일치하는 해석된 모델 ID의 대체값을 정의합니다. 위 해석 순서가 끝난 후 적용됩니다. 일치하면 이미 선택된 공급자와 계정 경로는 유지하고 업스트림 모델 ID만 교체하며, 경로 사유를 `blocked-model-redirect`로 기록합니다. 이 키를 생략하면 라우팅이 바뀌지 않습니다.
+`blockedModelRedirects`는 기본적으로 설정되지 않는 선택적 최상위 `Record<string, string>`이며, 모델 ID의 대체값을 정의합니다. 수신된 모델이 키와 일치하면 대상 대체 모델로 리디렉션됩니다. 대상 모델은 동일한 공급자 내에서 대체되거나 다른 공급자로 교차 재라우팅(예: `google-antigravity/gemini-3.8-flash-high`)될 수 있으며, 멀티홉 체인 리디렉션(사이클 감지 및 최대 5홉 깊이 제한)을 지원합니다. 경로 사유는 `blocked-model-redirect`로 기록됩니다. 이 키를 생략하면 라우팅이 바뀌지 않습니다.
+
+매칭은 별칭에서 확인된 네이티브 모델에 대해서도 수행되므로 차단된 네이티브 모델로 해석되는 별칭도 적절히 리디렉션됩니다. 계정 한정 교차 공급자 리디렉션에는 정확한 키(예: `side/gpt-5.6-terra`)가 필요하며, 계정 네임스페이스 요청에서 베어 키는 fail closed 합니다. 교차 공급자 대상은 소스 공급자의 자격 증명, 인증 정보, 소스 계정 필드(`codexAccountId`, `codexAccountNamespace`) 또는 할당량을 상속하지 않고 대상 공급자를 직접 사용합니다.
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": {
+    "gpt-5.6-terra": "gpt-5.6-luna",
+    "gpt-5.6-anon": "google-antigravity/gemini-3.8-flash-high"
+  }
 }
 ```
 
@@ -123,3 +128,4 @@ CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index-
 ## 마이그레이션
 
 `routingProfiles`는 선택적 추가 설정입니다. 기존 설정 파일과 이전 `usage.jsonl` 행은 그대로 읽힙니다. 인덱스는 일회용이며 삭제 시 다음 쿼리에서 `usage.jsonl`로 자동 재구축됩니다. 자동 튜닝은 없습니다.
+
