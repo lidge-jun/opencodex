@@ -84,6 +84,7 @@ test("both v2 surface setters route through the shared writer", () => {
 
   const dialog = modelsSource.slice(modelsSource.indexOf("<SubagentSurfaceWarningModal"));
   const props = dialog.slice(0, dialog.indexOf("/>"));
-  expect(props).toContain("putV2Setting({ multiAgentMode: next })");
+  // The Continue handler also answers the surface advisory, so match the call, not the body.
+  expect(props).toContain("putV2Setting({ multiAgentMode: next,");
   expect(props).not.toContain("void loadV2()");
 });
