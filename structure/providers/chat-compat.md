@@ -339,3 +339,6 @@ prose the model reads beside them. Vendor tool execution stays disabled on both
 adapters, and Qoder's explicit refusal of original images is unchanged.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+
+Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.

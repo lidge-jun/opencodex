@@ -36,3 +36,16 @@ These optimizations do not add request queues, retry policies, or RSS-based admi
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+## Unicode pattern normalization
+
+`src/adapters/responses-tool-schema.ts` strips unsupported Unicode property patterns with an
+iterative traversal and copies containers only when a descendant changes. Unchanged siblings
+retain identity; a no-op returns the original input. Traversal frames follow the active path
+instead of queueing an assignment closure and eagerly cloned container for each sibling.
+Name bags, literal values and preserved constraint subtrees retain their existing semantics;
+the separate encrypted-marker normalizer is unchanged. Inputs are not mutated.
+This reduces avoidable allocations; it is not a hard heap cap or a guarantee of lower CPU cost.
+Schema size still determines traversal work and the cost of copying a changed broad container.
+`tests/adapters/openai/openai-chat-hardening.test.ts` covers wide, deep and mixed-array schemas;
+`tests/responses/openai-responses-passthrough.test.ts` covers the existing wire contract.

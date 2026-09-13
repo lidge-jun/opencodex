@@ -325,6 +325,36 @@ describe("unicode property-escape pattern stripping", () => {
     expect(stripped.properties.plain.pattern).toBe("^[a-z0-9_-]{1,64}$");
   });
 
+  test("clones only affected paths across a broad schema", () => {
+    const properties: Record<string, Record<string, unknown>> = {};
+    for (let i = 0; i < 25_000; i++) properties[`field_${i}`] = { type: "string" };
+    properties.affected = { type: "string", pattern: artifactFieldPattern };
+    const before = { type: "object", properties };
+    const stripped = stripUnicodePropertyPatterns(before) as typeof before;
+
+    expect(stripped).not.toBe(before);
+    expect(stripped.properties).not.toBe(properties);
+    expect(stripped.properties.affected.pattern).toBeUndefined();
+    expect(properties.affected.pattern).toBe(artifactFieldPattern);
+    expect(stripped.properties.field_0).toBe(properties.field_0);
+    expect(stripped.properties.field_24999).toBe(properties.field_24999);
+  });
+
+  test("copies changed array paths while preserving literal and untouched siblings", () => {
+    const literal = { pattern: artifactFieldPattern };
+    const untouched = { type: "string", pattern: "^[a-z]+$" };
+    const changed = { type: "string", pattern: artifactFieldPattern, const: literal };
+    const before = { allOf: [changed, untouched, { properties: { pattern: changed } }] };
+    const stripped = stripUnicodePropertyPatterns(before) as typeof before;
+
+    expect(stripped.allOf).not.toBe(before.allOf);
+    expect(stripped.allOf[0]).toEqual({ type: "string", const: literal });
+    expect(stripped.allOf[0]!.const).toBe(literal);
+    expect(stripped.allOf[1]).toBe(untouched);
+    expect(stripped.allOf[2]!.properties!.pattern.pattern).toBeUndefined();
+    expect(changed.pattern).toBe(artifactFieldPattern);
+  });
+
   test("an escaped backslash before `p{` is a literal, not a property escape", () => {
     // `\\p{2}` is a literal backslash followed by a quantified `p`; Python compiles it, so a
     // substring scan for `\p{` would throw away a working pattern.
