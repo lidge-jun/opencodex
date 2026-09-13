@@ -99,19 +99,51 @@ relaunches it, helper B re-enumerates during that window, sees the **freshly sta
 root as a target, and kills it. Two `ocx sync --restart-codex` runs inside the app, or
 one handoff racing an ssh-issued direct run, are enough.
 
-So every restart that **acts** — direct path and helper alike — first takes an atomic
-lock at `<opencodex home>/desktop-restart.lock`, created with `wx` and holding the
-owner pid and a timestamp. A caller that cannot take the lock does not queue and does
-not wait: it reports `restart_in_flight` and exits. Queueing would just rebuild the
-same race one step later.
+So every restart attempt — direct path and handoff alike — first takes an atomic lock
+at `<opencodex home>/desktop-restart.lock`, created with `wx` and holding an owner pid
+and a timestamp. A caller that cannot take the lock does not queue and does not wait:
+it reports `restart_in_flight` and exits. Queueing would rebuild the same race one
+step later.
+
+The lock is held **across the whole ladder including the relaunch**. Releasing after
+the last kill would reopen exactly the window this closes.
+
+**The lock is transferred to the helper, not contended for.** This is the part that
+makes the handoff work at all. The obvious reading — "every restart that acts takes
+the lock" — deadlocks the feature: the caller takes the lock, discovers it is inside
+the tree, spawns a helper, and the helper then waits for a lock its own parent holds.
+
+The sequence is therefore:
+
+```
+caller: take lock (owner = caller pid)
+caller: ancestry check -> inside the tree
+caller: spawn detached helper
+caller: REWRITE the lock owner to the helper pid, atomically
+caller: exit WITHOUT releasing
+helper: wait for caller pid to exit (up to 20 s)
+helper: assert the lock names ITS OWN pid, else exit without acting
+helper: run the ladder
+helper: release in finally
+```
+
+The helper never takes the lock; it inherits one already made out to it. A concurrent
+caller arriving at any point sees a lock owned by a live pid and reports
+`restart_in_flight`, which is the behaviour B2 asked for.
+
+If the spawn fails, the caller releases the lock on the ordinary `finally` path and
+reports `self_ancestry`. The rewrite happens only after a successful spawn, so a
+failed handoff can never strand the lock on a pid that does not exist.
+
+The helper asserting ownership is what keeps the hidden command honest: an
+arbitrarily invoked `ocx internal desktop-restart-handoff` that was not handed a lock
+finds one owned by somebody else, or none at all, and in the latter case takes it
+normally like any direct caller.
 
 A lock whose owner pid is dead, or which is older than five minutes, is stale and is
-replaced atomically. The lock is released in a `finally`, including on the failure
-paths, because a lock leaked by a crashed helper would block every future restart
-until the staleness window expired.
-
-The lock is taken **around the whole ladder including the relaunch**, not only around
-the kill. Releasing after the last kill would reopen exactly the window this closes.
+replaced atomically. That staleness rule is what recovers from a helper killed by the
+`taskkill /T` race in §8: the lock is left owned by a dead pid and the next restart
+reclaims it rather than being blocked until someone deletes a file.
 
 ### 4.2 What the helper is actually spawned as (nit N11)
 
