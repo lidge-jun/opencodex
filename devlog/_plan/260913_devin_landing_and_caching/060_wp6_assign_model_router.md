@@ -98,3 +98,44 @@ if (isRouterModelUid(req.modelUid)) {
 wp4 다음. 둘 다 `chat.ts` 인코더를 건드리고, wp4의 필드 13이 먼저 들어가는 편이
 필드 순서를 한 번만 정리한다.
 
+
+## 결론 — 구현하지 않는다 (A 단계 감사 FAIL, 2026-09-13)
+
+이 단계는 **NOOP으로 닫는다.** 독립 감사가 `VERDICT: fail`로 블로커 2건을 냈고,
+둘 다 반박되지 않는다.
+
+**BLOCKER-1 — 라우터 uid가 우리에게 도달한다는 증거가 없다.**
+Plus의 가드 패턴(`-router` 접미사, `model-router` 포함)은 우리 카탈로그에도,
+`DEVIN_STATIC_MODELS`에도, 레인 A의 바이너리 조사에도 없다. 레인 A가 본 `adaptive`는
+`GetCliModelConfigs` 응답이고, 우리는 `GetCascadeModelConfigs`만 파싱한다. 다른 RPC의
+모델 목록을 근거로 우리 요청 경로에 RPC를 하나 더 붙일 수는 없다.
+
+**BLOCKER-2 — 훅을 걸 자리가 이미 선점되어 있다.**
+사용자가 `adaptive`를 직접 타이핑해도 `resolveWireModelUid`가 먼저 `adaptive-medium`으로
+바꾸고, 그다음 카탈로그 preflight가 `not_listed`로 턴을 끝낸다. AssignModel 호출은
+그 두 단계 뒤에 올 자리라 영원히 실행되지 않는다. 훅을 앞으로 당기려면 wp5에서 막
+정리한 접미사 해석과 #14의 preflight 계약을 둘 다 되돌려야 하는데, 확인되지 않은
+수요를 위해 확인된 보호장치를 걷어내는 거래다.
+
+### 그래도 남겨 두는 것
+
+봉투 자체는 검증됐으므로 기록은 유지한다. 나중에 라우터 uid가 실제로 관측되면
+이 문서의 필드 표를 그대로 쓰면 된다. 감사가 함께 확인한 사항:
+
+- 요청 1/2/3/5, 응답 1→{1 jwt, 2 uid} 구조는 Go 구현과 일치한다.
+- 다만 우리 `buildMetadata`는 Go `devinBuildMetadata`와 필드·클라이언트 문자열이
+  달라서, 그대로 재사용하면 다른 봉투가 나간다. 재사용 전 대조가 필요하다.
+- AssignModel이 느리면 wp3의 헤더 데드라인에는 안 걸리지만 사용자 체감 TTFB는
+  늘어난다. 구현한다면 이 호출에 **별도의 짧은 타임아웃**이 필요하다.
+- 필드 26은 21 뒤, JWT가 있을 때만. assignment JWT는 api_key와 동급으로 로그·오류
+  본문에서 가려야 한다.
+
+### 착지 조건
+
+다음 중 하나가 관측되면 이 단계를 다시 연다.
+
+1. `GetCascadeModelConfigs` 응답에 `-router` 또는 `model-router` uid가 실제로 나온다.
+2. 사용자가 라우터 uid로 턴을 시도해 `not_listed`로 죽은 사례가 로그에 남는다.
+
+그 전까지 요청 경로에 RPC를 추가하는 것은 순비용이다.
+

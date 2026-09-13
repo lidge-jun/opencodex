@@ -152,3 +152,52 @@ Go에서 전체 요청 예산이라 정상적인 3분 턴도 자른다 — 따�
 | c-7 | effort 접미사 통합 merge | merge SHA + CI run id |
 | c-8 | AssignModel 라우터 지원 merge | merge SHA + CI run id |
 
+
+## 단위 종료 기록 (2026-09-13)
+
+6개 PR이 `dev`에 들어갔고, 1개 단계는 NOOP으로 닫혔다.
+
+| wp | 결과 | PR | merge SHA | exact-head CI |
+|---|---|---|---|---|
+| wp0 | 로드맵 | #4446 | `0a89b416a` | 27 success / 0 fail |
+| wp1 | #4420 carry | #4445 | `eee8fd82f` | 31 success / 0 fail |
+| wp2 | #4384 carry | #4448 | `720ea9730` | 22 success / 0 fail |
+| wp3 | 헤더 데드라인 | #4450 | `dc33113a9` | 25 success / 0 fail |
+| wp4 | 프롬프트 캐시 + identity | #4453 | `261bab915` | 25 success / 0 fail |
+| wp5 | effort 접미사 통합 | #4459 | `cff737ce4` | 25 success / 0 fail |
+| wp6 | **NOOP** (감사 FAIL) | — | — | — |
+
+원 PR #4420, #4384는 carry 링크와 함께 close했고, 두 저자는 squash 커밋의
+`Co-authored-by` 트레일러로 크레딧이 남는다.
+
+로컬 제품 스위트·typecheck·build·install은 이 세션에서 **NOT RUN**이다. 모든 머지
+증거는 exact-final-head hosted CI이며, cancelled/skipped는 성공으로 세지 않았다.
+
+### 감사가 계획을 바꾼 지점
+
+서브에이전트 감사가 네 번 계획을 고쳤고, 그게 이 단위에서 가장 값어치 있는 부분이다.
+
+| 감사 지적 | 계획 원안 | 실제 착지 |
+|---|---|---|
+| abort 사유가 `AbortError`에 먹힌다 | `abort(new CloudChatError())` | 플래그 + catch에서 명시 throw |
+| 전역 `clear()`가 타 계정 턴을 끊는다 | 문서화 후 유지 | export 제거, identity 스코프만 |
+| epoch는 죽은 복잡도 | epoch 추가 | 추가하지 않음 |
+| tier와 effort는 다른 개념 | 두 집합 병합 | 분리 유지, 이름으로 구분 |
+| 라우터 uid 도달 증거 없음 | RPC 추가 | NOOP |
+
+### 미해결로 남긴 것
+
+`c-8`(AssignModel 착지)은 **미충족으로 남긴다.** 기준이 거짓 전제 위에 쓰였고,
+통과시키려고 기준을 약화하지 않는다. 위 "착지 조건" 둘 중 하나가 관측되면 연다.
+
+040에서 범위 밖으로 미룬 두 건도 남아 있다.
+
+- `invalid_argument` 분류. trailer → HTTP 400 매핑은 `chat.ts`에 이미 있다. 빠진 것은
+  `devinErrorClassification`(`devin.ts:54`)에 400 분기가 없어 잘못된 요청이 구조화된
+  분류 없이 올라간다는 점이다. 040이 쓴 "자격증명 cooldown을 태운다"는 과장이었다 —
+  현재 key-failover cooldown은 401/429에서만 돈다. 재감사 지적을 반영해 정정한다.
+- rune-safe 도구 설명 절단. 현재 JS `slice`는 UTF-16 기준이라 한글·이모지 중간에서
+  잘리고 그 결과가 `invalid_argument`다. Plus는 1024B rune-safe로 자른다.
+
+둘 다 캐싱과는 별개 주제라 이 단위에서 분리했다.
+
