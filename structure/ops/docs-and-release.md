@@ -3,6 +3,8 @@
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+Human-readable connect diagnostics follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics), with regression coverage in `tests/cli/cli-connect-readiness.test.ts`.
+
 ## Public docs
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is

@@ -33,6 +33,9 @@ const CATALOG_WITH_MAX = JSON.stringify({
 
 type ProbeResult = {
   lines: string[];
+  exitCode?: number;
+  errors: string[];
+  catalogUnchanged?: boolean;
   status: {
     state: string;
     catalog: string;
@@ -50,6 +53,7 @@ function runStatusProbe(options: {
   connected: boolean;
   ladder: string[] | null | "forbidden";
   catalog?: string;
+  connectRejectCatalog?: string;
 }): ProbeResult {
   const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-readiness-home-"));
   const codexHome = mkdtempSync(join(tmpdir(), "ocx-readiness-codex-"));
@@ -78,7 +82,9 @@ function runStatusProbe(options: {
         },
       }
       : { port: 10100, providers: {}, defaultProvider: "openai" }), "utf8");
-    writeFileSync(join(opencodexHome, "service-api-token"), `${token}\n`, { mode: 0o600 });
+    if (!options.connectRejectCatalog) {
+      writeFileSync(join(opencodexHome, "service-api-token"), `${token}\n`, { mode: 0o600 });
+    }
     writeFileSync(join(codexHome, "opencodex-catalog.json"), catalog, "utf8");
 
     const script = `
@@ -89,20 +95,54 @@ function runStatusProbe(options: {
         : ladder === null ? () => null : () => new Set(ladder);
       const lifecycleLockDeps = { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" };
       const captured = [];
+      const errors = [];
       const real = console.log;
+      const realError = console.error;
       (async () => {
+        let exitCode, catalogUnchanged;
         console.log = (...parts) => captured.push(parts.join(" "));
+        console.error = (...parts) => errors.push(parts.join(" "));
         try {
-          await handleConnectCommand(["status"], { lifecycleLockDeps, catalogProbeDeps: { supportedEfforts } });
+          if (process.env.REJECT_CATALOG) {
+            const fs = require("node:fs");
+            const { Readable } = require("node:stream");
+            const catalogPath = process.env.CODEX_HOME + "/opencodex-catalog.json";
+            const before = fs.readFileSync(catalogPath, "utf8");
+            const fetchImpl = async (input, init = {}) => {
+              const url = String(input);
+              if (url.endsWith("/readyz")) return Response.json({
+                service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 443,
+                status: "ready", protocol: 1, minimumClientProtocol: 1,
+                managementUrl: "https://hub.example.test",
+              });
+              if (url.endsWith("/api/keys") && init.method === "POST") return Response.json({
+                id: "fixture-key", name: "fixture", key: "ocx_data_" + "a".repeat(40),
+                createdAt: "2026-09-13T00:00:00.000Z",
+              }, { status: 201 });
+              if (url.endsWith("/v1/catalog")) return new Response(process.env.REJECT_CATALOG, {
+                headers: { "content-type": "application/json" },
+              });
+              if (init.method === "DELETE") return Response.json({ ok: true });
+              throw new Error("unexpected fixture request");
+            };
+            exitCode = await handleConnectCommand(["https://hub.example.test", "--admin-token-stdin", "--clients", "codex"], {
+              lifecycleLockDeps, catalogProbeDeps: { supportedEfforts },
+              stdinImpl: Readable.from(["ocx_admin_fixture" + String.fromCharCode(10)]), fetchImpl,
+            });
+            catalogUnchanged = fs.readFileSync(catalogPath, "utf8") === before;
+          } else {
+            await handleConnectCommand(["status"], { lifecycleLockDeps, catalogProbeDeps: { supportedEfforts } });
+          }
         } finally {
           console.log = real;
+          console.error = realError;
         }
         const status = collectClientConnectionStatus(
           Date.parse("2026-08-28T00:00:10.000Z"),
           lifecycleLockDeps,
           { supportedEfforts },
         );
-        console.log(JSON.stringify({ lines: captured, status }));
+        console.log(JSON.stringify({ lines: captured, status, exitCode, errors, catalogUnchanged }));
       })();
     `;
 
@@ -118,6 +158,7 @@ function runStatusProbe(options: {
         ...process.env,
         OPENCODEX_HOME: opencodexHome,
         CODEX_HOME: codexHome,
+        REJECT_CATALOG: options.connectRejectCatalog ?? "",
         // Matches the existing client fixtures: no probe may reach the operator's real Claude
         // Desktop configuration, even transitively.
         OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop"),
@@ -133,6 +174,24 @@ function runStatusProbe(options: {
 }
 
 describe("#4207 connected-client readiness", () => {
+  test("first-time connect escapes a rejected hub catalog before stderr output", () => {
+    const probe = runStatusProbe({
+      connected: false,
+      ladder: OLD_CLI,
+      connectRejectCatalog: JSON.stringify({
+        models: [{ slug: "gpt-5.6-sol", supported_reasoning_levels: [{ effort: "bad\nFORGED\x1b[2J" }] }],
+      }),
+    });
+    expect(probe.exitCode).toBe(1);
+    expect(probe.catalogUnchanged).toBe(true);
+    expect(probe.status.state).toBe("disconnected");
+    expect(probe.lines).toEqual([]);
+    expect(probe.errors[0]).toContain("catalog_incompatible:");
+    expect(probe.errors[0]).toContain("bad\\x0aFORGED\\x1b[2J");
+    expect(probe.errors[0]).toContain("gpt-5.6-sol");
+    expect(probe.errors.join(" ")).not.toMatch(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/);
+  });
+
   test("an installed catalog the local CLI rejects is not reported as ready", () => {
     const probe = runStatusProbe({ connected: true, ladder: OLD_CLI });
 
@@ -157,6 +216,21 @@ describe("#4207 connected-client readiness", () => {
     // exactly the failure this issue describes.
     expect(probe.lines[1]).toContain("Local Codex CLI: not ready");
     expect(probe.lines.find(line => line.startsWith("Hub:"))).toBeDefined();
+  });
+
+  test("terminal controls in catalog effort names remain data in status diagnostics", () => {
+    const effort = "rogue\nFORGED\x1b]52;c;SGVsbG8=\x07\u2028after";
+    const probe = runStatusProbe({
+      connected: true,
+      ladder: OLD_CLI,
+      catalog: JSON.stringify({
+        models: [{ slug: "gpt-5.6-sol", supported_reasoning_levels: [{ effort: "high" }, { effort }] }],
+      }),
+    });
+
+    expect(probe.status.readinessReason).toContain(effort);
+    expect(probe.lines[1]).toContain("rogue\\x0aFORGED\\x1b]52;c;SGVsbG8=\\x07\\u2028after");
+    expect(probe.lines[1]).not.toMatch(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/);
   });
 
   test("a catalog the local CLI accepts is ready, with nothing to explain", () => {
@@ -237,6 +311,24 @@ describe("#4207 what ocx connect reports when the local CLI cannot use the catal
     // The connection really was saved. Saying so is what keeps the failure from reading as a
     // rollback that never happened.
     expect(report.lines.join(" ")).toContain("was saved");
+  });
+
+  test("completion diagnostics escape controls without changing readiness or failure policy", () => {
+    const reason = "진단 café\nFORGED\x1b]52;c;SGVsbG8=\x07\x00\x7f\x85\u2028\u2029";
+    const safe = "진단 café\\x0aFORGED\\x1b]52;c;SGVsbG8=\\x07\\x00\\x7f\\u0085\\u2028\\u2029";
+    const verdict: ClientCatalogReadiness = {
+      kind: "incompatible", reason, unsupportedEfforts: [reason], affectedModels: ["gpt-5.6-sol"],
+    };
+    const failed = connectCompletionReport(connection, ["codex"], verdict);
+    expect(failed.failure).toBe("client_not_ready: " + safe);
+    expect(failed.lines[0]).toContain(safe);
+    const claude = connectCompletionReport(connection, ["claude"], verdict);
+    expect(claude.failure).toBeNull();
+    expect(claude.lines.join(" ")).toContain(safe);
+    const unknown = connectCompletionReport(connection, ["codex"], { kind: "unverified", reason });
+    expect(unknown.failure).toBeNull();
+    expect(unknown.lines[1]).toContain(safe);
+    expect(verdict.reason).toBe(reason);
   });
 
   test("a Claude-only connection is told, but not failed, by an old Codex CLI", () => {
