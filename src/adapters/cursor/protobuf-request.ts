@@ -1005,6 +1005,14 @@ function toolInvocationLine(call: Extract<OcxAssistantContentPart, { type: "tool
  * - only out of `spare`, so restoring can never push the envelope past its own limit;
  * - never for an `outputElided` root, whose own output is already gone — widening the invocation
  *   there would spend the last free bytes describing an answer that is not present;
+ *   this guard is load bearing, and it is not reachable the obvious way. Truncation undershoots
+ *   its own budget by ~28 bytes, far less than a restoration costs, so a root that was merely
+ *   truncated cannot pay. What pays is initiator recovery: after the equal-share pass elides a
+ *   trailing run, recovery drops an elided sibling to fit the user turn, and the bytes it frees
+ *   become spare. It needs the share to land in a narrow window — wide enough that the clipped
+ *   invocation line survives, narrow enough that `output:` does not — and outside it the
+ *   clipped-line lookup below declines the root first. `the skip refuses to widen an elided root
+ *   even when spare would pay` pins a measured instance;
  * - never by dropping, shrinking or reordering another root, so nothing pruning chose to keep is
  *   evicted to pay for a wider invocation line.
  */

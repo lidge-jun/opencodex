@@ -91,6 +91,12 @@ a small replay would otherwise clip a completed call's arguments with nearly the
 unused. After every pruning and truncation decision is final, a second pass re-widens clipped
 invocation lines out of the leftover aggregate bytes only: newest tool result first, skipping a root
 whose own output was already elided, and never dropping, shrinking or reordering a retained root.
+The elision skip is load bearing, reached through initiator recovery rather than through truncation
+alone: a truncated root undershoots its own budget by far less than a restoration costs, but after
+the equal-share pass elides a trailing run, recovery drops an elided sibling to fit the user turn and
+the freed bytes become spare. It requires the share to land in a narrow window where the clipped
+invocation line survives but `output:` does not; outside that window the clipped-line lookup declines
+the root first.
 Root-echo eligibility is `cursorNeedsExternalToolContinuation`, which includes native
 `composer-2.5`, not only external wire models, so the restoration reaches every replay that carries
 an invocation line. Coverage lives in

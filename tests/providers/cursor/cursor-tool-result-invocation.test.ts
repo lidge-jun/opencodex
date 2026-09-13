@@ -691,4 +691,172 @@ describe("cursor spare envelope budget restores clipped invocation arguments", (
     expect(line).not.toContain("…[arguments truncated]");
     expect(line).toContain(JSON.stringify(args));
   });
+
+  // The boundary case the 4,600-byte fixture cannot see: an argument only ~70 bytes over the cap.
+  // An off-by-one in the cost arithmetic (`cost > spare` vs `>=`) or in the newline-anchored
+  // clipped-line search is invisible when thousands of spare bytes surround the decision — it only
+  // shows up when the clip is a handful of bytes and the widened line must match exactly.
+  test("a just-over-cap argument is preserved complete", () => {
+    const args = { contents: "A".repeat(2100) };
+    const root = resultRoot(encode(writeFileHistory(args), "grok-4.6-high"));
+    expect(root).toBeDefined();
+    expect(root).toContain("SENTINEL_OUTPUT");
+    expect(root).not.toContain("…[arguments truncated]");
+    expect(invokedLine(root)).toBe("invoked: write_file with " + JSON.stringify(args));
+  });
+
+  // Two claims, and they are not equally general — worth saying plainly, because the weaker one
+  // reads like the stronger one.
+  //
+  // No result may be evicted to pay for a wider invocation line. That is a real invariant of the
+  // pass, which only ever replaces a root with a widened copy of itself, so all sixty outputs must
+  // survive regardless of sizes.
+  //
+  // The contiguous-suffix claim is weaker. The pass walks newest-first but skips an unaffordable
+  // line with a continue rather than a break, so with UNEVEN costs a cheaper older line can still
+  // be filled in after a dearer newer one was passed over — non-contiguously, and legitimately.
+  // This fixture gives every round the same argument size, so the costs are uniform and the
+  // restored set has to be the newest contiguous suffix. What that buys is a direction check: flip
+  // the walk to oldest-first and the restored set becomes a PREFIX, which this assertion catches
+  // (verified by mutation). Do not read it as a guarantee of contiguity under mixed sizes, and do
+  // not vary the argument size in this fixture without replacing the assertion.
+  test("restoration never evicts an older result and stops at a contiguous boundary", () => {
+    const messages: OcxMessage[] = [];
+    for (let n = 0; n < 60; n++) {
+      messages.push(
+        { role: "user", content: "round " + n, timestamp: n * 3 + 1 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_" + n, name: "write_file", arguments: { path: "/f" + n, contents: "C".repeat(16 * 1024) } }],
+          timestamp: n * 3 + 2,
+        },
+        { role: "toolResult", toolCallId: "call_" + n, toolName: "write_file", content: "OUT_" + n, isError: false, timestamp: n * 3 + 3 },
+      );
+    }
+    // Wire order, oldest to newest — the order the model reads them, and the order the suffix
+    // property is stated in.
+    const results = rootTexts(encode(messages, "grok-4.6-high")).filter(text => text.startsWith("[Tool Result]"));
+    for (let n = 0; n < 60; n++) {
+      expect(results.some(text => text.includes("OUT_" + n))).toBe(true);
+    }
+    const clipped = results.map(text => invokedLine(text)?.includes("…[arguments truncated]") === true);
+    // Exactly one clipped -> restored transition, and never the reverse: under uniform costs a
+    // newest-first walk can only produce clipped-then-restored in wire order.
+    let transitions = 0;
+    for (let i = 1; i < clipped.length; i++) {
+      if (clipped[i - 1] === true && clipped[i] === false) transitions++;
+      expect(clipped[i - 1] === false && clipped[i] === true).toBe(false);
+    }
+    expect(transitions).toBe(1);
+    // Both sides non-empty: an all-restored or all-clipped run would make the boundary assertion
+    // vacuous.
+    expect(clipped.some(Boolean)).toBe(true);
+    expect(clipped.every(Boolean)).toBe(false);
+  });
+
+  // On the checkpoint path only the result is replayed — its call sits inside the covered prefix,
+  // so the pass resolves it with callBefore(replayedCalls, callId, knownCallsOffset + messageIndex).
+  // Drop the knownCallsOffset term and callBefore compares a full-history call position against a
+  // slice-local index, returns undefined for the covered call, and the line stays clipped. Only a
+  // checkpoint fixture catches that: on the full-replay path the term is identically zero.
+  test("a checkpoint-covered call keeps its argument tail in the suffix", () => {
+    const args = { contents: "A".repeat(2100) };
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Write the file.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "write_file", arguments: args }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "write_file", content: "SENTINEL_OUTPUT", isError: false, timestamp: 3 },
+    ];
+    const root = resultRoot(encodeCheckpoint(messages, "grok-4.6-high", 2));
+    expect(root).toBeDefined();
+    const line = invokedLine(root);
+    expect(line).toBeDefined();
+    expect(line).not.toContain("…[arguments truncated]");
+    expect(line).toContain(JSON.stringify(args));
+  });
+
+  // "한" is three UTF-8 bytes, so 700 of them put the 2 KiB cap boundary inside a character. When
+  // the spare budget cannot cover the whole line, truncateUtf8 walks back to a character boundary —
+  // a naive byte slice would leave U+FFFD in the stored text. The equality half alone would not say
+  // WHICH failure occurred, so the replacement character is asserted absent explicitly. Here the
+  // envelope is idle and the full argument survives the round trip intact.
+  test("a multi-byte argument survives the round trip intact", () => {
+    const args = { contents: "한".repeat(700) };
+    const root = resultRoot(encode(writeFileHistory(args), "grok-4.6-high"));
+    expect(root).toBeDefined();
+    expect(root).not.toContain("\uFFFD");
+    expect(invokedLine(root)).toContain(JSON.stringify(args));
+  });
+
+  // The outputElided skip, pinned at a configuration the test finds for itself. The guard is load
+  // bearing, and an earlier pass at this very test asserted the opposite — that elision always cuts
+  // the invocation line too, so the guard could never decide anything. A sweep of single-result
+  // fixtures agreed, and it was wrong: it never landed in the share window where the claim fails.
+  //
+  // The reachable route is not truncation on its own. A truncated root undershoots its own budget by
+  // about 28 bytes, nowhere near a restoration's cost. What pays is initiator recovery: a ~519.7 KiB
+  // system prompt leaves roughly 4.6 KiB of history budget, the equal-share pass cuts each of two
+  // trailing results to ~2.3 KiB — far enough to lose "output:" but not the clipped invocation line —
+  // and recovery then drops the older elided sibling so the user turn fits. Those freed bytes become
+  // spare, and the surviving elided root holds a clipped line the pass could now afford.
+  //
+  // That window is only ~24 bytes wide, so it moves when any envelope header changes length: pinning
+  // one literal system size made this test pass on a two-character call id and fail on a twelve-
+  // character one. It therefore searches for the window instead, and fails loudly if no size in the
+  // range produces one — which is the signal that the route closed and the guard needs re-examining,
+  // not a licence to delete the assertion.
+  //
+  // Remove the outputElided term from the pass's guard and the located root comes back widened, with
+  // the full 3,000-byte argument in a root that shows the model no output at all. Verified by
+  // mutation.
+  test("the skip refuses to widen an elided root even when spare would pay", () => {
+    const args = { contents: "A".repeat(3000) };
+    const full = JSON.stringify(args);
+    const probe = (systemBytes: number) => {
+      const messages: OcxMessage[] = [
+        { role: "user", content: "U".repeat(200), timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "c0", name: "write_file", arguments: args }],
+          timestamp: 2,
+        },
+        { role: "toolResult", toolCallId: "c0", toolName: "write_file", content: "OUT_0_" + "Y".repeat(20000), isError: false, timestamp: 3 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "c1", name: "write_file", arguments: args }],
+          timestamp: 4,
+        },
+        { role: "toolResult", toolCallId: "c1", toolName: "write_file", content: "OUT_1_" + "Y".repeat(20000), isError: false, timestamp: 5 },
+      ];
+      const bytes = encodeCursorRunRequest({
+        modelId: "grok-4.6-high",
+        conversationId: "c_elide_" + systemBytes,
+        system: ["S".repeat(systemBytes)],
+        messages: [],
+        rawMessages: messages,
+      });
+      const root = resultRoot(bytes);
+      const blobIds = runRequest(bytes)?.conversationState?.rootPromptMessagesJson ?? [];
+      const used = blobIds.reduce((sum, blobId) => sum + blobData(blobId).byteLength, 0);
+      return { root, spare: CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - used };
+    };
+    // The window: "output:" gone, but the clipped invocation line still whole, and enough envelope
+    // left over to have paid the ~968-byte widening. That last term is what makes this a test of the
+    // skip rather than of the budget.
+    let located: { root: string | undefined; spare: number } | undefined;
+    for (let systemBytes = 519600; systemBytes <= 519800 && !located; systemBytes += 2) {
+      const candidate = probe(systemBytes);
+      if (candidate.root === undefined) continue;
+      if (candidate.root.includes("\noutput:\n")) continue;
+      if (invokedLine(candidate.root)?.endsWith("…[arguments truncated]") !== true) continue;
+      if (candidate.spare <= 1024) continue;
+      located = candidate;
+    }
+    expect(located).toBeDefined();
+    // The pass declined to widen it, even though the bytes were there.
+    expect(located!.root).not.toContain(full);
+  });
 });
