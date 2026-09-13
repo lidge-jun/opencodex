@@ -252,6 +252,13 @@ const SECRET_VALUE_PATTERNS: Array<[RegExp, string]> = [
   [/((?:"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|refreshToken|accessToken|clientSecret|apiKey)"\s*:\s*"))([^"]+)(")/gi, `$1${REDACTED_SECRET}$3`],
   // Raw JSON "token" field values (Copilot token exchange bodies echo the credential here).
   [/(("token"\s*:\s*"))([^"]+)(")/gi, `$1${REDACTED_SECRET}$4`],
+  // Cognition/Devin session keys, and the bare JWTs several providers hand out.
+  // A Connect EOS trailer can quote the request that carried the key, and the
+  // rules above only fire on a label — `Bearer`, `api_key=`, `"token":` — which
+  // a quoted proto field does not have. `eyJ` is the base64url of `{"`, so the
+  // JWT rule needs a real three-segment shape and does not match ordinary prose.
+  [/\bdevin-session-token\$[A-Za-z0-9._~+/=-]{8,}/g, REDACTED_SECRET],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, REDACTED_SECRET],
   [/\b(arn:aws:[A-Za-z0-9_-]+:[A-Za-z0-9-]*:\d{12}:[A-Za-z0-9_/:+=,.@-]+)\b/g, REDACTED_SECRET],
 ];
 

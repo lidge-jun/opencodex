@@ -57,7 +57,7 @@ describe("loopback listener policy view", () => {
     expect(resolveResponsesApiAuth(
       request("/v1/responses", { "x-opencodex-api-key": "ocx_data_realsecret" }),
       wildcardConfig,
-    )).toEqual({ kind: "configured", keyId: "k1", source: "dedicated" });
+    )).toEqual({ kind: "configured", keyId: "k1", source: "dedicated", contextPrincipalId: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 
   test("both Anthropic routes finish CORS with the listener-effective policy", () => {

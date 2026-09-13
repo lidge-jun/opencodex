@@ -41,12 +41,53 @@ describe("devin adapter", () => {
       options: {},
     };
     const history = mapOcxMessagesToDevin(parsed);
-    expect(history[0]).toEqual({ role: "system", content: "be brief" });
+    // One system item carrying the prompt and, because this request advertises a
+    // tool, the shared non-OpenAI catalog contract paragraph after it.
+    expect(history[0]?.role).toBe("system");
+    expect(String(history[0]?.content)).toStartWith("be brief\n\nTool contract:");
     expect(history[1]).toEqual({ role: "user", content: "hi" });
     expect(history[2]?.role).toBe("assistant");
     expect(history[2]?.tool_calls?.[0]?.id).toBe("c1");
     expect(history[3]).toEqual({ role: "tool", content: "ok", tool_call_id: "c1" });
     expect(mapOcxToolsToDevin(parsed.context.tools)?.[0]?.name).toBe("lookup");
+  });
+
+  test("the tool catalog nudge names the bare wire names the encoder actually sends", () => {
+    // Cognition is offered `tool.name` with no namespace prefix (mapOcxToolsToDevin),
+    // so a nudge built from the default namespaced form would advertise a name the
+    // model is never given. Both Devin provider rows share this adapter, so this is
+    // the single place that covers `devin` and `devin-cli` at once.
+    const parsed: OcxParsedRequest = {
+      modelId: "swe-1-7",
+      stream: true,
+      context: {
+        systemPrompt: ["be brief"],
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        tools: [
+          { name: "exec_command", description: "run", parameters: { type: "object" } },
+          { namespace: "codex_app", name: "list_threads", description: "list", parameters: { type: "object" } },
+        ],
+      },
+      options: {},
+    };
+    const system = String(mapOcxMessagesToDevin(parsed)[0]?.content);
+    const wireNames = (mapOcxToolsToDevin(parsed.context.tools) ?? []).map((tool) => tool.name);
+    expect(wireNames).toEqual(["exec_command", "list_threads"]);
+    for (const name of wireNames) expect(system).toContain(`\`${name}\``);
+    expect(system).not.toContain("codex_app__list_threads");
+  });
+
+  test("a request with no tools keeps the system prompt exactly as it was", () => {
+    const parsed: OcxParsedRequest = {
+      modelId: "swe-1-7",
+      stream: true,
+      context: {
+        systemPrompt: ["be brief"],
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      options: {},
+    };
+    expect(mapOcxMessagesToDevin(parsed)[0]).toEqual({ role: "system", content: "be brief" });
   });
 
   test("collapseDevinModelUid strips effort suffixes to base ids", () => {

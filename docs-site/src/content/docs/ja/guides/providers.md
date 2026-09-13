@@ -116,7 +116,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
 | `devin` | `devin` | `https://server.codeium.com` | 実験的な非公式 Cognition/Devin ブリッジ。ログインは Auth0 のブラウザサインインを開き、取得したトークンを `RegisterUser` で長期 API キーに交換します。モデル一覧は `GetCascadeModelConfigs` でアカウントごとに取得し、ストリーミングは Connect-RPC 上の `runTurn` 経路のみを使います。ダッシュボードのプリセットには既定で含まれません。 |
-| `devin-cli` | `devin` | `https://server.codeium.com` | インストール済み Devin CLI がすでに保持している認証情報を取り込みます（`devin auth login` が自身の `credentials.toml` に書き込みます）。以降は `devin` プロバイダと同じく Cognition の Connect-RPC api-server へストリーミングします。ブラウザサインインも貼り付けるキーも不要です。モデル一覧とコンテキストウィンドウはアカウントのカタログから取得します。CLI 自身のローカルエージェントループ（ACP stdio）を使う場合は、別名の行に `"adapter": "devin-cli"` を指定してください。|
+| `devin-cli` | `devin` | `https://server.codeium.com` | インストール済み Devin CLI がすでに保持している認証情報を取り込みます（`devin auth login` が自身の `credentials.toml` に書き込みます）。以降は `devin` プロバイダと同じく Cognition の Connect-RPC api-server へストリーミングします。ブラウザサインインも貼り付けるキーも不要です。モデル一覧とコンテキストウィンドウはアカウントのカタログから取得します。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的。GitHub デバイスフロー + `copilot_internal` 交換（VS Code OAuth クライアント）。有効な Copilot サブスクリプションが必要で、公式のサードパーティ API ではありません。 |
 
 Google Antigravity のアカウント・プロバイダーのクォータ確認は、モデル一覧へのフォールバックも含め、固定の Google エンドポイントを使用します。その宛先では透過 Fake-IP DNS に対応し、TLS 検証、リダイレクト拒否、プライベートアドレス検査を維持します。カスタム base URL はモデル要求にのみ適用されます。`NO_PROXY` は直接接続のポリシーを維持します。

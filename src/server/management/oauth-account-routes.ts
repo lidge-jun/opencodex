@@ -78,6 +78,24 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, readManagementJsonBodyOr, rethrowManagementBodyTooLarge } from "./body";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
+
+/**
+ * Provider ids that share the Devin cloud-direct client, and therefore share its
+ * process-memory caches.
+ *
+ * `devin` signs in through RegisterUser and `devin-cli` imports a signed-in local
+ * CLI session, but both hand the same api_key to the same client, so one cache
+ * serves both and one of them clearing it is not enough.
+ */
+function isDevinCloudDirectProvider(provider: string): boolean {
+  return provider === "devin" || provider === "devin-cli";
+}
+
+async function clearDevinCloudDirectCaches(): Promise<void> {
+  const { clearCachedUserJwt, clearCachedCatalog } = await import("../../adapters/devin/cloud-direct");
+  clearCachedUserJwt();
+  clearCachedCatalog();
+}
 import { ACCOUNT_IMPORT_DEADLINE_MS, ACCOUNT_IMPORT_MAX_REQUEST_BYTES } from "../../oauth/account-import";
 import { readBoundedJsonRequestBody } from "../request-decompress";
 
@@ -255,14 +273,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     clearAccountQuotaCache(provider);
-    if (provider === "devin") {
-      // The cached user_jwt's payload contains the api_key, and the catalog is
-      // keyed by that key. Without this they outlive the credential in process
-      // memory until the JWT's own ~24 minute expiry.
-      const { clearCachedUserJwt, clearCachedCatalog } = await import("../../adapters/devin/cloud-direct");
-      clearCachedUserJwt();
-      clearCachedCatalog();
-    }
+    // The cached user_jwt's payload contains the api_key, and the catalog is
+    // keyed by that key. Without this they outlive the credential in process
+    // memory until the JWT's own ~24 minute expiry. `devin` and `devin-cli`
+    // share one cache, so gating on `devin` alone left a CLI-imported key's JWT
+    // resident after its own logout.
+    if (isDevinCloudDirectProvider(provider)) await clearDevinCloudDirectCaches();
     return jsonResponse({ success: true });
   }
 
@@ -685,6 +701,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     clearAccountQuotaCache(provider);
+    // Same reasoning as logout. Removing the last account for a provider used to
+    // leave the JWT and catalog in memory, because only the logout route cleared
+    // them.
+    if (isDevinCloudDirectProvider(provider)) await clearDevinCloudDirectCaches();
     return jsonResponse({ ok: true });
   }
 

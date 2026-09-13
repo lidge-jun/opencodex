@@ -58,8 +58,20 @@ the native passthrough there is no canonical Fast injection and no wire mapping:
 and `fastMode` injects nothing here. Resolved-Fast-policy injection applies only to routes that
 take the Chat -> Responses -> Chat bridge below. `parallel_tool_calls` is emitted only for providers opted into
 parallel tools (or pinned false by the existing provider opt-out contract).
+
+On the response side, the upstream `service_tier` echo (xAI Priority Processing, OpenAI fast
+tier) relays to the Chat Completions caller on every delivery shape: the non-streaming body
+(`responsesJsonToChatCompletion` in `src/chat/outbound.ts`), the folded stream
+(`collectChatCompletion` in `src/chat/outbound.ts`), and each synthesized SSE chunk
+(`jsonCompletionSse` in `src/server/chat-native-sse.ts`). An upstream that sends no
+`service_tier` gets no injected key. The Responses lane already relayed the same field for
+responses-wire upstreams; the responses-lane assembly for chat-wire upstreams keeps it in
+attempt telemetry only.
+
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
 or storage semantics retain the existing Chat -> Responses -> Chat bridge.
+Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
+aliasing as native Responses; see [`responses.md`](../transports/responses.md).
 
 The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
 one bounded event. EOF with an unterminated event and an event above the translator limit are typed
@@ -71,6 +83,15 @@ request-signal cancellation contracts as routed Responses transport. Because
 `src/server/chat-native.ts` repeats the pre-dispatch `selectProactiveApiKeyTransport`
 call before it binds the adapter; the pick remains inert unless a strategy is configured
 and the committed key is cooling. See [`responses.md`](../transports/responses.md).
+
+## Chat conversation identity forwarding
+
+`src/server/chat-completions.ts` preserves caller `prompt_cache_key` on the Chat-to-Responses
+bridge. Canonical ChatGPT Responses forwarding preserves `session_id`, `session-id`, `thread-id`
+and per-request `x-client-request-id` under their original names. Missing conversation identity
+stays missing; a shared prefix/cache key is not converted into a session. The direct-mode
+outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`.
+This transport contract does not prove a client's emission, Pool selection stability or cache hits.
 
 ## Chat streaming client with a JSON upstream result
 
@@ -167,3 +188,4 @@ changes prompt roles, not conversation identity, and cannot guarantee upstream c
 Instruction notice extraction scans fence ranges once and walks original lines backwards with
 a decreasing cursor. It accepts exactly one ASCII space inside the token notice, preserves
 unmatched prefix bytes, and does not repeatedly scan or copy shrinking prompt prefixes.
+Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.

@@ -42,6 +42,7 @@ The wire surfaces a client actually talks to.
 | [`data-planes/images.md`](data-planes/images.md) | Standalone image generation and edit relay. |
 | [`data-planes/search.md`](data-planes/search.md) | Hosted search relay and exact account selectors. |
 | [`data-planes/inbound-compat.md`](data-planes/inbound-compat.md) | Chat Completions inbound, Anthropic-shaped clients, and JSON-upstream streaming clients. |
+| [`remote-workspace.md`](remote-workspace.md) | Inactive workspace protocol, cryptographic identity primitives, and bounded framing. |
 
 ### Tier 4 — Providers and adapters
 
@@ -115,6 +116,7 @@ for it; see [`AGENTS.md`](AGENTS.md).
 | `src/oauth/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/reasoning-effort.ts` | [`runtime.md`](runtime.md) |
+| `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |
 | `src/remote/` | [`runtime.md`](runtime.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/router.ts` | [`runtime.md`](runtime.md) |

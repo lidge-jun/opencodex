@@ -2040,7 +2040,10 @@ describe("provider discovered model display names", () => {
     expect(afterIdentity).toEqual({
       ...beforeIdentity,
       maxOutputTokens: 500_000,
-      supportsServiceTier: false,
+      // Classified by the 2026-09-13 OAuth-lane probe: grok-4.6 is Fast-eligible on
+      // either xAI transport, so the hint fills the capability and its description.
+      supportsServiceTier: true,
+      fastTierDescription: "Priority processing, 2x token price",
     });
     expect(catalogModelSlug(output)).toBe("xai/grok-4.6");
   });

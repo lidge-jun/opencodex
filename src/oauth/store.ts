@@ -490,6 +490,30 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
       };
     }
   }
+  if (candidate.muse && typeof candidate.muse === "object") {
+    const muse = candidate.muse;
+    const cleanMuse = (value: unknown, max: number): string | undefined => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed && trimmed.length <= max && !/[\x00-\x1f\x7f]/.test(trimmed) ? trimmed : undefined;
+    };
+    const oauthAccessToken = cleanMuse(muse.oauthAccessToken, 4096);
+    const userId = cleanMuse(muse.userId, 128);
+    const tierName = cleanMuse(muse.tierName, 128);
+    const mintedAt = typeof muse.mintedAt === "number" && Number.isFinite(muse.mintedAt)
+      ? muse.mintedAt
+      : undefined;
+    // oauthAccessToken is the only load-bearing member: without it there is nothing to
+    // mint or probe with, and a row carrying only a tier label would be noise.
+    if (oauthAccessToken) {
+      normalized.muse = {
+        oauthAccessToken,
+        ...(userId ? { userId } : {}),
+        ...(tierName ? { tierName } : {}),
+        ...(mintedAt !== undefined ? { mintedAt } : {}),
+      };
+    }
+  }
   return normalized;
 }
 

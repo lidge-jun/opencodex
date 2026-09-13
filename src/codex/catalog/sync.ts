@@ -1404,6 +1404,8 @@ interface RetainedCatalogSyncResult {
   path: string;
   catalogWritten: boolean;
   comboOmissions: ComboCatalogOmission[];
+  /** Validated catalog commit (including identical bytes), or a refused refresh. */
+  refreshOutcome?: "committed" | "refused";
   /** `desired_disabled` observed under K after the provider await; nothing was written. */
   skippedReason?: "desired_disabled";
 }
@@ -2124,6 +2126,7 @@ export async function syncCatalogModels(
       path: readCodexCatalogPath(),
       catalogWritten: false,
       comboOmissions: [],
+      refreshOutcome: "refused",
     };
   }
 
@@ -2180,12 +2183,18 @@ export async function syncCatalogModels(
       modelEntitlements,
     });
   });
-  if (committed.kind === "completed" && committed.value !== null) return committed.value;
+  if (committed.kind === "completed" && committed.value !== null) {
+    return {
+      ...committed.value,
+      refreshOutcome: committed.value.skippedReason ? "refused" : "committed",
+    };
+  }
   return {
     added: 0,
     path: prepared.catalogPath,
     catalogWritten: false,
     comboOmissions,
+    refreshOutcome: "refused",
   };
 }
 
