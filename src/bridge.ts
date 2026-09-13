@@ -1293,7 +1293,9 @@ export function bridgeToResponsesSSE(
                 if (isTruncatedStopReason(event.stopReason)) failCurrentToolCall();
                 else closeCurrentToolCall();
               }
-              if (currentWebSearch) closeCurrentWebSearch("completed", []);
+              // A search still in flight when upstream truncates never returned results, so it
+              // takes the same "failed" status as the error/incomplete terminals below.
+              if (currentWebSearch) closeCurrentWebSearch(isTruncatedStopReason(event.stopReason) ? "failed" : "completed", []);
               releasePendingWebSources();
               // Redacted-only turns (or hidden thinking without a trailing signature event) still
               // need their envelope-only reasoning item so the blocks replay next turn.
