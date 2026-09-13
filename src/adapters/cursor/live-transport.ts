@@ -1,3 +1,4 @@
+import { cursorPolicyErrorExplanation } from "./policy-error";
 import http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { namespacedToolName, type OcxProviderConfig, type OcxUsage } from "../../types";
@@ -209,7 +210,8 @@ export function parseConnectEndStreamError(payload: Uint8Array): Error | null {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(payload)) as { error?: { code?: string; message?: string } };
     if (parsed?.error) {
-      return new Error(`Cursor Connect error ${parsed.error.code ?? "unknown"}: ${parsed.error.message ?? "Unknown error"}`);
+      const explanation = cursorPolicyErrorExplanation(parsed.error);
+      return new Error(`Cursor Connect error ${parsed.error.code ?? "unknown"}: ${explanation ?? parsed.error.message ?? "Unknown error"}`);
     }
     return null;
   } catch {

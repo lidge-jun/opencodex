@@ -374,6 +374,16 @@ advertised effort control on those models as proof of upstream-native reasoning 
 
 ## `cursor`
 
+For the recognized Fable data-retention policy gate, OpenCodex displays an explanation and the
+official policy-review URL instead of only `failed_precondition: Error`. Recognition uses the
+binary structured error; other or changed gate details retain the generic error. Review in Cursor itself;
+the proxy does not accept policies or execute upstream consent actions. For the Fable data-retention
+gate, sign in to the same Cursor account and review the policy in the
+[Cursor Dashboard](https://cursor.com/dashboard/restricted_models/claude-fable-5), then retry your request.
+This is the approval route linked by [Cursor’s Fable documentation](https://cursor.com/docs/models/claude-fable-5#enabling-fable-5). Unknown or malformed
+structured details retain the generic error, and precondition failures remain non-retryable.
+
+
 **Targets:** Cursor's `agent.v1.AgentService/Run` over HTTP/2 Connect streaming at `api2.cursor.sh`
 by default. With `upstreamHttpVersion: "http1.1"` (or `"h1"`), uses Cursor's HTTP/1.1
 compatibility pair: `agent.v1.AgentService/RunSSE` for server output and

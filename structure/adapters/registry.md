@@ -141,3 +141,5 @@ medium/high/max UID before accepting a suffix already present in the model id.
 The merged `devin` provider uses this resolver for every account, whichever login
 path minted the credential. Omitted effort preserves an explicit
 variant; unrelated model families retain their existing suffix precedence.
+
+Cursor Connect failures preserve [bounded structured error details](../providers/cursor.md#cursor-structured-error-details); policy acknowledgement remains a user action and structured precondition failures remain non-retryable.

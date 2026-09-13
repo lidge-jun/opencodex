@@ -106,3 +106,13 @@ Combo child requests normalize effort and thinking controls against the selected
 `src/adapters/cursor.ts` surfaces the first bare context overflow before attempting conversation remint on later eligible requests. `cursorClientThreadOwner` recognizes both client thread aliases; `src/adapters/cursor/thread-continuity.ts` limits recovery to three remints per retained identity-scoped owner, with a one-hour idle TTL and 2,048-entry bound. Conversation-only requests have no stable owner and do not automatically remint. Quota/rate errors, tool-result resumes, partial output, local side effects, isolated helper/shadow requests and compaction remain fail-closed. Isolated requests neither consume the parent allowance nor invalidate its checkpoint. Eligible overflow checks refresh existing retention timestamps and LRU position even after the cap is exhausted, without allocating absent scopes. Retention expiry, eviction or process restart resets the in-memory allowance; this is not a persistent lifetime cap or semantic-progress policy.
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+
+## Cursor structured error details
+
+The Cursor end-stream parser recognizes the observed Fable policy gate from a bounded
+`aiserver.v1.ErrorDetails` protobuf value: MODEL_BLOCKED plus the exact policy title and detail.
+It returns code-owned explanatory text and the official Cursor Dashboard review URL. Unknown or
+malformed details retain the generic Connect error. The optional JSON debug representation,
+upstream buttons, URLs, analytics, and consent actions are not forwarded or executed. Recognition
+is deliberately limited to this known gate, so arbitrary upstream text cannot change downstream
+error classification. Policy acknowledgement remains a user action; this rejection stays non-retryable.
