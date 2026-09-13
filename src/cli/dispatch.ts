@@ -961,6 +961,12 @@ export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Pro
     printUsage();
     return 0;
   }
+  if (command === "internal") {
+    // Routed here rather than as a runner key so it stays out of DISPATCH_COMMANDS and
+    // therefore out of the registry-parity gate. See src/cli/internal-command.ts.
+    const { handleInternalCommand } = await import("./internal-command");
+    return await handleInternalCommand(deps.args.slice(1));
+  }
   const runner = commandRunners[resolveDispatchCommand(command) ?? ""];
   if (!runner) {
     console.error(`Unknown command: ${command}`);
@@ -976,7 +982,18 @@ export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Pro
  */
 async function handleDesktopAppRestart(log: Pick<Console, "log" | "error">): Promise<void> {
   const { restartCodexDesktopApp } = await import("../codex/desktop-app-restart");
-  const result = restartCodexDesktopApp();
+  const { startDesktopRestartHandoff } = await import("../codex/desktop-app/handoff");
+  const result = restartCodexDesktopApp({
+    // The CLI is the one caller whose exit is exactly the signal the helper waits for,
+    // so it is the one caller allowed to hand off. The management service is not (it
+    // runs in a proxy that never exits) and the helper itself is not (recursion).
+    startHandoff: () => {
+      const outcome = startDesktopRestartHandoff();
+      return outcome.kind === "started"
+        ? { helperPid: outcome.helperPid, logPath: outcome.logPath }
+        : null;
+    },
+  });
   switch (result.reason) {
     case "unsupported_platform":
       log.error(
@@ -1001,10 +1018,20 @@ async function handleDesktopAppRestart(log: Pick<Console, "log" | "error">): Pro
         + "manually to refresh the model picker.",
       );
       return;
+    case "handoff_started":
+      // Saying the session will end is the point. The operator is about to lose the
+      // terminal they typed into, and a message that omits that reads as a hang.
+      log.log(
+        "This command is running inside the Codex app, so the restart was handed off to "
+        + `a detached helper (pid ${result.handoff?.helperPid ?? 0}). The app will quit and `
+        + `relaunch in a moment; this session will end with it. Outcome: ${result.handoff?.logPath ?? ""}`,
+      );
+      return;
     case "self_ancestry":
       log.error(
-        "Refusing to restart the desktop app because this command is running inside it. "
-        + "Run 'ocx sync --restart-desktop-app' from an external terminal instead.",
+        "Refusing to restart the desktop app because this command is running inside it, "
+        + "and the restart could not be handed off to a detached helper. "
+        + "Run 'ocx sync --restart-codex' from a terminal outside the app instead.",
       );
       return;
     case "process_probe_failed":

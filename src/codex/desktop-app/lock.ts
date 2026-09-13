@@ -26,6 +26,7 @@
  */
 import { mkdirSync, openSync, closeSync, writeSync, readFileSync, unlinkSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { getConfigDir } from "../../config/paths";
 
 /** A lock older than this is stale regardless of what its owner pid says. */
 const LOCK_MAX_AGE_MS = 5 * 60_000;
@@ -214,7 +215,7 @@ export function releaseDesktopRestartLock(io: DesktopRestartLockIo = {}): void {
 }
 
 export function defaultLockPath(): string {
-  const home = process.env.OPENCODEX_HOME
-    ?? join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".opencodex");
-  return join(home, "desktop-restart.lock");
+  // getConfigDir owns OPENCODEX_HOME resolution, including ~ expansion and the caching
+  // every other consumer sees. Re-deriving it here would drift from it.
+  return join(getConfigDir(), "desktop-restart.lock");
 }
