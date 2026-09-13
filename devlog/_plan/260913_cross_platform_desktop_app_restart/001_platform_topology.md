@@ -19,7 +19,7 @@ Two hosts were measured: the maintainer's laptop (`local`) and `macmini-cf`.
 | Root process | pid 15901, ppid 1 | pid 25712, ppid 1 |
 | Root argv[0] | `/Applications/ChatGPT.app/Contents/MacOS/ChatGPT` | same |
 | bun | `~/.bun/bin/bun` 1.4.0 | `~/.bun/bin/bun` 1.3.14 |
-| opencodex checkout | this worktree | `/Users/junny/Developer/opencodex` |
+| opencodex checkout | this worktree | `~/Developer/opencodex` |
 
 The bundle **name** is `ChatGPT` but the bundle **identifier** is `com.openai.codex`.
 Discovery must key on the identifier: the display name is shared with a different

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
@@ -17,7 +17,25 @@ import {
  * which is what shows the move to a shared ladder preserved that platform.
  */
 
-const BUNDLE = "/Applications/ChatGPT.app";
+/**
+ * A REAL directory, not the conventional `/Applications/ChatGPT.app`.
+ *
+ * Discovery resolves the bundle through `realpathSync`, which touches the actual
+ * filesystem and cannot be intercepted by the exec seam. Pointing these cases at the
+ * conventional path made them pass on a machine with Codex installed and fail on a
+ * Linux CI runner without it - the local pass was an accident of the developer's own
+ * machine. Building the bundle under a temp directory makes the case hermetic and
+ * exercises the same code path everywhere.
+ */
+const BUNDLE = (() => {
+  const root = join(mkdtempSync(join(tmpdir(), "ocx-bundle-")), "ChatGPT.app");
+  mkdirSync(join(root, "Contents", "MacOS"), { recursive: true });
+  // realpath it HERE so the fixture and the adapter agree. Discovery resolves the
+  // bundle, and on macOS the temp directory lives under /var, which is a symlink to
+  // /private/var - leaving the fixture unresolved makes every enumerated process fall
+  // outside the resolved root and the tree reads as empty.
+  return realpathSync(root);
+})();
 const SHELL = BUNDLE + "/Contents/MacOS/ChatGPT";
 const HELPER = BUNDLE + "/Contents/Frameworks/Codex Framework.framework/Versions/152.0.7977.83/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)";
 const CRASHPAD = BUNDLE + "/Contents/Frameworks/Codex Framework.framework/Versions/152.0.7977.83/Helpers/browser_crashpad_handler";

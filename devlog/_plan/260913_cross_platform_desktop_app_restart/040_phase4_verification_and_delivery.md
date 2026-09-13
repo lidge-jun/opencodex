@@ -36,7 +36,7 @@ afterwards rather than from the terminal that issued it.
 
 Each host runs the branch from a checkout, not from its installed `ocx`:
 
-- `macmini-cf`: `/Users/junny/Developer/opencodex` exists; `~/.bun/bin/bun` 1.3.14.
+- `macmini-cf`: `~/Developer/opencodex` exists; `~/.bun/bin/bun` 1.3.14.
   `node` is absent from the non-interactive PATH, so every command uses absolute
   paths and `bun`, never the `~/.bun/bin/ocx` npm shim (which fails with
   `env: node: No such file or directory`).
