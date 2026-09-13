@@ -180,6 +180,29 @@ describe("ZCode local agent", () => {
     const other = new FakeClient(); await run(fixture(), other, next);
     expect(other.calls[0]?.method).toBe("session/create");
   });
+  test("a fresh ZCode session safely projects replayed reasoning and tool history", async () => {
+    const parsed = request();
+    parsed.context.messages = [
+      { role: "user", content: "Inspect the repository", timestamp: 0 },
+      { role: "assistant", timestamp: 1, content: [
+        { type: "thinking", thinking: "private reasoning must not cross providers" },
+        { type: "toolCall", id: "call_old", name: "exec_command", arguments: { command: "pwd" } },
+      ] },
+      { role: "toolResult", toolCallId: "call_old", toolName: "exec_command",
+        content: "/workspace", isError: false, timestamp: 2 },
+      { role: "assistant", content: [{ type: "text", text: "The repository is available." }], timestamp: 3 },
+      { role: "user", content: "Continue with the fix", timestamp: 4 },
+    ];
+    const client = new FakeClient();
+    expect((await run(fixture(), client, parsed)).at(-1)?.type).toBe("done");
+    const sent = String(client.calls.find(call => call.method === "session/send")?.params.content);
+    expect(sent).toContain("[historical tool call: exec_command]");
+    expect(sent).toContain("tool exec_command result: /workspace");
+    expect(sent).toContain("assistant: The repository is available.");
+    expect(sent).toContain("user: Continue with the fix");
+    expect(sent).not.toContain("private reasoning");
+    expect(sent).not.toContain('"command":"pwd"');
+  });
   test("post-send failures are non-retryable incomplete, not failover candidates", async () => {
     const client = new FakeClient("failed"); const events = await run(fixture(), client);
     expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "zcode_agent_interrupted", retryable: false });
@@ -214,10 +237,13 @@ describe("ZCode local agent", () => {
     const client = new FakeClient(); const events = await run(fixture(), client, request(), AbortSignal.abort());
     expect(events.at(-1)?.type).toBe("error"); expect(client.calls).toHaveLength(0);
   });
-  test("rejects images and client tool results instead of silently losing them", async () => {
+  test("rejects residual media that escaped text-only normalization", async () => {
     const parsed = request(); parsed.context.messages = [{ role: "user", timestamp: 0,
-      content: [{ type: "image", url: "https://example.invalid/image.png" }] }];
-    const client = new FakeClient(); expect((await run(fixture(), client, parsed)).at(-1)?.type).toBe("error");
+      content: [{ type: "image", imageUrl: "https://example.invalid/image.png" }] }];
+    const client = new FakeClient();
+    expect((await run(fixture(), client, parsed)).at(-1)).toMatchObject({
+      type: "error", message: "ZCode image input was not converted to text before native dispatch.",
+    });
     expect(client.calls).toHaveLength(0);
   });
 });

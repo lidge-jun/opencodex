@@ -1,6 +1,6 @@
 import { refreshAccount } from "./account-runtime";
 import { createHash } from "node:crypto";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../types";
+import type { OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import type { ProviderAdapter } from "../base";
 import { ZcodeClient } from "./client";
 import { loadZcodeSettings, readZcodeModels, record, type JsonObject, type ZcodeSettings } from "./settings";
@@ -45,17 +45,51 @@ async function lock(key: string, signal?: AbortSignal): Promise<() => void> {
   return release;
 }
 
+function textualContent(content: string | OcxContentPart[]): string {
+  if (typeof content === "string") return content;
+  return content.map(part => {
+    if (part.type === "text") return part.text;
+    if (part.type === "image") {
+      throw new Error("ZCode image input was not converted to text before native dispatch.");
+    }
+    throw new Error("ZCode video input is unsupported by the native Desktop bridge.");
+  }).join("\n");
+}
+
+function safeLabel(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 128) || "unknown";
+}
+
+/**
+ * Project Responses history onto the app-server's text-only `session/send` wire.
+ *
+ * Starting a ZCode session after another provider means the replay can legitimately contain
+ * assistant reasoning, tool calls and their results. Those are history, not new client tool
+ * instructions: omit hidden reasoning, render calls as inert labels, and keep textual results.
+ * Images must already have been described/stripped by the shared vision pipeline.
+ */
+function transcriptLine(message: OcxMessage): string | undefined {
+  if (message.role === "assistant") {
+    const content = message.content.flatMap(part => {
+      if (part.type === "text") return part.text ? [part.text] : [];
+      if (part.type === "toolCall") return [`[historical tool call: ${safeLabel(part.name)}]`];
+      // Never disclose or replay another provider's hidden chain of thought.
+      return [];
+    }).join("\n");
+    return content.trim() ? `assistant: ${content}` : undefined;
+  }
+  if (message.role === "toolResult") {
+    const content = textualContent(message.content);
+    const status = message.isError ? " error" : " result";
+    return `tool ${safeLabel(message.toolName)}${status}: ${content}`;
+  }
+  return `${message.role}: ${textualContent(message.content)}`;
+}
+
 function textInput(parsed: OcxParsedRequest, resumed: boolean): string {
   const messages = parsed.context.messages;
   const current = resumed ? messages.slice(parsed._continuationConversationMessageIndex ?? -1) : messages;
-  const lines = current.map(message => {
-    if (message.role === "toolResult") throw new Error("ZCode executes its own tools; client tool results are unsupported.");
-    const content = typeof message.content === "string" ? message.content : message.content.map(part => {
-      if (part.type !== "text") throw new Error("ZCode bridge currently accepts text only.");
-      return part.text;
-    }).join("\n");
-    return `${message.role}: ${content}`;
-  });
+  const lines = current.map(transcriptLine).filter((line): line is string => line !== undefined);
   const prompt = [...(parsed.context.systemPrompt ?? []), ...lines].join("\n\n");
   if (!prompt.trim() || prompt.length > 200_000) throw new Error("ZCode input is empty or exceeds the bridge limit.");
   return prompt;
