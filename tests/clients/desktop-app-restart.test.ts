@@ -28,6 +28,15 @@ function withTrustedExes<T>(run: () => T): T {
 interface Call { file: string; args: string[] }
 
 /** Scripted exec seam: discovery, then process list, then whatever the branch does. */
+/**
+ * A lock path this case owns. The restart takes a singleton lock, so a case using the
+ * real default path would fail with restart_in_flight after any interrupted run, and
+ * would write into a directory the tests do not own.
+ */
+function isolatedLock(): { lockPath: string } {
+  return { lockPath: join(mkdtempSync(join(tmpdir(), "ocx-desktop-restart-")), "lock") };
+}
+
 function scriptedIo(options: {
   discovery?: string;
   processes?: string;
@@ -43,7 +52,7 @@ function scriptedIo(options: {
     // the suite would contend on the developer's real ~/.opencodex lock - a leftover
     // from an interrupted run would then fail every case with restart_in_flight, and a
     // passing run would leave state behind in a directory the tests do not own.
-    lock: { lockPath: join(mkdtempSync(join(tmpdir(), "ocx-desktop-restart-")), "lock") },
+    lock: isolatedLock(),
     ancestryPids: () => options.ancestry ?? [4242],
     sleep: () => {},
     now: (() => { let t = 0; return () => (t += 500); })(),
@@ -73,6 +82,7 @@ describe("Codex desktop app restart (#2292)", () => {
   test("is a no-op on a platform with no adapter and never execs anything", () => {
     const calls: Call[] = [];
     const result = restartCodexDesktopApp({
+          lock: isolatedLock(),
       platform: "freebsd",
       execFile: (f, a) => { calls.push({ file: f, args: [...a] }); return ""; },
     });
@@ -196,6 +206,7 @@ describe("Codex desktop app restart (#2292)", () => {
   test("every probe is bounded by a timeout", () => {
     const seen: (number | undefined)[] = [];
     withTrustedExes(() => restartCodexDesktopApp({
+          lock: isolatedLock(),
       platform: "win32",
       ancestryPids: () => [4242],
       sleep: () => {},
@@ -255,6 +266,7 @@ describe("Codex desktop app restart — kill-authority guards (#2292)", () => {
   test("an unreadable ancestry chain fails closed instead of assuming we are outside it", () => {
     const calls: Call[] = [];
     const result = withTrustedExes(() => restartCodexDesktopApp({
+          lock: isolatedLock(),
       platform: "win32",
       sleep: () => {},
       isAlive: () => false,
@@ -278,6 +290,7 @@ describe("Codex desktop app restart — kill-authority guards (#2292)", () => {
     const calls: Call[] = [];
     const parents: Record<number, string> = { 900: "800", 800: "1000", 1000: "0" };
     const result = withTrustedExes(() => restartCodexDesktopApp({
+          lock: isolatedLock(),
       platform: "win32",
       sleep: () => {},
       isAlive: () => false,
