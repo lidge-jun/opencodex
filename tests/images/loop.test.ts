@@ -7,6 +7,12 @@ import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { parseStreamWithProgress, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
+import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
+
+const realParseStreamWithProgress = parseStreamWithProgress;
+let useRealProgressStream = false;
+let fulfillCallCount = 0;
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
 let runWithImageBridgeProduction: typeof import("../../src/images/loop")["runWithImageBridge"];
@@ -23,14 +29,15 @@ beforeAll(async () => {
   process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
   mock.restore();
   mock.module("../../src/web-search/progress-stream", () => ({
-    parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
-      for await (const e of parse(_resp)) yield e;
+    parseStreamWithProgress: async function* (_resp: Response, parse: ProviderAdapter["parseStream"], opts: ParseStreamWithProgressOptions) {
+      if (useRealProgressStream) yield* realParseStreamWithProgress(_resp, parse, opts);
+      else for await (const e of parse(_resp, opts.translatorBudget)) yield e;
     },
     RoutedModelInactivityError: class extends Error { readonly timeoutMs = 0; },
     WebSearchStreamProtocolError: class extends Error { /* */ },
   }));
   mock.module("../../src/images/fulfill", () => ({
-    fulfillImageCall: async (): Promise<ImageCallResult> => fulfillResult,
+    fulfillImageCall: async (): Promise<ImageCallResult> => { fulfillCallCount++; return fulfillResult; },
   }));
   ({
     runWithImageBridge: runWithImageBridgeProduction,
@@ -62,9 +69,193 @@ const defaultFulfillResult: ImageCallResult = {
   files: ["/test/img.png"], count: 1, markdown: "![image](/test/img.png)",
 };
 beforeEach(() => {
+  useRealProgressStream = false;
+  fulfillCallCount = 0;
   fulfillResult = { ...defaultFulfillResult, files: [...defaultFulfillResult.files] };
   buildRequestCalls = 0;
   streamQueue = [];
+});
+
+describe.each(["runTurn", "parseStream"] as const)("image-loop collection bounds — %s", mode => {
+  beforeEach(() => { useRealProgressStream = true; });
+
+  function streamingAdapter(events: () => Generator<AdapterEvent>) {
+    const state = { produced: 0, terminalProduced: false, closed: false, cancelled: false, signal: undefined as AbortSignal | undefined, requests: [] as OcxParsedRequest[] };
+    async function* source(): AsyncGenerator<AdapterEvent> {
+      try {
+        for (const event of events()) {
+          if (state.signal?.aborted) return;
+          state.produced++;
+          if (event.type === "done") state.terminalProduced = true;
+          yield event;
+          // Keep queue backlog small: the regression is cumulative iteration retention.
+          await Bun.sleep(1);
+        }
+      } finally { state.closed = true; }
+    }
+    const adapter: ProviderAdapter = {
+      name: "bounded-media-fixture",
+      buildRequest: async (_parsed, incoming) => {
+        state.signal = incoming.abortSignal;
+        state.requests.push(_parsed);
+        return { url: "https://example.invalid/model", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response(new ReadableStream<Uint8Array>({
+        cancel() { state.cancelled = true; },
+      })),
+      parseStream: source,
+      ...(mode === "runTurn" ? {
+        runTurn: async (_parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void) => {
+          state.signal = incoming.abortSignal;
+          state.requests.push(_parsed);
+          for await (const event of source()) emit(event);
+        },
+      } : {}),
+    };
+    return { adapter, state };
+  }
+
+  test("aborts retained-event overflow before the producer reaches its terminal", async () => {
+    const { adapter, state } = streamingAdapter(function* () {
+      const text = "x".repeat(1024 * 1024);
+      for (let i = 0; i < 40; i++) yield { type: "text_delta", text };
+      yield { type: "done" };
+    });
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan });
+    const sse = await response.text();
+    await Bun.sleep(5);
+    expect(state.terminalProduced).toBe(false);
+    expect(state.produced).toBeLessThan(40);
+    expect(state.signal?.aborted).toBe(true);
+    expect(state.closed).toBe(true);
+    if (mode === "parseStream") expect(state.cancelled).toBe(true);
+    expect(sse).toContain('"code":"translation_buffer_limit"');
+    expect(sse).not.toContain("event: response.completed");
+    expect(fulfillCallCount).toBe(0);
+  });
+
+  test("aborts cumulative UTF-8 arguments before media fulfillment or terminal", async () => {
+    const { adapter, state } = streamingAdapter(function* () {
+      yield { type: "tool_call_start", id: "oversize", name: "image_gen" };
+      const argumentsChunk = "한".repeat(Math.floor(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES / 6));
+      for (let i = 0; i < 4; i++) {
+        yield { type: "tool_call_delta", arguments: argumentsChunk };
+        yield { type: "heartbeat" };
+      }
+      yield { type: "tool_call_end" };
+      yield { type: "done" };
+    });
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan });
+    const sse = await response.text();
+    await Bun.sleep(5);
+    expect(state.terminalProduced).toBe(false);
+    expect(state.produced).toBeLessThan(9);
+    expect(state.signal?.aborted).toBe(true);
+    expect(state.closed).toBe(true);
+    if (mode === "parseStream") expect(state.cancelled).toBe(true);
+    expect(sse).toContain('"code":"translation_buffer_limit"');
+    expect(sse).not.toContain("event: response.completed");
+    expect(fulfillCallCount).toBe(0);
+    expect(translatorLiveBudgetCountForTests()).toBe(1); // Only the caller-owned budget remains.
+  });
+
+  test.each([0, 1])("retained JSON array boundary plus %i byte", async extra => {
+    const first: AdapterEvent[] = [{ type: "text_delta", text: "" }, ...imageCallEvents];
+    const overhead = Buffer.byteLength(JSON.stringify(first));
+    first[0] = { type: "text_delta", text: "x".repeat(TRANSLATOR_MAX_TURN_BYTES - overhead + extra) };
+    let iteration = 0;
+    const { adapter } = streamingAdapter(function* () {
+      if (iteration++ === 0) yield* first;
+      else { yield { type: "text_delta", text: "finished" }; yield { type: "done" }; }
+    });
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan });
+    const sse = await response.text();
+    expect(sse.includes('"code":"translation_buffer_limit"')).toBe(extra === 1);
+    expect(sse.includes("event: response.completed")).toBe(extra === 0);
+    expect(fulfillCallCount).toBe(extra === 0 ? 1 : 0);
+  });
+
+  test("resets the retained-event budget between media iterations", async () => {
+    let iteration = 0;
+    const { adapter } = streamingAdapter(function* () {
+      if (iteration++ < 2) {
+        yield { type: "text_delta", text: "x".repeat(18 * 1024 * 1024) };
+        yield* imageCallEvents;
+      } else { yield { type: "text_delta", text: "finished" }; yield { type: "done" }; }
+    });
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan });
+    const sse = await response.text();
+    expect(sse).toContain("event: response.completed");
+    expect(sse).not.toContain("translation_buffer_limit");
+    expect(fulfillCallCount).toBe(2);
+  });
+
+  test("accepts exact UTF-8 argument limits per call and preserves opaque metadata", async () => {
+    let iteration = 0;
+    const signatures = ["first-synthetic-signature", "second-synthetic-signature"];
+    const { adapter, state } = streamingAdapter(function* () {
+      if (iteration++ > 0) { yield { type: "done" }; return; }
+      for (const signature of signatures) {
+        yield { type: "tool_call_start", id: signature, name: "image_gen", providerMetadata: { google: { thoughtSignature: signature } } };
+        const prefix = '{"prompt":"';
+        const suffix = '"}';
+        yield { type: "tool_call_delta", arguments: prefix + "x".repeat(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES - prefix.length - suffix.length - 4) };
+        yield { type: "tool_call_delta", arguments: "\uD83D" };
+        yield { type: "heartbeat" };
+        yield { type: "tool_call_delta", arguments: "\uDE00" + suffix };
+        yield { type: "tool_call_end" };
+      }
+      yield { type: "done" };
+    });
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan });
+    const sse = await response.text();
+    expect(sse).toContain("event: response.completed");
+    expect(sse).not.toContain("translation_buffer_limit");
+    expect(fulfillCallCount).toBe(2);
+    const assistant = state.requests[1]?.context.messages.find(message => message.role === "assistant");
+    const calls = assistant?.role === "assistant" ? assistant.content.filter(part => part.type === "toolCall") : [];
+    expect(calls.map(call => call.providerMetadata?.google?.thoughtSignature)).toEqual(signatures);
+    expect(calls.map(call => Buffer.byteLength(JSON.stringify(call.arguments)))).toEqual([TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_CALL_ARGUMENT_BYTES]);
+  });
+
+  test("passes normal real tool calls through without media fulfillment", async () => {
+    const { adapter } = streamingAdapter(function* () {
+      yield { type: "tool_call_start", id: "real", name: "read_file", providerMetadata: { google: { thoughtSignature: "real-call-signature" } } };
+      yield { type: "tool_call_delta", arguments: '{"path":"example.txt"}' };
+      yield { type: "tool_call_end" };
+      yield { type: "done" };
+    });
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan });
+    const sse = await response.text();
+    expect(sse).toContain("event: response.completed");
+    expect(sse).toContain('"name":"read_file"');
+    expect(sse).toContain('"thought_signature":"real-call-signature"');
+    expect(fulfillCallCount).toBe(0);
+  });
+
+  test("consumer cancellation aborts and releases an active collector", async () => {
+    const { adapter, state } = streamingAdapter(function* () {
+      for (let i = 0; i < 100; i++) yield { type: "text_delta", text: "pending" };
+      yield { type: "done" };
+    });
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan });
+    const reader = response.body!.getReader();
+    const draining = (async () => { while (!(await reader.read()).done) { /* keep demanding SSE */ } })();
+    try {
+      for (let i = 0; i < 20 && state.produced === 0; i++) await Bun.sleep(1);
+      expect(state.produced).toBeGreaterThan(0);
+    } finally {
+      await reader.cancel("synthetic consumer closed");
+      await draining;
+    }
+    await Bun.sleep(5);
+    expect(state.signal?.aborted).toBe(true);
+    expect(state.closed).toBe(true);
+    expect(state.terminalProduced).toBe(false);
+    if (mode === "parseStream") expect(state.cancelled).toBe(true);
+    expect(fulfillCallCount).toBe(0);
+    expect(translatorLiveBudgetCountForTests()).toBe(1);
+  });
 });
 
 const mockAdapter: ProviderAdapter = {
@@ -731,6 +922,74 @@ describe("runWithImageBridge", () => {
 // ---------------------------------------------------------------------------
 
 describe("runWithImageBridge — runTurn adapter", () => {
+  test("queue backlog overflow keeps its upstream error instead of becoming client cancellation", async () => {
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: {
+        ...mockAdapter,
+        runTurn: async (_parsed, _incoming, emit) => {
+          for (let i = 0; i < 1100; i++) emit({ type: "tool_call_start", id: `call_${i}`, name: "read_file" });
+          emit({ type: "done" });
+        },
+      },
+    });
+    const sse = await response.text();
+    expect(sse).toContain("adapter event backlog exceeded");
+    expect(sse).not.toContain("client closed request");
+    expect(sse).not.toContain("event: response.completed");
+  });
+
+  test("a completed batch is not fulfilled after its turn signal aborts", async () => {
+    const abort = new AbortController();
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async (_parsed, _incoming, emit) => {
+        for (const event of imageCallEvents) emit(event);
+        abort.abort("synthetic cancelled turn");
+      },
+    };
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan, abortSignal: abort.signal });
+    const sse = await response.text();
+    expect(sse).not.toContain("event: response.completed");
+    expect(fulfillCallCount).toBe(0);
+  });
+
+  test("emits after runTurn settles cannot recharge its collection", async () => {
+    let lateEmit!: (event: AdapterEvent) => void;
+    let resolveRun!: () => void;
+    let incomingSignal: AbortSignal | undefined;
+    const finished = new Promise<void>(resolve => { resolveRun = resolve; });
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: (_parsed, incoming, emit) => {
+        incomingSignal = incoming.abortSignal;
+        lateEmit = emit;
+        // Alternate event types so the queue still has a batch to drain after producer settlement.
+        for (let i = 0; i < 32; i++) {
+          emit({ type: "text_delta", text: "finished" });
+          emit({ type: "thinking_delta", thinking: "synthetic thought" });
+        }
+        emit({ type: "done" });
+        resolveRun();
+        return finished;
+      },
+    };
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan });
+    const reading = response.text();
+    await finished;
+    // Queue the emit after the bridge's promise completion handler, while the batch can still drain.
+    await Promise.resolve();
+    const abortedBeforeLateEmit = incomingSignal?.aborted;
+    expect(abortedBeforeLateEmit).toBe(false);
+    expect(() => lateEmit({ type: "tool_call_start", id: "late", name: "image_gen" })).not.toThrow();
+    expect(() => lateEmit({ type: "tool_call_delta", arguments: "x".repeat(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES + 1) })).not.toThrow();
+    expect(incomingSignal?.aborted).toBe(abortedBeforeLateEmit);
+    const sse = await reading;
+    expect(sse).toContain("event: response.completed");
+    expect(sse).not.toContain("translation_buffer_limit");
+    expect(fulfillCallCount).toBe(0);
+  });
+
   let runTurnEventQueue: AdapterEvent[][] = [];
   const runTurnAdapter: ProviderAdapter = {
     ...mockAdapter,

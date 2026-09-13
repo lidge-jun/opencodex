@@ -24,7 +24,9 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import {
+  createTranslatorBudget,
   isTranslatorBudgetExceededError,
+  TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
   TRANSLATOR_MAX_TURN_BYTES,
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
@@ -99,6 +101,41 @@ interface ImageCall {
    * signature belongs to one specific part, so parallel calls must not share one value.
    */
   providerMetadata?: OcxProviderOpaqueToolCallMetadata;
+}
+
+/** Independent retention owner: adapter leases and final SSE buffers have separate lifetimes. */
+function createIterationEventBudget() {
+  const budget = createTranslatorBudget();
+  let firstEvent = true;
+  let argumentBytes: number | undefined;
+  let trailingHighSurrogate = false;
+  return {
+    retain(event: AdapterEvent): void {
+      // Heartbeats are never retained or passed to scanEventsForImageCall.
+      if (event.type === "heartbeat") return;
+      if (event.type === "tool_call_start") {
+        argumentBytes = 0;
+        trailingHighSurrogate = false;
+      } else if (event.type === "tool_call_delta" && argumentBytes !== undefined) {
+        const chunk = event.arguments;
+        argumentBytes += Buffer.byteLength(chunk);
+        // A surrogate pair may straddle adapter deltas; count the concatenated UTF-8 string.
+        if (trailingHighSurrogate && /^[\uDC00-\uDFFF]/.test(chunk)) argumentBytes -= 2;
+        if (chunk.length > 0) trailingHighSurrogate = /[\uD800-\uDBFF]$/.test(chunk);
+        if (argumentBytes > TRANSLATOR_MAX_CALL_ARGUMENT_BYTES) {
+          throw new TranslatorBudgetExceededError("tool_args", TRANSLATOR_MAX_CALL_ARGUMENT_BYTES);
+        }
+      } else {
+        argumentBytes = undefined;
+        trailingHighSurrogate = false;
+      }
+      budget.chargeRetained(Buffer.byteLength(JSON.stringify(event)) + (firstEvent ? 2 : 1), {
+        kind: "retained_collectors",
+      });
+      firstEvent = false;
+    },
+    dispose: () => budget.dispose(),
+  };
 }
 
 /**
@@ -370,6 +407,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   interface IterationResponse {
     response: Response;
     responseAdapter: ProviderAdapter;
+    /** runTurn events are already bounded; consume them without replaying or charging twice. */
+    collectedEvents?: AdapterEvent[];
   }
   type IterationSplit = ReturnType<typeof scanEventsForImageCall>;
 
@@ -397,29 +436,30 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
 
     // runTurn adapters (Cursor) own all upstream communication via an emit callback. They don't
     // expose buildRequest/fetchResponse/parseStream to the bridge, so collect their events through
-    // an AdapterEventQueue and wrap them in a pseudo-response whose parseStream replays them.
+    // an AdapterEventQueue and pass the bounded collection directly to the common scanner.
     if (adapter.runTurn) {
       await deps.waitForRequestSlot?.(signal);
       const queue = createAdapterEventQueue({
         onBacklogExceeded: () => internalAbort.abort("runTurn backlog exceeded"),
       });
-      // Attempt telemetry must fire at dispatch time (parity with fetchOnce), not after collect.
-      deps.onAttemptSend?.();
-      void adapter
-        .runTurn(
-          iterParsed,
-          {
-            headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
-            abortSignal: signal,
-            translatorBudget,
-          },
-          queue.push,
-        )
-        .then(() => queue.close())
-        .catch(err => {
-          queue.push({ type: "error", message: err instanceof Error ? err.message : String(err) });
-          queue.close();
-        });
+      const iterationBudget = createIterationEventBudget();
+      let accepting = true;
+      let collectionError: unknown;
+      const closeOnAbort = (): void => { accepting = false; queue.close(); };
+      signal.addEventListener("abort", closeOnAbort, { once: true });
+      const emit = (event: AdapterEvent): void => {
+        if (!accepting || signal.aborted) return;
+        try {
+          // Check at emission, before even a synchronous producer can fill the queue.
+          iterationBudget.retain(event);
+          queue.push(event);
+        } catch (error) {
+          collectionError = error;
+          closeOnAbort();
+          internalAbort.abort(error);
+          throw error;
+        }
+      };
 
       // Bound collect with a real *idle* deadline that resets on each emitted event.
       // A fixed wall-clock race would abort legitimate long Cursor turns that keep
@@ -439,14 +479,34 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       });
       const events: AdapterEvent[] = [];
       try {
+        // Attempt telemetry must fire at dispatch time, not after collection.
+        deps.onAttemptSend?.();
+        void adapter.runTurn(iterParsed, {
+          headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+          abortSignal: signal,
+          translatorBudget,
+        }, emit).then(closeOnAbort).catch(err => {
+          if (accepting) {
+            collectionError = err;
+            if (isTranslatorBudgetExceededError(err)) internalAbort.abort(err);
+          }
+          closeOnAbort();
+        });
         idle.reset();
         for await (const event of queue.stream()) {
           if (timedOut) break;
           idle.reset();
-          events.push(event);
+          if (event.type !== "heartbeat") events.push(event);
         }
       } finally {
+        accepting = false;
         idle.cancel();
+        signal.removeEventListener("abort", closeOnAbort);
+        iterationBudget.dispose();
+      }
+      if (collectionError) {
+        if (isTranslatorBudgetExceededError(collectionError)) throw collectionError;
+        throw new LoopError(502, collectionError instanceof Error ? collectionError.message : String(collectionError));
       }
       if (timedOut) {
         throw new LoopError(504, `runTurn inactivity timeout after ${stallTimeoutMs}ms during image-bridge`);
@@ -466,14 +526,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         }
         throw new LoopError(502, errorEvent.message);
       }
+      if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
 
-      const wrappedAdapter: ProviderAdapter = {
-        ...adapter,
-        async *parseStream() {
-          for (const e of events) yield e;
-        },
-      };
-      return { response: new Response(new Uint8Array(0), { status: 200 }), responseAdapter: wrappedAdapter };
+      return { response: new Response(new Uint8Array(0), { status: 200 }), responseAdapter: adapter, collectedEvents: events };
     }
 
     let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
@@ -643,23 +698,34 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   // Consume and validate one successful response body. Only invisible heartbeat events escape while
   // semantic output remains buffered for safe scanning.
   const consumeIterationEvents = async function* (prepared: IterationResponse): AsyncGenerator<AdapterEvent, IterationSplit> {
-    const events: AdapterEvent[] = [];
+    const events: AdapterEvent[] = prepared.collectedEvents ?? [];
+    const iterationBudget = prepared.collectedEvents ? undefined : createIterationEventBudget();
     try {
-      const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
-      for await (const event of parseStreamWithProgress(prepared.response, parse, {
-        signal,
-        inactivityTimeoutMs: stallTimeoutMs,
-        translatorBudget,
-      })) {
-        if (event.type === "heartbeat") yield event;
-        else events.push(event);
+      if (iterationBudget) {
+        const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
+        for await (const event of parseStreamWithProgress(prepared.response, parse, {
+          signal,
+          inactivityTimeoutMs: stallTimeoutMs,
+          translatorBudget,
+        })) {
+          if (event.type === "heartbeat") yield event;
+          else {
+            iterationBudget.retain(event);
+            events.push(event);
+          }
+        }
       }
     } catch (error) {
-      if (isTranslatorBudgetExceededError(error)) throw error;
+      if (isTranslatorBudgetExceededError(error)) {
+        internalAbort.abort(error);
+        throw error;
+      }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      iterationBudget?.dispose();
     }
 
     const terminalIndexes = events.flatMap((event, index) =>
