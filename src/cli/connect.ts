@@ -29,6 +29,8 @@ import {
   takeFlag,
   takeIntegerOption,
   takeOption,
+  terminalSafeError,
+  terminalSafeText,
   type RuntimeApiDeps,
 } from "./runtime-api";
 
@@ -212,7 +214,7 @@ function readinessLine(status: ClientConnectionStatus): string {
     : status.readiness === "incompatible"
       ? "not ready"
       : "unverified";
-  return `Local Codex CLI: ${label}${status.readinessReason ? ` (${status.readinessReason})` : ""}`;
+  return `Local Codex CLI: ${label}${status.readinessReason ? ` (${terminalSafeText(status.readinessReason)})` : ""}`;
 }
 
 export type ConnectCompletionReport = {
@@ -249,9 +251,10 @@ export function connectCompletionReport(
   if (readiness.kind === "unverified") {
     // Not a failure. A client with no observable Codex CLI is a working configuration, and the
     // write-time gate deliberately lets it through; saying so is the honest middle report.
-    return { lines: [connected, `Local Codex CLI: unverified (${readiness.reason}).`], failure: null };
+    return { lines: [connected, `Local Codex CLI: unverified (${terminalSafeText(readiness.reason)}).`], failure: null };
   }
-  const verdict = `Local Codex CLI: not ready (${readiness.reason})`;
+  const safeReason = terminalSafeText(readiness.reason);
+  const verdict = `Local Codex CLI: not ready (${safeReason})`;
   if (!selectedClients.includes("codex")) {
     return {
       lines: [connected, `${verdict} This connection selected ${selectedClients.join(", ")}, so nothing here launches Codex.`],
@@ -260,7 +263,7 @@ export function connectCompletionReport(
   }
   return {
     lines: [verdict, `The connection to ${connection.serverUrl} as key ${connection.apiKeyId} was saved; run 'ocx connect status' to see it.`],
-    failure: `client_not_ready: ${readiness.reason}`,
+    failure: `client_not_ready: ${safeReason}`,
   };
 }
 
@@ -344,6 +347,10 @@ async function runConnect(argv: string[], deps: ClientCommandDeps): Promise<void
     // production would let the gate fall back to its own probing, persisting default, so one
     // command could run two probes and act on two different ladders.
     catalogCompatibility: catalogObserver(deps.catalogProbeDeps),
+  }).catch((error: unknown) => {
+    // Compatibility refusals happen before the completion report and reach stderr.
+    // Keep the domain error untouched; render its message only at the CLI boundary.
+    throw terminalSafeError(error);
   });
   // The hub and the credential are proven at this point; the local runtime is not. Reporting
   // only the first half is what #4207 was filed for, so the catalog now on disk is checked
