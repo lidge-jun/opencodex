@@ -16,6 +16,7 @@ import {
   resolveOllamaWebSearchEndpoint,
   resolvePassthroughWebSearchBridgeAuth,
   shouldResolveOpenAiPassthroughWebSearchBridge,
+  sidecarSettingsForBridge,
   WEB_SEARCH_BRIDGE_ERROR_CODE,
   WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE,
   type PassthroughWebSearchBridgePlan,
@@ -28,7 +29,7 @@ import {
   setProviderRequestPacingRuntimeForTest,
   waitForProviderRequestSlot,
 } from "../../src/providers/request-pacing";
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig, ProviderWebSearchBridgeConfig } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig, ProviderWebSearchBridgeBackend, ProviderWebSearchBridgeConfig } from "../../src/types";
 
 /** One SSE event block without its blank-line delimiter. */
 function frame(type: string, payload: Record<string, unknown>): string {
@@ -752,6 +753,76 @@ describe("bridge helpers", () => {
     expect(mapped.error).toBeUndefined();
     expect(mapped.sources).toEqual([{ url: "https://example.test/rel", title: "Releases" }]);
     expect(mapped.text).toContain("2.50.0 is out");
+  });
+});
+
+// The global webSearchSidecar block carries the model chosen for ITS backend, while the bridge
+// backend is per-provider and configured independently. Without the agreement check a global
+// { backend: "openai", model: "gpt-5.6-luna" } would reach runAnthropicWebSearch on an anthropic
+// bridge, and Anthropic rejects the model.
+describe("sidecarSettingsForBridge backend/model agreement", () => {
+  function bridgePlan(backend: ProviderWebSearchBridgeBackend): PassthroughWebSearchBridgePlan {
+    return { backend, maxSearches: 3, timeoutMs: 60_000 };
+  }
+
+  test("a global sidecar model configured for another backend does not reach this bridge", () => {
+    const sidecar = { backend: "openai", model: "gpt-5.6-luna" } as const;
+    expect(sidecarSettingsForBridge("anthropic", bridgePlan("anthropic"), { sidecar }).model)
+      .toBe("claude-sonnet-5");
+    expect(sidecarSettingsForBridge("xai", bridgePlan("xai"), { sidecar }).model)
+      .toBe("grok-4.6");
+    expect(sidecarSettingsForBridge("gemini", bridgePlan("gemini"), { sidecar }).model)
+      .toBe("gemini-3.8-flash");
+  });
+
+  test("a global sidecar model configured for the same backend is kept as the operator override", () => {
+    expect(sidecarSettingsForBridge("anthropic", bridgePlan("anthropic"), {
+      sidecar: { backend: "anthropic", model: "claude-opus-4-6" },
+    }).model).toBe("claude-opus-4-6");
+    expect(sidecarSettingsForBridge("xai", bridgePlan("xai"), {
+      sidecar: { backend: "xai", model: "grok-4.6-fast" },
+    }).model).toBe("grok-4.6-fast");
+    expect(sidecarSettingsForBridge("gemini", bridgePlan("gemini"), {
+      sidecar: { backend: "gemini", model: "gemini-3.8-pro" },
+    }).model).toBe("gemini-3.8-pro");
+  });
+
+  test("an unset global sidecar backend resolves to openai and matches only an openai bridge", () => {
+    const sidecar = { model: "gpt-5.6-terra" } as const;
+    expect(sidecarSettingsForBridge("openai", bridgePlan("openai"), { sidecar }).model)
+      .toBe("gpt-5.6-terra");
+    expect(sidecarSettingsForBridge("anthropic", bridgePlan("anthropic"), { sidecar }).model)
+      .toBe("claude-sonnet-5");
+  });
+
+  test("an explicit openai sidecar backend keeps its model on an openai bridge", () => {
+    const sidecar = { backend: "openai", model: "gpt-5.6-terra" } as const;
+    expect(sidecarSettingsForBridge("openai", bridgePlan("openai"), { sidecar }).model)
+      .toBe("gpt-5.6-terra");
+  });
+
+  test("a missing global sidecar block still yields a model for the ollama bridge", () => {
+    // createOllamaBridgeExecutor passes no sidecar; the ollama arm is inert anyway since
+    // runOllamaWebSearch takes no model argument.
+    const settings = sidecarSettingsForBridge("ollama", bridgePlan("ollama"), {});
+    expect(typeof settings.model).toBe("string");
+    expect(settings.model.length).toBeGreaterThan(0);
+  });
+
+  test("reasoning, timeout, and describeImages still come from the sidecar block, the plan, and the context", () => {
+    const settings = sidecarSettingsForBridge("xai", bridgePlan("xai"), {
+      describeImages: true,
+      sidecar: { backend: "xai", model: "grok-4.6-fast", reasoning: "high" },
+    });
+    expect(settings.reasoning).toBe("high");
+    expect(settings.timeoutMs).toBe(60_000);
+    expect(settings.describeImages).toBe(true);
+
+    const unset = sidecarSettingsForBridge("xai", bridgePlan("xai"), {
+      sidecar: { backend: "xai" },
+    });
+    expect(unset.reasoning).toBe("low");
+    expect(unset.describeImages).toBe(false);
   });
 });
 

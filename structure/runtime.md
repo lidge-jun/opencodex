@@ -246,6 +246,21 @@ disarmed rather than falling through to another paid search. A leg that mixes an
 `web_search` call with another client-executed tool still fails closed. Assistant text is not
 treated as a search instruction.
 
+The bridge backend and the global `webSearchSidecar` block are configured independently, so the
+sidecar's `model` applies to a bridge search only when `resolveSidecarBackend(webSearchSidecar.backend)`
+equals that bridge backend; otherwise the bridge runs the backend's own default. An unset global
+backend resolves to `openai`, so an unset-backend model reaches an `openai` bridge and no other.
+There is no per-provider `webSearchBridge.model`, so a mismatched backend gets the default rather
+than a vendor-specific override. This is a model and settings rule, not a credential one:
+`resolvePassthroughWebSearchBridgeAuth` switches on the bridge backend and consults only that
+backend's credential locator, so no key crosses backends. `reasoning` and `xSearch` are not gated —
+`reasoning` is a generic effort level and `xSearch` is xai-only with no per-backend default and no
+`webSearchBridge` equivalent. `resolveSidecarBackend` lives in `src/web-search/sidecar-providers.ts`
+rather than the `src/web-search/index.ts` barrel so the bridge can answer this question without a
+value import of the barrel; the barrel re-exports it.
+`tests/web-search/web-search-passthrough-bridge.test.ts` covers the mismatch and matching cases for
+anthropic, xai, and gemini, plus the unset-backend default.
+
 ## Remote Hub hardening ownership
 
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.

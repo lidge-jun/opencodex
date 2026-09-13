@@ -61,6 +61,7 @@ import {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
   findXaiSidecarProvider,
+  resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
 } from "./sidecar-providers";
 
@@ -677,7 +678,7 @@ export interface PassthroughWebSearchBridgeExecutorContext {
   auth?: PassthroughWebSearchBridgeAuth;
   hostedTool?: Record<string, unknown>;
   describeImages?: boolean;
-  sidecar?: Pick<OcxWebSearchSidecarConfig, "model" | "reasoning" | "xSearch">;
+  sidecar?: Pick<OcxWebSearchSidecarConfig, "backend" | "model" | "reasoning" | "xSearch">;
 }
 
 const DEFAULT_OPENAI_BRIDGE_MODEL = "gpt-5.6-luna";
@@ -686,18 +687,52 @@ const DEFAULT_XAI_BRIDGE_MODEL = "grok-4.6";
 const DEFAULT_GEMINI_BRIDGE_MODEL = "gemini-3.8-flash";
 const DEFAULT_BRIDGE_REASONING = "low";
 
-function sidecarSettingsForBridge(
+/**
+ * Search model each bridge backend runs when the global sidecar block was configured for a
+ * DIFFERENT backend (see modelForBridgeBackend). Exhaustive over the backend union on purpose:
+ * a seventh backend must decide its own default here rather than fall through to a ChatGPT model.
+ * The `ollama` and `exa` rows are inert — runOllamaWebSearch takes no model argument and
+ * runExaWebSearch reads only settings.timeoutMs — and must stay that way.
+ */
+const DEFAULT_BRIDGE_MODELS: Record<ProviderWebSearchBridgeBackend, string> = {
+  ollama: DEFAULT_OPENAI_BRIDGE_MODEL,
+  openai: DEFAULT_OPENAI_BRIDGE_MODEL,
+  anthropic: DEFAULT_ANTHROPIC_BRIDGE_MODEL,
+  xai: DEFAULT_XAI_BRIDGE_MODEL,
+  gemini: DEFAULT_GEMINI_BRIDGE_MODEL,
+  exa: DEFAULT_OPENAI_BRIDGE_MODEL,
+};
+
+/**
+ * `sidecar` is the GLOBAL `config.webSearchSidecar` block, which carries the model chosen for
+ * ITS backend. The bridge backend is the per-provider `webSearchBridge.backend` and the two are
+ * configured independently, so the operator's model only means anything here when they agree:
+ * a global {backend:"openai", model:"gpt-5.6-luna"} otherwise reaches runAnthropicWebSearch and
+ * Anthropic rejects the model. On a mismatch the bridge falls back to the backend's own default.
+ * The same reasoning already pins the backend first in planWebSearch.
+ *
+ * Only the model is gated. `reasoning` is a generic effort level, and `xSearch` is xai-only with
+ * no per-backend default and no `webSearchBridge.xSearch` equivalent, so gating it would make an
+ * openai sidecar plus an xai bridge plus x_search impossible to express at all.
+ */
+function modelForBridgeBackend(
+  backend: ProviderWebSearchBridgeBackend,
+  sidecar: Pick<OcxWebSearchSidecarConfig, "backend" | "model">,
+): string {
+  const backendDefault = DEFAULT_BRIDGE_MODELS[backend];
+  if (resolveSidecarBackend(sidecar.backend) !== backend) return backendDefault;
+  return sidecar.model ?? backendDefault;
+}
+
+/** The settings a bridge executor will run with. Exported for tests; the executor closes over it. */
+export function sidecarSettingsForBridge(
   backend: ProviderWebSearchBridgeBackend,
   plan: PassthroughWebSearchBridgePlan,
   context: PassthroughWebSearchBridgeExecutorContext,
 ): SidecarSettings {
   const sidecar = context.sidecar ?? {};
-  const model = backend === "anthropic" ? sidecar.model ?? DEFAULT_ANTHROPIC_BRIDGE_MODEL
-    : backend === "xai" ? sidecar.model ?? DEFAULT_XAI_BRIDGE_MODEL
-    : backend === "gemini" ? sidecar.model ?? DEFAULT_GEMINI_BRIDGE_MODEL
-    : sidecar.model ?? DEFAULT_OPENAI_BRIDGE_MODEL;
   return {
-    model,
+    model: modelForBridgeBackend(backend, sidecar),
     reasoning: sidecar.reasoning ?? DEFAULT_BRIDGE_REASONING,
     timeoutMs: plan.timeoutMs,
     describeImages: context.describeImages === true,
