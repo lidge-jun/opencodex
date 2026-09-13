@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDevinAdapter, mapOcxMessagesToDevin, mapOcxToolsToDevin } from "../../src/adapters/devin";
+import { createDevinAdapter, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
 import { sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
@@ -198,6 +198,41 @@ describe("devin adapter", () => {
     // Every statically advertised model needs one, or the picker reports 128k.
     for (const model of DEVIN_STATIC_MODELS) {
       expect(DEVIN_MODEL_CONTEXT_WINDOWS[model]).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("SWE-2 wire effort selection", () => {
+  // Cognition spells SWE-2 effort as the model id, so an explicit effort has to
+  // beat a suffix the picker already chose. Before this, swe-2-high asked for at
+  // medium stayed high and the caller was silently ignored.
+  test.each(["medium", "high", "max"])("an explicit %s effort overrides every SWE-2 variant", async (effort) => {
+    for (const model of ["swe-2", "swe-2-medium", "swe-2-high", "swe-2-max", "swe-2.high"]) {
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", effort)).toBe(`swe-2-${effort}`);
+    }
+  });
+
+  test.each([
+    ["none", "medium"], ["off", "medium"], ["minimal", "medium"],
+    ["low", "medium"], ["xhigh", "max"], ["ultra", "max"],
+  ])("maps %s to the supported SWE-2 %s lane", async (effort, expected) => {
+    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused", effort)).toBe(`swe-2-${expected}`);
+  });
+
+  // Case is normalised, which the source contribution did not do: a caller that
+  // sends HIGH means the same lane as high.
+  test("effort matching is case-insensitive", async () => {
+    expect(await resolveWireModelUidForTests("swe-2-medium", "unused", "unused", "HIGH")).toBe("swe-2-high");
+  });
+
+  test("omitted or unknown effort preserves an explicit variant", async () => {
+    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused")).toBe("swe-2-high");
+    expect(await resolveWireModelUidForTests("swe-2-max", "unused", "unused", "future-effort")).toBe("swe-2-max");
+  });
+
+  test("other model families keep their existing suffix precedence", async () => {
+    for (const model of ["claude-opus-5-medium", "gpt-5-6-sol-high", "swe-1-7-high", "swe-20-high"]) {
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", "max")).toBe(model);
     }
   });
 });

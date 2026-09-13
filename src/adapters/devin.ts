@@ -85,6 +85,39 @@ function hasEffortSuffix(modelId: string): boolean {
 }
 
 /**
+ * SWE-2 ships exactly three native lanes. Cognition spells them as the model id,
+ * not as a separate effort field, so an explicit caller effort has to be resolved
+ * to the UID before the suffix shortcut below accepts whatever the picker sent.
+ *
+ * Kept as a named table rather than an inline branch because EFFORT_SUFFIXES does
+ * not carry `ultra`, `off`, or `minimal`, so the two would drift apart silently.
+ * Values below Medium select Medium: SWE-2 has no lane under it, and rounding down
+ * to nothing would quietly disable its reasoning.
+ */
+const SWE2_EFFORT: Record<string, "medium" | "high" | "max"> = {
+  none: "medium",
+  off: "medium",
+  minimal: "medium",
+  low: "medium",
+  medium: "medium",
+  high: "high",
+  xhigh: "max",
+  ultra: "max",
+  max: "max",
+};
+
+/**
+ * Resolve an explicit effort onto a SWE-2 lane, or undefined when this is not a
+ * SWE-2 id or the caller named no usable effort. Undefined leaves every existing
+ * path untouched, which is what keeps other model families on suffix precedence.
+ */
+function resolveSwe2Variant(modelId: string, reasoningEffort?: string): string | undefined {
+  if (!/^swe-2(?:-(?:medium|high|max))?$/.test(modelId)) return undefined;
+  const mapped = reasoningEffort ? SWE2_EFFORT[reasoningEffort.toLowerCase()] : undefined;
+  return mapped ? `swe-2-${mapped}` : undefined;
+}
+
+/**
  * Resolve the wire model UID using the live catalog as the source of truth.
  * Cognition's catalog lists most models with an effort suffix
  * (e.g. `gpt-5-6-sol-high`); the base id alone is not accepted for those.
@@ -103,6 +136,11 @@ async function resolveWireModelUid(
   reasoningEffort?: string,
 ): Promise<string> {
   const modelId = normalizeDevinModelId(rawModelId);
+  // Explicit effort wins over a suffix the picker already baked into the id, so
+  // `swe-2-high` asked for at `medium` becomes `swe-2-medium` instead of ignoring
+  // the caller. Runs before the shortcut below, which would otherwise return early.
+  const swe2 = resolveSwe2Variant(modelId, reasoningEffort);
+  if (swe2) return swe2;
   if (hasEffortSuffix(modelId)) return modelId;
   const catalog = await getCachedCatalog(apiKey, host);
   if (catalog) {
@@ -119,6 +157,13 @@ async function resolveWireModelUid(
   const effort = reasoningEffort && EFFORT_SUFFIXES.has(reasoningEffort) ? reasoningEffort : "medium";
   return `${modelId}-${effort}`;
 }
+
+/**
+ * Test seam. The resolver stays module-private because it reaches the catalog;
+ * exporting it under its bare name would make an async network-touching helper
+ * part of the adapter public API. Mirrors sanitizeToolDescriptionForCognitionForTests.
+ */
+export const resolveWireModelUidForTests = resolveWireModelUid;
 
 export class DevinMissingCredentialError extends Error {
   constructor() {

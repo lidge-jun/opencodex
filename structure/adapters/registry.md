@@ -97,3 +97,10 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+
+## SWE-2 model effort selection
+
+`src/adapters/devin.ts` resolves an explicit SWE-2 reasoning effort to the native
+medium/high/max UID before accepting a suffix already present in the model id.
+Both Devin provider rows share this resolver. Omitted effort preserves an explicit
+variant; unrelated model families retain their existing suffix precedence.
