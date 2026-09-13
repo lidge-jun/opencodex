@@ -70,6 +70,27 @@ const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWri
 const KIMI_K27_CODE_HIGHSPEED: Cost4 = { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 1.9 };
 const KIMI_K26: Cost4 = { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
 const KIMI_K25: Cost4 = { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0.6 };
+/*
+ * Z.AI GLM list prices (USD / 1M tokens), verified 2026-09-13 against
+ * https://docs.z.ai/guides/overview/pricing. Neither z.ai nor bigmodel.cn
+ * publishes a cache-write rate — both list cache storage as limited-time free —
+ * so cacheWrite is 0 everywhere. glm-4.5-flash and glm-4.7-flash are officially
+ * "Free" and deliberately get no rows: a zero-cost overlay is inert in the
+ * resolver, which requires a nonzero tuple. glm-5-turbo / glm-5v-turbo are
+ * published only in CNY on bigmodel.cn and stay unregistered — the same hold
+ * the xiaomi CNY rows took in devlog/_fin/260720_toks_speed_price_columns/003.
+ * glm-4.5 (0.6/2.2/0.11), glm-4.5-air (0.2/1.1/0.03) and glm-4.5v (0.6/1.8/0.11)
+ * are verified on the same page but no registered provider exposes them, so
+ * they have no constants here.
+ */
+const GLM_46: Cost4 = { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 };
+const GLM_46V: Cost4 = { input: 0.3, output: 0.9, cacheRead: 0.05, cacheWrite: 0 };
+const GLM_47: Cost4 = { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 };
+const GLM_5: Cost4 = { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 0 };
+const GLM_51: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+const GLM_52: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+const GLM_53: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+const GLM_53_FLASH: Cost4 = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 };
 const QWEN38_MAX: Cost4 = { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 };
 // Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
 const CLAUDE_SONNET_46: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
@@ -104,6 +125,13 @@ const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-deta
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
 const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cacheWrite derived = input, Kimi auto-cache has no write billing)";
+// Z.AI publishes one USD table for the international surface; the Coding Plan
+// subscription and the domestic bigmodel.cn endpoints bill differently
+// (subscription quota / CNY tiers), so every GLM row below is verified-derived:
+// the numbers are the verified z.ai list prices shown as estimates.
+const ZAI_PRICING = "https://docs.z.ai/guides/overview/pricing (official USD table, 2026-09-13; cacheWrite=0 — cache storage is limited-time free on both z.ai and bigmodel.cn)";
+const ZAI_CODING_PLAN_NOTE = "z.ai list price shown as estimate; GLM Coding Plan is subscription-billed";
+const BIGMODEL_NOTE = "z.ai international list price shown as estimate; domestic bigmodel.cn billing is CNY tiered (docs.bigmodel.cn/cn/guide/start/pricing)";
 // 260804: Qwen3.8-Max shipped as a stable model and Qwen published a per-token rate, which
 // is the exit condition the previous Routeway reseller overlay named. Two caveats are
 // deliberately in the source string rather than dropped: the figure comes from Qwen's own
@@ -236,6 +264,45 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "alibaba-token-plan-intl", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
   // Cursor Auto router — Cursor's published fixed token price (verified).
   { provider: "cursor", modelId: "auto", cost4: { input: 1.25, output: 6, cacheRead: 0.25, cacheWrite: 1.25 }, source: "https://docs.cursor.com/account/pricing + https://cursor.com/blog/aug-2025-pricing", verifiedAt: "2026-07-20", status: "verified" },
+  // Z.AI GLM family — the zai bundle's rows are all-zero upstream, and the four
+  // provider surfaces below resolve overlays by exact provider id, so each one
+  // needs its own rows (same pattern as kimi/moonshot/kimi-code). All rows are
+  // verified-derived: the tuples are the verified z.ai USD list prices, while
+  // the Coding Plan rows are subscription products and zhipu-bigmodel is the
+  // domestic CNY-tiered PAYG — see ZAI_CODING_PLAN_NOTE / BIGMODEL_NOTE.
+  // zai (api.z.ai Coding Plan) exposes: glm-5.3, glm-5.3[1m], glm-5.3-flash,
+  // glm-5.2, glm-5.2[1m], glm-5.1, glm-5, glm-4.6.
+  { provider: "zai", modelId: "glm-5.3", cost4: GLM_53, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.3[1m]", cost4: GLM_53, source: `derived: glm-5.3 1M-context compat notation; ${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.2", cost4: GLM_52, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.2[1m]", cost4: GLM_52, source: `derived: glm-5.2 1M-context compat notation; ${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.1", cost4: GLM_51, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5", cost4: GLM_5, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-4.6", cost4: GLM_46, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // zhipu-bigmodel (open.bigmodel.cn PAYG) exposes: glm-4.6, glm-4.7,
+  // glm-4.7-flash (officially free — no row), glm-5, glm-5.1, glm-5.2, glm-5.3,
+  // glm-4.6v.
+  { provider: "zhipu-bigmodel", modelId: "glm-4.6", cost4: GLM_46, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-4.6v", cost4: GLM_46V, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-4.7", cost4: GLM_47, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-5", cost4: GLM_5, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-5.1", cost4: GLM_51, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-5.2", cost4: GLM_52, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-5.3", cost4: GLM_53, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // zhipu-bigmodel-coding exposes the same roster as the zai Coding Plan row.
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3", cost4: GLM_53, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3[1m]", cost4: GLM_53, source: `derived: glm-5.3 1M-context compat notation; ${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.2", cost4: GLM_52, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.2[1m]", cost4: GLM_52, source: `derived: glm-5.2 1M-context compat notation; ${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.1", cost4: GLM_51, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5", cost4: GLM_5, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-4.6", cost4: GLM_46, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // zhipu-bigmodel-responses exposes glm-5.3, glm-5.3-flash, glm-5-turbo; the
+  // turbo id is CNY-only upstream and stays unregistered (see the GLM_* note).
+  { provider: "zhipu-bigmodel-responses", modelId: "glm-5.3", cost4: GLM_53, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-responses", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
 ];
 
 /**

@@ -298,8 +298,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 70 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(70);
+  test("16. shipped overlay membership: 95 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(95);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -370,6 +370,33 @@ describe("resolveMatchedPrice", () => {
       "alibaba-token-plan/qwen3.8-max",
       "alibaba-token-plan-intl/qwen3.8-max",
       "cursor/auto",
+      // Z.AI GLM family — the zai bundle is all-zero upstream, so each exposing
+      // provider surface carries its own verified-derived rows (z.ai USD list).
+      "zai/glm-5.3",
+      "zai/glm-5.3[1m]",
+      "zai/glm-5.3-flash",
+      "zai/glm-5.2",
+      "zai/glm-5.2[1m]",
+      "zai/glm-5.1",
+      "zai/glm-5",
+      "zai/glm-4.6",
+      "zhipu-bigmodel/glm-4.6",
+      "zhipu-bigmodel/glm-4.6v",
+      "zhipu-bigmodel/glm-4.7",
+      "zhipu-bigmodel/glm-5",
+      "zhipu-bigmodel/glm-5.1",
+      "zhipu-bigmodel/glm-5.2",
+      "zhipu-bigmodel/glm-5.3",
+      "zhipu-bigmodel-coding/glm-5.3",
+      "zhipu-bigmodel-coding/glm-5.3[1m]",
+      "zhipu-bigmodel-coding/glm-5.3-flash",
+      "zhipu-bigmodel-coding/glm-5.2",
+      "zhipu-bigmodel-coding/glm-5.2[1m]",
+      "zhipu-bigmodel-coding/glm-5.1",
+      "zhipu-bigmodel-coding/glm-5",
+      "zhipu-bigmodel-coding/glm-4.6",
+      "zhipu-bigmodel-responses/glm-5.3",
+      "zhipu-bigmodel-responses/glm-5.3-flash",
     ]) {
       expect(keys.has(expected)).toBe(true);
     }
