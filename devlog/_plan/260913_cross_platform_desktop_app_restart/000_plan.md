@@ -136,7 +136,7 @@ file rather than from a transcript.
 |---|---|---|
 | wp1 roadmap | **done** | `000`, `001`, `002`, `010`, `020`, `030`, `040` on `codex/260913-cross-platform-desktop-restart` |
 | wp2 shared surface | **done** | `010`; commits de44e6a6..49e36f1d |
-| wp5 self-handoff | not started | `020` |
+| wp5 self-handoff | **built, cycle not yet closed** | `020`; commits d1efbebd, 75722903 |
 | wp3 contract merge | not started | `030` |
 | wp4 verification and delivery | not started | `040` |
 
@@ -159,6 +159,11 @@ named staging file always succeeds. All folded and re-audited to PASS.
 The lesson for the remaining phases: a plan section saying "fails closed" is not
 evidence that the code does. Each of the three defects reads as correct until the
 error shape is checked against what the runtime actually throws.
+
+**FSM note for whoever resumes.** The cycle currently open is bound to **wp3**, not
+wp5: both became ready when wp2 closed and the orchestrator activated wp3. The wp5
+code is built, audited and committed regardless; the open cycle should now deliver
+wp3 and close, and wp5's record lives in the goalplan task ledger.
 
 **Direction for wp5.** Build `020` as written. The lock it depends on already exists
 and is verified, including the transfer that lets the helper inherit ownership, so
