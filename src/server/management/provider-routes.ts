@@ -257,7 +257,10 @@ function providerEditorCandidate(
     if (namespaceCollision) return { ok: false, status: 409, error: namespaceCollision, code: "provider_namespace_conflict" };
     const merged = mergeProviderEditorRow(persisted.providers[name], baseline.providers[name], publicProvider);
     const transportCandidate = providerTransportValidationCandidate(merged as unknown as Record<string, unknown>);
-    const providerError = providerManagementConfigError(name, transportCandidate)
+    // The editor merges onto the persisted row, so stored operator overlays (selectedModels,
+    // disabled, …) ride along in the candidate. They are owned by their own write boundaries;
+    // the seed check must only pin the canonical transport/auth keys.
+    const providerError = providerManagementConfigError(name, transportCandidate, { allowOperatorOverlays: true })
       ?? providerEmptyToolOutputConfigError(name, transportCandidate)
       ?? providerServiceTierConfigError(name, transportCandidate);
     if (providerError) return { ok: false, status: 400, error: providerError, code: "invalid_provider" };
@@ -829,6 +832,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const providerError = providerManagementConfigError(
       name,
       providerTransportValidationCandidate(provider as unknown as Record<string, unknown>),
+      // Reload validates a row straight off disk, which legitimately carries stored
+      // operator overlays; only the canonical transport/auth keys need to match the seed.
+      { allowOperatorOverlays: true },
     )
       ?? providerEmptyToolOutputConfigError(name, provider);
     if (providerError) return jsonResponse({ error: "provider reload target invalid" }, 409);
@@ -1271,6 +1277,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         : providerManagementConfigError(
             name,
             providerTransportValidationCandidate(next as unknown as Record<string, unknown>),
+            // PATCH merges the mask onto the persisted row, which legitimately carries
+            // stored operator overlays (selectedModels, disabled, …); only the canonical
+            // transport/auth keys need to match the seed.
+            { allowOperatorOverlays: true },
           )
           ?? providerEmptyToolOutputConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
@@ -1314,6 +1324,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           : providerManagementConfigError(
               name,
               providerTransportValidationCandidate(replay.next as unknown as Record<string, unknown>),
+              { allowOperatorOverlays: true },
             )
             ?? providerEmptyToolOutputConfigError(name, replay.next);
         if (syncError) {
