@@ -10,6 +10,7 @@ import {
   CodexAuthContextError,
   CodexDirectAuthenticationError,
   CodexMainProfileDrainingError,
+  CodexModelAvailabilityError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
   codexMainProfileDrainingResponse,
@@ -676,9 +677,17 @@ describe("Codex auth context", () => {
     });
 
     await expect(resolve(["gpt-daybreak-blue-latest"]))
-      .rejects.toThrow("Codex accounts that support this model are currently unavailable");
+      .rejects.toMatchObject({
+        name: "CodexModelAvailabilityError",
+        reason: "temporarily_unavailable",
+        message: "Codex accounts that support this model are currently unavailable",
+      } satisfies Partial<CodexModelAvailabilityError>);
     await expect(resolve(["gpt-5.6-sol"]))
-      .rejects.toThrow("No eligible Codex account supports this model");
+      .rejects.toMatchObject({
+        name: "CodexModelAvailabilityError",
+        reason: "unsupported",
+        message: "No eligible Codex account supports this model",
+      } satisfies Partial<CodexModelAvailabilityError>);
 
     const mainExcludedSnapshot: CodexModelEntitlementSnapshot = {
       modelsByAccount: new Map(),
@@ -697,7 +706,10 @@ describe("Codex auth context", () => {
         expect(options?.excludeAccountIds?.has(MAIN_CODEX_ACCOUNT_ID)).toBeTrue();
         return mainExcludedSnapshot;
       },
-    })).rejects.toThrow("Codex accounts that support this model are currently unavailable");
+    })).rejects.toMatchObject({
+      reason: "temporarily_unavailable",
+      message: "Codex accounts that support this model are currently unavailable",
+    } satisfies Partial<CodexModelAvailabilityError>);
   });
 
   test("auth resolution preserves per-model detours without replacing ordinary affinity", async () => {
@@ -784,7 +796,10 @@ describe("Codex auth context", () => {
       accountId: "pool-a",
       modelId: "gpt-daybreak-blue-latest",
       resolveCodexModelEntitlements: async () => entitlementSnapshot,
-    })).rejects.toThrow("Selected Codex account does not support this model");
+    })).rejects.toMatchObject({
+      reason: "unsupported",
+      message: "Selected Codex account does not support this model",
+    } satisfies Partial<CodexModelAvailabilityError>);
   });
 
   test("ordinary native models do not pay the entitlement discovery path", async () => {

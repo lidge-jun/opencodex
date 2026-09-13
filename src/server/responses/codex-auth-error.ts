@@ -7,6 +7,7 @@ import {
   CodexDirectAuthenticationError,
   CodexMainProfileDrainingError,
   CodexMainSubstitutionUnavailableError,
+  CodexModelAvailabilityError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
 } from "../../codex/auth-context";
@@ -20,6 +21,13 @@ import { NativeProfileError } from "../../codex/native-profile-types";
 export interface CodexAuthContextErrorResponseOptions {
   accountSelector?: string;
   now: number;
+}
+
+export function codexModelAvailabilityErrorResponse(error: CodexModelAvailabilityError): Response {
+  if (error.reason === "temporarily_unavailable") {
+    return formatErrorResponse(429, "rate_limit_error", error.message);
+  }
+  return formatErrorResponse(400, "invalid_request_error", error.message);
 }
 
 export function nativeMainRefreshFailureResponse(error: unknown): Response {
@@ -85,6 +93,9 @@ export function mapCodexAuthContextErrorToResponse(
       "authentication_error",
       "Selected Codex account needs reauthentication",
     );
+  }
+  if (error instanceof CodexModelAvailabilityError) {
+    return codexModelAvailabilityErrorResponse(error);
   }
   if (error instanceof CodexPoolAuthenticationError || error instanceof CodexDirectAuthenticationError) {
     return formatErrorResponse(401, "authentication_error", error.message);

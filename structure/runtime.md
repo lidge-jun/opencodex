@@ -43,8 +43,11 @@ there. Feature code is grouped by responsibility:
 
 `src/server/` is split by responsibility: `index.ts` owns the listener and route ordering;
 `responses.ts` owns Responses handling and compaction; `images.ts` owns the standalone Images relay;
-`responses/codex-auth-error.ts` owns the shared Responses/compact Codex auth-context HTTP mapping,
-while account selection, credential materialization, logging, and transport stay in their existing handlers;
+`responses/codex-auth-error.ts` owns the shared Responses/compact Codex auth-context HTTP mapping.
+Model entitlement denial is a 400 request error and temporary exhaustion of every model-capable
+account is a retryable 429; neither is reported as an invalid API key. Images, Live, and Search
+reuse that model-availability mapping while retaining their existing credential handling. Account
+selection, credential materialization, logging, and transport stay in their existing handlers;
 `management-api.ts` owns `/api/*`;
 `lifecycle.ts`, `request-log.ts`, `relay.ts` (incl. the shared `createSseInspector` SSE inspection
 factory), `relay-eager.ts` (#314 gated eager bounded passthrough relay), `memory-watchdog.ts`

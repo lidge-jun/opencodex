@@ -15,6 +15,7 @@ import {
   cooldownErrorResponse,
   CodexAuthContextError,
   CodexMainProfileDrainingError,
+  CodexModelAvailabilityError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
 } from "../codex/auth-context";
@@ -39,6 +40,7 @@ import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
+import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-error";
 
 /**
  * Default TOTAL deadline for one search relay. alpha/search is non-streaming JSON — response
@@ -143,6 +145,7 @@ export async function handleSearch(
       console.error(`[search] Pool account ${safeAccountLabel} token failed; reauthentication required`);
       return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
     }
+    if (err instanceof CodexModelAvailabilityError) return codexModelAvailabilityErrorResponse(err);
     if (err instanceof CodexPoolAuthenticationError) return formatErrorResponse(401, "authentication_error", err.message);
     throw err;
   }
