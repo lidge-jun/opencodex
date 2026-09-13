@@ -81,26 +81,33 @@ export interface CursorNativeExecContext extends CursorNativeExecDeps {
 const REDIRECT_HINT_MAX_TOOLS = 16;
 
 /**
- * Redirect text for Cursor-native fs/shell attempts when the request catalog carries NO shell
+ * Redirect text for Cursor-native fs/shell/fetch attempts when the request catalog carries NO shell
  * bridge or other execution-path tool (an orchestrator client that only exposes delegation tools,
  * for example). The default refusal steers the model to `shell_command` / `exec_command`; when those
  * are not in the catalog some models (kimi-k3 observed) conclude every tool is unavailable and give
- * up instead of using the tools that ARE listed. Name the real catalog instead.
- * Local patch (hs, 2026-09-14) on top of 2.53.0 — see ~/.opencodex/patches.
+ * up instead of using the tools that ARE listed. Name the real catalog instead — the client tools
+ * plus any configured MCP tools advertised this turn — and stay neutral about what those tools can
+ * do, so a listed file/search/fetch tool is never contradicted.
  */
 export function cursorNativeExecRedirectHint(
   tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+  mcpToolDefs: readonly Pick<McpToolDefinition, "name" | "providerIdentifier">[] = [],
 ): string | undefined {
   if (!tools || tools.length === 0) return undefined;
   if (cursorRequestHasShellAlias(tools) || cursorRequestHasExecutionPath(tools)) return undefined;
-  const names = [...new Set(tools.map(cursorToolWireName))];
+  // Client tools are advertised under OCX_RESPONSES_TOOL_PROVIDER, so the harness shows them as
+  // `mcp_<provider>_<wire name>`; configured MCP servers are advertised under their own provider id.
+  const names = [...new Set([
+    ...tools.map(cursorToolWireName),
+    ...mcpToolDefs.map(def => `mcp_${def.providerIdentifier}_${def.name}`),
+  ])];
   const shown = names.slice(0, REDIRECT_HINT_MAX_TOOLS).map(name => `\`${name}\``).join(", ");
   const more = names.length > REDIRECT_HINT_MAX_TOOLS ? ` (+${names.length - REDIRECT_HINT_MAX_TOOLS} more)` : "";
   return (
-    "This request has no shell, read, grep, ls, write, or fetch tool. Do NOT retry Read/Glob/Grep/LS/Shell/Write/Fetch. "
-    + `The ONLY callable tools this turn are the \`${OCX_RESPONSES_TOOL_PROVIDER}\` catalog entries: ${shown}${more} `
-    + `(the harness may display them as \`mcp_${OCX_RESPONSES_TOOL_PROVIDER}_<name>\`; that is the same tool). `
-    + "Accomplish this operation NOW by calling one of those listed tools — if it needs file or shell access, delegate it through the listed tool that runs work on your behalf. "
+    `Re-issue this operation NOW through one of the tools listed in this request's catalog: ${shown}${more} `
+    + `(the harness displays a \`${OCX_RESPONSES_TOOL_PROVIDER}\` entry as \`mcp_${OCX_RESPONSES_TOOL_PROVIDER}_<name>\`; that is the same tool). `
+    + "Cursor-native Read/Glob/Grep/LS/Shell/Write/Fetch are not part of this request's catalog; do not retry them. "
+    + "Pick the listed tool that fits the operation — a listed file, search, or fetch tool if there is one, otherwise the listed tool that delegates work to a worker agent. "
     + "Do NOT narrate this redirect, do NOT comment on tool availability, and do NOT re-announce the task — just make the catalog tool call."
   );
 }

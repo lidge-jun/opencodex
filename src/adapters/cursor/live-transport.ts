@@ -698,7 +698,7 @@ class LiveCursorTransport implements CursorTransport {
       clientToolDefs,
       rejectNativeFileMutations: cursorRequestAdvertisesApplyPatch(request.tools, request.toolChoice),
       structuredEditAvailable: syntheticStructuredEditToolNames.size > 0,
-      nativeExecRedirectHint: cursorNativeExecRedirectHint(cursorVisibleTools),
+      nativeExecRedirectHint: cursorNativeExecRedirectHint(cursorVisibleTools, this.execContext.mcpToolDefs),
     };
     const toolSchemas = new Map<string, unknown>();
     const cursorToolNameMap = new Map<string, string>();

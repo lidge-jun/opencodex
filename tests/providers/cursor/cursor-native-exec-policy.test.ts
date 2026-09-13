@@ -422,7 +422,19 @@ describe("Cursor native exec catalog-aware redirect hint", () => {
     expect(hint).toContain("Do NOT narrate");
     expect(hint).not.toContain("shell_command");
     expect(hint).not.toContain("exec_command");
+    // Neutral about capabilities: a listed file/search/fetch tool must never be contradicted.
+    expect(hint).not.toMatch(/no (shell|read|grep|ls|write|fetch) tool/i);
+    expect(hint).not.toMatch(/ONLY callable/i);
     for (const pattern of SILENT_REDIRECT_FORBIDDEN) expect(hint).not.toMatch(pattern);
+  });
+
+  test("names configured MCP tools advertised for the turn by their harness display form", () => {
+    const hint = cursorNativeExecRedirectHint(
+      [{ name: "task" }],
+      [{ name: "read_file", providerIdentifier: "opencodex" }],
+    ) ?? "";
+    expect(hint).toContain("`ocx_client_task`");
+    expect(hint).toContain("`mcp_opencodex_read_file`");
   });
 
   test.each<[string, CatalogTool[] | undefined]>([
@@ -519,6 +531,9 @@ describe("Cursor native exec catalog-aware redirect hint", () => {
         failTurn = fail;
         onOpened();
       };
+      (transport as unknown as { execContext: { mcpToolDefs?: unknown[] } }).execContext.mcpToolDefs = [
+        { name: "read_file", providerIdentifier: "opencodex" },
+      ];
       const iterator = transport.run({
         modelId: "composer-2.5",
         conversationId: `redirect-hint-${tools.length}`,
@@ -537,7 +552,9 @@ describe("Cursor native exec catalog-aware redirect hint", () => {
     };
     const task: OcxTool = { name: "task", description: "Delegate work to a worker agent.", parameters: { type: "object" } };
     const bridge: OcxTool = { name: "exec_command", description: "Run a shell command.", parameters: { type: "object" } };
-    expect(await runWithTools([task])).toContain("`ocx_client_task`");
+    const hint = await runWithTools([task]);
+    expect(hint).toContain("`ocx_client_task`");
+    expect(hint).toContain("`mcp_opencodex_read_file`");
     expect(await runWithTools([task, bridge])).toBeUndefined();
   });
 });

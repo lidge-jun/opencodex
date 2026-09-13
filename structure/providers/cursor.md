@@ -24,9 +24,13 @@ The denial payload is a silent redirect whose wording follows the request catalo
 carries a shell bridge or unified `exec`, the model is redirected to `shell_command` /
 `exec_command`. When it carries neither — a delegation-only client that exposes nothing but its own
 Responses tools — `cursorNativeExecRedirectHint` in `src/adapters/cursor/native-exec.ts` names the
-request's actual `ocx_client_*` wire names instead, and the live transport injects that text into
-the per-request exec context, so a model that tried Cursor-native Read/Shell is steered to a tool
-that exists rather than to an alias it cannot see.
+request's actual wire names instead: bare client tools as `ocx_client_*`, namespaced tools as the
+`namespacedToolName` form (for example `mcp__docker__ps`), both registered under the
+`opencodex-responses` provider so the harness displays them as `mcp_opencodex-responses_<wire name>`,
+plus any configured MCP server tools advertised through `prepareMcp` as `mcp_<provider>_<name>`. The
+text stays neutral about what those tools can do — it never claims the request has no read or fetch
+tool — and the live transport injects it into the per-request exec context, so a model that tried
+Cursor-native Read/Shell is steered to a tool that exists rather than to an alias it cannot see.
 
 > Decision record: [ADR-0047](../decisions/ADR-0047-cursor-native-exec.md)
 
