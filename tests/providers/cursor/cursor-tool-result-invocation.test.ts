@@ -655,4 +655,32 @@ describe("cursor spare envelope budget restores clipped invocation arguments", (
     const stillClipped = results.filter(text => invokedLine(text)?.includes("…[arguments truncated]"));
     expect(stillClipped.length).toBeGreaterThan(0);
   });
+
+  // An adversarial counter-read of this change found the real defect here: pushDeduped built the
+  // collapsed root's wire payload from the marked text but stored the UNMARKED text in `entry.text`,
+  // so anything that rebuilt a root from `text` silently deleted the "produced N times in a row"
+  // note — the restoration pass below, and truncation before it. That note is the repetition
+  // breaker's per-entry half, so losing it re-primes the self-reinforcing loop the breaker exists to
+  // end. Restoring the arguments and keeping the note are both required.
+  test("a collapsed repeat run keeps its run note while its arguments are restored", () => {
+    const args = { contents: "A".repeat(4600) };
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Write the file.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "write_file", arguments: args }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "write_file", content: "SAME_OUTPUT", isError: false, timestamp: 3 },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "write_file", content: "SAME_OUTPUT", isError: false, timestamp: 4 },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "write_file", content: "SAME_OUTPUT", isError: false, timestamp: 5 },
+    ];
+    const results = rootTexts(encode(messages, "grok-4.6-high")).filter(text => text.startsWith("[Tool Result]"));
+    expect(results).toHaveLength(1);
+    const collapsed = results[0]!;
+    expect(collapsed).toContain("[note: this exact output was produced 3 times in a row]");
+    const line = invokedLine(collapsed);
+    expect(line).not.toContain("…[arguments truncated]");
+    expect(line).toContain(JSON.stringify(args));
+  });
 });

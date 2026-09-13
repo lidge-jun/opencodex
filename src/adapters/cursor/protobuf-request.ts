@@ -325,7 +325,12 @@ function rootPromptMessages(
       const replacement = rootBlobCandidate(
         { role: payload.role, content: [{ type: "text", text: marked }] },
         role,
-        { ...opts, messageIndex: previous.entry.messageIndex ?? opts.messageIndex },
+        // `text` must mirror the payload actually stored, not the unmarked text it was built from.
+        // It did not, and every consumer that rebuilds a root from `text` therefore dropped the run
+        // note: truncating a collapsed root silently deleted the "produced N times" line, and so did
+        // the invocation-argument restoration below. The note is the repetition breaker's per-entry
+        // half, so losing it re-primes the self-reinforcing loop the breaker exists to end.
+        { ...opts, text: marked, messageIndex: previous.entry.messageIndex ?? opts.messageIndex },
       );
       entries[entries.indexOf(previous.entry)] = replacement;
       replayRuns.set(role, { text: normalized, entry: replacement, length: runLength });
@@ -1034,13 +1039,17 @@ function restoreClippedInvocationArguments(
     const clipped = toolCallArgumentsText(call.arguments);
     if (clipped === full) continue;
     const name = namespacedToolName(call.namespace, call.name);
-    const clippedLine = `invoked: ${name} with ${clipped}`;
+    // Anchored on the preceding newline. `toolResultToText` always emits the invocation after the
+    // `[tool_result]`, `call_id:` and `name:` lines, so the real line is never first — and
+    // `name:` renders the RESULT's tool name, which nothing sanitizes, so an unanchored search could
+    // be satisfied by a crafted tool name and rewrite that header instead of the invocation.
+    const clippedLine = `\ninvoked: ${name} with ${clipped}`;
     // Absent when truncation already cut through the invocation line itself; there is nothing to
     // widen in that root, and re-rendering the envelope would undo the output truncation too.
     if (!entry.text.includes(clippedLine)) continue;
     // Callback replacement: serialized arguments routinely contain `$&`, `$'` and `$1`, and the
     // string form of `replace` expands those into the surrounding match instead of inserting them.
-    const widened = entry.text.replace(clippedLine, () => `invoked: ${name} with ${full}`);
+    const widened = entry.text.replace(clippedLine, () => `\ninvoked: ${name} with ${full}`);
     const candidate = rootBlobCandidate(
       toolResultRootPayload(widened),
       "toolResult",
