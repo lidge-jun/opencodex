@@ -106,3 +106,9 @@ function mapOcxContentToWire(content: string | OcxContentPart[] | undefined): st
 - `scripts/test-layout/layout.json` explicit → providers
 - `tests/fixtures/test-layout-expected.json`
 
+
+## 결과 (2026-09-13)
+
+- PR [#4513](https://github.com/lidge-jun/opencodex/pull/4513) squash merge: `c5d7f6a6efc22ab2fc17b377e0d6aae79c77b6a8`
+- exact-head CI (`6106478389`): test 1-4/4, macos 1-2/2, keyring/docker/npm-global/hygiene/gates 전부 green (windows shard는 runner 선택으로 skip)
+- 로컬 포커스 테스트: devin 도메인 9개 파일 154 pass / 0 fail (디버깅용; 제품 스위트·typecheck·build는 NOT RUN, 호스티드 CI가 머지 증거)
