@@ -15,13 +15,14 @@ import {
   planPassthroughWebSearchBridge,
   resolveOllamaWebSearchEndpoint,
   resolvePassthroughWebSearchBridgeAuth,
+  resetRefusedBridgeEndpointWarningsForTests,
   shouldResolveOpenAiPassthroughWebSearchBridge,
   sidecarSettingsForBridge,
   WEB_SEARCH_BRIDGE_ERROR_CODE,
   WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE,
   type PassthroughWebSearchBridgePlan,
 } from "../../src/web-search/passthrough-bridge";
-import { providerWebSearchBridgeConfigError } from "../../src/config";
+import { providerWebSearchBridgeConfigError, validateConfigCandidate } from "../../src/config";
 import { mapOllamaSearchResponse } from "../../src/web-search/ollama-executor";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../src/server/responses-undeclared-tool-guard";
 import { handleResponses } from "../../src/server/responses";
@@ -415,6 +416,105 @@ describe("webSearchBridge.endpoint destination policy", () => {
       isPassthrough: true,
       stream: true,
     })?.endpoint).toBe("https://imds.example.test/latest/meta-data");
+  });
+});
+
+// The refusal disarms the bridge without an error, which is what keeps the key unspent. That
+// silence broke a real configuration: a provider keyed under a CUSTOM name pointing at loopback
+// used to arm, and only the registry ids are local by default. The operator has to be told once.
+describe("a refused endpoint tells the operator once", () => {
+  const gateway = { baseUrl: "https://gateway.example/v1" };
+
+  function captureWarnings(run: () => void): string[] {
+    const lines: string[] = [];
+    const saved = console.warn;
+    console.warn = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+    try {
+      run();
+    } finally {
+      console.warn = saved;
+    }
+    return lines;
+  }
+
+  test("a custom-named local provider is warned, with the remedy and without the endpoint", () => {
+    resetRefusedBridgeEndpointWarningsForTests();
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://127.0.0.1:11434/api/web_search" },
+      gateway,
+    );
+    const warnings = captureWarnings(() => {
+      expect(resolveOllamaWebSearchEndpoint("my-ollama", provider)).toBeUndefined();
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("my-ollama");
+    expect(warnings[0]).toContain("allowPrivateNetwork");
+    // The destination itself never reaches the log.
+    expect(warnings[0]).not.toContain("127.0.0.1");
+    expect(warnings[0]).not.toContain("/api/web_search");
+  });
+
+  test("the same refusal does not warn again on every later request", () => {
+    resetRefusedBridgeEndpointWarningsForTests();
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5/api/web_search" },
+      gateway,
+    );
+    const warnings = captureWarnings(() => {
+      for (let i = 0; i < 5; i += 1) {
+        expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+          providerName: "local-llm",
+          isPassthrough: true,
+          stream: true,
+        })).toBeUndefined();
+      }
+    });
+    expect(warnings).toHaveLength(1);
+  });
+
+  test("an accepted endpoint is not warned about", () => {
+    resetRefusedBridgeEndpointWarningsForTests();
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://127.0.0.1:11434/api/web_search" },
+      gateway,
+    );
+    const warnings = captureWarnings(() => {
+      expect(resolveOllamaWebSearchEndpoint("ollama", provider)).toBe("http://127.0.0.1:11434/api/web_search");
+    });
+    expect(warnings).toEqual([]);
+  });
+});
+
+// The blocker this policy exists for: config load does NOT run providerWebSearchBridgeConfigError,
+// so a metadata endpoint reaches running config intact. Plan time is what refuses to spend it.
+describe("a metadata endpoint survives config load and is refused at plan time", () => {
+  test("configSchema accepts the block and the planner still disarms", () => {
+    const result = validateConfigCandidate({
+      port: 0,
+      defaultProvider: "gateway",
+      providers: {
+        gateway: {
+          adapter: "openai-responses",
+          baseUrl: "https://gateway.example/v1",
+          authMode: "key",
+          apiKey: "fixture-key",
+          webSearchBridge: {
+            enabled: true,
+            backend: "ollama",
+            endpoint: "http://169.254.169.254/latest/meta-data",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    const loaded = (result as { ok: true; config: OcxConfig }).config.providers.gateway!;
+    // It really did survive validation, untouched.
+    expect(loaded.webSearchBridge?.endpoint).toBe("http://169.254.169.254/latest/meta-data");
+    expect(planPassthroughWebSearchBridge(parsedFixture(), loaded, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
   });
 });
 

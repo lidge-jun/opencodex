@@ -65,10 +65,51 @@ import {
   xaiSearchOptionsFromConfig,
 } from "./sidecar-providers";
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { redactSecretString } from "../lib/redact";
 
 /** Canonical Ollama Cloud origin. The only origin the "ollama" backend derives on its own. */
 export const OLLAMA_CLOUD_ORIGIN = "https://ollama.com";
 const OLLAMA_WEB_SEARCH_PATH = "/api/web_search";
+
+/**
+ * Providers already warned about a destination-refused bridge endpoint. The planner runs per
+ * request, so without this a refused endpoint would warn on every turn. Keyed on provider plus
+ * endpoint so that editing the config warns again; the key itself is never logged.
+ */
+const warnedRefusedBridgeEndpoints = new Set<string>();
+/** Bound the dedupe set so a pathological config cannot grow it without limit. */
+const MAX_WARNED_REFUSED_ENDPOINTS = 64;
+
+/**
+ * A refused endpoint disarms the bridge, and the refusal itself has to stay silent at the point of
+ * use -- returning undefined is what keeps the key unspent. But silence alone made a real
+ * configuration fail invisibly: a provider keyed under a CUSTOM name (say "my-ollama") pointing at
+ * a loopback endpoint used to arm, and the destination policy now refuses it because only the
+ * registry ids are local by default. The config file never reaches
+ * "providerWebSearchBridgeConfigError", so nothing else would tell the operator. One warning per
+ * provider and endpoint gives them the remedy without leaking the destination: the URL is
+ * deliberately omitted and the provider name is redacted, because a provider key is
+ * caller-controlled and can be token-shaped.
+ */
+function warnRefusedBridgeEndpointOnce(providerName: string, endpoint: string): void {
+  const key = providerName + "\u0000" + endpoint;
+  if (warnedRefusedBridgeEndpoints.has(key)) return;
+  if (warnedRefusedBridgeEndpoints.size >= MAX_WARNED_REFUSED_ENDPOINTS) {
+    warnedRefusedBridgeEndpoints.clear();
+  }
+  warnedRefusedBridgeEndpoints.add(key);
+  console.warn(
+    "[web-search] provider " + JSON.stringify(redactSecretString(providerName))
+    + " webSearchBridge.endpoint was refused by destination policy, so the bridge stays disarmed."
+    + " Set allowPrivateNetwork:true for an intentionally local endpoint, or key the provider under"
+    + " its registry id (ollama, vllm, lm-studio, litellm).",
+  );
+}
+
+/** Test seam: the dedupe is process-wide, so a test that asserts the warning must reset it. */
+export function resetRefusedBridgeEndpointWarningsForTests(): void {
+  warnedRefusedBridgeEndpoints.clear();
+}
 
 const DEFAULT_BRIDGE_MAX_SEARCHES = 3;
 const DEFAULT_BRIDGE_TIMEOUT_MS = 60_000;
@@ -131,8 +172,10 @@ function originOf(value: string | undefined): string | undefined {
  * registry entry that is local by definition, so a local Ollama on 127.0.0.1 keeps working. This
  * is the ONLY reader of "webSearchBridge.endpoint" in the tree, which is what lets it act as the
  * authorization boundary for a config file the operator edited by hand -- that path never reaches
- * "providerWebSearchBridgeConfigError". The refusal is deliberately silent: config-time is where
- * an operator is told why, and a value that survives file load simply cannot be spent.
+ * "providerWebSearchBridgeConfigError", so a value that survives file load simply cannot be spent.
+ * The refusal returns undefined rather than an error, because disarming is what keeps the key
+ * unspent -- but it is not silent: see warnRefusedBridgeEndpointOnce for why a custom-named local
+ * provider has to be told, once, that its endpoint was refused and how to re-authorize it.
  */
 export function resolveOllamaWebSearchEndpoint(
   providerName: string,
@@ -144,7 +187,10 @@ export function resolveOllamaWebSearchEndpoint(
     if (providerDestinationConfigError(providerName, {
       baseUrl: configured,
       allowPrivateNetwork: provider.allowPrivateNetwork,
-    })) return undefined;
+    })) {
+      warnRefusedBridgeEndpointOnce(providerName, configured);
+      return undefined;
+    }
     return configured;
   }
   return originOf(provider.baseUrl) === OLLAMA_CLOUD_ORIGIN
