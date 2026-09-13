@@ -183,3 +183,71 @@ try {
 본문 침묵은 그대로 120초 idle이 잡는다. 라이브 `ageMs=137197` 사례가 있으므로
 120000은 헤더 예산으로 부족하다.
 
+
+## 사용자 지적 반영 — AssignModel 가설 검증 (2026-09-13, wp1 P 시점)
+
+사용자가 계획의 약한 곳을 짚었다: 네이티브 CLI와 Plus는 `AssignModel` RPC를 먼저
+부르는데 우리만 안 부른다. 라우팅 비용을 짧은 별도 호출로 치르지 않고 생성 요청에
+묻어버려서 헤더가 늦는 것 아니냐는 가설이다.
+
+절반은 사실이고, TTFB 원인으로는 **기각된다**.
+
+### 사실인 부분
+
+우리 트리에 `AssignModel`이 없다. `rg -in "assignmodel|assignment_jwt" src/ tests/` 결과가
+0건이다. Plus는 `devin_request.go:376`에
+`devinAssignModelPath = "/exa.api_server_pb.ApiServerService/AssignModel"`를 두고
+`devin_executor.go:641,765`에서 부른 뒤 결과 `ModelUID`와 `AssignmentJWT`(필드 26)를
+`GetChatMessage`에 싣는다.
+
+### 기각되는 부분
+
+Plus의 호출은 무조건이 아니라 가드 뒤에 있다 (`devin_executor.go:883-885`):
+
+```go
+// devinIsRouterModel reports whether a model id routes through AssignModel.
+// Thinking-effort suffixes are resolved server side.
+func devinIsRouterModel(model string) bool {
+	return strings.HasSuffix(model, "-router") || strings.Contains(model, "model-router")
+}
+```
+
+`swe-2-high`는 `-router`로 끝나지도, `model-router`를 포함하지도 않는다. 그러니 Plus도
+이 모델에서는 `AssignModel`을 부르지 않고 곧장 `GetChatMessage`로 간다 — 우리와 같다.
+주석이 직접 못을 박는다: **thinking-effort 접미사는 서버가 푼다.**
+
+따라서 `AssignModel` 누락은 사용자가 실제로 맞은 `swe-2-high` 504의 원인이 아니다.
+wp3의 헤더 예산 수정은 그대로 간다.
+
+### 그래도 남는 진짜 결손 → wp6
+
+기각됐다고 가치가 없는 건 아니다. `AssignModel`이 없으면 **라우터 uid를 아예 못 쓴다.**
+레인 A가 카탈로그에서 `adaptive`를 확인했고, 우리 `src/`에는 `adaptive`도 `router`도
+0건이다(`live-models.ts`, `devin.ts` 검색). 사용자가 라우터 모델을 고르면 우리는 그것을
+구체 uid로 바꾸지 못한 채 원시 문자열로 보낸다.
+
+이것은 TTFB와 무관한 별개 기능 결손이므로 **wp6**으로 세운다. 측정이 필요한 가설
+(핸드셰이크가 헤더 지연을 줄이는가)이 아니라, 확인된 기능 공백이다.
+
+### 함께 확정된 것 두 가지
+
+**헤더 이후는 이미 안전하다.** 추론 프레임이 생존 신호로 동작한다. 파서가 추론을
+`kind: reasoning`으로 분리하고(`chat.ts:427,753`), `resetIdle()`이 `reader.read()`가
+무엇이든 돌려주면 재무장한다. 헤더만 도착하면 그 뒤 90초를 생각해도 죽지 않는다.
+죽는 구간은 오직 헤더 이전이다. wp3가 그 한 구간만 건드리는 것이 맞다.
+
+**Plus의 타임아웃은 따라가면 안 된다.** `devin_executor.go:69,85`:
+
+```go
+devinDefaultTimeout = 120 * time.Second
+client: &http.Client{Timeout: devinDefaultTimeout},
+```
+
+Go의 `http.Client.Timeout`은 헤더가 아니라 본문 읽기까지 포함한 **전체 요청** 예산이다.
+3분짜리 정상 스트리밍 턴도 120초에 잘린다. 긴 턴에 대해서는 우리 구조(헤더 예산과
+본문 idle 분리)가 오히려 낫다. 고칠 곳은 헤더 구간 하나다.
+
+헤더 데드라인을 길게 잡는 것이 위험하지 않은 이유도 여기 있다. 업스트림이 죽으면
+TCP/HTTP2 레벨 오류가 즉시 올라와 `fetch`가 reject된다. 300초를 조용히 기다리는
+경우는 연결이 블랙홀이 된 때뿐이고, 그건 keepalive의 영역이다.
+

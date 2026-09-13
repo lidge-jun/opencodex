@@ -123,3 +123,32 @@ wp0 ──┬── wp1  #4420 carry
       └── wp5  effort 접미사 통합    (wp1 다음, 같은 함수)
 ```
 
+
+## P 단계 수정 — wp6 추가 (2026-09-13, wp1 사이클 진입 시)
+
+사용자가 `AssignModel` 누락을 지적했다. TTFB 원인으로는 기각됐지만(030 말미 참조 —
+Plus도 `devinIsRouterModel` 가드 뒤에서만 부르고 `swe-2-high`는 걸리지 않는다),
+라우터 uid를 아예 처리 못 한다는 별개 결손이 확인되어 wp6으로 세웠다.
+
+| wp | 문서 | 산출물 |
+|---|---|---|
+| wp6 | `060_wp6_assign_model_router.md` | 라우터 uid용 AssignModel 선행 호출 + 필드 26 |
+
+```
+wp0 ──┬── wp1  #4420 carry
+      │     └── wp5  effort 접미사 통합
+      ├── wp2  #4384 carry
+      └── wp3  TTFB 헤더 예산
+            └── wp4  프롬프트 캐시 / identity
+                  └── wp6  AssignModel 라우터
+```
+
+같은 검증에서 확정된 두 가지도 030에 기록했다: 헤더 이후 구간은 추론 프레임이
+`resetIdle()`을 재무장시켜 이미 안전하고, Plus의 `http.Client{Timeout: 120s}`는
+Go에서 전체 요청 예산이라 정상적인 3분 턴도 자른다 — 따라가지 않는다.
+
+| id | 기준 | 증거 |
+|---|---|---|
+| c-7 | effort 접미사 통합 merge | merge SHA + CI run id |
+| c-8 | AssignModel 라우터 지원 merge | merge SHA + CI run id |
+
