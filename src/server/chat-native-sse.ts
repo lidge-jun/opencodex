@@ -65,6 +65,10 @@ export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: T
   const id = typeof value.id === "string" ? value.id : `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const created = typeof value.created === "number" ? value.created : Math.floor(Date.now() / 1000);
   const model = requestedModel;
+  // Relay the upstream service-tier echo on every chunk, matching how OpenAI/xAI
+  // annotate streamed chat chunks, so streaming callers see the same confirmation
+  // the non-streaming body carries.
+  const serviceTier = typeof value.service_tier === "string" ? { service_tier: value.service_tier } : {};
   const choices = Array.isArray(value.choices) ? value.choices : [];
   const choice = isRec(choices[0]) ? choices[0] : {};
   const message = isRec(choice.message) ? choice.message : {};
@@ -73,6 +77,7 @@ export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: T
     object: "chat.completion.chunk",
     created,
     model,
+    ...serviceTier,
     choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
   }];
   const delta: Rec = {};
@@ -85,13 +90,14 @@ export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: T
     delta.tool_calls = message.tool_calls.filter(isRec).map((tool, index) => ({ ...tool, index }));
   }
   if (Object.keys(delta).length > 0) {
-    frames.push({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: null }] });
+    frames.push({ id, object: "chat.completion.chunk", created, model, ...serviceTier, choices: [{ index: 0, delta, finish_reason: null }] });
   }
   frames.push({
     id,
     object: "chat.completion.chunk",
     created,
     model,
+    ...serviceTier,
     choices: [{ index: 0, delta: {}, finish_reason: typeof choice.finish_reason === "string" ? choice.finish_reason : "stop" }],
     ...(value.usage !== undefined ? { usage: value.usage } : {}),
   });

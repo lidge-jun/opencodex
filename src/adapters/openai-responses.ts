@@ -24,6 +24,7 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
+import { isMetaAiResponsesDestination, rewriteMuseToolNamesForUpstream } from "../responses/muse-tool-name-alias";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import { normalizeResponsesCodeMode } from "./responses-code-mode";
 import { stripUnicodePropertyPatterns } from "./responses-tool-schema";
@@ -2370,6 +2371,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let routedCustomToolRepairNames: Set<string> | undefined;
       let convertedRoutedToolSearchNames: Set<string> | undefined;
       let convertedRoutedNamespaceToolAliases: Map<string, { namespace: string; name: string; kind: "function" | "custom" }> | undefined;
+      let convertedMuseToolNameAliases: Map<string, string> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,
@@ -2463,6 +2465,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           outBody = stripOpenAiOnlyWebSearchFields(outBody);
         }
         outBody = stripMuseSparkUnsupportedWebSearchFields(outBody, parsed.modelId, url);
+        // Host-only: api.meta.ai rejects function names over 64 chars on every Muse model,
+        // including default muse-spark-1.3. Do not reuse the contributor/Zen web_search
+        // predicates. Namespace flattening has already produced the public wire names.
+        if (isMetaAiResponsesDestination(url)) {
+          const rewritten = rewriteMuseToolNamesForUpstream(outBody);
+          outBody = rewritten.body;
+          convertedMuseToolNameAliases = rewritten.aliases;
+        }
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
@@ -2571,6 +2581,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ...(routedCustomToolRepairNames ? { routedCustomToolRepairNames } : {}),
         ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
         ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
+        ...(convertedMuseToolNameAliases ? { convertedMuseToolNameAliases } : {}),
         ...(tierLog ? { tierLog } : {}),
       };
     },

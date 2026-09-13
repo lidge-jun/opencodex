@@ -80,9 +80,9 @@ afterEach(() => {
 });
 
 describe("the client registries cannot drift apart", () => {
-  test("every list of clients holds the same registered ids", async () => {
+  test("every list of clients holds exactly the same registered ids", async () => {
     /*
-     * Five lists name the same clients, and two of them are maintained by
+     * Five lists name the same registered clients, and two of them are maintained by
      * hand: the GUI cannot import the backend registry, because that would
      * pull node:os and node:path into the browser bundle. A client added
      * server-side renders no row until someone remembers the tuple, and the

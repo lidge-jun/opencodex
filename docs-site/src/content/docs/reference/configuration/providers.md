@@ -381,11 +381,19 @@ need to rediscover. Every legacy variant id keeps routing unchanged.
 
 ### xAI Priority Processing
 
-The built-in `xai` preset advertises and injects Fast only when its effective transport uses
-`authMode: "key"`. API-key mode targets `https://api.x.ai/v1` through the `openai-chat` adapter and
-sends `service_tier: "priority"` through Chat Completions. `ocx login xai`
-instead stores OAuth credentials for the separate Grok CLI subscription-gateway flow, so OAuth
-remains unclassified: its catalog rows do not advertise Fast and the proxy does not inject a tier.
+The built-in `xai` preset supports Fast on both of its transports, with different scope.
+API-key mode targets `https://api.x.ai/v1`; routes resolved to `openai-chat` send
+`service_tier: "priority"` through Chat Completions, while model defaults and overrides can
+select the `openai-responses` transport instead. `ocx login xai`
+instead stores OAuth credentials for the Grok subscription gateway
+(`https://cli-chat-proxy.grok.com/v1`; these credentials refresh automatically), where Fast
+is classified per model (live-probed 2026-09-13): grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-reasoning,
+grok-4.20-0309-non-reasoning, grok-build-0.1, and grok-composer-2.5-fast accept
+`service_tier: "priority"` over Grok OAuth and echo it, so those rows advertise Fast, accept
+`--fast` selectors, and forward a caller-sent tier on either wire. grok-4.20-multi-agent-0309
+is excluded: the gateway answers `service_tier: "default"` when sent `priority`, so it stays
+unclassified and its caller tier is not forwarded. Unlisted models stay unclassified on both
+transports.
 
 xAI charges Priority Processing at 2× the standard token price for input, output, cached, and
 reasoning tokens; cache discounts are applied before the multiplier. Cost estimates use that premium

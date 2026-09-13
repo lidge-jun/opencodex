@@ -751,8 +751,13 @@ export async function forceRefreshCodexPoolToken(
   };
 }
 
-export async function getValidCodexToken(id: string): Promise<CodexTokenResult> {
-  const result = await resolveCodexToken(id);
+export async function getValidCodexToken(
+  id: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<CodexTokenResult> {
+  // Cancellation ends THIS caller's wait. A shared refresh already in flight keeps running for
+  // whoever else awaits it, which is what `awaitOwnCancellation` inside the resolver preserves.
+  const result = await resolveCodexToken(id, undefined, options.signal);
   return {
     accessToken: result.accessToken,
     chatgptAccountId: result.chatgptAccountId,

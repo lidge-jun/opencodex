@@ -361,6 +361,15 @@
       "documents": [
         "gui/"
       ]
+    },
+    {
+      "path": "remote-workspace.md",
+      "tier": 3,
+      "title": "Remote Workspace",
+      "scope": "Inactive workspace protocol, cryptographic identity primitives, and bounded framing.",
+      "documents": [
+        "src/remote-control/"
+      ]
     }
   ],
   "grace": {

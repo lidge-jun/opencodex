@@ -86,4 +86,6 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
 
 上限只会降低 effort。它们会向下贴合到不高于上限、且模型公开的最高档位。如果模型没有 effort 控制，或者没有任何受支持的档位可用，opencodex 会移除 effort，让提供方默认值生效。`max` 和 `ultra` 都可接受，而仪表板提供 `low` 到 `xhigh`。
 
+即使没有设置模型 effort pin，符合条件的原生 Chat Completions 轮次也会应用配置的上限。仅在应用 pin 或上限改变值时才映射为提供方的传输值；两者都未发生时，原生调用方值保留原始写法。
+
 关于 v1、default 和 v2 行为的面向初学者说明，请参阅 [Sub-agent surfaces](/guides/sub-agent-surface/)。
