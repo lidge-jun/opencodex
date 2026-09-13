@@ -3,6 +3,9 @@
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+Key-auth Responses hosted-search continuations retain the first dispatch's account binding; see
+[the dispatch contract](transports/responses.md#hosted-search-continuation-binding).
+
 ## Entrypoints
 
 | Path | Responsibility |

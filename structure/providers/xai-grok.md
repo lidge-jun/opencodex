@@ -3,6 +3,9 @@
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+The opt-in key-auth Responses hosted-search bridge uses the shared
+[continuation binding contract](../transports/responses.md#hosted-search-continuation-binding).
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:

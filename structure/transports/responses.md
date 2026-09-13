@@ -11,6 +11,19 @@ Plaintext collaboration restoration treats a null namespace as absent, rejects n
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+### Hosted-search continuation binding
+
+The opt-in key-auth Responses hosted-search bridge in `src/server/responses/core.ts` captures the
+request binding that served the first leg, after any permitted initial reselection. Before every
+continuation dispatch, after provider pacing, that binding must remain an API-key selection matching
+the configured entry, reference, revision, resolved key, authentication mode, and base URL; a
+disabled or removed provider fails the same check. Drift produces the bridge's failed terminal
+without another provider request, and an unchanged binding resends the built request with its
+executed search result appended, never re-entering the initial reselection/rebuild path. Initial
+dispatch keeps its normal reselection policy. `tests/web-search/web-search-passthrough-bridge.test.ts`
+covers drift during search, while pacing, and before first-leg headers return, plus successful
+first-dispatch reselection and result preservation.
+
 ### Credential-bearing HTTP redirects
 
 Credential/body-bearing HTTP sends use `redirect: "manual"` at the final executor boundary,

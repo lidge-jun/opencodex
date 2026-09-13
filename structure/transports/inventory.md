@@ -3,6 +3,9 @@
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+The opt-in key-auth Responses hosted-search bridge has a separate
+[continuation binding contract](responses.md#hosted-search-continuation-binding).
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport

@@ -218,6 +218,9 @@ real turn depends on it (`src/codex/warmup.ts`).
 
 ## Routed tool discovery and hosted search
 
+For opted-in key-auth Responses providers, the declared hosted-search tool follows the
+[continuation binding contract](transports/responses.md#hosted-search-continuation-binding).
+
 All routed catalog rows advertise `supports_search_tool: true` together with
 `tool_mode: "code_mode_only"` — the pair is load-bearing. The field selects Codex's deferred
 tool-discovery surface; it does not describe the hosted web-search sidecar. Under code mode,
