@@ -78,6 +78,11 @@ function darwinIo(options: {
         return psRows(rows);
       }
       if (file === "/usr/libexec/PlistBuddy") return options.bundleId ?? "com.openai.codex";
+      // Spotlight resolves to the fixture bundle. Returning nothing here let discovery
+      // fall through to the conventional /Applications path, which exists on a developer
+      // Mac and not on a CI runner - so a case meant to exercise a FAILED PROCESS PROBE
+      // reported a failed package discovery instead, depending on the machine.
+      if (file === "/usr/bin/mdfind") return BUNDLE;
       return "";
     },
   };
