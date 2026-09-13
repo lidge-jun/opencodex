@@ -566,6 +566,14 @@ describe("cursor invocation lookup is bounded by history position", () => {
  * the envelope is idle, a no-op below the cap, coverage of the native composer-2.5 path the gate
  * exists for, verbatim handling of String.replace patterns inside arguments, and a hard stop at
  * the envelope boundary.
+ *
+ * One thing to know about the two 600 KiB tests above ("PROBE a huge argument must not evict the
+ * result output from root replay" and "the truncated invocation line stays within the declared
+ * argument budget"): the refund leaves them alone because restoring a 600 KiB argument costs more
+ * than the whole envelope, so `cost > spare` is always true there. That is a size-dependent skip,
+ * not a rule that the line stays clipped — an argument over the cap but well under the envelope IS
+ * restored, which is the entire point of this block. Anyone shrinking those fixtures to speed them
+ * up would silently convert them into tests of the refund instead of tests of the cap.
  */
 describe("cursor spare envelope budget restores clipped invocation arguments", () => {
   function writeFileHistory(args: Record<string, unknown>): OcxMessage[] {
