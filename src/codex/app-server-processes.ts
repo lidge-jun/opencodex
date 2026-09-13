@@ -1176,6 +1176,19 @@ export interface AfterCatalogWriteAppServerOptions {
   restart: boolean;
   log?: Pick<Console, "log" | "error"> | null;
   io?: CodexAppServerProcessIo;
+  /**
+   * Pids already covered by a desktop-app restart in this same command.
+   *
+   * The app-server is a CHILD of the Codex desktop app on every platform, so signalling
+   * it and then quitting the app interrupts the operator's in-flight turn twice in one
+   * command. Excluding the desktop tree leaves the quit to do that work once.
+   *
+   * Standalone app-servers - the npm wrapper pair, SSH bootstraps - are not members of
+   * that tree and are still signalled. An empty list means no exclusion, which is what a
+   * failed discovery or probe yields: a missed exclusion costs an extra interruption, a
+   * wrong one leaves a stale app-server serving a roster that no longer exists.
+   */
+  excludePids?: readonly number[];
 }
 
 export interface AfterCatalogWriteAppServerResult {
@@ -1189,7 +1202,9 @@ export interface AfterCatalogWriteAppServerResult {
 export function afterCatalogWriteHandleAppServers(
   options: AfterCatalogWriteAppServerOptions,
 ): AfterCatalogWriteAppServerResult {
-  const processes = listCodexAppServerProcesses(options.io);
+  const excluded = new Set(options.excludePids ?? []);
+  const processes = listCodexAppServerProcesses(options.io)
+    .filter(process => !excluded.has(process.pid));
   const hint = STALE_CODEX_APP_SERVER_HINT;
   if (processes.length === 0) {
     return { processes, warned: false, hint };
