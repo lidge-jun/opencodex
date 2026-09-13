@@ -96,7 +96,7 @@ code can tell.
 Lane I5 is the one outcome in this train that is deliberately partial, and it is
 the better result.
 
-#4429 reads as a missing executor: a key-auth gateway echoes hosted web_search as
+Issue #4429 reads as a missing executor: a key-auth gateway echoes hosted web_search as
 a client function_call, and webSearchBridge had an executor only for ollama.
 Arming the other five backends is what #4515 landed. It does not fix the reported
 failure, and the lane said so rather than closing the issue.
@@ -122,8 +122,8 @@ completed successfully on `cb2e15ba6f8ac17af0620d6ff04fcfa7d88e3dcd`, the
 merge commit for the last implementation PR, #4515. This verifies the integrated
 batch; conditional jobs remain skips rather than claimed passes.
 
-#4429 remains partially unresolved: the non-Ollama executor slice landed, while
-mixed-tool continuation remains open. The separate follow-up is tracked in #4519.
+Issue #4429 remains partially unresolved: the non-Ollama executor slice landed, while
+mixed-tool continuation remains open. Issue #4519 separately tracks the Ollama endpoint destination-policy gap; it is not the mixed-tool continuation tracker.
 
 ## Honest limits of the proof
 
