@@ -208,6 +208,39 @@ describe("base prompt source", () => {
     }
   });
 
+  test("reports an empty model instruction override as unavailable", async () => {
+    const home = root();
+    const overridePath = join(home, "empty.md");
+    writeFileSync(join(home, "config.toml"), "model = \"gpt-test\"\nmodel_instructions_file = \"empty.md\"\n");
+    writeFileSync(overridePath, " \n\t", "utf8");
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.base).toMatchObject({
+        text: null,
+        reason: "override-empty",
+        model: "gpt-test",
+        sourcePath: overridePath,
+        effectiveSourcePath: overridePath,
+        effectiveSourceKind: "model-instructions-file",
+        representation: "unavailable",
+        effectiveTextAvailable: false,
+      });
+      expect(result.layers["base-instructions"]).toMatchObject({
+        text: null,
+        reason: "unavailable",
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
   test("reads the selected model's published base instructions as expanded text", async () => {
     await withPromptHome("gpt-test", {
       client_version: "catalog-test-1",
@@ -282,6 +315,38 @@ describe("probe failure attribution", () => {
       expect(result.failure?.kind).toBe(kind);
       expect(result.base.text).toBe("Base.");
     });
+  });
+
+  test("classifies a missing PATH fallback as program-not-found", async () => {
+    const codexHome = root();
+    const opencodexHome = root();
+    const localAppData = root();
+    const isolatedPath = root();
+    const previous = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      OPENCODEX_HOME: process.env.OPENCODEX_HOME,
+      CODEX_CLI_PATH: process.env.CODEX_CLI_PATH,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      PATH: process.env.PATH,
+    };
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = opencodexHome;
+    delete process.env.CODEX_CLI_PATH;
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.PATH = isolatedPath;
+    setPromptTextProbeCommandForTests(null);
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(false);
+      expect(result.runtime?.source).toBe("fallback");
+      expect(result.failure?.kind).toBe("program-not-found");
+      expect(result.failure?.detail).toContain("fallback");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
 

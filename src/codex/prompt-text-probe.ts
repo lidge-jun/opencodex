@@ -109,6 +109,7 @@ export interface BasePromptText {
     | "catalog-not-found"
     | "catalog-unreadable"
     | "not-published"
+    | "override-empty"
     | "override-not-found"
     | "override-unreadable";
   bytes: number;
@@ -204,6 +205,9 @@ function readBasePrompt(codexHome: string): BasePromptText {
     }
     try {
       const text = readFileSync(overridePath, "utf8");
+      if (text.trim().length === 0) {
+        return unavailable("override-empty", overridePath, overridePath, "model-instructions-file");
+      }
       return {
         text,
         reason: "ok",
@@ -345,6 +349,8 @@ function classifyRuntimeFailure(runtime: ReturnType<typeof resolveCodexRuntime>)
   const lower = detail.toLowerCase();
   const kind = /not a spawnable|unrecognized --version output/.test(lower)
     ? "command-unsupported"
+    : /enoent|not found/.test(lower)
+      ? "program-not-found"
     : /failed --version|probe sandbox unavailable/.test(lower)
       ? "execution-failed"
       : "program-not-found";

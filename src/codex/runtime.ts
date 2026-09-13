@@ -89,6 +89,7 @@ const PERSIST_FILE = "codex-runtime.json";
 const CLAMP_PERSIST_FILE = "codex-runtime-clamp.json";
 /** Probe rejection for an absolute candidate whose file is gone. Matched when retiring a dead pin (#4035). */
 const PATH_MISSING_REASON = "path does not exist";
+const PROGRAM_NOT_FOUND_REASON = "program not found (ENOENT)";
 
 function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
   const clone = (current: unknown): unknown => {
@@ -352,6 +353,9 @@ function probeVersion(
     return { ok: true, version };
   } catch (error) {
     if (!probeHome) return { ok: false, reason: "probe sandbox unavailable" };
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+      return { ok: false, reason: PROGRAM_NOT_FOUND_REASON };
+    }
     const message = error instanceof Error ? error.message : String(error);
     const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
     return { ok: false, reason: `failed --version (${redacted})` };
