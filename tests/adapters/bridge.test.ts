@@ -1502,3 +1502,111 @@ describe("bridgeToResponsesSSE owned default budget lifecycle", () => {
     }
   });
 });
+describe("array-backed string accumulation", () => {
+  test("1000 text deltas produce identical output to direct concatenation", async () => {
+    const fragments = Array.from({ length: 1000 }, (_, i) => `chunk-${i} `);
+    const expected = fragments.join("");
+
+    const events: AdapterEvent[] = [
+      ...fragments.map(text => ({ type: "text_delta" as const, text })),
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const budget = createTranslatorBudget();
+    try {
+      const frames = await collectSse(bridgeToResponsesSSE(
+        replay(events),
+        "routed/model",
+        undefined, undefined, undefined, undefined, undefined,
+        { translatorBudget: budget },
+      ));
+
+      const doneFrame = frames.find(f => f.event === "response.output_text.done");
+      expect(doneFrame).toBeDefined();
+      expect(doneFrame!.data.text).toBe(expected);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("batch mode: 1000 text deltas produce correct output", () => {
+    const fragments = Array.from({ length: 1000 }, (_, i) => `chunk-${i} `);
+    const expected = fragments.join("");
+
+    const events: AdapterEvent[] = [
+      ...fragments.map(text => ({ type: "text_delta" as const, text })),
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const budget = createTranslatorBudget();
+    try {
+      const result = buildResponseJSON(events, "routed/model", { translatorBudget: budget });
+      const output = result.output as Record<string, unknown>[];
+      const message = output.find(item => item.type === "message") as Record<string, unknown>;
+      expect(message).toBeDefined();
+      const content = message.content as Record<string, unknown>[];
+      const textContent = content.find(c => c.type === "output_text") as Record<string, unknown>;
+      expect(textContent.text).toBe(expected);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("budget limit rejection releases reservation cleanly without corrupting previous state", async () => {
+    const tightBudget = createTranslatorBudget({ maxTurnBytes: 100 });
+    try {
+      const events: AdapterEvent[] = [
+        { type: "text_delta", text: "short " },
+        { type: "text_delta", text: "x".repeat(500) },
+        { type: "done", stopReason: "end_turn" },
+      ];
+
+      const frames = await collectSse(bridgeToResponsesSSE(
+        replay(events),
+        "routed/model",
+        undefined, undefined, undefined, undefined, undefined,
+        { translatorBudget: tightBudget },
+      ));
+
+      const failedFrame = frames.find(f => f.event === "response.failed");
+      expect(failedFrame).toBeDefined();
+      const errorPayload = typeof failedFrame!.data === "string" ? JSON.parse(failedFrame!.data) : failedFrame!.data;
+      const errorCode = errorPayload.response?.error?.code ?? errorPayload.error?.code;
+      expect(errorCode).toBe("translation_buffer_limit");
+    } finally {
+      tightBudget.dispose();
+    }
+  });
+  test("empty text deltas do not accumulate in StringChunks arrays", async () => {
+    const events: AdapterEvent[] = [
+      { type: "text_delta", text: "hello" },
+      { type: "text_delta", text: "" },
+      { type: "text_delta", text: "" },
+      { type: "text_delta", text: " world" },
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const frames = await collectSse(bridgeToResponsesSSE(
+      replay(events),
+      "routed/model",
+    ));
+
+    const doneFrame = frames.find(f => f.event === "response.output_text.done");
+    expect(doneFrame).toBeDefined();
+    expect(doneFrame!.data.text).toBe("hello world");
+
+    // Also verify batch mode
+    const budget = createTranslatorBudget();
+    try {
+      const result = buildResponseJSON(events, "routed/model", { translatorBudget: budget });
+      const output = result.output as Record<string, unknown>[];
+      const message = output.find(item => item.type === "message") as Record<string, unknown>;
+      expect(message).toBeDefined();
+      const content = message.content as Record<string, unknown>[];
+      const textContent = content.find(c => c.type === "output_text") as Record<string, unknown>;
+      expect(textContent.text).toBe("hello world");
+    } finally {
+      budget.dispose();
+    }
+  });
+});
