@@ -167,6 +167,13 @@ travels in the human message and in the structured `historyPreflightFailureReaso
 halves revert while the history is left to Codex's native writer. Paginated rollout bytes and
 thread rows are never modified in this state.
 
+Restore distinguishes two situations that wear the same refusal string. A store already
+paginated at the entry preflight is not news — the relabel was never available, so the config
+half proceeds and the report names the stood-down unit. A store that migrates *while the
+restore is writing* is news: history was restorable when the operation began, so that refusal
+still abandons the restore and the caller compensates its pre-images, because stripping a
+provider definition while its threads still point at it would orphan them.
+
 Scoping it is not a relaxation, it is the correct boundary. `removeCodexConfig` and the config
 half of restore open no state database and no rollout, so a history preflight never authorized
 them. Treating the refusal as a veto is what made every current Codex home unusable: paginated
