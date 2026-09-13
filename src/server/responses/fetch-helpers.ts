@@ -9,6 +9,7 @@ import type { OcxProviderConfig } from "../../types";
 import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
+import { providerTlsFetch } from "../../lib/provider-tls-profile";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 
 export { withUpstreamHttpVersion };
@@ -71,6 +72,7 @@ export function providerFetch(
   options: ProviderFetchOptions = {},
 ): ProviderFetch {
   const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
     base.preconnect?.(...args);
   };
@@ -78,7 +80,7 @@ export function providerFetch(
   // Return the original 3xx so the response owner retains its retry/health/relay contract.
   const dispatch = Object.assign(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
-      base(input, { ...init, redirect: "manual" }),
+      transport(input, { ...init, redirect: "manual" }),
     { preconnect },
   ) as typeof globalThis.fetch;
   const httpFetch = Object.assign(
