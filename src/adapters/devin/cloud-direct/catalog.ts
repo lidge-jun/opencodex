@@ -298,6 +298,19 @@ export function clearCachedCatalog(): void {
 }
 
 /**
+ * Test seam: install a catalog as the live cache entry. Mirrors
+ * clearCachedCatalog's invalidation — the in-flight slot is dropped and the
+ * epoch bumped — so a fetch racing the seed cannot overwrite it, and a null
+ * entry resets the cache between tests.
+ */
+export function setCachedCatalogForTests(entry: CacheEntry | null): void {
+  cached = entry;
+  inFlight = null;
+  inFlightKey = null;
+  cacheEpoch++;
+}
+
+/**
  * Tier-disabled error — thrown by the chat pre-flight when the catalog lists
  * a model as `disabled: true` for this account. The message names the model
  * and points at the plan page, replacing Cognition's opaque

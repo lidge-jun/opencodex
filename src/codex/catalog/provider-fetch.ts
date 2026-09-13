@@ -1745,6 +1745,12 @@ async function fetchProviderModelsWithAuth(
           // away, and every client that keys an effort control off this field —
           // the Pi-shaped exports — renders no control at all.
           ...(liveResult.efforts[id]?.length ? { reasoningEfforts: liveResult.efforts[id] } : {}),
+          // The account catalog's per-base supportsImages vote collapses to one
+          // modalities value. It spreads before the hints so exact
+          // modelCapabilities declarations, the legacy modelInputModalities
+          // record and the vision-sidecar rewrite keep winning — the live
+          // value survives only when none of them applies.
+          ...(liveResult.inputModalities[id]?.length ? { inputModalities: liveResult.inputModalities[id] } : {}),
           ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
         } as CatalogModel;
       });

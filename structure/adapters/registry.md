@@ -56,7 +56,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   `ClientModelConfig` field #4 as the per-account disabled gate, field #18 as the per-account
   context window, and field #5 as an optional `supportsImages` tri-state — a present value
   asserts image support or its absence, while an omitted field stays unknown (the #1796
-  precedent).
+  precedent). `src/adapters/devin/live-models.ts` collapses that tri-state across each base
+  model's effort variants: unmeasured rows abstain, unanimous measured rows advertise
+  `["text"]` or `["text", "image"]`, and measured disagreement stays unadvertised.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
