@@ -215,6 +215,8 @@ thinking 重放与提示缓存仍由独立的 [#3719](https://github.com/lidge-j
 
 下文的账户绑定说明适用于原生 Codex 客户端。通过外部 API 密钥使用语音转写和 GPT-Live，请参阅[英文音频 API 规范](/reference/proxy-formats/#streaming-dictation)。
 
+Connections > API keys 包含独立的听写和实时语音区域。数据密钥仅保留在表单内存中。听写会上传所选文件；语音连接检查不使用麦克风，而是等待会话确认。已配置不代表连接成功。
+
 `POST /v1/live` 接受 ChatGPT/Codex App 的 Frameless call-creation 表面。
 `POST /v1/realtime/calls` 接受 OpenAI Realtime 的 call-creation 表面。opencodex 会选择
 一个符合条件的 OpenAI 家族路由，将 call-creation 请求规范化为上游认证模式，并转发有界响应。

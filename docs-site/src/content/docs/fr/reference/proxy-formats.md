@@ -278,6 +278,8 @@ Voir [le guide Desktop](/fr/guides/claude-code/). Relecture thinking et cache re
 
 La liaison de compte ci-dessous concerne les clients Codex natifs. Pour la dictée et GPT-Live avec une clé API externe, consultez la [spécification audio en anglais](/reference/proxy-formats/#streaming-dictation).
 
+Connections > API keys propose deux sections, Dictée et Voix en direct. La clé de données reste uniquement en mémoire dans le formulaire. La dictée envoie le fichier choisi ; la vérification vocale attend une confirmation de session sans microphone. Une configuration présente ne garantit pas la connexion.
+
 `POST /v1/live` accepte la surface de création d'appel ChatGPT/Codex App sans cadre.
 `POST /v1/realtime/calls` accepte la surface de création d'appel OpenAI Realtime. opencodex sélectionne un
 route OpenAI-family éligible, normalise la demande de création d'appel pour l'authentification en amont

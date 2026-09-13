@@ -24,11 +24,13 @@ import {
 } from "../../pages/api-keys-panels";
 import ClientConfigPanel from "./ClientConfigPanel";
 import ApiKeysListPanel from "./ApiKeysListPanel";
+import { DictationPanel, LiveVoicePanel } from "./AudioApiPanel";
 
 export interface ApiKeysWorkspaceProps {
   keys: ApiKeyEntry[];
   /** Management API origin the client-config panel fetches from. */
   apiBase: string;
+  active?: boolean;
   /** Dataset-level. Absent means nothing is attributable yet — a different
    *  statement from a key whose counters read zero. */
   attributionSince?: string;
@@ -78,6 +80,7 @@ export interface ApiKeysWorkspaceProps {
 export default function ApiKeysWorkspace({
   keys,
   apiBase,
+  active = true,
   attributionSince,
   historyTruncated,
   authMatrix,
@@ -164,6 +167,8 @@ export default function ApiKeysWorkspace({
     { id: "keys", label: t("api.section.keys"), meta: keysLoading ? undefined : String(keys.length) },
     { id: "connect", label: t("api.section.connect") },
     { id: "endpoints", label: t("api.section.endpoints") },
+    { id: "dictation", label: t("audio.dictation") },
+    { id: "live-voice", label: t("audio.liveVoice") },
     { id: "models", label: t("api.section.models"), meta: String(modelCount) },
     { id: "examples", label: t("api.section.examples") },
   ], [t, keys.length, keysLoading, modelCount]);
@@ -245,7 +250,7 @@ export default function ApiKeysWorkspace({
           one, the pattern Usage / Logs / Subagents already use. A rail plus a
           content pane was a second vertical band competing for the same width,
           and at 1280px it cost the content column 252px it could not spare. */}
-      {!selected && <SectionTabs scope="api" items={sectionTabs} ariaLabel={t("api.workspace.sections")} />}
+      {!selected && <SectionTabs scope="api" items={sectionTabs} ariaLabel={t("api.workspace.sections")} mobileReadingLine={108} />}
       <div className="apikeys-workspace-root">
         <section className="apikeys-workspace-main" aria-label={t("api.workspace.details")}>
           {selected ? (
@@ -483,6 +488,12 @@ export default function ApiKeysWorkspace({
                 </div>
                 <div id={sectionAnchorId("api", "endpoints")} className="awi-section-anchor">
                   <ApiKeysEndpointsPanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} authMatrix={authMatrix} />
+                </div>
+                <div id={sectionAnchorId("api", "dictation")} className="awi-section-anchor">
+                  {active && <DictationPanel key={`${apiBase}:${JSON.stringify(endpoints.audio)}`} audio={endpoints.audio} />}
+                </div>
+                <div id={sectionAnchorId("api", "live-voice")} className="awi-section-anchor">
+                  {active && <LiveVoicePanel key={`${apiBase}:${JSON.stringify(endpoints.audio)}`} audio={endpoints.audio} />}
                 </div>
                 <div id={sectionAnchorId("api", "models")} className="awi-section-anchor">
                 <ApiKeysModelsPanel

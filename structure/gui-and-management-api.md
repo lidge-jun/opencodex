@@ -290,6 +290,29 @@ hard-lock evidence and reset-notification history; their retention rules are doc
 
 ## Dashboard surfaces
 
+`src/server/management/api-access.ts` publishes an `audio` projection through the
+existing `/api/keys` response in `src/server/management/oauth-account-routes.ts`.
+URLs derive from the same advertised inference base as text APIs, with HTTP(S)
+mapped to WS(S). Configuration flags inspect enabled canonical providers only;
+they do not read credentials, inspect account health or prove entitlement.
+`gui/src/pages/api-keys-utils.ts` validates the same projection on network and
+cache reads. Missing or malformed audio metadata disables only audio controls.
+
+Connections/API keys has separate Dictation and Live Voice sections in
+`gui/src/components/apikeys-workspace/AudioApiPanel.tsx`. Transient data keys never
+enter caches or generated samples. `gui/src/audio-api-client.ts` owns bounded
+uploads and a connection-only native voice probe; `gui/src/api.ts` sends uploads
+without management auth injection or 401 recovery. Voice readiness requires a
+nonterminal session acknowledgment with `session.id`, not merely socket open.
+Changing keys, inference metadata, API origin or leaving the active panel releases
+requests/sockets. Only allowlisted event types and localized error categories are
+displayed. Tests live in `gui/tests/audio-api-client.test.ts`,
+`gui/tests/audio-api-panel.test.tsx`, `gui/tests/api-auth-memory.test.ts` and
+`tests/server/api-access-endpoints.test.ts`.
+The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
+line so scroll-spy and the top-bar offset agree; other consumers keep their
+existing reading line. The section strip stays one row at every width.
+
 Provider Overview consumes the existing shared `add-provider-presets` resource for sponsor
 presentation. `matchingWorkspacePreset` requires the configured id, adapter and normalized
 endpoint to match; a custom endpoint or absent sponsor metadata suppresses the introduction.

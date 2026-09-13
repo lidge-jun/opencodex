@@ -22,11 +22,23 @@ export function SectionTabs({
   scope,
   items,
   ariaLabel,
+  mobileReadingLine,
 }: {
   scope: string;
   items: SectionTabItem[];
   ariaLabel: string;
+  /** Optional offset for a shell with a mobile top bar above its section strip. */
+  mobileReadingLine?: number;
 }) {
+  const [readingLine, setReadingLine] = useState(() => mobileReadingLine && window.matchMedia("(max-width: 760px)").matches ? mobileReadingLine : 72);
+  useEffect(() => {
+    if (!mobileReadingLine) return;
+    const query = window.matchMedia("(max-width: 760px)");
+    const update = () => setReadingLine(query.matches ? mobileReadingLine : 72);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, [mobileReadingLine]);
   const [active, setActive] = useState(items[0]?.id ?? "");
   /** While set, scroll-spy ignores intermediate sections during smooth scroll-to-click. */
   const scrollLockRef = useRef<string | null>(null);
@@ -49,7 +61,6 @@ export function SectionTabs({
     // so a destination that stopped mid-viewport still wins over an off-screen prior heading.
     let bestId: string | null = null;
     let bestDistance = Number.POSITIVE_INFINITY;
-    const readingLine = 72;
     for (const item of items) {
       const node = document.getElementById(sectionAnchorId(scope, item.id));
       if (!node) continue;
@@ -60,7 +71,7 @@ export function SectionTabs({
       }
     }
     if (bestId) setActive(bestId);
-  }, [clearScrollLock, items, scope]);
+  }, [clearScrollLock, items, scope, readingLine]);
 
   useEffect(() => () => clearScrollLock(), [clearScrollLock]);
 
@@ -92,11 +103,11 @@ export function SectionTabs({
         const id = visible.target.id.slice(sectionAnchorPrefix(scope).length);
         setActive(current => (current === id ? current : id));
       },
-      { rootMargin: "-72px 0px -60% 0px", threshold: 0 },
+      { rootMargin: [String(-readingLine) + "px", "0px", "-60%", "0px"].join(" "), threshold: 0 },
     );
     for (const node of nodes) observer.observe(node);
     return () => observer.disconnect();
-  }, [clearScrollLock, items, scope]);
+  }, [clearScrollLock, items, scope, readingLine]);
 
   const go = (id: string) => {
     const target = document.getElementById(sectionAnchorId(scope, id));

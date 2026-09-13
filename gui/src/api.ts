@@ -340,6 +340,16 @@ export function installApiAuthFetch(): void {
   };
 }
 
+/** Audio is data-plane traffic, even when the connected management target is a relay. */
+export function fetchAudioUpload(endpoint: string, init: RequestInit): Promise<Response> {
+  const url = new URL(endpoint);
+  if (!["http:", "https:"].includes(url.protocol) || url.pathname !== "/v1/audio/transcriptions"
+    || url.username || url.password || url.search || url.hash || init.method !== "POST") {
+    return Promise.reject(new Error("Invalid audio upload destination"));
+  }
+  return (rawFetch ?? fetch)(url.href, { ...init, credentials: "omit", redirect: "error" });
+}
+
 export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = promptForAdminToken): void {
   installed = false;
   rawFetch = null;
