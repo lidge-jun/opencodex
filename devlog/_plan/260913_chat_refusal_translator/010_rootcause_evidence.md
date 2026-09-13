@@ -54,3 +54,43 @@ const events = [
 이 세션은 로컬 제품 스위트 금지이므로 **hosted CI가 판정자**다. 로컬에서는 실행하지
 않고 NOT RUN으로 표기한다.
 
+
+## 증명 결과 (wp1 종료, 2026-09-13)
+
+가설은 **확증**됐다. 세 명의 독립 리뷰어가 같은 결론에 도달했고, 마지막 리뷰어는
+실제 제어 흐름을 따라 재유도했다.
+
+| 단계 | 위치 | 무슨 일 |
+|---|---|---|
+| 1 | `outbound.ts:308` | `added`의 `msg_1`이 거절 없이 장부에 등록됨 |
+| 2 | `outbound.ts:623` → `:299` | 같은 index의 `done`이 `rs_1`로 들어옴 |
+| 3 | `outbound.ts:249` | `item.id !== candidate` → `invalid_refusal` |
+
+트리거 진입점은 `src/bridge.ts:958-960` → `flushHiddenReasoningEnvelope(:514-517)`이다.
+`currentMsg`를 닫지 않은 채 같은 `outputIndex`로 reasoning의 `added`/`done`을 낸다.
+
+### 계약이 깨지지 않는다는 증명
+
+`tests/responses/chat-refusal.test.ts`의 18개 케이스는 전부 선행 `refusalDelta`를 갖는다.
+따라서 `existing`이 참이고 새 조기 return에 걸리지 않는다. 리뷰어가 개별 확인한 것:
+
+| 케이스 | 던지는 곳 | 수정 후 |
+|---|---|---|
+| 178, 179 | `:248` | 여전히 throw |
+| 180 | `:315` | 여전히 throw |
+| 208 | `:249` | 여전히 throw |
+
+### 기각된 대안
+
+"스트림에서 거절을 한 번이라도 봤는가"라는 전역 플래그 안은 더 약하다. 거절이 한 번
+나온 뒤에는 다른 index의 평범한 메시지가 다시 장부에 등록되기 때문이다. per-item
+스코프가 맞다.
+
+### 착지
+
+- 재현 테스트: `tests/responses/chat-refusal-scope.test.ts` (커밋 `66e1c9e67`)
+- 머지: PR #4468 → `dev` `d0cbfffddfe1bb6a30b53862c55ff75cabc54eca`
+- exact-head CI: `66e1c9e67`에서 25 success / 0 fail / 0 cancelled
+
+로컬 제품 스위트·typecheck·build·install은 **NOT RUN**이다.
+
