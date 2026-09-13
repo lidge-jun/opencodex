@@ -2034,8 +2034,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
             mode={pendingSurface}
             docsUrl={readSubagentSurfaceAdvisory(v2?.multiAgentSurfaceAdvisory)?.docsUrl ?? SUBAGENT_SURFACE_GUIDE_URL}
             busy={v2Busy}
-            onContinue={() => { const next = pendingSurface; setPendingSurface(null); void putV2Setting({ multiAgentMode: next }); }}
-            onChooseV1={() => { setPendingSurface(null); if (v2?.multiAgentMode !== "v1") void putV2Setting({ multiAgentMode: "v1" }); }}
+            onContinue={() => { const next = pendingSurface; setPendingSurface(null); void putV2Setting({ multiAgentMode: next, multiAgentSurfaceAdvisoryAcknowledged: true }); }}
+            onChooseV1={() => { setPendingSurface(null); if (v2?.multiAgentMode !== "v1") void putV2Setting({ multiAgentMode: "v1", multiAgentSurfaceAdvisoryAcknowledged: true }); }}
             onDismiss={() => setPendingSurface(null)}
           />
         )}

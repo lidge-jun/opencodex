@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { DICTS, LOCALES } from "../src/i18n/shared";
 import SubagentSurfaceWarningModal from "../src/components/SubagentSurfaceWarningModal";
 import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory, subagentSurfaceLabel } from "../src/subagent-surface";
 
@@ -27,15 +28,21 @@ test("the fallback guide URL matches the runtime constant", async () => {
   expect(SUBAGENT_SURFACE_GUIDE_URL).toStartWith("https://opencodex.me/guides/");
 });
 
-test("every locale defines the dialog keys, and Korean uses the wording that was asked for", async () => {
-  for (const locale of ["en", "de", "fr", "ja", "ko", "ru", "tr", "zh", "zh-TW"]) {
-    const source = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
-    for (const key of KEYS) expect(source).toContain(`"${key}"`);
+test("every locale defines the dialog keys, and Korean uses the wording that was asked for", () => {
+  // Read the loaded catalogs, not the source text: a key mentioned only in a comment would
+  // satisfy a grep and still render the raw key id to the operator.
+  expect(LOCALES.length).toBe(9);
+  for (const { code } of LOCALES) {
+    for (const key of KEYS) {
+      const value = DICTS[code][key as keyof (typeof DICTS)[typeof code]];
+      expect(typeof value).toBe("string");
+      expect(value.trim().length).toBeGreaterThan(0);
+      expect(value).not.toBe(key);
+    }
   }
 
-  const ko = await Bun.file(new URL("../src/i18n/ko.ts", import.meta.url)).text();
-  expect(ko).toContain('"subagentSurface.continue": "계속하기"');
-  expect(ko).toContain('"subagentSurface.switchToV1": "v1으로 바꾸기"');
+  expect(DICTS.ko["subagentSurface.continue"]).toBe("계속하기");
+  expect(DICTS.ko["subagentSurface.switchToV1"]).toBe("v1으로 바꾸기");
 });
 
 test("a runtime that does not send the advisory yields null instead of a raised notice", () => {
@@ -61,10 +68,11 @@ test("the stored default mode is called base in the UI", () => {
 });
 
 /**
- * Both switches must stage a base/v2 click instead of writing it, or the dialog is decoration.
+ * The same v1/base/v2 switch is rendered on three pages. Every one of them must stage a base
+ * or v2 click instead of writing it, or the dialog is decoration on whichever page was missed.
  * v1 stays immediate: asking an operator to confirm a move toward the safe default is noise.
  */
-test("both mode switches gate base and v2 but let v1 through", async () => {
+test("all three mode switches gate base and v2 but let v1 through", async () => {
   const models = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
   const gate = models.slice(models.indexOf("const setMultiAgentMode"));
   const body = gate.slice(0, gate.indexOf("};"));
@@ -79,6 +87,15 @@ test("both mode switches gate base and v2 but let v1 through", async () => {
 
   expect(switcherBody).toContain('if (mode !== "v1") { setPendingMaMode(mode); return; }');
   expect(switcherBody).toContain('await writeMaMode("v1")');
+
+  // The Subagents page carries a third copy of the switch and used to PUT straight through.
+  const subagents = await Bun.file(new URL("../src/pages/Subagents.tsx", import.meta.url)).text();
+  const handler = subagents.slice(subagents.indexOf("onUltraModeSave: patch =>"));
+  const handlerBody = handler.slice(0, handler.indexOf("},"));
+
+  expect(handlerBody).toContain('patch.multiAgentMode === "default" || patch.multiAgentMode === "v2"');
+  expect(handlerBody).toContain("setPendingSurface(patch.multiAgentMode);");
+  expect(subagents).toContain("<SubagentSurfaceWarningModal");
 });
 
 /** The recommended answer must not leave the notice raised on a mode it just applied. */
@@ -93,6 +110,10 @@ test("choosing v1 from a raised advisory sends the mode and the acknowledgement 
   expect(writer.slice(0, writer.indexOf("const switchMaMode"))).toContain(
     "if (acknowledgeAdvisory) payload.multiAgentSurfaceAdvisoryAcknowledged = true;",
   );
+
+  // Continuing to base or v2 also answers the notice. Otherwise the next poll asks again.
+  const keep = dash.slice(dash.indexOf("const keepMaMode"));
+  expect(keep.slice(0, keep.indexOf("};"))).toContain("await writeMaMode(pending, maAdvisory?.required === true)");
 });
 
 const globals = ["document", "window", "navigator", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -179,4 +200,24 @@ test("a selection names the mode being selected, using the UI label for base", (
   expect(heading).toContain("base");
   expect(heading).not.toContain("{mode}");
   expect(container.querySelector("dialog")?.getAttribute("data-subagent-surface-reason")).toBe("selection");
+});
+
+test("the backdrop dismisses without answering either way", () => {
+  const calls: string[] = [];
+  render(
+    <SubagentSurfaceWarningModal
+      reason="selection"
+      mode="v2"
+      docsUrl={SUBAGENT_SURFACE_GUIDE_URL}
+      onContinue={() => calls.push("continue")}
+      onChooseV1={() => calls.push("v1")}
+      onDismiss={() => calls.push("dismiss")}
+    />,
+  );
+
+  const backdrop = container.querySelector(".modal-backdrop-dismiss") as HTMLButtonElement | null;
+  expect(backdrop).not.toBeNull();
+  act(() => backdrop!.click());
+
+  expect(calls).toEqual(["dismiss"]);
 });

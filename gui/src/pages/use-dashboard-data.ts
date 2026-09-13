@@ -673,7 +673,9 @@ const [maBusy, setMaBusy] = useState(false);
   const keepMaMode = async () => {
     const pending = pendingMaMode;
     setPendingMaMode(null);
-    if (pending) { await writeMaMode(pending); return; }
+    // A selection answers the advisory too. Without that, continuing to base or v2 leaves the
+    // notice raised and the next poll asks the same question the operator just answered.
+    if (pending) { await writeMaMode(pending, maAdvisory?.required === true); return; }
     await acknowledgeMaAdvisory();
   };
 
