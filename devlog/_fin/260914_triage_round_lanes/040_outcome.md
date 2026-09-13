@@ -80,3 +80,33 @@ obligation the plan assigned it. The round-2 audit found a diff sketch that
 referenced variables not in scope and would have cost a CI round trip. The security
 review found the silent regression. None of these were style notes.
 
+
+## Post-delivery state
+
+Written after the rounds closed, so the next reader knows what is still moving.
+
+Two items are waiting on people rather than on work. #4555 is green at
+`e8b36b0e202025780e84759542a78cb1488b2333` and needs the explicit security review
+MAINTAINERS.md requires for a credential-destination change; the `dev`
+self-integration exception covers a missing second approval and not that review.
+#4528 had never run CI until tonight's approval, and its one failure is
+`release version line > the in-tree version is never behind a released one` — a
+stale-base failure caused by the release train opening `dev` at 2.55.0, not by
+anything in the diff. The author was told that a rebase should clear it.
+
+The thread heartbeat was repointed from the four finished lanes to exactly those
+two pull requests. It is read-only by construction: an absolute no-write rule, and
+an explicit instruction that a merge of #4555 notifies with the merge SHA and
+leaves #4519 open for a human to close after checking the landed code. That rule
+exists because an earlier draft of the same automation told it to close the issue
+automatically, and an audit caught that `state == MERGED` is not the
+verified-code-evidence standard this unit used for every other close.
+
+Two details in that automation are worth keeping if it is ever rewritten. It must
+not use `reviewDecision` to detect the reviewer: that field never says who reviewed,
+and a COMMENTED security review leaves it at `REVIEW_REQUIRED`, which is the likely
+shape of the review being waited on. And it keys the CI verdict off
+`gh run list --workflow ci.yml --commit <full sha>` rather than the check-run array,
+because the array mixes a cancelled entry with later successful copies of the same
+name and cannot answer "is the current head green".
+
