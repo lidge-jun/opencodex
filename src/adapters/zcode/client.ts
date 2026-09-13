@@ -1,10 +1,34 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { homedir } from "node:os";
 import { readJsonLines } from "../coding-agent/protocol";
 import { record, type JsonObject, type ZcodeSettings } from "./settings";
 import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
 
 export type ZcodeSpawn = typeof spawn;
 type Pending = { resolve: (value: JsonObject) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+const HOST_TOOL_ENV = new Set([
+  "ALL_PROXY", "all_proxy", "BROWSER", "COLORTERM", "DBUS_SESSION_BUS_ADDRESS", "DISPLAY",
+  "GIT_ASKPASS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_SSH", "GIT_SSH_COMMAND",
+  "GH_CONFIG_DIR", "GPG_AGENT_INFO", "GNUPGHOME", "GPG_TTY", "HTTPS_PROXY", "https_proxy",
+  "HTTP_PROXY", "http_proxy", "LANG", "LC_ALL", "LOGNAME", "NODE_EXTRA_CA_CERTS", "NO_COLOR",
+  "NO_PROXY", "no_proxy", "PATH", "SHELL", "SSH_AGENT_PID", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+  "SSH_AUTH_SOCK", "SSL_CERT_DIR", "SSL_CERT_FILE", "TERM", "TMPDIR", "TZ", "USER", "WAYLAND_DISPLAY",
+  "XAUTHORITY", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "XDG_STATE_HOME",
+]);
+
+/** Host native tools need the user's normal config/agent sockets, but never unrelated provider secrets. */
+export function zcodeChildEnvironment(settings: ZcodeSettings, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!settings.hostExecution) return { HOME: settings.home, PATH: source.PATH ?? "/usr/bin:/bin",
+    XDG_CONFIG_HOME: `${settings.home}/.config`, XDG_CACHE_HOME: `${settings.home}/.cache` };
+  const result: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && (HOST_TOOL_ENV.has(key) || key.startsWith("LC_"))) result[key] = value;
+  }
+  result.HOME = homedir();
+  result.PATH = source.PATH ?? "/usr/bin:/bin";
+  result.ZCODE_DATA_BASE_DIR = settings.home;
+  return result;
+}
 const desktopClients = new Set<ZcodeClient>();
 export const hasZcodeAccountClients = (id: string) => [...desktopClients].some(client => client.accountId === id);
 export async function closeZcodeDesktopClients(): Promise<void> {
@@ -30,8 +54,7 @@ export class ZcodeClient {
     const [command, ...args] = settings.command;
     this.child = spawnProcess(command!, [...args, "app-server"], {
       cwd: settings.home, shell: false, stdio: ["pipe", "pipe", "pipe"],
-      env: { HOME: settings.home, PATH: process.env.PATH ?? "/usr/bin:/bin",
-        XDG_CONFIG_HOME: `${settings.home}/.config`, XDG_CACHE_HOME: `${settings.home}/.cache` },
+      env: zcodeChildEnvironment(settings),
     }) as ChildProcessWithoutNullStreams;
     this.exited = new Promise(resolve => {
       this.child.once("exit", () => resolve());
@@ -81,7 +104,7 @@ export class ZcodeClient {
               this.write({ id: message.id, result: { decision: "deny", reason: "Interactive approval is unavailable through this bridge." } });
             } else if (message.method === "interaction/requestUserInput") {
               this.write({ id: message.id, result: { action: "cancel" } });
-              this.fail(new Error("ZCode requires user input; continue in the isolated ZCode client."));
+              this.fail(new Error("ZCode requires user input; continue in the interactive ZCode client."));
             } else {
               this.write({ id: message.id, error: { code: -32601, message: "Unsupported ZCode client request." } });
             }

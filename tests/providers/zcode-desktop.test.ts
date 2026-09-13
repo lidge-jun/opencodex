@@ -217,11 +217,13 @@ test("host bootstrap reads and writes outside workspace without touching the sou
       const path=${JSON.stringify(external)};
       const value=fs.readFileSync(path,"utf8");
       fs.writeFileSync(path,value);
-      process.stdout.write(JSON.stringify({id:r.id,result:{read:value,written:true,cwd:process.cwd()}})+"\\n");
+      process.stdout.write(JSON.stringify({id:r.id,result:{read:value,written:true,cwd:process.cwd(),
+        home:process.env.HOME,dataBase:process.env.ZCODE_DATA_BASE_DIR,args:process.argv.slice(2)}})+"\\n");
     });
   `);
   const settings = { command: [resolveDesktopNode(), fileURLToPath(new URL("../../src/adapters/zcode/desktop-bootstrap.cjs", import.meta.url)),
-    "--host", runtime, config, workspace], home, workspace, settingsPath: "", scope: "desktop:test-host" };
+    "--host", runtime, config, workspace, home], home, workspace, settingsPath: "", scope: "desktop:test-host",
+    hostExecution: true, nativePermissionMode: "yolo" as const };
   // Repeated processes must not fail on an existing config, or overwrite Desktop's file.
   for (let i = 0; i < 2; i++) {
     const client = new ZcodeClient(settings);
@@ -229,7 +231,12 @@ test("host bootstrap reads and writes outside workspace without touching the sou
       const models = await client.request("opencodex/desktopModels", {}, 3000);
       expect(models.models).toHaveLength(1);
       const state = await client.request("workspace/readState", {}, 3000);
-      expect(state).toEqual({ read: "report fixture", written: true, cwd: workspace });
+      const runtimeArgs = state.args as string[];
+      expect(state).toMatchObject({ read: "report fixture", written: true, cwd: workspace,
+        home: homedir(), dataBase: home });
+      expect(runtimeArgs.slice(0, 2)).toEqual(["app-server", "--settings"]);
+      expect(runtimeArgs[2]).toContain("/turn-");
+      expect(runtimeArgs[2]).toEndWith("/config.json");
     } finally { await client.close(); }
   }
   expect(readFileSync(config, "utf8")).toBe(original);
@@ -304,10 +311,13 @@ test("ZCode GLM-5.3 catalog exposes only real levels plus Codex ultra", async ()
   }), { mode: 0o600 });
   const providerName = `zcode-fixture-${crypto.randomUUID()}`;
   const models = await gatherRoutedModels({ port: 0, defaultProvider: providerName, providers: {
-    [providerName]: { adapter: "zcode", authMode: "local", baseUrl: "https://zcode.z.ai", liveModels: true },
+    [providerName]: { adapter: "zcode", authMode: "local", baseUrl: "https://zcode.z.ai", liveModels: true,
+      contextWindow: 8192 },
   } });
   for (const modelId of ids) {
     const model = models.find(row => row.provider === providerName && row.id === modelId);
+    expect(model?.contextWindow).toBe(8192);
+    expect(model?.inputModalities).toContain("image");
     expect(model?.reasoningEfforts).toEqual(["low", "high", "max"]);
     const [entry] = buildCatalogEntries(null, [], [model!]);
     const efforts = (entry?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort);

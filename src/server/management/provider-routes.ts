@@ -705,11 +705,13 @@ function canonicalOpenAiBudgetPatchError(
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
-  if (url.pathname === "/api/zcode-accounts" || url.pathname.startsWith("/api/zcode-accounts/")) {
+  const zcodeAccountsPrefix = "/api/zcode-accounts";
+  const zcodeDesktopPrefix = "/api/zcode-desktop";
+  if (url.pathname === zcodeAccountsPrefix || url.pathname.startsWith(`${zcodeAccountsPrefix}/`)) {
     const { handleZcodeAccountRoutes } = await import("./zcode-account-routes");
     return handleZcodeAccountRoutes(ctx);
   }
-  if (url.pathname === "/api/zcode-desktop" || url.pathname.startsWith("/api/zcode-desktop/")) {
+  if (url.pathname === zcodeDesktopPrefix || url.pathname.startsWith(`${zcodeDesktopPrefix}/`)) {
     const { handleZcodeDesktopRoutes } = await import("./zcode-desktop-routes");
     return handleZcodeDesktopRoutes(ctx);
   }

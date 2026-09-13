@@ -179,7 +179,8 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
         const content = textInput(parsed, Boolean(sessionId));
         client = (deps.client ?? (s => new ZcodeClient(s)))(settings);
         const active = client;
-        // The Desktop bootstrap resolves credentials INSIDE the sandbox. The parent only sends
+        // The Desktop bootstrap resolves credentials inside the official runtime (and the optional
+        // sandbox when enabled). The parent only sends
         // public model identity; it never receives Desktop API keys or synthesizes vendor auth.
         const modelParams = settings.desktopModels
           ? { _zcodeModel: { providerId: model.providerId, modelId: model.modelId } }
@@ -214,10 +215,14 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
               text: payload.kind === "started" ? "\n[ZCode: native tool started]\n" : "\n[ZCode: native tool finished]\n",
               phase: "commentary" });
           } else if (params.type === "turn.completed") {
-            if (!textSeen && typeof payload.response === "string") emit({ type: "text_delta", text: payload.response, phase: "final_answer" });
-            controller.resolve();
+            if (!textSeen && typeof payload.response === "string" && payload.response.length > 0) {
+              textSeen = true;
+              emit({ type: "text_delta", text: payload.response, phase: "final_answer" });
+            }
+            if (textSeen) controller.resolve();
+            else controller.reject(new Error("ZCode completed without a model answer."));
           } else if (params.type === "turn.failed") {
-            controller.reject(new Error("ZCode agent turn failed. Inspect the isolated client for authentication, quota or model errors."));
+            controller.reject(new Error("ZCode agent turn failed. Inspect the interactive ZCode client for authentication, quota or model errors."));
           }
         };
         if (sessionId) {
@@ -225,7 +230,7 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
         } else {
           const result = await active.request("session/create", {
             workspace: { workspacePath: settings.workspace, workspaceKey: settings.workspace },
-            mode: "edit", ...modelParams, ...thoughtParams, titleGenerationEnabled: false,
+            mode: settings.nativePermissionMode ?? "edit", ...modelParams, ...thoughtParams, titleGenerationEnabled: false,
             mcpServers: [], toolDenylist: ["Task", "TaskOutput", "TaskStop"],
           });
           const id = record(result.session).sessionId;
@@ -236,7 +241,9 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
         if (incoming.abortSignal?.aborted) throw new Error("ZCode request cancelled before dispatch.");
         // Commit visible output before dispatch, so streaming combo routing cannot replay an
         // accepted task that already changed files. Post-send failure is non-retryable incomplete.
-        emit({ type: "text_delta", text: "[ZCode: running in the configured isolated workspace]\n", phase: "commentary" });
+        emit({ type: "text_delta", text: settings.hostExecution
+          ? "[ZCode: running native tools with host-user access]\n"
+          : "[ZCode: running native tools in the configured launcher]\n", phase: "commentary" });
         sent = true;
         await active.request("session/send", { sessionId, content, ...modelParams });
         await controller.promise;

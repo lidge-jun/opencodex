@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
+import { homedir } from "node:os";
 import { ZcodeClient, closeZcodeDesktopClients, type ZcodeSpawn } from "../../src/adapters/zcode/client";
 import type { JsonObject, ZcodeSettings } from "../../src/adapters/zcode/settings";
 
 const settings: ZcodeSettings = { command: ["/isolated/launcher", "argument with spaces"], home: "/isolated/home",
   workspace: "/workspace", settingsPath: "/isolated/config.json", scope: "test" };
-function fixture(managed = false) {
+function fixture(managed = false, hostExecution = false) {
   const child = new EventEmitter() as EventEmitter & { stdin: Writable; stdout: PassThrough; stderr: PassThrough; kill: () => boolean };
   const writes: JsonObject[] = [];
   child.stdin = new Writable({ write(chunk, _encoding, callback) { writes.push(JSON.parse(chunk.toString())); callback(); } });
@@ -14,7 +15,7 @@ function fixture(managed = false) {
   child.kill = () => { child.stdout.end(); child.stderr.end(); queueMicrotask(() => child.emit("exit", 0)); return true; };
   let invocation: unknown[] = [];
   const spawn = ((...args: unknown[]) => { invocation = args; return child; }) as ZcodeSpawn;
-  const client = new ZcodeClient(managed ? { ...settings, desktopModels: [] } : settings, spawn);
+  const client = new ZcodeClient(managed ? { ...settings, desktopModels: [], hostExecution } : settings, spawn);
   return { child, client, writes, invocation: () => invocation };
 }
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
@@ -39,6 +40,25 @@ describe("ZCode NDJSON transport", () => {
     expect(options.shell).toBe(false);
     expect(Object.keys(options.env).sort()).toEqual(["HOME", "PATH", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"]);
     await f.client.close();
+  });
+  test("host tools inherit user configuration but not unrelated provider secrets", async () => {
+    const token = process.env.OPENCODEX_API_AUTH_TOKEN;
+    const ghToken = process.env.GH_TOKEN;
+    try {
+      process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-secret";
+      process.env.GH_TOKEN = "github-secret";
+      const f = fixture(true, true);
+      const options = f.invocation()[2] as { env: Record<string, string> };
+      expect(options.env.HOME).toBe(homedir());
+      expect(options.env.ZCODE_DATA_BASE_DIR).toBe(settings.home);
+      expect(options.env.PATH).toBe(process.env.PATH);
+      expect(options.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
+      expect(options.env.GH_TOKEN).toBeUndefined();
+      await f.client.close();
+    } finally {
+      if (token === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN; else process.env.OPENCODEX_API_AUTH_TOKEN = token;
+      if (ghToken === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = ghToken;
+    }
   });
   test("correlates fragmented Unicode responses and services runtime preferences", async () => {
     const f = fixture(); const pending = f.client.request("session/create", {});

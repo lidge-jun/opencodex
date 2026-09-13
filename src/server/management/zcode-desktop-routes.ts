@@ -22,12 +22,13 @@ export async function handleZcodeDesktopRoutes(ctx: ManagementContext, deps = se
     try { return jsonResponse(desktopFolders(url.searchParams.get("path") ?? undefined)); }
     catch { return jsonResponse({ error: "workspace_invalid" }, 400); }
   }
-  if (req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
+  if (req.method !== "POST") return null;
   try {
     const raw = await readBoundedJsonRequestBody(req, 12_000, undefined, { signal: AbortSignal.any([req.signal, AbortSignal.timeout(5_000)]) });
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return jsonResponse({ error: "invalid_request" }, 400);
     const body = raw as Record<string, unknown>;
-    if (url.pathname === "/api/zcode-desktop/connect" || url.pathname === "/api/zcode-desktop/activate") {
+    if (url.pathname === "/api/zcode-desktop/connect" && req.method === "POST"
+      || url.pathname === "/api/zcode-desktop/activate" && req.method === "POST") {
       if (body.consent !== true || typeof body.runtime !== "string" || typeof body.workspace !== "string") return jsonResponse({ error: "consent_required" }, 400);
       if (activating) return jsonResponse({ error: "busy" }, 409);
       activating = true;
@@ -38,12 +39,12 @@ export async function handleZcodeDesktopRoutes(ctx: ManagementContext, deps = se
         return jsonResponse(await activateDesktopProvider(ctx, status, deps.readDesktopCatalogSlugs));
       } finally { activating = false; }
     }
-    if (url.pathname === "/api/zcode-desktop/disconnect") {
+    if (url.pathname === "/api/zcode-desktop/disconnect" && req.method === "POST") {
       if (activating) return jsonResponse({ error: "busy" }, 409);
       await deps.disconnectDesktop(); invalidateCodexModelsCache(); clearGatherRoutedModelsInflight();
       return jsonResponse(deps.desktopStatus());
     }
-    if (url.pathname === "/api/zcode-desktop/test") {
+    if (url.pathname === "/api/zcode-desktop/test" && req.method === "POST") {
       if (testing) return jsonResponse({ error: "busy" }, 409);
       const status = deps.desktopStatus();
       if (body.consent !== true || !status.connected || !status.models.some(m => m.id === body.model)) return jsonResponse({ error: "invalid_request" }, 400);

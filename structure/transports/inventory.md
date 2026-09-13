@@ -60,7 +60,9 @@ executor contract. Main-request migration must not treat that branch as fixed-tr
 
 ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
 not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
-Bubblewrap workspace boundary; harness restrictions apply where the native process runs.
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs. Managed
+connections pair that explicit consent with ZCode's non-interactive permission mode and a bounded
+host-tool environment; advanced launchers keep their existing `edit` semantics.
 
 ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
 client integration exports. Their profile, catalog and transport contract is maintained in

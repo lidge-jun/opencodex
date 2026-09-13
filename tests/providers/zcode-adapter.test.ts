@@ -29,7 +29,7 @@ class FakeClient {
   onFailure: (error: Error) => void = () => {};
   calls: Array<{ method: string; params: JsonObject }> = [];
   closed = false;
-  constructor(private outcome: "ok" | "failed" | "hang" | "session-noise" = "ok") {}
+  constructor(private outcome: "ok" | "failed" | "hang" | "session-noise" | "answerless" = "ok") {}
   async request(method: string, params: JsonObject): Promise<JsonObject> {
     this.calls.push({ method, params });
     if (method === "session/create") return { session: { sessionId: "sess_test-1" } };
@@ -51,6 +51,7 @@ class FakeClient {
         this.event("tool.updated", { kind: "started", toolCallId: "tool-1" });
         this.event("tool.updated", { kind: "result", toolCallId: "tool-1" });
         if (this.outcome === "failed") return this.event("turn.failed", { error: { message: "secret" } });
+        if (this.outcome === "answerless") return this.event("turn.completed", {});
         this.event("model.streaming", { kind: "text_delta", delta: "Hello" });
         this.event("turn.completed", { response: "Hello" });
       });
@@ -75,7 +76,8 @@ async function run(settings: ZcodeSettings, client: FakeClient, parsed = request
 
 describe("ZCode local agent", () => {
   test("managed requests select a public model without carrying Desktop secrets", async () => {
-    const settings = { ...fixture(), desktopModels: [{ id: "test/model", providerId: "test", modelId: "model", label: "Model" }] };
+    const settings = { ...fixture(), hostExecution: true, nativePermissionMode: "yolo" as const,
+      desktopModels: [{ id: "test/model", providerId: "test", modelId: "model", label: "Model" }] };
     const client = new FakeClient();
     expect((await run(settings, client)).at(-1)?.type).toBe("done");
     for (const call of client.calls.filter(c => ["session/create", "session/send"].includes(c.method))) {
@@ -85,6 +87,11 @@ describe("ZCode local agent", () => {
       expect(serialized).not.toContain("never-log-this");
       expect(serialized).not.toContain("apiKey");
     }
+    expect(client.calls.find(call => call.method === "session/create")?.params.mode).toBe("yolo");
+    expect((await run(fixture(), new FakeClient())).find(event => event.type === "text_delta"
+      && event.phase === "commentary")?.text).toContain("configured launcher");
+    expect((await run(settings, new FakeClient())).find(event => event.type === "text_delta"
+      && event.phase === "commentary")?.text).toContain("host-user access");
   });
   test("maps Codex effort labels to the official GLM-5.3 thought levels", async () => {
     const settings = { ...fixture(), desktopModels: [{
@@ -160,6 +167,13 @@ describe("ZCode local agent", () => {
     expect(JSON.stringify(events)).not.toContain("never-log-this");
     expect(client.closed).toBe(true);
     expect(client.calls.map(c => c.method)).toEqual(["session/create", "session/subscribe", "session/send", "session/stop"]);
+  });
+  test("answerless completion is reported as an interrupted accepted turn", async () => {
+    const events = await run(fixture(), new FakeClient("answerless"));
+    expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "zcode_agent_interrupted",
+      retryable: false, endTurn: true });
+    expect(JSON.stringify(events)).toContain("completed without a model answer");
+    expect(events.some(event => event.type === "done")).toBe(false);
   });
   test("ignores terminal events without the active session identity", async () => {
     const events = await run(fixture(), new FakeClient("session-noise"));

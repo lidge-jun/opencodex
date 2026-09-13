@@ -126,7 +126,10 @@ permissions of the proxy's operating-system user. It can read and modify files o
 selected working directory, including sensitive files accessible to that user. Absolute
 paths retain their host meaning. The selected workspace is a starting directory, not a
 filesystem boundary. This default also applies to previously connected installations after
-upgrading. No root elevation or permission-skipping flag is used.
+upgrading. Managed connections start ZCode in its non-interactive `yolo` permission mode so
+native commands can actually use that host access without stopping for an approval prompt that
+the OpenCodex protocol cannot display. This changes ZCode's approval policy, not operating-system
+permissions: there is no root elevation or sandbox bypass.
 
 Any isolation must be applied by the harness/operator **where the native ZCode process
 executes**. A sandbox in a remote calling client does not automatically constrain this
@@ -235,9 +238,10 @@ rewritten. **Test connection** checks the local catalog only, not account entitl
 
 - Native execution requires either a persisted, explicitly consented Desktop connection or all
   four advanced environment settings. Disconnecting revokes managed execution.
-- Sessions use ZCode's `edit` permission mode. Interactive permissions are denied; user-input
-  requests are cancelled rather than answered automatically. Continue such work in the isolated
-  ZCode client. No permission-skipping flag is passed.
+- Managed Desktop sessions use ZCode's non-interactive `yolo` permission mode after the explicit
+  connection consent. Advanced operator launchers retain `edit` mode. Interactive permission
+  requests are still denied, and user-input requests are cancelled rather than answered
+  automatically; continue those workflows in the ZCode client itself.
 - Each turn owns a child process. A profile has one active turn at a time because ZCode writes
   model selection to shared settings; at most 32 active/queued bridge calls are admitted.
 - `previous_response_id` uses OpenCodex's owner-fenced private continuation state. Client thread
@@ -253,9 +257,10 @@ rewritten. **Test connection** checks the local catalog only, not account entitl
 - Vendor errors and stderr are not forwarded. No raw credentials or protocol traces are
   included in discovery/management results. Token usage is currently unavailable, not measured
   as zero; model access still consumes your ZCode account quota.
-- Linux was tested. Windows/macOS require an equivalent isolated launcher and are not yet
-  live-validated. Streaming reasoning is supported, but caller-selected reasoning levels are
-  not yet advertised or mapped; ZCode owns the model's configured defaults.
+- Linux was tested. Windows/macOS require an equivalent advanced launcher and are not yet
+  live-validated. GLM-5.3 and GLM-5.3-Flash advertise and map ZCode's `low`, `high`, and `max`
+  thought levels; Codex also offers `ultra` as its multi-agent/max orchestration tier. Unknown
+  future models expose no generic reasoning picker unless the operator configures one.
 
 ## Verification
 

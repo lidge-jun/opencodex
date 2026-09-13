@@ -67,7 +67,12 @@ so the schema is not something a user can fix from configuration (issue #2673).
 
 ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
 not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
-Bubblewrap workspace boundary; harness restrictions apply where the native process runs.
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs. Explicitly
+consented managed connections use the official runtime's non-interactive `yolo` mode because the
+bridge cannot project interactive approval prompts; advanced operator launchers retain `edit` mode.
+The host child inherits only a named allowlist of tool environment variables and keeps ZCode-owned
+credentials/session state under its private data root, so host tools work without copying unrelated
+provider secrets into the child.
 
 ## ZCode saved accounts
 

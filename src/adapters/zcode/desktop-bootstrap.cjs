@@ -40,29 +40,34 @@ function desktopModelCatalog(config) {
 }
 module.exports = { normalizeDesktopConfig, desktopModelCatalog };
 if (require.main === module) {
-  let temporaryHome;
-  const cleanup = () => { if (temporaryHome) fs.rmSync(temporaryHome, { recursive: true, force: true }); };
+  let temporarySettings;
+  const cleanup = () => { if (temporarySettings) fs.rmSync(temporarySettings, { recursive: true, force: true }); };
   process.on("exit", cleanup);
   try {
     const args = process.argv.slice(2);
     const host = args[0] === "--host";
-    if (host ? args.length !== 5 || args[4] !== "app-server" : args.length !== 1 || args[0] !== "app-server") throw new Error("unsupported command");
+    if (host ? args.length !== 6 || args[5] !== "app-server" : args.length !== 1 || args[0] !== "app-server") throw new Error("unsupported command");
     const path = host ? args[2] : "/desktop/config.json";
     if (fs.statSync(path).size > 4 * 1024 * 1024) throw new Error("oversized");
     const input = JSON.parse(fs.readFileSync(path, "utf8"));
     const config = normalizeDesktopConfig(input);
     let env = process.env;
+    let settingsPath = `${env.HOME}/.zcode/cli/config.json`;
     if (host) {
-      // Separate runtime state is not filesystem confinement: native tools retain host access.
-      const stableDb = require("node:path").join(process.env.HOME, ".zcode/cli/db");
-      temporaryHome = fs.mkdtempSync(require("node:path").join(process.env.HOME, "turn-"));
-      fs.mkdirSync(temporaryHome + "/.zcode/cli", { recursive: true, mode: 0o700 });
-      fs.symlinkSync(stableDb, temporaryHome + "/.zcode/cli/db", "dir");
-      env = { ...process.env, HOME: temporaryHome, XDG_CONFIG_HOME: temporaryHome + "/.config",
-        XDG_CACHE_HOME: temporaryHome + "/.cache" };
+      // Keep only ZCode-owned state private. HOME/XDG remain the real host environment so
+      // native tools behave like ordinary host tools rather than an accidental soft sandbox.
+      const paths = require("node:path");
+      const stateHome = args[4];
+      if (!paths.isAbsolute(stateHome) || stateHome.includes("\0")) throw new Error("invalid state home");
+      temporarySettings = fs.mkdtempSync(paths.join(stateHome, "turn-"));
+      settingsPath = paths.join(temporarySettings, "config.json");
+      config.storage = { dir: paths.join(stateHome, ".zcode") };
+      env = { ...process.env, ZCODE_DATA_BASE_DIR: stateHome };
     }
-    fs.writeFileSync(`${env.HOME}/.zcode/cli/config.json`, JSON.stringify(config), { mode: 0o600, flag: "wx" });
-    const child = spawn(host ? process.execPath : "/usr/bin/node", [host ? args[1] : "/runtime/zcode.cjs", "app-server"], {
+    fs.writeFileSync(settingsPath, JSON.stringify(config), { mode: 0o600, flag: "wx" });
+    const childArgs = [host ? args[1] : "/runtime/zcode.cjs", "app-server"];
+    if (host) childArgs.push("--settings", settingsPath);
+    const child = spawn(host ? process.execPath : "/usr/bin/node", childArgs, {
       stdio: ["pipe", "inherit", "inherit"], shell: false, env, ...(host ? { cwd: args[3] } : {}),
     });
     const lines = require("node:readline").createInterface({ input: process.stdin });

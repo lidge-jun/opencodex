@@ -236,3 +236,33 @@ test("saved account UI completes official login then shows provider/catalog read
   expect(requests.some(r => r.path.endsWith("/test"))).toBe(false);
   expect(requests.filter(r => r.body).every(r => r.body!.consent === true)).toBe(true);
 });
+
+test("saved account completion preserves an HTTP-200 partial activation", async () => {
+  let completed = false;
+  const prior = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, options?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (!url.pathname.startsWith("/api/zcode-accounts")) return prior(input, options);
+    if (url.pathname.endsWith("/login")) return Response.json({ jobId: "partial-job", accountId: "partial-account",
+      phase: options?.method === "POST" ? "waiting" : "authenticated" });
+    if (url.pathname.endsWith("/complete")) {
+      completed = true;
+      return Response.json({ activation: "catalog_pending", error: "catalog_update_failed" });
+    }
+    return Response.json({ accounts: completed ? [{ id: "partial-account", label: "Partial fixture",
+      activation: "catalog_pending", busy: false }] : [] });
+  } });
+  await mountPane();
+  const section = host.querySelector("h3")!.closest("section")!;
+  const input = section.querySelector('input:not([type="checkbox"])') as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, "Partial fixture");
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+  await click(section.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+  await click(button("Add account"));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 2200)); });
+  expect(host.textContent).toContain("Partial fixture");
+  expect(host.textContent).toContain("catalog_update_failed");
+  expect(host.textContent).not.toContain("native_oauth_failed");
+});

@@ -17,6 +17,10 @@ export interface ZcodeSettings {
   settingsPath: string;
   scope: string;
   desktopModels?: DesktopModel[];
+  /** Managed host mode preserves the user's ordinary tool environment while keeping ZCode state private. */
+  hostExecution?: boolean;
+  /** Managed Desktop consent authorizes non-interactive native tools; advanced launchers retain edit mode. */
+  nativePermissionMode?: "edit" | "yolo";
 }
 
 /** Execution authority is operator environment or persisted GUI consent, never data-plane input. */

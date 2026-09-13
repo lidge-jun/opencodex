@@ -18,7 +18,7 @@ export default function ZcodeAccountsPane({ apiBase, runtime, workspace }: { api
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, consent: true }),
     } : undefined);
     const value = await response.json();
-    if (!response.ok || value.error) throw new Error(value.error || "native_oauth_failed");
+    if (!response.ok) throw new Error(value.error || "native_oauth_failed");
     return value;
   }, [apiBase]);
   const refresh = useCallback(async () => {

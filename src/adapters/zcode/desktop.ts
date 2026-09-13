@@ -165,9 +165,10 @@ function settingsFor(connection: Connection, accountId?: string): ZcodeSettings 
   mkdirSync(db, { recursive: true, mode: 0o700 });
   if (!bwrap) return { accountId,
     command: [node, fileURLToPath(new URL("./desktop-bootstrap.cjs", import.meta.url)),
-      "--host", runtime, profile.config, workspace],
+      "--host", runtime, profile.config, workspace, privateHome],
     home: privateHome, workspace, settingsPath: "",
     scope: `desktop:${connection.generation}:${profileStamp}:host`, desktopModels: connection.models,
+    hostExecution: true, nativePermissionMode: "yolo",
   };
   const sandboxHome = homedir(); // preserve the official credential cipher's HOME/username identity
   const args = ["--unshare-all", "--share-net", "--die-with-parent", "--new-session", "--ro-bind", "/usr", "/usr"];
@@ -188,7 +189,8 @@ function settingsFor(connection: Connection, accountId?: string): ZcodeSettings 
     "--setenv", "ZCODE_DATA_BASE_DIR", "/desktop", "--chdir", "/workspace",
     "/usr/bin/node", "/bridge/desktop-bootstrap.cjs");
   return { accountId, command: [bwrap, ...args], home: privateHome, workspace: "/workspace", settingsPath: "",
-    scope: `desktop:${connection.generation}:${profileStamp}:sandbox`, desktopModels: connection.models };
+    scope: `desktop:${connection.generation}:${profileStamp}:sandbox`, desktopModels: connection.models,
+    nativePermissionMode: "yolo" };
 }
 
 /** Persisted GUI consent is separate from provider config; data-plane requests cannot set it. */
