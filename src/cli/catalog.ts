@@ -79,6 +79,10 @@ export async function handleCatalogCommand(args: string[]): Promise<number> {
       const processResult = outcome.appServers;
       const restart = processResult?.restart;
       desktopAppRestarted = outcome.desktopApp?.relaunch === "started";
+      // A desktop restart that was asked for and did not relaunch is an incomplete
+      // restart, exactly like a surviving app-server. Without this the pull reports
+      // ok: true while the picker the operator was fixing is still stale.
+      if (restartScope.desktopApp && !desktopAppRestarted) restartIncomplete = true;
       if (restart) {
         // A partial stop is not a restart. `restartCodexAppServers` reports failures and
         // survivors without throwing, so counting `stopped` alone reported success while a
@@ -96,7 +100,9 @@ export async function handleCatalogCommand(args: string[]): Promise<number> {
       const envelope: CatalogPullEnvelope = {
         schemaVersion: 1, ok: false, status: result.status,
         catalogWritten: result.catalogWritten, cacheSynced: result.cacheSynced,
-        codexRestarted: false, modelCount: result.modelCount, code: "restart_incomplete",
+        codexRestarted: false,
+        ...(restartScope.desktopApp ? { desktopAppRestarted } : {}),
+        modelCount: result.modelCount, code: "restart_incomplete",
       };
       if (json) console.log(JSON.stringify(envelope));
       else console.error("Remote Codex catalog installed, but a Codex app-server is still running the previous catalog.");
@@ -105,7 +111,8 @@ export async function handleCatalogCommand(args: string[]): Promise<number> {
     const envelope: CatalogPullEnvelope = {
       schemaVersion: 1, ok: true, status: result.status,
       catalogWritten: result.catalogWritten, cacheSynced: result.cacheSynced,
-      codexRestarted, modelCount: result.modelCount,
+      codexRestarted,
+        ...(restartScope.desktopApp ? { desktopAppRestarted } : {}), modelCount: result.modelCount,
     };
     if (json) console.log(JSON.stringify(envelope));
     else if (result.status === "unchanged") console.log("Remote Codex catalog is unchanged; no files or processes were touched.");
