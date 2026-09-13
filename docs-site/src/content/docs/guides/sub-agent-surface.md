@@ -16,8 +16,8 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 
 | Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
-| **v1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
-| **base** (default) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
+| **v1** (default) | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Anyone who delegates across providers, especially native-to-routed children. This is what a fresh install ships with. |
+| **base** | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
 | **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow and understand model inheritance and the encrypted-task limitation below. |
 
 On **v2**, an optional **Keep ChatGPT on v1** switch (`keepNativeChatGptOnV1`) leaves Sol/Terra
@@ -28,8 +28,10 @@ Codex applies that override before per-model catalog pins. This is a switch *ins
 fourth catalog mode.
 
 :::tip[Not sure?]
-Start with **base**. Choose **v1** when cross-provider delegation must work predictably. Force **v2**
-only when you specifically want its newer session model across every catalog entry.
+Stay on **v1**, the shipped default. Choose **base** or **v2** only when your parent and child models
+sit on the same side of the provider boundary — on both, a task handed from a ChatGPT model to a
+routed one arrives encrypted and fails. The dashboard asks before either, and links to
+[Why v1 is the default](/guides/subagent-v1-default/).
 :::
 
 ## External task input

@@ -106,6 +106,7 @@ export default defineConfig({
             { label: "Video Bridge", translations: { fr: "Pont vidéo", ko: "비디오 브릿지", "zh-CN": "视频桥接", "zh-TW": "影片橋接", ru: "Video Bridge", ja: "動画ブリッジ", tr: "Video Bridge" }, slug: "guides/video-bridge" },
             { label: "Web Dashboard", translations: { fr: "Tableau de bord web", ko: "웹 대시보드", "zh-CN": "网页控制台", "zh-TW": "網頁儀表板", ru: "Веб-дашборд", ja: "ウェブダッシュボード", tr: "Web Kontrol Paneli" }, slug: "guides/web-dashboard" },
             { label: "Sub-agent Surface", translations: { fr: "Interface des sous-agents", ko: "서브에이전트 서피스", "zh-CN": "子代理界面", "zh-TW": "子代理介面", ru: "Интерфейс подагентов", ja: "サブエージェントサーフェス", tr: "Alt Ajan Arayüzü" }, slug: "guides/sub-agent-surface" },
+            { label: "Why v1 Is the Default", translations: { fr: "Pourquoi v1 est la valeur par défaut", ko: "v1이 기본값인 이유", "zh-CN": "为什么默认是 v1", "zh-TW": "為什麼預設是 v1", ru: "Почему v1 по умолчанию", ja: "v1 がデフォルトである理由", tr: "Neden varsayılan v1" }, slug: "guides/subagent-v1-default" },
           ],
         },
         {
