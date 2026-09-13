@@ -153,10 +153,10 @@ function readBasePrompt(codexHome: string): BasePromptText {
   let configText: string;
   try {
     configText = readFileSync(configPath, "utf8");
-  } catch {
+  } catch (error) {
     return {
       text: null,
-      reason: existsSync(configPath) ? "config-unreadable" : "config-not-found",
+      reason: (error as NodeJS.ErrnoException).code === "ENOENT" ? "config-not-found" : "config-unreadable",
       bytes: 0,
       model: null,
       modelSource: configPath,

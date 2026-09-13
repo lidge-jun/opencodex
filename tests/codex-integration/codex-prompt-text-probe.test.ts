@@ -7,7 +7,7 @@
  * that attribution to a user as an explanation.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -186,7 +186,7 @@ describe("section extraction", () => {
 });
 
 describe("base prompt source", () => {
-  test("distinguishes a missing config from a config without a selected model", async () => {
+  test("distinguishes missing, unreadable, and unselected config states", async () => {
     const home = root();
     const previousHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = home;
@@ -198,6 +198,10 @@ describe("base prompt source", () => {
       expect((await probePromptText(2_000)).base.reason).toBe("config-not-found");
       writeFileSync(join(home, "config.toml"), "model_catalog_json = \"catalog.json\"\n");
       expect((await probePromptText(2_000)).base.reason).toBe("model-not-selected");
+      const unreadableHome = root();
+      mkdirSync(join(unreadableHome, "config.toml"));
+      process.env.CODEX_HOME = unreadableHome;
+      expect((await probePromptText(2_000)).base.reason).toBe("config-unreadable");
     } finally {
       if (previousHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousHome;
