@@ -129,6 +129,22 @@ describe("service listen-port bake", () => {
     expect(buildPlist()).toContain("start --port 13337");
     expect(buildUnit()).toContain("start --port 13337");
   });
+
+  test("Windows service wrapper preserves the user's current PATH", () => {
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = "C:\\OpenCodex\\bin";
+      const script = buildWindowsServiceScript({
+        bun: "C:\\OpenCodex\\bun.exe",
+        bunRuntimeSource: "bundled",
+        cli: "C:\\OpenCodex\\cli.ts",
+      });
+      expect(script).toContain('set "PATH=C:\\OpenCodex\\bin;%PATH:"=%"');
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
 });
 
 describe("systemd service unit", () => {
@@ -1173,7 +1189,7 @@ describe("Windows service task", () => {
       process.env.OPENCODEX_HOME = 'C:\\ocx" & del C:\\important & rem "';
       process.env.OPENCODEX_API_AUTH_TOKEN = 'token" & echo LEAK & rem "';
       const script = buildWindowsServiceScript();
-      expect(script).toContain('set "PATH=C:\\safe & echo PWNED & rem "');
+      expect(script).toContain('set "PATH=C:\\safe & echo PWNED & rem ;%PATH:"=%"');
       expect(script).toContain('set "OPENCODEX_HOME=C:\\ocx & del C:\\important & rem "');
       expect(script).toContain('set "OCX_API_TOKEN_FILE=');
       expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
@@ -10,6 +10,7 @@ export type CodexRuntimeSource =
   | "environment"
   | "configured"
   | "shim"
+  | "installed"
   | "path"
   | "fallback";
 
@@ -88,6 +89,7 @@ const PERSIST_FILE = "codex-runtime.json";
 const CLAMP_PERSIST_FILE = "codex-runtime-clamp.json";
 /** Probe rejection for an absolute candidate whose file is gone. Matched when retiring a dead pin (#4035). */
 const PATH_MISSING_REASON = "path does not exist";
+const PROGRAM_NOT_FOUND_REASON = "program not found (ENOENT)";
 
 function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
   const clone = (current: unknown): unknown => {
@@ -111,6 +113,7 @@ function isCodexRuntimeSource(value: unknown): value is CodexRuntimeSource {
   return value === "environment"
     || value === "configured"
     || value === "shim"
+    || value === "installed"
     || value === "path"
     || value === "fallback";
 }
@@ -350,6 +353,9 @@ function probeVersion(
     return { ok: true, version };
   } catch (error) {
     if (!probeHome) return { ok: false, reason: "probe sandbox unavailable" };
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+      return { ok: false, reason: PROGRAM_NOT_FOUND_REASON };
+    }
     const message = error instanceof Error ? error.message : String(error);
     const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
     return { ok: false, reason: `failed --version (${redacted})` };
@@ -399,6 +405,30 @@ function pathCandidates(deps: ResolveCodexRuntimeDeps): string[] {
     }
   }
   return [...new Set(out)];
+}
+
+/** Windows Codex installs use a changing directory name under this stable product root. */
+function installedCodexCandidates(deps: ResolveCodexRuntimeDeps): string[] {
+  if ((deps.platform ?? process.platform) !== "win32") return [];
+  const localAppData = (deps.env ?? process.env).LOCALAPPDATA?.trim();
+  if (!localAppData) return [];
+  const root = join(localAppData, "OpenAI", "Codex", "bin");
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => {
+        const directory = join(root, entry.name);
+        try {
+          return { directory, name: entry.name, mtimeMs: statSync(directory).mtimeMs };
+        } catch {
+          return { directory, name: entry.name, mtimeMs: -Infinity };
+        }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name))
+      .map(entry => join(entry.directory, "codex.exe"));
+  } catch {
+    return [];
+  }
 }
 
 interface RankedCandidate {
@@ -623,6 +653,9 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
   for (const command of pathCandidates(deps)) {
     ordered.push({ command, source: "path" });
   }
+  for (const command of installedCodexCandidates(deps)) {
+    ordered.push({ command, source: "installed" });
+  }
   ordered.push({ command: "codex", source: "fallback" });
 
   const seen = new Set<string>();
@@ -644,7 +677,7 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
     };
   }
 
-  // Prefer first valid in priority order (environment → configured → shim → path → fallback).
+  // Prefer first valid in priority order (environment → configured → shim → path → installed → fallback).
   let selected = valid[0]!;
   let replacedConfigured: ResolveCodexRuntimeResult["replacedConfigured"];
 

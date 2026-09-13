@@ -8,8 +8,9 @@
  *
  * What this does NOT cover, stated rather than implied:
  *
- * - `base-instructions` is absent. `prompt_debug.rs` returns `prompt.input` and
- *   discards `base_instructions`, so the base prompt never appears here.
+ * - `base-instructions` is absent from `prompt.input`. `prompt_debug.rs` discards
+ *   `base_instructions`, so the base prompt is read separately from the selected
+ *   model catalog below rather than being guessed from the debug output.
  * - World-state sections are DIFF-rendered (`add_section` registers state, it does
  *   not emit text). A section that renders nothing on a first turn is missing
  *   from this output even though its layer exists.
@@ -17,10 +18,14 @@
  *   universal prompt.
  */
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { closeSync, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { expandUserPath } from "../config";
+import { parseCatalogJson, readCodexCatalogPathForHome, type RawEntry } from "./catalog/parsing";
+import { codexExecInvocation } from "./exec-invocation";
 import { resolveCodexHomeDir } from "./home";
+import { readRootTomlString } from "./paths";
+import { resolveCodexRuntime, type CodexRuntimeSource } from "./runtime";
 
 /**
  * Layer id -> the tag Codex actually renders it under.
@@ -75,8 +80,50 @@ export interface LayerText {
   /** Why the text is absent, when it is. */
   reason: "ok" | "empty-source" | "not-rendered" | "not-exposed" | "unavailable";
   bytes: number;
+  /** `expanded` is model-visible text; `template` still contains expansion placeholders. */
+  representation?: "expanded" | "template";
   /** For `empty-source`: the file that exists but has nothing in it. */
   sourcePath?: string;
+}
+
+export type PromptProbeFailureKind =
+  | "program-not-found"
+  | "command-unsupported"
+  | "execution-failed"
+  | "output-invalid";
+
+export interface PromptProbeFailure {
+  kind: PromptProbeFailureKind;
+  command: string;
+  detail: string;
+}
+
+export interface BasePromptText {
+  text: string | null;
+  reason:
+    | "ok"
+    | "config-not-found"
+    | "config-unreadable"
+    | "model-not-selected"
+    | "model-not-found"
+    | "catalog-not-found"
+    | "catalog-unreadable"
+    | "catalog-too-large"
+    | "not-published"
+    | "config-too-large"
+    | "override-empty"
+    | "override-not-found"
+    | "override-too-large"
+    | "override-unreadable";
+  bytes: number;
+  model: string | null;
+  modelSource: string;
+  sourcePath: string | null;
+  representation: "expanded" | "template" | "unavailable";
+  catalogVersion: string | null;
+  effectiveSourcePath: string | null;
+  effectiveSourceKind: "catalog-default" | "model-instructions-file";
+  effectiveTextAvailable: boolean;
 }
 
 export interface PromptTextProbe {
@@ -84,21 +131,180 @@ export interface PromptTextProbe {
   /** The Codex home the probe reported on. */
   codexHome: string;
   layers: Record<string, LayerText>;
+  base: BasePromptText;
+  runtime?: { command: string; version: string | null; source: CodexRuntimeSource };
+  failure?: PromptProbeFailure;
   detail?: string;
 }
 
-function resolveCodexBinary(): string | null {
-  const candidates = [
-    join(homedir(), ".codex/packages/standalone/current/bin/codex"),
-    join(homedir(), ".local/bin/codex"),
-    "/usr/local/bin/codex",
-    "/opt/homebrew/bin/codex",
-  ];
-  return candidates.find(path => existsSync(path)) ?? null;
+function promptLayerForBase(base: BasePromptText): LayerText {
+  return {
+    text: base.text,
+    reason: base.reason === "ok" ? "ok" : "unavailable",
+    bytes: base.bytes,
+    representation: base.representation === "unavailable" ? undefined : base.representation,
+    ...(base.sourcePath ? { sourcePath: base.sourcePath } : {}),
+  };
 }
 
-/** 8 MiB is far above any real prompt and far below anything that hurts the server. */
+function entryText(entry: RawEntry | null, key: string): string | null {
+  const value = entry?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** Keep local source reads bounded to the same size as the subprocess response. */
 const MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+function readBoundedPromptSource(path: string): string {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, "r");
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile()) {
+      const error = new Error("prompt source is not a regular file") as NodeJS.ErrnoException;
+      error.code = "EFTYPE";
+      throw error;
+    }
+    const buffer = Buffer.allocUnsafe(MAX_PROBE_OUTPUT_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const read = readSync(descriptor, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (read === 0) break;
+      bytesRead += read;
+    }
+    if (bytesRead > MAX_PROBE_OUTPUT_BYTES) {
+      const error = new Error(`prompt source exceeds ${MAX_PROBE_OUTPUT_BYTES} bytes`) as NodeJS.ErrnoException;
+      error.code = "EFBIG";
+      throw error;
+    }
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor); } catch { /* best effort */ }
+    }
+  }
+}
+
+function readBasePrompt(codexHome: string): BasePromptText {
+  const configPath = join(codexHome, "config.toml");
+  let configText: string;
+  try {
+    configText = readBoundedPromptSource(configPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return {
+      text: null,
+      reason: code === "ENOENT" ? "config-not-found" : code === "EFBIG" ? "config-too-large" : "config-unreadable",
+      bytes: 0,
+      model: null,
+      modelSource: configPath,
+      sourcePath: null,
+      representation: "unavailable",
+      catalogVersion: null,
+      effectiveSourcePath: null,
+      effectiveSourceKind: "catalog-default",
+      effectiveTextAvailable: false,
+    };
+  }
+
+  const model = readRootTomlString(configText, "model");
+  const catalogPath = readCodexCatalogPathForHome(codexHome, configText);
+  let catalog: ReturnType<typeof parseCatalogJson> = null;
+  let catalogReason: "catalog-not-found" | "catalog-unreadable" | "catalog-too-large" = "catalog-not-found";
+  try {
+    catalog = parseCatalogJson(readBoundedPromptSource(catalogPath));
+    if (!catalog) catalogReason = "catalog-unreadable";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    catalogReason = code === "ENOENT" ? "catalog-not-found" : code === "EFBIG" ? "catalog-too-large" : "catalog-unreadable";
+  }
+  const catalogVersion = typeof catalog?.client_version === "string" ? catalog.client_version : null;
+  const unavailable = (
+    reason: BasePromptText["reason"],
+    sourcePath: string | null = null,
+    effectiveSourcePath: string | null = sourcePath,
+    effectiveSourceKind: BasePromptText["effectiveSourceKind"] = "catalog-default",
+  ): BasePromptText => ({
+    text: null,
+    reason,
+    bytes: 0,
+    model,
+    modelSource: configPath,
+    sourcePath,
+    representation: "unavailable",
+    catalogVersion,
+    effectiveSourcePath,
+    effectiveSourceKind,
+    effectiveTextAvailable: false,
+  });
+
+  if (!model) return unavailable("model-not-selected");
+
+  const configuredOverride = readRootTomlString(configText, "model_instructions_file");
+  if (configuredOverride) {
+    let overridePath: string;
+    try {
+      overridePath = resolve(dirname(configPath), expandUserPath(configuredOverride));
+    } catch {
+      return unavailable("override-unreadable", configuredOverride, configuredOverride, "model-instructions-file");
+    }
+    try {
+      const text = readBoundedPromptSource(overridePath);
+      if (text.trim().length === 0) {
+        return unavailable("override-empty", overridePath, overridePath, "model-instructions-file");
+      }
+      return {
+        text,
+        reason: "ok",
+        bytes: Buffer.byteLength(text, "utf8"),
+        model,
+        modelSource: configPath,
+        sourcePath: overridePath,
+        representation: "expanded",
+        catalogVersion,
+        effectiveSourcePath: overridePath,
+        effectiveSourceKind: "model-instructions-file",
+        effectiveTextAvailable: true,
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      return unavailable(
+        code === "ENOENT" ? "override-not-found" : code === "EFBIG" ? "override-too-large" : "override-unreadable",
+        overridePath,
+        overridePath,
+        "model-instructions-file",
+      );
+    }
+  }
+
+  if (!catalog) return unavailable(catalogReason, catalogPath);
+  const entry = catalog.models?.find(candidate => candidate.slug === model || candidate.id === model) ?? null;
+  if (!entry) return unavailable("model-not-found", catalogPath);
+  const topLevel = entryText(entry, "base_instructions");
+  const modelMessages = entry.model_messages;
+  const template = modelMessages && typeof modelMessages === "object" && !Array.isArray(modelMessages)
+    ? entryText(modelMessages as RawEntry, "instructions_template")
+    : null;
+  const text = topLevel ?? template;
+  if (!text) return unavailable("not-published", catalogPath);
+  // `base_instructions` is the catalog's model-visible field. The nested
+  // `instructions_template` is explicitly a template, even when it currently
+  // has no placeholders.
+  const representation = topLevel ? "expanded" : "template";
+  return {
+    text,
+    reason: "ok",
+    bytes: Buffer.byteLength(text, "utf8"),
+    model,
+    modelSource: configPath,
+    sourcePath: catalogPath,
+    representation,
+    catalogVersion,
+    effectiveSourcePath: catalogPath,
+    effectiveSourceKind: "catalog-default",
+    effectiveTextAvailable: true,
+  };
+}
 
 interface ProbeCommand {
   binary: string;
@@ -111,7 +317,7 @@ interface ProbeCommand {
 interface PromptProbeFlight {
   key: string;
   controller: AbortController;
-  result: Promise<string | null>;
+  result: Promise<PromptProbeExecutionResult | null>;
   closed: Promise<void>;
   waiters: number;
   joinable: boolean;
@@ -120,13 +326,18 @@ interface PromptProbeFlight {
 }
 
 interface PromptProbeExecution {
-  result: Promise<string | null>;
+  result: Promise<PromptProbeExecutionResult | null>;
   closed: Promise<void>;
+}
+
+interface PromptProbeExecutionResult {
+  raw: string | null;
+  failure: PromptProbeFailure | null;
 }
 
 type SharedPromptProbeOutcome =
   | { kind: "output"; raw: string }
-  | { kind: "failed" }
+  | { kind: "failed"; failure?: PromptProbeFailure }
   | { kind: "busy" };
 
 let activePromptProbe: PromptProbeFlight | null = null;
@@ -144,8 +355,56 @@ function commandKey(command: ProbeCommand): string {
   ]);
 }
 
-function completedExecution(value: string | null): PromptProbeExecution {
+function completedExecution(value: PromptProbeExecutionResult | null): PromptProbeExecution {
   return { result: Promise.resolve(value), closed: Promise.resolve() };
+}
+
+function commandDescription(command: ProbeCommand): string {
+  return [command.binary, ...command.args].join(" ");
+}
+
+function errorDescription(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).trim().slice(0, 512);
+}
+
+function executionFailure(
+  command: ProbeCommand,
+  detail: string,
+  kind: PromptProbeFailureKind = "execution-failed",
+): PromptProbeFailure {
+  return { kind, command: commandDescription(command), detail: detail || "unknown process error" };
+}
+
+function classifyProcessFailure(command: ProbeCommand, code: number | null, stderr: string): PromptProbeFailure {
+  const detail = stderr.trim().slice(0, 512) || `process exited with code ${code ?? "unknown"}`;
+  const lower = detail.toLowerCase();
+  const unsupported = code === 2 && (
+    (/unknown|unrecognized|unexpected|invalid/.test(lower) && /command|subcommand|argument|option|prompt-input|debug/.test(lower))
+    || /usage:/.test(lower)
+  );
+  return executionFailure(command, detail, unsupported ? "command-unsupported" : "execution-failed");
+}
+
+function classifyRuntimeFailure(runtime: ReturnType<typeof resolveCodexRuntime>): PromptProbeFailure {
+  const detail = runtime.failures.length > 0
+    ? runtime.failures.map(item => `${item.source}: ${item.reason}`).join("; ").slice(0, 512)
+    : "no usable Codex runtime was found";
+  const lower = detail.toLowerCase();
+  const representative = runtime.failures.find(item => !/enoent|not found|path does not exist/.test(item.reason.toLowerCase()))
+    ?? runtime.failures[0];
+  const representativeReason = representative?.reason.toLowerCase() ?? lower;
+  const kind = /not a spawnable|unrecognized --version output/.test(representativeReason)
+    ? "command-unsupported"
+    : /enoent|not found|path does not exist/.test(representativeReason)
+      ? "program-not-found"
+      : /failed --version|probe sandbox unavailable/.test(representativeReason)
+      ? "execution-failed"
+      : "program-not-found";
+  return executionFailure(
+    { binary: runtime.runtime.command, args: [], cwd: "", timeoutMs: 0, promptStateFingerprint: null },
+    detail,
+    kind,
+  );
 }
 
 function runProbe(
@@ -153,15 +412,15 @@ function runProbe(
   signal: AbortSignal,
   onStopping: () => void,
 ): PromptProbeExecution {
-  if (signal.aborted) return completedExecution(null);
-  let resolveResult!: (value: string | null) => void;
+  if (signal.aborted) return completedExecution({ raw: null, failure: null });
+  let resolveResult!: (value: PromptProbeExecutionResult | null) => void;
   let resolveClosed!: () => void;
-  const result = new Promise<string | null>(resolve => { resolveResult = resolve; });
+  const result = new Promise<PromptProbeExecutionResult | null>(resolve => { resolveResult = resolve; });
   const closed = new Promise<void>(resolve => { resolveClosed = resolve; });
   let resultSettled = false;
   let closeSettled = false;
 
-  const finishResult = (value: string | null) => {
+  const finishResult = (value: PromptProbeExecutionResult | null) => {
     if (resultSettled) return;
     resultSettled = true;
     resolveResult(value);
@@ -179,22 +438,32 @@ function runProbe(
     let child: ReturnType<typeof spawn>;
     try {
       if (probeCommandForTests) probeSpawnAttemptsForTests += 1;
-      child = spawn(command.binary, command.args, {
+      const invocation = codexExecInvocation(command.binary, command.args);
+      child = spawn(invocation.file, invocation.args, {
         cwd: command.cwd,
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        ...invocation.options,
+        env: { ...process.env, CODEX_HOME: command.cwd },
       });
-    } catch {
-      finishResult(null);
+    } catch (error) {
+      const detail = errorDescription(error);
+      finishResult({
+        raw: null,
+        failure: executionFailure(command, detail, /ENOENT|not found/i.test(detail) ? "program-not-found" : "execution-failed"),
+      });
       finishClosed();
       return { result, closed };
     }
     const chunks: Buffer[] = [];
+    const errorChunks: Buffer[] = [];
     let size = 0;
     let settled = false;
     let stopping = false;
+    let stoppingFailure: PromptProbeFailure | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const finish = (value: string | null) => {
+    const finish = (value: PromptProbeExecutionResult) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
@@ -205,9 +474,10 @@ function runProbe(
 
     // Keep the flight admitted until `close`: kill() only requests termination
     // and does not prove the exact child has released its process and stdio.
-    const terminate = () => {
+    const terminate = (failure = executionFailure(command, "probe process was terminated")) => {
       if (settled || stopping) return;
       stopping = true;
+      stoppingFailure = failure;
       onStopping();
       if (timer) clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
@@ -215,7 +485,7 @@ function runProbe(
       // The caller is bounded even if OS termination later fails. Admission is
       // retained separately by `closed`, and later probes fail soft while this
       // exact child remains unproven terminal.
-      finishResult(null);
+      finishResult({ raw: null, failure });
       if (child.exitCode !== null || child.signalCode !== null) return;
       try {
         child.kill("SIGKILL");
@@ -233,18 +503,34 @@ function runProbe(
       if (size > MAX_PROBE_OUTPUT_BYTES) { terminate(); return; }
       chunks.push(chunk);
     });
-    child.on("error", () => {
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (Buffer.concat(errorChunks).length < 64 * 1024) errorChunks.push(chunk);
+    });
+    child.on("error", error => {
       // No PID means spawn itself failed, so there is no live child to drain.
       if (child.pid === undefined) {
-        finish(null);
+        const detail = errorDescription(error);
+        finish({
+          raw: null,
+          failure: executionFailure(command, detail, /ENOENT|not found/i.test(detail) ? "program-not-found" : "execution-failed"),
+        });
       }
-      else terminate();
+      else terminate(executionFailure(command, errorDescription(error)));
     });
     child.on("close", code => {
       // Decode once, at the end: `String(chunk)` per chunk corrupts any UTF-8
       // character that straddles a chunk boundary.
       const recordClose = () => {
-        finish(!stopping && code === 0 ? Buffer.concat(chunks).toString("utf8") : null);
+        if (stopping) {
+          finish({ raw: null, failure: stoppingFailure ?? executionFailure(command, "probe process was terminated") });
+        } else if (code === 0) {
+          finish({ raw: Buffer.concat(chunks).toString("utf8"), failure: null });
+        } else {
+          finish({
+            raw: null,
+            failure: classifyProcessFailure(command, code, Buffer.concat(errorChunks).toString("utf8")),
+          });
+        }
       };
       const barrier = probeCloseBarrierForTests;
       if (barrier) void barrier.then(recordClose, recordClose);
@@ -252,8 +538,8 @@ function runProbe(
     });
     // Close the race between the pre-spawn check and listener registration.
     if (signal.aborted) terminate();
-  } catch {
-    finishResult(null);
+  } catch (error) {
+    finishResult({ raw: null, failure: executionFailure(command, errorDescription(error)) });
     finishClosed();
   }
   return { result, closed };
@@ -296,19 +582,26 @@ async function runSharedPromptProbe(
   if (signal?.aborted) return { kind: "failed" };
   const active = activePromptProbe;
   if (!active) {
-    const raw = await waitForPromptProbeFlight(startPromptProbeFlight(command), signal);
-    return raw === null ? { kind: "failed" } : { kind: "output", raw };
+    const result = await waitForPromptProbeFlight(startPromptProbeFlight(command), signal);
+    if (!result) return { kind: "failed" };
+    if (result.failure) return { kind: "failed", failure: result.failure };
+    return result.raw === null ? { kind: "failed" } : { kind: "output", raw: result.raw };
   }
   if (active.key === key && active.joinable && !active.controller.signal.aborted) {
-    const raw = await waitForPromptProbeFlight(active, signal);
-    return raw === null ? { kind: "failed" } : { kind: "output", raw };
+    const result = await waitForPromptProbeFlight(active, signal);
+    if (!result) return { kind: "failed" };
+    if (result.failure) return { kind: "failed", failure: result.failure };
+    return result.raw === null ? { kind: "failed" } : { kind: "output", raw: result.raw };
   }
   // A different or terminating flight still owns the sole process slot. Never
   // wait unboundedly for an unproven close and never launch beside it.
   return { kind: "busy" };
 }
 
-async function waitForPromptProbeFlight(flight: PromptProbeFlight, signal?: AbortSignal): Promise<string | null> {
+async function waitForPromptProbeFlight(
+  flight: PromptProbeFlight,
+  signal?: AbortSignal,
+): Promise<PromptProbeExecutionResult | null> {
   if (signal?.aborted) {
     if (flight.waiters === 0 && !flight.settled) flight.controller.abort();
     return null;
@@ -317,7 +610,7 @@ async function waitForPromptProbeFlight(flight: PromptProbeFlight, signal?: Abor
   let onAbort: (() => void) | undefined;
   try {
     if (!signal) return await flight.result;
-    const aborted = new Promise<null>(resolve => {
+    const aborted = new Promise<PromptProbeExecutionResult | null>(resolve => {
       onAbort = () => resolve(null);
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) onAbort();
@@ -387,12 +680,31 @@ export async function probePromptText(
   // and it also described a prompt that depends on where Codex happened to run.
   // The global home is the one context this page can honestly report on.
   const codexHome = resolveCodexHomeDir();
+  const base = readBasePrompt(codexHome);
+  const baseLayer = promptLayerForBase(base);
   if (signal?.aborted) {
-    return { ok: false, codexHome, layers: {}, detail: "prompt probe cancelled" };
+    return { ok: false, codexHome, layers: { "base-instructions": baseLayer }, base, detail: "prompt probe cancelled" };
   }
-  const binary = probeCommandForTests?.binary ?? resolveCodexBinary();
+  const resolved = probeCommandForTests ? null : resolveCodexRuntime({ discoverAlternatives: false });
+  const runtime = resolved?.runtime;
+  const binary = probeCommandForTests?.binary ?? (runtime?.version ? runtime.command : null);
   if (!binary) {
-    return { ok: false, codexHome, layers: {}, detail: "codex binary not found" };
+    const failure = resolved
+      ? classifyRuntimeFailure(resolved)
+      : executionFailure(
+          { binary: "codex", args: ["debug", "prompt-input"], cwd: codexHome, timeoutMs, promptStateFingerprint },
+          "Codex runtime was not provided",
+          "program-not-found",
+        );
+    return {
+      ok: false,
+      codexHome,
+      layers: { "base-instructions": baseLayer },
+      base,
+      ...(runtime ? { runtime } : {}),
+      failure,
+      detail: failure.detail,
+    };
   }
   const command: ProbeCommand = {
     binary,
@@ -403,10 +715,14 @@ export async function probePromptText(
   };
   const outcome = await runSharedPromptProbe(command, signal);
   if (outcome.kind !== "output") {
+    const failure = outcome.kind === "failed" ? outcome.failure : undefined;
     return {
       ok: false,
       codexHome,
-      layers: {},
+      layers: { "base-instructions": baseLayer },
+      base,
+      ...(runtime ? { runtime } : {}),
+      ...(failure ? { failure } : {}),
       detail: signal?.aborted
         ? "prompt probe cancelled"
         : outcome.kind === "busy"
@@ -419,7 +735,16 @@ export async function probePromptText(
   if (sections.size === 0) {
     // Zero sections from a zero-exit probe means the output did not parse, which
     // is a failed read - not fifteen layers that each chose to send nothing.
-    return { ok: false, codexHome, layers: {}, detail: "prompt output could not be parsed" };
+    const failure = executionFailure(command, "codex debug prompt-input returned no recognized sections", "output-invalid");
+    return {
+      ok: false,
+      codexHome,
+      layers: { "base-instructions": baseLayer },
+      base,
+      ...(runtime ? { runtime } : {}),
+      failure,
+      detail: failure.detail,
+    };
   }
   const layers: Record<string, LayerText> = {};
   for (const [layerId, tag] of Object.entries(LAYER_SECTION_TAGS)) {
@@ -444,8 +769,7 @@ export async function probePromptText(
       // An unreadable file stays "not-rendered": we cannot claim it is empty.
     }
   }
-  // The base prompt travels outside prompt.input and cannot be read this way.
-  layers["base-instructions"] = { text: null, reason: "not-exposed", bytes: 0 };
+  layers["base-instructions"] = baseLayer;
 
   // Layers whose rendered tag we have not confirmed against live output. Leaving
   // them absent made the GUI fall through to "unavailable", which claims the probe
@@ -453,7 +777,7 @@ export async function probePromptText(
   for (const id of UNMAPPED_LAYER_IDS) {
     layers[id] ??= { text: null, reason: "not-exposed", bytes: 0 };
   }
-  return { ok: true, codexHome, layers };
+  return { ok: true, codexHome, layers, base, ...(runtime ? { runtime } : {}) };
 }
 
 /** Test-only command seam; production always resolves the installed Codex binary. */

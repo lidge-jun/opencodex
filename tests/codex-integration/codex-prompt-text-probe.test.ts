@@ -7,7 +7,7 @@
  * that attribution to a user as an explanation.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,6 +27,7 @@ const VALID_PROBE_OUTPUT = JSON.stringify([{
   role: "developer",
   content: [{ type: "input_text", text: "<skills_instructions>Skill text.</skills_instructions>" }],
 }]);
+const OVERSIZED_SOURCE_BYTES = 8 * 1024 * 1024 + 1;
 
 function message(text: string): string {
   return JSON.stringify([{ type: "message", role: "developer", content: [{ type: "input_text", text }] }]);
@@ -77,6 +78,24 @@ function root(): string {
   const path = mkdtempSync(join(tmpdir(), "ocx-prompt-probe-"));
   lifecycleRoots.push(path);
   return path;
+}
+
+async function withPromptHome(
+  model: string,
+  catalog: Record<string, unknown>,
+  run: (home: string) => Promise<void>,
+): Promise<void> {
+  const home = root();
+  writeFileSync(join(home, "config.toml"), `model = "${model}"\nmodel_catalog_json = "catalog.json"\n`);
+  writeFileSync(join(home, "catalog.json"), JSON.stringify(catalog));
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    await run(home);
+  } finally {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+  }
 }
 
 afterEach(async () => {
@@ -164,6 +183,242 @@ describe("section extraction", () => {
     const sections = extractSectionsForTests(raw);
     expect(sections.has("div")).toBe(false);
     expect(sections.get("__agents_md")).toContain("<div>");
+  });
+});
+
+describe("base prompt source", () => {
+  test("distinguishes missing, unreadable, and unselected config states", async () => {
+    const home = root();
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+    try {
+      expect((await probePromptText(2_000)).base.reason).toBe("config-not-found");
+      writeFileSync(join(home, "config.toml"), "model_catalog_json = \"catalog.json\"\n");
+      expect((await probePromptText(2_000)).base.reason).toBe("model-not-selected");
+      const unreadableHome = root();
+      mkdirSync(join(unreadableHome, "config.toml"));
+      process.env.CODEX_HOME = unreadableHome;
+      expect((await probePromptText(2_000)).base.reason).toBe("config-unreadable");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("reports an empty model instruction override as unavailable", async () => {
+    const home = root();
+    const overridePath = join(home, "empty.md");
+    writeFileSync(join(home, "config.toml"), "model = \"gpt-test\"\nmodel_instructions_file = \"empty.md\"\n");
+    writeFileSync(overridePath, " \n\t", "utf8");
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.base).toMatchObject({
+        text: null,
+        reason: "override-empty",
+        model: "gpt-test",
+        sourcePath: overridePath,
+        effectiveSourcePath: overridePath,
+        effectiveSourceKind: "model-instructions-file",
+        representation: "unavailable",
+        effectiveTextAvailable: false,
+      });
+      expect(result.layers["base-instructions"]).toMatchObject({
+        text: null,
+        reason: "unavailable",
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test.each([
+    ["catalog", "model_catalog_json", "catalog.json", "catalog-too-large"],
+    ["override", "model_instructions_file", "override.md", "override-too-large"],
+  ] as const)("reports an oversized %s source as unavailable", async (_label, key, fileName, reason) => {
+    const home = root();
+    const sourcePath = join(home, fileName);
+    writeFileSync(join(home, "config.toml"), `model = "gpt-test"\n${key} = "${fileName}"\n`);
+    writeFileSync(sourcePath, "", "utf8");
+    truncateSync(sourcePath, OVERSIZED_SOURCE_BYTES);
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.base).toMatchObject({
+        text: null,
+        reason,
+        model: "gpt-test",
+        sourcePath,
+        effectiveSourcePath: sourcePath,
+        representation: "unavailable",
+        effectiveTextAvailable: false,
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("reads the selected model's published base instructions as expanded text", async () => {
+    await withPromptHome("gpt-test", {
+      client_version: "catalog-test-1",
+      models: [{ slug: "gpt-test", base_instructions: "Complete base prompt." }],
+    }, async (home) => {
+      setPromptTextProbeCommandForTests({
+        binary: process.execPath,
+        args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+      });
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(true);
+      expect(result.base).toMatchObject({
+        text: "Complete base prompt.",
+        reason: "ok",
+        model: "gpt-test",
+        sourcePath: join(home, "catalog.json"),
+        representation: "expanded",
+        catalogVersion: "catalog-test-1",
+        effectiveSourceKind: "catalog-default",
+        effectiveTextAvailable: true,
+      });
+      expect(result.layers["base-instructions"]).toMatchObject({
+        text: "Complete base prompt.",
+        reason: "ok",
+        representation: "expanded",
+      });
+    });
+  });
+
+  test("labels a nested instructions template instead of presenting it as expanded", async () => {
+    await withPromptHome("gpt-template", {
+      models: [{ slug: "gpt-template", model_messages: { instructions_template: "Template {{model}}." } }],
+    }, async () => {
+      setPromptTextProbeCommandForTests({
+        binary: process.execPath,
+        args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+      });
+      const result = await probePromptText(2_000);
+      expect(result.base).toMatchObject({
+        text: "Template {{model}}.",
+        reason: "ok",
+        representation: "template",
+        effectiveSourceKind: "catalog-default",
+      });
+      expect(result.layers["base-instructions"]?.representation).toBe("template");
+    });
+  });
+});
+
+describe("probe failure attribution", () => {
+  test.each([
+    ["program-not-found", "missing Codex program", (home: string) => ({ binary: join(home, "missing-codex.exe"), args: [] })],
+    ["command-unsupported", "unknown command: prompt-input", (_home: string) => ({
+      binary: process.execPath,
+      args: ["-e", "process.stderr.write('unknown command: prompt-input'); process.exit(2)"],
+    })],
+    ["execution-failed", "probe failed", (_home: string) => ({
+      binary: process.execPath,
+      args: ["-e", "process.stderr.write('probe failed'); process.exit(1)"],
+    })],
+    ["output-invalid", "empty probe output", (_home: string) => ({
+      binary: process.execPath,
+      args: ["-e", "process.stdout.write('{}')"],
+    })],
+  ] as const)("reports %s distinctly", async (kind, _label, commandFor) => {
+    await withPromptHome("gpt-test", {
+      models: [{ slug: "gpt-test", base_instructions: "Base." }],
+    }, async (home) => {
+      setPromptTextProbeCommandForTests(commandFor(home));
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(false);
+      expect(result.failure?.kind).toBe(kind);
+      expect(result.base.text).toBe("Base.");
+    });
+  });
+
+  test("classifies a missing PATH fallback as program-not-found", async () => {
+    const codexHome = root();
+    const opencodexHome = root();
+    const localAppData = root();
+    const isolatedPath = root();
+    const previous = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      OPENCODEX_HOME: process.env.OPENCODEX_HOME,
+      CODEX_CLI_PATH: process.env.CODEX_CLI_PATH,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      PATH: process.env.PATH,
+    };
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = opencodexHome;
+    delete process.env.CODEX_CLI_PATH;
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.PATH = isolatedPath;
+    setPromptTextProbeCommandForTests(null);
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(false);
+      expect(result.runtime?.source).toBe("fallback");
+      expect(result.failure?.kind).toBe("program-not-found");
+      expect(result.failure?.detail).toContain("fallback");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("prefers a concrete runtime failure over fallback not-found", async () => {
+    const codexHome = root();
+    const opencodexHome = root();
+    const localAppData = root();
+    const isolatedPath = root();
+    const launcherRoot = root();
+    const launcher = process.platform === "win32" ? join(launcherRoot, "broken.cmd") : join(launcherRoot, "broken");
+    if (process.platform === "win32") {
+      writeFileSync(launcher, "@echo off\r\nexit /b 1\r\n", "utf8");
+    } else {
+      writeFileSync(launcher, "#!/bin/sh\nexit 1\n", "utf8");
+      chmodSync(launcher, 0o755);
+    }
+    const previous = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      OPENCODEX_HOME: process.env.OPENCODEX_HOME,
+      CODEX_CLI_PATH: process.env.CODEX_CLI_PATH,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      PATH: process.env.PATH,
+    };
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = opencodexHome;
+    process.env.CODEX_CLI_PATH = launcher;
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.PATH = isolatedPath;
+    setPromptTextProbeCommandForTests(null);
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(false);
+      expect(result.failure?.kind).toBe("execution-failed");
+      expect(result.failure?.detail).toContain("environment");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
 
