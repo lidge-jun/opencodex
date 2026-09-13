@@ -45,12 +45,20 @@ function seedCatalog(...entries: Buffer[]): void {
   ));
 }
 
+// A cache miss must fail the test, never dial Cognition: every case here is
+// supposed to be served by the seeded catalog, so the network is a bug.
+let realFetch: typeof globalThis.fetch;
 beforeEach(() => {
+  realFetch = globalThis.fetch;
+  globalThis.fetch = (() => {
+    throw new Error("devin-live-models.test.ts reached the network — the seeded catalog cache missed");
+  }) as typeof globalThis.fetch;
   setCachedCatalogForTests(null);
   clearModelCache("devin-test");
   providerCacheGenerations.delete("devin-test");
 });
 afterEach(() => {
+  globalThis.fetch = realFetch;
   setCachedCatalogForTests(null);
   clearModelCache("devin-test");
   providerCacheGenerations.delete("devin-test");
