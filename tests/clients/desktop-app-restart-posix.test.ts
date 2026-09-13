@@ -1,0 +1,219 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
+import { isUnderRoot } from "../../src/codex/desktop-app/types";
+import {
+  acquireDesktopRestartLock,
+  releaseDesktopRestartLock,
+  transferDesktopRestartLock,
+} from "../../src/codex/desktop-app/lock";
+
+/**
+ * The macOS and Linux halves of the desktop restart, plus the singleton lock.
+ *
+ * The Windows cases live in desktop-app-restart.test.ts and still pass unchanged,
+ * which is what shows the move to a shared ladder preserved that platform.
+ */
+
+const BUNDLE = "/Applications/ChatGPT.app";
+const SHELL = BUNDLE + "/Contents/MacOS/ChatGPT";
+const HELPER = BUNDLE + "/Contents/Frameworks/Codex Framework.framework/Versions/152.0.7977.83/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)";
+const CRASHPAD = BUNDLE + "/Contents/Frameworks/Codex Framework.framework/Versions/152.0.7977.83/Helpers/browser_crashpad_handler";
+const WHEN = "Sun Sep 13 18:06:22 2026";
+
+interface Call { file: string; args: string[] }
+
+function isolatedLock(): { lockPath: string } {
+  return { lockPath: join(mkdtempSync(join(tmpdir(), "ocx-posix-restart-")), "lock") };
+}
+
+/** Rows are "pid ppid lstart uid comm", exactly as /bin/ps -o ... prints them. */
+function psRows(rows: Array<[number, number, string]>): string {
+  return rows.map(([pid, ppid, exe]) => `${pid} ${ppid} ${WHEN}   ${process.getuid?.() ?? 0} ${exe}`).join("\n");
+}
+
+function darwinIo(options: {
+  calls: Call[];
+  rows?: Array<[number, number, string]>;
+  ancestry?: number[];
+  psThrows?: boolean;
+  bundleId?: string;
+}): DesktopAppRestartIo {
+  return {
+    platform: "darwin",
+    lock: isolatedLock(),
+    ancestryPids: () => options.ancestry ?? [99_999],
+    isAlive: () => false,
+    sleep: () => {},
+    now: (() => { let t = 0; return () => (t += 500); })(),
+    execFile: (file, args) => {
+      options.calls.push({ file, args: [...args] });
+      if (file === "/bin/ps") {
+        if (options.psThrows) throw new Error("ps failed");
+        return psRows(options.rows ?? [[15901, 1, SHELL]]);
+      }
+      if (file === "/usr/libexec/PlistBuddy") return options.bundleId ?? "com.openai.codex";
+      return "";
+    },
+  };
+}
+
+describe("desktop restart membership is a path boundary, not a prefix", () => {
+  test("a sibling directory sharing the prefix is not a member", () => {
+    expect(isUnderRoot(BUNDLE + "/Contents/MacOS/ChatGPT", BUNDLE)).toBe(true);
+    expect(isUnderRoot(BUNDLE, BUNDLE)).toBe(true);
+    // The whole reason isUnderRoot exists: the same user can create these.
+    expect(isUnderRoot("/Applications/ChatGPT.app-evil/Contents/MacOS/ChatGPT", BUNDLE)).toBe(false);
+    expect(isUnderRoot("/usr/lib/chatgpt-evil/ChatGPT", "/usr/lib/chatgpt")).toBe(false);
+    expect(isUnderRoot("/usr/lib/chatgpt/ChatGPT", "/usr/lib/chatgpt")).toBe(true);
+  });
+});
+
+describe("macOS desktop restart", () => {
+  test("quits through the Apple event and relaunches by bundle id", () => {
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp(darwinIo({ calls }));
+    expect(result.relaunch).toBe("started");
+    expect(result.stopped).toEqual([15901]);
+    const quit = calls.find(call => call.file === "/usr/bin/osascript");
+    expect(quit?.args.join(" ")).toContain('quit app id "com.openai.codex"');
+    const open = calls.find(call => call.file === "/usr/bin/open");
+    // Relaunch is by the DISCOVERED identifier, and never -n: a second instance is
+    // both unreliable to obtain and unwanted.
+    expect(open?.args).toEqual(["-b", "com.openai.codex"]);
+    expect(calls.some(call => call.args.includes("-n"))).toBe(false);
+  });
+
+  test("a crashpad handler at ppid 1 is never a restart target", () => {
+    // Measured live: the running app owns crashpad handlers at ppid 1, and an instance
+    // that already exited leaves more behind. Under a plain "parent is not a member"
+    // rule every one of them is a root, so they would be signalled and a survivor would
+    // block the relaunch forever.
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp(darwinIo({
+      calls,
+      rows: [[15901, 1, SHELL], [15903, 1, CRASHPAD], [15905, 1, CRASHPAD], [15910, 15901, HELPER]],
+    }));
+    expect(result.stopped).toEqual([15901]);
+    const quits = calls.filter(call => call.file === "/usr/bin/osascript");
+    expect(quits).toHaveLength(1);
+  });
+
+  test("an executable path containing spaces and parentheses still parses", () => {
+    // ps prints the full untruncated path in comm, and this app's helpers are literally
+    // named "Codex (Service)". A parser that split on whitespace would drop them.
+    const calls: Call[] = [];
+    restartCodexDesktopApp(darwinIo({ calls, rows: [[15901, 1, SHELL], [15910, 15901, HELPER]] }));
+    expect(calls.some(call => call.file === "/usr/bin/open")).toBe(true);
+  });
+
+  test("a ps probe that throws reports process_probe_failed, not no_targets", () => {
+    // #2557 in its macOS form: "we could not look" must never be reported as
+    // "the app is not running".
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp(darwinIo({ calls, psThrows: true }));
+    expect(result.reason).toBe("process_probe_failed");
+    expect(result.attempted).toBe(false);
+  });
+
+  test("a bundle whose identifier is not com.openai.codex is not discovered", () => {
+    // The bundle is named ChatGPT.app and that name is shared with another product, so
+    // identity has to come from the identifier.
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp(darwinIo({ calls, bundleId: "com.openai.chat" }));
+    expect(result.reason).toBe("package_discovery_failed");
+  });
+
+  test("being inside the app tree refuses instead of killing its own session", () => {
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp(darwinIo({ calls, ancestry: [4242, 15901, 1] }));
+    expect(result.reason).toBe("self_ancestry");
+    expect(calls.some(call => call.file === "/usr/bin/osascript")).toBe(false);
+  });
+
+  test("an unreadable ancestry chain fails closed", () => {
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp(darwinIo({ calls, ancestry: [] }));
+    expect(result.reason).toBe("self_ancestry");
+    expect(calls.some(call => call.file === "/usr/bin/osascript")).toBe(false);
+  });
+
+  test("a failed relaunch is reported as relaunch_failed, not targets_survived", () => {
+    // Everything DID die; it is the relaunch that failed. Reporting the two as one sent
+    // operators looking for processes that were not there.
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp({
+      ...darwinIo({ calls }),
+      execFile: (file, args) => {
+        calls.push({ file, args: [...args] });
+        if (file === "/usr/bin/open") throw new Error("LSCopyApplicationURLsForBundleIdentifier() failed");
+        if (file === "/bin/ps") return psRows([[15901, 1, SHELL]]);
+        if (file === "/usr/libexec/PlistBuddy") return "com.openai.codex";
+        return "";
+      },
+    });
+    expect(result.reason).toBe("relaunch_failed");
+    expect(result.surviving).toEqual([]);
+    expect(result.stopped).toEqual([15901]);
+  });
+});
+
+describe("the restart singleton lock", () => {
+  const alive = new Set<number>([1001, 1002, 2001]);
+  const io = (lockPath: string, pid: number) => ({
+    lockPath, pid, isAlive: (p: number) => alive.has(p), now: () => 1_000_000,
+  });
+
+  test("a second caller is refused rather than queued", () => {
+    // Two ladders at once are destructive, not merely wasteful: the second re-enumerates
+    // during the first's relaunch and kills the app that was just started.
+    const { lockPath } = isolatedLock();
+    expect(acquireDesktopRestartLock(io(lockPath, 1001)).acquired).toBe(true);
+    expect(acquireDesktopRestartLock(io(lockPath, 1002))).toEqual({ acquired: false, heldBy: 1001 });
+  });
+
+  test("the owner re-acquires its own lock, which is what lets a helper inherit one", () => {
+    const { lockPath } = isolatedLock();
+    acquireDesktopRestartLock(io(lockPath, 1001));
+    expect(acquireDesktopRestartLock(io(lockPath, 1001)).acquired).toBe(true);
+    expect(transferDesktopRestartLock(2001, io(lockPath, 1001))).toBe(true);
+    expect(acquireDesktopRestartLock(io(lockPath, 2001)).acquired).toBe(true);
+    expect(acquireDesktopRestartLock(io(lockPath, 1002))).toEqual({ acquired: false, heldBy: 2001 });
+  });
+
+  test("releasing a lock owned by somebody else is a no-op", () => {
+    const { lockPath } = isolatedLock();
+    acquireDesktopRestartLock(io(lockPath, 1001));
+    releaseDesktopRestartLock(io(lockPath, 1002));
+    expect(acquireDesktopRestartLock(io(lockPath, 1002))).toEqual({ acquired: false, heldBy: 1001 });
+  });
+
+  test("a lock whose owner is gone is reclaimed", () => {
+    const { lockPath } = isolatedLock();
+    acquireDesktopRestartLock(io(lockPath, 1001));
+    alive.delete(1001);
+    expect(acquireDesktopRestartLock(io(lockPath, 1002)).acquired).toBe(true);
+    alive.add(1001);
+  });
+
+  test("a corrupt lock file does not wedge every future restart", () => {
+    // Reachable whenever a writer dies between creating the file and writing it.
+    const { lockPath } = isolatedLock();
+    writeFileSync(lockPath, "{not json");
+    expect(acquireDesktopRestartLock(io(lockPath, 1001)).acquired).toBe(true);
+  });
+});
+
+describe("a restart already in flight does not start a second one", () => {
+  test("the ladder reports restart_in_flight and touches nothing", () => {
+    const { lockPath } = isolatedLock();
+    acquireDesktopRestartLock({ lockPath, pid: process.pid + 1, isAlive: () => true });
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp({ ...darwinIo({ calls }), lock: { lockPath } });
+    expect(result.reason).toBe("restart_in_flight");
+    expect(calls).toEqual([]);
+  });
+});
+
