@@ -731,8 +731,12 @@ export {
  * Shared shape check for the two relative send-path overrides. `field` names the
  * offending key so the message stays specific to what the user actually wrote.
  */
-function providerRelativeSendPathConfigError(field: string, value: string | undefined): string | null {
+export function providerRelativeSendPathConfigError(
+  field: "responsesPath" | "chatCompletionsPath",
+  value: unknown,
+): string | null {
   if (value === undefined) return null;
+  if (typeof value !== "string") return `${field} must be a string`;
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) || value.includes("://")) {
     return `${field} must be a relative path without a URL scheme`;
   }

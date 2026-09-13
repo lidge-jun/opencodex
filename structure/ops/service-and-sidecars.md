@@ -1,5 +1,7 @@
 # Background Service And Sidecars
 
+Management provider-validation calls use the [shared relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 

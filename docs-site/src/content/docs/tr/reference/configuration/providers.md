@@ -160,6 +160,8 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor eski boolean değeri, yalnızca daha yeni alan ayarlanmadığında `nativeLocalExec: "on"` değerine eşdeğerdir. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor yerel yürütme politikası. `off` varsayılandır; `codex-sandbox` şu anda `off` gibi kapalı olarak başarısız olur. |
 
+Sağlayıcı kaydı ve değiştirme (`POST /api/providers`), bellekteki veya diskteki yapılandırmayı değiştirmeden önce `responsesPath` ve `chatCompletionsPath` değerlerini doğrular. Aynı yol kuralları yapılandırma dosyası yüklenirken de uygulanır.
+
 API anahtarı sağlayıcıları değişmez bir anahtar veya bir ortam referansı
 tutabilir. OAuth sağlayıcıları `ocx login` tarafından doldurulan kimlik bilgisi
 deposunu kullanır; abonelik destekli Claude Code başlatma davranışı

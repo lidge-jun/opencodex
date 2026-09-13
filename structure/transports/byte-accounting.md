@@ -1,5 +1,7 @@
 # Byte Accounting
 
+Management provider-validation calls use the [shared relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+
 How opencodex measures request and stream bytes without allocating copies solely to count
 them. These contracts are shared by request parsing, SSE rewriting, the provider adapters and
 the translator budget, which is why so many documents link here rather than restating them.

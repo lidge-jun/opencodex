@@ -224,6 +224,8 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
+Provider registration and replacement (`POST /api/providers`) validate `responsesPath` and `chatCompletionsPath` before changing live configuration or disk state. The same path rules apply when loading a configuration file.
+
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
 served the first request. Changing the selected key, its reference or resolved value, authentication
 mode, or base URL during search or provider pacing ends the turn with a bridge error before another

@@ -228,6 +228,17 @@ hand-edited `config.json` must accept and reject the same provider shapes.
 
 > Decision record: [ADR-0020](decisions/ADR-0020-provider-validation-ownership.md)
 
+## Provider relative send paths
+
+`src/config.ts` exports `providerRelativeSendPathConfigError` for the schema loader and
+`src/server/auth-cors.ts` management validator. Both `responsesPath` and `chatCompletionsPath`
+must be strings beginning with `/`, without a scheme, query or fragment; omission is allowed.
+Provider registration/replacement rejects invalid values before DNS, persistence or catalog
+refresh. Editor PATCH checks also validate retained paths when they revalidate a merged provider;
+pacing-only and other existing validation bypasses are unchanged. No send-path PATCH setter is added.
+`tests/server/management-provider-validation.test.ts` covers rejection without live/disk mutation
+and valid-path persistence/reload through the actual management handler.
+
 ## Restore
 
 `ocx stop`, `ocx restore` / `ocx eject`, `ocx service stop`, and `ocx service uninstall` must strip

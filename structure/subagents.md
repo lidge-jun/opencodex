@@ -1,5 +1,7 @@
 # Subagents And Multi-Agent Surface
 
+Management provider-validation calls use the [shared relative send-path validation](config.md#provider-relative-send-paths) before persistence.
+
 ## Plaintext V2 agent messages
 
 `src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only
