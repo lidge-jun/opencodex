@@ -22,6 +22,13 @@ partial-event, injection/drop, and EOF behavior. Output admission precedes its s
 failed enqueue and cancellation release the reservation without re-entering a disposed rewrite.
 Old/new buffer overlap remains charged against the same translator cap.
 
+A saved-account ZCode refresh in `src/adapters/zcode/adapter.ts` reserves the account, waits for an active turn and its direct bootstrap to release the official profile, and completes before native dispatch or output admission. The cache is checked again after the stable profile queue is acquired, so a refresh that becomes due during a long wait reloads settings and model identity before any client is created. Caller cancellation stops only that request's wait on the shared official refresh, emits no native stream bytes, and does not transfer cancellation ownership to sibling requests; authenticated orphan-draft reconciliation is likewise metadata-only, and default-workspace aliases are canonicalized before account-scope validation. Advanced settings are read through the same bounded four-MiB file reader used for model materialization, and the resulting content generation joins the session scope so in-place profile changes cannot retain a prior continuation. Process serialization uses a separate stable physical-profile key, so a credential-generation change cannot open a concurrent queue against the same profile.
+The same adapter constructs a maximum-length session-id envelope and measures the actual JSON
+serialization of each prospective `session/send` frame before it creates the native client. Frames
+over the managed bootstrap's one-MiB NDJSON line limit fail as pre-dispatch input errors; escaped
+control characters therefore cannot expand a nominally bounded prompt into an accepted turn that
+later dies in the bridge.
+
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
 Serialized request and buffered-response observations use byte counts without measurement arrays.

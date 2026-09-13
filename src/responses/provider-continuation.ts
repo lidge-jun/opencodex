@@ -54,7 +54,7 @@ export function isValidProviderContinuationOwner(
     && bounded(owner.adapterName, 128)
     && bounded(owner.modelId, 512)
     && typeof owner.credentialIdentity === "string"
-    && /^(key|oauth|codex):[0-9a-f]{64}$/.test(owner.credentialIdentity);
+    && /^(key|oauth|codex|local):[0-9a-f]{64}$/.test(owner.credentialIdentity);
 }
 
 /** Reuse the exact process-local route identity already established for reasoning replay. */

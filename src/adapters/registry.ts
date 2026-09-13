@@ -1,3 +1,4 @@
+import { createZcodeAdapter } from "./zcode/adapter";
 import { createAnthropicAdapter } from "./anthropic";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
@@ -33,6 +34,7 @@ export interface AdapterFactoryContext {
 }
 
 export type AdapterWire =
+  | "zcode"
   | "codebuddy"
   | "command-code"
   | "openai-chat"
@@ -45,6 +47,7 @@ export type AdapterWire =
   | "devin";
 
 export type AdapterMutationContract =
+  | "agent-owned-with-explicit-opt-in"
   | "codex-owned"
   | "codex-owned-with-gated-native-fallback";
 
@@ -68,6 +71,11 @@ type InheritedAdapterDefinition = {
 type AdapterDefinition = DirectAdapterDefinition | InheritedAdapterDefinition;
 
 export const ADAPTER_REGISTRY = {
+  zcode: {
+    wire: "zcode",
+    mutation: "agent-owned-with-explicit-opt-in",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createZcodeAdapter(provider),
+  },
   codebuddy: {
     wire: "codebuddy",
     mutation: "codex-owned",

@@ -1,6 +1,7 @@
 import { usageSummary30dResourceKey } from "../usage-summary-resource";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
+import { refreshQuotasAfterProviderAddition } from "../provider-addition";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import { matchingWorkspacePreset, type CatalogPreset } from "../components/provider-catalog/provider-presets";
 import { isAccountProvider, type WorkspaceProvider } from "../provider-workspace/catalog";
@@ -457,7 +458,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     });
   }, [apiBase, fetchConfig, fetchOauth]);
 
-  const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
+  const bumpModelsRefresh = useCallback(() => setModelsRefreshToken(n => n + 1), []);
+  const refreshProviderStateAfterNestedMutation = useCallback(() => {
+    void fetchConfig().finally(bumpModelsRefresh);
+  }, [fetchConfig, bumpModelsRefresh]);
 
   const { cancelLoginOAuth, loginOAuth, logoutOAuth } = useProvidersOAuth({
     apiBase, t, aliveRef, accountSets, setAccountSets,
@@ -645,6 +649,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             onSetDisabled={setProviderDisabled}
             onSetDefault={name => { void setDefaultProvider(name); }}
             onUpdateProvider={updateProvider}
+            onProviderStateMutation={refreshProviderStateAfterNestedMutation}
             codexController={codexPool}
           />
           );
@@ -691,14 +696,15 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           setAdding(false);
           setAddIntent(null);
         }}
-        onAdded={(name) => {
+        onAdded={(name, metadata) => {
           setAdding(false);
           setAddIntent(null);
           clearStatus();
           modelsNotice.open(name, !config.providers[name]);
           fetchConfig();
           fetchOauth();
-          fetchProviderQuotas(true);
+          // Desktop connection is protocol/catalog only, not consent to validate accounts.
+          refreshQuotasAfterProviderAddition(metadata, fetchProviderQuotas);
           bumpModelsRefresh();
         }}
         onAccountLogin={onAccountLogin}
@@ -706,6 +712,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onAccountLogout={(provider) => { void logoutOAuth(provider); }}
         onAccountManage={onAccountManage}
         onOpenAdd={fetchOauth}
+        onProviderStateMutation={refreshProviderStateAfterNestedMutation}
         onCloseCodexLogin={() => setCodexLoginOpen(false)}
         onCodexAdded={(completion) => {
           setCodexLoginOpen(false);

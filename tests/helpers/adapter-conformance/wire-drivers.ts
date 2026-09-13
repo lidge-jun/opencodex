@@ -318,6 +318,11 @@ export const TOOL_WIRE_DRIVERS = {
       }
     },
   },
+  zcode: {
+    async observeOutbound(): Promise<string> {
+      throw new Error("ZCode owns native tools and does not forward client tool catalogs.");
+    },
+  },
   codebuddy: {
     // CodeBuddy v1 runs the vendor CLI with `--tools ""` so Codex keeps tool ownership; it forwards
     // no client tool catalog and is exempt from routed-tool conformance, so this driver is never

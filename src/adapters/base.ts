@@ -22,6 +22,12 @@ export interface IncomingMeta {
 }
 
 export interface ProviderAdapter {
+  /** False for native agents whose accepted turns may have filesystem side effects. */
+  replaySafe?: boolean;
+  /** False when all inference must stay inside the provider's own agent runtime. */
+  allowExternalSidecars?: boolean;
+  /** Explicit exception for input-image description only; native tools still belong to the agent. */
+  allowVisionSidecar?: boolean;
   name: string;
 
   /**

@@ -52,3 +52,12 @@ The pairing panel names the hub, offers an origin-specific command to run on tha
 Cline uses the existing file-integration page, tabs, status badge and rollback dialogs. Its localized semantics identify both files and the required stop/restart boundary before users mutate them.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths and default-workspace aliases before
+optional sandbox validation, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.

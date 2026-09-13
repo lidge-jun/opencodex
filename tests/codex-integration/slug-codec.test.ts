@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 // 260718: Codex-facing slug codec for providers whose NATIVE model ids contain "/"
 // (zenmux `moonshotai/kimi-k3-free`, openrouter `anthropic/...`, nvidia `moonshotai/...`).
 // Codex's models-manager metadata lookup tolerates exactly one "/", so two-slash slugs
@@ -403,4 +406,39 @@ describe("#2491 one selection resolver reports what it actually matched", () => 
     expect(match.matched).toEqual(["turbo"]);
     expect(match.exact).toBe("turbo");
   });
+});
+
+test("managed ZCode published slugs route with a cold cache and no configured models", () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-zcode-routing-"));
+  const previous = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = home;
+  try {
+    const ids = ["builtin:zai-coding-plan/GLM-5.3", "builtin:zai-coding-plan/GLM-5.3-Flash"];
+    const directory = join(home, "zcode-desktop"); mkdirSync(directory);
+    const connection = { version: 1, connected: true,
+      generation: "11111111-1111-1111-1111-111111111111", runtime: "/not-launched",
+      workspace: "/not-opened", models: ids.map(id => ({
+        id, providerId: "builtin:zai-coding-plan", modelId: id.split("/")[1], label: id,
+      })) };
+    writeFileSync(join(directory, "connection.json"), JSON.stringify(connection), { mode: 0o600 });
+    const config: OcxConfig = { port: 10100, defaultProvider: "openai",
+      providers: { zcode: { adapter: "zcode", authMode: "local", baseUrl: "https://zcode.z.ai" } } };
+    const before = JSON.stringify(config);
+    for (const id of ids) {
+      clearModelCache();
+      const slug = routedSlug("zcode", id);
+      const route = routeModel(config, slug);
+      expect(route.providerName).toBe("zcode");
+      expect(route.modelId).toBe(id);
+    }
+    expect(JSON.stringify(config)).toBe(before);
+    config.providers.zcode!.models = ["builtin:zai-coding-plan-GLM-5.3"];
+    expect(() => routeModel(config, routedSlug("zcode", ids[0]!))).toThrow("ambiguous model id");
+    connection.connected = false;
+    writeFileSync(join(directory, "connection.json"), JSON.stringify(connection), { mode: 0o600 });
+    expect(knownModelIdsForProvider("zcode", { adapter: "zcode", baseUrl: "https://zcode.z.ai" })).toEqual([]);
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

@@ -145,3 +145,18 @@ The [explicit model-capability contract](../config.md#explicit-per-model-capabil
 Exact [model input declarations](../config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](../adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.
+
+For ZCode, input-image description is the explicit exception to native-agent helper exclusion;
+see [ZCode vision input adaptation](../adapters/registry.md#zcode-vision-input-adaptation). The configured
+vision provider may consume its own quota; main inference remains in official ZCode.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths and default-workspace aliases before
+optional sandbox validation, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.
+Managed host Bash policy, close-until-exit profile fencing, alias-aware account removal, visibility-aware activation, continuation ownership, tool-free compaction and serialized-frame admission follow the
+[canonical adapter contract](../adapters/registry.md#zcode-saved-accounts).

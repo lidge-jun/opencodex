@@ -20,11 +20,13 @@ import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility"
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 import { AddProviderOAuthPane } from "./add-provider-oauth-pane";
 import { AddProviderFormPane } from "./add-provider-form-pane";
+import ZcodeDesktopPane from "./ZcodeDesktopPane";
 import { useAddProviderOAuth } from "./use-add-provider-oauth";
 import {
   addProviderModalReducer,
   createInitialAddProviderState,
 } from "./add-provider-modal-reducer";
+import type { ProviderAdditionMetadata } from "../provider-addition";
 
 export type ProviderConfig = ProviderPayload;
 
@@ -34,11 +36,12 @@ export default function AddProviderModal({
   apiBase, existingNames, onClose, onAdded, initialTier, initialCustom = false,
   accountRows, accountStatus, accountBusy, accountLoginHint = null,
   onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
+  onProviderStateMutation,
 }: {
   apiBase: string;
   existingNames: string[];
   onClose: () => void;
-  onAdded: (name: string) => void;
+  onAdded: (name: string, metadata?: ProviderAdditionMetadata) => void;
   initialTier?: "accounts" | "free" | "paid";
   initialCustom?: boolean;
   accountRows?: AccountLoginRow[];
@@ -51,6 +54,7 @@ export default function AddProviderModal({
   onAccountLogout?: (provider: string) => void;
   onAccountManage?: (provider: string) => void;
   onOpen?: () => void;
+  onProviderStateMutation?: () => void;
 }) {
   const t = useT();
   const fallbackPresets = useMemo<Preset[]>(() => [
@@ -301,7 +305,10 @@ export default function AddProviderModal({
             }}
           />
         ) : form && (
-          preset.auth === "oauth" && form.authMode === "oauth" ? (
+          preset.id === "zcode" ? (
+            <ZcodeDesktopPane apiBase={apiBase} onConnected={onAdded}
+              onProviderStateMutation={onProviderStateMutation} onBack={() => dispatch({ type: "back" })} />
+          ) : preset.auth === "oauth" && form.authMode === "oauth" ? (
             <AddProviderOAuthPane
               preset={preset}
               oauthSupported={oauthSupported}

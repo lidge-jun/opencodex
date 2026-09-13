@@ -304,3 +304,19 @@ test("explicit routed image declarations outrank stale candidate metadata", () =
   expect(modelAcceptsImageInput(config, { provider: "custom", id: "modela", inputModalities: ["text"] })).toBe(false);
   expect(modelAcceptsImageInput(config, { provider: "custom", id: "ModelA:variant", inputModalities: ["text"] })).toBe(false);
 });
+
+test("account-bound ZCode models cannot recursively describe their own images", () => {
+  const config = configWithProviders({
+    personal: {
+      adapter: "zcode",
+      baseUrl: "https://zcode.z.ai",
+      authMode: "local",
+      zcodeAccountId: "account-test",
+    },
+  });
+  expect(modelAcceptsImageInput(config, {
+    provider: "personal",
+    id: "builtin:zai-coding-plan/GLM-5.3-Flash",
+    inputModalities: ["text", "image"],
+  })).toBe(false);
+});

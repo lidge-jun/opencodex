@@ -350,3 +350,24 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.
+Managed host cancellation signals the official runtime and its inherited native-tool process group,
+escalates to a bounded forced stop, and cleans the disposable turn home before the client returns.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference. A cancelled caller stops waiting for a shared official account refresh without cancelling the refresh for other requests, and the next authenticated account operation removes reconnect drafts orphaned by restart.
+
+For ZCode, input-image description is the explicit exception to native-agent helper exclusion;
+see [ZCode vision input adaptation](adapters/registry.md#zcode-vision-input-adaptation). The configured
+vision provider may consume its own quota; main inference remains in official ZCode.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths and default-workspace aliases before
+optional sandbox validation, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.
+Managed host Bash policy, close-until-exit profile fencing, alias-aware account removal, visibility-aware activation, continuation ownership, tool-free compaction and serialized-frame admission follow the
+[canonical adapter contract](adapters/registry.md#zcode-saved-accounts).

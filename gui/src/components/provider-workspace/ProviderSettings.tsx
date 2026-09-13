@@ -7,6 +7,7 @@
  * Parent should remount on provider change (`key={item.name}`) so choice-loading
  * state resets cleanly without sync setState-in-effect.
  */
+import ZcodeDesktopPane from "../ZcodeDesktopPane";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../../base-url-choice";
 import { readJsonIfOk } from "../../fetch-json";
@@ -57,13 +58,15 @@ function pacingSignature(value: WorkspaceItem["requestPacing"] | undefined): str
 }
 
 export default function ProviderSettings({
-  item, availableModels = EMPTY_MODELS, apiBase, onUpdateProvider, onDirtyChange, onRegisterSave,
+  item, availableModels = EMPTY_MODELS, apiBase, onUpdateProvider, onProviderStateMutation, onDirtyChange, onRegisterSave,
 }: {
   item: WorkspaceItem;
   availableModels?: string[];
   /** When set, load endpoint choices for catalog providers that expose baseUrlChoices. */
   apiBase?: string;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  /** Reload parent provider/catalog state after nested ZCode management mutations. */
+  onProviderStateMutation?: () => void;
   onDirtyChange?: (dirty: boolean) => void;
   /** Lets parent dialogs trigger the same save path as the sticky bar. */
   onRegisterSave?: (save: (() => Promise<boolean>) | null) => void;
@@ -326,6 +329,8 @@ export default function ProviderSettings({
 
   return (
     <div className="pwi-settings-form">
+      {item.adapter === "zcode" && item.zcodeAccountId === undefined && apiBase !== undefined
+        && <ZcodeDesktopPane apiBase={apiBase} onProviderStateMutation={onProviderStateMutation} />}
       <label className="pwi-settings-field">
         <span className="pwi-settings-label"><IconLock style={{ width: 12, height: 12 }} /> {t("pws.providerId")}</span>
         <input className="input" value={item.name} readOnly disabled />

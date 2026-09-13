@@ -1,3 +1,4 @@
+import { discoverZcodeModels } from "../../adapters/zcode/settings";
 import { modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -817,6 +818,16 @@ function providerRoutingQuota(config: OcxConfig, name: string, now: number): Pro
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  const zcodeAccountsPrefix = "/api/zcode-accounts";
+  const zcodeDesktopPrefix = "/api/zcode-desktop";
+  if (url.pathname === zcodeAccountsPrefix || url.pathname.startsWith(`${zcodeAccountsPrefix}/`)) {
+    const { handleZcodeAccountRoutes } = await import("./zcode-account-routes");
+    return handleZcodeAccountRoutes(ctx);
+  }
+  if (url.pathname === zcodeDesktopPrefix || url.pathname.startsWith(`${zcodeDesktopPrefix}/`)) {
+    const { handleZcodeDesktopRoutes } = await import("./zcode-desktop-routes");
+    return handleZcodeDesktopRoutes(ctx);
+  }
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
@@ -1550,6 +1561,18 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         models: live.models.length,
         message: `Connected. ${live.models.length} models.`,
       });
+    }
+    if (prov.adapter === "zcode") {
+      try {
+        const models = discoverZcodeModels(prov.zcodeAccountId);
+        if (!models.length) return jsonResponse({ ok: false, models: 0, latencyMs: 0,
+          error: "ZCode local catalog has no available models." });
+        return jsonResponse({ ok: true, models: models.length, latencyMs: 0,
+          message: "Local catalog loaded. Account inference is validated only by an explicit agent turn." });
+      } catch {
+        return jsonResponse({ ok: false, latencyMs: 0,
+          error: "ZCode isolated launcher, opt-in or model settings are unavailable. See the ZCode provider setup guide." });
+      }
     }
     if (prov.adapter === "qoder") {
       const started = Date.now();

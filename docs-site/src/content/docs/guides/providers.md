@@ -6,6 +6,9 @@ description: Every way opencodex authenticates and talks to an LLM provider — 
 A **provider** is one upstream LLM endpoint plus how to reach it: an adapter, a base URL, an auth
 mode, and an optional model list. Providers live under `providers` in `~/.opencodex/config.json`.
 
+For a tool-executing local agent rather than an HTTP model endpoint, see the opt-in
+[ZCode app-server provider](/guides/zcode-agent/). It is separate from exporting models to ZCode Desktop.
+
 The dashboard provider Overview separates connection details, account usage and editable notes.
 Notes appear once, below the connection and authentication sections. Supported sponsor presets
 also show a short introduction, a Sponsor label and links to the provider's site or console.

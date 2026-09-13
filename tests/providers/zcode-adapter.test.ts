@@ -1,0 +1,472 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createZcodeAdapter } from "../../src/adapters/zcode/adapter";
+import { loadZcodeSettings, readZcodeModels, type JsonObject, type ZcodeSettings } from "../../src/adapters/zcode/settings";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { catalogRowSupportsToolUse, modelCapabilityFields } from "../../src/server/models-capabilities";
+import { deriveProviderPresets } from "../../src/providers/derive";
+
+const roots: string[] = [];
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+function fixture(): ZcodeSettings {
+  const home = mkdtempSync(join(tmpdir(), "ocx-zcode-test-")); roots.push(home);
+  const dir = join(home, ".zcode", "cli"); mkdirSync(dir, { recursive: true });
+  const settingsPath = join(dir, "config.json");
+  writeFileSync(settingsPath, JSON.stringify({ provider: {
+    test: { name: "Test", kind: "anthropic", options: { baseURL: "https://example.invalid", apiKey: "never-log-this" },
+      models: { model: { limit: { context: 1000 } } } },
+    opencodex: { models: { recursive: {} } },
+    alias: { options: { baseURL: "https://127.0.0.1/v1" }, models: { recursive: {} } },
+    linkLocal: { options: { baseURL: "https://169.254.1.2/v1" }, models: { metadata: {} } },
+    disabled: { enabled: false, models: { hidden: {} } },
+  } }));
+  return { command: ["/isolated-launcher"], home, workspace: "/workspace", settingsPath, lockKey: home, scope: home };
+}
+class FakeClient {
+  onEvent: (event: JsonObject) => void = () => {};
+  onFailure: (error: Error) => void = () => {};
+  calls: Array<{ method: string; params: JsonObject }> = [];
+  closed = false;
+  private nativeTools = true;
+  constructor(private outcome: "ok" | "failed" | "hang" | "session-noise" | "answerless" | "tool-during-compaction" = "ok") {}
+  async request(method: string, params: JsonObject): Promise<JsonObject> {
+    this.calls.push({ method, params });
+    if (method === "session/create") {
+      this.nativeTools = !(Array.isArray(params.toolAllowlist) && params.toolAllowlist.length === 0);
+      return { session: { sessionId: "sess_test-1" } };
+    }
+    if (method === "session/send") {
+      if (this.outcome === "session-noise") {
+        queueMicrotask(() => {
+          this.onEvent({ method: "session/event", params: { type: "turn.completed", payload: { response: "wrong session" } } });
+          this.onEvent({ method: "session/event", params: { sessionId: "sess_other", type: "turn.completed", payload: { response: "wrong session" } } });
+        });
+        setTimeout(() => {
+          this.event("model.streaming", { kind: "text_delta", delta: "Hello" });
+          this.event("turn.completed", { response: "Hello" });
+        }, 5);
+        return {};
+      }
+      queueMicrotask(() => {
+        if (this.outcome === "hang") return;
+        this.event("model.streaming", { kind: "reasoning_delta", delta: "Thinking" });
+        if (this.nativeTools || this.outcome === "tool-during-compaction") {
+          this.event("tool.updated", { kind: "started", toolCallId: "tool-1" });
+          this.event("tool.updated", { kind: "result", toolCallId: "tool-1" });
+        }
+        if (this.outcome === "failed") return this.event("turn.failed", { error: { message: "secret" } });
+        if (this.outcome === "answerless") return this.event("turn.completed", {});
+        this.event("model.streaming", { kind: "text_delta", delta: "Hello" });
+        this.event("turn.completed", { response: "Hello" });
+      });
+    }
+    return {};
+  }
+  event(type: string, payload: JsonObject) {
+    this.onEvent({ method: "session/event", params: { sessionId: "sess_test-1", type, payload } });
+  }
+  async close() { this.closed = true; }
+}
+const provider: OcxProviderConfig = { adapter: "zcode", baseUrl: "https://zcode.z.ai", authMode: "local" };
+const request = (): OcxParsedRequest => ({ modelId: "test/model", stream: true, options: {},
+  context: { messages: [{ role: "user", content: "Say hello", timestamp: 0 }] } });
+async function run(settings: ZcodeSettings, client: FakeClient, parsed = request(), signal?: AbortSignal, timeoutMs = 40) {
+  const events: AdapterEvent[] = [];
+  const adapter = createZcodeAdapter(provider, { settings: () => settings, client: () => client, timeoutMs });
+  await adapter.runTurn!(parsed, { headers: new Headers(), abortSignal: signal,
+    translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+  return events;
+}
+
+describe("ZCode local agent", () => {
+  test("managed requests select a public model without carrying Desktop secrets", async () => {
+    const settings = { ...fixture(), hostExecution: true, nativePermissionMode: "yolo" as const,
+      desktopModels: [{ id: "test/model", providerId: "test", modelId: "model", label: "Model" }] };
+    const client = new FakeClient();
+    expect((await run(settings, client)).at(-1)?.type).toBe("done");
+    for (const call of client.calls.filter(c => ["session/create", "session/send"].includes(c.method))) {
+      expect(call.params._zcodeModel).toEqual({ providerId: "test", modelId: "model" });
+      expect(call.params.runtimeModel).toBeUndefined();
+      const serialized = JSON.stringify(call.params);
+      expect(serialized).not.toContain("never-log-this");
+      expect(serialized).not.toContain("apiKey");
+    }
+    expect(client.calls.find(call => call.method === "session/create")?.params.mode).toBe("yolo");
+    expect(String(client.calls.find(call => call.method === "session/send")?.params.content))
+      .toContain("configured through ZCode's official hook");
+    expect(String(client.calls.find(call => call.method === "session/send")?.params.content))
+      .toMatch(/^\[OpenCodex bridge capability:.*\[OpenCodex bridge reminder:/s);
+    const advancedClient = new FakeClient();
+    expect((await run(fixture(), advancedClient)).find(event => event.type === "text_delta"
+      && event.phase === "commentary")?.text).toContain("configured launcher");
+    expect(String(advancedClient.calls.find(call => call.method === "session/send")?.params.content))
+      .not.toContain("managed host-execution setting");
+    expect((await run(settings, new FakeClient())).find(event => event.type === "text_delta"
+      && event.phase === "commentary")?.text).toContain("host-user access");
+  });
+  test("maps Codex effort labels to the official GLM-5.3 thought levels", async () => {
+    const settings = { ...fixture(), desktopModels: [{
+      id: "builtin:zai-coding-plan/GLM-5.3", providerId: "builtin:zai-coding-plan",
+      modelId: "GLM-5.3", label: "GLM-5.3",
+    }] };
+    for (const [requested, expected] of [["low", "low"], ["medium", "high"], ["high", "high"],
+      ["xhigh", "max"], ["max", "max"], ["ultra", "max"]] as const) {
+      const client = new FakeClient();
+      const parsed = request(); parsed.modelId = settings.desktopModels[0]!.id; parsed.options.reasoning = requested;
+      expect((await run(settings, client, parsed)).at(-1)?.type).toBe("done");
+      expect(client.calls.find(call => call.method === "session/create")?.params.thoughtLevel).toBe(expected);
+      expect(client.calls.find(call => call.method === "session/send")?.params.thoughtLevel).toBeUndefined();
+    }
+  });
+  test("a revoked or changed managed connection cannot start a queued child", async () => {
+    const settings = { ...fixture(), desktopModels: [{ id: "test/model", providerId: "test", modelId: "model", label: "Model" }] };
+    let reads = 0; let children = 0;
+    const adapter = createZcodeAdapter(provider, { settings: () => ({ ...settings, scope: ++reads === 1 ? "before" : "after" }), client: () => { children++; return new FakeClient(); } });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(request(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    expect(children).toBe(0);
+    expect(events.at(-1)?.type).toBe("error");
+  });
+  test("saved accounts refresh again after waiting in the physical-profile queue", async () => {
+    const before = fixture();
+    const after = { ...before, scope: before.scope + ":refreshed" };
+    const first = new FakeClient("hang");
+    const firstController = new AbortController();
+    const firstTurn = run(before, first, request(), firstController.signal, 2_000);
+    await Bun.sleep(5);
+    expect(first.calls.some(call => call.method === "session/send")).toBe(true);
+
+    let refreshCalls = 0;
+    let refreshed = false;
+    let dispatchedScope = "";
+    const second = new FakeClient();
+    const adapter = createZcodeAdapter({ ...provider, zcodeAccountId: crypto.randomUUID() }, {
+      settings: () => refreshed ? after : before,
+      refreshAccount: async () => {
+        refreshCalls++;
+        if (refreshCalls === 2) refreshed = true;
+        return refreshed;
+      },
+      client: settings => { dispatchedScope = settings.scope; return second; },
+      timeoutMs: 2_000,
+    });
+    const events: AdapterEvent[] = [];
+    const secondTurn = adapter.runTurn!(request(), { headers: new Headers(),
+      translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    await Bun.sleep(10);
+    expect(refreshCalls).toBe(1);
+    expect(second.calls).toEqual([]);
+
+    firstController.abort();
+    expect((await firstTurn).at(-1)?.type).toBe("incomplete");
+    await secondTurn;
+    expect(refreshCalls).toBe(2);
+    expect(dispatchedScope).toBe(after.scope);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+  test("has no direct HTTP inference path or client-tool capability", () => {
+    const adapter = createZcodeAdapter(provider);
+    expect(adapter.fetchResponse).toBeUndefined();
+    expect(adapter.replaySafe).toBe(false);
+    expect(adapter.allowExternalSidecars).toBe(false);
+    expect(adapter.allowVisionSidecar).toBe(true);
+    expect(() => adapter.buildRequest(request(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }))
+      .toThrow("not HTTP");
+    expect(modelCapabilityFields({ supportsToolUse: false }).capabilities.supports_tool_use).toBe(false);
+    const comboSupportsTools = catalogRowSupportsToolUse(undefined, { targets: [{ provider: "zcode", model: "model" }] }, { zcode: provider });
+    expect(comboSupportsTools).toBe(false);
+    expect(modelCapabilityFields({ supportsToolUse: comboSupportsTools }).capabilities.supports_tool_use).toBe(false);
+    expect(catalogRowSupportsToolUse(undefined, { targets: [{ provider: "other", model: "model" }] }, {
+      other: { adapter: "openai-chat", baseUrl: "https://example.invalid" },
+    })).toBe(true);
+    expect(deriveProviderPresets().find(p => p.id === "zcode")).toMatchObject({ auth: "local", adapter: "zcode" });
+  });
+  test("requires explicit operator opt-in and an argv launcher, never a shell string", () => {
+    expect(() => loadZcodeSettings({})).toThrow("disabled");
+    expect(() => loadZcodeSettings({ OCX_ZCODE_NATIVE_TOOLS: "1", OCX_ZCODE_COMMAND: "echo unsafe" })).toThrow("JSON argv");
+  });
+  test("managed host policy cannot turn an empty request into a native dispatch", async () => {
+    const settings = { ...fixture(), hostExecution: true,
+      desktopModels: [{ id: "test/model", providerId: "test", modelId: "model", label: "Model" }] };
+    const client = new FakeClient();
+    const parsed = request(); parsed.context.messages = [];
+    const events = await run(settings, client, parsed);
+    expect(events.at(-1)).toMatchObject({ type: "error", message: "ZCode input is empty." });
+    expect(client.calls).toEqual([]);
+  });
+  test("saved-account refresh failures emit only bounded public codes", async () => {
+    const events: AdapterEvent[] = [];
+    const adapter = createZcodeAdapter({ ...provider, zcodeAccountId: crypto.randomUUID() }, {
+      refreshAccount: async () => { throw new Error("/private/config/zcode-accounts/identity/account.json"); },
+    });
+    await adapter.runTurn!(request(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", message: "account_refresh_failed", retryable: false });
+    expect(JSON.stringify(events)).not.toContain("/private/");
+    expect(JSON.stringify(events)).not.toContain("account.json");
+  });
+  test("saved-account refresh preserves actionable public codes", async () => {
+    for (const code of ["account_login_required", "account_identity_mismatch", "native_oauth_failed"]) {
+      const events: AdapterEvent[] = [];
+      const adapter = createZcodeAdapter({ ...provider, zcodeAccountId: crypto.randomUUID() }, {
+        refreshAccount: async () => { throw new Error(code); },
+      });
+      await adapter.runTurn!(request(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+      expect(events.at(-1)).toMatchObject({ type: "error", message: code, retryable: false });
+    }
+  });
+  test("saved-account cancellation stops only the caller waiting on a shared refresh", async () => {
+    const shared = Promise.withResolvers<boolean>();
+    let refreshFinished = false; let children = 0;
+    const work = shared.promise.finally(() => { refreshFinished = true; });
+    const adapter = createZcodeAdapter({ ...provider, zcodeAccountId: crypto.randomUUID() }, {
+      refreshAccount: async () => work,
+      client: () => { children++; return new FakeClient(); },
+    });
+    const events: AdapterEvent[] = [];
+    const controller = new AbortController();
+    const pending = adapter.runTurn!(request(), { headers: new Headers(), abortSignal: controller.signal,
+      translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    controller.abort();
+    const stopped = await Promise.race([pending.then(() => true), Bun.sleep(50).then(() => false)]);
+    expect(stopped).toBe(true);
+    expect(refreshFinished).toBe(false);
+    expect(children).toBe(0);
+    expect(events.at(-1)).toMatchObject({ type: "error", message: "ZCode request cancelled before dispatch.", retryable: false });
+    shared.resolve(false); await work;
+    expect(refreshFinished).toBe(true);
+  });
+  test("advanced settings allow an isolated home when the proxy HOME is absent", () => {
+    const settings = fixture();
+    const env = { OCX_ZCODE_NATIVE_TOOLS: "1", OCX_ZCODE_COMMAND: JSON.stringify(["/isolated-launcher"]),
+      OCX_ZCODE_HOME: settings.home, OCX_ZCODE_WORKSPACE: settings.workspace };
+    expect(loadZcodeSettings(env)).toMatchObject({ home: settings.home, workspace: settings.workspace });
+    expect(() => loadZcodeSettings({ ...env, HOME: settings.home })).toThrow("separate home");
+  });
+  test("advanced settings fence sessions across in-place credential changes", () => {
+    const settings = fixture();
+    const env = { OCX_ZCODE_NATIVE_TOOLS: "1", OCX_ZCODE_COMMAND: JSON.stringify(["/isolated-launcher"]),
+      OCX_ZCODE_HOME: settings.home, OCX_ZCODE_WORKSPACE: settings.workspace };
+    const before = loadZcodeSettings(env);
+    const contents = readFileSync(settings.settingsPath, "utf8");
+    writeFileSync(settings.settingsPath, contents.replace("never-log-this", "other-key-here"));
+    const after = loadZcodeSettings(env);
+    expect(after.lockKey).toBe(before.lockKey);
+    expect(after.scope).not.toBe(before.scope);
+    expect(after.profileGeneration).not.toBe(before.profileGeneration);
+    expect(() => readZcodeModels(before)).toThrow("unavailable, invalid");
+    expect(readZcodeModels(after).map(model => model.id)).toEqual(["test/model"]);
+  });
+  test("catalog excludes disabled, recursive and link-local entries and preserves canonical model identity", () => {
+    const models = readZcodeModels(fixture());
+    expect(models.map(m => m.id)).toEqual(["test/model"]);
+    expect(models[0]?.contextWindow).toBe(1000);
+  });
+  test("settings parse errors and escaping symlinks disclose no file content", () => {
+    const settings = fixture();
+    writeFileSync(settings.settingsPath, "{secret-value");
+    expect(() => readZcodeModels(settings)).toThrow("unavailable, invalid");
+    if (process.platform !== "win32") {
+      const outside = fixture(); unlinkSync(settings.settingsPath); symlinkSync(outside.settingsPath, settings.settingsPath);
+      expect(() => readZcodeModels(settings)).toThrow("unavailable, invalid");
+    }
+  });
+  test("native execution streams progress without asking the client to execute tools", async () => {
+    const settings = fixture(); const client = new FakeClient();
+    const events = await run(settings, client);
+    expect(events.some(e => e.type.startsWith("tool_call"))).toBe(false);
+    expect(events.filter(e => e.type === "text_delta" && e.text === "Hello")).toHaveLength(1);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(JSON.stringify(events)).not.toContain("never-log-this");
+    expect(client.closed).toBe(true);
+    expect(client.calls.map(c => c.method)).toEqual(["session/create", "session/subscribe", "session/send", "session/stop"]);
+  });
+  test("compaction uses a fresh tool-disabled session and does not replace the main continuation", async () => {
+    const settings = fixture();
+    const parsed = request();
+    parsed._compactionRequest = true;
+    parsed._providerContinuation = { zcode: { sessionId: "sess_existing", scope: settings.scope } };
+    const client = new FakeClient();
+    const events = await run(settings, client, parsed);
+    expect(events.at(-1)?.type).toBe("done");
+    const done = events.find((event): event is Extract<AdapterEvent, { type: "done" }> => event.type === "done");
+    expect(done?.providerState).toBeUndefined();
+    expect(events.some(event => event.type === "text_delta" && event.text.includes("without native tools"))).toBe(true);
+    expect(client.calls.some(call => call.method === "session/resume")).toBe(false);
+    const created = client.calls.find(call => call.method === "session/create")?.params;
+    expect(created?.toolAllowlist).toEqual([]);
+    expect(created?.toolDenylist).toBeUndefined();
+  });
+  test("compaction fails closed if the official runtime emits a native tool event", async () => {
+    const parsed = request(); parsed._compactionRequest = true;
+    const events = await run(fixture(), new FakeClient("tool-during-compaction"), parsed);
+    expect(events.at(-1)).toMatchObject({ type: "incomplete", retryable: false });
+    expect(JSON.stringify(events)).toContain("compaction attempted native tool execution");
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+  test("rejects an oversized serialized send frame before starting the native client", async () => {
+    const parsed = request();
+    parsed.context.messages = [{ role: "user", content: "\0".repeat(175_000), timestamp: 0 }];
+    const client = new FakeClient();
+    const events = await run(fixture(), client, parsed, undefined, 2_000);
+    expect(events.at(-1)).toMatchObject({
+      type: "error", message: "ZCode input exceeds the native bridge serialization limit.", retryable: false,
+    });
+    expect(client.calls).toHaveLength(0);
+    expect(client.closed).toBe(false);
+  });
+  test("answerless completion is reported as an interrupted accepted turn", async () => {
+    const events = await run(fixture(), new FakeClient("answerless"));
+    expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "zcode_agent_interrupted",
+      retryable: false, endTurn: true });
+    expect(JSON.stringify(events)).toContain("completed without a model answer");
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+  test("ignores terminal events without the active session identity", async () => {
+    const events = await run(fixture(), new FakeClient("session-noise"));
+    expect(events.filter(e => e.type === "text_delta" && e.text === "wrong session")).toHaveLength(0);
+    expect(events.filter(e => e.type === "text_delta" && e.text === "Hello")).toHaveLength(1);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+  test("continuation resumes only owner-fenced state and sends the current delta", async () => {
+    const settings = fixture();
+    const first = await run(settings, new FakeClient());
+    const done = first.find(e => e.type === "done");
+    const next = request(); next._providerContinuation = done?.providerState;
+    next.context.messages.push({ role: "user", content: "Follow up", timestamp: 1 });
+    const client = new FakeClient(); await run(settings, client, next);
+    expect(client.calls[0]?.method).toBe("session/resume");
+    const sent = String(client.calls.find(c => c.method === "session/send")?.params.content);
+    expect(sent).toContain("Follow up"); expect(sent).not.toContain("Say hello");
+    const other = new FakeClient(); await run(fixture(), other, next);
+    expect(other.calls[0]?.method).toBe("session/create");
+  });
+  test("a fresh ZCode session safely projects replayed reasoning and tool history", async () => {
+    const parsed = request();
+    parsed.context.messages = [
+      { role: "user", content: "Inspect the repository", timestamp: 0 },
+      { role: "assistant", timestamp: 1, content: [
+        { type: "thinking", thinking: "private reasoning must not cross providers" },
+        { type: "toolCall", id: "call_old", name: "exec_command", arguments: { command: "pwd" } },
+      ] },
+      { role: "toolResult", toolCallId: "call_old", toolName: "exec_command",
+        content: "/workspace", isError: false, timestamp: 2 },
+      { role: "assistant", content: [{ type: "text", text: "The repository is available." }], timestamp: 3 },
+      { role: "user", content: "Continue with the fix", timestamp: 4 },
+    ];
+    const client = new FakeClient();
+    expect((await run(fixture(), client, parsed)).at(-1)?.type).toBe("done");
+    const sent = String(client.calls.find(call => call.method === "session/send")?.params.content);
+    expect(sent).toContain("[historical tool call: exec_command]");
+    expect(sent).toContain("tool exec_command result: /workspace");
+    expect(sent).toContain("assistant: The repository is available.");
+    expect(sent).toContain("user: Continue with the fix");
+    expect(sent).not.toContain("private reasoning");
+    expect(sent).not.toContain('"command":"pwd"');
+  });
+  test("a fresh session truncates oldest replay history without dropping the current turn", async () => {
+    const parsed = request();
+    parsed._continuationConversationMessageIndex = 2;
+    parsed.context.systemPrompt = ["SYSTEM_SENTINEL"];
+    parsed.context.messages = [
+      { role: "user", content: `OLDEST_${"a".repeat(150_000)}`, timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: `NEWEST_${"b".repeat(70_000)}` }], timestamp: 1 },
+      { role: "user", content: "CURRENT_REQUEST_SENTINEL", timestamp: 2 },
+    ];
+    const client = new FakeClient();
+    expect((await run(fixture(), client, parsed)).at(-1)?.type).toBe("done");
+    const sent = String(client.calls.find(call => call.method === "session/send")?.params.content);
+    expect(sent.length).toBeLessThanOrEqual(200_000);
+    expect(sent).toContain("SYSTEM_SENTINEL");
+    expect(sent).toContain("CURRENT_REQUEST_SENTINEL");
+    expect(sent).toContain("NEWEST_");
+    expect(sent).not.toContain("OLDEST_");
+    expect(sent).toContain("Earlier OpenCodex conversation history truncated");
+  });
+  test("post-send failures are non-retryable incomplete, not failover candidates", async () => {
+    const client = new FakeClient("failed"); const events = await run(fixture(), client);
+    expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "zcode_agent_interrupted", retryable: false });
+    expect(JSON.stringify(events)).not.toContain("secret");
+    expect(client.calls.filter(c => c.method === "session/send")).toHaveLength(1);
+  });
+  test("timeout closes the owned app-server and does not resend", async () => {
+    const client = new FakeClient("hang"); const events = await run(fixture(), client);
+    expect(events.at(-1)?.type).toBe("incomplete"); expect(client.closed).toBe(true);
+    expect(client.calls.filter(c => c.method === "session/send")).toHaveLength(1);
+  });
+  test("a running cancellation closes only its child and never resends", async () => {
+    const controller = new AbortController(); const client = new FakeClient("hang");
+    const pending = run(fixture(), client, request(), controller.signal);
+    await new Promise(resolve => setTimeout(resolve, 5)); controller.abort();
+    expect((await pending).at(-1)).toMatchObject({ type: "incomplete", retryable: false });
+    expect(client.closed).toBe(true);
+    expect(client.calls.filter(c => c.method === "session/send")).toHaveLength(1);
+  });
+  test("profile turns serialize and cancelled waiters never start a child", async () => {
+    const settings = fixture(); const first = new FakeClient("hang"); const second = new FakeClient();
+    const pending = run(settings, first);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const controller = new AbortController(); const waiting = run(settings, second, request(), controller.signal);
+    controller.abort();
+    expect((await waiting).at(-1)?.type).toBe("error");
+    expect(second.calls).toHaveLength(0);
+    await pending;
+    expect((await run(settings, new FakeClient())).at(-1)?.type).toBe("done");
+  });
+  test("profile generations share one physical-profile serialization queue", async () => {
+    const settings = fixture();
+    const env = { OCX_ZCODE_NATIVE_TOOLS: "1", OCX_ZCODE_COMMAND: JSON.stringify(["/isolated-launcher"]),
+      OCX_ZCODE_HOME: settings.home, OCX_ZCODE_WORKSPACE: settings.workspace };
+    const before = loadZcodeSettings(env);
+    const first = new FakeClient("hang");
+    const firstController = new AbortController();
+    const firstTurn = run(before, first, request(), firstController.signal, 2_000);
+    await Bun.sleep(5);
+    expect(first.calls.some(call => call.method === "session/send")).toBe(true);
+
+    const contents = readFileSync(settings.settingsPath, "utf8");
+    writeFileSync(settings.settingsPath, contents.replace("never-log-this", "other-key-here"));
+    const after = loadZcodeSettings(env);
+    expect(after.lockKey).toBe(before.lockKey);
+    expect(after.scope).not.toBe(before.scope);
+
+    const second = new FakeClient();
+    const secondTurn = run(after, second, request(), undefined, 2_000);
+    await Bun.sleep(10);
+    expect(second.calls).toEqual([]);
+
+    firstController.abort();
+    expect((await firstTurn).at(-1)?.type).toBe("incomplete");
+    expect((await secondTurn).at(-1)?.type).toBe("done");
+    expect(second.calls.some(call => call.method === "session/send")).toBe(true);
+  });
+  test("one saturated profile leaves reservation capacity for another profile", async () => {
+    const settings = fixture();
+    const controllers = Array.from({ length: 24 }, () => new AbortController());
+    const pending = controllers.map(controller => run(
+      settings, new FakeClient("hang"), request(), controller.signal, 2_000,
+    ));
+    const rejected = await run(settings, new FakeClient(), request(), undefined, 2_000);
+    expect(rejected.at(-1)).toMatchObject({ type: "error", message: "ZCode profile queue is full." });
+    const other = await run({ ...settings, lockKey: settings.lockKey + ":other", scope: settings.scope + ":other" },
+      new FakeClient(), request(), undefined, 2_000);
+    expect(other.at(-1)?.type).toBe("done");
+    for (const controller of controllers) controller.abort();
+    await Promise.all(pending);
+  });
+  test("pre-aborted requests never spawn or send", async () => {
+    const client = new FakeClient(); const events = await run(fixture(), client, request(), AbortSignal.abort());
+    expect(events.at(-1)?.type).toBe("error"); expect(client.calls).toHaveLength(0);
+  });
+  test("rejects residual media that escaped text-only normalization", async () => {
+    const parsed = request(); parsed.context.messages = [{ role: "user", timestamp: 0,
+      content: [{ type: "image", imageUrl: "https://example.invalid/image.png" }] }];
+    const client = new FakeClient();
+    expect((await run(fixture(), client, parsed)).at(-1)).toMatchObject({
+      type: "error", message: "ZCode image input was not converted to text before native dispatch.",
+    });
+    expect(client.calls).toHaveLength(0);
+  });
+});

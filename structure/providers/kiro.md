@@ -69,3 +69,7 @@ positive value overwrites an earlier one.
 Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
 `tokenUsage` on any event, which is why Kiro usage stays estimated; `meteringEvent` is currently
 ignored because a credit is not a token count.
+
+The shared `src/responses/provider-continuation.ts` owner validator also admits process-local
+`local:` identities for ZCode's credential-free route binding. Kiro retains its existing OAuth/key
+owner derivation; the added identity kind does not broaden Kiro continuation matching.

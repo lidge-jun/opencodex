@@ -336,3 +336,20 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 ## Renamed destination reasoning metadata
 
 `src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Identity, transport and other capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.
+Live Desktop discovery uses the official model label only as a fallback; configured
+`modelDisplayNames` remain authoritative for renamed accounts and operator customizations.
+
+For ZCode, input-image description is the explicit exception to native-agent helper exclusion;
+see [ZCode vision input adaptation](adapters/registry.md#zcode-vision-input-adaptation). The configured
+vision provider may consume its own quota; main inference remains in official ZCode.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths and default-workspace aliases before
+optional sandbox validation, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.
+Managed host Bash policy, close-until-exit profile fencing, alias-aware account removal, visibility-aware activation, continuation ownership, tool-free compaction and serialized-frame admission follow the
+[canonical adapter contract](adapters/registry.md#zcode-saved-accounts).

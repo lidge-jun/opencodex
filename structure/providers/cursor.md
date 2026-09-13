@@ -106,3 +106,24 @@ Combo child requests normalize effort and thinking controls against the selected
 `src/adapters/cursor.ts` surfaces the first bare context overflow before attempting conversation remint on later eligible requests. `cursorClientThreadOwner` recognizes both client thread aliases; `src/adapters/cursor/thread-continuity.ts` limits recovery to three remints per retained identity-scoped owner, with a one-hour idle TTL and 2,048-entry bound. Conversation-only requests have no stable owner and do not automatically remint. Quota/rate errors, tool-result resumes, partial output, local side effects, isolated helper/shadow requests and compaction remain fail-closed. Isolated requests neither consume the parent allowance nor invalidate its checkpoint. Eligible overflow checks refresh existing retention timestamps and LRU position even after the cap is exhausted, without allocating absent scopes. Retention expiry, eviction or process restart resets the in-memory allowance; this is not a persistent lifetime cap or semantic-progress policy.
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.
+Managed host cancellation stops the official runtime and inherited native tools as one process
+group and cleans the disposable turn home before the outer client can force-stop the bootstrap.
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](../adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference. A cancelled caller stops waiting for a shared official account refresh without cancelling the refresh for other requests, and the next authenticated account operation removes reconnect drafts orphaned by restart.
+
+For ZCode, input-image description is the explicit exception to native-agent helper exclusion;
+see [ZCode vision input adaptation](../adapters/registry.md#zcode-vision-input-adaptation). The configured
+vision provider may consume its own quota; main inference remains in official ZCode.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths and default-workspace aliases before
+optional sandbox validation, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.
+Managed host Bash policy, close-until-exit profile fencing, alias-aware account removal, visibility-aware activation, continuation ownership, tool-free compaction and serialized-frame admission follow the
+[canonical adapter contract](../adapters/registry.md#zcode-saved-accounts).

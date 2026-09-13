@@ -847,9 +847,10 @@ describe("Responses previous_response_id state", () => {
       .toBe("cursor_conv_force_1");
   });
 
-  test("adapterNeedsForcedContinuation covers exactly kiro and cursor", () => {
+  test("adapterNeedsForcedContinuation covers native provider sessions", () => {
     expect(adapterNeedsForcedContinuation("kiro")).toBe(true);
     expect(adapterNeedsForcedContinuation("cursor")).toBe(true);
+    expect(adapterNeedsForcedContinuation("zcode")).toBe(true);
     expect(adapterNeedsForcedContinuation("openai")).toBe(false);
     expect(adapterNeedsForcedContinuation("claude")).toBe(false);
     expect(adapterNeedsForcedContinuation("")).toBe(false);

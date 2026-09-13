@@ -35,6 +35,7 @@ const WIRE_MODELS: Record<AdapterWire, string> = {
   "openai-responses": "deepseek-v4-flash",
   cursor: "cursor/auto",
   codebuddy: "glm-5.3",
+  zcode: "test/model",
 };
 
 function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfig {
@@ -48,6 +49,7 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
     "openai-responses": "https://api.deepseek.com",
     cursor: "https://api2.cursor.sh",
     codebuddy: "https://www.codebuddy.ai",
+    zcode: "https://zcode.z.ai",
   };
   // Semantic wrappers with provider-specific URL shapes must override the wire-family default here.
   const baseUrl = adapterId === "mimo-free"
@@ -419,8 +421,9 @@ describe("registry-derived routed tool conformance", () => {
     }
   });
 
-  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder"]);
-  // The Devin adapter is runTurn-only: it streams Connect-RPC from runTurn, so
+  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "zcode"]);
+  // Both Devin providers are runTurn-only: devin-cli drives a local CLI over ACP
+  // stdio and devin streams Connect-RPC from runTurn, so for both of them
   // buildRequest returns a placeholder and tools never travel the wire path.
   // Both Devin provider rows share it and differ only in where the credential
   // came from.

@@ -8,6 +8,7 @@ import type { AccountLoginRow, AccountLoginStatus } from "../components/provider
 import type { ProvidersConfig } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import type { ProviderAdditionMetadata } from "../provider-addition";
 
 export function ProvidersPageModals({
   apiBase,
@@ -32,6 +33,7 @@ export function ProvidersPageModals({
   onAccountLogout,
   onAccountManage,
   onOpenAdd,
+  onProviderStateMutation,
   onCloseCodexLogin,
   onCodexAdded,
   onCancelRemove,
@@ -58,12 +60,13 @@ export function ProvidersPageModals({
   jsonSaving?: boolean;
   oauthTosPending: { provider: string; addAccount: boolean } | null;
   onCloseAdd: () => void;
-  onAdded: (name: string) => void;
+  onAdded: (name: string, metadata?: ProviderAdditionMetadata) => void;
   onAccountLogin: (provider: string, addAccount?: boolean) => void;
   onAccountCancelLogin: (provider: string) => void;
   onAccountLogout: (provider: string) => void;
   onAccountManage?: (provider: string) => void;
   onOpenAdd: () => void;
+  onProviderStateMutation?: () => void;
   onCloseCodexLogin: () => void;
   onCodexAdded: (completion: CodexAccountMutationCompletion) => void;
   onCancelRemove: () => void;
@@ -94,6 +97,7 @@ export function ProvidersPageModals({
           onAccountLogout={onAccountLogout}
           onAccountManage={onAccountManage}
           onOpen={onOpenAdd}
+          onProviderStateMutation={onProviderStateMutation}
         />
       )}
       {codexLoginOpen && (

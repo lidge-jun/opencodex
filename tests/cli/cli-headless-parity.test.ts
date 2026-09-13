@@ -325,6 +325,14 @@ describe("headless GUI parity CLI", () => {
       ["/api/usage", "ocx observe usage"],
       ["/api/v2", "ocx v2/agent"],
       ["/api/windows-tray", "ocx tray"],
+      // Connecting the official ZCode Desktop runtime and adding its separately
+      // authenticated accounts are explicit user-consent actions.  They require
+      // a dashboard session by design; the admin-token CLI transport cannot
+      // authorize them.  Folder discovery exists only to support that picker.
+      // `ocx zcode` is intentionally not listed here: it manages ZCode's client
+      // config, not OpenCodex's ZCode Desktop provider or account sessions.
+      ["/api/zcode-desktop", "(none — dashboard-only ZCode Desktop consent flow)"],
+      ["/api/zcode-accounts", "(none — dashboard-only ZCode account consent flow)"],
     ];
     const uncovered = [...endpoints].filter(endpoint => !coverage.some(([prefix]) => endpoint === prefix || endpoint.startsWith(prefix)));
     expect(uncovered).toEqual([]);

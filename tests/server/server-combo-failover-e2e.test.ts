@@ -74,9 +74,11 @@ mock.module("../../src/server/adapter-resolve", () => ({
       provider.adapter === "test-run-turn"
       || provider.adapter === "test-kiro"
       || provider.adapter === "test-owned"
+      || provider.adapter === "test-zcode"
     ) {
       const adapter: ProviderAdapter = {
-        name: provider.adapter === "test-kiro" ? "kiro" : provider.adapter,
+        name: provider.adapter === "test-kiro" ? "kiro"
+          : provider.adapter === "test-zcode" ? "zcode" : provider.adapter,
         buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
         async *parseStream(): AsyncGenerator<AdapterEvent> {
           yield { type: "error", message: "test runTurn adapter does not use parseStream" };
@@ -2828,6 +2830,49 @@ describe("server combo failover 030 activation matrix", () => {
 
     expect(second.status).toBe(200);
     expect(seen).toEqual([undefined, "kiro-owned-conversation"]);
+  });
+
+  test("headerless local ZCode continuation stays owner-fenced and survives store false", async () => {
+    const { previousResponseProviderState } = await import("../../src/responses/state");
+    const accountId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const seen: Array<string | undefined> = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const sessionId = parsed._providerContinuation?.zcode?.sessionId as string | undefined;
+      seen.push(sessionId);
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done", providerState: { zcode: { sessionId: sessionId ?? "sess_zcode-owned", scope: "scope-a" } } });
+    };
+    const config = comboConfig({
+      z: provider("test-zcode", "https://zcode.z.ai", "unused", { authMode: "local", zcodeAccountId: accountId }),
+    }, [{ provider: "z", model: "m1" }]);
+
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    const stored = previousResponseProviderState(firstJson.id);
+    expect(stored?.__ocxOwner?.credentialIdentity).toMatch(/^local:[0-9a-f]{64}$/);
+    expect(JSON.stringify(stored)).not.toContain(accountId);
+
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+    expect(second.status).toBe(200);
+    expect(seen).toEqual([undefined, "sess_zcode-owned"]);
+
+    const otherAccount = comboConfig({
+      z: provider("test-zcode", "https://zcode.z.ai", "unused", {
+        authMode: "local", zcodeAccountId: "ffffffff-eeee-4ddd-8ccc-bbbbbbbbbbbb",
+      }),
+    }, [{ provider: "z", model: "m1" }]);
+    const mismatched = await post(otherAccount, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "different account",
+    });
+    expect(mismatched.status).toBe(200);
+    expect(seen).toEqual([undefined, "sess_zcode-owned", undefined]);
   });
 
   test("same Cursor combo target without a parent-thread header retains its conversation id", async () => {

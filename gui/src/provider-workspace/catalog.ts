@@ -55,6 +55,8 @@ export interface WorkspaceProvider {
   };
   /** Codex account routing mode for the canonical `openai` forward provider. */
   codexAccountMode?: "direct" | "pool";
+  /** Exact saved-account binding for ZCode; absent on the global Desktop provider. */
+  zcodeAccountId?: string;
   /** Derived state of the two xAI Grok Responses model-adapter entries. */
   xaiResponsesOptInState?: boolean | "mixed";
 }

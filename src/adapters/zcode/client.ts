@@ -1,0 +1,205 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { homedir } from "node:os";
+import { readJsonLines } from "../coding-agent/protocol";
+import { record, type JsonObject, type ZcodeSettings } from "./settings";
+import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
+
+export type ZcodeSpawn = typeof spawn;
+type Pending = { resolve: (value: JsonObject) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+const HOST_TOOL_ENV = new Set([
+  "ALL_PROXY", "all_proxy", "BROWSER", "COLORTERM", "DBUS_SESSION_BUS_ADDRESS", "DISPLAY",
+  "GIT_ASKPASS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_SSH", "GIT_SSH_COMMAND",
+  "GH_CONFIG_DIR", "GPG_AGENT_INFO", "GNUPGHOME", "GPG_TTY", "HTTPS_PROXY", "https_proxy",
+  "HTTP_PROXY", "http_proxy", "LANG", "LC_ALL", "LOGNAME", "NODE_EXTRA_CA_CERTS", "NO_COLOR",
+  "NO_PROXY", "no_proxy", "PATH", "SHELL", "SSH_AGENT_PID", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+  "SSH_AUTH_SOCK", "SSL_CERT_DIR", "SSL_CERT_FILE", "TERM", "TMPDIR", "TZ", "USER", "WAYLAND_DISPLAY",
+  "XAUTHORITY", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "XDG_STATE_HOME",
+]);
+
+/** Host native tools need the user's normal config/agent sockets, but never unrelated provider secrets. */
+export function zcodeChildEnvironment(settings: ZcodeSettings, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!settings.hostExecution) return { HOME: settings.home, PATH: source.PATH ?? "/usr/bin:/bin",
+    XDG_CONFIG_HOME: `${settings.home}/.config`, XDG_CACHE_HOME: `${settings.home}/.cache` };
+  const result: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && (HOST_TOOL_ENV.has(key) || key.startsWith("LC_"))) result[key] = value;
+  }
+  result.HOME = homedir();
+  result.PATH = source.PATH ?? "/usr/bin:/bin";
+  result.ZCODE_DATA_BASE_DIR = settings.home;
+  return result;
+}
+const desktopClients = new Set<ZcodeClient>();
+const accountIdleWaiters = new Map<string, Set<() => void>>();
+export const hasZcodeAccountClients = (id: string) => [...desktopClients].some(client => client.accountId === id);
+function notifyAccountIdle(id?: string): void {
+  if (!id || hasZcodeAccountClients(id)) return;
+  const waiters = accountIdleWaiters.get(id);
+  accountIdleWaiters.delete(id);
+  for (const resolve of waiters ?? []) resolve();
+}
+/** Wait for every official app-server child using this saved profile to close. */
+export function waitForZcodeAccountClients(id: string, signal?: AbortSignal): Promise<void> {
+  if (!hasZcodeAccountClients(id)) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise<void>((resolve, reject) => {
+    const waiters = accountIdleWaiters.get(id) ?? new Set<() => void>();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true; signal?.removeEventListener("abort", abort);
+      waiters.delete(finish); if (!waiters.size) accountIdleWaiters.delete(id);
+      resolve();
+    };
+    const abort = () => {
+      if (settled) return;
+      settled = true; waiters.delete(finish); if (!waiters.size) accountIdleWaiters.delete(id);
+      reject(signal?.reason);
+    };
+    waiters.add(finish); accountIdleWaiters.set(id, waiters);
+    signal?.addEventListener("abort", abort, { once: true });
+    // Registration and the second check are synchronous, closing the check/subscribe race.
+    if (!hasZcodeAccountClients(id)) finish();
+  });
+}
+export async function closeZcodeDesktopClients(): Promise<void> {
+  await Promise.all([...desktopClients].filter(client => !client.accountId).map(client => client.disconnect()));
+}
+
+/** ZCode 0.16.5 uses request/result NDJSON, without a jsonrpc field. */
+export class ZcodeClient {
+  private child: ChildProcessWithoutNullStreams;
+  private pending = new Map<number, Pending>();
+  private nextId = 0;
+  private closed = false;
+  private terminalError?: Error;
+  private reading: Promise<void>;
+  private exited: Promise<void>;
+  private closePromise?: Promise<void>;
+  private detachShutdown: () => void;
+  private closeGraceMs: number;
+  onEvent: (message: JsonObject) => void = () => {};
+  onFailure: (error: Error) => void = () => {};
+
+  readonly accountId?: string;
+  constructor(settings: ZcodeSettings, spawnProcess: ZcodeSpawn = spawn) {
+    this.accountId = settings.accountId;
+    this.closeGraceMs = settings.hostExecution ? 1_000 : 500;
+    const [command, ...args] = settings.command;
+    this.child = spawnProcess(command!, [...args, "app-server"], {
+      cwd: settings.home, shell: false, stdio: ["pipe", "pipe", "pipe"],
+      env: zcodeChildEnvironment(settings),
+    }) as ChildProcessWithoutNullStreams;
+    this.exited = new Promise(resolve => {
+      this.child.once("exit", () => resolve());
+      // A spawn failure has no process to fence. Later child errors (for example a failed
+      // signal) must not masquerade as exit while the official runtime can still be alive.
+      this.child.once("error", () => { if (this.child.pid === undefined) resolve(); });
+    });
+    // Discard vendor diagnostics: stderr may contain account or request data.
+    this.child.stderr.resume();
+    this.child.stdin.on("error", () => this.fail(new Error("ZCode protocol input closed.")));
+    this.child.once("error", () => this.fail(new Error("ZCode launcher could not start.")));
+    this.child.once("exit", () => this.fail(new Error("ZCode app server exited before completing the turn.")));
+    this.reading = this.read();
+    this.detachShutdown = registerOptionalShutdownHook(`zcode-${crypto.randomUUID()}`, () => { void this.close(); });
+    if (settings.desktopModels) desktopClients.add(this);
+  }
+
+  async disconnect(): Promise<void> {
+    this.fail(new Error("ZCode Desktop was disconnected or reconnected."));
+    await this.close();
+  }
+
+  private fail(error: Error): void {
+    if (this.closed || this.terminalError) return;
+    this.terminalError = error;
+    for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(error); }
+    this.pending.clear();
+    this.onFailure(error);
+  }
+
+  private write(frame: JsonObject): void {
+    if (this.closed || this.terminalError) throw this.terminalError ?? new Error("ZCode client is closed.");
+    this.child.stdin.write(JSON.stringify(frame) + "\n");
+  }
+
+  private async read(): Promise<void> {
+    try {
+      for await (const message of readJsonLines(this.child.stdout)) {
+        if (typeof message.method === "string") {
+          if (message.id !== undefined) {
+            if (message.method === "session/requestRuntimePreferences") {
+              this.write({ id: message.id, result: {
+                nativeSearchEnhancementsEnabled: false, memoryEnabled: false,
+                askUserQuestionAutoResolutionEnabled: false, modelContextBudgetStrategy: "preflight-v1",
+              } });
+            } else if (message.method === "interaction/requestPermission") {
+              // Permission decisions cannot be safely represented by all OpenCodex clients.
+              // Native non-interactive actions still run under ZCode's edit mode and any operator/harness sandbox.
+              this.write({ id: message.id, result: { decision: "deny", reason: "Interactive approval is unavailable through this bridge." } });
+            } else if (message.method === "interaction/requestUserInput") {
+              this.write({ id: message.id, result: { action: "cancel" } });
+              this.fail(new Error("ZCode requires user input; continue in the interactive ZCode client."));
+            } else {
+              this.write({ id: message.id, error: { code: -32601, message: "Unsupported ZCode client request." } });
+            }
+          } else this.onEvent(message);
+        } else if (typeof message.id === "number") {
+          const item = this.pending.get(message.id);
+          if (!item) continue;
+          clearTimeout(item.timer);
+          this.pending.delete(message.id);
+          // Never forward raw error messages/stacks: the vendor includes prompts and paths.
+          if (message.error) item.reject(new Error("ZCode rejected the protocol request. Check the isolated login and model configuration."));
+          else item.resolve(record(message.result));
+        }
+      }
+      this.fail(new Error("ZCode protocol output closed."));
+    } catch {
+      this.fail(new Error("ZCode returned an invalid or oversized protocol stream."));
+    }
+  }
+
+  request(method: string, params: JsonObject, timeoutMs = 30_000): Promise<JsonObject> {
+    if (this.terminalError || this.closed) return Promise.reject(this.terminalError ?? new Error("ZCode client is closed."));
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error("ZCode protocol request timed out."));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      try { this.write({ id, method, params }); }
+      catch { clearTimeout(timer); this.pending.delete(id); reject(new Error("ZCode protocol write failed.")); }
+    });
+  }
+
+  close(): Promise<void> {
+    this.closePromise ??= this.performClose();
+    return this.closePromise;
+  }
+
+  private async performClose(): Promise<void> {
+    this.closed = true;
+    this.detachShutdown();
+    for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error("ZCode client closed.")); }
+    this.pending.clear();
+    this.child.stdin.destroy();
+    try { this.child.kill("SIGTERM"); } catch { /* launcher already exited */ }
+    const killTimer = setTimeout(() => {
+      try { this.child.kill("SIGKILL"); } catch { /* launcher already exited */ }
+    }, this.closeGraceMs);
+    try {
+      // The direct bootstrap owns descendant cleanup. Keep the account busy until that bootstrap
+      // really exits; timing out here would reopen a profile-mutation window while tools unwind.
+      await this.exited;
+    } finally {
+      clearTimeout(killTimer);
+      this.child.stdout.destroy();
+      this.child.stderr.destroy();
+      desktopClients.delete(this);
+      notifyAccountIdle(this.accountId);
+    }
+  }
+}

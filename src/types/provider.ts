@@ -237,6 +237,8 @@ export interface ModelCapabilities {
 }
 
 export interface OcxProviderConfig {
+  /** Explicit manual ZCode account binding; never participates in an implicit pool. */
+  zcodeAccountId?: string;
   /** Optional short provider namespace used only at request/catalog presentation time. */
   alias?: string;
   /** Native model id -> short, slash-free request alias. */

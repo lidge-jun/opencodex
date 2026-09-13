@@ -1,3 +1,6 @@
+import ZcodeUsageNotices from "../ZcodeUsageNotices";
+import { zcodeUsageScope } from "../../zcode-usage-schedule";
+import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconRefresh } from "../../icons";
@@ -6,7 +9,8 @@ import { formatRelativeTime, relativeTimeLabelsFromT } from "../../provider-work
 import ProviderAccountQuota from "./ProviderAccountQuota";
 import type { AccountQuotaReading } from "./types";
 
-export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }: {
+export default function ProviderCurrentQuota({ report, reading, onRefreshQuota, item }: {
+  item?: WorkspaceItem;
   report?: ProviderQuotaReportView;
   reading?: AccountQuotaReading;
   onRefreshQuota?: () => Promise<boolean>;
@@ -45,7 +49,8 @@ export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }
         </button>
       </div>}
     </div>
-    <ProviderAccountQuota {...effective} />
+    <ProviderAccountQuota {...effective} source={current?.source} />
+    {item && zcodeUsageScope(item) && <ZcodeUsageNotices viaZcode={zcodeUsageScope(item) === "zcode"} />}
     {quota && !effective.quotaUnavailable && effective.quotaMode !== "unsupported" && <dl className="pws-kv pws-usage-meta">
       {!rowOwnsReading && current?.source?.trim() && <div className="pws-kv-row">
         <dt>{t("pws.stats.source")}</dt><dd>{formatQuotaSourceLabel(current.source)}</dd>

@@ -58,6 +58,7 @@ export default function ProviderDetails({
   onCodexActiveNeedsReauthChange,
   codexController,
   onUpdateProvider,
+  onProviderStateMutation,
   isDefault,
   onRemoveProvider,
   onSetDisabled,
@@ -99,6 +100,7 @@ export default function ProviderDetails({
   /** Shared Codex account state owned by Providers (WP3). */
   codexController?: CodexAccountPoolController;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onProviderStateMutation?: () => void;
   isDefault?: boolean;
   onRemoveProvider?: (name: string) => void;
   onSetDisabled?: (name: string, disabled: boolean) => void;
@@ -355,6 +357,7 @@ export default function ProviderDetails({
             apiBase={apiBase}
             availableModels={availableModels}
             onUpdateProvider={onUpdateProvider}
+            onProviderStateMutation={onProviderStateMutation}
             onDirtyChange={setSettingsDirty}
             onRegisterSave={registerSettingsSave}
           />

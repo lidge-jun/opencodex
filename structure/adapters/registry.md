@@ -63,6 +63,20 @@ changing contract inheritance or generic Responses Lite handling; see
 
 ## Extension policy
 
+`zcode` uses the direct `zcode` wire and `agent-owned-with-explicit-opt-in` mutation contract.
+Unlike routed function tools, native ZCode actions are informational output only. Its `runTurn`
+sets `replaySafe: false`; accepted failures terminate incomplete rather than becoming automatic
+failover candidates. Launcher authority comes from either the operator environment or a separately persisted,
+GUI-consented Desktop connection. Data-plane requests and ordinary provider configuration cannot
+set command/workspace paths. The managed Desktop bootstrap keeps credential-bearing runtime
+descriptors inside the official child process; the parent sees public model identities only.
+Subscription quota is separately read through the official Desktop host entitlement RPC in a
+short-lived private profile copy, optionally inside Bubblewrap when enabled. Managed quota cache
+identity reuses the runtime already resolved and validated while loading Desktop settings instead
+of repeating synchronous host process discovery. Only numeric quota windows leave that process. An advanced launcher
+requires explicit `OCX_ZCODE_DESKTOP_RUNTIME` authority and reuses its own isolated model key;
+quota discovery must not silently import another Desktop account or affect routing policy.
+
 Adding a production adapter requires:
 
 1. one `ADAPTER_REGISTRY` entry with its factory;
@@ -141,3 +155,97 @@ medium/high/max UID before accepting a suffix already present in the model id.
 The merged `devin` provider uses this resolver for every account, whichever login
 path minted the credential. Omitted effort preserves an explicit
 variant; unrelated model families retain their existing suffix precedence.
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs. Explicitly
+consented managed connections use the official runtime's non-interactive `yolo` mode because the
+bridge cannot project interactive approval prompts; advanced operator launchers retain `edit` mode.
+The managed host bootstrap writes an official `PreToolUse` process hook into the disposable private
+ZCode config. It preserves Bash input and deterministically sets the supported
+`dangerouslyDisableSandbox=true` field; this is configuration through the vendor hook surface, not
+a patch to the official runtime. ZCode's file-oriented tools remain workspace-scoped, so a
+bridge-owned reminder directs outside-workspace access through Bash before reporting a host path
+absent. The optional Bubblewrap path and advanced launchers receive neither the hook nor reminder.
+The host child inherits only a named allowlist of tool environment variables and keeps ZCode-owned
+credentials/session state under its private data root. Because the official app server has no
+config-path option, a one-shot Node preload redirects only its internal `os.homedir()` lookup to a
+turn-scoped private home; the process environment retains the user's real `HOME`, so native host
+tools work without copying unrelated provider secrets into the child. On cancellation, the host
+bootstrap signals the official runtime and inherited native tools as one POSIX process group,
+escalates to a bounded forced stop, and removes the disposable turn home before returning.
+The dashboard's optional recheck repeats only model-catalog and `workspace/readState` protocol
+operations; it never creates or sends a model turn, starts a native tool or consumes inference quota.
+
+## ZCode saved accounts
+
+`src/adapters/zcode/accounts.ts` stores private UUID-scoped metadata and official profiles.
+`src/adapters/zcode/native-oauth.ts` and `src/adapters/zcode/oauth-bootstrap.cjs` invoke only
+ZCode's installed host OAuth/credential services; authorization URLs and safe stage codes are
+projected to the browser, never tokens. The official cached-session restore and Coding Plan
+refresh run before account use. Disabled/unavailable vendor profiles remain unavailable.
+
+The provider's `zcodeAccountId` is an exact binding through routing, catalog discovery,
+app-server settings, session/DB scope and quota reads. An invalid or revoked binding fails
+closed, never to the legacy Desktop profile or another account. Legacy unbound `zcode`
+retains its previous profile. Account providers do not participate in an implicit pool.
+Native tools still run on the host by default; optional OS sandboxing is independent of
+profile separation and does not turn the latter into a security boundary. Refresh failures
+cross the adapter boundary only as bounded public codes, never filesystem or account paths. An
+expired refresh reserves the account before waiting for an active official turn to close, then
+revalidates account/connection state. The adapter checks the official refresh both before joining
+the stable profile queue and again after acquiring it; if the short cache expired during a long
+wait, it reloads the refreshed generation before dispatch instead of using the earlier snapshot. A caller
+waiting on that shared official refresh races only its own abort signal and returns promptly without
+cancelling the refresh for sibling requests. Authenticated account operations also delete valid
+hidden new-account and reconnect drafts whose in-memory job disappeared after restart, while preserving active
+drafts and visible accounts. Active standalone drafts reserve their eventual account-limit slot without becoming
+visible; restart reconciliation releases abandoned reservations. A failed OAuth job continues to
+own its hidden draft and capacity reservation until explicit cancellation or bounded expiry, so a
+retry cannot stack drafts for the same account. Global Desktop controls are hidden for account-bound provider settings,
+transient completion failures keep the OAuth job authenticated for retry, and canonical
+global-default aliases remap to the account default before validation.
+Provider activation updates config and catalog without invalidating the quota view; entitlement
+refresh remains a separate, explicitly requested action rather than a side effect of connection.
+Account-list snapshots reuse one Desktop runtime discovery and one persisted-catalog read across all
+saved accounts. Removal checks only route-bearing selector fields (including aliases and provider
+reviewer targets), then revokes the official profile before deleting provider/catalog state. A later
+durability or catalog failure remains visible as a bounded partial-removal state; retry is idempotent
+and cannot reconnect or select another account.
+Native turn admission retains a 32-request process ceiling and a 24-request per-profile ceiling,
+so one stalled profile cannot consume every reservation needed by independent saved accounts.
+Closing saved-account clients remain registered as busy until the direct bootstrap actually exits;
+concurrent close callers share the same shutdown promise, so refresh, reconnect and removal cannot
+enter while inherited native tools are still unwinding.
+Headerless `previous_response_id` chains persist owner-fenced ZCode state even with `store:false`;
+the non-secret local account slot identifies the owner, while the connection/profile generation in
+the adapter scope rejects stale sessions after reconnect. Internal Codex compaction always starts a
+fresh official session with an empty tool allowlist, publishes no replacement ZCode session, and
+fails closed on an unexpected tool event. `session/send` is sized after JSON serialization before
+the native client starts, matching the managed bootstrap's one-MiB NDJSON limit.
+Advanced model descriptors reject loopback, private and link-local destinations before the
+official runtime receives them.
+Advanced launcher scope includes a bounded content generation for its isolated configuration and
+rejects a stale generation at model-read time; queued turns recheck the complete scope before
+starting a child, so an in-place account or credential change cannot resume the prior session.
+Account removal recognizes both the generated provider name and its configured alias in routed
+selectors outside the provider record. Activation/catalog readiness applies the same
+`selectedModels` and `disabledModels` visibility policy as catalog convergence, so intentionally
+hidden Desktop models do not leave a connection permanently pending.
+
+## ZCode vision input adaptation
+
+`src/adapters/base.ts` exposes a vision-only exception to the native-agent sidecar gate.
+ZCode sets `allowVisionSidecar: true` while retaining `allowExternalSidecars: false`.
+`src/server/responses/core.ts` resolves the configured vision helper and rewrites images before
+calling the official agent; search/image/video generation remain native-agent-owned.
+`src/vision/eligibility.ts` classifies every ZCode transport model as a sidecar consumer,
+including renamed/account-bound providers and Flash. The shared catalog predicate advertises
+sidecar-backed image input and excludes these models from describer selection. Disabled or
+unavailable vision uses explicit omission markers; recursion protection and quota/cancellation
+bounds remain in the shared vision path. This does not implement native image support in ZCode.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths and default-workspace aliases before
+optional sandbox validation, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.

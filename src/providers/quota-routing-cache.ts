@@ -48,6 +48,8 @@ export function replaceCachedProviderQuotas(
 ): void {
   quotaCache.clear();
   for (const report of reports) {
+    // Native Desktop account snapshots are display-only, not an automatic routing policy.
+    if (report.source === "zcode-desktop") continue;
     quotaCache.set(report.provider, { quota: report.quota, routing: routingEvidence?.get(report) });
   }
 }

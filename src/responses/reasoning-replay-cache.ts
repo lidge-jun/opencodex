@@ -347,7 +347,7 @@ export function durableReplayCredentialIdentity(
 
 /** Produce a non-reversible process-local identity for credential material. */
 export function reasoningReplayCredentialIdentity(
-  kind: "key" | "oauth" | "codex",
+  kind: "key" | "oauth" | "codex" | "local",
   material: string | undefined,
   headers?: Record<string, string>,
 ): string | undefined {
