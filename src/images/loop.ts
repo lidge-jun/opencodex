@@ -11,6 +11,7 @@
  * dedup, no describeImages/structuredOutput, no recordSidecarOutcome.
  */
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
+import { AnthropicImageLimitError } from "../adapters/anthropic-image-guard";
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
@@ -18,7 +19,7 @@ import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuatio
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
-import { bridgeToResponsesSSE } from "../bridge";
+import { bridgeToResponsesSSE, formatErrorResponse } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
@@ -693,7 +694,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       return prepared;
     } catch (error) {
-      if (isTranslatorBudgetExceededError(error)) throw error;
+      if (isTranslatorBudgetExceededError(error) || error instanceof AnthropicImageLimitError) throw error;
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }
@@ -770,6 +771,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       firstPrepared = await prepareIterationDrained(maxRounds <= 0);
     } catch (e) {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
+      if (e instanceof AnthropicImageLimitError) return formatErrorResponse(e.status, e.code, e.message);
       if (e instanceof LoopError) return jsonError(e.status, e.message);
       throw e;
     }
@@ -1012,6 +1014,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               message: "upstream translation buffer exceeded the safe limit",
               ...(hiddenUsage ? { usage: hiddenUsage } : {}),
             };
+          } else if (e instanceof AnthropicImageLimitError) {
+            yield { type: "error", status: e.status, errorType: "request_too_large", code: e.code, message: e.message, ...(hiddenUsage ? { usage: hiddenUsage } : {}) };
           } else {
             yield {
               type: "error",

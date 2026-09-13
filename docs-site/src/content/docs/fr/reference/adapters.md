@@ -90,6 +90,8 @@ Avec l’authentification `key`, [`retryOn429`](/fr/reference/configuration/) s�
 
 ## `anthropic`
 
+**Stabilité des images historiques :** chaque image intégrée est normalisée indépendamment, à partir d’un bord maximal de 2000px et d’une cible base64 de 2MiB. L’ajout d’images ne réencode plus les précédentes selon leur ancienneté. Au-delà de 100 images, de 20MiB de base64 d’images ou de 32 000 000 octets UTF-8 pour la requête complète, le proxy renvoie HTTP 413 sans supprimer ni dégrader l’historique. Avec plus de 20 images, les dimensions doivent être connues et ne pas dépasser 2000px par côté. Messages natif et `count_tokens` suivent la même politique ; un 413 amont ne déclenche plus de réessai à qualité réduite. Réduisez l’entrée, compactez la conversation côté client ou ouvrez une nouvelle session. La stabilité suppose les mêmes sources, codec et version de politique, sans garantie de cache amont. Kiro et OpenAI Chat conservent leurs politiques.
+
 **Cibles :** l’API **Messages** d’Anthropic (`/v1/messages`).
 **Authentification :** `key` (`x-api-key` par défaut, ou `Authorization: Bearer` avec `apiKeyTransport: "bearer"`) ou `oauth` (Bearer + `anthropic-beta`, pour Claude Pro/Max).
 

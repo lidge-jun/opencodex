@@ -112,6 +112,8 @@ Ollama 공급자에 `adapter: "ollama-native"`로 설정할 수도 있습니다.
 
 ## `anthropic`
 
+**이미지 이력 안정성:** 인라인 이미지는 긴 변 2000px, base64 목표 2MiB에서 개별 처리합니다. 새 이미지를 추가해도 상대적 순서 때문에 이전 이미지를 다시 인코딩하지 않습니다. 100장, 이미지 base64 합계 20MiB 또는 전체 요청 32,000,000 UTF-8 바이트를 초과하면 이력을 삭제하거나 화질을 낮추지 않고 HTTP 413으로 거절합니다. 20장을 넘으면 모든 이미지의 크기가 확인 가능하고 각 변이 2000px 이하여야 합니다. 네이티브 Messages와 `count_tokens`에도 적용되며, 업스트림 413 이후 화질을 낮춘 재시도는 없습니다. 클라이언트에서 입력을 줄이거나 대화를 압축하거나 새 세션을 시작하세요. 바이트 안정성은 동일한 원본·코덱·정책 버전을 전제로 하며 캐시 적중을 보장하지 않습니다. Kiro와 OpenAI Chat 정책은 유지됩니다.
+
 **대상:** Anthropic **Messages**(`/v1/messages`).
 **인증:** `key`(기본 `x-api-key`, 또는 `apiKeyTransport: "bearer"` 설정 시 `Authorization: Bearer`) 또는 `oauth`(Bearer + `anthropic-beta`, Claude Pro/Max용).
 

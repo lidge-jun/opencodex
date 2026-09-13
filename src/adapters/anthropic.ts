@@ -1,4 +1,4 @@
-import type { IncomingMeta, ProviderAdapter } from "./base";
+import type { ProviderAdapter } from "./base";
 import { createToolCallIdAllocator, type ToolCallIdAllocator } from "./tool-call-id";
 import { debugDroppedFrame } from "../lib/debug";
 import type {
@@ -17,7 +17,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
 import { parseDataUrl } from "./image";
-import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
+import { assertAnthropicRequestBodySize, enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
 import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
@@ -904,7 +904,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
 
     formatErrorBody: formatAnthropicErrorBody,
 
-    async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
+    async buildRequest(parsed: OcxParsedRequest) {
       if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
         if (isOAuth) {
           throw new Error("anthropic oauth token missing — run ocx login anthropic");
@@ -915,12 +915,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
-      // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
-      // (anthropic-image-normalize.ts); the guard below remains the deterministic backstop.
-      // imageTierBias > 0 = upstream-413 tightened retry (030): start every image one tier lower.
-      await normalizeAnthropicImages(messages, { tierBias: incoming?.imageTierBias ?? 0 });
-      // Anthropic rejects many-image requests (>20 images) carrying any image over
-      // 2000px per side; see anthropic-image-guard.ts for the full limit policy.
+      // Image-local encoding preserves historical bytes across appended screenshots.
+      await normalizeAnthropicImages(messages);
       enforceAnthropicImageLimits(messages);
       const tools = toolsToAnthropicFormat(parsed, toolNames);
 
@@ -1060,7 +1056,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);
 
-      return { url, method: "POST", headers, body: JSON.stringify(body) };
+      const serialized = JSON.stringify(body);
+      assertAnthropicRequestBodySize(serialized);
+      return { url, method: "POST", headers, body: serialized };
     },
 
     async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {

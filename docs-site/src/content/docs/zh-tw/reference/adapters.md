@@ -92,6 +92,8 @@ interface ProviderAdapter {
 
 ## `anthropic`
 
+**歷史圖片穩定性：** 內嵌圖片獨立正規化，從最大邊 2000px、base64 目標上限 2MiB 開始；追加圖片不再依新舊位置改寫舊圖。超過 100 張、20MiB 圖片 base64，或完整請求超過 32,000,000 UTF-8 位元組時回傳 HTTP 413，不再刪除或降級歷史圖片。超過 20 張須確認每張尺寸不超過 2000px。原生 Messages 與 `count_tokens` 使用相同策略；上游 413 不觸發圖片降級重試。請由宿主壓縮、縮減輸入或開新會話。編碼器與策略版本變更仍可能影響位元組，並不保證上游快取命中；Kiro、OpenAI Chat 策略不變。
+
 **目標：** Anthropic **Messages**（`/v1/messages`）。
 **認證：** `key`（`x-api-key`）或 `oauth`（Bearer + `anthropic-beta`，用於 Claude Pro/Max）。
 

@@ -100,6 +100,23 @@ function runWithWebSearch(
 }
 
 describe("anthropic adapter through the web-search bridge", () => {
+  test("image admission is a local 413 rather than a provider-unreachable error", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; throw new Error("unexpected dispatch"); }) as typeof fetch;
+    const request = parseRequest({
+      model: "routed/claude-opus-5", stream: true, tools: [{ type: "web_search" }],
+      input: [{ role: "user", content: Array.from({ length: 101 }, () => ({
+        type: "input_image", image_url: "data:image/png;base64,AAAA",
+      })) }],
+    });
+    const response = await runWithWebSearch(deps(createAnthropicAdapter(anthropicProvider), { parsed: request }));
+    expect(response.status).toBe(413);
+    expect((await response.json()).error).toMatchObject({
+      type: "request_too_large", code: "anthropic_image_count_exceeded",
+    });
+    expect(calls).toBe(0);
+  });
+
   test("a JSON 400 envelope reaches the client message instead of the bare status", async () => {
     const envelope = JSON.stringify({
       type: "error",

@@ -202,7 +202,7 @@ describe("Responses provider input overflow", () => {
     }
   });
 
-  test("the bounded Anthropic image retry runs once before the terminal failure", async () => {
+  test("Anthropic image requests surface terminal upstream overflow without a degraded replay", async () => {
     let hits = 0;
     const upstream = upstream413(() => { hits += 1; });
     saveConfig(config({ target: provider("anthropic", upstream) }));
@@ -225,7 +225,7 @@ describe("Responses provider input overflow", () => {
         }],
       ));
       expect((failed.error as { code?: string }).code).toBe("context_length_exceeded");
-      expect(hits).toBe(2);
+      expect(hits).toBe(1);
     } finally {
       await server.stop(true);
     }
@@ -284,6 +284,30 @@ describe("Responses provider input overflow", () => {
       }
       expect(firstHits).toBe(1);
       expect(secondHits).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each([true, false])("local Anthropic image admission stops a combo with its specific code (stream=%s)", async stream => {
+    let hits = 0;
+    const upstream = upstream413(() => { hits += 1; });
+    const next = config({ first: provider("anthropic", upstream), second: provider("openai-chat", upstream) });
+    next.combos = { fallback: { strategy: "failover", targets: [
+      { provider: "first", model: "kimi-k3" }, { provider: "second", model: "kimi-k3" },
+    ] } };
+    saveConfig(next);
+    const server = startServer(0);
+    try {
+      const response = await request(String(server.url), "combo/fallback", stream, [{
+        role: "user", content: Array.from({ length: 101 }, () => ({
+          type: "input_image",
+          image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        })),
+      }]);
+      expect(response.status).toBe(413);
+      expect((await response.json()).error.code).toBe("anthropic_image_count_exceeded");
+      expect(hits).toBe(0);
     } finally {
       await server.stop(true);
     }

@@ -1,7 +1,7 @@
 # GUI And Management API
 
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding. Anthropic additionally follows [stable image admission](transports/byte-accounting.md#anthropic-stable-image-admission); other providers retain their image policies.
 
 ## Dashboard serving
 

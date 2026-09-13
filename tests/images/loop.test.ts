@@ -10,6 +10,8 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { parseStreamWithProgress, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
 import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
 
+import { createAnthropicAdapter } from "../../src/adapters/anthropic";
+import { parseRequest } from "../../src/responses/parser";
 const realParseStreamWithProgress = parseStreamWithProgress;
 let useRealProgressStream = false;
 let fulfillCallCount = 0;
@@ -74,6 +76,29 @@ beforeEach(() => {
   fulfillResult = { ...defaultFulfillResult, files: [...defaultFulfillResult.files] };
   buildRequestCalls = 0;
   streamQueue = [];
+});
+
+test("Anthropic image admission stops the media loop before dispatch or fulfillment", async () => {
+  const parsed = parseRequest({
+    model: "claude-fable-5", stream: true,
+    input: [{ role: "user", content: Array.from({ length: 101 }, () => ({
+      type: "input_image", image_url: "data:image/png;base64,AAAA",
+    })) }],
+  });
+  let dispatches = 0;
+  const response = await runWithImageBridge({
+    parsed,
+    adapter: createAnthropicAdapter({
+      adapter: "anthropic", baseUrl: "https://example.invalid", apiKey: "fixture-key",
+    }),
+    fetchImpl: (async () => { dispatches++; throw new Error("Unexpected dispatch"); }) as typeof fetch,
+  });
+  expect(response.status).toBe(413);
+  expect((await response.json()).error).toMatchObject({
+    type: "request_too_large", code: "anthropic_image_count_exceeded",
+  });
+  expect(dispatches).toBe(0);
+  expect(fulfillCallCount).toBe(0);
 });
 
 describe.each(["runTurn", "parseStream"] as const)("image-loop collection bounds — %s", mode => {

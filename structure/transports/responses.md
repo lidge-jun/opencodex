@@ -1,7 +1,7 @@
 # Responses Transport
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding. Anthropic additionally follows [stable image admission](byte-accounting.md#anthropic-stable-image-admission); other providers retain their image policies.
 
 Plaintext collaboration restoration treats a null namespace as absent, rejects non-string namespace types, and restores the native namespace/name pair before HTTP/WS delivery and continuation publication.
 

@@ -6,14 +6,8 @@
  *   "At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"
  * - Hard cap: 100 images per request.
  *
- * Codex threads accumulate screenshots in history, so long sessions cross 20 images
- * easily and any single retina capture (>2000px wide) kills every later turn. The
- * PRIMARY layer is now anthropic-image-normalize.ts (Bun.Image resize/re-encode with an
- * age-tier pyramid — devlog/260714_image_normalization_pipeline/020), which runs before
- * this guard; these rules remain the deterministic BACKSTOP for whatever normalization
- * could not shrink (undecodable passthroughs, all-terminal overflow). When this guard
- * must drop, it textifies the OLDEST image blocks — newest screenshots are the ones the
- * model needs.
+ * Image-local normalization runs first. This guard textifies only individually unsafe
+ * images; request-level limits reject the request instead of rewriting its history.
  */
 
 export const MANY_IMAGE_THRESHOLD = 20;
@@ -34,20 +28,30 @@ export const MAX_IMAGE_BASE64_LENGTH = 5 * 1024 * 1024;
 export const MAX_IMAGE_FILE_BYTES = MAX_IMAGE_BASE64_LENGTH;
 
 /**
- * Anthropic rejects raw HTTP bodies over ~32MB with 413 request_too_large, and base64
- * image data dominates image-heavy histories (base64 is single-byte ASCII, so base64
- * chars ≈ serialized body bytes for the image share). The guard runs inside buildRequest
- * BEFORE system/tools attach, so it cannot measure the final body; instead we bound the
- * image share to 20MiB, leaving ≥11MB headroom even against a decimal 32,000,000-byte
- * cap — realistic non-image share (context-capped text history + tool schemas) stays
- * well under that. Residual: a request dominated by non-image content can still 413.
+ * Image share admission is separate from the final serialized UTF-8 body check:
+ * system text, tool schemas and framing also consume the upstream request budget.
  */
 export const TOTAL_IMAGE_BASE64_BUDGET = 20 * 1024 * 1024;
 
-const OMITTED_TEXT = "[image omitted: Anthropic request exceeded the 20-image limit for large images; older screenshots were dropped]";
 const OVERSIZED_TEXT = "[image omitted: exceeds Anthropic's 8000px per-side limit]";
 const PER_IMAGE_TOO_LARGE_TEXT = "[image omitted: exceeds Anthropic's 5MB per-image limit]";
-const BYTE_BUDGET_TEXT = "[image omitted: total image payload exceeded Anthropic's 32MB request limit; older screenshots were dropped]";
+export const MAX_ANTHROPIC_REQUEST_BYTES = 32_000_000;
+
+/** A caller must compact or reduce its input; retrying with degraded history is unsafe. */
+export class AnthropicImageLimitError extends Error {
+  readonly status = 413;
+
+  constructor(readonly code: string, message: string) {
+    super(`${message} Compact the conversation or start a new session before retrying.`);
+    this.name = "AnthropicImageLimitError";
+  }
+}
+
+export function assertAnthropicRequestBodySize(body: string): void {
+  if (Buffer.byteLength(body, "utf8") > MAX_ANTHROPIC_REQUEST_BYTES) {
+    throw new AnthropicImageLimitError("anthropic_request_body_too_large", "The serialized Anthropic request exceeds 32 MB.");
+  }
+}
 
 interface ImageDimensions { width: number; height: number }
 
@@ -175,16 +179,15 @@ function textify(ref: ImageBlockRef, text: string): void {
 }
 
 /**
- * Enforce Anthropic image limits on already-built wire messages (mutates in place).
- * Policy: unconditionally textify >8000px images; when the request would be a
- * many-image request (>20) with at least one image over 2000px, textify oldest
- * images until <=20 so the 8000px allowance applies; always cap at 100 images;
- * textify images over the 5MB per-image cap; and drop oldest base64 images until
- * the total base64 payload fits the request-size budget.
+ * Textify only individually invalid images, independently of other messages.
+ * Reject request-level overflow without dropping or degrading any valid history.
  */
 export function enforceAnthropicImageLimits(messages: unknown[]): void {
   const refs = collectImageRefs(messages);
   if (refs.length === 0) return;
+  if (refs.length > MAX_IMAGES_PER_REQUEST) {
+    throw new AnthropicImageLimitError("anthropic_image_count_exceeded", `Anthropic accepts at most ${MAX_IMAGES_PER_REQUEST} images per request.`);
+  }
 
   const dims = refs.map(r => (r.base64 ? sniffImageDimensions(r.base64) : null));
   const live = new Set<number>(refs.keys());
@@ -208,44 +211,18 @@ export function enforceAnthropicImageLimits(messages: unknown[]): void {
     }
   }
 
-  // Rule 2: many-image requests cap each image at 2000px. Keep the request at <=20
-  // images (dropping oldest first) whenever a surviving image exceeds that cap OR has
-  // unknown dimensions (URL sources and unsniffable formats): one unverifiable offender
-  // 400s the whole request upstream, so unknown counts as risky, not as safe.
+  // Unknown URL dimensions cannot prove admission for a many-image request.
   const hasRiskyForMany = [...live].some(i => {
     const d = dims[i];
     return d === null || d.width > MANY_IMAGE_MAX_DIMENSION || d.height > MANY_IMAGE_MAX_DIMENSION;
   });
   if (hasRiskyForMany && live.size > MANY_IMAGE_THRESHOLD) {
-    for (const i of [...live]) {
-      if (live.size <= MANY_IMAGE_THRESHOLD) break;
-      textify(refs[i], OMITTED_TEXT);
-      live.delete(i);
-    }
+    throw new AnthropicImageLimitError("anthropic_image_dimensions_exceeded", "Requests with more than 20 images require known dimensions of at most 2000px per side.");
   }
 
-  // Rule 3: hard cap of 100 images per request regardless of size.
-  if (live.size > MAX_IMAGES_PER_REQUEST) {
-    for (const i of [...live]) {
-      if (live.size <= MAX_IMAGES_PER_REQUEST) break;
-      textify(refs[i], OMITTED_TEXT);
-      live.delete(i);
-    }
-  }
-
-  // Rule 4: bound the total base64 payload (see TOTAL_IMAGE_BASE64_BUDGET rationale).
-  // Oldest base64 images are dropped first — newest screenshots are the ones the model
-  // needs. URL-source images carry no base64 weight and are never evicted here.
   let base64Sum = 0;
   for (const i of live) base64Sum += refs[i].base64?.length ?? 0;
   if (base64Sum > TOTAL_IMAGE_BASE64_BUDGET) {
-    for (const i of [...live]) {
-      if (base64Sum <= TOTAL_IMAGE_BASE64_BUDGET) break;
-      const b64 = refs[i].base64;
-      if (!b64) continue;
-      textify(refs[i], BYTE_BUDGET_TEXT);
-      live.delete(i);
-      base64Sum -= b64.length;
-    }
+    throw new AnthropicImageLimitError("anthropic_image_budget_exceeded", "The total Anthropic image payload exceeds 20 MiB of base64 data.");
   }
 }

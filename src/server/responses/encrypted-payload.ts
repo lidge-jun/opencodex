@@ -66,7 +66,6 @@ import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../providers/key-failover";
-import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
 import { registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";

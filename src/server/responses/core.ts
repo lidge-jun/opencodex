@@ -285,7 +285,7 @@ import {
   rotateProviderTransportOn401,
   transientRetryPolicyFor,
 } from "../../providers/key-failover";
-import { shouldAttemptImageTierRetry } from "../image-retry";
+import { AnthropicImageLimitError } from "../../adapters/anthropic-image-guard";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import type { WsData } from "../ws-bridge";
@@ -3197,6 +3197,15 @@ export async function handleComboResponses(
     (logCtx.attempts ??= []).push(attempt);
     attemptRetained = true;
     lastFailure = failure.response;
+    if (failure.response.status === 413 && [
+      "anthropic_image_count_exceeded",
+      "anthropic_image_budget_exceeded",
+      "anthropic_image_dimensions_exceeded",
+      "anthropic_request_body_too_large",
+    ].includes(failure.upstreamCode ?? "")) {
+      adoptFailedChildLog(childLog);
+      return formatErrorResponse(413, failure.upstreamCode!, failure.classificationText);
+    }
     const failureDecision = comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     });
@@ -4225,7 +4234,6 @@ async function handleResponsesInner(
   let sameTargetParsed: OcxParsedRequest | undefined;
   let sameTargetToken = 0;
   let transportToken = 0;
-  let imageTierBias = 0;
   const invalidateSameTargetRequest = (): void => { transportToken += 1; };
   type DispatchBinding =
     | { kind: "oauth"; selection: NonNullable<typeof oauthSelection>; snapshot: OAuthAccessSnapshot }
@@ -4485,7 +4493,6 @@ async function handleResponsesInner(
         const nextAdapter = await refreshDispatchAdapter(requestParsed);
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
           headers: selectedForwardHeaders, translatorBudget,
-          ...(imageTierBias > 0 ? { imageTierBias } : {}),
         });
         const bodySize = checkOutboundBodySize(rebuilt.body, config.maxUpstreamBodyBytes);
         if (!bodySize.admitted) {
@@ -5000,6 +5007,9 @@ async function handleResponsesInner(
       request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     } catch (error) {
       releaseCodexAuthContextProbeLease(authCtx);
+      if (error instanceof AnthropicImageLimitError) {
+        return formatErrorResponse(error.status, error.code, error.message);
+      }
       // A tool catalog this proxy cannot lower onto one wire namespace is a client input error, and
       // the rotation-rebuild and bridged paths already answer 400 for the identical throw. Rethrowing
       // it here escaped every catch up to the Bun handler, so the same request produced an
@@ -5409,6 +5419,12 @@ async function handleResponsesInner(
         releaseCodexAuthContextProbeLease(authCtx);
         return clientCancelledResponse();
       }
+      if (err instanceof AnthropicImageLimitError) {
+        releaseUpstreamHostAdmission(hostAdmissionLease);
+        hostAdmissionLease = null;
+        releaseCodexAuthContextProbeLease(authCtx);
+        return formatErrorResponse(err.status, err.code, err.message);
+      }
       const localRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
         now: Date.now(), accountSelector: route.codexAccountNamespace,
       });
@@ -5521,6 +5537,9 @@ async function handleResponsesInner(
       } catch (err) {
         upstream.abort();
         if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
+        if (err instanceof AnthropicImageLimitError) {
+          return { failed: formatErrorResponse(err.status, err.code, err.message) };
+        }
         const msg = err instanceof Error ? err.message : String(err);
         return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(msg)) };
       }
@@ -5753,6 +5772,9 @@ async function handleResponsesInner(
       } catch (err) {
         upstream.abort();
         if (options.abortSignal?.aborted) return clientCancelledResponse();
+        if (err instanceof AnthropicImageLimitError) {
+          return formatErrorResponse(err.status, err.code, err.message);
+        }
         const msg = err instanceof Error ? err.message : String(err);
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
       }
@@ -7455,9 +7477,9 @@ async function handleResponsesInner(
 
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // auth headers, generated compat headers). Same-target 429 replays reuse it verbatim; the
-  // builder runs again only after a key/account/adapter rotation, an oauth refresh, or an
-  // image-tier bias change (transportToken bump). `body` is always a serialized string, so
-  // reuse is safe, and releaseBodyObservation is idempotent per build.
+  // builder runs again only after a key/account/adapter rotation, OAuth refresh, or a
+  // parsed-input change (transportToken bump). The serialized body is safe to reuse;
+  // releaseBodyObservation is idempotent per build.
   let initialRequest: AdapterRequest | undefined;
   let inputTokenEstimate: number | undefined;
   // An adapter may know the turn needs no inference at all — Kiro's replayed history ending in a
@@ -7541,6 +7563,9 @@ async function handleResponsesInner(
     cleanupUpstreamAbort();
     upstream.abort();
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    if (err instanceof AnthropicImageLimitError) {
+      return formatErrorResponse(err.status, err.code, err.message);
+    }
     const msg = err instanceof Error ? err.message : String(err);
     return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
   }
@@ -7623,16 +7648,9 @@ async function handleResponsesInner(
   // `attempts` same-key replays in total (bounded per request).
   const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
   let rateLimitRetries = 0;
-  // Shared with the terminal-guard continuation below: an image-tier reduction that let the
-  // main request clear a 413 must not be forgotten on the very next continuation build.
   if (!upstreamResponse.ok) {
-    // Recovery loop: multi-key 429 failover + at most ONE opaque-state rebuild and ONE
-    // anthropic 413 tightened retry
-    // (devlog/260714_image_normalization_pipeline/030). One mutable activeAdapter serves
-    // both paths so a 429→413 sequence never rebuilds against a stale pre-rotation
-    // adapter, and imageTierBias — once armed — rides EVERY subsequent rebuild so a
-    // 413→429 rotation cannot silently undo the tightening.
-    let imageRetryAttempted = false;
+    // Recovery preserves image bytes: account/key rotation and opaque-state recovery
+    // may rebuild a request, but an upstream 413 never triggers image degradation.
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
     // moments later; at most one byte-identical replay is allowed per request.
@@ -7643,7 +7661,7 @@ async function handleResponsesInner(
     // every `continue recovery`, which would let one turn walk the whole ladder down.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
     /**
-     * Rebuild the request from the current parsed input (and any image-tier bias) and refetch
+     * Rebuild the request from the current parsed input and refetch
      * it once, tagging the attempt with the given recovery kind. Rebuilds are deterministic
      * for the same parsed request, so same-target replays stay byte-identical.
      */
@@ -7659,7 +7677,6 @@ async function handleResponsesInner(
           retryRequest = await activeAdapter.buildRequest(parsed, {
             headers: selectedForwardHeaders,
             translatorBudget,
-            ...(imageTierBias > 0 ? { imageTierBias } : {}),
           });
           recordAdapterReasoning(logCtx, retryRequest);
           recordAdapterTier(logCtx, retryRequest);
@@ -7670,6 +7687,9 @@ async function handleResponsesInner(
           cleanupUpstreamAbort();
           upstream.abort();
           if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
+          if (err instanceof AnthropicImageLimitError) {
+            return { failed: formatErrorResponse(err.status, err.code, err.message) };
+          }
           const msg = err instanceof Error ? err.message : String(err);
           return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(msg)) };
         }
@@ -8008,23 +8028,6 @@ async function handleResponsesInner(
         upstreamResponse = opaqueBlobRecovery.response;
         continue recovery;
       }
-      // Anthropic 413 request_too_large: rebuild once with every image one tier lower
-      // (spiral guard: single attempt). The biased response re-enters the 429 check above.
-      if (shouldAttemptImageTierRetry({
-        status: upstreamResponse.status,
-        adapterName: activeAdapter.name,
-        parsed,
-        alreadyAttempted: imageRetryAttempted,
-      })) {
-        imageRetryAttempted = true;
-        imageTierBias = 1;
-        invalidateSameTargetRequest();
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        const result = await rebuildAndRefetch("image-413");
-        if ("failed" in result) return result.failed;
-        upstreamResponse = result;
-        continue recovery;
-      }
       // Console Go (opencode-zen / opencode-go) intermittently rejects a body it accepts seconds
       // later with 400 invalid_request_error / "Invalid upload request." Replay the
       // byte-identical request once after the exact gateway rejection.
@@ -8187,7 +8190,7 @@ async function handleResponsesInner(
     /**
      * Build and fetch one terminal-guard continuation. `recoveryKind` tags same-target and
      * failover sends (`empty-completion`, `rate-limit-429`, `key-429`,
-     * `anthropic-oauth-429`, `image-413`); the
+     * `anthropic-oauth-429`); the
      * adapter rebuild is deterministic for the same parsed request (tests assert byte-identical
      * replays).
      */
@@ -8201,7 +8204,6 @@ async function handleResponsesInner(
           continuationRequest = await activeAdapter.buildRequest(nextParsed, {
             headers: selectedForwardHeaders,
             translatorBudget,
-            ...(imageTierBias > 0 ? { imageTierBias } : {}),
           });
           recordAdapterReasoning(logCtx, continuationRequest);
           recordAdapterTier(logCtx, continuationRequest);
@@ -8293,6 +8295,8 @@ async function handleResponsesInner(
       } catch (error) {
         if (options.abortSignal?.aborted || upstream.signal.aborted) {
           yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
+        } else if (error instanceof AnthropicImageLimitError) {
+          yield { type: "error", status: error.status, errorType: "request_too_large", code: error.code, message: error.message };
         } else {
           yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
         }
@@ -8339,6 +8343,8 @@ async function handleResponsesInner(
         } catch (error) {
           if (options.abortSignal?.aborted || upstream.signal.aborted) {
             yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
+          } else if (error instanceof AnthropicImageLimitError) {
+            yield { type: "error", status: error.status, errorType: "request_too_large", code: error.code, message: error.message };
           } else {
             yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
           }
@@ -8456,18 +8462,6 @@ async function handleResponsesInner(
             // fall through to emit continuation error below
           }
         }
-      }
-      if (shouldAttemptImageTierRetry({
-        status: response.status,
-        adapterName: activeAdapter.name,
-        parsed: nextParsed,
-        alreadyAttempted: imageTierBias > 0,
-      })) {
-        imageTierBias = 1;
-        invalidateSameTargetRequest();
-        try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
-        nextContinuationRecoveryKind = "image-413";
-        continue;
       }
       break;
     }

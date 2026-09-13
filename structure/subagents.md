@@ -1,5 +1,7 @@
 # Subagents And Multi-Agent Surface
 
+Anthropic requests follow [stable image admission](transports/byte-accounting.md#anthropic-stable-image-admission); other providers retain their image policies.
+
 ## Plaintext V2 agent messages
 
 `src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only

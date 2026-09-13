@@ -9,7 +9,7 @@
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import { sseFieldValue } from "../lib/sse-decoder";
-import { enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
+import { AnthropicImageLimitError, assertAnthropicRequestBodySize, enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
 import { AnthropicRequestError, DesktopModelMappingUnavailableError, anthropicToResponsesTranslation, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
@@ -414,14 +414,20 @@ async function anthropicNativePassthrough(
 
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
   const search = new URL(req.url).search;
-  // Native passthrough bypasses the anthropic adapter, so the generous image pipeline
-  // (devlog/260714_image_normalization_pipeline/040) must run here: tier-normalize then
-  // guard the already-Anthropic-wire messages before serialization. Applies to
-  // count_tokens too — counts must match what the real send will contain, and the 32MB
-  // body cap applies to it equally. Non-message bodies pass through untouched.
-  if (Array.isArray(body.messages)) {
-    await normalizeAnthropicImages(body.messages);
-    enforceAnthropicImageLimits(body.messages);
+  // Messages and count_tokens share exactly the same image policy and body admission.
+  let serialized: string;
+  try {
+    if (Array.isArray(body.messages)) {
+      await normalizeAnthropicImages(body.messages);
+      enforceAnthropicImageLimits(body.messages);
+    }
+    serialized = JSON.stringify(body);
+    assertAnthropicRequestBodySize(serialized);
+  } catch (error) {
+    if (!(error instanceof AnthropicImageLimitError)) throw error;
+    logCtx.errorCode = error.code;
+    finalize(error.status, { closeReason: "non_stream" });
+    return anthropicErrorResponse(error.status, error.message, "request_too_large", error.code);
   }
   const headers = new Headers();
   req.headers.forEach((value, name) => {
@@ -431,7 +437,7 @@ async function anthropicNativePassthrough(
 
   const result = await fetchWithHeaderDeadline(
     `${base}${pathname}${search}`,
-    { method: "POST", headers, body: JSON.stringify(body) },
+    { method: "POST", headers, body: serialized },
     config.connectTimeoutMs ?? 200_000,
     req.signal,
   );

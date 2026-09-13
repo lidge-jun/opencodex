@@ -198,6 +198,12 @@ header and does not guarantee a provider cache hit.
 
 ## `anthropic`
 
+**Stable image history:** Inline images are normalized independently, starting at a 2000px maximum edge and a 2MiB base64 target; only the image's own size can select a lower encoding step. Adding screenshots no longer changes older images because of their age or the total request size. Full decode validation, per-image safety checks, bounded concurrency and the bounded encoding cache remain enabled.
+
+Requests exceeding 100 images or 20MiB of image base64 are rejected, not repaired by deleting or degrading history. More than 20 images require known dimensions of at most 2000px per side. The complete serialized Anthropic request, including text and tools, must fit 32,000,000 UTF-8 bytes. Local failures return HTTP 413 with an `anthropic_image_*` or `anthropic_request_body_too_large` code before upstream dispatch. An upstream 413 never triggers a lower-quality image retry; existing client-specific context-overflow error mapping still applies.
+
+Native Anthropic Messages and `count_tokens` use the same image policy. Compact/reduce the conversation or start a new session after a budget refusal; the proxy does not do that automatically. Byte stability assumes unchanged original bytes and codec/policy versions, and does not guarantee upstream cache hits or stable contents at remote image URLs. Kiro and OpenAI Chat retain their separate adaptive image policies.
+
 **Targets:** Anthropic **Messages** (`/v1/messages`).
 **Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 

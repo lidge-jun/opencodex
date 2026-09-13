@@ -129,6 +129,8 @@ döngüsünün bir parçası değildir.
 
 ## `anthropic`
 
+**Görsel geçmişinin kararlılığı:** Satır içi görseller, en uzun kenar 2000px ve base64 hedefi 2MiB ile başlayarak bağımsız işlenir. Yeni görsel eklemek, eski görselleri göreli yaşlarına göre yeniden kodlamaz. 100 görsel, toplam 20MiB görsel base64 verisi veya tüm istek için 32.000.000 UTF-8 bayt sınırı aşılırsa geçmiş silinmeden ya da kalitesi düşürülmeden HTTP 413 döner. 20’den fazla görselde boyutlar doğrulanabilmeli ve her kenar en fazla 2000px olmalıdır. Yerel Messages ve `count_tokens` aynı politikayı kullanır; sağlayıcının 413 yanıtı düşük kaliteli yeniden denemeyi tetiklemez. Girdiyi azaltın, istemcide konuşmayı sıkıştırın veya yeni oturum açın. Bayt kararlılığı aynı kaynak, kodlayıcı ve politika sürümünü gerektirir; sağlayıcı önbellek isabetini garanti etmez. Kiro ve OpenAI Chat politikaları değişmez.
+
 **Hedefler:** Anthropic **Messages** (`/v1/messages`).
 **Kimlik Doğrulama:** `key` (varsayılan olarak `x-api-key` veya
 `apiKeyTransport: "bearer"` ile `Authorization: Bearer`) veya `oauth` (Claude

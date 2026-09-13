@@ -217,6 +217,14 @@ export function classifyError(status: number, type: string, message: string): Oc
   if (type === "inbound_body_too_large") {
     return { message, type: "invalid_request_error", code: "inbound_body_too_large" };
   }
+  if (status === 413 && (
+    type === "anthropic_image_count_exceeded"
+    || type === "anthropic_image_budget_exceeded"
+    || type === "anthropic_image_dimensions_exceeded"
+    || type === "anthropic_request_body_too_large"
+  )) {
+    return { message, type: "request_too_large", code: type };
+  }
   if (
     text.includes("context_length_exceeded") ||
     text.includes("context window") ||

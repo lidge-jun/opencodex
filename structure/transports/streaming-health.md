@@ -1,5 +1,7 @@
 # Streaming Health And WebSocket
 
+Anthropic requests follow [stable image admission](byte-accounting.md#anthropic-stable-image-admission); other providers retain their image policies.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
@@ -63,7 +65,7 @@ is emitted as `response.failed` SSE.
 A provider HTTP 413 received before streaming starts is unambiguous request-size refusal, but raw
 relay is not compatible with Codex: Codex classifies the unknown status as retryable and resends the
 same oversized turn through its reconnect budget. For a streaming Responses caller, OpenCodex
-therefore converts the final 413 (after any adapter-owned bounded image retry) into one HTTP-200 SSE
+therefore converts the final upstream 413 into one HTTP-200 SSE
 `response.failed` event with `error.code = context_length_exceeded` and `retryable = false`. Codex
 recognizes that terminal contract, marks the context as full, and can run its own compaction policy
 on the next turn. Combo routing treats 413 as a stop condition and performs the conversion only at

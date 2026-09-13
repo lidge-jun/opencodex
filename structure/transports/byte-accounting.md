@@ -4,6 +4,34 @@ How opencodex measures request and stream bytes without allocating copies solely
 them. These contracts are shared by request parsing, SSE rewriting, the provider adapters and
 the translator budget, which is why so many documents link here rather than restating them.
 
+## Anthropic stable image admission
+
+`src/adapters/anthropic-image-normalize.ts` encodes each Anthropic image independently,
+starting at the fixed 2000px/2MiB profile. Only that image's size selects lower codec steps.
+The shared codec retains full-decode validation, bomb limits, four-worker concurrency and a
+byte-bounded LRU. Cache eviction does not select a different encoding. Byte stability is scoped
+to unchanged source bytes, media type, codec and policy versions, not mutable remote URL content.
+Kiro and OpenAI Chat retain their existing adaptive image-count and aggregate-budget policies.
+
+`src/adapters/anthropic-image-guard.ts` textifies only individually unsafe images. Request-level
+limits reject rather than rewrite history: more than 100 images, more than 20MiB image base64,
+or unverifiable/oversized dimensions in a request with more than 20 images. The completed
+serialized Anthropic body has a separate 32,000,000-byte UTF-8 cap, including tools and text.
+
+`src/adapters/anthropic.ts` and native `src/server/claude-messages.ts` apply the same admission;
+native Messages and count_tokens normalize identically. Local refusals retain specific
+anthropic_image_* or anthropic_request_body_too_large codes and HTTP 413 before dispatch;
+already-streaming continuations report a terminal error. Combo routing stops without penalizing
+or trying another account. Upstream 413 never causes an image-degrading retry. Existing upstream
+context-overflow response mapping remains separate. The host must compact/reduce input or start
+a new session; the proxy does not compact, delete history, or promise upstream cache hits.
+
+Regression coverage: `tests/adapters/anthropic/anthropic-image-normalize.test.ts`,
+`tests/adapters/anthropic/anthropic-image-guard.test.ts`,
+`tests/adapters/anthropic/anthropic-image-retry.test.ts`,
+`tests/adapters/anthropic/anthropic-image-retry-e2e.test.ts`, and
+`tests/claude-integration/claude-native-passthrough.test.ts`.
+
 ## Request-copy accounting
 
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON

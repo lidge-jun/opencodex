@@ -205,22 +205,6 @@ describe("openai-chat inline image normalization", () => {
     for (const part of parts) expect(part.image_url?.url).toContain("base64,");
   });
 
-  test("an image processing failure preserves the original image without encoding", async () => {
-    const big = await noisyPngB64(1000, 1000);
-    const original = dataUrl(big);
-    const parsed = parsedWith([imageMessage([original])]);
-    const built = createOpenAIChatAdapter(provider).buildRequest(parsed, {
-      headers: new Headers(),
-      translatorBudget: createTestTranslatorBudget(),
-      imageTierBias: Number.NaN,
-    });
-    const request = await (built as Promise<{ body: string }>);
-    const parts = imageParts(wireMessages(request.body));
-    expect(parts).toHaveLength(1);
-    // NaN bypasses processing tiers; this exercises failed processing, not Promise rejection.
-    expect(parts[0]?.image_url?.url).toBe(original);
-    expect(getNormalizeStatsForTests().encodeCalls).toBe(0);
-  });
 
   test("a remote https image is left untouched", async () => {
     const messages = [{
@@ -329,25 +313,6 @@ describe("openai-chat inline image normalization", () => {
     }
   });
 
-  test("imageTierBias from incoming meta reaches the normalizer", async () => {
-    const big = await noisyPngB64(1000, 1000);
-    const urls = Array.from({ length: 4 }, () => dataUrl(big));
-    const adapter = createOpenAIChatAdapter(provider);
-
-    const build = async (imageTierBias?: number) => {
-      resetNormalizeStateForTests();
-      const built = adapter.buildRequest(parsedWith([imageMessage(urls)]), {
-        headers: new Headers(),
-        translatorBudget: createTestTranslatorBudget(),
-        ...(imageTierBias !== undefined ? { imageTierBias } : {}),
-      });
-      const request = await (built as Promise<{ body: string }>);
-      return imageParts(wireMessages(request.body))
-        .reduce((sum, part) => sum + (part.image_url?.url.length ?? 0), 0);
-    };
-
-    expect(await build(3)).toBeLessThan(await build());
-  });
 
 });
 

@@ -16,6 +16,7 @@ import {
   enforceAnthropicImageLimits,
   sniffImageDimensions,
   TOTAL_IMAGE_BASE64_BUDGET,
+  AnthropicImageLimitError,
 } from "../../../src/adapters/anthropic-image-guard";
 
 /** 1x1 red PNG — the smallest real, fully-decodable fixture. */
@@ -180,26 +181,22 @@ describe("normalizeAnthropicImages — real Bun.Image path", () => {
     expect((block.source?.data ?? "").length).toBeLessThanOrEqual(TIER_SPECS[0].hardCap);
   });
 
-  test("N2: 30 images land on age tiers — newest pass through, older shrink to their tier edges", async () => {
-    const src = await realPngBase64(1500, 1000);
-    const messages = [userMsg(Array.from({ length: 30 }, () => imageBlock(src)))];
-    await normalizeAnthropicImages(messages);
-    const content = contentOf(messages);
-    expect(content.every(b => b.type === "image")).toBe(true);
-    // Wire order is oldest first: indices 0-9 are tier 2 (<=700px), 10-23 tier 1 (<=1024px), 24-29 tier 0 (pass-through PNG).
-    for (let i = 0; i < 10; i++) {
-      const d = sniffImageDimensions(content[i].source?.data ?? "");
-      expect(Math.max(d!.width, d!.height)).toBeLessThanOrEqual(700);
-      expect(content[i].source?.media_type).toBe("image/jpeg");
+  test("appending images across both old age boundaries preserves all historical encodings", async () => {
+    const sources: string[] = [];
+    for (let i = 0; i < 21; i++) sources.push(await realPngBase64(2400 + i, 1600));
+    let previous = contentOf([userMsg([])]);
+    for (const count of [5, 6, 7, 8, 9, 20, 21]) {
+      const messages = [userMsg(sources.slice(0, count).map(source => imageBlock(source)))];
+      await normalizeAnthropicImages(messages);
+      enforceAnthropicImageLimits(messages);
+      const current = contentOf(messages);
+      expect(current.slice(0, previous.length)).toEqual(previous);
+      previous = structuredClone(current);
     }
-    for (let i = 10; i < 24; i++) {
-      const d = sniffImageDimensions(content[i].source?.data ?? "");
-      expect(Math.max(d!.width, d!.height)).toBeLessThanOrEqual(1024);
-    }
-    for (let i = 24; i < 30; i++) {
-      expect(content[i].source?.media_type).toBe("image/png");
-      expect(content[i].source?.data).toBe(src);
-    }
+    resetNormalizeStateForTests();
+    const cold = [userMsg(sources.map(source => imageBlock(source)))];
+    await normalizeAnthropicImages(cold);
+    expect(contentOf(cold)).toEqual(previous);
   });
 
   test("N3: cache hit — same input re-normalized with ZERO additional encoder invocations and identical bytes", async () => {
@@ -277,33 +274,23 @@ describe("normalizeAnthropicImages — guards and seams", () => {
     expect(getNormalizeStatsForTests().encodeCalls).toBe(expectedCalls);
   });
 
-  test("N7b: all-terminal overflow falls to the guard, which textifies — either-fits-or-textifies", async () => {
-    // 30 identical stubborn images at 3MiB terminal → sum 90MiB, nothing demotable below
-    // 3MiB → normalization exits all-terminal and the guard Rule 4 backstop textifies.
+  test("terminal overflow rejects without deleting historical images", async () => {
     const stubborn = sizedEncoder(() => 3 * 1024 * 1024);
     const messages = [userMsg(Array.from({ length: 30 }, () => imageBlock(fakePngBase64(3000, 2000))))];
     await normalizeAnthropicImages(messages, { encode: stubborn });
-    enforceAnthropicImageLimits(messages);
-    const content = contentOf(messages);
-    expect(content.some(b => b.type === "text")).toBe(true); // oldest textified by backstop
-    let sum = 0;
-    for (const b of content) if (b.type === "image") sum += b.source?.data?.length ?? 0;
-    expect(sum).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(contentOf(messages).every(b => b.type === "image" && b.source?.data?.length === 3 * 1024 * 1024)).toBe(true);
   });
 
-  test("representative 100-image session: demotion keeps every image, zero textify, sum within budget", async () => {
+  test("100 high-fidelity images are rejected rather than aggregate-demoted", async () => {
     const capFitting = sizedEncoder(edge => {
       const spec = TIER_SPECS.find(s => s.maxEdge === edge)!;
       return Number.isFinite(spec.hardCap) ? spec.hardCap : 100 * 1024;
     });
     const messages = [userMsg(Array.from({ length: 100 }, () => imageBlock(fakePngBase64(3000, 2000))))];
     await normalizeAnthropicImages(messages, { encode: capFitting });
-    enforceAnthropicImageLimits(messages);
-    const content = contentOf(messages);
-    expect(content.every(b => b.type === "image")).toBe(true);
-    let sum = 0;
-    for (const b of content) sum += b.source?.data?.length ?? 0;
-    expect(sum).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(contentOf(messages).every(b => b.type === "image" && b.source?.data?.length === 2 * 1024 * 1024)).toBe(true);
   });
 
   test("aggregate demotion: over-budget totals demote OLDEST images further down the ladder until the sum fits", async () => {
@@ -314,7 +301,12 @@ describe("normalizeAnthropicImages — guards and seams", () => {
     });
     // 30 images, all larger than every tier edge so every one is encoded.
     const messages = [userMsg(Array.from({ length: 30 }, () => imageBlock(fakePngBase64(3000, 2000))))];
-    await normalizeAnthropicImages(messages, { encode: capFitting });
+    await normalizeImageTargets(contentOf(messages).map(block => ({
+      base64: block.source!.data!,
+      mediaType: "image/png",
+      replace: (data, mediaType) => { block.source = { type: "base64", data, media_type: mediaType }; },
+      drop: note => { block.type = "text"; block.text = note; delete block.source; },
+    })), { encode: capFitting });
     const content = contentOf(messages);
     expect(content.every(b => b.type === "image")).toBe(true);
     let sum = 0;
@@ -324,7 +316,7 @@ describe("normalizeAnthropicImages — guards and seams", () => {
     expect(content[0].source?.data?.length).toBe(100 * 1024);
   });
 
-  test("activation both directions: with normalization the guard keeps every image; without it Rule 4 drops", async () => {
+  test("single-image normalization makes an otherwise over-budget request admissible", async () => {
     const shrink = sizedEncoder(() => 50 * 1024);
     const bigB64 = fakePngBase64(3000, 2000, 3 * 1024 * 1024); // 4MiB base64 each
     const normalized = [userMsg(Array.from({ length: 8 }, () => imageBlock(bigB64)))];
@@ -333,8 +325,7 @@ describe("normalizeAnthropicImages — guards and seams", () => {
     expect(contentOf(normalized).every(b => b.type === "image")).toBe(true);
 
     const raw = [userMsg(Array.from({ length: 8 }, () => imageBlock(bigB64)))];
-    enforceAnthropicImageLimits(raw);
-    expect(contentOf(raw).some(b => b.type === "text")).toBe(true);
+    expect(() => enforceAnthropicImageLimits(raw)).toThrow(AnthropicImageLimitError);
   });
 });
 
@@ -590,20 +581,6 @@ describe("bounded parallel first pass (WP170)", () => {
   });
 });
 
-test("image codec seam preserves hook identity and owns normalization state", async () => {
-  const {
-    resetNormalizeStateForTests: resetCodecState,
-    getNormalizeStatsForTests: getCodecStats,
-  } = await import("../../../src/adapters/anthropic-image-codec");
-  const { readFileSync } = await import("node:fs");
-  const { repoPath } = await import("../../helpers/repo-root");
-
-  expect(resetNormalizeStateForTests).toBe(resetCodecState);
-  expect(getNormalizeStatsForTests).toBe(getCodecStats);
-  const source = readFileSync(repoPath("src/adapters/anthropic-image-normalize.ts"), "utf8");
-  expect(source).not.toMatch(/^(?:const|let|var)\b[^\n]*\bnew Map</m);
-  expect(source).not.toMatch(/^let encodeCalls\b/m);
-});
 
 
 test("failed demotion keeps retained bytes in the aggregate budget", async () => {

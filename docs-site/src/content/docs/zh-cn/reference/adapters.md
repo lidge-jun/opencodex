@@ -102,6 +102,12 @@ interface ProviderAdapter {
 
 ## `anthropic`
 
+**历史图片稳定性：** 内嵌图片独立正规化，从最大边 2000px、base64 目标上限 2MiB 的档位开始；只有图片自身大小可以触发进一步压缩。追加截图不再因新旧位置或总量改变旧图编码，解码安全检查、有限并发和有界缓存仍保留。
+
+超过 100 张图片、20MiB 图片 base64 总量，或完整请求体超过 32,000,000 UTF-8 字节时，本地返回 HTTP 413 与 `anthropic_image_*`／`anthropic_request_body_too_large` 错误码，不再删旧图或降档凑预算。超过 20 张图片还要求每张尺寸可确认且不超过 2000px。上游 413 不再触发低画质重试；已有的客户端上下文超限错误映射不变。
+
+原生 Anthropic Messages 与 `count_tokens` 使用相同策略。超限后需由宿主压缩、缩减输入或开启新会话，代理不会自动执行。字节稳定性以原图、编码器和策略版本不变为前提，不保证上游缓存命中或远程图片 URL 内容不变。Kiro、OpenAI Chat 保留各自的自适应图片策略。
+
 **目标：** Anthropic **Messages**（`/v1/messages`）。
 **认证：** `key`（默认 `x-api-key`，或设置 `apiKeyTransport: "bearer"` 后使用 `Authorization: Bearer`）或 `oauth`（Bearer + `anthropic-beta`，用于 Claude Pro/Max）。
 

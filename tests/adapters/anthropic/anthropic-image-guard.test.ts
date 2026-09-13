@@ -4,6 +4,9 @@ import {
   sniffImageDimensions,
   MAX_IMAGE_BASE64_LENGTH,
   TOTAL_IMAGE_BASE64_BUDGET,
+  AnthropicImageLimitError,
+  assertAnthropicRequestBodySize,
+  MAX_ANTHROPIC_REQUEST_BYTES,
 } from "../../../src/adapters/anthropic-image-guard";
 
 function b64(bytes: number[]): string {
@@ -111,18 +114,15 @@ describe("enforceAnthropicImageLimits", () => {
     expect(JSON.stringify(messages)).toBe(before);
   });
 
-  test("C1: >20 images with one >2000px trims oldest down to 20, keeping the newest", () => {
+  test("many-image dimension overflow rejects instead of changing old images", () => {
     const blocks = [...Array.from({ length: 24 }, () => imageBlock(SMALL)), imageBlock(BIG)];
     const messages = [userMsg(blocks)];
-    enforceAnthropicImageLimits(messages);
-    expect(countImages(messages)).toBe(20);
-    const content = (messages[0] as { content: Array<{ type: string }> }).content;
-    // Oldest 5 textified, newest (the BIG one) survives.
-    for (let i = 0; i < 5; i++) expect(content[i].type).toBe("text");
-    expect(content[24].type).toBe("image");
+    const before = JSON.stringify(messages);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(JSON.stringify(messages)).toBe(before);
   });
 
-  test("C3: images nested in tool_result content are counted and trimmable", () => {
+  test("images nested in tool_result content count toward admission without changing the tool result", () => {
     const toolResult = {
       type: "tool_result",
       tool_use_id: "tu_1",
@@ -133,12 +133,9 @@ describe("enforceAnthropicImageLimits", () => {
       userMsg(Array.from({ length: 20 }, () => imageBlock(SMALL))),
       userMsg([imageBlock(BIG)]),
     ];
-    enforceAnthropicImageLimits(messages);
-    expect(countImages(messages)).toBe(20);
-    // The oldest image (inside tool_result) was textified in place; the block itself remains.
-    const tr = (messages[0] as { content: Array<{ type: string; content?: Array<{ type: string }> }> }).content[0];
-    expect(tr.type).toBe("tool_result");
-    expect(tr.content?.[0].type).toBe("text");
+    const before = JSON.stringify(messages);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(JSON.stringify(messages)).toBe(before);
   });
 
   test("C6: a single >8000px image is textified even in a small request", () => {
@@ -149,19 +146,17 @@ describe("enforceAnthropicImageLimits", () => {
     expect(content[1].type).toBe("image");
   });
 
-  test("C4: >100 small images trimmed to 100", () => {
+  test("more than 100 images rejects without removing history", () => {
     const messages = [userMsg(Array.from({ length: 110 }, () => imageBlock(SMALL)))];
-    enforceAnthropicImageLimits(messages);
-    expect(countImages(messages)).toBe(100);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(countImages(messages)).toBe(110);
   });
 
-  test("unknown-format images count as risky in many-image requests (trimmed to 20)", () => {
-    // An unverifiable image can still be >2000px; one offender 400s the whole
-    // many-image request, so unknown dimensions must trigger the <=20 trim.
+  test("unknown-format images cannot be admitted in many-image requests", () => {
     const unknown = { type: "image", source: { type: "base64", media_type: "image/bmp", data: b64([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) } };
     const messages = [userMsg([...Array.from({ length: 22 }, () => ({ ...unknown }))])];
-    enforceAnthropicImageLimits(messages);
-    expect(countImages(messages)).toBe(20);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(countImages(messages)).toBe(22);
   });
 
   test("unknown-format images pass through untouched at <=20 images", () => {
@@ -172,18 +167,18 @@ describe("enforceAnthropicImageLimits", () => {
     expect(JSON.stringify(messages)).toBe(before);
   });
 
-  test("url-only many-image request is trimmed to 20 (dimensions unverifiable)", () => {
+  test("url-only many-image requests reject without fetching or deleting URLs", () => {
     const urlImg = { type: "image", source: { type: "url", url: "https://example.com/a.png" } };
     const messages = [userMsg(Array.from({ length: 25 }, () => ({ ...urlImg })))];
-    enforceAnthropicImageLimits(messages);
-    expect(countImages(messages)).toBe(20);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(countImages(messages)).toBe(25);
   });
 
   test("url-source images count toward totals but are not sniffed", () => {
     const urlImg = { type: "image", source: { type: "url", url: "https://example.com/a.png" } };
     const messages = [userMsg([...Array.from({ length: 21 }, () => ({ ...urlImg })), imageBlock(BIG)])];
-    enforceAnthropicImageLimits(messages);
-    expect(countImages(messages)).toBe(20);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(countImages(messages)).toBe(22);
   });
 });
 
@@ -210,18 +205,11 @@ describe("enforceAnthropicImageLimits — byte limits", () => {
     return sum;
   }
 
-  test("B1: over-budget total evicts oldest base64 images until under budget, newest survive", () => {
-    // 8 × 4MiB base64 = 32MiB > 20MiB budget → 3 oldest evicted (28 → 24 → 20MiB).
+  test("over-budget images reject without changing any historical payload", () => {
     const messages = [userMsg(Array.from({ length: 8 }, () => midPng()))];
-    enforceAnthropicImageLimits(messages);
-    const content = (messages[0] as { content: Array<{ type: string }> }).content;
-    for (let i = 0; i < 3; i++) {
-      expect(content[i].type).toBe("text");
-      expect(textOf(content[i])).toContain("older screenshots were dropped");
-      expect(textOf(content[i])).toContain("request limit");
-    }
-    for (let i = 3; i < 8; i++) expect(content[i].type).toBe("image");
-    expect(base64SumOf(messages)).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(countImages(messages)).toBe(8);
+    expect(base64SumOf(messages)).toBe(32 * 1024 * 1024);
   });
 
   test("B2: under-budget request is untouched by the byte rule", () => {
@@ -265,18 +253,18 @@ describe("enforceAnthropicImageLimits — byte limits", () => {
     expect(content[2].type).toBe("image");
   });
 
-  test("B6: URL images are never evicted by the byte budget; oldest base64 goes instead", () => {
-    // Oldest ref is a URL image, then 6 × 4MiB base64 = 24MiB > 20MiB → exactly one
-    // base64 eviction (the oldest base64, index 1), never the URL.
+  test("mixed URL and base64 overflow rejects without removing either source kind", () => {
     const urlImg = { type: "image", source: { type: "url", url: "https://example.com/a.png" } };
     const messages = [userMsg([{ ...urlImg }, midPng(), midPng(), midPng(), midPng(), midPng(), midPng()])];
-    enforceAnthropicImageLimits(messages);
-    const content = (messages[0] as { content: Array<{ type: string; source?: { type?: string } }> }).content;
-    expect(content[0].type).toBe("image");
-    expect(content[0].source?.type).toBe("url");
-    expect(content[1].type).toBe("text");
-    expect(textOf(content[1])).toContain("older screenshots were dropped");
-    for (let i = 2; i < 7; i++) expect(content[i].type).toBe("image");
-    expect(base64SumOf(messages)).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
+    expect(() => enforceAnthropicImageLimits(messages)).toThrow(AnthropicImageLimitError);
+    expect(countImages(messages)).toBe(7);
+    expect(base64SumOf(messages)).toBe(24 * 1024 * 1024);
   });
+});
+
+test("serialized request admission counts UTF-8 bytes, with an inclusive boundary", () => {
+  const boundary = "a".repeat(MAX_ANTHROPIC_REQUEST_BYTES);
+  expect(() => assertAnthropicRequestBodySize(boundary)).not.toThrow();
+  expect(() => assertAnthropicRequestBodySize(boundary + "a")).toThrow(AnthropicImageLimitError);
+  expect(() => assertAnthropicRequestBodySize("界".repeat(Math.floor(MAX_ANTHROPIC_REQUEST_BYTES / 3) + 1))).toThrow(AnthropicImageLimitError);
 });

@@ -1,10 +1,11 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
+import { AnthropicImageLimitError } from "../adapters/anthropic-image-guard";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
-import { bridgeToResponsesSSE } from "../bridge";
+import { bridgeToResponsesSSE, formatErrorResponse } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -598,7 +599,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       return prepared;
     } catch (error) {
-      if (isTranslatorBudgetExceededError(error)) throw error;
+      if (isTranslatorBudgetExceededError(error) || error instanceof AnthropicImageLimitError) throw error;
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
       }
@@ -825,6 +826,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     firstPrepared = await prepareIterationDrained(false);
   } catch (e) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
+    if (e instanceof AnthropicImageLimitError) return formatErrorResponse(e.status, e.code, e.message);
     if (e instanceof LoopError) return jsonError(e.status, e.message);
     throw e;
   }
@@ -933,6 +935,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               code: e.code,
               message: "upstream translation buffer exceeded the safe limit",
             };
+          } else if (e instanceof AnthropicImageLimitError) {
+            yield { type: "error", status: e.status, errorType: "request_too_large", code: e.code, message: e.message };
           } else {
             yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
           }

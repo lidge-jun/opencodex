@@ -1679,7 +1679,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         };
       };
       if (hasShrinkableOpenAIChatImages(messages)) {
-        return normalizeOpenAIChatImages(messages, { tierBias: incoming?.imageTierBias }).then(finish, finish);
+        return normalizeOpenAIChatImages(messages).then(finish, finish);
       }
       return finish();
     },

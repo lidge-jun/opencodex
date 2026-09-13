@@ -6,7 +6,6 @@ import { saveConfig } from "../../../src/config";
 import { clearKeyCooldowns } from "../../../src/providers/key-failover";
 import { startServer } from "../../../src/server";
 import { resetNormalizeStateForTests } from "../../../src/adapters/anthropic-image-normalize";
-import { sniffImageDimensions } from "../../../src/adapters/anthropic-image-guard";
 import type { OcxConfig } from "../../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -101,7 +100,7 @@ function anthropicConfig(baseUrl: string, pool = false): OcxConfig {
   } as OcxConfig;
 }
 
-async function postImageRequest(serverUrl: string, dataUrl: string): Promise<Response> {
+async function postImageRequest(serverUrl: string, dataUrl: string, count = 1): Promise<Response> {
   return fetch(new URL("/v1/responses", serverUrl), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -113,7 +112,7 @@ async function postImageRequest(serverUrl: string, dataUrl: string): Promise<Res
           type: "message", role: "user",
           content: [
             { type: "input_text", text: "look" },
-            { type: "input_image", image_url: dataUrl },
+            ...Array.from({ length: count }, () => ({ type: "input_image", image_url: dataUrl })),
           ],
         },
       ],
@@ -121,66 +120,54 @@ async function postImageRequest(serverUrl: string, dataUrl: string): Promise<Res
   });
 }
 
-describe("anthropic 413 tightened-retry (end-to-end)", () => {
-  test("R1: upstream 413 then 200 — exactly one biased rebuild, images re-encoded a tier lower", async () => {
+describe("Anthropic image admission and upstream 413", () => {
+  test("upstream 413 is terminal instead of degrading old images and retrying", async () => {
     const seen: SeenRequest[] = [];
     upstream = scriptedUpstream([413, 200], seen);
     saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, "")));
     const server = startServer(0);
     try {
       const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
-      expect(res.status).toBe(200);
-      expect(seen).toHaveLength(2);
-      // First attempt: 1500px PNG rides tier-0 pass-through.
-      const first = firstImageSource(seen[0].body);
-      expect(first?.media_type).toBe("image/png");
-      // Biased retry: tier 1 — re-encoded JPEG within 1024px.
-      const second = firstImageSource(seen[1].body);
-      expect(second?.media_type).toBe("image/jpeg");
-      const dims = sniffImageDimensions(second?.data ?? "");
-      expect(Math.max(dims!.width, dims!.height)).toBeLessThanOrEqual(1024);
+      expect(res.status).toBe(413);
+      await res.text();
+      expect(seen).toHaveLength(1);
+      expect(firstImageSource(seen[0].body)?.media_type).toBe("image/png");
     } finally {
       await server.stop(true);
     }
   });
 
-  test("R2: upstream 413 twice — exactly two calls, honest 413 surfaces, no spiral", async () => {
+  test("local image-count overflow returns 413 before any upstream request", async () => {
     const seen: SeenRequest[] = [];
-    upstream = scriptedUpstream([413, 413], seen);
+    upstream = scriptedUpstream([200], seen);
     saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, "")));
     const server = startServer(0);
     try {
-      const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
+      const res = await postImageRequest(String(server.url), `data:image/png;base64,${ONE_PX_PNG}`, 101);
       expect(res.status).toBe(413);
-      expect(seen).toHaveLength(2);
-      expect(res.headers.get("content-type")).toContain("application/json");
       const errorBody = await res.json();
-      expect(errorBody.error).toEqual({
-        message: "The provider rejected this turn because its input exceeds the provider size or context limit. Reduce the current input or compact the conversation before retrying.",
-        type: "invalid_request_error",
-        code: "context_length_exceeded",
+      expect(errorBody.error).toMatchObject({
+        type: "request_too_large",
+        code: "anthropic_image_count_exceeded",
       });
+      expect(seen).toHaveLength(0);
     } finally {
       await server.stop(true);
     }
   });
 
-  test("R4: 413 → biased retry → 429 → key rotation keeps the tightened tiers", async () => {
+  test("429 rotates the key without changing images; a following 413 is terminal", async () => {
     const seen: SeenRequest[] = [];
-    upstream = scriptedUpstream([413, 429, 200], seen);
+    upstream = scriptedUpstream([429, 413, 200], seen);
     saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, ""), true));
     const server = startServer(0);
     try {
       const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
-      expect(res.status).toBe(200);
-      expect(seen).toHaveLength(3);
-      // Rotation happened after the biased 413 retry hit 429.
-      expect(seen[2].apiKey).not.toBe(seen[1].apiKey);
-      // And the rotated rebuild STILL carries the tightened tier (jpeg <= 1024px).
-      const third = firstImageSource(seen[2].body);
-      expect(third?.media_type).toBe("image/jpeg");
-      const dims = sniffImageDimensions(third?.data ?? "");
-      expect(Math.max(dims!.width, dims!.height)).toBeLessThanOrEqual(1024);
+      expect(res.status).toBe(413);
+      await res.text();
+      expect(seen).toHaveLength(2);
+      expect(seen[1].apiKey).not.toBe(seen[0].apiKey);
+      expect(firstImageSource(seen[1].body)).toEqual(firstImageSource(seen[0].body));
     } finally {
       await server.stop(true);
     }

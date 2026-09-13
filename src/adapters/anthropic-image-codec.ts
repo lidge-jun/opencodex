@@ -48,7 +48,7 @@ export const MAX_INPUT_PIXELS = 100_000_000;
 const PASSTHROUGH_MEDIA = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 export interface NormalizeOptions {
-  /** Shift every image's starting ladder position down (413 retry tightening; 030). */
+  /** Shift the adaptive Kiro/Chat image ladder; Anthropic never applies a bias. */
   tierBias?: number;
   /** Test seam: replaces the Bun.Image encode path (audit round 1, blocker 6). */
   encode?: EncodeFn;

@@ -1,23 +1,19 @@
 /**
- * Anthropic image normalization: resize/re-encode images to fit Anthropic's request
- * limits instead of dropping them (devlog/260714_image_normalization_pipeline/020).
+ * Anthropic images use an image-local encoding policy: later messages never change an
+ * earlier image's starting tier or output. Request admission rejects overflow instead
+ * of degrading history. Kiro and Chat retain their adaptive age/budget policy through
+ * normalizeImageTargets; both policies share the bounded codec worker pool.
  *
- * Age-tier pyramid: newest images keep near-full fidelity, older images become
- * progressively smaller JPEG thumbnails, so a whole session's screenshots stay visible
- * under the request byte budget. An aggregate demotion loop re-encodes the OLDEST
- * not-yet-terminal image one ladder position at a time until the total fits; only when
- * every image is terminal-floored does the guard's Rule 4 (textify) fire as backstop.
- *
- * Runs inside the anthropic adapter's buildRequest BEFORE enforceAnthropicImageLimits,
- * on freshly-built wire messages (in-place mutation is safe: messagesToAnthropicFormat
- * creates new arrays/blocks). Encoding uses Bun.Image (bun >= 1.3.14, probe-verified:
- * decodes JPEG/PNG/WebP/GIF/BMP/TIFF/HEIC/AVIF; corrupt input throws).
+ * Runs on freshly-built wire blocks; only those blocks are mutated. Bun.Image performs
+ * full decode validation and bounded resize/re-encoding.
  */
 
 import {
   collectImageRefs,
   sniffImageDimensions,
   TOTAL_IMAGE_BASE64_BUDGET,
+  MAX_IMAGES_PER_REQUEST,
+  AnthropicImageLimitError,
   type ImageBlockRef,
 } from "./anthropic-image-guard";
 
@@ -83,8 +79,7 @@ export interface NormalizeTargetsOptions extends NormalizeOptions {
   budget?: number;
   /**
    * What to do when every image is terminal-floored and the sum still exceeds budget:
-   * "none" (anthropic — the guard's Rule 4 backstop textifies downstream) or "drop"
-   * (kiro — no downstream guard exists, so drop OLDEST targets here until it fits).
+   * "none" (Chat retains the payload) or "drop" (Kiro drops oldest targets).
    */
   overflowAction?: "none" | "drop";
   /** Only the newest N images are processed (older ones skipped). Default: unlimited. */
@@ -95,7 +90,11 @@ export interface NormalizeTargetsOptions extends NormalizeOptions {
  * Core normalization over wire-neutral targets (mutates via target callbacks).
  * Null-base64 targets (URL/file sources) pass through untouched.
  */
-export async function normalizeImageTargets(targets: NormalizeTarget[], options: NormalizeTargetsOptions = {}): Promise<void> {
+export function normalizeImageTargets(targets: NormalizeTarget[], options: NormalizeTargetsOptions = {}): Promise<void> {
+  return normalizeTargets(targets, options, false);
+}
+
+async function normalizeTargets(targets: NormalizeTarget[], options: NormalizeTargetsOptions, imageLocal: boolean): Promise<void> {
   if (targets.length === 0) return;
   const encode = options.encode ?? bunImageEncode;
   const validate = options.validate ?? bunImageValidate;
@@ -109,11 +108,11 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
   // size always reflects the bytes currently ON the wire for this target (the core is
   // the only mutator, so tracked size cannot drift from reality).
   interface Entry { target: NormalizeTarget; sourceB64: string; sourceMedia: string; pos: number; size: number; done: boolean }
-  const entries: (Entry | null)[] = new Array(n).fill(null);
+  const entries: (Entry | null)[] = imageLocal ? [] : new Array(n).fill(null);
 
   // Bounded parallel first pass: a shared index queue with a small fixed worker pool.
-  // Unbounded Promise.all across up to `processLimit` (anthropic passes 100) large
-  // images would hold that many decoded bitmaps in flight at once — the limit bounds
+  // Unbounded Promise.all across a large image history would hold that many
+  // decoded bitmaps in flight at once — the limit bounds
   // peak memory, not throughput (native encode parallelism lives below this layer).
   // entries[] stays index-addressed, so completion order never affects output order
   // or the sequential demotion loop below.
@@ -130,8 +129,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
       const b64 = target.base64;
       if (!b64) continue; // URL source: no base64 weight, never touched here.
       const newestFirstIndex = n - 1 - i;
-      // Images beyond the processing limit are left untouched (anthropic passes 100:
-      // its guard textifies the surplus anyway, so decode/encode work there is waste).
+      // Adaptive callers can skip images outside their processing limit.
       if (newestFirstIndex >= processLimit) continue;
       if (b64.length > MAX_INPUT_BASE64_LENGTH) {
         target.drop(BOMB_TEXT);
@@ -149,7 +147,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
         continue;
       }
       const sourceMedia = target.mediaType.toLowerCase();
-      const pos = initialPosition(newestFirstIndex, bias);
+      const pos = imageLocal ? 0 : initialPosition(newestFirstIndex, bias);
       const result = await processAt(b64, pos, sourceMedia, encode, validate);
       if (result.kind === "failed") {
         target.drop(UNDECODABLE_TEXT);
@@ -174,7 +172,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
         }
         size = result.data.length;
       }
-      entries[i] = { target, sourceB64: b64, sourceMedia, pos: result.pos, size, done: result.pos >= TERMINAL_POS };
+      if (!imageLocal) entries[i] = { target, sourceB64: b64, sourceMedia, pos: result.pos, size, done: result.pos >= TERMINAL_POS };
     }
   };
   await Promise.all(Array.from({ length: workerCount }, () => worker().catch(err => {
@@ -184,6 +182,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
     }
   })));
   if (failed) throw firstError;
+  if (imageLocal) return;
 
   // Aggregate demotion loop (audit rounds 1+3): while the measured total exceeds the
   // budget, demote the OLDEST not-yet-terminal image one position and re-encode.
@@ -240,17 +239,17 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
  * Normalize every base64 image in already-built Anthropic wire messages (mutates in
  * place). URL-source images pass through untouched. See module header for the contract.
  */
-export async function normalizeAnthropicImages(messages: unknown[], options: NormalizeOptions = {}): Promise<void> {
+export async function normalizeAnthropicImages(messages: unknown[], options: Pick<NormalizeOptions, "encode" | "validate"> = {}): Promise<void> {
   const refs = collectImageRefs(messages);
   if (refs.length === 0) return;
+  if (refs.length > MAX_IMAGES_PER_REQUEST) {
+    throw new AnthropicImageLimitError("anthropic_image_count_exceeded", `Anthropic accepts at most ${MAX_IMAGES_PER_REQUEST} images per request.`);
+  }
   const targets: NormalizeTarget[] = refs.map(ref => ({
     base64: ref.base64,
     mediaType: mediaTypeOf(ref),
     replace: (data: string, mediaType: string) => replaceImage(ref, data, mediaType),
     drop: (note: string) => textify(ref, note),
   }));
-  // Anthropic hard-caps 100 images/request and its guard textifies the surplus, so
-  // processing beyond the newest 100 is pure waste; terminal overflow stays with the
-  // guard's Rule 4 backstop (overflowAction "none").
-  await normalizeImageTargets(targets, { ...options, processLimit: 100, overflowAction: "none" });
+  await normalizeTargets(targets, options, true);
 }

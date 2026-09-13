@@ -1,5 +1,7 @@
 # Client Integrations
 
+Anthropic requests follow [stable image admission](../transports/byte-accounting.md#anthropic-stable-image-admission); other providers retain their image policies.
+
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
 The client-integration subsystem writes one generated OpenCodex provider contribution into a

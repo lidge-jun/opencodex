@@ -447,7 +447,7 @@ test("nativePassthrough:false disables the pierce", async () => {
   }
 });
 
-// --- Generous image pipeline on the native branch (devlog 260714 .../040, P1-P5) ---
+// Native messages and count_tokens share stable encoding and strict admission.
 
 import { resetNormalizeStateForTests } from "../../src/adapters/anthropic-image-normalize";
 import { sniffImageDimensions } from "../../src/adapters/anthropic-image-guard";
@@ -485,7 +485,7 @@ async function postNative(serverUrl: string, path: string, body: Record<string, 
   return fetch(new URL(path, serverUrl), { method: "POST", headers: OAUTH_HEADERS, body: JSON.stringify(body) });
 }
 
-test("P1: 30-image history arrives age-tiered — newest pass through, older shrink, none dropped", async () => {
+test("30-image history preserves every already-small PNG without age-based re-encoding", async () => {
   resetNormalizeStateForTests();
   const captured: Captured[] = [];
   const upstream = mockAnthropicUpstream(captured);
@@ -497,15 +497,9 @@ test("P1: 30-image history arrives age-tiered — newest pass through, older shr
     expect(res.status).toBe(200);
     const images = capturedBlocks(captured).filter(b => b.type === "image");
     expect(images).toHaveLength(30);
-    // Wire order oldest first: 0-9 tier2 (<=700 jpeg), 10-23 tier1 (<=1024), 24-29 tier0 pass-through png.
-    for (let i = 0; i < 10; i++) {
-      expect(images[i].source?.media_type).toBe("image/jpeg");
-      const d = sniffImageDimensions(images[i].source?.data ?? "");
-      expect(Math.max(d!.width, d!.height)).toBeLessThanOrEqual(700);
-    }
-    for (let i = 24; i < 30; i++) {
-      expect(images[i].source?.media_type).toBe("image/png");
-      expect(images[i].source?.data).toBe(src);
+    for (const image of images) {
+      expect(image.source?.media_type).toBe("image/png");
+      expect(image.source?.data).toBe(src);
     }
   } finally {
     await server.stop(true);
@@ -532,18 +526,19 @@ test("P2: dimension-oversized image is re-encoded (normalized), not dropped", as
   }
 });
 
-test("P2b: 101 images trip the guard's 100-cap — exactly one oldest textified", async () => {
+test("messages and count_tokens reject 101 images before native dispatch", async () => {
   resetNormalizeStateForTests();
   const captured: Captured[] = [];
   const upstream = mockAnthropicUpstream(captured);
   saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
   const server = startServer(0);
   try {
-    const res = await postNative(String(server.url), "/v1/messages", imageBody(Array.from({ length: 101 }, () => imgBlock(ONE_PX_PNG))));
-    expect(res.status).toBe(200);
-    const blocks = capturedBlocks(captured);
-    expect(blocks.filter(b => b.type === "image")).toHaveLength(100);
-    expect(blocks.filter(b => b.type === "text").length).toBeGreaterThanOrEqual(2); // original text + 1 omitted note
+    for (const path of ["/v1/messages", "/v1/messages/count_tokens"]) {
+      const res = await postNative(String(server.url), path, imageBody(Array.from({ length: 101 }, () => imgBlock(ONE_PX_PNG))));
+      expect(res.status).toBe(413);
+      expect((await res.json()).error).toMatchObject({ type: "request_too_large", code: "anthropic_image_count_exceeded" });
+    }
+    expect(captured).toHaveLength(0);
   } finally {
     await server.stop(true);
     upstream.stop(true);
@@ -563,6 +558,11 @@ test("P4: count_tokens body is normalized identically to the real send", async (
     expect(res.status).toBe(200);
     const [img] = capturedBlocks(captured).filter(b => b.type === "image");
     expect(img.source?.media_type).toBe("image/jpeg");
+    await res.text();
+    const sent = await postNative(String(server.url), "/v1/messages", body);
+    expect(sent.status).toBe(200);
+    await sent.text();
+    expect(capturedBlocks(captured.slice(1)).filter(b => b.type === "image")).toEqual([img]);
   } finally {
     await server.stop(true);
     upstream.stop(true);
@@ -581,6 +581,26 @@ test("P5: Files API image source passes through untouched", async () => {
     expect(res.status).toBe(200);
     const [img] = capturedBlocks(captured).filter(b => b.type === "image");
     expect(img.source).toEqual({ type: "file", file_id: "file_abc123" });
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("native messages and count_tokens enforce the complete UTF-8 request budget", async () => {
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  try {
+    const body = imageBody([]);
+    body.system = "界".repeat(10_666_667);
+    for (const path of ["/v1/messages", "/v1/messages/count_tokens"]) {
+      const response = await postNative(String(server.url), path, body);
+      expect(response.status).toBe(413);
+      expect((await response.json()).error.code).toBe("anthropic_request_body_too_large");
+    }
+    expect(captured).toHaveLength(0);
   } finally {
     await server.stop(true);
     upstream.stop(true);
