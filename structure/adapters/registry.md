@@ -26,7 +26,10 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   `devin-cli` imports that token and the two rows differ only in where the credential came from.
   `AdapterFactoryContext.providerId` is what keeps them apart: the Cognition tenant is recorded on
   the credential, not in the registry, so the adapter has to know which row it is serving before it
-  can resolve a host.
+  can resolve a host. The adapter advertises bare local tool names to Cognition, so `runTurn` also
+  owns a request-scoped return map from each unique bare name to the canonical Codex namespace
+  identity. Unknown names remain subject to the shared undeclared-tool guard; duplicate bare names
+  fail before dispatch rather than selecting a request tool by declaration order.
 
   There is no second Devin transport. An Agent Client Protocol adapter that spawned a local
   `devin acp` child once existed under the `devin-cli` adapter id and was removed: the CLI's
