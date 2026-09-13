@@ -88,6 +88,27 @@ Windows and silently produce an app that cannot reach the compositor on Linux.
 Putting it in the contract makes the ordering a property of the ladder, checked in
 one place.
 
+### 2.1 Membership is boundary-aware (audit B3, N2)
+
+"Executable lives under the install root" is a **path boundary** test, not a string
+test. Implemented as a raw `startsWith`, an install root of `/usr/lib/chatgpt` also
+matches `/usr/lib/chatgpt-evil/ChatGPT`, and `/Applications/ChatGPT.app` matches
+`/Applications/ChatGPT.app-evil/...`. Both are plantable by the same user whose
+processes we are about to signal, so uid scoping does not cover it.
+
+Each adapter therefore resolves its root through `realpath` **once, at discovery**,
+stores the resolved form, and compares candidates against `resolvedRoot + sep`. A
+candidate equal to the root itself is also a member. Nothing compares unresolved
+paths, so a symlinked sibling cannot smuggle itself in.
+
+**Residual, stated rather than hidden:** macOS `lstart` has one-second granularity.
+If a member pid is recycled into *another member of the same tree* within the same
+second, `createdAt` equality passes on a different process. The victim is still
+inside the package tree, so the `§8` UNSAFE boundary holds and nothing outside the app
+is ever signalled — but the guard's promise is "same process", and at one-second
+resolution it is really "same process, or a same-second replacement inside the same
+app". Linux (`starttime` jiffies) and Windows (`CreationDate`) do not have this gap.
+
 ## 3. The shared ladder — `src/codex/desktop-app-restart.ts` (MODIFY)
 
 Exports that must not change, because callers and tests bind to them:
@@ -117,6 +138,10 @@ failed. Those are different problems with different manual recoveries.
 consumed by one `switch` in `src/cli/dispatch.ts`; keeping a value that can no
 longer occur would leave dead prose in the CLI telling users about a restriction
 that no longer exists.
+
+wp5 extends this union with `handoff_started` (`020` §6). Treat it as open until that
+phase lands, and make the `switch` in `src/cli/dispatch.ts` exhaustive against the
+final union, not this one.
 
 ### 3.2 Ladder
 
@@ -165,6 +190,34 @@ without a `--type=` argument, and `ChatGPT.exe` respectively. Helpers are still
 enumerated — they are what `captureRelaunchContext` reads on Linux — but they are
 not signalled directly; terminating the shell takes them.
 
+Helpers are also never counted as `surviving`. Measured on this machine: the live app
+(root 15901) owns crashpad handlers 15903 and 15905 at **ppid 1**, and an app instance
+that had already exited had left 72689 and 72691 behind, also at ppid 1. Crashpad
+handlers are launchd children by design and can outlive the shell. If a surviving
+helper blocked the relaunch, the very first restart on any macOS machine would leave
+the user with no app at all.
+
+### 3.4 Ancestry-walk semantics (audit B1, primitives N1)
+
+Two opposite mistakes are possible here, and each breaks the feature in a different
+direction, so both are pinned:
+
+- **A parent pid that names no live process is a clean end of chain**, not a read
+  failure. Windows never reparents orphans, so the wp5 handoff helper *always* has a
+  dead parent link once its caller exits. An implementation that read that as
+  "unreadable" would fail closed into `self_ancestry` forever and the helper could
+  never do the one job it exists for. The same applies to `ps -o ppid= -p <dead>` on
+  macOS returning empty output.
+- **Hitting the 16-hop bound returns `[]`**, identical to an unreadable hop. A
+  truncated chain silently defeats the self-ancestry intersection, and the direct
+  path would then terminate the caller's own tree. Sixteen hops is not a generous
+  margin in this environment — agent shell, app-server, nested `ocx`, tmux, a login
+  shell — so the bound being reached is a real state, and the safe reading of it is
+  "I could not establish that I am outside the tree".
+
+Fail-closed here means a handoff, not a refusal, once wp5 lands. That is what makes
+the conservative reading cheap enough to always take.
+
 ## 4. macOS adapter — `src/codex/desktop-app/darwin.ts` (NEW)
 
 **discover.** Ask LaunchServices first, fall back to the conventional path:
@@ -180,6 +233,13 @@ Either way the candidate is confirmed by reading
 the bundle is called `ChatGPT.app` and shares that name with a different product.
 
 `install = { id: "com.openai.codex", root: "<bundle>", relaunch: "com.openai.codex" }`.
+
+**Multi-install ambiguity (N5).** Membership is path-scoped while `osascript` quit and
+`open -b` are bundle-id-scoped. If two bundles claim `com.openai.codex`, the ladder
+could enumerate one and quit the other. Discovery therefore prefers the bundle that
+the **running root process** is executing out of, and only falls back to `mdfind` and
+then `/Applications/ChatGPT.app` when nothing is running. Whatever is quit is then
+the thing that was enumerated.
 
 **listProcesses.** `/bin/ps -Ao pid=,ppid=,lstart=,uid=,comm=`, keep rows whose
 `comm` starts with `<bundle>/` and whose uid equals `process.getuid()`.
@@ -200,7 +260,12 @@ termination is not, which is why the ladder always waits and re-verifies. If
 
 **relaunch.** `/usr/bin/open -b com.openai.codex`. Not `open -n`: `001` §1.2 records
 that it does not reliably produce a second instance, and a second instance is not
-wanted regardless.
+wanted regardless. Deliberately **without** `-g`: the operator asked for a restart and
+expects the app back in front of them, so foregrounding is the intended behaviour
+rather than an oversight. An unknown bundle id makes `open` exit non-zero with
+`LSCopyApplicationURLsForBundleIdentifier() failed`, which the ladder reports as
+`relaunch_failed`.
+
 
 ## 5. Linux adapter — `src/codex/desktop-app/linux.ts` (NEW)
 
@@ -208,6 +273,16 @@ wanted regardless.
 `realpath`; `001` §2 measured it as a symlink to `/usr/lib/chatgpt/codex-launcher`,
 a two-line `sh` script that execs `/usr/lib/chatgpt/ChatGPT`. The directory holding
 that launcher is the install root, and the shell binary must exist inside it.
+
+**The resolved root must be trusted (N1).** `dirname(realpath(launcher))` alone is not
+enough: `/usr/local/bin` is group-writable on some systems, so a planted
+`chatgpt -> ~/x/codex-launcher` beside a `~/x/ChatGPT` would make an attacker-chosen,
+user-writable directory the membership boundary and the relaunch target. Discovery
+therefore requires the resolved root and the shell binary to be owned by uid 0 and
+not group- or world-writable. A root that fails that check is `package_discovery_failed`,
+not a fallback. Same-uid scoping limits the blast radius to the attacker's own
+processes, but the relaunch would execute an attacker-chosen binary, which is the
+part worth closing.
 
 `install = { id: "chatgpt", root: "/usr/lib/chatgpt", relaunch: "/usr/bin/chatgpt" }`.
 
@@ -219,7 +294,10 @@ keep it when the target is under `<root>/`, and require `/proc/<pid>/status` `Ui
 real uid to equal `process.getuid()`. `parentPid` comes from `PPid:`. `createdAt` is
 field 22 of `/proc/<pid>/stat` (`starttime`) as a raw string — the same field
 `readLinuxProcStartMs` already reads in `src/codex/app-server-processes.ts:573-589`,
-but kept as an opaque token here because the ladder only ever compares it.
+but kept as an opaque token here because the ladder only ever compares it. Reuse that
+function's parsing rather than re-deriving it: field 22 must be located **after the
+last `)`** in the line, because `comm` can itself contain spaces and parentheses —
+and this app's helpers are literally named `Codex (Service)` (N3).
 
 A `/proc` that cannot be read throws, and the adapter returns `null` so the ladder
 reports `process_probe_failed`. This mirrors `listUnixProcSnapshots`, which already
@@ -252,8 +330,9 @@ The values survive in children that inherited them before the scrub — the embe
 app-server was the one that still had them.
 
 So: iterate the enumerated members, oldest-first, reading `/proc/<pid>/environ` until
-one yields a non-empty `XDG_RUNTIME_DIR`. Copy forward exactly five keys and nothing
-else:
+one yields a non-empty `XDG_RUNTIME_DIR`. "Oldest-first" sorts `starttime`
+**numerically** — it is a jiffies integer in a string, and a lexical sort misorders it
+(N4). Copy forward exactly five keys and nothing else:
 
 ```
 DISPLAY  WAYLAND_DISPLAY  XDG_RUNTIME_DIR  XDG_SESSION_TYPE  DBUS_SESSION_BUS_ADDRESS
@@ -269,6 +348,18 @@ into a spawn would move credentials between security contexts for no benefit.
 
 **relaunch.** `setsid <relaunch>` with `detached: true`, `stdio: "ignore"`, the
 captured five variables merged over a minimal environment, followed by `unref()`.
+
+That minimal environment is not empty (N6): it carries `HOME`, `USER`, `LOGNAME`,
+`LANG` and a fixed `PATH` of `/usr/local/bin:/usr/bin:/bin` from this process's own
+environment. The launcher is a `sh` script and Electron resolves its user-data
+directory from `HOME`; starting it with only the five session variables would produce
+an app that launches and then behaves as a different user profile.
+
+`detached: true` and the `setsid` binary overlap — `detached` already calls
+`setsid(2)`, and the `setsid` binary then auto-forks because it finds itself a group
+leader. The audit confirmed this is redundant but harmless, and no `--fork` is
+needed. Both are kept because the redundant one is the cheap insurance against a
+runtime that changes `detached` semantics.
 `setsid` is required so the relaunched app is not in the ssh session's process group
 and does not die when that session ends — `001` §2 confirmed `/usr/bin/setsid` is
 present. If `XDG_RUNTIME_DIR` was not recovered, `relaunch` throws rather than

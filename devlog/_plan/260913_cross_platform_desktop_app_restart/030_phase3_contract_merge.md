@@ -51,6 +51,14 @@ export function listCodexDesktopAppPids(io?: DesktopAppRestartIo): number[] | nu
 behaviour of signalling everything, which is the safe direction: a missed exclusion
 costs an extra interruption, a wrong exclusion leaves a stale app-server alive.
 
+**`excludePids` can go stale (nit N7).** Between enumeration and the signal pass, a
+listed pid can exit and be recycled into a standalone app-server, which would then
+escape signalling because its pid is on the exclusion list. The window is short and
+the cost is one stale app-server rather than a wrong kill. `restartCodexAppServers`
+already re-resolves pid+command-line identity immediately before signalling
+(`src/codex/app-server-processes.ts:1146-1154`), so a recycled pid is never
+*signalled* on a stale identity. Only the skip can be wrong, never the kill.
+
 ## 3. `src/cli/dispatch.ts` (MODIFY)
 
 ### 3.1 Flag parsing, `sync` (currently lines 381-384)
@@ -113,19 +121,62 @@ conversations is unrecoverable; a stale model picker is not.
 +      await handleRestartScopeAfterWrite(restartScope, console);
 ```
 
+### 3.3 The helper returns its outcome (audit B6)
+
+`catalog pull` derives its JSON envelope from the restart result
+(`src/cli/catalog.ts:65-93`), so a `void` helper cannot serve it:
+
 ```ts
+export interface RestartScopeOutcome {
+  appServers?: AfterCatalogWriteAppServerResult;
+  desktopApp?: DesktopAppRestartResult;
+}
+
 async function handleRestartScopeAfterWrite(
   scope: RestartScope,
   log: Pick<Console, "log" | "error">,
-): Promise<void> {
+): Promise<RestartScopeOutcome> {
   const excludePids = scope.desktopApp ? (listCodexDesktopAppPids() ?? []) : [];
-  afterCatalogWriteHandleAppServers({ restart: scope.appServers, log, excludePids });
-  if (scope.desktopApp) await handleDesktopAppRestart(log);
+  const appServers = afterCatalogWriteHandleAppServers({
+    restart: scope.appServers, log, excludePids,
+  });
+  const desktopApp = scope.desktopApp ? await handleDesktopAppRestart(log) : undefined;
+  return { appServers, desktopApp };
 }
 ```
 
-All three call sites collapse to this one helper, which is what makes the
-source-oracle assertion in §6 checkable in one place instead of three.
+`handleDesktopAppRestart` therefore returns the `DesktopAppRestartResult` it already
+switches on, instead of `void`.
+
+All four call sites collapse to this one helper, which is what makes the
+source-oracle assertion in §6 checkable in one place instead of four.
+
+### 3.4 `catalog pull` joins the merged contract (audit B4)
+
+`src/cli/catalog.ts` was missing from the first draft. It is a fourth
+`afterCatalogWriteHandleAppServers` call site, and its `knownFlags` set is **closed**,
+so the new flags would be rejected as `code: "usage"` rather than ignored.
+
+| Location | Change |
+|---|---|
+| `src/cli/catalog.ts:24` | parse through `readRestartScope` instead of a local `includes` |
+| `src/cli/catalog.ts:31` | `knownFlags` gains `--restart-desktop-app` and `--restart-app-server-only` |
+| `src/cli/catalog.ts:41` | usage string lists the three flags |
+| `src/cli/catalog.ts:65` | call `handleRestartScopeAfterWrite` |
+| `src/cli/catalog.ts:5-14` | `CatalogPullEnvelope` gains optional `desktopAppRestarted?: boolean` |
+| `src/cli/registry.ts:148` | `catalog pull` usage line |
+| `src/cli/help.ts:49` | `catalog pull` usage line |
+
+`codexRestarted` keeps its current meaning — app-servers only — and the desktop
+outcome gets its own optional field, so a script reading the existing field is not
+silently handed a different answer. The field is emitted only when a desktop restart
+was requested, which keeps `schemaVersion: 1` honest.
+
+The docs currently say desktop restart is not part of this command, in English plus
+`zh-cn`, `zh-tw`, `tr` and `ru`. `002` §B4 records why that is reversed: it is a scope
+statement about a capability that did not exist cross-platform, not the consent
+decision that split the `sync` flags.
+
 
 ### 3.3 `handleDesktopAppRestart` messages (currently lines 977-1017)
 
@@ -181,6 +232,26 @@ guard validates the field's shape and its own cross-field invariants when presen
 `scalar-only` still holds: pid arrays and a closed-vocabulary reason string, never a
 command line, a path or an OS error message.
 
+### 4.1 The wire `restartCodex` field does not change meaning (audit B5)
+
+`POST /api/machine/sync` accepts a `restartCodex` boolean from a remote hub
+(`src/client/machine-api.ts:79-95`) and hands it to `syncConnectedClient`, which
+deliberately ignores it (`src/client/connect.ts:649-650`). The desktop restart on the
+connected path is performed **locally**, by the CLI, in
+`handleConnectedSyncCatalogWrite` (`src/cli/dispatch.ts:1023-1028`).
+
+That stays exactly as it is. The wire field keeps app-server-only semantics and
+remains unhonored. A remote hub must not end a local user's conversations because a
+field name acquired a wider meaning underneath it — the maintainer instruction in
+`000` §4 widens a **local CLI flag** and says nothing about remote callers. Version
+skew sharpens the argument: an older hub that never heard of this change would be
+sending a boolean whose meaning silently grew.
+
+Pinned by a regression test rather than a comment, because the realistic failure is a
+future contributor "finishing" a parameter that looks obviously unused: the
+machine-sync route must never reach `restartCodexDesktopApp`.
+`tests/clients/client-machine-listener.test.ts:206` already exercises the route.
+
 **The GUI is deliberately not changed.** `gui/src/codex-restart.ts`,
 `use-codex-restart.ts` and `components/codex-stale-banner.tsx` keep rendering the
 app-server outcome and ignore the new optional field. Surfacing the desktop result in
@@ -201,6 +272,11 @@ is entirely in process handling. Making the field optional is what allows that s
 | `src/codex/app-server-processes.ts:565-567` | `formatStaleCodexAppServerWarning` likewise |
 | `src/cli/doctor.ts:1369` | WARN action collapses to `ocx sync --restart-codex` |
 | `src/codex/desktop-app-restart.ts:2` | module header rewritten: cross-platform, and why the flags merged |
+
+`warnIfStaleCodexAppServersAfterStartupWrite` (`src/codex/app-server-processes.ts:1245`)
+consumes the same hint strings but stays **warn-only** and never gains a restart
+(nit N14). Its reason for existing is that an unattended startup is not consent to
+interrupt a turn, and this unit does not touch that argument.
 
 ## 6. Tests to rewrite
 
@@ -234,6 +310,18 @@ New coverage lands in `tests/clients/desktop-app-restart-posix.test.ts`. The
 `tests/clients/` resolves without an `explicit` entry — and therefore needs no
 matching addition to `tests/fixtures/test-layout-expected.json`.
 
+If anyone adds an `explicit` entry later it must go into **both** tables:
+`tests/test-layout-tooling.test.ts:250` asserts `layout.explicit` equals the fixture
+exactly, so a half-entry fails the gate (nit N15).
+
+New tests this phase owes, beyond the two rewrites above:
+
+- `readRestartScope`: each flag alone, the deprecation line, and the contradiction
+  case where `--restart-app-server-only` beats `--restart-codex`.
+- The machine-sync route never triggers a desktop restart (§4.1).
+- `catalog pull` accepts the new flags instead of returning `code: "usage"`.
+- The handoff singleton lock refuses a second concurrent restart (`020` §4.1).
+
 ## 7. Documentation
 
 English, hand-written, heaviest edit in
@@ -248,6 +336,12 @@ Locales that exist and mention `--restart-codex`: `fr`, `ja`, `ko`, `ru`, `tr`,
 `--restart-codex` description in each, not a new section. The repository rule is that
 translations must not contradict the English source; leaving seven locales saying
 "app-server only" would do exactly that.
+
+One correction from the audit: `zh-cn`, `zh-tw`, `tr` and `ru` **do** carry the
+`catalog pull` desktop-restart exclusion sentence (zh-cn's
+"Desktop 应用重启不属于此命令", for example). Those four pages need that sentence removed
+as well as the `--restart-codex` description updated, so the locale edit is not
+uniform across the seven.
 
 ## 8. Generated surfaces
 

@@ -67,6 +67,16 @@ nothing (`000_plan.md` §3).
   so `-n` does not reliably produce a second instance — and we do not want one.
   Relaunch uses plain `open -b`.
 
+**Precondition, measured rather than assumed:** `open -b` launches into the invoking
+user's **GUI session**. Issued over ssh to a Mac where that user has no logged-in
+window session, it relaunches into nothing. Both macOS hosts here have an active
+session, so the wp4 proof holds — but a headless macOS host would stop the app and
+not visibly bring it back, and the operator-facing text must not promise otherwise.
+
+An unknown bundle id makes `open` exit non-zero with
+`LSCopyApplicationURLsForBundleIdentifier() failed`, which is a usable fail-closed
+signal rather than a silent no-op.
+
 ### 1.3 The local host cannot prove its own restart
 
 The shell running `ocx` on the local host is a descendant of the app:

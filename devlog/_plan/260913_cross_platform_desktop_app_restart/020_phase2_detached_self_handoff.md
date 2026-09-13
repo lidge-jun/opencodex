@@ -91,6 +91,47 @@ export function startDesktopRestartHandoff(io?: HandoffIo): HandoffOutcome;
 export function runDesktopRestartHandoff(planPath: string, io?: HandoffIo): Promise<number>;
 ```
 
+### 4.1 A restart that acts is a singleton (audit B2)
+
+Nothing in the first draft stopped two ladders from running at once, and the
+interleaving is destructive rather than merely wasteful: helper A quits the app and
+relaunches it, helper B re-enumerates during that window, sees the **freshly started**
+root as a target, and kills it. Two `ocx sync --restart-codex` runs inside the app, or
+one handoff racing an ssh-issued direct run, are enough.
+
+So every restart that **acts** — direct path and helper alike — first takes an atomic
+lock at `<opencodex home>/desktop-restart.lock`, created with `wx` and holding the
+owner pid and a timestamp. A caller that cannot take the lock does not queue and does
+not wait: it reports `restart_in_flight` and exits. Queueing would just rebuild the
+same race one step later.
+
+A lock whose owner pid is dead, or which is older than five minutes, is stale and is
+replaced atomically. The lock is released in a `finally`, including on the failure
+paths, because a lock leaked by a crashed helper would block every future restart
+until the staleness window expired.
+
+The lock is taken **around the whole ladder including the relaunch**, not only around
+the kill. Releasing after the last kill would reopen exactly the window this closes.
+
+### 4.2 What the helper is actually spawned as (nit N11)
+
+`spawn(process.execPath, args)` is under-specified, because `process.execPath` and the
+right `args` differ between the ways `ocx` can be running: `bun run src/cli/index.ts`
+from a checkout, an npm-installed `ocx` shim, and `bunx`.
+
+Resolution order, decided at spawn time:
+
+1. If `process.argv[1]` names an existing file, spawn `[process.execPath, argv[1], "internal", ...]`.
+   This covers the checkout and the npm shim, which is how every measured host runs it.
+2. Otherwise, if `process.execPath` is itself the packaged CLI (basename `ocx`), spawn
+   `[process.execPath, "internal", ...]`.
+3. Otherwise return `{ kind: "failed", reason: "no_executable" }` and let the caller
+   report the ordinary `self_ancestry` refusal.
+
+Failing to resolve is a refusal, never a guess. Spawning the wrong interpreter with a
+path that does not exist would produce a helper that silently exits and an operator
+who was told a restart was handed off.
+
 **Plan file.** Written under the opencodex home with mode `0600`, named
 `desktop-restart-handoff-<pid>-<random>.json`. It holds no secret — pids and a
 timestamp — but it is a file whose path is passed to a spawned process, so it is
@@ -127,6 +168,13 @@ documented pages name only registry commands, so keeping this out of the registr
 what keeps that gate green.
 
 Unknown `internal` subcommands exit non-zero with a one-line usage string on stderr.
+
+**It is intentionally unauthenticated (nit N8), and that is not a finding.** Any
+process running as this user can invoke it with a hand-written plan file naming any
+`callerPid`. It gains nothing: the helper only does what the public `--restart-codex`
+flag already does for that same user, and a same-uid process could call `kill`
+directly. Adding a token here would protect nothing and would imply a boundary that
+does not exist. Recording the reasoning so a later reviewer does not file it as a gap.
 
 ## 6. `src/codex/desktop-app-restart.ts` (MODIFY)
 
@@ -171,3 +219,14 @@ the terminal they typed into, and a message that does not say so reads as a hang
 - **Recursion.** Structurally prevented by `allowHandoff: false` in the helper.
 - **Surprise for scripted callers.** A CI script calling `ocx sync --restart-codex`
   from outside the app is unaffected: the guard does not fire, and the direct path runs.
+- **Concurrent ladders.** Closed by the singleton lock in §4.1.
+- **Windows `taskkill /T` pid-recycle race (nit N10).** The helper escapes the kill
+  set because its parent pid is dead and `/T` walks live parent links. If that dead pid
+  is recycled into a live process that is itself inside the tree being killed, the
+  helper is momentarily reachable through the new link and can be terminated with the
+  app. The window is small and the outcome is a failed restart rather than a wrong
+  kill: the app still dies, the helper dies before relaunching, and the operator gets
+  no relaunch. Accepted and named rather than engineered around, because the
+  alternative — an intermediate re-parenting service — costs far more than the
+  failure it prevents. The handoff log records nothing in this case, which is itself
+  the signal that it happened.

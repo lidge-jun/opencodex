@@ -79,6 +79,11 @@ meaning of the other flag.
 | wp3 | CLI + management contract merge, docs and generated surfaces | `030` | wp2, wp5 |
 | wp4 | Live three-host verification, hosted CI, PR, merge | `040` | wp3 |
 
+`002` records the A-phase audit findings and their dispositions. It is part of wp1's
+output: the roadmap was audited by three independent reviewers before any
+implementation, two returned FAIL, and six blockers were folded back into `010`,
+`020` and `030` before wp2 started.
+
 Execution order is wp1 -> wp2 -> wp5 -> wp3 -> wp4. The goalplan ids are not
 chronological because wp5 was appended after the first four were registered
 (LOOP-UNIT-CHAIN-01); the dependency column above is authoritative.
@@ -107,6 +112,10 @@ needed rather than a direct kill.
   branch.
 - `--restart-desktop-app` still works and says it is deprecated.
 - `--restart-app-server-only` reproduces the old `--restart-codex` behaviour.
+- `ocx catalog pull --restart-codex` means the same thing as `ocx sync --restart-codex`,
+  so the flag has one meaning across the CLI (`002` §B4).
+- The remote `POST /api/machine/sync` `restartCodex` field does **not** gain desktop
+  scope (`002` §B5).
 - Hosted CI green at the exact final head; PR merged into `dev`.
 
 ## 8. Terminal outcomes
