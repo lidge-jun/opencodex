@@ -197,7 +197,7 @@ type LinuxSpawn = (
   command: string,
   args: readonly string[],
   options: { detached: boolean; stdio: "ignore"; env: NodeJS.ProcessEnv },
-) => { unref(): void };
+) => { pid?: number | undefined; unref(): void };
 
 const defaultSpawn: LinuxSpawn = (command, args, options) => {
   const child = spawn(command, [...args], {
@@ -282,12 +282,20 @@ export const linuxDesktopAppAdapter: DesktopAppAdapter = {
       let status: string;
       try {
         status = readFileSync(procPath(current, "status"), "utf8");
-      } catch {
-        // A pid whose status cannot be read is a CLEAN end of chain, not a
-        // read failure. The detached handoff helper reaches exactly this state
-        // once its caller exits; reading it as unreadable would make the helper
-        // refuse the one job it exists for. Opposite of the 16-hop bound below.
-        return chain;
+      } catch (error) {
+        // Two different situations arrive here and they must not be merged.
+        //
+        // ENOENT means the pid is simply gone. That is a CLEAN end of chain and the
+        // normal state above an orphaned handoff helper, so the chain collected so far
+        // is returned and the caller can still be judged outside the tree.
+        //
+        // Any OTHER error means we could not look, and "could not look" must never be
+        // read as "we are outside the tree": that reading lets the ladder signal the
+        // shell hosting the caller's own session. Hop 0 is this process itself, which
+        // always exists, so a failure there is always a read failure.
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (hop > 0 && code === "ENOENT") return chain;
+        return [];
       }
       const parsed = parsePpidAndRealUid(status);
       if (!parsed || parsed.parentPid <= 0) return chain;
@@ -350,6 +358,13 @@ export const linuxDesktopAppAdapter: DesktopAppAdapter = {
       stdio: "ignore",
       env,
     });
+    // A detached child reports a failed launch asynchronously, and this process is
+    // about to stop caring about it, so the 'error' event has nobody to reach. An
+    // absent pid is the synchronous signal that the spawn never happened - without
+    // this check a missing /usr/bin/setsid still reported relaunch: "started".
+    if (child.pid === undefined) {
+      throw new Error("failed to spawn " + SETSID + " for the Codex desktop app relaunch");
+    }
     // detached already calls setsid(2); the setsid binary then auto-forks because
     // it finds itself a group leader. The overlap is deliberate belt-and-braces
     // against a runtime that changes detached semantics. No --fork is needed.

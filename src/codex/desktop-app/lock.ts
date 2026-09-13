@@ -68,7 +68,37 @@ function readRecord(path: string): DesktopRestartLockRecord | null {
   }
 }
 
-/** Atomic create-or-replace. `renameSync` over an existing path is atomic on POSIX and Windows. */
+/**
+ * Exclusive create ON THE LOCK PATH. This is the whole mutual exclusion.
+ *
+ * The obvious-looking alternative - write a staging file with `wx` and `rename` it
+ * over the lock - is NOT exclusive: `wx` on a unique staging name always succeeds, and
+ * both racers then rename, so both believe they hold the lock and each kills the
+ * other's freshly relaunched app. The exclusivity has to come from `O_EXCL` on the
+ * contended path itself.
+ */
+function tryCreateExclusive(path: string, record: DesktopRestartLockRecord): boolean {
+  mkdirSync(dirname(path), { recursive: true });
+  let fd: number;
+  try {
+    fd = openSync(path, "wx", 0o600);
+  } catch {
+    return false;
+  }
+  try {
+    writeSync(fd, JSON.stringify(record));
+  } finally {
+    closeSync(fd);
+  }
+  return true;
+}
+
+/**
+ * Atomic replace, used ONLY by an owner handing the lock to its helper.
+ *
+ * Safe there precisely because it is not the contended path: the caller already holds
+ * the lock, so there is no race to lose.
+ */
 function writeRecord(path: string, record: DesktopRestartLockRecord): void {
   mkdirSync(dirname(path), { recursive: true });
   const staging = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}`;
@@ -108,19 +138,24 @@ export function acquireDesktopRestartLock(
     if (existing.ownerPid === self) return { acquired: true, record: existing };
     const stale = !isAlive(existing.ownerPid) || now() - existing.createdAtMs > LOCK_MAX_AGE_MS;
     if (!stale) return { acquired: false, heldBy: existing.ownerPid };
+    // Stale. Clear it and then compete for the exclusive create like anyone else rather
+    // than writing straight over it: two processes can observe the same stale lock, and
+    // only O_EXCL decides which of them actually gets it.
+    try {
+      unlinkSync(path);
+    } catch {
+      /* somebody else cleared it first, which is fine - the create below still decides */
+    }
   }
 
   const record: DesktopRestartLockRecord = { ownerPid: self, createdAtMs: now() };
-  try {
-    writeRecord(path, record);
-  } catch {
-    // Losing the create race means somebody else got there first. Reporting contention
-    // is the honest answer; retrying would be the queue this deliberately avoids.
-    const winner = readRecord(path);
-    if (winner && winner.ownerPid !== self) return { acquired: false, heldBy: winner.ownerPid };
-    return { acquired: false, heldBy: winner?.ownerPid ?? 0 };
-  }
-  return { acquired: true, record };
+  if (tryCreateExclusive(path, record)) return { acquired: true, record };
+
+  // Lost the race. Reporting contention is the honest answer; retrying would be the
+  // queue this deliberately avoids, and queueing rebuilds the same race one step later.
+  const winner = readRecord(path);
+  if (winner && winner.ownerPid === self) return { acquired: true, record: winner };
+  return { acquired: false, heldBy: winner?.ownerPid ?? 0 };
 }
 
 /**

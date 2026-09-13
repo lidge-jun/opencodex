@@ -176,11 +176,15 @@ export const darwinDesktopAppAdapter: DesktopAppAdapter = {
     const snapshots = readPsSnapshots(exec);
     if (snapshots === null) return null;
     const uid = currentUid();
+    // Without a uid there is no way to scope the result to this user, and reporting an
+    // empty list would tell the caller the app is not running (#2557's failure mode in a
+    // different disguise). This is a probe failure.
+    if (uid === undefined) return null;
     const out: DesktopProcess[] = [];
     for (const snapshot of snapshots) {
       if (!isUnderRoot(snapshot.executable, install.root)) continue;
-      // Same user only. An unreadable uid fails closed rather than widening the set.
-      if (uid === undefined || snapshot.uid !== uid) continue;
+      // Same user only.
+      if (snapshot.uid !== uid) continue;
       out.push({
         pid: snapshot.pid,
         parentPid: snapshot.parentPid,
@@ -202,8 +206,15 @@ export const darwinDesktopAppAdapter: DesktopAppAdapter = {
       let stdout: string;
       try {
         stdout = exec(PS, ["-o", "ppid=", "-p", String(current)], { timeout: PROBE_TIMEOUT_MS });
-      } catch {
-        // Could not look, so we cannot conclude we are outside the tree.
+      } catch (error) {
+        // ps -p <pid> exits 1 with empty output when the pid does not exist, and
+        // execFileSync turns a non-zero exit into a throw. Without this branch the
+        // clean-end handling below is unreachable in production, every dead parent reads
+        // as unreadable, and the orphaned handoff helper refuses the one job it exists
+        // for. Hop 0 is this process, which always exists, so a failure there is real.
+        const status = (error as { status?: unknown } | null)?.status;
+        if (hop > 0 && status === 1) return chain;
+        // Anything else: could not look, so we cannot conclude we are outside the tree.
         return [];
       }
       const trimmed = stdout.trim();
