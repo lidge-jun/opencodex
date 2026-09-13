@@ -151,11 +151,29 @@ export function acquireDesktopRestartLock(
   const record: DesktopRestartLockRecord = { ownerPid: self, createdAtMs: now() };
   if (tryCreateExclusive(path, record)) return { acquired: true, record };
 
-  // Lost the race. Reporting contention is the honest answer; retrying would be the
-  // queue this deliberately avoids, and queueing rebuilds the same race one step later.
   const winner = readRecord(path);
   if (winner && winner.ownerPid === self) return { acquired: true, record: winner };
-  return { acquired: false, heldBy: winner?.ownerPid ?? 0 };
+  if (winner) {
+    // Lost the race fairly. Reporting contention is the honest answer; retrying would be
+    // the queue this deliberately avoids, and queueing rebuilds the same race one step
+    // later.
+    return { acquired: false, heldBy: winner.ownerPid };
+  }
+
+  // The file exists but names nobody: truncated, corrupt, or left behind by a writer
+  // that died between creating it and writing it. Without this it would block every
+  // future restart forever, reported as contention with an owner of 0 - a lock nobody
+  // holds and nobody can clear. Remove it and make exactly one more attempt, so a real
+  // winner that appears in between still keeps the lock.
+  try {
+    unlinkSync(path);
+  } catch {
+    /* somebody else cleared it first */
+  }
+  if (tryCreateExclusive(path, record)) return { acquired: true, record };
+  const successor = readRecord(path);
+  if (successor && successor.ownerPid === self) return { acquired: true, record: successor };
+  return { acquired: false, heldBy: successor?.ownerPid ?? 0 };
 }
 
 /**
