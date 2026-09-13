@@ -124,3 +124,18 @@ PR #4490 → `dev` `cb8f59614`. `modelReasoningEfforts`가 붙었고, 라이브 
 - 정적 표에는 실측된 SWE-2만 있다. 다른 모델의 degraded 사다리는 계정 카탈로그를
   실측할 기회가 생기면 줄을 추가한다.
 
+
+## 단위 종료
+
+| wp | 결과 | 커밋 / PR | merge |
+|---|---|---|---|
+| wp0 | 로드맵 + 구현 | `024537f30a`, PR #4490 (`6f77d24bb3`) | `cb8f59614` |
+| wp1 | 선례 확정 | `b7e9d66966`, `17e1c9320a` | — |
+| wp2 | Codex 피커 사다리 | 위 머지에 포함 | `cb8f59614` |
+| wp3 | Pi 계열 익스포트 | `d4666ffe14` (기록), 위 머지에 포함 | `cb8f59614` |
+
+한 원인이라 PR 하나로 착지했다. 나눴다면 두 번째가 빈 변경이 됐을 것이다.
+
+exact-head CI: `6f77d24bb3`에서 25 success / 0 fail / 0 cancelled. 로컬 제품
+스위트·typecheck·build·install은 **NOT RUN**이다.
+
