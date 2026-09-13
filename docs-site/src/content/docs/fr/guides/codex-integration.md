@@ -336,8 +336,9 @@ S'il manque un modèle dans Codex, ou si l'ordre ou la visibilité du catalogue 
 6. **Processus Codex `app-server` actif** — réécrire le catalogue sur disque ne suffit pas tant qu'un processus
    Codex `app-server` de longue durée — Codex Desktop ou hôte d'arrière-plan de la CLI — conserve l'ancienne
    liste en mémoire. `ocx sync` et `ocx sync-cache` émettent un avertissement lorsqu'ils détectent ces processus.
-   Redémarrez-les avec `ocx sync --restart-codex`, ou arrêtez vous-même les processus `app-server` concernés,
-   puis laissez Codex les recréer afin que la nouvelle liste apparaisse.
+   `ocx sync --restart-codex` les redémarre et quitte puis relance entièrement l'application Codex Desktop sous
+   macOS, Linux et Windows, afin que le sélecteur relise le catalogue. Pour laisser l'application Desktop ouverte,
+   passez `--restart-app-server-only` ou arrêtez vous-même les processus `app-server` concernés.
 
 :::caution[Autres processus d'écriture locaux]
 Les écritures du catalogue (`opencodex-catalog.json`, `config.toml`) sont atomiques **au sein** d'opencodex.

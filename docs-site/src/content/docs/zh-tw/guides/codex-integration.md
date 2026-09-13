@@ -284,8 +284,9 @@ OpenCodex 直接注入路由，請先將 Codex 切回內建 `openai` provider，
    `ocx sync` 可強制重新抓取並立即重寫目錄。
 6. **正在執行的 Codex `app-server`**：長時間執行的 Codex `app-server`（Desktop／CLI 背景 host）可能
    仍在記憶體保留舊列表，因此只重寫磁碟目錄還不夠。`ocx sync` 與 `ocx sync-cache` 偵測到這些
-   process 時會警告。可執行 `ocx sync --restart-codex` 重新啟動，或自行停止對應的 `app-server`
-   process，再讓 Codex 重新建立它們，讓新列表出現。
+   process 時會警告。`ocx sync --restart-codex` 會重啟這些 process，並在 macOS、Linux 與 Windows
+   上完全結束再重新啟動 Codex 桌面應用程式，讓選擇器重新讀取目錄。若要讓桌面應用程式繼續執行，請傳入
+   `--restart-app-server-only`，或自行停止對應的 `app-server` process。
 
 :::caution[其他本機寫入者]
 目錄寫入（`opencodex-catalog.json`、`config.toml`）在 opencodex **內部**是原子的；這只避免兩個

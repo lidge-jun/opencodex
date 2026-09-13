@@ -258,6 +258,8 @@ le CLI, l’API, et le GUI utilisent les mêmes octets.
 
 Gérez les paramètres d'exécution sans tête, le démarrage, la synchronisation, les diagnostics et les mises à jour.
 
+`ocx system codex-restart --yes` redémarre les serveurs d'application Codex et quitte puis relance entièrement l'application Codex Desktop, via le même module que `ocx sync --restart-codex`. Lorsque le proxy lui-même s'exécute dans l'application Codex, la commande refuse avec un message actionnable au lieu de promettre un transfert qu'elle ne peut pas mener à bien.
+
 ```bash
 ocx system settings --stream-mode eager-relay
 ```

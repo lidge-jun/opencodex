@@ -379,10 +379,11 @@ sırayla kontrol edin:
 6. **Çalışan Codex `app-server`** — uzun ömürlü bir Codex `app-server` (Desktop
    / CLI arka plan ana bilgisayarı) önceki listeyi bellekte tuttuğu sürece
    diskteki kataloğu yeniden yazmak yeterli değildir. `ocx sync` ve `ocx
-   sync-cache` bu süreçler algılandığında uyarır. Bunları `ocx sync
-   --restart-codex` ile yeniden başlatın (veya eşleşen `app-server` süreçlerini
-   kendiniz durdurun), ardından yeni listenin görünmesi için Codex'in bunları
-   yeniden oluşturmasına izin verin.
+   sync-cache` bu süreçler algılandığında uyarır. `ocx sync --restart-codex` bu
+   süreçleri yeniden başlatır ve seçicinin kataloğu yeniden okuması için Codex
+   masaüstü uygulamasını macOS, Linux ve Windows'ta tamamen kapatıp yeniden
+   başlatır. Masaüstü uygulamasını çalışır bırakmak için `--restart-app-server-only`
+   iletin veya eşleşen `app-server` süreçlerini kendiniz durdurun.
 
 :::caution[Diğer yerel yazıcılar]
 Katalog yazmaları (`opencodex-catalog.json`, `config.toml`) opencodex **içinde**

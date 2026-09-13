@@ -194,6 +194,8 @@ gjc 是例外：`OPENCODEX_GAJAE_API_KEY` 只會從環境提供 provider 憑證�
 
 管理無頭執行階段設定、啟動、同步、診斷與更新。
 
+`ocx system codex-restart --yes` 透過與 `ocx sync --restart-codex` 相同的模組重啟 Codex app-server，並完全結束再重新啟動 Codex 桌面應用程式。若代理本身在 Codex 應用程式內部執行，此命令會給出可執行提示並拒絕，而不是承諾無法完成的移交。
+
 ```bash
 ocx system settings --stream-mode eager-relay
 ```

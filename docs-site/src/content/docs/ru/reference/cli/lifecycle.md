@@ -213,7 +213,7 @@ credential'ы и не выполняет repair.
 
 ## Синхронизация каталога
 
-### `ocx sync [--restart-codex]`
+### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 Получить живой список моделей от каждого настроенного провайдера и заново внедрить объединённый
 каталог в Codex. Запускайте после добавления провайдера или когда нужно обновить доступные
@@ -222,17 +222,30 @@ credential'ы и не выполняет repair.
 Если всё ещё работают долгоживущие процессы Codex `app-server`, `ocx sync` предупредит, что они
 могут продолжать отдавать старый in-memory список моделей, хотя файлы
 `opencodex-catalog.json` / `models_cache.json` уже обновлены. Передайте `--restart-codex`, чтобы
-послать `SIGTERM` только подходящим процессам `codex … app-server` и `codex-code-mode-host`,
-принадлежащим текущему пользователю (активные turn'ы при этом могут оборваться). Широкий
+перезапустить подходящие процессы `codex … app-server` и `codex-code-mode-host` **и** полностью
+закрыть и заново запустить Desktop-приложение Codex на macOS, Linux и Windows, чтобы model
+picker перечитал каталог. Живые conversation'ы при этом завершаются. Широкий
 `pkill -f codex` намеренно не используется.
 
-### `ocx sync-cache [--restart-codex]`
+`--restart-desktop-app` — устаревший alias `--restart-codex`. Он по-прежнему работает, печатает
+предупреждение об устаревании и не ограничен Windows.
+
+`--restart-app-server-only` возвращает прежнее узкое поведение: `SIGTERM` только подходящим
+процессам app-server / code-mode-host текущего пользователя, Desktop-приложение остаётся
+запущенным (активные turn'ы всё ещё могут оборваться). Если флаг указан вместе с
+`--restart-codex` или `--restart-desktop-app`, побеждает узкий scope: потеря живых
+conversation'ов невосстановима, а устаревший picker — нет.
+
+Если команда запущена изнутри приложения Codex, restart передаётся detached helper'у, и эта
+сессия завершается вместе с приложением.
+
+### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Инвалидировать локальный кэш model picker'а Codex, чтобы он пересобрался из активного каталога
-opencodex. Предупреждение о stale-`app-server` и optional `--restart-codex` работают так же, как
+opencodex. Предупреждение о stale-`app-server` и те же optional restart-флаги работают так же, как
 и у `ocx sync`.
 
-### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]`
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
 
 Устанавливает полный каталог, который отдаёт эндпоинт `/v1/catalog` другого экземпляра OpenCodex,
 и затем синхронизирует `models_cache.json`. URL должен быть HTTPS; HTTP допускается только на
@@ -241,9 +254,10 @@ loopback. Учётные данные в URL, query, фрагменты, ред�
 имени переменной окружения (`--auth-env`), но не из argv.
 
 Каталог и кэш пишутся под общей блокировкой каталога Codex; при сбое сохраняются last-known-good
-файлы. Идентичные байты — это no-op, сохраняющий mtime. `--restart-codex` применяется только после
-реальной записи. Условные запросы `ETag` и перезапуск Desktop-приложения в эту команду не входят.
-Полная `--json`-обёртка и коды выхода описаны в
+файлы. Идентичные байты — это no-op, сохраняющий mtime. `--restart-codex`,
+`--restart-app-server-only` и устаревший alias `--restart-desktop-app` здесь означают то же, что
+у `ocx sync` и `ocx sync-cache`, и применяются только после реальной записи. Условные запросы
+`ETag` в эту команду не входят. Полная `--json`-обёртка и коды выхода описаны в
 [английской справке](/reference/cli/lifecycle/).
 
 ## Фоновая служба

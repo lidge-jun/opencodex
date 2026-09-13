@@ -314,7 +314,7 @@ Codex에서 model이 빠졌거나 catalog 순서/가시성이 이상해 보이�
    이 규칙은 라이브 발견 실패 시 폴백 동작을 바꾸지 않습니다.
 4. **Cursor `GetUsableModels`** - Cursor adapter는 `/models`가 아니라 protobuf `GetUsableModels` RPC로 model을 찾습니다. 그래서 Cursor 쪽 변경이 다른 provider와 무관하게 어떤 id가 보이는지 바꿀 수 있습니다.
 5. **캐시와 `ocx sync`** - live catalog는 약 5분(`modelCacheTtlMs`, 기본값 `300000`) 동안 캐시됩니다. `ocx sync`를 실행하면 새로 가져와서 catalog를 즉시 다시 쓸 수 있습니다.
-6. **실행 중인 Codex `app-server`** - 오래 살아 있는 Codex `app-server`(Desktop / CLI background host)가 이전 목록을 메모리에 쥐고 있으면 디스크 catalog를 다시 쓰는 것만으로는 부족합니다. `ocx sync`와 `ocx sync-cache`는 그런 process를 감지하면 경고합니다. `ocx sync --restart-codex`로 다시 시작하거나(아니면 일치하는 `app-server` process를 직접 중지한 뒤), Codex가 다시 만들게 해서 새 목록이 보이게 하세요.
+6. **실행 중인 Codex `app-server`** - 오래 살아 있는 Codex `app-server`(Desktop / CLI background host)가 이전 목록을 메모리에 쥐고 있으면 디스크 catalog를 다시 쓰는 것만으로는 부족합니다. `ocx sync`와 `ocx sync-cache`는 그런 process를 감지하면 경고합니다. `ocx sync --restart-codex`는 그 process를 재시작하고 macOS·Linux·Windows에서 Codex 데스크톱 앱을 완전히 종료한 뒤 다시 띄워 선택기가 카탈로그를 다시 읽게 합니다. 데스크톱 앱을 그대로 두려면 `--restart-app-server-only`를 쓰거나 일치하는 `app-server` process를 직접 중지하세요.
 
 :::caution[다른 로컬 writer]
 catalog write(`opencodex-catalog.json`, `config.toml`)는 opencodex 내부에서만 원자적입니다. 이것은 두 개의 opencodex 소유 writer가 경합할 때 반쯤만 써진 파일을 막아줄 뿐입니다. 다른 로컬 process, file watcher, sync agent가 opencodex가 쓴 뒤에 catalog visibility나 순서를 다시 쓸 가능성은 막지 못합니다. Codex는 별도의 `models_cache.json`을 유지하고 독립적으로 갱신할 수 있으므로, 이 과정에서 `opencodex-catalog.json`을 다시 쓰지 않고도 보이는 목록이 바뀔 수 있습니다. proxy가 실행 중인데 model이 예상치 않게 바뀌면, 경쟁 writer를 중지하거나 재설정한 뒤 `ocx sync`를 실행하세요. 이것은 외부 writer 위험이지, 확인된 opencodex 결함이 아닙니다.

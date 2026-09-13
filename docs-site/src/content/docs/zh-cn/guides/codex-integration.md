@@ -278,8 +278,9 @@ provider 形式一样，从 `OPENCODEX_API_AUTH_TOKEN` 传入 `x-opencodex-api-k
    运行 `ocx sync` 可以强制立即重新抓取并重写 catalog。
 6. **正在运行的 Codex `app-server`** - 当长生命周期的 Codex `app-server`（Desktop / CLI 后台宿主）还在
    内存中保留旧列表时，只重写磁盘上的 catalog 还不够。`ocx sync` 和 `ocx sync-cache` 会在检测到这些进程时给出
-   警告。请用 `ocx sync --restart-codex` 重新启动它们（或者你自己停掉匹配的 `app-server` 进程），然后让 Codex
-   重新创建它们，这样新列表才会出现。
+   警告。`ocx sync --restart-codex` 会重启这些进程，并在 macOS、Linux 和 Windows 上完全退出再重新启动 Codex
+   桌面应用，让选择器重新读取 catalog。若要让桌面应用继续运行，请传入 `--restart-app-server-only`，或自行停掉匹配的
+   `app-server` 进程。
 
 :::caution[其他本地写入者]
 在 opencodex 内部，catalog 写入（`opencodex-catalog.json`、`config.toml`）是原子的，这只能防止两个

@@ -730,9 +730,10 @@ If a model is missing from Codex, or the catalog order/visibility looks wrong, c
    default `300000`). Run `ocx sync` to force a fresh fetch and rewrite the catalog immediately.
 6. **Running Codex `app-server`** — rewriting the on-disk catalog is not enough while a long-lived
    Codex `app-server` (Desktop / CLI background host) keeps the previous list in memory. `ocx sync`
-   and `ocx sync-cache` warn when those processes are detected. Restart them with
-   `ocx sync --restart-codex` (or stop the matching `app-server` processes yourself), then let Codex
-   recreate them so the new list appears.
+   and `ocx sync-cache` warn when those processes are detected. `ocx sync --restart-codex` restarts
+   those processes and fully quits and relaunches the Codex desktop app on macOS, Linux, and
+   Windows so the picker re-reads the catalog. To leave the desktop app running, pass
+   `--restart-app-server-only` or stop the matching `app-server` processes yourself.
 
 :::caution[Other local writers]
 Catalog writes (`opencodex-catalog.json`, `config.toml`) are atomic **inside** opencodex, which only

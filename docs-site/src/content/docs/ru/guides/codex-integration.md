@@ -328,9 +328,11 @@ Codex на встроенный провайдер `openai` и удалите л
    переписать каталог.
 6. **Запущенный Codex `app-server`** — переписать каталог на диске недостаточно, если
    долгоживущий `app-server` Codex (Desktop / CLI background host) держит в памяти старый список.
-   `ocx sync` и `ocx sync-cache` предупреждают, когда находят такие процессы. Перезапустите их
-   через `ocx sync --restart-codex` (или остановите подходящие процессы `app-server` вручную), а
-   затем дайте Codex создать их заново.
+   `ocx sync` и `ocx sync-cache` предупреждают, когда находят такие процессы. `ocx sync
+   --restart-codex` перезапускает эти процессы и полностью закрывает и заново запускает
+   Desktop-приложение Codex на macOS, Linux и Windows, чтобы picker перечитал каталог. Чтобы
+   оставить Desktop-приложение запущенным, передайте `--restart-app-server-only` или остановите
+   подходящие процессы `app-server` вручную.
 
 :::caution[Другие локальные writer'ы]
 Записи каталога (`opencodex-catalog.json`, `config.toml`) атомарны **только внутри** opencodex, то

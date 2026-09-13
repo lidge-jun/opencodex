@@ -184,6 +184,8 @@ opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex �
 
 ヘッドレス ランタイムの設定、起動、同期、診断、更新を管理します。
 
+`ocx system codex-restart --yes` は `ocx sync --restart-codex` と同じモジュールで Codex app-server を再起動し、デスクトップ アプリも完全に終了して再起動します。プロキシ自体が Codex アプリ内で動いている場合、完了できない引き渡しを約束せず、実行可能な案内とともに拒否します。
+
 ```bash
 ocx system settings --stream-mode eager-relay
 ```

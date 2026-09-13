@@ -220,23 +220,36 @@ single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또
 
 ## 카탈로그 동기화
 
-### `ocx sync [--restart-codex]`
+### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 설정된 모든 공급자에서 라이브 모델 목록을 가져와 병합된 카탈로그를 Codex에 다시 주입합니다.
 공급자를 추가한 뒤나 사용 가능한 모델을 새로 고칠 때 실행합니다.
 
 오래 실행 중인 Codex `app-server` 프로세스가 아직 살아 있으면, `opencodex-catalog.json` /
 `models_cache.json`가 업데이트되었더라도 이전 인메모리 모델 목록을 계속 서비스할 수 있다고 경고합니다.
-`--restart-codex`를 붙이면 현재 사용자가 소유한 `codex … app-server`와 `codex-code-mode-host`
-프로세스 중 일치하는 것에만 `SIGTERM`을 보냅니다(활성 작업이 중단될 수 있습니다). 광범위한
+`--restart-codex`를 붙이면 일치하는 `codex … app-server`와 `codex-code-mode-host` 프로세스를
+재시작하는 데 더해, macOS·Linux·Windows에서 Codex 데스크톱 앱을 완전히 종료했다가 다시 띄웁니다.
+모델 선택기가 카탈로그를 다시 읽도록 하기 위해서이며, 진행 중인 대화는 끝납니다. 광범위한
 `pkill -f codex` 매칭은 의도적으로 피합니다.
 
-### `ocx sync-cache [--restart-codex]`
+`--restart-desktop-app`은 `--restart-codex`의 폐기 예정 별칭입니다. 여전히 동작하고 폐기
+안내를 출력하며, Windows 전용이 아닙니다.
+
+`--restart-app-server-only`는 예전처럼 좁은 범위만 수행합니다. 현재 사용자가 소유한 일치
+app-server / code-mode-host 프로세스에만 `SIGTERM`을 보내고 데스크톱 앱은 그대로 둡니다(활성
+작업이 중단될 수 있습니다). `--restart-codex`나 `--restart-desktop-app`과 함께 쓰면 좁은
+범위가 이깁니다. 진행 중인 대화를 잃는 것은 되돌릴 수 없고, 오래된 선택기는 그렇지 않기
+때문입니다.
+
+명령을 Codex 앱 안에서 실행하면 재시작은 분리된 helper에 넘기고, 이 세션은 앱과 함께
+종료됩니다.
+
+### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카탈로그에서 다시 빌드되게 합니다.
-`ocx sync`와 같은 오래된 `app-server` 경고와 선택적 `--restart-codex` 동작이 적용됩니다.
+`ocx sync`와 같은 오래된 `app-server` 경고와 선택적 재시작 플래그가 적용됩니다.
 
-### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]`
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
 
 다른 OpenCodex 인스턴스의 `/v1/catalog` 엔드포인트가 제공하는 완성된 카탈로그를 설치한 뒤
 `models_cache.json`을 맞춥니다. URL은 HTTPS여야 하고 HTTP는 루프백만 허용합니다. URL에 박힌
@@ -244,9 +257,11 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 거절합니다. 인증은 선택이며 환경변수 이름(`--auth-env`)으로만 읽고 argv로는 받지 않습니다.
 
 카탈로그와 캐시는 공유 Codex 카탈로그 잠금 아래에서 쓰고, 실패하면 직전까지 정상이던 파일을
-그대로 둡니다. 바이트가 같으면 mtime까지 건드리지 않는 no-op입니다. `--restart-codex`는 실제로
-쓴 뒤에만 적용됩니다. `ETag` 조건부 요청과 Desktop 앱 재시작은 이 명령에 없습니다. `--json`
-envelope 필드와 종료 코드는 [영문 레퍼런스](/reference/cli/lifecycle/)를 보세요.
+그대로 둡니다. 바이트가 같으면 mtime까지 건드리지 않는 no-op입니다. `--restart-codex`,
+`--restart-app-server-only`, 폐기 예정 별칭 `--restart-desktop-app`은 실제로 쓴 뒤에만
+적용되며, `ocx sync` / `ocx sync-cache`와 같은 뜻입니다. `ETag` 조건부 요청은 이 명령에
+없습니다. `--json` envelope 필드와 종료 코드는 [영문 레퍼런스](/reference/cli/lifecycle/)를
+보세요.
 
 ## 백그라운드 서비스
 

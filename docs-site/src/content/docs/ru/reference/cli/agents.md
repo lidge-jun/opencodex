@@ -241,6 +241,8 @@ env-reference, либо несекретную loopback-заглушку. Loopba
 
 Управляйте headless runtime-setting'ами, startup, sync, diagnostics и update.
 
+`ocx system codex-restart --yes` перезапускает Codex app-server'ы и полностью закрывает и заново запускает Desktop-приложение Codex тем же модулем, что и `ocx sync --restart-codex`. Если сам proxy запущен внутри приложения Codex, команда отказывается с actionable-сообщением вместо handoff, который она не может завершить.
+
 ```bash
 ocx system settings --stream-mode eager-relay
 ```

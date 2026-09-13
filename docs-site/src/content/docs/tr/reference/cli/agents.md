@@ -288,6 +288,12 @@ sekmesinde işlenir; böylece CLI, API ve GUI aynı baytları kullanır.
 Başsız çalışma zamanı ayarlarını, başlatmayı, senkronizasyonu, tanılamayı ve
 güncellemeleri yönetin.
 
+`ocx system codex-restart --yes`, `ocx sync --restart-codex` ile aynı modül
+üzerinden Codex app-server'larını yeniden başlatır ve Codex masaüstü
+uygulamasını tamamen kapatıp yeniden başlatır. Proxy'nin kendisi Codex
+uygulamasının içinde çalışıyorsa, tamamlayamayacağı bir devri vaat etmek
+yerine eyleme geçirilebilir bir iletiyle reddeder.
+
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
