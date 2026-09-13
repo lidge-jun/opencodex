@@ -108,7 +108,7 @@ describe("Codex CLI install provenance", () => {
     expect(calls).toBe(0);
   });
 
-  test("Windows does not read persisted candidate state", async () => {
+  test("Windows defers without reading persisted candidate state", async () => {
     let calls = 0;
     const report = await inspectCodexCliInstall({
       ...noFilesystemDeps(() => { calls += 1; }),
@@ -116,9 +116,35 @@ describe("Codex CLI install provenance", () => {
       configDir: "C:\\OpenCodex",
       env: { PATH: "C:\\Tools" },
     });
+    // Persisted state is still never read on Windows, so the command cannot
+    // know whether a candidate exists. It must not claim that none does.
+    expect(report.reason).toBe("windows_inspection_deferred");
     expect(report.candidateAvailable).toBe(false);
-    expect(report.reason).toBe("candidate_unavailable");
+    expect(report.candidateSource).toBeNull();
+    expect(report.candidateVersion).toBeNull();
+    expect(report.location).toBeNull();
+    expect(report.provenance).toBe("unknown");
+    expect(report.managed).toBe(false);
+    expect(report.selectionAttested).toBe(false);
+    expect(report.versionEvidence.kind).toBe("unavailable");
     expect(report.shim.status).toBe("unknown");
+    expect(report.evidence).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  test("a POSIX run with no observed candidate retains candidate_unavailable", async () => {
+    let calls = 0;
+    const report = await inspectCodexCliInstall({
+      ...noFilesystemDeps(() => { calls += 1; }),
+      platform: "linux",
+      configDir: "relative-config-dir",
+      env: { PATH: "" },
+    });
+    // The relative configuration path is rejected without I/O. This control
+    // preserves the existing POSIX reason when no candidate is observed.
+    expect(report.reason).toBe("candidate_unavailable");
+    expect(report.candidateAvailable).toBe(false);
+    expect(report.shim.status).toBe("not-tracked");
     expect(calls).toBe(0);
   });
 
