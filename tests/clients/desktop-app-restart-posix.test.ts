@@ -209,9 +209,17 @@ describe("the restart singleton lock", () => {
 describe("a restart already in flight does not start a second one", () => {
   test("the ladder reports restart_in_flight and touches nothing", () => {
     const { lockPath } = isolatedLock();
-    acquireDesktopRestartLock({ lockPath, pid: process.pid + 1, isAlive: () => true });
+    const holder = process.pid + 1;
+    // Liveness is stated on BOTH sides. Leaving the restart's own lock io to the real
+    // isAlive made the case depend on whether pid+1 happened to exist: alone it passed,
+    // alongside other files the holder read as dead, the lock was reclaimed as stale and
+    // the restart proceeded. The behaviour under test is contention, not pid roulette.
+    acquireDesktopRestartLock({ lockPath, pid: holder, isAlive: () => true });
     const calls: Call[] = [];
-    const result = restartCodexDesktopApp({ ...darwinIo({ calls }), lock: { lockPath } });
+    const result = restartCodexDesktopApp({
+      ...darwinIo({ calls }),
+      lock: { lockPath, isAlive: () => true },
+    });
     expect(result.reason).toBe("restart_in_flight");
     expect(calls).toEqual([]);
   });
