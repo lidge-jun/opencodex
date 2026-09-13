@@ -250,7 +250,7 @@ The connection's `tokenFingerprint` participates in
 [`ocx status` credential binding](runtime.md#remote-hub-status-credential-binding).
 
 Client catalog readiness observes the selected Codex runtime without creating or rewriting
-`codex-runtime.json`; its probe scope follows the [runtime contract](runtime.md#remote-hub-hardening-ownership).
+`codex-runtime.json`; general status reuses its already-resolved command under the [runtime contract](runtime.md#remote-hub-hardening-ownership).
 
 Client connection metadata stores a stable `apiKeyId` and a non-secret rotation `pendingOperation`. The current data secret remains only in `service-api-token`; a bounded rotation temporarily keeps the old secret in owner-only `service-api-token.prev`. Commit or recovery clears the marker before orphan cleanup. `ocx disconnect` is local-only and leaves remote revocation to the hub's **Integrations → API Keys** page. Hub and local usage stores are not mirrored.
 

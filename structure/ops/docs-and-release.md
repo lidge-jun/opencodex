@@ -20,7 +20,7 @@ Native retirement keeps active model/quota instructions aligned across locales w
 sharing a model-name fragment remain distinct from current Codex-native support.
 
 The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
-`tests/cli/cli-connect-readiness.test.ts` exercises that boundary with isolated executable fixtures.
+`tests/cli/cli-connect-readiness.test.ts` exercises that boundary and general status's single discovery pass with isolated executable fixtures.
 
 ## GitHub Pages
 

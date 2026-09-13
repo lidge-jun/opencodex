@@ -12,7 +12,7 @@ Claude-only connections keep their existing non-failing readiness policy; displa
 
 ## Connected Claude Desktop profiles
 
-The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership).
+The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership); general status hands its resolved command to this check instead of probing the version twice.
 It does not discover lower-priority alternatives after a valid selection or alter Desktop ownership.
 
 Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin

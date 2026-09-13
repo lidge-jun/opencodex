@@ -103,6 +103,8 @@ function runStatusProbe(options: {
   preferred?: "valid" | "failed" | "missing";
   persisted?: boolean;
   fullDiagnostics?: boolean;
+  /** "connect" drives `ocx connect status`; "status" drives the general `ocx status` collector. */
+  surface?: "connect" | "status";
 }): ProbeResult {
   const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-readiness-home-"));
   const codexHome = mkdtempSync(join(tmpdir(), "ocx-readiness-codex-"));
@@ -167,6 +169,9 @@ function runStatusProbe(options: {
         : ladder === null ? () => null : () => new Set(ladder);
       const catalogProbeDeps = ladder === "observed" ? {} : { supportedEfforts };
       const readOptional = path => { try { return readFileSync(path, "utf8"); } catch { return null; } };
+      const dirs = process.env.FIXTURE_RUNTIME_DIRS ? JSON.parse(process.env.FIXTURE_RUNTIME_DIRS) : null;
+      const calls = () => Object.fromEntries(Object.entries(dirs ?? {}).map(([key, dir]) =>
+        [key, (readOptional(join(dir, "calls.log")) ?? "").split(/\\r?\\n/).map(line => line.trim()).filter(Boolean)]));
       const selectionPath = join(process.env.OPENCODEX_HOME, "codex-runtime.json");
       const selectionBefore = readOptional(selectionPath);
       const lifecycleLockDeps = { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" };
@@ -176,6 +181,18 @@ function runStatusProbe(options: {
       const realError = console.error;
       (async () => {
         let exitCode, catalogUnchanged, commandCode;
+        if (process.env.FIXTURE_SURFACE === "status") {
+          const { collectStatus } = require("./src/cli/status");
+          const view = await collectStatus();
+          const observed = calls();
+          console.log(JSON.stringify({
+            lines: [], commandCode: 0, status: view.json.connection,
+            runtime: { beforeDiagnostics: observed, afterDiagnostics: observed, diagnosticsCached: true,
+              selectionUnchanged: selectionBefore === readOptional(selectionPath), failures: [] },
+            exitCode, errors, catalogUnchanged,
+          }));
+          return;
+        }
         console.log = (...parts) => captured.push(parts.join(" "));
         console.error = (...parts) => errors.push(parts.join(" "));
         try {
@@ -220,9 +237,6 @@ function runStatusProbe(options: {
         );
         let runtime;
         if (ladder === "observed") {
-          const dirs = JSON.parse(process.env.FIXTURE_RUNTIME_DIRS);
-          const calls = () => Object.fromEntries(Object.entries(dirs).map(([key, dir]) =>
-            [key, (readOptional(join(dir, "calls.log")) ?? "").split(/\\r?\\n/).map(line => line.trim()).filter(Boolean)]));
           const beforeDiagnostics = calls();
           const { resolveCodexRuntime } = require("./src/codex/runtime");
           // Same priority-only scope the status path resolved with, so this reads the memo that
@@ -260,6 +274,7 @@ function runStatusProbe(options: {
         // Desktop configuration, even transitively.
         OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop"),
         FIXTURE_LADDER: JSON.stringify(options.ladder),
+        FIXTURE_SURFACE: options.surface ?? "connect",
         ...runtimeEnv,
       },
     });
@@ -424,6 +439,27 @@ describe("connected-client runtime probe scope", () => {
     const missing = probe.runtime?.failures.filter(item => item.source === "environment") ?? [];
     expect(missing).toHaveLength(1);
     expect(missing[0]?.reason).toBe("path does not exist");
+    expect(probe.runtime?.selectionUnchanged).toBe(true);
+  }, SPAWN_BUDGET_MS);
+
+  test("a general ocx status does not re-probe the runtime it already resolved", () => {
+    // General `ocx status` answers readiness and then reports full runtime diagnostics. Both
+    // land on the same selected command, and each `codex --version` probe is allowed up to
+    // eight seconds, so resolving it twice is latency the operator pays for nothing. The
+    // readiness scope caches under its own key, so before the fix the second resolution missed.
+    const probe = runStatusProbe({ connected: true, ladder: "observed", surface: "status" });
+
+    expect(probe.status.readiness).toBe("ready");
+    // One full discovery pass, then the ladder. The pass probes the configured path and the
+    // bare `codex` fallback as separate candidates, which PATH resolves back to this fixture;
+    // what must not appear is a third `--version` after `debug models`, which is what the
+    // readiness scope added when it resolved the selection for itself.
+    expect(probe.runtime?.afterDiagnostics.selected).toEqual([
+      "--version", "--version", "debug models --bundled",
+    ]);
+    // Full discovery still runs: the lower-priority candidate is still version-probed, so the
+    // saving comes from reusing the selection rather than from narrowing what status reports.
+    expect(probe.runtime?.afterDiagnostics.lower).toEqual(["--version"]);
     expect(probe.runtime?.selectionUnchanged).toBe(true);
   }, SPAWN_BUDGET_MS);
 });

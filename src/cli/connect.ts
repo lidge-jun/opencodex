@@ -42,6 +42,15 @@ export interface ClientCommandDeps extends RuntimeApiDeps {
 export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
   /** Injected in tests; defaults to reading the materialized client catalog off disk. */
   readCatalogBody?: () => string | null;
+  /**
+   * A Codex command the caller already resolved, handed over so readiness skips resolving it
+   * again. General `ocx status` resolves the full runtime for its diagnostics block; the resolver
+   * memo is keyed by discovery scope and holds one entry, so a priority-only readiness resolve
+   * and the full one miss each other and re-probe the same command with `--version` — up to eight
+   * seconds apiece. Passing the command across adds no cache state, and it cannot disagree with
+   * what status prints because it is the selection status is printing.
+   */
+  selectedCodexCommand?: string;
 }
 
 export const CONNECT_USAGE = `Usage:
@@ -106,9 +115,12 @@ function readInstalledCatalogBody(): string | null {
  * readiness check was added to it. Stop at the first valid runtime, then hand only that command
  * to the catalog probe: readiness does not consume alternative-runtime diagnostics. The resolver
  * keeps this priority-only cache separate from the full discovery used by `ocx status`.
+ *
+ * A caller that has already resolved passes its selection in through `selectedCodexCommand` rather
+ * than paying for a second `--version` probe of the command it just resolved.
  */
-function observeLocalCodexEffortLadder(): ReadonlySet<string> | null {
-  const command = resolveCodexRuntime({ discoverAlternatives: false }).runtime.command;
+function observeLocalCodexEffortLadder(selected?: string): ReadonlySet<string> | null {
+  const command = selected ?? resolveCodexRuntime({ discoverAlternatives: false }).runtime.command;
   return codexSupportedReasoningEfforts({ commandCandidates: () => [command] });
 }
 
@@ -120,7 +132,8 @@ function observeLocalCodexEffortLadder(): ReadonlySet<string> | null {
  * a single `ocx connect`.
  */
 function catalogObserver(deps: ClientCatalogProbeDeps | undefined): CatalogCompatibilityDeps {
-  return { supportedEfforts: deps?.supportedEfforts ?? observeLocalCodexEffortLadder };
+  const selected = deps?.selectedCodexCommand;
+  return { supportedEfforts: deps?.supportedEfforts ?? (() => observeLocalCodexEffortLadder(selected)) };
 }
 
 /** The stat half of the catalog verdict, shared by the status collector and `ocx connect`. */
