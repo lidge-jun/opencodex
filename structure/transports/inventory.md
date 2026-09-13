@@ -28,6 +28,11 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
 | Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts`, `src/providers/registry.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. Provider-scoped hints fill capabilities omitted by live rosters; OpenCode Go's `deepseek-v4.1-flash` keeps its 1,048,576-token context window. Codex quota DTOs suppress retired Spark evidence under the [OpenAI scope contract](../providers/openai-tiers.md#public-provider-contract), retaining ordinary custom windows. |
 
+The registry's first-party `deepseek-flash` row declares native `text` and `image` input, so image
+requests bypass the vision sidecar by default; explicit `noVisionModels` or text-only declarations
+remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
+remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
+
 > Decision record: [ADR-0072](../decisions/ADR-0072-transport-inventory.md)
 
 Cursor external-model continuations attach data-URL screenshots from the contiguous active

@@ -525,6 +525,11 @@ The built-in DeepSeek preset also routes `deepseek-v4-flash` over its native Res
 keeps upstream SSE streaming enabled. If that model finishes every output item but omits the final
 Responses event, opencodex applies a five-second model-scoped grace repair; malformed or partial
 streams close as incomplete rather than being reported as successful.
+The first-party `deepseek-flash` model advertises native `text` and `image` input, so image requests
+are sent directly to DeepSeek by default instead of through the vision sidecar. Explicit
+`noVisionModels` or text-only declarations remain authoritative. First-party `deepseek-chat`,
+`deepseek-reasoner`, and `deepseek-v4-flash` remain sidecar-backed by default. Zen routes are
+unchanged and were not probed in this update.
 
 > **Three Volcengine billing routes:** `volcengine` is the pay-as-you-go Ark API,
 > `volcengine-coding-plan` consumes Coding Plan quota, and `volcengine-agent-plan` consumes Agent

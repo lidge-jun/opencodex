@@ -189,6 +189,10 @@ Provider-scoped capability hints remain authoritative when discovery returns an 
 capabilities. In particular, `src/providers/registry.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
 routed-model fallback.
+The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
+so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
+remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
+remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
 
 The BigModel Coding Plan Responses preset uses the separately documented
 `https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row

@@ -410,6 +410,11 @@ yönlendirir ve yukarı akış SSE akışını etkin tutar. Bu model tüm çıkt
 bitirir ancak son Responses olayını atlarsa opencodex beş saniyelik model
 kapsamlı bir yetkisiz kullanım onarımı uygular; hatalı biçimlendirilmiş veya
 kısmi akışlar başarılı olarak bildirilmek yerine tamamlanmamış olarak kapanır.
+Birinci taraf `deepseek-flash` modeli yerel olarak `text` ve `image` girdilerini bildirir; bu nedenle
+görüntü içeren istekler varsayılan olarak vision sidecar üzerinden geçmeden doğrudan DeepSeek'e gönderilir.
+Açık `noVisionModels` veya yalnızca metin bildirimleri önceliğini korur. Birinci taraf `deepseek-chat`,
+`deepseek-reasoner` ve `deepseek-v4-flash` varsayılan olarak sidecar üzerinden çalışmaya devam eder; Zen
+rotaları değişmedi ve bu güncellemede yoklanmadı.
 
 > **Üç Volcengine faturalandırma rotası:** `volcengine` kullandıkça öde Ark API'sidir, `volcengine-coding-plan` Coding Plan kotasını tüketir ve `volcengine-agent-plan` Agent Plan kotasını tüketir. Aynı ürün için verilen anahtarı ve uç noktayı kullanın; sıradan `/api/v3` uç noktası bir Plan aboneliği mevcut olduğunda bile kullandıkça öde ücretlerine neden olabilir. Önayarlar özenle seçilmiş statik model katalogları kullanır çünkü Ark'ın `/models` yanıtı yerleştirme, görsel, video ve 3D kaynaklarını da içerir, Coding ağ geçidi aynı geniş kataloğu döndürür ve Agent Plan ağ geçidinin `/models` kaynağı yoktur. Kullandıkça öde varsayılan olarak `doubao-seed-2-1-pro-260628`'dir; seçilmiş kataloğu güncel DeepSeek ve GLM metin modellerini de içerir. Coding Plan varsayılan olarak `ark-code-latest`, Agent Plan ise varsayılan olarak `deepseek-v4-flash`'dur.
 

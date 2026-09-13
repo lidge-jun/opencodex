@@ -316,6 +316,10 @@ provider，例如 **Xiaomi MiMo**，使用 `anthropic` adapter（`x-api-key`）�
 原生 Responses endpoint，並保持上游 SSE streaming。若該模型完成所有 output item 卻省略最後的
 Responses event，opencodex 會套用 5 秒、model-scoped 的 grace repair；malformed 或 partial stream 會以
 incomplete 關閉，不會被誤報為成功。
+第一方 `deepseek-flash` 模型原生宣告支援 `text` 與 `image` 輸入，因此圖片請求預設會直接送往
+DeepSeek，不經過 vision sidecar。明確的 `noVisionModels` 或純文字宣告仍然優先。第一方
+`deepseek-chat`、`deepseek-reasoner` 與 `deepseek-v4-flash` 預設仍使用 sidecar；Zen 路由維持不變，
+本次更新未進行探測。
 
 > **三條 Volcengine 計費路徑：** `volcengine` 是 pay-as-you-go Ark API，
 > `volcengine-coding-plan` 消耗 Coding Plan quota，`volcengine-agent-plan` 消耗 Agent Plan quota。請使用

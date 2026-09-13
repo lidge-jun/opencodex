@@ -94,6 +94,10 @@ Devin CLI credential path composition in `src/oauth/devin-cli.ts` follows the se
 Provider-scoped catalog hints remain isolated by provider in `src/providers/registry.ts`. The
 OpenCode Go `deepseek-v4.1-flash` 1,048,576-token context hint does not change xAI model metadata or
 transport behavior.
+The first-party DeepSeek `deepseek-flash` native `text`/`image` declaration is likewise scoped to
+the DeepSeek provider and does not alter xAI metadata or transport behavior; explicit capability
+overrides remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and
+`deepseek-v4-flash` remain sidecar-backed by default. Zen routes are unchanged and unprobed here.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
