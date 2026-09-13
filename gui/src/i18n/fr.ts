@@ -474,7 +474,7 @@ export const fr: Record<TKey, string> = {
   "subagentSurface.selectionTitle": "Passer l’interface de sous-agents à {mode} ?",
   "subagentSurface.selectionBody": "Sur {mode}, les modèles ChatGPT qui utilisent l’interface v2 (Sol et Terra sur base, tous les modèles sur v2) confient leur tâche, chiffrée pour le backend ChatGPT, à un modèle routé tel que Grok ou Claude, et le modèle routé ne peut pas la lire. Cette délégation échoue avec unreadable_encrypted_agent_task tant que ce n’est pas corrigé en amont. v1 délègue de manière fiable entre fournisseurs.",
   "subagentSurface.advisoryTitle": "v1 est désormais l’interface de sous-agents par défaut",
-  "subagentSurface.advisoryBody": "Cette installation utilise {mode}, où un modèle ChatGPT sur l’interface v2 confie à un modèle routé une tâche chiffrée qu’il ne peut pas lire, si bien que la délégation entre fournisseurs échoue. Nous recommandons v1 tant que ce n’est pas corrigé en amont. Votre paramètre actuel reste inchangé tant que vous ne choisissez pas.",
+  "subagentSurface.advisoryBody": "Cette installation utilise {mode}, où un modèle ChatGPT sur l’interface v2 confie à un modèle routé une tâche chiffrée qu’il ne peut pas lire, si bien que la délégation entre fournisseurs échoue. Nous recommandons v1 tant que ce n’est pas corrigé en amont. Votre paramètre actuel reste inchangé jusqu’à ce que vous fassiez un choix.",
   "subagentSurface.continue": "Continuer",
   "subagentSurface.switchToV1": "Passer à v1",
   "subagentSurface.learnMore": "Pourquoi cet échec",
