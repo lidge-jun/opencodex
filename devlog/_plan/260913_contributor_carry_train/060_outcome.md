@@ -115,16 +115,15 @@ would turn model output into tool execution.
 A scoped slice with an accurate description is what the packet asked for, and
 refusing to close the issue is the part that makes it honest.
 
-## What the last review surfaced
+## Final integration evidence
 
-The security review of #4515 verified credential isolation per backend rather
-than accepting the claim: only ollama spends the serving provider's key, and only
-on the planner-admitted endpoint. It also found a pre-existing gap that this slice
-does not widen -- webSearchBridge.endpoint skips the destination policy that
-provider baseUrl values go through, so an ollama endpoint pointed at a metadata
-address would receive the serving API key. That is filed as #4519 rather than
-attributed to the change that exposed it.
+Cross-platform CI run [34760250023](https://github.com/lidge-jun/opencodex/actions/runs/34760250023)
+completed successfully on `cb2e15ba6f8ac17af0620d6ff04fcfa7d88e3dcd`, the
+merge commit for the last implementation PR, #4515. This verifies the integrated
+batch; conditional jobs remain skips rather than claimed passes.
 
+#4429 remains partially unresolved: the non-Ollama executor slice landed, while
+mixed-tool continuation remains open. The separate follow-up is tracked in #4519.
 
 ## Honest limits of the proof
 
