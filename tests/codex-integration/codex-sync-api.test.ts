@@ -267,10 +267,13 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(result.message).toBe(refusal);
   });
 
-  test("an unattended sync keeps the hard failure on the same history refusal", async () => {
+  // The reason matters: a paginated store no longer refuses the injection at all, so stubbing
+  // that one here would guard a shape the injector cannot produce. An operational reason still
+  // refuses, and an unattended sync must not soften it or gather a catalog first.
+  test("an unattended sync keeps the hard failure on a non-terminal history refusal", async () => {
     let refreshCalls = 0;
     const errors: string[] = [];
-    const refusal = "Codex config injection refused: history_paginated_requires_native_writer.";
+    const refusal = "Codex config injection refused: history_injection_preflight_unavailable.";
 
     const result = await syncModelsToCodex(12345, config, { log: () => {}, error: line => errors.push(String(line)) }, {
       admitCodexWrite: admittedSync,
@@ -280,7 +283,7 @@ describe("GUI/CLI Codex sync backend", () => {
       },
       injectCodexConfig: async () => ({
         success: false,
-        historyPreflightFailureReason: "history_paginated_requires_native_writer",
+        historyPreflightFailureReason: "history_injection_preflight_unavailable",
         message: refusal,
       }),
       currentExternalCodexModelProvider: () => null,
