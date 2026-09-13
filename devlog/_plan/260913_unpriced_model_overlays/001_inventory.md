@@ -14,7 +14,7 @@ glm-4.7-flash, glm-5, glm-5-turbo, glm-5.1, glm-5.2, glm-5.3, glm-5v-turbo
 - registry의 `zai` provider는 GLM Coding Plan(구독) — 단가 미공개가 불릴 수 있음.
 - zhipu-bigmodel(PAYG, open.bigmodel.cn)이 jawcodeBundle:"zai"를 씀 — PAYG 단가가
   공개돼 있으면 bigmodel 쪽은 verified 가능.
-- glm-5.3-flash는 DATA에 없음(registry 수동 시드) — 번들 밖이라 별도 처리 불필요.
+- glm-5.3-flash는 DATA에 없음(registry 수동 시드) — 77행 inventory 밖이지만 overlay는 provider+model exact라 등재 대상에 포함.
 
 ## google (10)
 

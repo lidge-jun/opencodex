@@ -10,7 +10,7 @@ not-published/unverified 사유를 기록하고, 확보된 것만 expected-price
 | lane | 대상 | 방법 |
 |---|---|---|
 | zai | GLM 14종 + glm-5.3-flash | Aside repl/exec로 docs.z.ai + bigmodel.cn 가격 페이지 열람 |
-| google-gemma | gemma-3-27b-it, gemma-4-* 8종 | 공식 Gemini API pricing에서 Gemma 과금 여부 확인 |
+| google-gemma | gemma 8종(gemma-3-27b-it + gemma-4 계열 7종) | 공식 Gemini API pricing에서 Gemma 과금 여부 확인 |
 | cerebras | qwen-3-coder-480b, zai-glm-4.6 | cloud.cerebras.ai pricing 열람 |
 | mistral | labs-devstral-small-2512 | mistral.ai pricing / docs 열람 |
 | xai | grok-composer-2.5-fast | docs.x.ai pricing 재검증 |

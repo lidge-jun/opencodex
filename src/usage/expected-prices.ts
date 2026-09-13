@@ -73,8 +73,10 @@ const KIMI_K25: Cost4 = { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0.6
 /*
  * Z.AI GLM list prices (USD / 1M tokens), verified 2026-09-13 against
  * https://docs.z.ai/guides/overview/pricing. Neither z.ai nor bigmodel.cn
- * publishes a cache-write rate — both list cache storage as limited-time free —
- * so cacheWrite is 0 everywhere. glm-4.5-flash and glm-4.7-flash are officially
+ * publishes a cache-write rate — both list cache storage as limited-time free,
+ * an open-beta promotion the vendor may change or end — so cacheWrite is 0 as a
+ * 2026-09-13 snapshot, not a guaranteed rate; re-check the pricing page before
+ * relying on it long-term. glm-4.5-flash and glm-4.7-flash are officially
  * "Free" and deliberately get no rows: a zero-cost overlay is inert in the
  * resolver, which requires a nonzero tuple. glm-5-turbo / glm-5v-turbo are
  * published only in CNY on bigmodel.cn and stay unregistered — the same hold

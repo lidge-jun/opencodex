@@ -22,8 +22,8 @@
 
 등재: 4 provider 표면(zai, zhipu-bigmodel, zhipu-bigmodel-coding,
 zhipu-bigmodel-responses) × 노출 모델 = 25행, 전부 verified-derived
-(구독/CNY 표면에 z.ai 정가를 estimate로 표시). cacheWrite=0 — 양쪽 공식 모두
-cache-write 단가 미공개(cache storage limited-time free).
+(구독/CNY 표면에 z.ai 정가를 estimate로 표시). cacheWrite=0 — 양쪽 공식 모두 cache-write 단가 미공개(cache storage는 limited-time free
+오픈베타 프로모션). 2026-09-13 스냅샷이며 종료/변경 가능 — 장기 의존 전 재확인 필요.
 
 ## google gemma — not-published 전원
 
