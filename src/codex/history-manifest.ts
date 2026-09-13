@@ -54,8 +54,11 @@ export type CodexHistoryManifestValidation =
       readonly scope: "manifest" | "entry-shape" | "entry-provenance";
     };
 
-function stripWindowsPathPrefix(path: string): string {
-  if (process.platform !== "win32") return path;
+/**
+ * Strips Windows extended-length and device prefixes (e.g. \\?\, \\.\, //?/, //./, \\?\UNC\, //?/UNC/)
+ * to allow deterministic path comparison across tools. Pure string operation independent of host OS.
+ */
+export function stripWindowsPathPrefix(path: string): string {
   if (/^(\\\\(\?|\.)\\UNC\\|\/\/(\?|\.)\/UNC\/)/i.test(path)) {
     return "\\\\" + path.slice(8);
   }

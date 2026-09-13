@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, restoredUserEventFor, setAfterNoopPendingCountForTests, setAfterStrictHistoryRolloutAppendForTests, setBeforeHistoryApplyTransactionForTests, setBeforeHistoryBackupConsumeForTests, setBeforeStrictHistoryRolloutAppendForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../../src/codex/history-provider";
-import { sameCodexHistoryPath } from "../../src/codex/history-manifest";
+import { sameCodexHistoryPath, stripWindowsPathPrefix } from "../../src/codex/history-manifest";
 import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "../helpers/codex-history-manifest-fixtures";
 import { preflightCodexHistoryInjection, setHistoryAppendHooksForTests } from "../../src/codex/history-provider";
 
@@ -1513,6 +1513,19 @@ describe("Design B migration helpers", () => {
     const db = new Database(pending.dbPath, { readonly: true });
     expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "openai" });
     db.close();
+  });
+
+  test("stripWindowsPathPrefix normalizes Windows extended prefixes platform-independently", () => {
+    expect(stripWindowsPathPrefix("\\\\?\\C:\\Users\\test\\state.db")).toBe("C:\\Users\\test\\state.db");
+    expect(stripWindowsPathPrefix("\\\\.\\C:\\Users\\test\\state.db")).toBe("C:\\Users\\test\\state.db");
+    expect(stripWindowsPathPrefix("//?/C:/Users/test/state.db")).toBe("C:/Users/test/state.db");
+    expect(stripWindowsPathPrefix("//./C:/Users/test/state.db")).toBe("C:/Users/test/state.db");
+    expect(stripWindowsPathPrefix("\\\\?\\UNC\\server\\share\\path")).toBe("\\\\server\\share\\path");
+    expect(stripWindowsPathPrefix("\\\\?\\unc\\server\\share\\path")).toBe("\\\\server\\share\\path");
+    expect(stripWindowsPathPrefix("//?/UNC/server/share/path")).toBe("\\\\server/share/path");
+    expect(stripWindowsPathPrefix("C:\\standard\\path")).toBe("C:\\standard\\path");
+    expect(stripWindowsPathPrefix("/unix/style/path")).toBe("/unix/style/path");
+    expect(stripWindowsPathPrefix("")).toBe("");
   });
 
   test("sameCodexHistoryPath normalizes Windows extended-length and device path prefixes", () => {
