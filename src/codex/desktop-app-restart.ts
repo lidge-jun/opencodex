@@ -141,18 +141,28 @@ function waitForExit(
  * identity across that window; the start-time token is what distinguishes a process
  * from its replacement.
  */
-function stillSameProcess(
+type IdentityCheck = "same" | "gone" | "unknown";
+
+function checkIdentity(
   adapter: DesktopAppAdapter,
   exec: DesktopExec,
   install: Parameters<DesktopAppAdapter["listProcesses"]>[1],
   target: DesktopProcess,
-): boolean {
+): IdentityCheck {
   const processes = adapter.listProcesses(exec, install);
-  // Fail CLOSED on a failed re-probe. This guards a kill, and "we could not look" must
-  // not be read as "the pid was recycled and now belongs to someone else".
-  if (processes === null) return false;
+  // THREE outcomes, not two. Collapsing them into a boolean is what made this ladder
+  // claim a restart it never performed: a re-probe that could not RUN looked identical
+  // to a process that had exited, and the caller recorded the pid as stopped, skipped
+  // the forced pass, and relaunched into an app that was still running - reporting
+  // success the whole way. Measured on a real Windows host, where the app kept its
+  // original pid and start time through a restart that said it had stopped it.
+  if (processes === null) return "unknown";
   const current = processes.find(entry => entry.pid === target.pid);
-  return current !== undefined && current.createdAt === target.createdAt;
+  if (current === undefined) return "gone";
+  // Same pid, different start time: the pid was recycled and now belongs to somebody
+  // else. Treated as gone, because the process we meant to stop no longer exists and
+  // signalling this pid would hit an unrelated process.
+  return current.createdAt === target.createdAt ? "same" : "gone";
 }
 
 /**
@@ -237,8 +247,16 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
     for (const shell of shells) {
       const pid = shell.pid;
       // The listing is already one probe old.
-      if (!stillSameProcess(adapter, exec, install, shell)) {
+      const before = checkIdentity(adapter, exec, install, shell);
+      if (before === "gone") {
         stopped.push(pid);
+        continue;
+      }
+      if (before === "unknown") {
+        // We could not look, so we cannot claim this exited and we must not signal a
+        // process we failed to re-verify. Reporting it as surviving is the honest answer:
+        // it blocks the relaunch, which is exactly right when the tree state is unknown.
+        surviving.push(pid);
         continue;
       }
       try {
@@ -246,14 +264,23 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
       } catch {
         /* a refused graceful close still gets the forced pass below */
       }
-      if (waitForExit(pid, GRACEFUL_EXIT_TIMEOUT_MS, isAlive, sleep, now)) {
+      if (waitForExit(pid, GRACEFUL_EXIT_TIMEOUT_MS, isAlive, sleep, now)
+        && checkIdentity(adapter, exec, install, shell) === "gone") {
+        // Liveness AND enumeration have to agree before a stop is claimed. A pid-based
+        // liveness probe is a weaker instrument than the platform's own process list,
+        // and on a packaged app the two can disagree.
         stopped.push(pid);
         continue;
       }
       // The wait window is long enough for a pid to be recycled, and the next step is a
       // hard kill. Confirm it is still the process we verified, or leave it alone.
-      if (!stillSameProcess(adapter, exec, install, shell)) {
+      const afterGraceful = checkIdentity(adapter, exec, install, shell);
+      if (afterGraceful === "gone") {
         stopped.push(pid);
+        continue;
+      }
+      if (afterGraceful === "unknown") {
+        surviving.push(pid);
         continue;
       }
       try {
@@ -261,8 +288,15 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
       } catch {
         /* the process state decides, not the exit code */
       }
-      if (waitForExit(pid, FORCED_EXIT_TIMEOUT_MS, isAlive, sleep, now)) stopped.push(pid);
-      else surviving.push(pid);
+      // Same rule after the forced pass: only an enumeration that no longer contains this
+      // process proves it stopped. Everything else is a survivor, and a survivor blocks
+      // the relaunch rather than producing a second shell beside a live one.
+      if (waitForExit(pid, FORCED_EXIT_TIMEOUT_MS, isAlive, sleep, now)
+        && checkIdentity(adapter, exec, install, shell) === "gone") {
+        stopped.push(pid);
+      } else {
+        surviving.push(pid);
+      }
     }
 
     if (surviving.length > 0) {

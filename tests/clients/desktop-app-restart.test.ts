@@ -46,6 +46,11 @@ function scriptedIo(options: {
   throwOn?: (file: string, args: readonly string[]) => boolean;
 }): DesktopAppRestartIo {
   const polls = new Map<number, number>();
+  // A process that has exited must also STOP BEING LISTED. Modelling exit only through
+  // isAlive made these doubles unable to express the defect measured on a real Windows
+  // host, where the ladder recorded a stop that never happened; the enumeration is the
+  // authoritative signal and the double has to behave like one.
+  const dead = new Set<number>();
   return {
     platform: "win32",
     // A per-case lock path. The restart now takes a singleton lock, and without this
@@ -59,14 +64,26 @@ function scriptedIo(options: {
     isAlive: pid => {
       const n = (polls.get(pid) ?? 0) + 1;
       polls.set(pid, n);
-      return options.aliveFor ? options.aliveFor(pid, n) : false;
+      const alive = options.aliveFor ? options.aliveFor(pid, n) : false;
+      if (!alive) dead.add(pid);
+      return alive;
     },
     execFile: (file, args) => {
       options.calls.push({ file, args: [...args] });
       if (options.throwOn?.(file, args)) throw new Error("exec failed");
       const joined = args.join(" ");
       if (joined.includes("Get-AppxPackage")) return options.discovery ?? "MISS";
-      if (joined.includes("Win32_Process")) return options.processes ?? "";
+      if (joined.includes("Win32_Process")) {
+        const listing = options.processes ?? "";
+        if (dead.size === 0) return listing;
+        return listing
+          .split("\n")
+          .filter(line => {
+            const pid = Number(line.trim().split(/\s+/)[0]);
+            return !Number.isSafeInteger(pid) || !dead.has(pid);
+          })
+          .join("\n");
+      }
       return "";
     },
   };

@@ -41,18 +41,23 @@ function darwinIo(options: {
   psThrows?: boolean;
   bundleId?: string;
 }): DesktopAppRestartIo {
+  // A process that has exited must also STOP BEING LISTED. Modelling exit only through
+  // isAlive is what let a ladder claim a stop the enumeration still contradicted.
+  const dead = new Set<number>();
   return {
     platform: "darwin",
     lock: isolatedLock(),
     ancestryPids: () => options.ancestry ?? [99_999],
-    isAlive: () => false,
+    isAlive: (pid: number) => { dead.add(pid); return false; },
     sleep: () => {},
     now: (() => { let t = 0; return () => (t += 500); })(),
     execFile: (file, args) => {
       options.calls.push({ file, args: [...args] });
       if (file === "/bin/ps") {
         if (options.psThrows) throw new Error("ps failed");
-        return psRows(options.rows ?? [[15901, 1, SHELL]]);
+        const rows = (options.rows ?? [[15901, 1, SHELL]] as Array<[number, number, string]>)
+          .filter(([pid]) => !dead.has(pid));
+        return psRows(rows);
       }
       if (file === "/usr/libexec/PlistBuddy") return options.bundleId ?? "com.openai.codex";
       return "";
@@ -144,12 +149,20 @@ describe("macOS desktop restart", () => {
     // Everything DID die; it is the relaunch that failed. Reporting the two as one sent
     // operators looking for processes that were not there.
     const calls: Call[] = [];
+    // This double overrides execFile wholesale, so it has to model exit itself: the
+    // shell stops being listed once liveness has reported it dead, exactly as the real
+    // enumeration behaves.
+    const dead = new Set<number>();
     const result = restartCodexDesktopApp({
       ...darwinIo({ calls }),
+      isAlive: (pid: number) => { dead.add(pid); return false; },
       execFile: (file, args) => {
         calls.push({ file, args: [...args] });
         if (file === "/usr/bin/open") throw new Error("LSCopyApplicationURLsForBundleIdentifier() failed");
-        if (file === "/bin/ps") return psRows([[15901, 1, SHELL]]);
+        if (file === "/bin/ps") {
+          return psRows(([[15901, 1, SHELL]] as Array<[number, number, string]>)
+            .filter(([pid]) => !dead.has(pid)));
+        }
         if (file === "/usr/libexec/PlistBuddy") return "com.openai.codex";
         return "";
       },
@@ -157,6 +170,71 @@ describe("macOS desktop restart", () => {
     expect(result.reason).toBe("relaunch_failed");
     expect(result.surviving).toEqual([]);
     expect(result.stopped).toEqual([15901]);
+  });
+});
+
+describe("a stop is only ever claimed when the enumeration agrees (measured on Windows)", () => {
+  // The defect this pins was invisible to ten rounds of code review and surfaced in the
+  // first thirty seconds of running the ladder on a real Windows host: it reported
+  // {"stopped":[27788],"surviving":[],"relaunch":"started"} while the app kept its
+  // original pid AND start time throughout. A pid-based liveness probe is a weaker
+  // instrument than the platform's own process list, and when the two disagree the list
+  // wins - otherwise the ladder relaunches into an app that never quit and tells the
+  // operator it restarted.
+  test("liveness saying dead does not override an enumeration that still lists the process", () => {
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp({
+      platform: "darwin",
+      lock: isolatedLock(),
+      ancestryPids: () => [99_999],
+      // Liveness lies: it claims the process is gone.
+      isAlive: () => false,
+      sleep: () => {},
+      now: (() => { let t = 0; return () => (t += 500); })(),
+      execFile: (file, args) => {
+        calls.push({ file, args: [...args] });
+        // The enumeration keeps listing it, unchanged, which is the truth.
+        if (file === "/bin/ps") return psRows([[15901, 1, SHELL]]);
+        if (file === "/usr/libexec/PlistBuddy") return "com.openai.codex";
+        return "";
+      },
+    });
+    expect(result.stopped).toEqual([]);
+    expect(result.surviving).toEqual([15901]);
+    expect(result.relaunch).toBe("skipped");
+    expect(result.reason).toBe("targets_survived");
+    // And crucially: no relaunch beside a live app.
+    expect(calls.some(call => call.file === "/usr/bin/open")).toBe(false);
+  });
+
+  test("a re-probe that cannot run is a survivor, never a silent success", () => {
+    // "We could not look" must not read as "it exited". Reporting a survivor blocks the
+    // relaunch, which is the right outcome when the tree state is unknown.
+    const calls: Call[] = [];
+    let probes = 0;
+    const result = restartCodexDesktopApp({
+      platform: "darwin",
+      lock: isolatedLock(),
+      ancestryPids: () => [99_999],
+      isAlive: () => false,
+      sleep: () => {},
+      now: (() => { let t = 0; return () => (t += 500); })(),
+      execFile: (file, args) => {
+        calls.push({ file, args: [...args] });
+        if (file === "/usr/libexec/PlistBuddy") return "com.openai.codex";
+        if (file === "/bin/ps") {
+          probes += 1;
+          // Discovery and the first enumeration succeed; the re-verification fails.
+          if (probes > 2) throw new Error("ps failed");
+          return psRows([[15901, 1, SHELL]]);
+        }
+        return "";
+      },
+    });
+    expect(result.stopped).toEqual([]);
+    expect(result.surviving).toEqual([15901]);
+    expect(result.reason).toBe("targets_survived");
+    expect(calls.some(call => call.file === "/usr/bin/open")).toBe(false);
   });
 });
 
