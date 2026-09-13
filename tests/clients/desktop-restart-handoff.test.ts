@@ -72,6 +72,17 @@ describe("starting a handoff", () => {
     expect(owner).toBe(9001);
   });
 
+  test("a lock transfer that did not take is reported as a failure, not a handoff", () => {
+    // Otherwise the caller skips its release, the lock keeps naming a process that is
+    // about to exit, and it reads as stale for the whole helper wait.
+    const dir = home();
+    const spawned: { command?: string; args?: string[] } = {};
+    const io = startIo(dir, spawned, 9001);
+    // Nobody owns the lock, so the owner-check inside transfer fails.
+    const outcome = startDesktopRestartHandoff(io);
+    expect(outcome).toEqual({ kind: "failed", reason: "lock_transfer_failed" });
+  });
+
   test("a spawn that produced no pid is a failure, and the plan is cleaned up", () => {
     const dir = home();
     const spawned: { command?: string; args?: string[] } = {};
@@ -98,8 +109,10 @@ describe("running the handoff", () => {
     };
   }
 
+  // The name matters: the helper refuses any --plan outside the opencodex home or not
+  // named like a plan this CLI writes, so a generic "plan.json" is correctly rejected.
   function writePlan(dir: string, plan: unknown): string {
-    const path = join(dir, "plan.json");
+    const path = join(dir, "desktop-restart-handoff-4242-abc123.json");
     writeFileSync(path, JSON.stringify(plan));
     return path;
   }
@@ -108,6 +121,7 @@ describe("running the handoff", () => {
     const dir = home();
     const path = writePlan(dir, { schemaVersion: 1, callerPid: 4242, createdAtMs: 1_900 });
     const outcome = await runDesktopRestartHandoff(path, runIo(dir, {
+      readLockOwner: () => 9001,
       restart: () => ({ relaunch: "started" as const, stopped: [15901], surviving: [] }),
     }));
     expect(outcome).toBe("restarted");
@@ -143,11 +157,46 @@ describe("running the handoff", () => {
     expect(restarted).toBe(false);
   });
 
-  test("an unreadable plan is refused", async () => {
+  test("an unreadable plan is refused and NOT deleted", async () => {
     const dir = home();
-    const path = join(dir, "plan.json");
+    const path = join(dir, "desktop-restart-handoff-4242-abc123.json");
     writeFileSync(path, "{not json");
     expect(await runDesktopRestartHandoff(path, runIo(dir))).toBe("plan_unreadable");
+    // Deleting on a failed parse would destroy a file that merely sits in the right
+    // place under the right name.
+    expect(existsSync(path)).toBe(true);
+  });
+
+  test("a --plan outside the opencodex home is refused without being deleted", async () => {
+    // Unlinking whatever --plan points at would turn this hidden helper command into an
+    // unlink oracle for any same-uid caller.
+    const dir = home();
+    const outside = join(home(), "config.json");
+    writeFileSync(outside, JSON.stringify({ schemaVersion: 1, callerPid: 4242, createdAtMs: 1_900 }));
+    expect(await runDesktopRestartHandoff(outside, runIo(dir))).toBe("plan_unreadable");
+    expect(existsSync(outside)).toBe(true);
+  });
+
+  test("a plan whose name is not one this CLI writes is refused", async () => {
+    const dir = home();
+    const path = join(dir, "plan.json");
+    writeFileSync(path, JSON.stringify({ schemaVersion: 1, callerPid: 4242, createdAtMs: 1_900 }));
+    expect(await runDesktopRestartHandoff(path, runIo(dir))).toBe("plan_unreadable");
+    expect(existsSync(path)).toBe(true);
+  });
+
+  test("the helper refuses to act unless the lock names it", async () => {
+    // A failed transfer, or somebody reclaiming the lock, must not produce a second
+    // unsynchronised ladder.
+    const dir = home();
+    const path = writePlan(dir, { schemaVersion: 1, callerPid: 4242, createdAtMs: 1_900 });
+    let restarted = false;
+    const outcome = await runDesktopRestartHandoff(path, runIo(dir, {
+      readLockOwner: () => 12_345,
+      restart: () => { restarted = true; return { relaunch: "started" as const, stopped: [], surviving: [] }; },
+    }));
+    expect(outcome).toBe("not_lock_owner");
+    expect(restarted).toBe(false);
   });
 
   test("the helper never hands off again, so recursion is impossible", async () => {
@@ -155,6 +204,7 @@ describe("running the handoff", () => {
     const path = writePlan(dir, { schemaVersion: 1, callerPid: 4242, createdAtMs: 1_900 });
     const seen: boolean[] = [];
     await runDesktopRestartHandoff(path, runIo(dir, {
+      readLockOwner: () => 9001,
       restart: allowHandoff => {
         seen.push(allowHandoff);
         return { relaunch: "started" as const, stopped: [], surviving: [] };

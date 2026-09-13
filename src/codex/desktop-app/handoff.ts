@@ -27,9 +27,14 @@
  */
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { getConfigDir } from "../../config/paths";
-import { releaseDesktopRestartLock, transferDesktopRestartLock, type DesktopRestartLockIo } from "./lock";
+import {
+  readDesktopRestartLockOwner,
+  releaseDesktopRestartLock,
+  transferDesktopRestartLock,
+  type DesktopRestartLockIo,
+} from "./lock";
 
 /** How long the helper waits for its caller to exit before giving up. */
 const CALLER_EXIT_TIMEOUT_MS = 20_000;
@@ -46,7 +51,7 @@ export interface DesktopRestartHandoffPlan {
 
 export type HandoffStartOutcome =
   | { kind: "started"; helperPid: number; logPath: string }
-  | { kind: "failed"; reason: "no_executable" | "plan_write_failed" | "spawn_failed" };
+  | { kind: "failed"; reason: "no_executable" | "plan_write_failed" | "spawn_failed" | "lock_transfer_failed" };
 
 export interface HandoffIo {
   now?: () => number;
@@ -84,7 +89,7 @@ export function resolveHelperCommand(io: HandoffIo = {}): { command: string; arg
 
 function writePlan(path: string, plan: DesktopRestartHandoffPlan): boolean {
   try {
-    mkdirSync(join(path, ".."), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true });
     // Exclusive create: the path is handed to another process, so it must not be
     // possible to hand over a file somebody else authored.
     const fd = openSync(path, "wx", 0o600);
@@ -129,7 +134,16 @@ export function startDesktopRestartHandoff(io: HandoffIo = {}): HandoffStartOutc
   // Hand the lock over only AFTER a successful spawn. Doing it earlier would strand the
   // lock on a pid that never came into being, and the next restart would have to wait
   // out the staleness window for nothing.
-  transferDesktopRestartLock(child.pid, io.lock);
+  //
+  // A FAILED transfer is not cosmetic. The lock would still name this process, which is
+  // about to exit, so it reads as stale for the whole helper wait and a concurrent
+  // restart could reclaim it and run a second ladder - the dual-kill the lock exists to
+  // prevent. Reporting failure here is safe because the helper independently refuses to
+  // act unless the lock names IT, so the spawned process becomes a no-op rather than an
+  // unsupervised restart.
+  if (!transferDesktopRestartLock(child.pid, io.lock)) {
+    return { kind: "failed", reason: "lock_transfer_failed" };
+  }
   return { kind: "started", helperPid: child.pid, logPath: handoffLogPath(io) };
 }
 
@@ -160,6 +174,21 @@ function readPlan(path: string): DesktopRestartHandoffPlan | null {
   }
 }
 
+/** True when the path is inside the opencodex home AND named like a plan this CLI writes. */
+export function isOwnPlanPath(planPath: string, io: HandoffIo = {}): boolean {
+  const home = io.homeDir ?? getConfigDir();
+  let resolvedPlan: string;
+  let resolvedHome: string;
+  try {
+    resolvedHome = resolve(home);
+    resolvedPlan = resolve(planPath);
+  } catch {
+    return false;
+  }
+  if (dirname(resolvedPlan) !== resolvedHome) return false;
+  return /^desktop-restart-handoff-\d+-[a-z0-9]+\.json$/.test(basename(resolvedPlan));
+}
+
 function defaultIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -180,7 +209,7 @@ function defaultSleep(ms: number): void {
 function appendLog(io: HandoffIo, entry: Record<string, unknown>): void {
   try {
     const path = handoffLogPath(io);
-    mkdirSync(join(path, ".."), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, JSON.stringify({ at: new Date((io.now ?? Date.now)()).toISOString(), ...entry }) + "\n");
   } catch {
     /* the restart matters more than the record of it */
@@ -198,8 +227,20 @@ export async function runDesktopRestartHandoff(
 ): Promise<HandoffRunOutcome> {
   const now = io.now ?? Date.now;
   const self = io.pid ?? process.pid;
+  // Only ever touch a file this CLI could have written. Unlinking whatever --plan points
+  // at turned a hidden helper command into an unlink oracle: a same-uid caller could pass
+  // a config path and have it deleted on the way to being told the plan was unreadable.
+  if (!isOwnPlanPath(planPath, io)) {
+    appendLog(io, { outcome: "plan_unreadable" });
+    releaseDesktopRestartLock(io.lock);
+    return "plan_unreadable";
+  }
   const plan = readPlan(planPath);
-  try { unlinkSync(planPath); } catch { /* the plan is single-use either way */ }
+  // Unlink only AFTER the shape is confirmed, so a file that merely lives in the right
+  // directory under the right name is still not destroyed by a malformed read.
+  if (plan) {
+    try { unlinkSync(planPath); } catch { /* the plan is single-use either way */ }
+  }
   if (!plan) {
     appendLog(io, { outcome: "plan_unreadable" });
     releaseDesktopRestartLock(io.lock);
@@ -231,6 +272,15 @@ export async function runDesktopRestartHandoff(
     return "caller_still_running";
   }
 
+  // The lock must name THIS process. It was made out to us by the caller; if it names
+  // anybody else, the transfer failed or somebody reclaimed it, and acting now would be
+  // the unsynchronised second ladder the lock exists to prevent.
+  const owner = (io.readLockOwner ?? (() => readDesktopRestartLockOwner(io.lock)))();
+  if (owner !== self) {
+    appendLog(io, { outcome: "not_lock_owner" });
+    return "not_lock_owner";
+  }
+
   try {
     const restart = io.restart
       ? io.restart(false)
@@ -249,11 +299,5 @@ export async function runDesktopRestartHandoff(
   } finally {
     releaseDesktopRestartLock(io.lock);
   }
-}
-
-/** True when this process owns the handed-over lock. */
-export function helperOwnsLock(io: HandoffRunIo = {}): boolean {
-  const owner = io.readLockOwner?.() ?? null;
-  return owner === null || owner === (io.pid ?? process.pid);
 }
 

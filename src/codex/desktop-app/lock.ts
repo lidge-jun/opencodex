@@ -201,6 +201,11 @@ export function transferDesktopRestartLock(
   }
 }
 
+/** Who currently holds the lock, or null when nobody does or it is unreadable. */
+export function readDesktopRestartLockOwner(io: DesktopRestartLockIo = {}): number | null {
+  return readRecord(io.lockPath ?? defaultLockPath())?.ownerPid ?? null;
+}
+
 /** Compare-and-delete. Never removes a lock owned by another process. */
 export function releaseDesktopRestartLock(io: DesktopRestartLockIo = {}): void {
   const path = io.lockPath ?? defaultLockPath();
