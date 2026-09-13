@@ -490,6 +490,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleDisconnectCommand } = await import("./connect");
     return await handleDisconnectCommand(deps.args.slice(1));
   },
+  catalog: async deps => {
+    const { handleCatalogCommand } = await import("./catalog");
+    return await handleCatalogCommand(deps.args.slice(1));
+  },
   "sync-cache": async deps => {
     const cacheArgs = deps.args.slice(1);
     const restartCodex = cacheArgs.includes("--restart-codex");
