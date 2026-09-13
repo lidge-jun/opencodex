@@ -17,6 +17,7 @@ src/generated/compatibility-version.json
 devlog/_chase/_cca/
 devlog/_chase/_litellm/
 devlog/_chase/DSCodex/
+devlog/_chase/CLIProxyAPIPlus/
 devlog/_fin/opencode-cursor/
 devlog/_plan/*/_ref_*/
 devlog/**/*-security-redaction/
