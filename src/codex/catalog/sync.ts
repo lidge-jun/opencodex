@@ -300,6 +300,7 @@ function routedDisplayName(slug: string, model?: CatalogModel, config?: Pick<Ocx
   if (slash <= 0) return slug;
   const provider = slug.slice(0, slash);
   let modelId = slug.slice(slash + 1);
+  if (provider === "google-antigravity" || provider === "xai") return modelId;
   if (provider === "google-antigravity") {
     if (model?.providerAlias === null) return slug;
     const alias = (typeof model?.providerAlias === "string" && model.providerAlias.trim().length > 0)

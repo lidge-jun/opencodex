@@ -20,6 +20,7 @@ import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
+import { googleContentFilterEvent, googleTextPolicyRefusalEvent } from "./google-content-filter";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import { identifyRoutedModel } from "./identity";
@@ -48,9 +49,9 @@ import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-eff
 // providers are unaffected.
 const GOOGLE_BREVITY_INSTRUCTION = [
   "Output style for this session:",
-  "- While you are still working (between tool calls), keep any text you emit to a single short line; do not narrate at length.",
-  "- Do detailed reasoning internally, not as visible intermediate output.",
-  "- Prefer taking the next tool action over explaining; keep calling tools until the task is complete.",
+  "- While you are still working, emit one short visible progress line before each tool call so the user knows what you are doing.",
+  "- Keep private chain-of-thought internal; the visible line should only summarize the next action and current status.",
+  "- Prefer taking the next tool action over long narration; keep calling tools until the task is complete.",
   "- This applies only to intermediate progress text. Your final answer after the work is done is exempt: write it in full and at whatever length the task requires.",
   "- Formatting: The client environment renders standard Markdown and does not support LaTeX math delimiters ($...$, $$...$$, \\(...\\), \\[...\\]). Do not use LaTeX math delimiters or LaTeX markup (such as \\text{}, \\times, \\le, \\ge, etc.) for variables, formulas, dimensions, or units. Use clean plain text, Markdown, and Unicode symbols (e.g. 180°, 2560 × 1920 px, ≤, ≥, Δ, ±) instead.",
 ].join("\n");
@@ -996,6 +997,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
+      let contentFilterError: Extract<AdapterEvent, { type: "error" }> | undefined;
+      // Fixed, small diagnostic prefix; overflow disables matching rather than retaining output.
+      let policyRefusalText: string | undefined = "";
       let sawAnyFrame = false;
       let sawTerminalSignal = false;
       let pendingStreamThoughtSig: string | undefined;
@@ -1058,6 +1062,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           pendingUsage = usageFromGemini(usageMeta);
           sawTerminalSignal = true;
         }
+        const feedback = root.promptFeedback;
+        if (isGoogleRecord(feedback)) {
+          contentFilterError ??= googleContentFilterEvent(feedback.blockReason, "promptFeedback.blockReason");
+        }
+        // Drain trailing usage, but do not release content from a provider-blocked frame.
+        if (contentFilterError) return "continue";
         const rawCandidates = root.candidates;
         // `null` is an absence encoding, not corruption, and terminating on it is the #1219
         // failure mode one rung in: a `{"candidates":null}` frame arriving between a content
@@ -1094,6 +1104,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           lastFinishReason = candidate.finishReason;
           sawTerminalSignal = true;
         }
+        contentFilterError = googleContentFilterEvent(candidate.finishReason, "finishReason");
+        if (contentFilterError) return "continue";
 
         // One rung below the candidate guard above, same rule: this is claimed content, not
         // padding, so it fails closed rather than being iterated or silently dropped (#1325).
@@ -1141,11 +1153,16 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             }
             const textEvent = googlePartTextEvent(part);
             if (textEvent) {
+              if (textEvent.type === "text_delta" && policyRefusalText !== undefined) {
+                policyRefusalText = policyRefusalText.length + textEvent.text.length <= 1024
+                  ? policyRefusalText + textEvent.text : undefined;
+              }
               emittedContentEvent = true;
               yield textEvent;
             }
             const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
             if (inline && typeof inline.data === "string") {
+              policyRefusalText = undefined;
               if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {
                 yield { type: "error", message: "inline image exceeds per-image size cap" };
               } else {
@@ -1232,6 +1249,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             return;
           } else if ((yield* handleDataLine(residual)) === "terminate") return;
         }
+        if (contentFilterError) {
+          yield { ...contentFilterError, usage: pendingUsage };
+          return;
+        }
         // Fail-closed: a turn cut off mid tool call (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
         if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
@@ -1240,14 +1261,18 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           return;
         }
         if (!sawAnyFrame || !sawTerminalSignal) {
+          const textRefusal = provider.googleMode === "cloud-code-assist" && toolCallsStarted === 0 && policyRefusalText !== undefined
+            ? googleTextPolicyRefusalEvent(policyRefusalText, pendingUsage) : undefined;
+          if (textRefusal) {
+            yield textRefusal;
+            return;
+          }
           yield { type: "error", message: "upstream stream ended without a terminal signal — possible truncation" };
           return;
         }
         const stopReason = lastFinishReason === "MAX_TOKENS"
           ? "max_tokens"
-          : ["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"].includes(lastFinishReason ?? "")
-            ? "content_filter"
-            : undefined;
+          : undefined;
         yield {
           type: "done",
           usage: pendingUsage,
@@ -1363,6 +1388,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       const events: AdapterEvent[] = [];
 
+      const feedback = json.promptFeedback;
+      const promptBlock = isGoogleRecord(feedback)
+        ? googleContentFilterEvent(feedback.blockReason, "promptFeedback.blockReason", usageFromGemini(json.usageMetadata as Record<string, number> | undefined))
+        : undefined;
+      if (promptBlock) return finish([promptBlock]);
+
       const rawCandidates: unknown = json.candidates;
       // Parity with the streaming path, which has rejected a non-array `candidates` since #1332.
       // Buffered accepted `"abc"` outright (`"abc".length` is 3, so the emptiness check below
@@ -1389,6 +1420,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         })]);
       }
       const candidate = rawCandidate as { content?: unknown; finishReason?: string };
+      const contentBlock = googleContentFilterEvent(candidate.finishReason, "finishReason", usageFromGemini(json.usageMetadata as Record<string, number> | undefined));
+      if (contentBlock) return finish([contentBlock]);
       let toolCallsStarted = 0;
       const imageBudget = createImageBudget();
       const rawContent: unknown = candidate.content;
@@ -1455,16 +1488,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;
-      // Mirror the streaming path: a buffered turn cut off by the token limit or a content filter
-      // must carry its stop reason, or the bridge sees a clean `done` and reports the truncated
-      // turn as completed — and, on a compaction turn, installs the half-written summary as
-      // replacement history (#422).
+      // Content blocks returned an explicit failure above. Token-limit turns still carry their
+      // stop reason, so the bridge cannot install a half-written compaction as completed (#422).
       const finishReason = candidate.finishReason as string | undefined;
       const stopReason = finishReason === "MAX_TOKENS"
         ? "max_tokens"
-        : ["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"].includes(finishReason ?? "")
-          ? "content_filter"
-          : undefined;
+        : undefined;
       events.push({
         type: "done",
         usage: usageFromGemini(usage),

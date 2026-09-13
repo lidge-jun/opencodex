@@ -15,6 +15,8 @@
  * Both are excluded by `isGenericFailoverProvider`.
  */
 import { getAccountSet } from "./store";
+import { getCachedProviderAccountQuota } from "../providers/quota";
+import { AntigravityBalancer, antigravityBalanceUsage, antigravityQuotaFamily } from "./antigravity-balance";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
 import { exhaustedCooldownMs, hasHeadroomEvidence, isAccountQuotaExhausted, rankAccountsByHeadroom } from "./account-quota-rank";
 import { parseRetryAfterMs } from "../combos/failover";
@@ -23,6 +25,17 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 
 /** Cap same-request rotations so a short Retry-After cannot spin. Mirrors the Anthropic bound. */
 export const GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST = 3;
+export const genericOAuthFailoverLimit = (providerName: string): number =>
+  providerName === "google-antigravity" ? 8 : GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST;
+const antigravityBalancer = new AntigravityBalancer();
+
+function balanceAntigravity(config: OcxConfig, providerName: string, ids: string[], now: number, modelId?: string): string | null {
+  if (providerName !== "google-antigravity" || config.providers?.[providerName]?.oauthAccountFailover?.strategy !== "quota") return null;
+  const family = antigravityQuotaFamily(modelId);
+  return antigravityBalancer.pick(ids.map(id => ({
+    id, usage: antigravityBalanceUsage(getCachedProviderAccountQuota(providerName, id), family, now),
+  })), family);
+}
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 15 * 60_000;
@@ -181,6 +194,7 @@ export function rotateGenericOAuthAccountOn429(
   failedAccountId: string,
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
+  modelId?: string,
 ): string | null {
   if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
   const set = getAccountSet(providerName);
@@ -214,7 +228,8 @@ export function rotateGenericOAuthAccountOn429(
   if (candidates.length === 0) return null;
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
-  return rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
+  return balanceAntigravity(config, providerName, candidates, now, modelId)
+    ?? rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
 }
 
 /**
@@ -247,6 +262,7 @@ export function preferredInitialAccount(
   config: OcxConfig,
   providerName: string,
   now = Date.now(),
+  modelId?: string,
 ): string | null {
   // The PROACTIVE predicate, not the reactive one: this steers a request upstream has not
   // refused, so `oauthAccountFailover.enabled: false` must still be able to refuse it.
@@ -258,6 +274,8 @@ export function preferredInitialAccount(
   const active = selected.activeAccountId;
   const order = selected.accounts.filter(account => account.needsReauth !== true).map(account => account.id);
   if (order.length < 2) return null;
+  const balanced = balanceAntigravity(config, providerName, order.filter(id => !isCooled(providerName, id, now)), now, modelId);
+  if (balanced) return balanced === active ? null : balanced;
 
   const activeRow = selected.accounts.find(account => account.id === active);
   if (activeRow && activeRow.needsReauth !== true
@@ -311,6 +329,7 @@ export function forgetGenericFailoverRoster(providerName: string): void {
 
 /** Test seam and manual-recovery hook. */
 export function clearGenericFailoverHealth(providerName?: string): void {
+  if (!providerName || providerName === "google-antigravity") antigravityBalancer.clear();
   if (!providerName) {
     health.clear();
     presence.clear();

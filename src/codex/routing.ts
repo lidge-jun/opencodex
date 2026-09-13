@@ -1710,12 +1710,12 @@ function isUnknownUsage(usage: number): boolean {
 }
 
 /**
- * Move an unbound request back up when a higher tier regains headroom — the
+ * Move a request back up when a higher tier regains headroom — the
  * weekly-reset case. Returns null when nothing should change.
  *
  * Downward moves are deliberately left to {@link applyQuotaAutoSwitch}: this only
  * fires when the tier filter has already excluded `active`, and only toward a
- * tier that strictly outranks it. Threads bound by affinity never reach here.
+ * tier that strictly outranks it. Existing thread bindings use the same check.
  */
 function pickPriorityPreemption(
   config: OcxConfig,
@@ -1908,6 +1908,8 @@ function previewReusableAffinityAccount(
   ) {
     return null;
   }
+  const preferred = pickPriorityPreemption(config, entry.accountId, now, quotaScope, selectionOptions);
+  if (preferred) return preferred;
   // Quota strategy only: non-quota strategies keep affinity for ongoing threads
   // (new-session-only rotation — docs / affinity policy A).
   if (normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota") {
@@ -1936,8 +1938,8 @@ function previewReusableAffinityAccount(
 }
 
 /**
- * Re-evaluate an affined account under the quota strategy. Returns a strictly
- * cooler replacement, or null when the current binding should remain.
+ * Re-evaluate priority on every bound request, then quota under the quota strategy.
+ * Returns a higher-priority or cooler replacement, or null to preserve the binding.
  */
 function reevaluateAffinityQuota(
   entry: ThreadAffinityEntry,
@@ -1946,6 +1948,8 @@ function reevaluateAffinityQuota(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
+  const preferred = pickPriorityPreemption(config, entry.accountId, now, quotaScope, selectionOptions);
+  if (preferred) return preferred;
   if (normalizeAccountPoolStrategy(config.accountPoolStrategy) !== "quota") return null;
   const threshold = config.autoSwitchThreshold ?? 80;
   const usage = threshold > 0
