@@ -640,6 +640,11 @@ export interface OcxConfig {
    */
   multiAgentMode?: "v1" | "default" | "v2";
   /**
+   * Which revision of the sub-agent surface advisory this install has answered.
+   * Absent means it has answered none. Written by the dashboard, never by a mode change.
+   */
+  multiAgentSurfaceAdvisoryVersion?: number;
+  /**
    * When `multiAgentMode` is `"v2"`, keep ChatGPT-native catalog rows on v1.
    * Routed parents get v2 tools; Sol/Terra can still spawn Grok/Claude (issue #92).
    */

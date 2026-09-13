@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
 import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
+import { MULTI_AGENT_SURFACE_ADVISORY_VERSION } from "./config/multi-agent-surface";
 import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./config/subagent-models";
 export { DEFAULT_SUBAGENT_MODELS } from "./config/subagent-models";
 import {
@@ -1265,6 +1266,9 @@ const configSchema = z.object({
   googleAntigravityStaticCatalogVersion: z.union([z.literal(1), z.literal(2)]).optional().catch(undefined),
   subagentModelsVersion: z.number().int().positive().optional().catch(undefined),
   subagentModels: z.array(z.string().min(1)).optional().catch(undefined),
+  // A hand-edited advisory version must not cost the operator their providers; a bad
+  // value degrades to undefined, which simply raises the notice again.
+  multiAgentSurfaceAdvisoryVersion: z.number().int().nonnegative().optional().catch(undefined),
   clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
   // A malformed profile policy must not fall back to legacy all-profile activation.
   asideProfileSync: asideProfileSyncSchema.optional().catch({ allProfiles: false }),
@@ -2465,7 +2469,18 @@ export function loadConfig(): OcxConfig {
     // discarding it entirely, so pool accounts and providers survive a missing
     // field like defaultProvider.
     const defaults = getDefaultConfig();
-    const merged = { ...defaults, ...parsed, subagentModelsVersion: parsed.subagentModelsVersion };
+    // Pin the keys whose ABSENCE is meaningful. Spreading defaults underneath means any
+    // key the stored document lacks is inherited, which is right for additive defaults and
+    // wrong for a behavioral mode: a config that reaches this path only because it lost
+    // `defaultProvider` would be repaired into v1 sub-agents and a pre-answered advisory,
+    // silently changing a setting its operator never touched.
+    const merged = {
+      ...defaults,
+      ...parsed,
+      subagentModelsVersion: parsed.subagentModelsVersion,
+      multiAgentMode: parsed.multiAgentMode,
+      multiAgentSurfaceAdvisoryVersion: parsed.multiAgentSurfaceAdvisoryVersion,
+    };
     // Ensure providers from both sides survive
     if (parsed.providers && defaults.providers) {
       merged.providers = { ...defaults.providers, ...parsed.providers };
@@ -2687,7 +2702,14 @@ function mergeConfigDefaults(parsed: unknown): unknown {
   if (!parsed || typeof parsed !== "object") return parsed;
   const defaults = getDefaultConfig();
   const raw = parsed as Record<string, unknown>;
-  const merged: Record<string, unknown> = { ...defaults, ...raw, subagentModelsVersion: raw.subagentModelsVersion };
+  // Same absence-is-meaningful pin as the repair merge above.
+  const merged: Record<string, unknown> = {
+    ...defaults,
+    ...raw,
+    subagentModelsVersion: raw.subagentModelsVersion,
+    multiAgentMode: raw.multiAgentMode,
+    multiAgentSurfaceAdvisoryVersion: raw.multiAgentSurfaceAdvisoryVersion,
+  };
   if (raw.providers && typeof raw.providers === "object" && defaults.providers) {
     merged.providers = { ...defaults.providers, ...(raw.providers as Record<string, unknown>) };
   }
@@ -4105,6 +4127,12 @@ export function getDefaultConfig(): OcxConfig {
     defaultProvider: "openai",
     subagentModels: [...DEFAULT_SUBAGENT_MODELS],
     subagentModelsVersion: SUBAGENT_MODELS_VERSION,
+    // v1 is the shipped surface while a v2 native-to-routed task is undeliverable
+    // ciphertext. Written explicitly rather than left absent, because an absent key
+    // means base everywhere else. A fresh install starts already acknowledged: there is
+    // nothing to advise an operator who is on the recommended surface.
+    multiAgentMode: "v1",
+    multiAgentSurfaceAdvisoryVersion: MULTI_AGENT_SURFACE_ADVISORY_VERSION,
     multiAgentGuidanceEnabled: true,
     websockets: false,
     codexAutoStart: true,

@@ -38,6 +38,13 @@ import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, ha
 import { nextAtomicTempSequence } from "../../src/config/atomic-write";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { DEFAULT_SUBAGENT_MODELS, migrateSubagentModels } from "../../src/config/subagent-models";
+import {
+  MULTI_AGENT_SURFACE_ADVISORY_VERSION,
+  SUBAGENT_SURFACE_GUIDE_URL,
+  multiAgentSurfaceAdvisory,
+  multiAgentSurfaceAdvisoryRequired,
+  resolveMultiAgentMode,
+} from "../../src/config/multi-agent-surface";
 import { migrateStartupSubagentModels } from "../../src/server/subagent-models-startup";
 import { migrateXaiResponsesDefault } from "../../src/providers/xai-responses-opt-in";
 import { migrateStartupXaiResponses } from "../../src/server/xai-responses-startup";
@@ -83,6 +90,102 @@ afterEach(() => {
 function backupNames(): string[] {
   return readdirSync(testDir).filter(name => name.startsWith("config.json.invalid-"));
 }
+
+describe("sub-agent surface default and advisory", () => {
+  test("a fresh config ships v1 and has nothing to advise", () => {
+    const config = getDefaultConfig();
+    expect(config.multiAgentMode).toBe("v1");
+    expect(resolveMultiAgentMode(config)).toBe("v1");
+    expect(config.multiAgentSurfaceAdvisoryVersion).toBe(MULTI_AGENT_SURFACE_ADVISORY_VERSION);
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(false);
+  });
+
+  test("an absent key still resolves to base, which is what raises the advisory", () => {
+    const config = getDefaultConfig();
+    delete config.multiAgentMode;
+    delete config.multiAgentSurfaceAdvisoryVersion;
+    expect(resolveMultiAgentMode(config)).toBe("default");
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(true);
+  });
+
+  test.each(["default", "v2"] as const)("an unanswered %s install is advised", mode => {
+    const config = { ...getDefaultConfig(), multiAgentMode: mode };
+    delete config.multiAgentSurfaceAdvisoryVersion;
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(true);
+    expect(multiAgentSurfaceAdvisory(config)).toEqual({
+      required: true,
+      mode,
+      recommended: "v1",
+      version: MULTI_AGENT_SURFACE_ADVISORY_VERSION,
+      docsUrl: SUBAGENT_SURFACE_GUIDE_URL,
+    });
+  });
+
+  test("answering it silences the notice without moving the mode", () => {
+    const config = {
+      ...getDefaultConfig(),
+      multiAgentMode: "v2" as const,
+      multiAgentSurfaceAdvisoryVersion: MULTI_AGENT_SURFACE_ADVISORY_VERSION,
+    };
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(false);
+    expect(multiAgentSurfaceAdvisory(config).mode).toBe("v2");
+  });
+
+  test("a stale acknowledgement is advised again", () => {
+    expect(multiAgentSurfaceAdvisoryRequired({
+      multiAgentMode: "v2",
+      multiAgentSurfaceAdvisoryVersion: MULTI_AGENT_SURFACE_ADVISORY_VERSION - 1,
+    })).toBe(true);
+  });
+
+  test("v1 is silent whatever the stored acknowledgement", () => {
+    expect(multiAgentSurfaceAdvisoryRequired({ multiAgentMode: "v1" })).toBe(false);
+    expect(multiAgentSurfaceAdvisoryRequired({ multiAgentMode: "v1", multiAgentSurfaceAdvisoryVersion: 0 })).toBe(false);
+  });
+
+  test("the fresh default survives save and load", () => {
+    saveConfig(getDefaultConfig());
+    const loaded = loadConfig();
+    expect(loaded.multiAgentMode).toBe("v1");
+    expect(loaded.multiAgentSurfaceAdvisoryVersion).toBe(MULTI_AGENT_SURFACE_ADVISORY_VERSION);
+  });
+
+  test("a hand-edited version degrades to an unanswered advisory, keeping providers", () => {
+    writeConfig({ ...getDefaultConfig(), multiAgentMode: "v2", multiAgentSurfaceAdvisoryVersion: "soon" });
+    const loaded = loadConfig();
+    expect(loaded.providers.openai).toEqual(getDefaultConfig().providers.openai);
+    expect(loaded.multiAgentSurfaceAdvisoryVersion).toBeUndefined();
+    expect(multiAgentSurfaceAdvisoryRequired(loaded)).toBe(true);
+  });
+
+  test("a repaired config keeps the surface its operator chose", () => {
+    // A config that reaches the repair path only because it lost an unrelated field must
+    // not be handed the new v1 default underneath: that would change a setting silently.
+    const stored = { ...getDefaultConfig() } as Record<string, unknown>;
+    delete stored.defaultProvider;
+    delete stored.multiAgentMode;
+    delete stored.multiAgentSurfaceAdvisoryVersion;
+    writeConfig(stored);
+
+    const loaded = loadConfig();
+    expect(loaded.defaultProvider).toBe("openai");
+    expect(loaded.multiAgentMode).toBeUndefined();
+    expect(resolveMultiAgentMode(loaded)).toBe("default");
+    expect(loaded.multiAgentSurfaceAdvisoryVersion).toBeUndefined();
+    expect(multiAgentSurfaceAdvisoryRequired(loaded)).toBe(true);
+  });
+
+  test("a repaired v2 config is still v2", () => {
+    const stored = { ...getDefaultConfig(), multiAgentMode: "v2" } as Record<string, unknown>;
+    delete stored.defaultProvider;
+    delete stored.multiAgentSurfaceAdvisoryVersion;
+    writeConfig(stored);
+
+    const loaded = loadConfig();
+    expect(loaded.multiAgentMode).toBe("v2");
+    expect(multiAgentSurfaceAdvisoryRequired(loaded)).toBe(true);
+  });
+});
 
 describe("Astra-first subagent upgrade", () => {
   const defaults = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"];

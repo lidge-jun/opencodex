@@ -32,13 +32,25 @@ encryption marker when the upstream omitted it or returned a nonempty marker.
 | Mode | Behavior |
 | --- | --- |
 | `"v1"` | Force ALL entries to `multi_agent_version = "v1"` — overrides upstream pins (sol/terra included). |
-| `"default"` (install default) | Respect upstream model pins (sol/terra=v2, luna=v1, others=null → codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
+| `"default"` | Respect upstream model pins (sol/terra=v2, luna=v1, others=null → codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
 | `"v2"` | Force ALL entries to `multi_agent_version = "v2"` — overrides upstream pins (luna included). |
 
 The override is applied as a final pass in both `buildCatalogEntries` (live `/v1/models` path) and
 `mergeCatalogEntriesForSync` (on-disk sync), AFTER all normalization and visibility processing. This
 ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
 not clobber the forced value.
+
+`getDefaultConfig()` (`src/config.ts`) writes `multiAgentMode: "v1"` explicitly, using the version
+constant from `src/config/multi-agent-surface.ts`, so v1 is the install default while a v2
+native-to-routed child task is undeliverable ciphertext. The repair and salvage merges in
+`src/config.ts` pin `multiAgentMode` and `multiAgentSurfaceAdvisoryVersion` to the stored
+document, because spreading the defaults underneath would repair an unrelated missing field
+into a surface change its operator never made.
+An absent key still means `"default"`, because selecting base deletes the key — absence cannot be
+read as "never configured". An install that predates that change is therefore not rewritten; it is
+asked once. `multiAgentSurfaceAdvisoryRequired()` is true while the resolved mode is not v1 and
+the stored `multiAgentSurfaceAdvisoryVersion` is below `MULTI_AGENT_SURFACE_ADVISORY_VERSION`, and
+only the operator answering the dashboard notice writes that version.
 
 CLI: `ocx v2 mode v1|default|v2`. GUI: segmented control on the Models page. API: `GET/PUT /api/v2`
 with `multiAgentMode` field.
