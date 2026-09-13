@@ -507,9 +507,15 @@ export function requestPacingConfigError(value: unknown): string | null {
 /**
  * Bounds for the opt-in passthrough web-search bridge (`providers.<name>.webSearchBridge`,
  * #3761). Strict for the same reason `retryOn429` is: a misspelled key here would silently
- * leave the bridge disarmed while the operator believes they enabled it. `endpoint` is only
- * shape-checked here; `planPassthroughWebSearchBridge` re-validates the origin before any key
- * is sent to it, because config validation is not an authorization boundary.
+ * leave the bridge disarmed while the operator believes they enabled it.
+ *
+ * `endpoint` names the destination that receives this provider's API key, so it gets the same
+ * literal destination assessment `baseUrl` gets (#4519) — see `providerWebSearchBridgeConfigError`
+ * below. This schema itself still only shape-checks: it is `.catch(undefined)` at the provider
+ * row, and a hand-edited config file never reaches the error function at all. The authorization
+ * boundary is therefore `resolveOllamaWebSearchEndpoint`, which runs the same assessment and is
+ * the only reader of this field in the tree; config validation is where an operator is told why,
+ * not what makes the value safe.
  */
 const providerWebSearchBridgeSchema = z.object({
   enabled: z.boolean().optional(),
@@ -519,7 +525,11 @@ const providerWebSearchBridgeSchema = z.object({
   endpoint: z.string().min(1).optional(),
 }).strict();
 
-export function providerWebSearchBridgeConfigError(value: unknown): string | null {
+export function providerWebSearchBridgeConfigError(
+  value: unknown,
+  providerName: string,
+  provider: Pick<OcxProviderConfig, "allowPrivateNetwork">,
+): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return "webSearchBridge must be a plain object";
@@ -540,6 +550,17 @@ export function providerWebSearchBridgeConfigError(value: unknown): string | nul
     }
     if (url.protocol !== "https:" && url.protocol !== "http:") {
       return "webSearchBridge.endpoint must be an absolute http(s) URL";
+    }
+    // Same classifier baseUrl uses, so a metadata address is refused outright and loopback or
+    // private space needs the provider's allowPrivateNetwork opt-in (or a registry entry that is
+    // local by definition, which is what keeps a self-hosted Ollama working). Literal-only and
+    // synchronous, exactly as at the baseUrl boundary: no DNS is resolved here.
+    const destinationError = providerDestinationConfigError(providerName, {
+      baseUrl: endpoint,
+      allowPrivateNetwork: provider.allowPrivateNetwork,
+    });
+    if (destinationError) {
+      return destinationError.replace(/^baseUrl/, "webSearchBridge.endpoint");
     }
   }
   return null;

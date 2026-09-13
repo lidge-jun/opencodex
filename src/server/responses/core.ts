@@ -6251,6 +6251,7 @@ async function handleResponsesInner(
         openAiSidecar,
       );
       const webSearchBridgePlan = planPassthroughWebSearchBridge(parsed, route.provider, {
+        providerName: route.providerName,
         isPassthrough: true,
         stream: parsed.stream === true,
         auth: webSearchBridgeAuth,

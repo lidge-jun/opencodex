@@ -21,6 +21,7 @@ import {
   WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE,
   type PassthroughWebSearchBridgePlan,
 } from "../../src/web-search/passthrough-bridge";
+import { providerWebSearchBridgeConfigError } from "../../src/config";
 import { mapOllamaSearchResponse } from "../../src/web-search/ollama-executor";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../src/server/responses-undeclared-tool-guard";
 import { handleResponses } from "../../src/server/responses";
@@ -94,6 +95,7 @@ const armed: ProviderWebSearchBridgeConfig = { enabled: true, backend: "ollama" 
 describe("planPassthroughWebSearchBridge arming", () => {
   test("arms for an enabled ollama-backed key provider on the canonical origin", () => {
     const plan = planPassthroughWebSearchBridge(parsedFixture(), providerFixture(armed), {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
     });
@@ -113,6 +115,7 @@ describe("planPassthroughWebSearchBridge arming", () => {
     ];
     for (const bridge of off) {
       expect(planPassthroughWebSearchBridge(parsedFixture(), providerFixture(bridge), {
+        providerName: "gateway",
         isPassthrough: true,
         stream: true,
       })).toBeUndefined();
@@ -124,28 +127,35 @@ describe("planPassthroughWebSearchBridge arming", () => {
       expect(planPassthroughWebSearchBridge(
         parsedFixture(),
         providerFixture(armed, { authMode }),
-        { isPassthrough: true, stream: true },
+        { providerName: "gateway", isPassthrough: true, stream: true },
       )).toBeUndefined();
     }
   });
 
   test("stays disarmed off the passthrough, without hosted web_search, and for non-streaming turns", () => {
     const provider = providerFixture(armed);
-    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, { isPassthrough: false, stream: true }))
-      .toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: false,
+      stream: true,
+    })).toBeUndefined();
     expect(planPassthroughWebSearchBridge(parsedFixture({ _webSearch: undefined }), provider, {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
     })).toBeUndefined();
-    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, { isPassthrough: true, stream: false }))
-      .toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: false,
+    })).toBeUndefined();
   });
 
   test("a tool_choice that excludes search excludes the bridge", () => {
     expect(planPassthroughWebSearchBridge(
       parsedFixture({ options: { toolChoice: { type: "function", name: "exec" } } }),
       providerFixture(armed),
-      { isPassthrough: true, stream: true },
+      { providerName: "gateway", isPassthrough: true, stream: true },
     )).toBeUndefined();
   });
 
@@ -154,22 +164,26 @@ describe("planPassthroughWebSearchBridge arming", () => {
       expect(planPassthroughWebSearchBridge(
         parsedFixture(),
         providerFixture({ enabled: true, backend }),
-        { isPassthrough: true, stream: true },
+        { providerName: "gateway", isPassthrough: true, stream: true },
       )).toBeUndefined();
     }
   });
 
   test("the ollama backend refuses a non-canonical origin unless the operator names the endpoint", () => {
     const renamed = providerFixture(armed, { baseUrl: "https://gateway.example/v1" });
-    expect(resolveOllamaWebSearchEndpoint(renamed)).toBeUndefined();
-    expect(planPassthroughWebSearchBridge(parsedFixture(), renamed, { isPassthrough: true, stream: true }))
-      .toBeUndefined();
+    expect(resolveOllamaWebSearchEndpoint("gateway", renamed)).toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), renamed, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
 
     const operatorSet = providerFixture(
       { enabled: true, backend: "ollama", endpoint: "https://search.internal/api/web_search" },
       { baseUrl: "https://gateway.example/v1" },
     );
     const plan = planPassthroughWebSearchBridge(parsedFixture(), operatorSet, {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
     });
@@ -180,7 +194,7 @@ describe("planPassthroughWebSearchBridge arming", () => {
     const plan = planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "ollama", maxSearches: 99, timeoutMs: 1 }),
-      { isPassthrough: true, stream: true },
+      { providerName: "gateway", isPassthrough: true, stream: true },
     );
     expect(plan?.maxSearches).toBe(3);
     expect(plan?.timeoutMs).toBe(60_000);
@@ -189,6 +203,7 @@ describe("planPassthroughWebSearchBridge arming", () => {
   test("an openai backend arms only when the ChatGPT sidecar is present", () => {
     const provider = providerFixture({ enabled: true, backend: "openai" }, { baseUrl: "https://gateway.example/v1" });
     expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
     })).toBeUndefined();
@@ -200,6 +215,7 @@ describe("planPassthroughWebSearchBridge arming", () => {
       headers: new Headers({ authorization: "Bearer chatgpt" }),
     };
     const planned = planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
       auth: { openAiSidecar },
@@ -217,33 +233,33 @@ describe("planPassthroughWebSearchBridge arming", () => {
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "anthropic" }, gateway),
-      { isPassthrough: true, stream: true, auth: { anthropic } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { anthropic } },
     )?.backend).toBe("anthropic");
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "xai" }, gateway),
-      { isPassthrough: true, stream: true, auth: { xai } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { xai } },
     )?.backend).toBe("xai");
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "gemini" }, gateway),
-      { isPassthrough: true, stream: true, auth: { gemini } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { gemini } },
     )?.backend).toBe("gemini");
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "exa" }, gateway),
-      { isPassthrough: true, stream: true, auth: { exaApiKey: "exa-canary" } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { exaApiKey: "exa-canary" } },
     )?.backend).toBe("exa");
     // A named backend does not borrow a different credential.
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "exa" }, gateway),
-      { isPassthrough: true, stream: true, auth: { anthropic, xai, gemini } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { anthropic, xai, gemini } },
     )).toBeUndefined();
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "openai" }, gateway),
-      { isPassthrough: true, stream: true, auth: { exaApiKey: "exa-canary" } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { exaApiKey: "exa-canary" } },
     )).toBeUndefined();
   });
 
@@ -260,6 +276,179 @@ describe("planPassthroughWebSearchBridge arming", () => {
     expect(resolvePassthroughWebSearchBridgeAuth("xai", cfg)).toEqual({});
     expect(resolvePassthroughWebSearchBridgeAuth("gemini", cfg)).toEqual({});
     expect(resolvePassthroughWebSearchBridgeAuth("ollama", cfg)).toEqual({});
+  });
+});
+
+// webSearchBridge.endpoint names the destination that receives this provider's API key, so it
+// gets the same literal destination assessment baseUrl already gets: metadata is refused
+// outright, and loopback or private space needs the provider's allowPrivateNetwork opt-in or a
+// registry entry that is local by default. Every provider here sits on a non-canonical baseUrl
+// so the configured endpoint, not the Ollama Cloud fallback, decides the outcome.
+describe("webSearchBridge.endpoint destination policy", () => {
+  const gateway = { baseUrl: "https://gateway.example/v1" };
+
+  test("a configured metadata endpoint disarms the bridge", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://169.254.169.254/latest/meta-data" },
+      gateway,
+    );
+    expect(resolveOllamaWebSearchEndpoint("gateway", provider)).toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("allowPrivateNetwork does not waive a metadata endpoint", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://169.254.169.254/latest/meta-data" },
+      { ...gateway, allowPrivateNetwork: true },
+    );
+    expect(resolveOllamaWebSearchEndpoint("gateway", provider)).toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("the Aliyun metadata address stays refused under the opt-in", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://100.100.100.200/api/web_search" },
+      { ...gateway, allowPrivateNetwork: true },
+    );
+    expect(resolveOllamaWebSearchEndpoint("gateway", provider)).toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("a private-network endpoint stays disarmed without the opt-in", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5/api/web_search" },
+      gateway,
+    );
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("allowPrivateNetwork arms a private-network endpoint", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5/api/web_search" },
+      { ...gateway, allowPrivateNetwork: true },
+    );
+    expect(resolveOllamaWebSearchEndpoint("gateway", provider)).toBe("http://10.0.0.5/api/web_search");
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("http://10.0.0.5/api/web_search");
+  });
+
+  test("a self-hosted ollama keeps its loopback endpoint because the registry entry is local by default", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://127.0.0.1:11434/api/web_search" },
+      gateway,
+    );
+    expect(resolveOllamaWebSearchEndpoint("ollama", provider)).toBe("http://127.0.0.1:11434/api/web_search");
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "ollama",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("http://127.0.0.1:11434/api/web_search");
+  });
+
+  test("the same loopback endpoint is refused under a name with no registry default", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://127.0.0.1:11434/api/web_search" },
+      gateway,
+    );
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("a local-by-default registry name also covers private space, not just loopback", () => {
+    // allowPrivateNetworkByDefault is not loopback-only; it is the same waiver baseUrl gets, so a
+    // LAN Ollama arms too. Pinned because the rule is broader than the 127.0.0.1 case suggests.
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5:11434/api/web_search" },
+      gateway,
+    );
+    expect(resolveOllamaWebSearchEndpoint("ollama", provider)).toBe("http://10.0.0.5:11434/api/web_search");
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "ollama",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("http://10.0.0.5:11434/api/web_search");
+  });
+
+  test("a public endpoint still arms", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "https://ollama.com/api/web_search" },
+      gateway,
+    );
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("https://ollama.com/api/web_search");
+  });
+
+  test("a hostname that merely resembles a metadata address still arms", () => {
+    // The synchronous classifier is literal-only and resolves no DNS, exactly as at the baseUrl
+    // boundary, so a lookalike hostname is just a hostname here.
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "https://imds.example.test/latest/meta-data" },
+      gateway,
+    );
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("https://imds.example.test/latest/meta-data");
+  });
+});
+
+describe("providerWebSearchBridgeConfigError endpoint destination policy", () => {
+  test("names webSearchBridge.endpoint rather than baseUrl in a metadata refusal", () => {
+    const value = { enabled: true, backend: "ollama", endpoint: "http://169.254.169.254/latest/meta-data" };
+    const error = providerWebSearchBridgeConfigError(value, "gateway", {});
+    expect(error).toContain("webSearchBridge.endpoint");
+    expect(error).toContain("metadata");
+    expect(error).not.toStartWith("baseUrl");
+    expect(providerWebSearchBridgeConfigError(value, "gateway", { allowPrivateNetwork: true })).not.toBeNull();
+  });
+
+  test("a private-network endpoint errors without the opt-in and passes with it", () => {
+    const value = { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5/api/web_search" };
+    expect(providerWebSearchBridgeConfigError(value, "gateway", {})).toContain("allowPrivateNetwork");
+    expect(providerWebSearchBridgeConfigError(value, "gateway", { allowPrivateNetwork: true })).toBeNull();
+  });
+
+  test("a public endpoint and an absent endpoint both pass", () => {
+    expect(providerWebSearchBridgeConfigError(
+      { enabled: true, backend: "ollama", endpoint: "https://ollama.com/api/web_search" },
+      "gateway",
+      {},
+    )).toBeNull();
+    expect(providerWebSearchBridgeConfigError({ enabled: true, backend: "ollama" }, "gateway", {})).toBeNull();
+  });
+
+  test("the shape check still runs before the destination check", () => {
+    expect(providerWebSearchBridgeConfigError(
+      { enabled: true, backend: "ollama", endpoint: "not-a-url" },
+      "gateway",
+      {},
+    )).toBe("webSearchBridge.endpoint must be an absolute http(s) URL");
   });
 });
 

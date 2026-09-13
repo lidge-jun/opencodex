@@ -261,6 +261,25 @@ value import of the barrel; the barrel re-exports it.
 `tests/web-search/web-search-passthrough-bridge.test.ts` covers the mismatch and matching cases for
 anthropic, xai, and gemini, plus the unset-backend default.
 
+`providers.<name>.webSearchBridge.endpoint` names the destination that receives that provider's own
+API key, so it carries the same literal destination assessment as `baseUrl`:
+`providerDestinationConfigError` runs both at management write time, inside
+`providerWebSearchBridgeConfigError`, and at plan time inside `resolveOllamaWebSearchEndpoint`.
+Metadata destinations are refused unconditionally; loopback, localhost, and private space need the
+provider's `allowPrivateNetwork` opt-in or a registry entry that is local by default, which is what
+keeps a self-hosted Ollama on `127.0.0.1` working. Both checks are synchronous and literal-only and
+resolve no DNS, so a hostname that resolves into metadata or private space is a disclosed residual
+rather than a blocked case. That residual is strictly larger than `baseUrl`'s: `baseUrl` also runs
+the async `providerDestinationResolvedError` at management write, which the endpoint does not, and
+parity there would still leave the hand-edited-file path uncovered because the plan-time boundary is
+synchronous. The plan-time check is the
+authorization boundary rather than a second opinion: a hand-edited config file, `ocx config set`,
+and `ocx config import` all reach `configSchema` only and never call
+`providerWebSearchBridgeConfigError`, and `resolveOllamaWebSearchEndpoint` is the only reader of
+this field in the tree, so a value that survives file load still cannot be spent. It refuses
+silently by design; config-time is where the operator is told why. The planner requires the
+provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
+
 ## Remote Hub hardening ownership
 
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.

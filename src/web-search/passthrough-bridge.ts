@@ -64,6 +64,7 @@ import {
   resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
 } from "./sidecar-providers";
+import { providerDestinationConfigError } from "../lib/destination-policy";
 
 /** Canonical Ollama Cloud origin. The only origin the "ollama" backend derives on its own. */
 export const OLLAMA_CLOUD_ORIGIN = "https://ollama.com";
@@ -123,13 +124,28 @@ function originOf(value: string | undefined): string | undefined {
  * that receives this provider's API key. Without one, the origin must be canonical Ollama Cloud
  * -- a renamed row pointing at an arbitrary host must not silently receive the key just because
  * its adapter happens to be openai-responses.
+ *
+ * Naming a destination is not the same as it being an allowed one. The endpoint therefore gets the
+ * same literal destination assessment "baseUrl" already gets (#4519): metadata addresses are
+ * refused outright, and loopback/private need the provider's "allowPrivateNetwork" opt-in or a
+ * registry entry that is local by definition, so a local Ollama on 127.0.0.1 keeps working. This
+ * is the ONLY reader of "webSearchBridge.endpoint" in the tree, which is what lets it act as the
+ * authorization boundary for a config file the operator edited by hand -- that path never reaches
+ * "providerWebSearchBridgeConfigError". The refusal is deliberately silent: config-time is where
+ * an operator is told why, and a value that survives file load simply cannot be spent.
  */
 export function resolveOllamaWebSearchEndpoint(
+  providerName: string,
   provider: OcxProviderConfig,
 ): string | undefined {
   const configured = provider.webSearchBridge?.endpoint;
   if (configured !== undefined) {
-    return originOf(configured) === undefined ? undefined : configured;
+    if (originOf(configured) === undefined) return undefined;
+    if (providerDestinationConfigError(providerName, {
+      baseUrl: configured,
+      allowPrivateNetwork: provider.allowPrivateNetwork,
+    })) return undefined;
+    return configured;
   }
   return originOf(provider.baseUrl) === OLLAMA_CLOUD_ORIGIN
     ? OLLAMA_CLOUD_ORIGIN + OLLAMA_WEB_SEARCH_PATH
@@ -211,6 +227,12 @@ export function planPassthroughWebSearchBridge(
   parsed: OcxParsedRequest,
   provider: OcxProviderConfig,
   options: {
+    /**
+     * Registry key for this provider. Required rather than optional: the destination assessment
+     * consults the registry's local-by-default entries, and an absent name would silently pick a
+     * different answer than the operator configured.
+     */
+    providerName: string;
     isPassthrough: boolean;
     stream: boolean;
     auth?: PassthroughWebSearchBridgeAuth;
@@ -239,7 +261,7 @@ export function planPassthroughWebSearchBridge(
     ? bridge.timeoutMs!
     : DEFAULT_BRIDGE_TIMEOUT_MS;
   if (backend === "ollama") {
-    const endpoint = resolveOllamaWebSearchEndpoint(provider);
+    const endpoint = resolveOllamaWebSearchEndpoint(options.providerName, provider);
     if (!endpoint) return undefined;
     return { backend, endpoint, maxSearches, timeoutMs };
   }
