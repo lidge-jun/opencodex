@@ -93,14 +93,17 @@ export function cursorNativeExecRedirectHint(
   tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
   mcpToolDefs: readonly Pick<McpToolDefinition, "name" | "providerIdentifier">[] = [],
 ): string | undefined {
-  if (!tools || tools.length === 0) return undefined;
-  if (cursorRequestHasShellAlias(tools) || cursorRequestHasExecutionPath(tools)) return undefined;
+  const clientTools = tools ?? [];
+  if (cursorRequestHasShellAlias(clientTools) || cursorRequestHasExecutionPath(clientTools)) return undefined;
   // Client tools are advertised under OCX_RESPONSES_TOOL_PROVIDER, so the harness shows them as
   // `mcp_<provider>_<wire name>`; configured MCP servers are advertised under their own provider id.
+  // A request with no client tools but configured MCP tools still gets those named; a request that
+  // advertises nothing at all keeps the default bridge wording.
   const names = [...new Set([
-    ...tools.map(cursorToolWireName),
+    ...clientTools.map(cursorToolWireName),
     ...mcpToolDefs.map(def => `mcp_${def.providerIdentifier}_${def.name}`),
   ])];
+  if (names.length === 0) return undefined;
   const shown = names.slice(0, REDIRECT_HINT_MAX_TOOLS).map(name => `\`${name}\``).join(", ");
   const more = names.length > REDIRECT_HINT_MAX_TOOLS ? ` (+${names.length - REDIRECT_HINT_MAX_TOOLS} more)` : "";
   return (

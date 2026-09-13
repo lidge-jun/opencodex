@@ -435,6 +435,14 @@ describe("Cursor native exec catalog-aware redirect hint", () => {
     ) ?? "";
     expect(hint).toContain("`ocx_client_task`");
     expect(hint).toContain("`mcp_opencodex_read_file`");
+    // No client tools at all, but configured MCP tools: those are the catalog, so name them.
+    const mcpOnly = cursorNativeExecRedirectHint(undefined, [{ name: "read_file", providerIdentifier: "opencodex" }]) ?? "";
+    expect(mcpOnly).toContain("`mcp_opencodex_read_file`");
+    expect(mcpOnly).not.toContain("ocx_client_");
+    expect(mcpOnly).not.toContain("shell_command");
+    // Nothing advertised anywhere keeps the default bridge wording.
+    expect(cursorNativeExecRedirectHint(undefined, [])).toBeUndefined();
+    expect(cursorNativeExecRedirectHint([], [])).toBeUndefined();
   });
 
   test.each<[string, CatalogTool[] | undefined]>([
