@@ -1,4 +1,4 @@
-import { afterCatalogWriteHandleAppServers } from "../codex/app-server-processes";
+import { handleRestartScopeAfterWrite, readRestartScope } from "./restart-scope";
 import { pullRemoteCatalog, RemoteCatalogError } from "../codex/catalog/remote";
 import { hasHelpFlag, printSubcommandUsage } from "./help";
 
@@ -9,6 +9,14 @@ export interface CatalogPullEnvelope {
   catalogWritten: boolean;
   cacheSynced: boolean;
   codexRestarted: boolean;
+  /**
+   * Whether the desktop app was actually restarted. Only ever true for a completed
+   * relaunch: a handoff is not a success, because the restart has not happened yet when
+   * this envelope is written and a script reading true would proceed on a promise.
+   * Separate from codexRestarted so a script reading the existing field is not silently
+   * handed a different answer.
+   */
+  desktopAppRestarted?: boolean;
   modelCount?: number;
   code?: string;
 }
@@ -21,14 +29,18 @@ function optionValue(args: string[], name: string): string | undefined {
 export async function handleCatalogCommand(args: string[]): Promise<number> {
   if (hasHelpFlag(args)) { printSubcommandUsage("catalog"); return 0; }
   const json = args.includes("--json");
-  const restartCodex = args.includes("--restart-codex");
+  const restartScope = readRestartScope(args, console);
   const authEnv = optionValue(args, "--auth-env");
   const positionals = args.filter((arg, index) => {
     if (arg === "--auth-env") return false;
     if (index > 0 && args[index - 1] === "--auth-env") return false;
     return !arg.startsWith("-");
   });
-  const knownFlags = new Set(["--json", "--restart-codex", "--auth-env"]);
+  // A closed set: an unknown flag is a usage error, so the new scope flags have to be
+  // listed here or catalog pull would reject the very flags sync accepts.
+  const knownFlags = new Set([
+    "--json", "--restart-codex", "--restart-desktop-app", "--restart-app-server-only", "--auth-env",
+  ]);
   const unknown = args.find((arg, index) => arg.startsWith("-") && !knownFlags.has(arg) && args[index - 1] !== "--auth-env");
   const validEnvName = authEnv === undefined || /^[A-Za-z_][A-Za-z0-9_]*$/.test(authEnv);
   if (positionals[0] !== "pull" || positionals.length !== 2 || unknown || !validEnvName
@@ -38,7 +50,7 @@ export async function handleCatalogCommand(args: string[]): Promise<number> {
       cacheSynced: false, codexRestarted: false, code: "usage",
     };
     if (json) console.log(JSON.stringify(envelope));
-    else console.error("Usage: ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]");
+    else console.error("Usage: ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]");
     return 2;
   }
   let token: string | undefined;
@@ -57,20 +69,23 @@ export async function handleCatalogCommand(args: string[]): Promise<number> {
   try {
     const result = await pullRemoteCatalog(positionals[1]!, { token });
     let codexRestarted = false;
+    let desktopAppRestarted = false;
     let restartIncomplete = false;
     if (result.catalogWritten) {
       const processLog = json
         ? { log: (...values: unknown[]) => console.error(...values), error: (...values: unknown[]) => console.error(...values) }
         : console;
-      const processResult = afterCatalogWriteHandleAppServers({ restart: restartCodex, log: processLog });
-      const restart = processResult.restart;
+      const outcome = await handleRestartScopeAfterWrite(restartScope, processLog);
+      const processResult = outcome.appServers;
+      const restart = processResult?.restart;
+      desktopAppRestarted = outcome.desktopApp?.relaunch === "started";
       if (restart) {
         // A partial stop is not a restart. `restartCodexAppServers` reports failures and
         // survivors without throwing, so counting `stopped` alone reported success while a
         // stale app-server was still serving the previous catalog from memory.
         codexRestarted = restart.failed.length === 0
           && restart.surviving.length === 0
-          && restart.stopped.length === processResult.processes.length;
+          && restart.stopped.length === (processResult?.processes.length ?? -1);
         restartIncomplete = !codexRestarted;
       }
     }
