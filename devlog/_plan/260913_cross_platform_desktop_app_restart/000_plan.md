@@ -126,3 +126,33 @@ needed rather than a direct kill.
 - **UNSAFE** — any design that could terminate a process outside the discovered,
   current-user, package-owned tree. Stop and redesign.
 - **NEEDS_HUMAN** — CI red at the final head for a reason outside this unit's scope.
+
+## 9. Resume state
+
+Kept current so a later cycle, or a reader after a context loss, resumes from this
+file rather than from a transcript.
+
+| Work-phase | State | Artifact |
+|---|---|---|
+| wp1 roadmap | **done** | `000`, `001`, `002`, `010`, `020`, `030`, `040` on `codex/260913-cross-platform-desktop-restart` |
+| wp2 shared surface | not started | `010` |
+| wp5 self-handoff | not started | `020` |
+| wp3 contract merge | not started | `030` |
+| wp4 verification and delivery | not started | `040` |
+
+**What wp1 concluded.** The inert `--restart-codex` is not a matcher defect — the
+matcher finds the app-server correctly, and the app respawns it while the picker
+keeps the roster the shell built at launch. Only restarting the shell fixes it, which
+is why the Windows-only capability has to become cross-platform rather than the
+matcher being widened. Three audit rounds moved the design from "quit the app" to
+"quit the app, safely, from a process that will survive doing it", which is where the
+handoff and the singleton lock came from.
+
+**Direction for wp2.** Build `010` as written, including the folded audit items:
+boundary-aware membership (`010` §2.1), the shell predicate for root selection
+(§3.3), the two ancestry semantics (§3.4), and step 0's lock with own-pid reentrancy
+(§3.2, `020` §4.1). Changing that direction needs a recorded reason.
+
+**Standing constraint.** No local product suite, build, typecheck or install at any
+point in this unit (§2). Every completion claim rests on live host evidence plus
+hosted CI at the exact final head.
