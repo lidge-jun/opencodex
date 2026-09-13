@@ -3,6 +3,10 @@
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+## CLI readiness diagnostics
+
+Catalog-derived reasoning-level diagnostics from `src/cli/connect.ts` are escaped only at the human-output boundary. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason. The ready/unverified/incompatible classification and exit policy are unchanged.
+
 ## Entrypoints
 
 | Path | Responsibility |

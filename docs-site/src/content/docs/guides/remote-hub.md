@@ -48,6 +48,9 @@ ocx connect status
 ocx sync
 ```
 
+Human-readable connect readiness diagnostics show control characters in catalog values as visible hexadecimal escapes. Structured JSON status retains the original diagnostic value.
+
+
 You do not have to assemble that line by hand. `ocx hub invite`, run on the hub, mints the code and
 prints the exact command — including both origins — for the machine that is joining. See
 [Inviting another machine](#inviting-another-machine).
