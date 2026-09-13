@@ -5071,7 +5071,7 @@ async function handleResponsesInner(
           // `buildToolBridgeMaps` also aliases a namespaced tool under its bare name when the
           // caller's `tool_choice` selected it unambiguously, which the bridge needs to route the
           // call back. For `exec` alone that alias would also switch on nested-helper
-          // normalization and re-authorize `exec_command`/`shell_command`/`apply_patch`, so it is
+          // normalization and re-authorize `exec_command`/`shell_command`/`apply_patch`/`view_image`, so it is
           // admitted here only when the caller's own catalog declared a bare `exec`. Selecting an
           // MCP `exec` is not a declaration of the code-mode shell tool.
           if (

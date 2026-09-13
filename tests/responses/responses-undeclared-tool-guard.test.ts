@@ -134,7 +134,7 @@ describe("collectDeclaredWireToolNames", () => {
   test("withholds the bare alias when only a namespaced exec was declared", () => {
     // A bare `exec` in the declared set is not just a name: it switches on nested-helper
     // normalization, so aliasing a namespaced MCP `exec` under the bare name would authorize
-    // `exec_command`/`shell_command`/`apply_patch` this request never declared.
+    // `exec_command`/`shell_command`/`apply_patch`/`view_image` this request never declared.
     const names = collectDeclaredWireToolNames({
       tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
     });
@@ -846,6 +846,57 @@ describe("the reported turn, end to end through handleResponses", () => {
     const body = await response.json() as { output: Array<Record<string, unknown>> };
     expect(body.output[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
     expect(body.output[0]?.input).toContain("await tools.apply_patch");
+  });
+
+  test("streaming: default.view_image is bridged through unified exec with image output", async () => {
+    const viewImageCall = {
+      type: "function_call",
+      id: "fc_view",
+      call_id: "call_view",
+      name: "default.view_image",
+      arguments: JSON.stringify({ image_path: "/tmp/image.png", detail: "original" }),
+      status: "completed",
+    };
+    const response = await post(true, () => new Response([
+      frame("response.output_item.added", {
+        output_index: 0,
+        item: { ...viewImageCall, arguments: "", status: "in_progress" },
+      }),
+      frame("response.output_item.done", { output_index: 0, item: viewImageCall }),
+      frame("response.completed", {
+        response: { id: "resp_view", status: "completed", output: [viewImageCall] },
+      }),
+      "data: [DONE]",
+    ].join("\n\n") + "\n\n", { headers: { "content-type": "text/event-stream" } }));
+
+    const body = await response.text();
+    expect(body).not.toContain("response.failed");
+    expect(body).toContain('"name":"exec"');
+    expect(body).toContain("await tools.view_image");
+    expect(body).toContain('\\"path\\":\\"/tmp/image.png\\"');
+    expect(body).toContain("image(result.image_url)");
+    expect(body).not.toContain("tools.exec_command");
+  });
+
+  test("non-streaming: bare view_image is bridged through unified exec", async () => {
+    const viewImageCall = {
+      type: "function_call",
+      id: "fc_view",
+      call_id: "call_view",
+      name: "view_image",
+      arguments: JSON.stringify({ path: "/tmp/image.png" }),
+      status: "completed",
+    };
+    const response = await post(false, () => new Response(
+      JSON.stringify({ id: "resp_view", status: "completed", output: [viewImageCall] }),
+      { headers: { "content-type": "application/json" } },
+    ));
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
+    expect(String(body.output[0]?.input)).toContain("await tools.view_image");
+    expect(String(body.output[0]?.input)).toContain("image(result.image_url)");
   });
 
   test("a declared exec call still completes normally", async () => {
@@ -2001,7 +2052,7 @@ describe("empty and absent tool catalogs", () => {
       namespace: "mcp__functions",
     });
 
-    for (const name of ["apply_patch", "exec_command", "shell_command", "write_stdin"]) {
+    for (const name of ["apply_patch", "exec_command", "shell_command", "write_stdin", "view_image"]) {
       const refused = await post(
         false,
         tools,
@@ -2099,6 +2150,18 @@ describe("undeclaredToolCallNameInResponse", () => {
     expect(undeclaredToolCallNameInResponse(response, new Set())).toBe("write_stdin");
   });
 
+  test("accepts view_image helper spellings only through a bare unified exec declaration", () => {
+    for (const name of ["view_image", "default.view_image"]) {
+      const response = { output: [{ type: "function_call", name }] };
+      expect(undeclaredToolCallNameInResponse(response, new Set(["exec"]))).toBeUndefined();
+      expect(undeclaredToolCallNameInResponse(response, new Set())).toBe(name);
+      expect(undeclaredToolCallNameInResponse(response, new Set(["exec_command"]))).toBe(name);
+    }
+
+    const direct = { output: [{ type: "function_call", name: "view_image" }] };
+    expect(undeclaredToolCallNameInResponse(direct, new Set(["view_image"]))).toBeUndefined();
+  });
+
   test("never legacy-normalizes a namespaced shell bridge call", () => {
     // A namespaced call (e.g. an MCP server advertising its own exec_command) must be
     // matched by its full wire name only — never normalized to bare `exec`.
@@ -2122,7 +2185,7 @@ describe("undeclaredToolCallNameInResponse", () => {
       tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
     });
 
-    for (const name of ["exec_command", "shell_command", "apply_patch", "write_stdin", "exec"]) {
+    for (const name of ["exec_command", "shell_command", "apply_patch", "write_stdin", "view_image", "exec"]) {
       expect(undeclaredToolCallNameInResponse(
         { output: [{ type: "function_call", name, call_id: "call_1" }] },
         declared,

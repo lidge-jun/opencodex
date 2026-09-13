@@ -271,9 +271,7 @@ Cursor's error classification and Kiro's whitespace and failed-wrapper grouping 
 halves live in `src/adapters/exec-tool-result-normalize.ts`
 so the pre-call and post-hoc wording cannot drift. This guidance and annotation change rewrites
 neither the model's JavaScript nor its patch payload; the existing name-alias delimiter
-normalization in `src/responses/code-mode-helper-compat.ts` is unchanged, and the host still rejects a
-malformed call exactly as before. Anthropic, Google, OpenAI-chat and command-code result paths
-have no exec-result seam today and are not annotated.
+normalization in `src/responses/code-mode-helper-compat.ts` remains separate from result annotation. That boundary maps a routed provider's bare or synthetic-`default.` `view_image` call onto the declared code-mode `exec`, invokes nested `tools.view_image`, and emits the returned `image_url` through `image()`. Explicit `path` wins; otherwise `file_path`, `file`, and `image_path` normalize in that order. Malformed input still reaches nested validation as data. Anthropic, Google, OpenAI-chat and command-code result paths have no exec-result seam today and are not annotated.
 
 > Decision record: [ADR-0040](../decisions/ADR-0040-responses-http-sse.md)
 

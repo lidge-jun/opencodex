@@ -106,7 +106,7 @@ function addWireToolName(
   }
   // `exec` is the one name that also switches on nested-helper normalization, so a bare alias
   // for a namespaced MCP tool would silently authorize `exec_command`/`shell_command`/
-  // `apply_patch` the request never declared. Every other inner name keeps the bare alias.
+  // `apply_patch`/`view_image` the request never declared. Every other inner name keeps the bare alias.
   if (name !== CODE_MODE_EXEC_TOOL_NAME) names.add(name);
 }
 
