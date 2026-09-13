@@ -96,3 +96,13 @@ PR이 빈 변경이 된다.
 
 Devin은 그 문장의 다음 피해자였다.
 
+
+## wp2 종료 — Codex 피커 사다리
+
+PR #4490 → `dev` `cb8f59614`. `modelReasoningEfforts`가 붙었고, 라이브 경로가 모델별
+사다리를 `CatalogModel.reasoningEfforts`로 싣는다. SWE-2는 이제 medium/high/max만
+광고하고, `effort.ts:232-243`이 spawn_agent용 top rung을 별도로 합성한다.
+
+그룹핑 자체는 이미 있었다 — `collapseDevinModelUid`가 이 단위 이전부터 접고 있었다.
+빠진 건 접힌 행에 붙을 사다리였고, 그래서 "묶는 기능이 필요하다"는 체감이 나왔다.
+
