@@ -3,6 +3,8 @@
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+The hub-side CLI dashboard uses the [management ingress address](../runtime.md#hub-management-dashboard-address); this does not change connected Desktop profile endpoints.
+
 ## Connected Claude Desktop profiles
 
 Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin
