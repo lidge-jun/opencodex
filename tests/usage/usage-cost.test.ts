@@ -298,8 +298,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 95 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(95);
+  test("16. shipped overlay membership: 121 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(121);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -397,6 +397,35 @@ describe("resolveMatchedPrice", () => {
       "zhipu-bigmodel-coding/glm-4.6",
       "zhipu-bigmodel-responses/glm-5.3",
       "zhipu-bigmodel-responses/glm-5.3-flash",
+      // Cognition/Devin — both OAuth surfaces carry their own rows keyed by
+      // exact provider id; tuples come from the official docs.devin.ai
+      // modelCostData table (2026-09-13).
+      "devin-cli/swe-2",
+      "devin-cli/swe-1-7",
+      "devin-cli/swe-1-7-lightning",
+      "devin-cli/swe-1-6",
+      "devin-cli/gpt-5-6-sol",
+      "devin-cli/gpt-6-astra",
+      "devin-cli/claude-opus-5",
+      "devin-cli/claude-fable-5-1",
+      "devin-cli/claude-sonnet-5",
+      "devin-cli/glm-5-3",
+      "devin-cli/kimi-k3",
+      "devin-cli/gemini-3-8-flash",
+      "devin-cli/grok-4-6",
+      "devin/swe-2",
+      "devin/swe-1-7",
+      "devin/swe-1-7-lightning",
+      "devin/swe-1-6",
+      "devin/gpt-5-6-sol",
+      "devin/gpt-5-6-luna",
+      "devin/gpt-5-6-terra",
+      "devin/claude-opus-4-8",
+      "devin/claude-fable-5-1",
+      "devin/claude-sonnet-5",
+      "devin/glm-5-2",
+      "devin/kimi-k2-7",
+      "devin/grok-4-5",
     ]) {
       expect(keys.has(expected)).toBe(true);
     }
@@ -424,6 +453,16 @@ describe("resolveMatchedPrice", () => {
       ["zhipu-bigmodel", "glm-4.7", { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 }],
       ["zhipu-bigmodel-coding", "glm-5.2", { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 }],
       ["zhipu-bigmodel-responses", "glm-5.3-flash", { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 }],
+    ] as const) {
+      const price = resolveMatchedPrice(provider, modelId);
+      expect(price, `${provider}/${modelId}`).toMatchObject({ cost4, source: "expected", status: "verified-derived" });
+    }
+    // Devin overlays: SWE-2's list rate is exactly the Kimi K3 tuple, and the
+    // time-boxed $0 promos are deliberately not baked in.
+    for (const [provider, modelId, cost4] of [
+      ["devin-cli", "swe-2", { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 }],
+      ["devin", "swe-1-7-lightning", { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 }],
+      ["devin", "gpt-5-6-luna", { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }],
     ] as const) {
       const price = resolveMatchedPrice(provider, modelId);
       expect(price, `${provider}/${modelId}`).toMatchObject({ cost4, source: "expected", status: "verified-derived" });

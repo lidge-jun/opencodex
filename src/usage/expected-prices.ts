@@ -143,6 +143,31 @@ const BIGMODEL_NOTE = "z.ai international list price shown as estimate; domestic
 // under a vendor-price label would be a wrong value wearing a verified badge.
 const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
 
+/*
+ * Cognition/Devin list prices (USD / 1M tokens), verified 2026-09-13 against the
+ * official "AI Models" page — its embedded modelCostData table publishes
+ * input / cache-read / cache-write / output per model uid. Self-serve extra
+ * usage and enterprise ACU conversion both bill at these list rates, so the
+ * tuples are the vendor's own published numbers; every row still stays
+ * verified-derived because the surface itself is subscription/ACU, not a
+ * per-token API.
+ * Time-boxed promos are NOT baked in: SWE-2 shows $0 self-serve through
+ * 2026-10-08 and 75%-off enterprise through 2026-12-31, and the doc states the
+ * list rate is what applies afterward, so the list rate is the durable catalog
+ * value. swe-1-7 keeps its list rate for the same reason even though the
+ * self-serve column currently shows 0. gemini-3-8-flash is absent from the
+ * table entirely, so its row derives from Google's published rate instead.
+ */
+const DEVIN_SWE_2: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 };
+const DEVIN_SWE_17: Cost4 = { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
+const DEVIN_SWE_17_LIGHTNING: Cost4 = { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 };
+const DEVIN_SONNET_5: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
+const DEVIN_KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 };
+const DEVIN_KIMI_K27: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 };
+const DEVIN_GROK: Cost4 = { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 };
+const DEVIN_PRICING = "https://docs.devin.ai/desktop/models (official modelCostData table, 2026-09-13; list rates for self-serve overage / enterprise ACU conversion on a subscription surface)";
+const DEVIN_SWE2_NOTE = "list rate; $0 self-serve through 2026-10-08 and 75%-off enterprise through 2026-12-31 are time-boxed promos, not baked in";
+
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "openai-apikey", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: ASTRA_API_PRICING, verifiedAt: "2026-09-05", status: "verified" },
   // Display estimates use API prices for both login and API-key routes, including cache writes.
@@ -305,6 +330,39 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // turbo id is CNY-only upstream and stays unregistered (see the GLM_* note).
   { provider: "zhipu-bigmodel-responses", modelId: "glm-5.3", cost4: GLM_53, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "zhipu-bigmodel-responses", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // Cognition/Devin — the two OAuth surfaces resolve by exact provider id, so
+  // each carries the roster its liveModels discovery can surface. swe-2 and
+  // swe-1-6 are listed on both even though each static seed names only one
+  // side: the live catalog is authoritative and drifts between them.
+  // gpt-5-6-sol uses the enterprise list column — the same table's self-serve
+  // column shows a discounted 1.2/6, and the doc calls the list rate the
+  // billing rate for overage. glm-5-2 likewise takes the nonzero list column.
+  { provider: "devin-cli", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "gpt-5-6-sol", cost4: GPT56_SOL, source: `enterprise list column (self-serve shows discounted 1.2/6); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "claude-sonnet-5", cost4: DEVIN_SONNET_5, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "glm-5-3", cost4: GLM_53, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "kimi-k3", cost4: DEVIN_KIMI_K3, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "gemini-3-8-flash", cost4: GEMINI_38_FLASH, source: `derived: absent from Devin's modelCostData table; Google published promotional rate through 2026-12-31 shown as estimate ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "grok-4-6", cost4: DEVIN_GROK, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "gpt-5-6-sol", cost4: GPT56_SOL, source: `enterprise list column (self-serve shows discounted 1.2/6); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "gpt-5-6-luna", cost4: GPT56_LUNA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "gpt-5-6-terra", cost4: GPT56_TERRA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "claude-opus-4-8", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "claude-sonnet-5", cost4: DEVIN_SONNET_5, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "glm-5-2", cost4: GLM_52, source: `enterprise list column (self-serve shows an unannounced 0 promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "kimi-k2-7", cost4: DEVIN_KIMI_K27, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "grok-4-5", cost4: DEVIN_GROK, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
 ];
 
 /**
