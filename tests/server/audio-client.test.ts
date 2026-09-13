@@ -24,7 +24,8 @@ function client(result: ReturnType<typeof resolveAudioClient>): AudioClient {
 describe("audio-only WebSocket admission", () => {
   test("browser carrier resolves a configured owner and selects only the public protocol", () => {
     const result = client(resolveAudioClient(request({ "sec-websocket-protocol": carrier() }), config, true));
-    expect(result.admission).toEqual({ kind: "configured", keyId: "one", source: "dedicated" });
+    expect(result.admission).toMatchObject({ kind: "configured", keyId: "one", source: "dedicated" });
+    expect(result.admission).toHaveProperty("contextPrincipalId");
     expect(result.protocol).toBe("opencodex-audio");
     expect(result.owner).toBe('["configured","one"]');
     expect(result.owner).not.toContain(KEY);
