@@ -11,6 +11,7 @@ import {
   ChatCompletionsRequestError,
   chatCompletionsToResponsesBody,
 } from "../chat/inbound";
+import { normalizeChatImageParts } from "../chat/image-parts";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -111,7 +112,11 @@ async function handleChatCompletionsWithBudget(
   try {
     const rawBody = await readChatBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     assertChatCompletionsRoutingBody(rawBody);
-    chatBody = rawBody;
+    // Normalize foreign image shapes BEFORE routing. isNativeChatRouteEligible below
+    // decides the pipeline from the image parts it can see, and the native path then
+    // forwards this body as-is, so both must observe the same parts. A body with no
+    // foreign image part is returned by reference and stays byte-identical.
+    chatBody = normalizeChatImageParts(rawBody);
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
     const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;

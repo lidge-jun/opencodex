@@ -1,4 +1,5 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
+import { chatBodyCarriesImage } from "../chat/image-parts";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import {
   chatCompletionsErrorBody,
@@ -162,19 +163,6 @@ export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boo
     }
   }
   return true;
-}
-
-/** Any messages[].content[] part of type image_url. */
-function chatBodyCarriesImage(rawBody: Rec): boolean {
-  const messages = rawBody.messages;
-  if (!Array.isArray(messages)) return false;
-  for (const message of messages) {
-    if (!isRec(message) || !Array.isArray(message.content)) continue;
-    for (const part of message.content) {
-      if (isRec(part) && part.type === "image_url") return true;
-    }
-  }
-  return false;
 }
 
 function chatCompletionJson(value: unknown): Rec | null {

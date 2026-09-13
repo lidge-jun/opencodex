@@ -5,6 +5,8 @@
  * Same translate-and-replay pattern as Claude Messages: the produced body must pass
  * responsesRequestSchema so routing/OAuth/pool/sidecars are inherited unchanged.
  */
+import { chatImageUrlFromPart } from "./image-parts";
+
 export class ChatCompletionsRequestError extends Error {}
 
 type Rec = Record<string, unknown>;
@@ -25,7 +27,12 @@ export function assertChatCompletionsRoutingBody(raw: unknown): asserts raw is C
   }
 }
 
-const OUTPUT_CONFIG_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+// "none" is the runtime's disable sentinel, not an unknown value: src/reasoning-effort.ts
+// accepts it and maps it to "omit the reasoning parameter", and the Pi client export maps
+// Pi's "off" thinking level onto it (src/clients/config-export.ts). Dropping it here let a
+// provider default re-enable thinking the caller had explicitly turned off — and for the
+// Anthropic families that think by default, omission is not the same as disabled.
+const OUTPUT_CONFIG_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const OUTPUT_CONFIG_SUMMARIES = new Set(["auto", "concise", "detailed", "none"]);
 
 function contentToText(content: unknown): string {
@@ -45,38 +52,9 @@ function contentToText(content: unknown): string {
   return parts.join("\n");
 }
 
-function imageUrlFromPart(part: Rec): string | null {
-  if (part.type === "image_url") {
-    const imageUrl = part.image_url;
-    if (typeof imageUrl === "string" && imageUrl.length > 0) return imageUrl;
-    if (isRec(imageUrl) && typeof imageUrl.url === "string" && imageUrl.url.length > 0) return imageUrl.url;
-    return null;
-  }
-  // Agent clients whose native wire shape is not OpenAI's still send images over
-  // Chat Completions: Pi/MCP-style parts carry {type:"image", data, mimeType}
-  // (Aside read_file tool results), Anthropic-shaped clients carry a source
-  // object. Dropping either silently blinds a vision model, so normalize both
-  // to the URL/data-URI form the Responses pipeline already understands.
-  if (part.type === "image") {
-    const data = part.data;
-    if (typeof data === "string" && data.length > 0) {
-      if (data.startsWith("data:")) return data;
-      const media = typeof part.mimeType === "string" && part.mimeType.length > 0 ? part.mimeType
-        : typeof part.mediaType === "string" && part.mediaType.length > 0 ? part.mediaType
-        : "image/png";
-      return "data:" + media + ";base64," + data;
-    }
-    const source = part.source;
-    if (isRec(source)) {
-      if (source.type === "base64" && typeof source.data === "string" && source.data.length > 0) {
-        const media = typeof source.media_type === "string" && source.media_type.length > 0 ? source.media_type : "image/png";
-        return "data:" + media + ";base64," + source.data;
-      }
-      if (source.type === "url" && typeof source.url === "string" && source.url.length > 0) return source.url;
-    }
-  }
-  return null;
-}
+// Recognition moved to src/chat/image-parts.ts so the native fast path's
+// route-eligibility predicate and this translator cannot drift apart again.
+const imageUrlFromPart = chatImageUrlFromPart;
 
 function videoUrlFromPart(part: Rec): string | null {
   if (part.type !== "video_url") return null;

@@ -247,3 +247,33 @@ Translated Chat request construction uses the [inline-image budget](../transport
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+## Shared inbound Chat image recognition
+
+`src/chat/image-parts.ts` owns which `messages[].content[]` shapes count as an image
+on the Chat Completions ingress: OpenAI `image_url` in both spellings, Pi/MCP
+`{type:"image", data, mimeType}`, and Anthropic-shaped `{type:"image", source}` in
+base64 and url form. The translator and the native fast path both read it, because
+they previously answered that question separately and disagreed: native
+route-eligibility matched only `image_url`, so a text-only routed model kept a
+Pi-shaped or Anthropic-shaped image body and the native whitelist passthrough
+forwarded the foreign part verbatim.
+
+`normalizeChatImageParts` runs in `handleChatCompletionsWithBudget` immediately
+after routing-body validation and before `routeModel`, so the text-only diversion in
+`isNativeChatRouteEligible` and the forwarded native wire observe the same parts. It
+rewrites only recognized foreign parts into `image_url` form and returns its input by
+reference when nothing matched, so a body with no image — and one already in OpenAI
+shape — stays byte-identical. Sibling parts, message fields and top-level body fields
+are preserved; the native path is a whitelist passthrough, so an incidental deep clone
+would itself be a behavior change. A remote reference is recognized and rewritten,
+never fetched.
+
+## Explicit reasoning disable on the Chat ingress
+
+The Chat inbound effort allowlist accepts `none` alongside the ladder values.
+`none` is the runtime's disable sentinel — `src/reasoning-effort.ts` maps it to
+omitting the wire parameter, and the Pi client export maps Pi's `off` thinking level
+onto it. Dropping it let a provider default re-enable reasoning the caller had
+explicitly turned off, which is not neutral for the Anthropic families that think by
+default and require an explicit `thinking:{type:"disabled"}` to stop.
