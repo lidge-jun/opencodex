@@ -12,7 +12,7 @@ opencodex 內建了一個由代理提供服務的本機 web 儀表板（`gui/` �
 ocx gui
 ```
 
-該命令會在瀏覽器中開啟 `http://localhost:<port>`；如果代理尚未執行，會先自動啟動。開發時也可
+該命令會在瀏覽器中開啟 `http://localhost:<port>`；在啟用管理 ingress 的 hub 上則開啟 `http://127.0.0.1:<管理埠>`；如果代理尚未執行，會先自動啟動。開發時也可
 讓 GUI dev server 單獨連線到正在執行的代理：
 
 ```bash

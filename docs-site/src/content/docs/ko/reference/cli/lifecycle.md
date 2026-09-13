@@ -382,7 +382,7 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 ### `ocx gui`
 
 프록시가 실행 중이 아니면 자동으로 시작하면서 [웹 대시보드](/guides/web-dashboard/)를
-`http://localhost:<port>`에서 엽니다.
+`http://localhost:<port>`에서 엽니다. 허브에서 관리 리스너를 켜 두면 `http://127.0.0.1:<관리 포트>`에서 엽니다.
 
 ## 업데이트
 

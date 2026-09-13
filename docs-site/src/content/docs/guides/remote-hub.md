@@ -19,6 +19,8 @@ exchange; see [Remote Workspace](/guides/remote-workspace/). Do not publish its
 port directly, do not add a cloud-firewall rule for it, and do not use Tailscale Funnel. Funnel is a
 public-internet surface and is outside this deployment model.
 
+With management ingress enabled, the local dashboard command opens `http://127.0.0.1:<management port>` so the address matches the IPv4-only listener without resolving `localhost`.
+
 ## Trust and consent boundaries
 
 - Provider and OAuth credentials stay on the hub. Never copy them into a client, image layer,

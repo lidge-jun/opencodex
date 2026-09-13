@@ -5,6 +5,8 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 
 Connected-client catalog diagnostics use the [terminal rendering contract](runtime.md#cli-readiness-diagnostics) on the first connection and on every `ocx sync` refresh; stored catalog values are unchanged.
 
+Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
+
 ## Config surface
 
 ### OpenCodex home and live process state

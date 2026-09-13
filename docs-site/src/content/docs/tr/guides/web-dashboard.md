@@ -15,7 +15,7 @@ ocx gui
 ```
 
 Bu, gerekirse önce proxy'yi otomatik olarak başlatarak tarayıcınızda
-`http://localhost:<port>` adresini açar. Geliştirme sırasında GUI geliştirme
+`http://localhost:<port>` adresini açar; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar. Geliştirme sırasında GUI geliştirme
 sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash

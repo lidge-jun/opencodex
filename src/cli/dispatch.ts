@@ -70,7 +70,7 @@ export function selectDefaultGuiUrl(
   probeHostname: (hostname: string | undefined) => string,
 ): string {
   const ingress = config.runtimeRole === "hub" ? config.hub?.managementIngress : undefined;
-  if (ingress?.enabled) return `http://localhost:${ingress.port}`;
+  if (ingress?.enabled) return `http://127.0.0.1:${ingress.port}`;
 
   const guiHost = probeHostname(live?.hostname ?? config.hostname);
   const hostname = guiHost === "127.0.0.1" ? "localhost" : guiHost;

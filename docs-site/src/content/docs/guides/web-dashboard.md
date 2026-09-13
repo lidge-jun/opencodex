@@ -13,7 +13,8 @@ settings, and request traffic.
 ocx gui
 ```
 
-This opens `http://localhost:<port>` in your browser, auto-starting the proxy first if needed. In
+This opens `http://localhost:<port>` in your browser — or `http://127.0.0.1:<management port>` when hub
+management ingress is enabled — auto-starting the proxy first if needed. In
 development you can run the GUI dev server separately against a running proxy:
 
 ```bash
