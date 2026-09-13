@@ -183,11 +183,18 @@ export function useDashboardData(apiBase: string, refreshEpoch = 0) {
   const [maMode, setMaMode] = useState<MaMode>(() => cachedMaMode ?? "default");
 const [maBusy, setMaBusy] = useState(false);
   const [maError, setMaError] = useState<string | null>(null);
-  /** The runtime's one-time advisory, and whether this page load has answered it. */
-  const [maAdvisory, setMaAdvisory] = useState<SubagentSurfaceAdvisory | null>(null);
-  const [maAdvisoryAnswered, setMaAdvisoryAnswered] = useState(false);
-  /** A base/v2 selection from the dashboard switch waiting on the approval dialog. */
-  const [pendingMaMode, setPendingMaMode] = useState<"default" | "v2" | null>(null);
+ /** The runtime's one-time advisory, and whether this page load has answered it. */
+  /**
+   * The runtime's one-time advisory and any staged base/v2 selection, each tagged with the
+   * endpoint it came from. This hook stays mounted across an endpoint switch, and clearing the
+   * state from an effect would be a cascading render, so the tag is what scopes them.
+   */
+  const [maAdvisoryState, setMaAdvisoryState] = useState<{ advisory: SubagentSurfaceAdvisory | null; apiBase: string } | null>(null);
+  const [maAdvisoryAnsweredFor, setMaAdvisoryAnsweredFor] = useState<string | null>(null);
+  const [pendingMaModeState, setPendingMaModeState] = useState<{ mode: "default" | "v2"; apiBase: string } | null>(null);
+  const maAdvisory = maAdvisoryState?.apiBase === apiBase ? maAdvisoryState.advisory : null;
+  const maAdvisoryAnswered = maAdvisoryAnsweredFor === apiBase;
+  const pendingMaMode = pendingMaModeState?.apiBase === apiBase ? pendingMaModeState.mode : null;
  const [maHelpOpen, setMaHelpOpen] = useState(false);
   const [effortCapHelpOpen, setEffortCapHelpOpen] = useState(false);
   const [shadowCallHelpOpen, setShadowCallHelpOpen] = useState(false);
@@ -384,7 +391,7 @@ const [maBusy, setMaBusy] = useState(false);
   useEffect(() => {
     if (maModePoll.data === undefined) return;
     setMaMode(maModePoll.data.maMode);
-    setMaAdvisory(maModePoll.data.advisory ?? null);
+    setMaAdvisoryState({ advisory: maModePoll.data.advisory ?? null, apiBase });
     writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, maModePoll.data.maMode);
   }, [maModePoll.data, apiBase]);
 
@@ -626,7 +633,7 @@ const [maBusy, setMaBusy] = useState(false);
       });
       if (r.ok) {
         setMaMode(mode);
-        if (acknowledgeAdvisory) setMaAdvisoryAnswered(true);
+        if (acknowledgeAdvisory) setMaAdvisoryAnsweredFor(apiBase);
         writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, mode);
       } else {
         let message = t("dash.maSwitchFailed", { status: String(r.status) });
@@ -647,7 +654,7 @@ const [maBusy, setMaBusy] = useState(false);
     // v1 applies immediately: confirming a move toward the safe default would be noise. base
     // and v2 both put ChatGPT-native parents on the surface whose task a routed child cannot
     // read, so they wait for an answer.
-    if (mode !== "v1") { setPendingMaMode(mode); return; }
+    if (mode !== "v1") { setPendingMaModeState({ mode, apiBase }); return; }
     await writeMaMode("v1");
   };
 
@@ -656,7 +663,7 @@ const [maBusy, setMaBusy] = useState(false);
     // Answered for this page load either way: the operator did answer. If the write did not
     // land the runtime raises the notice again next load, so a failure costs one more prompt
     // rather than a lost setting — but say so instead of swallowing it.
-    setMaAdvisoryAnswered(true);
+    setMaAdvisoryAnsweredFor(apiBase);
     try {
       const r = await fetch(`${apiBase}/api/v2`, {
         method: "PUT",
@@ -672,24 +679,27 @@ const [maBusy, setMaBusy] = useState(false);
   /** The ghost button: apply the mode that was selected, or keep the stored one. */
   const keepMaMode = async () => {
     const pending = pendingMaMode;
-    setPendingMaMode(null);
+    setPendingMaModeState(null);
     // A selection answers the advisory too. Without that, continuing to base or v2 leaves the
     // notice raised and the next poll asks the same question the operator just answered.
-    if (pending) { await writeMaMode(pending, maAdvisory?.required === true); return; }
+    // Unconditionally, not gated on the poll's current `required`: that projection goes false
+    // while the mode is v1 without the version having been stored, so a later confirmed base or
+    // v2 would skip the acknowledgement and be asked all over again.
+    if (pending) { await writeMaMode(pending, true); return; }
     await acknowledgeMaAdvisory();
   };
 
   /** The primary button: v1, and the advisory answered in the same request when it is raised. */
   const chooseMaV1 = async () => {
-    setPendingMaMode(null);
+    setPendingMaModeState(null);
     if (maMode === "v1") { await acknowledgeMaAdvisory(); return; }
-    await writeMaMode("v1", maAdvisory?.required === true);
+    await writeMaMode("v1", true);
   };
 
   /** Escape or backdrop: abandon a selection, or leave the advisory unanswered for next load. */
   const dismissMaSurfaceDialog = () => {
-    if (pendingMaMode) { setPendingMaMode(null); return; }
-    setMaAdvisoryAnswered(true);
+    if (pendingMaMode) { setPendingMaModeState(null); return; }
+    setMaAdvisoryAnsweredFor(apiBase);
   };
 
   const maAdvisoryOpen = !pendingMaMode && !maAdvisoryAnswered && maAdvisory?.required === true;

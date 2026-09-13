@@ -52,7 +52,12 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const ultraMode = ultraModeCurrent ? ultraState.mode : UNLOADED_ULTRA_MODE;
   const [ultraSaving, setUltraSaving] = useState(false);
   /** A base/v2 selection from this page waiting on the approval dialog. */
-  const [pendingSurface, setPendingSurface] = useState<"default" | "v2" | null>(null);
+  /**
+   * A base/v2 selection waiting on the approval dialog, tagged with the endpoint it was staged
+   * for. Switching endpoints with the dialog open must not apply one proxy's answer to another,
+   * and tagging beats clearing it from an effect, which would be a cascading render.
+   */
+  const [pendingSurface, setPendingSurface] = useState<{ mode: "default" | "v2"; apiBase: string } | null>(null);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
   const currentUltraApiBase = useRef(apiBase);
@@ -369,7 +374,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           // needs the same gate: base and v2 wait for an answer, everything else writes.
           onUltraModeSave: patch => {
             if (patch.multiAgentMode === "default" || patch.multiAgentMode === "v2") {
-              setPendingSurface(patch.multiAgentMode);
+              setPendingSurface({ mode: patch.multiAgentMode, apiBase });
               return;
             }
             void saveUltraMode(patch);
@@ -378,14 +383,14 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           onUltraModeRetry: () => { void retryUltraMode(); },
         }}
       />
-      {pendingSurface && (
+      {pendingSurface && pendingSurface.apiBase === apiBase && (
         <SubagentSurfaceWarningModal
           reason="selection"
-          mode={pendingSurface}
+          mode={pendingSurface.mode}
           docsUrl={SUBAGENT_SURFACE_GUIDE_URL}
           busy={ultraSaving}
           onContinue={() => {
-            const next = pendingSurface;
+            const next = pendingSurface.mode;
             setPendingSurface(null);
             // Answer the advisory too: this operator has just read the same warning.
             void saveUltraMode({ multiAgentMode: next, multiAgentSurfaceAdvisoryAcknowledged: true });

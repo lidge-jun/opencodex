@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
-import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory } from "../../config/multi-agent-surface";
+import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
 import {
   DEFAULT_SUBAGENT_MODELS,
@@ -244,7 +244,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       enabled,
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
-      multiAgentMode: config.multiAgentMode ?? "default",
+      // Resolved, not raw: a hand-edited unsupported value survives config parsing, and the
+      // advisory below already reports the resolved surface. Two answers would disagree.
+      multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
       agentsEnabled: getAgentsEnabled(),
@@ -435,7 +437,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       enabled,
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
-      multiAgentMode: config.multiAgentMode ?? "default",
+      multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
       agentsEnabled: getAgentsEnabled(),

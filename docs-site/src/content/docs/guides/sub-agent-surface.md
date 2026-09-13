@@ -17,7 +17,7 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 | Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
 | **v1** (default) | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Anyone who delegates across providers, especially native-to-routed children. This is what a fresh install ships with. |
-| **base** | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
+| **base** | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Operators who want Codex's per-model pins and whose parent and child models sit on the same side of the provider boundary. Note that its pins put Sol and Terra on v2. |
 | **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow and understand model inheritance and the encrypted-task limitation below. |
 
 On **v2**, an optional **Keep ChatGPT on v1** switch (`keepNativeChatGptOnV1`) leaves Sol/Terra

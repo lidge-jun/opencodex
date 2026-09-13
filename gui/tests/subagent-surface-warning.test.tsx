@@ -85,7 +85,7 @@ test("all three mode switches gate base and v2 but let v1 through", async () => 
   const switcher = dash.slice(dash.indexOf("const switchMaMode"));
   const switcherBody = switcher.slice(0, switcher.indexOf("};"));
 
-  expect(switcherBody).toContain('if (mode !== "v1") { setPendingMaMode(mode); return; }');
+  expect(switcherBody).toContain('if (mode !== "v1") { setPendingMaModeState({ mode, apiBase }); return; }');
   expect(switcherBody).toContain('await writeMaMode("v1")');
 
   // The Subagents page carries a third copy of the switch and used to PUT straight through.
@@ -94,8 +94,14 @@ test("all three mode switches gate base and v2 but let v1 through", async () => 
   const handlerBody = handler.slice(0, handler.indexOf("},"));
 
   expect(handlerBody).toContain('patch.multiAgentMode === "default" || patch.multiAgentMode === "v2"');
-  expect(handlerBody).toContain("setPendingSurface(patch.multiAgentMode);");
+  expect(handlerBody).toContain("setPendingSurface({ mode: patch.multiAgentMode, apiBase });");
   expect(subagents).toContain("<SubagentSurfaceWarningModal");
+
+  // A staged selection belongs to the endpoint it was staged for.
+  expect(subagents).toContain("pendingSurface.apiBase === apiBase");
+  const switcher2 = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
+  expect(switcher2).toContain("pendingMaModeState?.apiBase === apiBase");
+  expect(switcher2).toContain("maAdvisoryAnsweredFor === apiBase");
 });
 
 /** The recommended answer must not leave the notice raised on a mode it just applied. */
@@ -104,7 +110,10 @@ test("choosing v1 from a raised advisory sends the mode and the acknowledgement 
   const choose = dash.slice(dash.indexOf("const chooseMaV1"));
   const body = choose.slice(0, choose.indexOf("};"));
 
-  expect(body).toContain('await writeMaMode("v1", maAdvisory?.required === true)');
+  // Unconditional: the poll's `required` goes false while the mode is v1 without the version
+  // having been stored, so gating on it would skip the acknowledgement and ask all over again.
+  expect(body).toContain('await writeMaMode("v1", true)');
+  expect(body).not.toContain("maAdvisory?.required");
 
   const writer = dash.slice(dash.indexOf("const writeMaMode"));
   expect(writer.slice(0, writer.indexOf("const switchMaMode"))).toContain(
@@ -113,7 +122,7 @@ test("choosing v1 from a raised advisory sends the mode and the acknowledgement 
 
   // Continuing to base or v2 also answers the notice. Otherwise the next poll asks again.
   const keep = dash.slice(dash.indexOf("const keepMaMode"));
-  expect(keep.slice(0, keep.indexOf("};"))).toContain("await writeMaMode(pending, maAdvisory?.required === true)");
+  expect(keep.slice(0, keep.indexOf("};"))).toContain("await writeMaMode(pending, true)");
 });
 
 const globals = ["document", "window", "navigator", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -220,4 +229,26 @@ test("the backdrop dismisses without answering either way", () => {
   act(() => backdrop!.click());
 
   expect(calls).toEqual(["dismiss"]);
+});
+
+test("a dialog with a write in flight cannot be dismissed out from under it", () => {
+  const calls: string[] = [];
+  render(
+    <SubagentSurfaceWarningModal
+      reason="advisory"
+      mode="v2"
+      docsUrl={SUBAGENT_SURFACE_GUIDE_URL}
+      busy
+      onContinue={() => calls.push("continue")}
+      onChooseV1={() => calls.push("v1")}
+      onDismiss={() => calls.push("dismiss")}
+    />,
+  );
+
+  const backdrop = container.querySelector(".modal-backdrop-dismiss") as HTMLButtonElement | null;
+  act(() => backdrop!.click());
+  const actions = Array.from(container.querySelectorAll(".modal-actions button")) as HTMLButtonElement[];
+  act(() => actions[0]!.click());
+
+  expect(calls).toEqual([]);
 });

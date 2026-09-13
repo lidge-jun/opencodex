@@ -3,8 +3,9 @@ title: Why v1 is the default sub-agent surface
 description: What the v2 encrypted-task limitation breaks, why OpenCodex now ships v1, and what to do if you still want v2.
 ---
 
-OpenCodex installs with the sub-agent surface set to **v1**, and it asks you to confirm before
-moving to **base** or **v2**. This page is what that confirmation links to.
+OpenCodex installs with the sub-agent surface set to **v1**. The Dashboard, Models and Subagents
+pages all ask you to confirm before moving to **base** or **v2**, and this page is what that
+confirmation links to. The CLI does not prompt.
 
 The reason is narrow and specific: on v2, a task handed from a ChatGPT-native model to a routed
 model cannot be read by the routed model. That is the single most common way people delegate —
