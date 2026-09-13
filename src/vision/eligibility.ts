@@ -156,9 +156,10 @@ function modelAcceptsImageInputWithCache(
 ): boolean | undefined {
   if (candidate.native === true || (candidate.provider === "openai" && SUPPORTED_NATIVE_OPENAI_SLUGS.has(candidate.id))) {
     const nativeProvider = enrichedProviderForVision(config, candidate.provider, cache);
-    if (nativeProvider && isModelVisionSidecarConsumer({
-      noVisionModels: nativeProvider.noVisionModels, modelInputModalities: nativeProvider.modelInputModalities,
-    }, candidate.id)) return false;
+    if (nativeProvider && isModelVisionSidecarConsumer(nativeProvider, candidate.id)) return false;
+    const declared = Object.hasOwn(nativeProvider?.modelCapabilities ?? {}, candidate.id)
+      ? nativeProvider?.modelCapabilities?.[candidate.id]?.inputModalities : undefined;
+    if (declared !== undefined) return declared.includes("image");
     return advertisesImageInput(nativeInputModalities(candidate.id)) ?? true;
   }
   if (isVisionSidecarConsumerWithCache(config, candidate.provider, candidate.id, cache)) return false;
