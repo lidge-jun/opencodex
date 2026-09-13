@@ -3,6 +3,8 @@
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
+Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
+
 ## Config surface
 
 ### OpenCodex home and live process state
