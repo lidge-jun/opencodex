@@ -18,10 +18,10 @@
  *   universal prompt.
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
-import { readCodexCatalogPathForHome, readCatalog, type RawEntry } from "./catalog/parsing";
+import { parseCatalogJson, readCodexCatalogPathForHome, type RawEntry } from "./catalog/parsing";
 import { codexExecInvocation } from "./exec-invocation";
 import { resolveCodexHomeDir } from "./home";
 import { readRootTomlString } from "./paths";
@@ -156,13 +156,33 @@ function entryText(entry: RawEntry | null, key: string): string | null {
 const MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 function readBoundedPromptSource(path: string): string {
-  const metadata = statSync(path);
-  if (metadata.isFile() && metadata.size > MAX_PROBE_OUTPUT_BYTES) {
-    const error = new Error(`prompt source exceeds ${MAX_PROBE_OUTPUT_BYTES} bytes`) as NodeJS.ErrnoException;
-    error.code = "EFBIG";
-    throw error;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, "r");
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile()) {
+      const error = new Error("prompt source is not a regular file") as NodeJS.ErrnoException;
+      error.code = "EFTYPE";
+      throw error;
+    }
+    const buffer = Buffer.allocUnsafe(MAX_PROBE_OUTPUT_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const read = readSync(descriptor, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (read === 0) break;
+      bytesRead += read;
+    }
+    if (bytesRead > MAX_PROBE_OUTPUT_BYTES) {
+      const error = new Error(`prompt source exceeds ${MAX_PROBE_OUTPUT_BYTES} bytes`) as NodeJS.ErrnoException;
+      error.code = "EFBIG";
+      throw error;
+    }
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor); } catch { /* best effort */ }
+    }
   }
-  return readFileSync(path, "utf8");
 }
 
 function readBasePrompt(codexHome: string): BasePromptText {
@@ -188,16 +208,16 @@ function readBasePrompt(codexHome: string): BasePromptText {
   }
 
   const model = readRootTomlString(configText, "model");
-  const catalogPath = readCodexCatalogPathForHome(codexHome);
-  const catalogTooLarge = (() => {
-    try {
-      const metadata = statSync(catalogPath);
-      return metadata.isFile() && metadata.size > MAX_PROBE_OUTPUT_BYTES;
-    } catch {
-      return false;
-    }
-  })();
-  const catalog = catalogTooLarge ? null : readCatalog(catalogPath);
+  const catalogPath = readCodexCatalogPathForHome(codexHome, configText);
+  let catalog: ReturnType<typeof parseCatalogJson> = null;
+  let catalogReason: "catalog-not-found" | "catalog-unreadable" | "catalog-too-large" = "catalog-not-found";
+  try {
+    catalog = parseCatalogJson(readBoundedPromptSource(catalogPath));
+    if (!catalog) catalogReason = "catalog-unreadable";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    catalogReason = code === "ENOENT" ? "catalog-not-found" : code === "EFBIG" ? "catalog-too-large" : "catalog-unreadable";
+  }
   const catalogVersion = typeof catalog?.client_version === "string" ? catalog.client_version : null;
   const unavailable = (
     reason: BasePromptText["reason"],
@@ -257,12 +277,7 @@ function readBasePrompt(codexHome: string): BasePromptText {
     }
   }
 
-  if (!catalog) {
-    return unavailable(
-      catalogTooLarge ? "catalog-too-large" : existsSync(catalogPath) ? "catalog-unreadable" : "catalog-not-found",
-      catalogPath,
-    );
-  }
+  if (!catalog) return unavailable(catalogReason, catalogPath);
   const entry = catalog.models?.find(candidate => candidate.slug === model || candidate.id === model) ?? null;
   if (!entry) return unavailable("model-not-found", catalogPath);
   const topLevel = entryText(entry, "base_instructions");
@@ -375,11 +390,14 @@ function classifyRuntimeFailure(runtime: ReturnType<typeof resolveCodexRuntime>)
     ? runtime.failures.map(item => `${item.source}: ${item.reason}`).join("; ").slice(0, 512)
     : "no usable Codex runtime was found";
   const lower = detail.toLowerCase();
-  const kind = /not a spawnable|unrecognized --version output/.test(lower)
+  const representative = runtime.failures.find(item => !/enoent|not found|path does not exist/.test(item.reason.toLowerCase()))
+    ?? runtime.failures[0];
+  const representativeReason = representative?.reason.toLowerCase() ?? lower;
+  const kind = /not a spawnable|unrecognized --version output/.test(representativeReason)
     ? "command-unsupported"
-    : /enoent|not found/.test(lower)
+    : /enoent|not found|path does not exist/.test(representativeReason)
       ? "program-not-found"
-    : /failed --version|probe sandbox unavailable/.test(lower)
+      : /failed --version|probe sandbox unavailable/.test(representativeReason)
       ? "execution-failed"
       : "program-not-found";
   return executionFailure(

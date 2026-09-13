@@ -2169,7 +2169,9 @@ export function buildWindowsServiceScript(
     windowsBatchSet(BUN_RUNTIME_PATH_ENV, bun, "path"),
     // Keep the PATH captured at install time for the bundled launcher, then inherit the
     // current user's PATH so a later Codex App install remains discoverable by the probe.
-    pathLine ? `${pathLine.slice(0, -1)};%PATH%"` : 'set "PATH=%PATH%"',
+    // `%PATH%` is expanded when this wrapper runs; strip embedded quotes before that value
+    // enters the quoted assignment so the inherited value cannot close the assignment.
+    pathLine ? `${pathLine.slice(0, -1)};%PATH:"=%"` : 'set "PATH=%PATH:"=%"',
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
     windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),

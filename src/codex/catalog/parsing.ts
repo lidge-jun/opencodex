@@ -256,11 +256,11 @@ export function readCodexCatalogPath(): string {
 }
 
 /** Resolve the configured catalog without consulting ambient CODEX_HOME again. */
-export function readCodexCatalogPathForHome(codexHome: string): string {
+export function readCodexCatalogPathForHome(codexHome: string, configText?: string): string {
   try {
     const configPath = join(codexHome, "config.toml");
-    if (existsSync(configPath)) {
-      const toml = readFileSync(configPath, "utf-8");
+    if (configText !== undefined || existsSync(configPath)) {
+      const toml = configText ?? readFileSync(configPath, "utf-8");
       const path = readRootTomlString(toml, "model_catalog_json");
       if (path) return resolve(codexHome, path);
     }

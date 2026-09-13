@@ -7,7 +7,7 @@
  * that attribution to a user as an explanation.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -374,6 +374,45 @@ describe("probe failure attribution", () => {
       expect(result.runtime?.source).toBe("fallback");
       expect(result.failure?.kind).toBe("program-not-found");
       expect(result.failure?.detail).toContain("fallback");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("prefers a concrete runtime failure over fallback not-found", async () => {
+    const codexHome = root();
+    const opencodexHome = root();
+    const localAppData = root();
+    const isolatedPath = root();
+    const launcherRoot = root();
+    const launcher = process.platform === "win32" ? join(launcherRoot, "broken.cmd") : join(launcherRoot, "broken");
+    if (process.platform === "win32") {
+      writeFileSync(launcher, "@echo off\r\nexit /b 1\r\n", "utf8");
+    } else {
+      writeFileSync(launcher, "#!/bin/sh\nexit 1\n", "utf8");
+      chmodSync(launcher, 0o755);
+    }
+    const previous = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      OPENCODEX_HOME: process.env.OPENCODEX_HOME,
+      CODEX_CLI_PATH: process.env.CODEX_CLI_PATH,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      PATH: process.env.PATH,
+    };
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = opencodexHome;
+    process.env.CODEX_CLI_PATH = launcher;
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.PATH = isolatedPath;
+    setPromptTextProbeCommandForTests(null);
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(false);
+      expect(result.failure?.kind).toBe("execution-failed");
+      expect(result.failure?.detail).toContain("environment");
     } finally {
       for (const [key, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[key];
