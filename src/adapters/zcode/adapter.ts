@@ -7,6 +7,8 @@ import { loadZcodeSettings, readZcodeModels, record, type JsonObject, type Zcode
 import { zcodeThoughtLevel } from "./reasoning";
 
 type Client = Pick<ZcodeClient, "request" | "close" | "onEvent" | "onFailure">;
+const MAX_ZCODE_INPUT_CHARS = 200_000;
+const HISTORY_TRUNCATED = "[Earlier OpenCodex conversation history truncated to fit the ZCode bridge.]";
 export interface ZcodeAdapterDeps {
   settings?: () => ZcodeSettings;
   client?: (settings: ZcodeSettings) => Client;
@@ -86,12 +88,47 @@ function transcriptLine(message: OcxMessage): string | undefined {
   return `${message.role}: ${textualContent(message.content)}`;
 }
 
+function transcriptLines(messages: OcxMessage[]): string[] {
+  return messages.map(transcriptLine).filter((line): line is string => line !== undefined && line.trim().length > 0);
+}
+
+function joinPrompt(lines: string[]): string {
+  return lines.join("\n\n");
+}
+
+/** Retain the current turn and newest complete history entries within the native bridge cap. */
+function boundedPrompt(system: string[], history: string[], current: string[]): string {
+  const full = joinPrompt([...system, ...history, ...current]);
+  if (full.length <= MAX_ZCODE_INPUT_CHARS) return full;
+
+  const fixed = [...system, HISTORY_TRUNCATED, ...current];
+  const fixedPrompt = joinPrompt(fixed);
+  if (fixedPrompt.length > MAX_ZCODE_INPUT_CHARS) {
+    throw new Error("ZCode current input and system instructions exceed the native bridge limit.");
+  }
+
+  const retained: string[] = [];
+  let length = fixedPrompt.length;
+  for (let index = history.length - 1; index >= 0; index--) {
+    const line = history[index]!;
+    // Inserting one complete history line adds its content and one prompt separator.
+    const added = line.length + 2;
+    if (length + added > MAX_ZCODE_INPUT_CHARS) break;
+    retained.unshift(line);
+    length += added;
+  }
+  return joinPrompt([...system, HISTORY_TRUNCATED, ...retained, ...current]);
+}
+
 function textInput(parsed: OcxParsedRequest, resumed: boolean): string {
   const messages = parsed.context.messages;
-  const current = resumed ? messages.slice(parsed._continuationConversationMessageIndex ?? -1) : messages;
-  const lines = current.map(transcriptLine).filter((line): line is string => line !== undefined);
-  const prompt = [...(parsed.context.systemPrompt ?? []), ...lines].join("\n\n");
-  if (!prompt.trim() || prompt.length > 200_000) throw new Error("ZCode input is empty or exceeds the bridge limit.");
+  const continuation = parsed._continuationConversationMessageIndex;
+  const boundary = continuation ?? Math.max(0, messages.length - 1);
+  const history = resumed ? [] : transcriptLines(messages.slice(0, boundary));
+  const current = transcriptLines(messages.slice(resumed ? continuation ?? -1 : boundary));
+  const system = (parsed.context.systemPrompt ?? []).filter(line => line.trim().length > 0);
+  const prompt = boundedPrompt(system, history, current);
+  if (!prompt.trim()) throw new Error("ZCode input is empty.");
   return prompt;
 }
 

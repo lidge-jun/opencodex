@@ -203,6 +203,25 @@ describe("ZCode local agent", () => {
     expect(sent).not.toContain("private reasoning");
     expect(sent).not.toContain('"command":"pwd"');
   });
+  test("a fresh session truncates oldest replay history without dropping the current turn", async () => {
+    const parsed = request();
+    parsed._continuationConversationMessageIndex = 2;
+    parsed.context.systemPrompt = ["SYSTEM_SENTINEL"];
+    parsed.context.messages = [
+      { role: "user", content: `OLDEST_${"a".repeat(150_000)}`, timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: `NEWEST_${"b".repeat(70_000)}` }], timestamp: 1 },
+      { role: "user", content: "CURRENT_REQUEST_SENTINEL", timestamp: 2 },
+    ];
+    const client = new FakeClient();
+    expect((await run(fixture(), client, parsed)).at(-1)?.type).toBe("done");
+    const sent = String(client.calls.find(call => call.method === "session/send")?.params.content);
+    expect(sent.length).toBeLessThanOrEqual(200_000);
+    expect(sent).toContain("SYSTEM_SENTINEL");
+    expect(sent).toContain("CURRENT_REQUEST_SENTINEL");
+    expect(sent).toContain("NEWEST_");
+    expect(sent).not.toContain("OLDEST_");
+    expect(sent).toContain("Earlier OpenCodex conversation history truncated");
+  });
   test("post-send failures are non-retryable incomplete, not failover candidates", async () => {
     const client = new FakeClient("failed"); const events = await run(fixture(), client);
     expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "zcode_agent_interrupted", retryable: false });
