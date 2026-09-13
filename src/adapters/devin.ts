@@ -10,6 +10,7 @@ import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, Ocx
 import { namespacedToolName } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
+import type { ContentPart } from "./devin/cloud-direct/chat";
 import { getCachedCatalog } from "./devin/cloud-direct/catalog";
 import { collapseDevinModelUid } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
@@ -208,9 +209,31 @@ function textFromParts(content: string | OcxContentPart[] | undefined): string {
   return content.map((part) => (part.type === "text" ? part.text : "")).filter(Boolean).join("\n");
 }
 
-function toolResultText(message: OcxToolResultMessage): string {
-  const body = textFromParts(message.content);
-  return message.isError ? ("ERROR: " + body) : body;
+/**
+ * Convert inbound content parts to the multimodal shape the wire encoder accepts.
+ *
+ * The wire layer already carries images (ChatMessagePrompt field #10 ImageData),
+ * but every image was discarded at this boundary: textFromParts returned a
+ * text-only string and a message whose only content was an image was dropped
+ * entirely, which is why a pasted screenshot killed the turn and the only
+ * workaround was running OCR before sending. A data: URL carries everything
+ * field #10 needs; a remote https URL cannot be inlined without a fetch, so it
+ * stays as an explicit text reference rather than pretending the model can see
+ * a picture it cannot. Video has no Devin field and is skipped.
+ */
+function mapOcxContentToWire(content: string | OcxContentPart[] | undefined): string | ContentPart[] {
+  if (typeof content === "string" || !Array.isArray(content)) return content ?? "";
+  const out: ContentPart[] = [];
+  for (const part of content) {
+    if (part.type === "text" && part.text) {
+      out.push({ type: "text", text: part.text });
+    } else if (part.type === "image") {
+      const m = part.imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (m) out.push({ type: "image", mimeType: m[1]!, base64Data: m[2]! });
+      else out.push({ type: "text", text: `[image url: ${part.imageUrl}]` });
+    }
+  }
+  return out;
 }
 
 function assistantToolCalls(message: OcxAssistantMessage): Array<{ id: string; name: string; arguments: string }> {
@@ -290,9 +313,12 @@ export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem
 
 function mapOneMessage(message: OcxMessage): ChatHistoryItem | undefined {
   if (message.role === "user" || message.role === "developer") {
-    const text = textFromParts(message.content).trim();
-    if (!text) return undefined;
-    return { role: message.role === "developer" ? "system" : "user", content: text };
+    const content = mapOcxContentToWire(message.content);
+    // An image with no caption text is a complete user message on its own.
+    // Dropping it — which is what the text-only extraction did — is why a
+    // pasted screenshot killed the turn before the model ever saw anything.
+    if (typeof content === "string" ? !content.trim() : content.length === 0) return undefined;
+    return { role: message.role === "developer" ? "system" : "user", content };
   }
   if (message.role === "assistant") {
     const toolCalls = assistantToolCalls(message);
@@ -309,9 +335,15 @@ function mapOneMessage(message: OcxMessage): ChatHistoryItem | undefined {
     };
   }
   if (message.role === "toolResult") {
+    const wireContent = mapOcxContentToWire(message.content);
+    const toolContent = message.isError
+      ? (typeof wireContent === "string"
+          ? `ERROR: ${wireContent}`
+          : [{ type: "text", text: "ERROR:" } as ContentPart, ...wireContent])
+      : wireContent;
     return {
       role: "tool",
-      content: toolResultText(message),
+      content: toolContent,
       tool_call_id: message.toolCallId,
     };
   }
