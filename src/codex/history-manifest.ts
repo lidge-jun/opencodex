@@ -54,8 +54,20 @@ export type CodexHistoryManifestValidation =
       readonly scope: "manifest" | "entry-shape" | "entry-provenance";
     };
 
+function stripWindowsPathPrefix(path: string): string {
+  if (process.platform !== "win32") return path;
+  if (/^(\\\\(\?|\.)\\UNC\\|\/\/(\?|\.)\/UNC\/)/i.test(path)) {
+    return "\\\\" + path.slice(8);
+  }
+  if (/^(\\\\(\?|\.)\\|\/\/(\?|\.)\/)/.test(path)) {
+    return path.slice(4);
+  }
+  return path;
+}
+
 function codexHistoryPathIdentity(path: string): string {
-  const canonical = resolve(path);
+  const stripped = stripWindowsPathPrefix(path);
+  const canonical = resolve(stripped);
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
