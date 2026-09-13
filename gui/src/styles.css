@@ -1673,6 +1673,21 @@ dialog.modal-overlay::backdrop {
 .codex-account-picker-feedback.is-ok { color: var(--green); }
 .codex-account-picker-feedback.is-warn { color: var(--amber); }
 .codex-account-picker-feedback.is-err { color: var(--red); }
+
+.fast-rows-card { gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+.fast-rows-copy { flex: 1 1 34rem; min-width: 0; }
+.fast-rows-copy .card-sub { padding: 4px 0 0; }
+.fast-rows-controls { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; margin-left: auto; }
+.fast-rows-feedback {
+  flex: 1 0 100%;
+  margin-top: -8px;
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+  text-align: right;
+}
+.fast-rows-feedback.is-ok { color: var(--green); }
+.fast-rows-feedback.is-warn { color: var(--amber); }
+.fast-rows-feedback.is-err { color: var(--red); }
 /* The toggle now lives in the slot below, which carries the auto margin itself. */
 /*
   Toggle slot: matches the height of the threshold compound so the 20px toggle centres against

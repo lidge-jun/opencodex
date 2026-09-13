@@ -1,5 +1,6 @@
 import { CodexStaleBanner } from "../components/codex-stale-banner";
 import ModelPickerOrderEditor from "../components/ModelPickerOrderEditor";
+import FastRowsSetting from "../components/FastRowsSetting";
 import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import ModelPriceDialog from "../components/ModelPriceDialog";
 import { fetchCodexAppServerState } from "../codex-app-server-state";
@@ -2137,6 +2138,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       </div>
       {pickerMode === "custom" && <ModelPickerOrderEditor key={apiBase} apiBase={apiBase} active={catalogActive}
         identities={models} onBusyChange={setPickerBusy} onAccepted={data => acceptPickerOrder(data, true)} />}
+
+      <FastRowsSetting apiBase={apiBase} onSaved={() => catalogResource.refresh()} />
 
 
       {(() => {
