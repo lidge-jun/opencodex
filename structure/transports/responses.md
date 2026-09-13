@@ -519,7 +519,7 @@ policies; kiro imports the shared abort/sleep helpers from this module.
 
 ## Same-provider combo quota fallback
 
-For a failover combo with multiple models on the same Codex-login OpenAI provider, a pre-stream
+Native account-gated model selection maps no grant to 400, temporary capable-account exhaustion to 429, and actual credential failures to 401; Images, Live, and Search reuse this distinction. For a failover combo with multiple models on the same Codex-login OpenAI provider, a pre-stream
 429/402 carrying only `x-codex-*-reset-at` may advance to the later model on the same account. The
 failed physical combo target still enters its normal target cooldown. An explicit `Retry-After`
 remains an account-wide instruction and blocks the later target; a quota response with neither an

@@ -35,6 +35,7 @@ import {
   cooldownErrorResponse,
   CodexAuthContextError,
   CodexMainProfileDrainingError,
+  CodexModelAvailabilityError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
 } from "../codex/auth-context";
@@ -48,6 +49,7 @@ import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
+import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-error";
 
 /** Voice call create can wait on SDP negotiation; bound a hung upstream. */
 const LIVE_UPSTREAM_TIMEOUT_MS = 120_000;
@@ -565,6 +567,8 @@ export async function resolveLiveRelay(
           "authentication_error",
           "Selected Codex account needs reauthentication",
         );
+      } else if (err instanceof CodexModelAvailabilityError) {
+        forwardAuthError = codexModelAvailabilityErrorResponse(err);
       } else if (err instanceof CodexPoolAuthenticationError) {
         forwardAuthError = formatErrorResponse(401, "authentication_error", err.message);
       } else {

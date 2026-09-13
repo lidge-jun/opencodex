@@ -204,6 +204,19 @@ export class CodexPoolAuthenticationError extends Error {
   }
 }
 
+export type CodexModelAvailabilityReason = "unsupported" | "temporarily_unavailable";
+
+/** A model/account compatibility failure is not a credential failure. */
+export class CodexModelAvailabilityError extends CodexPoolAuthenticationError {
+  reason: CodexModelAvailabilityReason;
+
+  constructor(reason: CodexModelAvailabilityReason, message: string) {
+    super(message);
+    this.name = "CodexModelAvailabilityError";
+    this.reason = reason;
+  }
+}
+
 class CodexAccountValidationPendingError extends CodexPoolAuthenticationError {
   constructor() {
     super("Codex account validation is pending; refresh quota after recovery to validate it");
@@ -703,7 +716,10 @@ export async function resolveCodexAuthContext(
           options.isDirectCallerEntitledToCodexModel ?? isDirectCallerEntitledToCodexModel
         )(headers, options.modelId);
         if (!entitled) {
-          throw new CodexPoolAuthenticationError("The selected ChatGPT account does not support this model");
+          throw new CodexModelAvailabilityError(
+            "unsupported",
+            "The selected ChatGPT account does not support this model",
+          );
         }
       }
       if (callerMatchesObservedMain(headers)) assertMainAccountPolicy(policy);
@@ -737,7 +753,10 @@ export async function resolveCodexAuthContext(
           options.modelId,
         )?.has(MAIN_CODEX_ACCOUNT_ID) === true;
         if (!entitled) {
-          throw new CodexPoolAuthenticationError("The selected ChatGPT account does not support this model");
+          throw new CodexModelAvailabilityError(
+            "unsupported",
+            "The selected ChatGPT account does not support this model",
+          );
         }
       }
       assertMainAccountPolicy(policy);
@@ -864,11 +883,13 @@ export async function resolveCodexAuthContext(
         return await resolveCallerOwnedMainContext();
       }
       if (fixedAccountId !== undefined) {
-        throw new CodexPoolAuthenticationError(
-          modelEligibleAccountIds && !modelEligibleAccountIds.has(fixedAccountId)
-            ? "Selected Codex account does not support this model"
-            : "Selected Codex account is unavailable",
-        );
+        if (modelEligibleAccountIds && !modelEligibleAccountIds.has(fixedAccountId)) {
+          throw new CodexModelAvailabilityError(
+            "unsupported",
+            "Selected Codex account does not support this model",
+          );
+        }
+        throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
       // Recovery or a turn drain deliberately makes physical main unobservable.
       // If no healthy pool route is available, report the temporary fence rather
@@ -884,13 +905,16 @@ export async function resolveCodexAuthContext(
         && (!modelEligibleAccountIds || modelEligibleAccountIds.has(MAIN_CODEX_ACCOUNT_ID))) {
         assertMainAccountPolicy(policy);
       }
-      throw new CodexPoolAuthenticationError(
-        modelEligibleAccountIds === undefined
-          ? undefined
-          : entitledAccountIds?.size === 0 && !mainModelGrantUnobserved
-          ? "No eligible Codex account supports this model"
-          : "Codex accounts that support this model are currently unavailable",
-      );
+      if (modelEligibleAccountIds !== undefined) {
+        const unsupported = entitledAccountIds?.size === 0 && !mainModelGrantUnobserved;
+        throw new CodexModelAvailabilityError(
+          unsupported ? "unsupported" : "temporarily_unavailable",
+          unsupported
+            ? "No eligible Codex account supports this model"
+            : "Codex accounts that support this model are currently unavailable",
+        );
+      }
+      throw new CodexPoolAuthenticationError();
     }
     accountId = selected;
     if (accountId === MAIN_CODEX_ACCOUNT_ID) assertMainAccountPolicy(policy);
@@ -909,7 +933,8 @@ export async function resolveCodexAuthContext(
     // Model entitlement is different: sending the request would spend a turn on an account whose
     // authenticated roster already denied the model. Reassert this boundary after every selector.
     if (modelEligibleAccountIds && !modelEligibleAccountIds.has(accountId)) {
-      throw new CodexPoolAuthenticationError(
+      throw new CodexModelAvailabilityError(
+        "unsupported",
         fixedAccountId !== undefined
           ? "Selected Codex account does not support this model"
           : "No eligible Codex account supports this model",
