@@ -1005,7 +1005,7 @@ function toolInvocationLine(call: Extract<OcxAssistantContentPart, { type: "tool
  */
 function restoreClippedInvocationArguments(
   selected: RootBlobCandidate[],
-  messages: OcxMessage[],
+  messages: readonly OcxMessage[],
   replayedCalls: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
   knownCallsOffset: number,
   carriedBytes: number,
