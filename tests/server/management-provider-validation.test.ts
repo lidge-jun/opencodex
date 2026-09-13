@@ -1490,6 +1490,69 @@ describe("provider management validation", () => {
     }
   });
 
+  // selectedModels is written by the dedicated /api/selected-models route, so a canonical
+  // provider that ever had a model chosen carries it on disk. The exact-key seed comparison
+  // counted that operator overlay as a transport divergence and rejected every later PATCH
+  // (context windows included) with "must equal the canonical built-in provider seed".
+  test("canonical OpenAI with selectedModels can still PATCH modelContextWindows", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: {
+        openai: { ...canonicalDirect, selectedModels: ["gpt-6-astra", "gpt-5.6-luna"] },
+      },
+    } as OcxConfig);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+
+    const server = startServer(0);
+    try {
+      const patch = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ modelContextWindows: { "gpt-6-astra": 872000 } }),
+      });
+      expect(patch.status).toBe(200);
+      expect(loadConfig().providers.openai?.modelContextWindows).toEqual({ "gpt-6-astra": 872000 });
+      expect(loadConfig().providers.openai?.selectedModels).toEqual(["gpt-6-astra", "gpt-5.6-luna"]);
+    } finally {
+      resolvedError.mockRestore();
+      await server.stop(true);
+    }
+  });
+
+  test("canonical OpenAI with selectedModels still rejects transport tampering", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: {
+        openai: { ...canonicalDirect, selectedModels: ["gpt-6-astra"] },
+      },
+    } as OcxConfig);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+
+    const server = startServer(0);
+    try {
+      const patch = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseUrl: "https://attacker.example.com/v1" }),
+      });
+      expect(patch.status).toBe(400);
+      expect(loadConfig().providers.openai?.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
+    } finally {
+      resolvedError.mockRestore();
+      await server.stop(true);
+    }
+  });
+
   // #1409: the add/edit form's payload type has no member for contextWindow or
   test("provider POST overwrite preserves an explicit annotateEmptyToolOutputs: false", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
