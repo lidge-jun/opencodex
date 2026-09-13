@@ -694,6 +694,20 @@ function rootPromptMessages(
     historyMessageStart = firstKept?.messageIndex ?? (messages.length);
   }
 
+  // Refund envelope bytes the assembled set left unused to invocation arguments the per-call cap
+  // clipped. Gated on `echoToolResultInRoot`, not `externalModel`: native `composer-2.5` echoes its
+  // results into roots without being an external wire model, so the narrower gate would leave the one
+  // native model that has clipped invocation lines capped for no reason (#4516).
+  if (echoToolResultInRoot && replayedCalls) {
+    selected = restoreClippedInvocationArguments(
+      selected,
+      messages,
+      replayedCalls,
+      knownCallsOffset,
+      carriedRoots.byteLength,
+    );
+  }
+
   return {
     ids: selected.map(entry => storeCursorBlob(entry.data, requestScope)),
     byteLength: selected.reduce((sum, entry) => sum + entry.byteLength, 0),
@@ -965,6 +979,79 @@ function toolCallArgumentsText(args: Record<string, unknown>): string {
  */
 function toolInvocationLine(call: Extract<OcxAssistantContentPart, { type: "toolCall" }>): string {
   return `invoked: ${namespacedToolName(call.namespace, call.name)} with ${toolCallArgumentsText(call.arguments)}`;
+}
+
+/**
+ * Second pass over the assembled root set: spend envelope bytes nothing else claimed on invocation
+ * arguments the per-call cap clipped.
+ *
+ * `CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT` is charged while the envelope is still being built, so it
+ * costs a call 2 KiB whether or not anything else wants those bytes. In a small replay nearly the
+ * whole 192-root / 512 KiB envelope goes unused and the cap still bites: a 4,693-byte successful
+ * `write_file` lost its tail inside a 6,011-byte replay, and because the result text does not repeat
+ * the argument, the model could no longer see what it had just written (#4516).
+ *
+ * The cap stays, and admission is still decided on its 2 KiB prefix — it is what keeps a 600 KiB
+ * argument from evicting the output it describes. This pass only refunds leftover aggregate bytes,
+ * after every pruning and truncation decision is already final:
+ *
+ * - newest `toolResult` first, because the argument the model is most likely to still need is the
+ *   one belonging to the call it just made;
+ * - only out of `spare`, so restoring can never push the envelope past its own limit;
+ * - never for an `outputElided` root, whose own output is already gone — widening the invocation
+ *   there would spend the last free bytes describing an answer that is not present;
+ * - never by dropping, shrinking or reordering another root, so nothing pruning chose to keep is
+ *   evicted to pay for a wider invocation line.
+ */
+function restoreClippedInvocationArguments(
+  selected: RootBlobCandidate[],
+  messages: OcxMessage[],
+  replayedCalls: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
+  knownCallsOffset: number,
+  carriedBytes: number,
+): RootBlobCandidate[] {
+  let spare = CURSOR_EXTERNAL_ROOT_BYTE_LIMIT
+    - carriedBytes
+    - selected.reduce((sum, entry) => sum + entry.byteLength, 0);
+  if (spare <= 0) return selected;
+  const restored = [...selected];
+  for (let i = restored.length - 1; i >= 0 && spare > 0; i--) {
+    const entry = restored[i];
+    if (!entry || entry.role !== "toolResult" || entry.outputElided === true) continue;
+    if (entry.text === undefined || entry.messageIndex === undefined) continue;
+    const message = messages[entry.messageIndex];
+    if (message?.role !== "toolResult") continue;
+    // Same full-history bound the envelope builder used: `messageIndex` is local to this call's
+    // `rawMessages`, and `knownCallsOffset` re-bases it when only a suffix is replayed.
+    const call = callBefore(
+      replayedCalls,
+      decodeCursorCallId(message.toolCallId),
+      knownCallsOffset + entry.messageIndex,
+    );
+    if (!call) continue;
+    const full = serializeToolCallArguments(call.arguments);
+    if (full === undefined) continue;
+    const clipped = toolCallArgumentsText(call.arguments);
+    if (clipped === full) continue;
+    const name = namespacedToolName(call.namespace, call.name);
+    const clippedLine = `invoked: ${name} with ${clipped}`;
+    // Absent when truncation already cut through the invocation line itself; there is nothing to
+    // widen in that root, and re-rendering the envelope would undo the output truncation too.
+    if (!entry.text.includes(clippedLine)) continue;
+    // Callback replacement: serialized arguments routinely contain `$&`, `$'` and `$1`, and the
+    // string form of `replace` expands those into the surrounding match instead of inserting them.
+    const widened = entry.text.replace(clippedLine, () => `invoked: ${name} with ${full}`);
+    const candidate = rootBlobCandidate(
+      toolResultRootPayload(widened),
+      "toolResult",
+      { messageIndex: entry.messageIndex, text: widened },
+    );
+    const cost = candidate.byteLength - entry.byteLength;
+    if (cost <= 0 || cost > spare) continue;
+    restored[i] = candidate;
+    spare -= cost;
+  }
+  return restored;
 }
 
 /**

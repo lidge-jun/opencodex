@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT, encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
+import { CURSOR_EXTERNAL_ROOT_BYTE_LIMIT, CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT, encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
 import { handleCursorNativeKv, storeCursorBlob } from "../../../src/adapters/cursor/native-exec";
 import {
   AgentClientMessageSchema,
@@ -551,5 +551,108 @@ describe("cursor invocation lookup is bounded by history position", () => {
     expect(step).toBeDefined();
     expect(step).toContain("invoked: exec_command with");
     expect(step).toContain("echo COVERED");
+  });
+});
+
+/**
+ * #4516: the 2 KiB invocation-argument cap is charged while the envelope is still being built, so
+ * it cost a call 2 KiB even when nearly the whole 512 KiB envelope went unused. A 4.6 KiB
+ * successful write_file lost its argument tail inside a 6 KiB replay, and because the result text
+ * does not repeat the argument, the model could no longer see what it had just written.
+ *
+ * The cap stays — it is what stops a 600 KiB argument from evicting the output it describes — but a
+ * second pass now refunds leftover aggregate bytes to clipped invocation lines, newest result
+ * first, without evicting or shrinking any root. These tests pin the refund: full restoration when
+ * the envelope is idle, a no-op below the cap, coverage of the native composer-2.5 path the gate
+ * exists for, verbatim handling of String.replace patterns inside arguments, and a hard stop at
+ * the envelope boundary.
+ */
+describe("cursor spare envelope budget restores clipped invocation arguments", () => {
+  function writeFileHistory(args: Record<string, unknown>): OcxMessage[] {
+    return [
+      { role: "user", content: "Write the file.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "write_file", arguments: args }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "write_file", content: "SENTINEL_OUTPUT", isError: false, timestamp: 3 },
+    ];
+  }
+
+  function invokedLine(root: string | undefined): string | undefined {
+    return root?.split("\n").find(text => text.startsWith("invoked: "));
+  }
+
+  test("an oversized argument is restored in full when the envelope is idle", () => {
+    const args = { contents: "A".repeat(4600) };
+    const root = resultRoot(encode(writeFileHistory(args), "grok-4.6-high"));
+    expect(root).toBeDefined();
+    expect(root).toContain("SENTINEL_OUTPUT");
+    const line = invokedLine(root);
+    expect(line).toBeDefined();
+    expect(line).not.toContain("…[arguments truncated]");
+    expect(line).toContain(JSON.stringify(args));
+  });
+
+  // The refund pass must be a no-op below the cap: a line that was never clipped has nothing to
+  // restore, and rewriting it would only risk drift from the admission-time rendering.
+  test("an under-cap argument is unchanged", () => {
+    const args = { contents: "A".repeat(64) };
+    const root = resultRoot(encode(writeFileHistory(args), "grok-4.6-high"));
+    expect(invokedLine(root)).toBe("invoked: write_file with " + JSON.stringify(args));
+  });
+
+  // composer-2.5 is a NATIVE wire model (isCursorExternalWireModel is false) that still routes
+  // through the external tool-continuation path, so it echoes results into roots and accumulates
+  // the same clipped lines. This is the case the echoToolResultInRoot gate exists for: a gate
+  // written as externalModel would leave the one native model with clipped lines capped.
+  test("native composer-2.5 root replay is restored too", () => {
+    const args = { contents: "A".repeat(4600) };
+    const root = resultRoot(encode(writeFileHistory(args), "composer-2.5"));
+    expect(root).toBeDefined();
+    const line = invokedLine(root);
+    expect(line).toBeDefined();
+    expect(line).not.toContain("…[arguments truncated]");
+    expect(line).toContain(JSON.stringify(args));
+  });
+
+  // Serialized arguments routinely contain $&, $', $` and $1. The widening must use the callback
+  // form of String.prototype.replace: the string form expands those sequences into the surrounding
+  // match and writes corrupted arguments into the root.
+  test("replacement patterns inside arguments are not expanded", () => {
+    const args = { contents: "$&$'`$1" + "B".repeat(4600) };
+    const root = resultRoot(encode(writeFileHistory(args), "grok-4.6-high"));
+    expect(invokedLine(root)).toContain(JSON.stringify(args));
+  });
+
+  // The refund is bounded by the envelope's own leftover bytes, newest result first: when the spare
+  // cannot cover every clipped line, the pass must stop mid-set rather than overrun the limit, and
+  // the result the model most likely still needs — the one it just produced — is restored first.
+  test("restoration stops at the envelope and prefers the newest result", () => {
+    const messages: OcxMessage[] = [];
+    for (let n = 0; n < 60; n++) {
+      messages.push(
+        { role: "user", content: "round " + n, timestamp: n * 3 + 1 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_" + n, name: "write_file", arguments: { path: "/f" + n, contents: "C".repeat(16 * 1024) } }],
+          timestamp: n * 3 + 2,
+        },
+        { role: "toolResult", toolCallId: "call_" + n, toolName: "write_file", content: "OUT_" + n, isError: false, timestamp: n * 3 + 3 },
+      );
+    }
+    const bytes = encode(messages, "grok-4.6-high");
+    const blobIds = runRequest(bytes)?.conversationState?.rootPromptMessagesJson ?? [];
+    const total = blobIds.reduce((sum, blobId) => sum + blobData(blobId).byteLength, 0);
+    expect(total).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+
+    const results = rootTexts(bytes).filter(text => text.startsWith("[Tool Result]"));
+    const newest = results.find(text => text.includes("OUT_59"));
+    expect(newest).toBeDefined();
+    expect(invokedLine(newest)).toBeDefined();
+    expect(invokedLine(newest)).not.toContain("…[arguments truncated]");
+    const stillClipped = results.filter(text => invokedLine(text)?.includes("…[arguments truncated]"));
+    expect(stillClipped.length).toBeGreaterThan(0);
   });
 });
