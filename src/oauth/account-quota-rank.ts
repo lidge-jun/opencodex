@@ -52,7 +52,7 @@ const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
  */
 function classifyModelFamilyForQuota(modelId: string): "Gem" | "Cla" | undefined {
   const lower = modelId.toLowerCase();
-  if (lower.includes("gemini") || lower === "gemini" || lower.startsWith("gemini-")) return "Gem";
+  if (lower.includes("gemini")) return "Gem";
   if (lower.includes("claude") || lower.includes("opus") || lower.includes("sonnet") || lower.includes("gpt-oss") || lower.includes("gpt_oss")) return "Cla";
   return undefined;
 }
