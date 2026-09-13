@@ -365,3 +365,15 @@ This one needs to stay written down. The wiring test only fires when an asset
 named after the provider id is already committed, so an absent mark produces no
 signal at all — nothing would stop a later pass from fetching that logo and
 committing it.
+
+## Provider marks (2026-09-11)
+
+- `crusoe.svg` — the Crusoe lozenge with its four-stop brand gradient (`#F4BF45`,
+  `#E48047`, `#C73361`, `#A42F5F`), `viewBox="0 0 24 24"`. Crusoe publishes no
+  square SVG of its own: `crusoe.ai` serves a 32px PNG favicon from Webflow and
+  the only vendor SVG in the wild is the 121x30 wordmark on models.dev. The file
+  is `icons/crusoe-color.svg` from `@lobehub/icons-static-svg` 1.95.0 (MIT),
+  fetched 2026-09-11 from jsDelivr and committed unmodified (628 bytes, MD5
+  `b60df52303ba7170772b256c20c04940`), gradient id and all. The contributor works
+  at Crusoe and confirms this is the company mark. Painted as an image: the
+  gradient is the brand, so it must never be masked.

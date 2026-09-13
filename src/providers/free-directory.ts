@@ -18,7 +18,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
   ],
   "recurring-credit": ["bytez", "nous-research"],
   "signup-credit": [
-    "agentrouter", "ai21", "baichuan", "baseten", "deepinfra", "deepseek", "doubao", "fireworks", "freemodel-dev", "glm-cn",
+    "agentrouter", "ai21", "baichuan", "baseten", "crusoe", "deepinfra", "deepseek", "doubao", "fireworks", "freemodel-dev", "glm-cn",
     "hyperbolic", "longcat", "monsterapi", "nebius", "novita", "nscale", "nvidia", "predibase", "publicai", "qoder", "qoder-cn",
     "scaleway", "sensenova", "stepfun", "together", "vertex",
   ],
@@ -127,6 +127,7 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   // Verified end-to-end 2026-07-30: /v1/models returns the OpenAI-shaped live catalog (13 models),
   // and a chat completion against moonshotai/Kimi-K3 returned a standard chat.completion payload.
   baseten: openAi("https://inference.baseten.co/v1", "https://app.baseten.co/settings/api_keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.baseten.co/inference/model-apis/overview", modelsUrl: "https://inference.baseten.co/v1/models", lastVerified: "2026-07-30" }),
+  crusoe: openAi("https://api.inference.crusoecloud.com/v1", "https://console.crusoecloud.com", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.crusoecloud.com/quickstart/getting-started-with-serverless-inference", modelsUrl: "https://api.inference.crusoecloud.com/v1/models", lastVerified: "2026-09-11" }),
   deepinfra: openAi("https://api.deepinfra.com/v1/openai", "https://deepinfra.com/dash/api_keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://deepinfra.com/docs/openai_api" }),
   deepseek: openAi("https://api.deepseek.com", "https://platform.deepseek.com/api_keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://api-docs.deepseek.com/api/list-models" }),
   doubao: openAi("https://ark.cn-beijing.volces.com/api/v3", "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", { verification: "official" }),
@@ -181,7 +182,7 @@ const LABELS: Record<string, string> = {
   "t3-web": "T3 Web", uncloseai: "UncloseAI", ainative: "AI Native", baidu: "Baidu Qianfan",
   glm: "Z.AI GLM", "glm-cn": "BigModel GLM (CN)", "kilo-gateway": "Kilo Gateway", "opencode-zen": "OpenCode Zen",
   sealion: "SEA-LION", bytez: "Bytez", "nous-research": "Nous Research", agentrouter: "AgentRouter",
-  ai21: "AI21", baichuan: "Baichuan", deepinfra: "DeepInfra", deepseek: "DeepSeek", doubao: "Doubao",
+  ai21: "AI21", baichuan: "Baichuan", crusoe: "Crusoe", deepinfra: "DeepInfra", deepseek: "DeepSeek", doubao: "Doubao",
   "freemodel-dev": "FreeModel.dev", sambanova: "SambaNova Cloud", nebius: "Nebius Token Factory",
   novita: "Novita", nscale: "Nscale", nvidia: "NVIDIA NIM",
   publicai: "PublicAI", qoder: "Qoder", "qoder-cn": "Qoder CN", sensenova: "SenseNova", stepfun: "StepFun", vertex: "Google Vertex AI",

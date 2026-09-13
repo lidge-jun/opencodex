@@ -167,7 +167,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 79개 들어 있습니다. 키 방식 67개, OAuth 8개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 80개 들어 있습니다. 키 방식 68개, OAuth 8개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -209,6 +209,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -299,6 +300,18 @@ SambaStudio deployment 엔드포인트는 범위에서 제외합니다. 키는
 보고된 context 및 input modality metadata를 보존하며 discovery를 512 KiB와 raw 행 512개로 제한합니다.
 dedicated deployment 호스트는 범위에서 제외합니다. 키는
 [Nebius Token Factory](https://tokenfactory.nebius.com)에서 생성합니다.
+
+**Crusoe 검색:** 키 기반 프리셋은 `openai-chat` adapter를 사용하며 Bearer key를 Crusoe의 고정
+Serverless Inference host에만 보냅니다. `/v1/models`는 인증되지 않은 요청을 401로 거부하므로 list 성공을
+key 검증으로 간주합니다. discovery는 `zai-org/GLM-5.3`, `moonshotai/Kimi-K2.6`처럼 슬래시로 구분된 네이티브
+id를 Crusoe가 반환한 그대로 유지하고 256 KiB와 raw 256행으로 제한합니다. `is_public: true`이면서 `architecture.modality`가 text 또는 multimodal인 행만 유지하므로 계정 전용 배포와 embedding, 미디어 행은 제외됩니다. reasoning model은 사고 내용을
+Chat Completions의 `reasoning` field로 반환하며 adapter가 이를 읽습니다. `reasoning_effort` 단계(`low`,
+`medium`, `high`)를 받는 것은 `openai/gpt-oss-120b`만이고 다른 reasoning model은 이 field를 on/off
+토글로 취급하므로, provider 전체 effort 단계나 parallel tool call은 광고하지 않습니다. rate limit은
+project와 model 단위로 적용되며(초과 시 429, 공유 deployment 확장 중 503) 신규 계정에는 $5 무료
+크레딧이 제공됩니다. 키는 [Crusoe Cloud console](https://console.crusoecloud.com)의
+Intelligence Foundry > Inference에서 생성합니다.
+
 **DigitalOcean 검색:** 프리셋은 model access key를 고정된 공유 Serverless Inference 호스트에 사용하고,
 인증된 `/v1/models` 응답과 DigitalOcean 공식 문서로 확인한 Chat Completions allowlist의 교집합만
 노출합니다. 알 수 없는 ID, Responses 전용, embedding 및 media-generation ID는 fail closed로 제외하며,

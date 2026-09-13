@@ -387,6 +387,7 @@
   "cost-scoring.test.ts": "usage",
   "crash-guard.test.ts": "service",
   "credential-redirect-guard.test.ts": "lib",
+  "crusoe-provider.test.ts": "providers",
   "cursor-adapter.test.ts": "providers/cursor",
   "cursor-continuity-retention.test.ts": "providers/cursor",
   "cursor-arg-normalize.test.ts": "providers/cursor",
