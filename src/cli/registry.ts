@@ -125,27 +125,29 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--restart-codex] [--restart-desktop-app]",
+    usage: "ocx sync [--restart-codex] [--restart-app-server-only]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
-      "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
-      "--restart-desktop-app (Windows only, opt-in) fully restarts the Codex desktop app so its model picker re-reads the catalog. Never implied by --restart-codex: it ends live conversations.",
+      "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, so its model picker re-reads the catalog. It ends live conversations.",
+      "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
+      "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
     ],
   },
   {
     name: "sync-cache",
-    usage: "ocx sync-cache [--restart-codex] [--restart-desktop-app]",
+    usage: "ocx sync-cache [--restart-codex] [--restart-app-server-only]",
     summary: "Refresh Codex's model cache from the active catalog.",
     details: [
       "Warns when Codex app-server processes still hold an in-memory model list.",
-      "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
-      "--restart-desktop-app (Windows only, opt-in) fully restarts the Codex desktop app so its model picker re-reads the catalog. Never implied by --restart-codex: it ends live conversations.",
+      "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, so its model picker re-reads the catalog. It ends live conversations.",
+      "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
+      "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
     ],
   },
   {
     name: "catalog",
-    usage: "ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]",
+    usage: "ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]",
     summary: "Install a validated remote /v1/catalog snapshot into Codex.",
     details: [
       "Authentication is read only from the named environment variable and sent as a Bearer token.",

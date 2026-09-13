@@ -17,8 +17,8 @@ import {
 import { readCodexCatalogPath } from "./catalog/parsing";
 
 export const STALE_CODEX_APP_SERVER_HINT =
-  "If Codex still shows an older model list, restart its long-lived app-server process after sync (ocx sync --restart-codex). "
-  + "On Windows the desktop app itself may also need a full restart (ocx sync --restart-desktop-app).";
+  "If Codex still shows an older model list, run `ocx sync --restart-codex`: it restarts the long-lived app-server "
+  + "processes and fully restarts the Codex desktop app, whose model picker is what actually holds the stale list.";
 
 /** Attach the shared dashboard hint only after a catalog or models_cache write. */
 export function attachStaleAppServerHint<T extends {
@@ -563,8 +563,8 @@ export function formatStaleCodexAppServerWarning(
   return (
     `WARNING: ${processes.length} Codex app-server process(es) still running (PID${processes.length === 1 ? "" : "s"}: ${pids}). `
     + "Disk catalog/cache were updated, but Codex may keep showing the old model list until those processes restart. "
-    + "Re-run with `ocx sync --restart-codex` (or `ocx sync-cache --restart-codex`) to send SIGTERM only to matching app-server processes. "
-    + "On Windows the desktop app itself may also need a full restart (`ocx sync --restart-desktop-app`). "
+    + "Re-run with `ocx sync --restart-codex` (or `ocx sync-cache --restart-codex`) to restart those processes and the Codex desktop app. "
+    + "Use `--restart-app-server-only` to leave the desktop app running. "
     + "Active turns may be interrupted."
   );
 }

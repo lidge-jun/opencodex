@@ -764,6 +764,7 @@ Restart the Codex app-server.
 JSON mode: `payload`.
 
 - `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.
+- Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
 - --yes is mandatory because this interrupts a running editor session, which must never happen because an agent guessed a subcommand.
 
 ### `ocx integration native`
@@ -826,8 +827,9 @@ Synchronize client catalogs, including Aside profiles through the running server
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--restart-codex` | boolean | Restart Codex app-servers after a catalog or cache write. |
-| `--restart-desktop-app` | boolean | Restart the Codex desktop app after a catalog or cache write. |
+| `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog or cache write, on macOS, Linux and Windows. |
+| `--restart-app-server-only` | boolean | Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given. |
+| `--restart-desktop-app` | boolean | Deprecated alias of --restart-codex. |
 
 JSON mode: `none`.
 
