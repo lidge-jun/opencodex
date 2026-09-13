@@ -53,6 +53,8 @@ import {
 import { clientBytes, execBytes, execStreamCloseBytes, execThrowBytes } from "./native-exec-common";
 import type { McpToolDefinition } from "./gen/agent_pb";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
+import { cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorToolWireName } from "./tool-naming";
+import type { OcxTool } from "../../types";
 
 export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDeps;
 
@@ -72,6 +74,35 @@ export interface CursorNativeExecContext extends CursorNativeExecDeps {
   rejectNativeFileMutations?: boolean;
   /** The synthetic exact-match edit tools (edit_file / multi_edit) are advertised this request. */
   structuredEditAvailable?: boolean;
+  /** Catalog-aware redirect text for denied native fs/shell attempts (undefined = default bridge wording). */
+  nativeExecRedirectHint?: string;
+}
+
+const REDIRECT_HINT_MAX_TOOLS = 16;
+
+/**
+ * Redirect text for Cursor-native fs/shell attempts when the request catalog carries NO shell
+ * bridge or other execution-path tool (an orchestrator client that only exposes delegation tools,
+ * for example). The default refusal steers the model to `shell_command` / `exec_command`; when those
+ * are not in the catalog some models (kimi-k3 observed) conclude every tool is unavailable and give
+ * up instead of using the tools that ARE listed. Name the real catalog instead.
+ * Local patch (hs, 2026-09-14) on top of 2.53.0 — see ~/.opencodex/patches.
+ */
+export function cursorNativeExecRedirectHint(
+  tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+): string | undefined {
+  if (!tools || tools.length === 0) return undefined;
+  if (cursorRequestHasShellAlias(tools) || cursorRequestHasExecutionPath(tools)) return undefined;
+  const names = [...new Set(tools.map(cursorToolWireName))];
+  const shown = names.slice(0, REDIRECT_HINT_MAX_TOOLS).map(name => `\`${name}\``).join(", ");
+  const more = names.length > REDIRECT_HINT_MAX_TOOLS ? ` (+${names.length - REDIRECT_HINT_MAX_TOOLS} more)` : "";
+  return (
+    "This request has no shell, read, grep, ls, write, or fetch tool. Do NOT retry Read/Glob/Grep/LS/Shell/Write/Fetch. "
+    + `The ONLY callable tools this turn are the \`${OCX_RESPONSES_TOOL_PROVIDER}\` catalog entries: ${shown}${more} `
+    + `(the harness may display them as \`mcp_${OCX_RESPONSES_TOOL_PROVIDER}_<name>\`; that is the same tool). `
+    + "Accomplish this operation NOW by calling one of those listed tools — if it needs file or shell access, delegate it through the listed tool that runs work on your behalf. "
+    + "Do NOT narrate this redirect, do NOT comment on tool availability, and do NOT re-announce the task — just make the catalog tool call."
+  );
 }
 
 export function cursorUnsafeNativeLocalExecEnabled(input: Pick<CursorNativeExecContext, "unsafeAllowNativeLocalExec"> = {}): boolean {
@@ -634,16 +665,16 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
     }))];
   }
   if (!cursorUnsafeNativeLocalExecEnabled(deps)) {
-    if (execCase === "readArgs") return [rejectReadExecForPolicy(execMsg)];
-    if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg)];
-    if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg)];
-    if (execCase === "lsArgs") return [rejectLsExecForPolicy(execMsg)];
-    if (execCase === "grepArgs") return [rejectGrepExecForPolicy(execMsg)];
-    if (execCase === "shellArgs") return [rejectShellExecForPolicy(execMsg)];
-    if (execCase === "shellStreamArgs") return rejectShellStreamExecForPolicy(execMsg);
-    if (execCase === "backgroundShellSpawnArgs") return [rejectBackgroundShellSpawnExecForPolicy(execMsg)];
-    if (execCase === "writeShellStdinArgs") return [rejectWriteShellStdinExecForPolicy(execMsg)];
-    if (execCase === "fetchArgs") return [rejectFetchExecForPolicy(execMsg)];
+    if (execCase === "readArgs") return [rejectReadExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "writeArgs") return [rejectWriteExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "deleteArgs") return [rejectDeleteExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "lsArgs") return [rejectLsExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "grepArgs") return [rejectGrepExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "shellArgs") return [rejectShellExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "shellStreamArgs") return rejectShellStreamExecForPolicy(execMsg, deps.nativeExecRedirectHint);
+    if (execCase === "backgroundShellSpawnArgs") return [rejectBackgroundShellSpawnExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "writeShellStdinArgs") return [rejectWriteShellStdinExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
+    if (execCase === "fetchArgs") return [rejectFetchExecForPolicy(execMsg, deps.nativeExecRedirectHint)];
   }
   if (execCase === "readArgs") return [readExec(execMsg)];
   if (execCase === "writeArgs") return [deps.rejectNativeFileMutations ? rejectWriteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : writeExec(execMsg)];

@@ -20,6 +20,14 @@ approval and sandbox path. `nativeLocalExec: "on"` is the explicit config-owner 
 local experiments; `off` and the backwards-compatible `codex-sandbox` spelling both fail closed.
 MCP, screen recording, and computer-use stay on their separate explicit executor/MCP config paths.
 
+The denial payload is a silent redirect whose wording follows the request catalog. When the catalog
+carries a shell bridge or unified `exec`, the model is redirected to `shell_command` /
+`exec_command`. When it carries neither — a delegation-only client that exposes nothing but its own
+Responses tools — `cursorNativeExecRedirectHint` in `src/adapters/cursor/native-exec.ts` names the
+request's actual `ocx_client_*` wire names instead, and the live transport injects that text into
+the per-request exec context, so a model that tried Cursor-native Read/Shell is steered to a tool
+that exists rather than to an alias it cannot see.
+
 > Decision record: [ADR-0047](../decisions/ADR-0047-cursor-native-exec.md)
 
 Cursor's generic tool-use prompt filter must preserve every Responses-owned execution-path tool

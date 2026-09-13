@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create, fromBinary } from "@bufbuild/protobuf";
@@ -12,19 +12,31 @@ import {
 import {
   AgentClientMessageSchema,
   BackgroundShellSpawnArgsSchema,
+  DeleteArgsSchema,
   ExecServerMessageSchema,
   FetchArgsSchema,
+  GrepArgsSchema,
+  LsArgsSchema,
   ReadArgsSchema,
   ShellArgsSchema,
+  WriteArgsSchema,
+  WriteShellStdinArgsSchema,
 } from "../../../src/adapters/cursor/gen/agent_pb";
-import { handleCursorNativeExec } from "../../../src/adapters/cursor/native-exec";
+import { createLiveCursorTransport } from "../../../src/adapters/cursor/live-transport";
 import {
+  cursorNativeExecRedirectHint,
+  handleCursorNativeExec,
+  resetCursorBlobStateForTests,
+} from "../../../src/adapters/cursor/native-exec";
+import {
+  nativeShellDisabledMessage,
   resetBackgroundShellStateForTests,
   setBackgroundShellRuntimeForTests,
 } from "../../../src/adapters/cursor/native-exec-shell";
 import type { CursorTransportFactoryInput } from "../../../src/adapters/cursor/transport";
 import { parseRequest } from "../../../src/responses/parser";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
+import type { OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../../src/types";
+import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 
 const fullAccessDeclaration = "`sandbox_mode` is `danger-full-access`";
 
@@ -383,4 +395,149 @@ describe("Cursor native exec sandbox policy", () => {
     expect(spawnCalls).toBe(1);
   });
 
+});
+
+/**
+ * A delegation-only client (an orchestrator that exposes nothing but its own Responses tools —
+ * no shell bridge, no unified exec) still gets Cursor-native Read/Shell attempts from the model.
+ * The default denial steers the model to `shell_command` / `exec_command`; when those are not in
+ * the catalog the model concludes every tool is unavailable and gives up. The hint names the
+ * catalog that actually exists instead.
+ */
+describe("Cursor native exec catalog-aware redirect hint", () => {
+  const SILENT_REDIRECT_FORBIDDEN = [/blocked/i, /\bdisabled\b/i, /not executed/i, /\bdenied\b/i, /cannot execute/i, /차단/];
+  type CatalogTool = { name: string; namespace?: string; freeform?: boolean };
+  const delegationOnlyCatalog: CatalogTool[] = [{ name: "task" }, { name: "ask_user" }];
+
+  function stringifyReplies(replies: Uint8Array[]): string {
+    return replies.map(bytes => stringify(fromBinary(AgentClientMessageSchema, bytes))).join("\n");
+  }
+
+  test("names the request's client wire names when the catalog has no shell bridge or execution path", () => {
+    const hint = cursorNativeExecRedirectHint(delegationOnlyCatalog);
+    expect(hint).toBeDefined();
+    expect(hint).toContain("`ocx_client_task`");
+    expect(hint).toContain("`ocx_client_ask_user`");
+    expect(hint).toContain("mcp_opencodex-responses_<name>");
+    expect(hint).toContain("Do NOT narrate");
+    expect(hint).not.toContain("shell_command");
+    expect(hint).not.toContain("exec_command");
+    for (const pattern of SILENT_REDIRECT_FORBIDDEN) expect(hint).not.toMatch(pattern);
+  });
+
+  test.each<[string, CatalogTool[] | undefined]>([
+    ["an undefined catalog", undefined],
+    ["an empty catalog", []],
+    ["a bare exec_command bridge", [{ name: "exec_command" }]],
+    ["a bare shell_command bridge next to client tools", [{ name: "task" }, { name: "shell_command" }]],
+    ["unified exec next to client tools", [{ name: "task" }, { name: "exec", freeform: true }]],
+  ])("keeps the default bridge wording for %s", (_name, tools) => {
+    expect(cursorNativeExecRedirectHint(tools)).toBeUndefined();
+  });
+
+  test("lists namespaced tools by wire name and caps a long catalog", () => {
+    const hint = cursorNativeExecRedirectHint([{ namespace: "mcp__docker", name: "ps" }, { name: "task" }]) ?? "";
+    expect(hint).toContain("`mcp__docker__ps`");
+    expect(hint).toContain("`ocx_client_task`");
+    const capped = cursorNativeExecRedirectHint(Array.from({ length: 20 }, (_, index) => ({ name: `tool_${index}` }))) ?? "";
+    expect(capped).toContain("`ocx_client_tool_15`");
+    expect(capped).not.toContain("`ocx_client_tool_16`");
+    expect(capped).toContain("(+4 more)");
+  });
+
+  test("without a hint the bridge wording is unchanged", () => {
+    expect(nativeShellDisabledMessage()).toContain("shell_command");
+    expect(nativeShellDisabledMessage("custom hint")).toBe("custom hint");
+  });
+
+  test("every denied native fs, shell, and fetch frame carries the hint and executes nothing", async () => {
+    const hint = cursorNativeExecRedirectHint(delegationOnlyCatalog);
+    expect(hint).toBeDefined();
+    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-hint-"));
+    const existing = join(dir, "grounding.txt");
+    const content = "HINT-GROUNDING-01 must not leak";
+    writeFileSync(existing, content);
+    const newPath = join(dir, "must-not-exist.txt");
+    let fetchCalled = false;
+    const deps = {
+      unsafeAllowNativeLocalExec: false,
+      nativeExecRedirectHint: hint,
+      fetch: async () => {
+        fetchCalled = true;
+        return new Response("SHOULD_NOT_FETCH");
+      },
+    };
+    const frames = [
+      execMessage({ case: "readArgs", value: create(ReadArgsSchema, { path: existing }) }),
+      execMessage({ case: "lsArgs", value: create(LsArgsSchema, { path: dir }) }),
+      execMessage({ case: "grepArgs", value: create(GrepArgsSchema, { pattern: "HINT", path: dir }) }),
+      execMessage({ case: "writeArgs", value: create(WriteArgsSchema, { path: newPath, fileText: "SHOULD_NOT_WRITE" }) }),
+      execMessage({ case: "deleteArgs", value: create(DeleteArgsSchema, { path: existing }) }),
+      execMessage({ case: "shellArgs", value: create(ShellArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir, hardTimeout: 2000 }) }),
+      execMessage({ case: "shellStreamArgs", value: create(ShellArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir }) }),
+      execMessage({ case: "backgroundShellSpawnArgs", value: create(BackgroundShellSpawnArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir }) }),
+      execMessage({ case: "writeShellStdinArgs", value: create(WriteShellStdinArgsSchema, { shellId: 999, chars: "SHOULD_NOT_WRITE" }) }),
+      execMessage({ case: "fetchArgs", value: create(FetchArgsSchema, { url: "https://metadata.invalid/latest" }) }),
+    ];
+    for (const frame of frames) {
+      const text = stringifyReplies(await handleCursorNativeExec(frame, deps));
+      expect(text).toContain("`ocx_client_task`");
+      expect(text).toContain("Do NOT narrate");
+      expect(text).not.toContain("shell_command");
+      expect(text).not.toContain("exec_command");
+      expect(text).not.toContain(content);
+      // Denied shell frames echo the command text; only an executed command could produce the joined marker.
+      expect(text).not.toContain("RAN_MARKER");
+      expect(text).not.toContain("SHOULD_NOT_WRITE");
+      expect(text).not.toContain("SHOULD_NOT_FETCH");
+    }
+    expect(fetchCalled).toBe(false);
+    expect(existsSync(existing)).toBe(true);
+    expect(existsSync(newPath)).toBe(false);
+  });
+
+  test("the live transport derives the hint from each turn's visible catalog", async () => {
+    type OpenFn = (
+      encoded: Uint8Array,
+      signal: AbortSignal | undefined,
+      state: unknown,
+      push: unknown,
+      fail: (error: Error) => void,
+      finish: () => void,
+    ) => void;
+    const runWithTools = async (tools: OcxTool[]): Promise<string | undefined> => {
+      resetCursorBlobStateForTests();
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        headers: new Headers(),
+      });
+      let failTurn!: (error: Error) => void;
+      let onOpened!: () => void;
+      const opened = new Promise<void>(resolve => { onOpened = resolve; });
+      (transport as unknown as { open: OpenFn }).open = (_encoded, _signal, _state, _push, fail) => {
+        failTurn = fail;
+        onOpened();
+      };
+      const iterator = transport.run({
+        modelId: "composer-2.5",
+        conversationId: `redirect-hint-${tools.length}`,
+        system: [],
+        messages: [{ role: "user", content: "hi" }],
+        tools,
+      })[Symbol.asyncIterator]();
+      const pending = iterator.next();
+      await opened;
+      const hint = (transport as unknown as { execContext: { nativeExecRedirectHint?: string } }).execContext.nativeExecRedirectHint;
+      failTurn(new Error("fixture closed"));
+      await pending.catch(() => {});
+      await transport.close?.();
+      resetCursorBlobStateForTests();
+      return hint;
+    };
+    const task: OcxTool = { name: "task", description: "Delegate work to a worker agent.", parameters: { type: "object" } };
+    const bridge: OcxTool = { name: "exec_command", description: "Run a shell command.", parameters: { type: "object" } };
+    expect(await runWithTools([task])).toContain("`ocx_client_task`");
+    expect(await runWithTools([task, bridge])).toBeUndefined();
+  });
 });

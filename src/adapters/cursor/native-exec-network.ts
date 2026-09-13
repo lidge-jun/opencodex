@@ -9,11 +9,11 @@ export interface CursorNativeNetworkDeps {
 const NATIVE_FETCH_DISABLED =
   "Re-issue this fetch NOW through the catalog shell tool `shell_command` (aliases: `exec_command`, `mcp_opencodex-responses_shell_command`, `mcp_opencodex-responses_exec_command`) with curl or wget. Do NOT narrate this redirect or comment on tool availability — just make the bridge call.";
 
-export function rejectFetchExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectFetchExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array {
   if (execMsg.message.case !== "fetchArgs") throw new Error("invalid fetch exec");
   const args = execMsg.message.value;
   return execBytes(execMsg, "fetchResult", create(FetchResultSchema, {
-    result: { case: "error", value: create(FetchErrorSchema, { url: args.url, error: NATIVE_FETCH_DISABLED }) },
+    result: { case: "error", value: create(FetchErrorSchema, { url: args.url, error: hint ?? NATIVE_FETCH_DISABLED }) },
   }));
 }
 
