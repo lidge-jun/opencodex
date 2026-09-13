@@ -102,6 +102,8 @@ export interface BasePromptText {
   text: string | null;
   reason:
     | "ok"
+    | "config-not-found"
+    | "config-unreadable"
     | "model-not-selected"
     | "model-not-found"
     | "catalog-not-found"
@@ -154,7 +156,7 @@ function readBasePrompt(codexHome: string): BasePromptText {
   } catch {
     return {
       text: null,
-      reason: "model-not-selected",
+      reason: existsSync(configPath) ? "config-unreadable" : "config-not-found",
       bytes: 0,
       model: null,
       modelSource: configPath,

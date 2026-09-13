@@ -186,6 +186,24 @@ describe("section extraction", () => {
 });
 
 describe("base prompt source", () => {
+  test("distinguishes a missing config from a config without a selected model", async () => {
+    const home = root();
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+    try {
+      expect((await probePromptText(2_000)).base.reason).toBe("config-not-found");
+      writeFileSync(join(home, "config.toml"), "model_catalog_json = \"catalog.json\"\n");
+      expect((await probePromptText(2_000)).base.reason).toBe("model-not-selected");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
   test("reads the selected model's published base instructions as expanded text", async () => {
     await withPromptHome("gpt-test", {
       client_version: "catalog-test-1",

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
@@ -412,7 +412,16 @@ function installedCodexCandidates(deps: ResolveCodexRuntimeDeps): string[] {
   try {
     return readdirSync(root, { withFileTypes: true })
       .filter(entry => entry.isDirectory())
-      .map(entry => join(root, entry.name, "codex.exe"));
+      .map(entry => {
+        const directory = join(root, entry.name);
+        try {
+          return { directory, name: entry.name, mtimeMs: statSync(directory).mtimeMs };
+        } catch {
+          return { directory, name: entry.name, mtimeMs: -Infinity };
+        }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name))
+      .map(entry => join(entry.directory, "codex.exe"));
   } catch {
     return [];
   }
@@ -664,7 +673,7 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
     };
   }
 
-  // Prefer first valid in priority order (environment → configured → shim → path → fallback).
+  // Prefer first valid in priority order (environment → configured → shim → path → installed → fallback).
   let selected = valid[0]!;
   let replacedConfigured: ResolveCodexRuntimeResult["replacedConfigured"];
 
