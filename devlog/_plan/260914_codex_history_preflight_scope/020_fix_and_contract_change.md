@@ -1,31 +1,83 @@
 # 020 — Fix and contract change
 
-A history preflight refusal now scopes only the conversation-history
-relabel unit. It never vetoes the config / profile / catalog write, in
-either direction.
+PR: https://github.com/lidge-jun/opencodex/pull/4531
+
+On apply, `history_paginated_requires_native_writer` stands the
+conversation-history relabel unit down and still writes the config /
+profile / catalog half. Restore and remove keep their original hard
+refusal. That is narrower than the first draft, which claimed a
+history preflight never vetoed the config write in either direction.
+
+The two P1s that forced the narrowing — restore/remove stay refused,
+and a provider table the home already published must be kept — came
+from the automated Codex reviewer on the pull request, not from the
+original analysis. The original write-up asserted the opposite on
+both points. The incident review was `structure/`-aware.
 
 ## Apply
 
-Config is always written. The relabel job is skipped without spawning a
-Worker. The reason is reported in the human message and in the
-structured `historyPreflightFailureReason` field, alongside
-`success: true`.
+Only one reason stands the relabel unit down:
+`history_paginated_requires_native_writer`, held in the module
+constant `HISTORY_RELABEL_STANDS_DOWN`. Codex allocates paginated
+rollout ordinals in its own writer; no retry changes that.
 
-If a mid-transaction migration is already in flight, it retires the
-relabel unit instead of rolling the config back. The config half that
-has been written stays written.
+When that reason is what preflight returns, config is written. The
+relabel job is skipped without spawning a Worker. The reason is
+reported in the human message and in the structured
+`historyPreflightFailureReason` field, alongside `success: true`. A
+mid-transaction observation of that same reason retires the relabel
+unit instead of rolling the config back.
 
-## Restore / remove
+Every other reason keeps the original hard refusal and the
+compensating rollback:
 
-The config and catalog halves proceed. The history restore unit stands
-down. Paginated rollout bytes and thread rows are never modified in
-this state.
+- `history_injection_preflight_unavailable`
+- `history_state_database_missing`
+- rollout-integrity codes
 
-The same preflight that used to deadlock `removeCodexConfig`,
-`restoreCodexConfigInlineImpl`, and the two `restoreNativeCodex*` sites
-can no longer hold those directions closed. Remove and restore become
-reachable again because they no longer share a veto with the relabel
-unit.
+That includes a mid-transaction observation of those reasons, which
+throws `CodexHistoryPreflightRefusal`. Treating a transient failure
+as a stand-down would let `resolveCodexHistoryTransition` record the
+transition as converged and suppress the relabel permanently.
+
+## Restore / remove — hard refusal kept
+
+`removeCodexConfig`, `restoreCodexConfigInlineImpl`,
+`restoreNativeCodex`, and `restoreNativeCodexAsync` keep their
+original hard refusal on a history preflight failure. The first
+draft softened those paths and argued they opened no state database
+and no rollout, so a history preflight had never authorized them.
+That argument is withdrawn.
+
+Stripping the `[model_providers.opencodex]` definition while thread
+rows still reference it makes those conversations unresolvable. The
+restore path has no seam for keeping a compatibility provider table.
+So the uninstall deadlock on an already-paginated home is **not**
+fixed by this unit.
+
+Open follow-up: lift the remove/restore deadlock only after the
+restore path gains a keep-the-table seam. Until that seam exists,
+the hard refusal stays.
+
+## Provider table the home already published
+
+Rows tagged `opencodex` resolve only through
+`[model_providers.opencodex]`. The loopback (Design B) form normally
+retires that table because the relabel migrates those rows back to
+`openai` in the same pass. With the relabel stood down, retiring it
+would orphan those conversations.
+
+The injector therefore snapshots `hadOcxProviderTableOnDisk` before
+its idempotent cleanup and re-appends the table before the write
+witness is built when the relabel stood down and the form is not
+already table-based.
+
+The first draft recorded those rows as a pre-existing limitation:
+they were equally unresolvable while the refusal blocked the write,
+so keeping or dropping the table did not matter. That is true only
+for a home that never published the table. For a home that **had**
+the table, removing it would have been a new regression. Review
+caught that; the original analysis had asserted the opposite.
 
 ## `sync.ts`
 
@@ -37,34 +89,26 @@ is gone.
 
 ## Safety argument
 
-`removeCodexConfig` and the config half of restore open no state
-database and no rollout. A history preflight never authorized them in
-the first place. Scoping the refusal to the relabel unit is therefore
-not a new write grant over history bytes; it is the removal of a veto
-that those paths did not need and that left the home unrecoverable.
+Paginated rollout bytes and thread rows are not rewritten, and no
+Worker is spawned to relabel them. The stand-down is not a write
+grant over history bytes.
 
-The history unit itself is unchanged in this state: paginated rollout
-bytes and thread rows are not rewritten, and no Worker is spawned to
-relabel them.
+The stand-down is also not a write grant over remove or restore.
+Those directions still refuse, because the only safe restore that
+would accompany a config unwind is one that can keep
+`[model_providers.opencodex]` for rows that still name it, and that
+seam does not exist yet.
 
-## Accepted limitation (follow-up, not a regression)
-
-Rows already tagged `model_provider = 'opencodex'` resolve only in the
-routing forms that install a `[model_providers.opencodex]` table. They
-were equally unresolvable while the refusal blocked the write, so this
-is pre-existing and is not introduced by the fix.
-
-Follow-up question: how should those already-tagged rows resolve when
-the installed routing form does not carry a `[model_providers.opencodex]`
-table? Record the answer in a later unit. Do not treat the current
-unresolvable rows as a regression of this contract change.
+Keeping a table the home already published is a preservation of
+resolvability, not a new provider install. A home that never had the
+table still does not gain one from this path.
 
 ## Tests changed
 
 `tests/codex-integration/codex-inject-integration.test.ts`
 
 - The commit-boundary test and the paginated-history test were inverted
-  to the new contract.
+  to the apply-path stand-down contract.
 - A new test pins that `model_catalog_json` reaches `config.toml` on a
   paginated home.
 
@@ -75,9 +119,11 @@ unresolvable rows as a regression of this contract change.
 
 ## Verification so far
 
-- `bun run typecheck` passes.
-- A real `ocx sync` on the affected machine now writes
-  `model_catalog_json` and `openai_base_url`, prints the stood-down
-  relabel warning, and the model picker recovered (user-confirmed).
-- The local product suite was deliberately NOT RUN at the user's
-  instruction. Hosted CI is the verification gate.
+- `bun run typecheck`, `bun run structure:check`, and
+  `bun run privacy:scan` pass.
+- Full CI on PR #4531 went green on the earlier revision (all four
+  test shards plus macOS). The narrowed revision is being re-run.
+- The local product suite was deliberately never run.
+- Live recovery on the affected machine is user-confirmed: the model
+  picker shows the routed models again in both the Codex app and the
+  CLI.

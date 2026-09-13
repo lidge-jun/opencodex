@@ -19,7 +19,7 @@ export interface CodexSyncResult {
   /**
    * `skipped` is policy truth, never evidence that Codex was written.
    * `catalog-only` means an explicit sync refreshed the catalog/cache while
-   * config/history injection was skipped (OFF, externally owned, or protected history).
+   * config/history injection was skipped (integration OFF, or externally owned).
    */
   status: "applied" | "skipped" | "catalog-only" | "refused";
   ok: boolean;
@@ -51,8 +51,9 @@ export interface CodexSyncOptions {
    * Explicit `ocx sync` is also the refresh path for side profiles that consume
    * the OpenCodex catalog without injection. When set, the sync still refreshes
    * the catalog and models cache even if the Codex integration toggle is OFF or
-   * an external `model_provider` owns config.toml, or paginated history refuses
-   * injection. Config/history injection is skipped in those cases.
+   * an external `model_provider` owns config.toml. Config/history injection is
+   * skipped in those two cases. A paginated-history refusal is NOT one of them:
+   * the injector writes config and stands only its relabel unit down.
    */
   catalogEvenWhenNotInjected?: boolean;
 }

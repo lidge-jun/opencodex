@@ -68,7 +68,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     removeTreeWithRetry(ocxHome);
   });
 
-  test.each(["sync", "async"])("manifest-owned native rows keep their history while the config still comes down (%s)", (kind) => {
+  test.each(["sync", "async"])("manifest-owned native rows refuse restore before artifact changes (%s)", (kind) => {
     writeFileSync(join(codexHome, "config.toml"), 'model="test"\n');
     const script = `
       const fs = require("node:fs");
@@ -93,14 +93,10 @@ describe("injectCodexConfig integration (Design B)", () => {
       const backup = historyBackupPathFor(dbPath);
       const entries = Object.keys(JSON.parse(fs.readFileSync(backup,"utf8")).entries).length;
       const defaultEntries = Object.keys(JSON.parse(fs.readFileSync(historyBackupPathFor(resolveCodexStateDbPath()),"utf8")).entries).length;
-      const historyPaths = [backup, rollout];
-      const historyBefore = historyPaths.map(p=>fs.readFileSync(p,"utf8"));
-      const configPath = join(process.env.CODEX_HOME,"config.toml");
-      const configBefore = fs.readFileSync(configPath,"utf8");
+      const paths = ["config.toml","opencodex.config.toml","opencodex-journal.json"].map(p=>join(process.env.CODEX_HOME,p)).concat([backup,rollout]);
+      const before = paths.map(p=>fs.readFileSync(p,"utf8"));
       const result = ${kind === "sync" ? "restoreNativeCodex()" : "await restoreNativeCodexAsync()"};
-      console.log(JSON.stringify({entries,defaultEntries,result,
-        historyPreserved:historyPaths.every((p,i)=>fs.readFileSync(p,"utf8")===historyBefore[i]),
-        configChanged:fs.readFileSync(configPath,"utf8")!==configBefore}));
+      console.log(JSON.stringify({entries,defaultEntries,result,preserved:paths.every((p,i)=>fs.readFileSync(p,"utf8")===before[i])}));
     `;
     const child = spawnSync(process.execPath, ["--eval", script], {
       cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
@@ -110,15 +106,9 @@ describe("injectCodexConfig integration (Design B)", () => {
     const result = JSON.parse(child.stdout);
     expect(result.entries).toBe(1);
     expect(result.defaultEntries).toBe(1);
-    // The rows are already native here, so removing the config orphans nothing: only the
-    // rollout's own metadata still lags, and its manifest survives untouched so a later
-    // native writer can still finish that half. Refusing instead is what made a paginated
-    // home impossible to uninstall.
-    expect(result.result.success).toBe(true);
-    expect(result.result.artifacts.history).toMatchObject({ state: "skipped" });
-    expect(result.result.artifacts.history.message).toContain("history_paginated_requires_native_writer");
-    expect(result.historyPreserved).toBe(true);
-    expect(result.configChanged).toBe(true);
+    expect(result.result.success).toBe(false);
+    expect(result.result.message).toContain("history_paginated_requires_native_writer");
+    expect(result.preserved).toBe(true);
   });
 
   // The denial has to be a real filesystem permission. `inject-coordination.ts`
@@ -376,7 +366,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     });
   }
 
-  test.each([false, true])("paginated rollout bytes stay untouched while config transitions both ways (authless=%s)", (authless) => {
+  test.each([false, true])("a paginated home still gets its config written, and keeps the provider table its rows need (authless=%s)", (authless) => {
     const original = 'model_provider = "opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\n';
     const configPath = join(codexHome, "config.toml");
     const profilePath = join(codexHome, "opencodex.config.toml");
@@ -402,10 +392,13 @@ describe("injectCodexConfig integration (Design B)", () => {
     // The profile is replaced inside the artifact transaction; no longer holding the fixture
     // sentinel is proof the config half committed rather than being compensated away.
     expect(readFileSync(profilePath,"utf8")).not.toBe("# preserve profile\n");
+    // The relabel stood down, so the rows still say `opencodex`. Retiring the table that
+    // publishes that provider id would leave those conversations pointing at nothing, so a
+    // table this home already had survives the write even in the root-override form.
+    expect(readFileSync(configPath,"utf8")).toContain("[model_providers.opencodex]");
 
-    // Restore and remove must not be a one-way door. Before this was scoped, the same
-    // refusal froze all three directions at once, so a home with a single paginated
-    // rollout could neither install OpenCodex nor take it back out.
+    // Removing routing while those rows stay routed would orphan them, so restore keeps its
+    // refusal here. Making an already-paginated home uninstallable is tracked separately.
     const restoreScript = `
       const { restoreNativeCodex, restoreNativeCodexAsync, removeCodexConfig } = require("./src/codex/inject");
       const results = [restoreNativeCodex(), await restoreNativeCodexAsync(), removeCodexConfig()];
@@ -416,8 +409,8 @@ describe("injectCodexConfig integration (Design B)", () => {
       encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
     });
     expect(restored.status).toBe(0);
-    for (const outcome of JSON.parse(restored.stdout)) expect(outcome.success).toBe(true);
-    expect(readFileSync(configPath,"utf8")).not.toContain("[model_providers.opencodex]");
+    for (const outcome of JSON.parse(restored.stdout)) expect(outcome.success).toBe(false);
+    expect(readFileSync(configPath,"utf8")).toContain("[model_providers.opencodex]");
     expect(readFileSync(rollout,"utf8")).toBe(bytes);
   });
 

@@ -909,6 +909,13 @@ export interface CodexInjectResult {
   nativeSubagentDefaultsWarning?: string;
 }
 
+/**
+ * The one history preflight reason that is permanent rather than operational: Codex owns
+ * paginated rollout ordinals, so no retry makes the legacy relabel protocol available again.
+ */
+const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
+
+class CodexHistoryPreflightRefusal extends Error {}
 class CodexRestoreRefusal extends Error {
   constructor(readonly config: CodexRestoreConfigResult) {
     super(config.message);
@@ -932,7 +939,11 @@ export async function injectCodexConfig(
   config?: OcxConfig,
   options: InjectCodexOptions = {},
 ): Promise<CodexInjectResult> {
-  return await injectCodexConfigImpl(port, config, options);
+  try { return await injectCodexConfigImpl(port, config, options); }
+  catch (error) {
+    if (error instanceof CodexHistoryPreflightRefusal) return { success: false, historyPreflightFailureReason: error.message, message: `Codex config injection refused: ${error.message}. Existing configuration and history were preserved.` };
+    throw error;
+  }
 }
 
 async function injectCodexConfigImpl(
@@ -1056,7 +1067,10 @@ async function injectCodexConfigImpl(
     journaledInjectedOpenaiBaseUrl({ readOnly: !!options.beforeClientWrite }),
     journaledInjectedRealtimeWsBaseUrl({ readOnly: !!options.beforeClientWrite }),
   );
-  if (hasOcxProviderTable(content)) {
+  // Whether this home already published the provider id that its thread rows may reference.
+  // Design B strips the table below; it may only stay stripped if those rows can be relabeled.
+  const hadOcxProviderTableOnDisk = hasOcxProviderTable(content);
+  if (hadOcxProviderTableOnDisk) {
     content = removeOcxSection(content);
   }
   content = removeProfileSection(content);
@@ -1192,25 +1206,55 @@ async function injectCodexConfigImpl(
     }
   };
   /*
-   * A refusal here scopes the conversation-history relabel unit. It does NOT veto the
-   * config transition.
+   * ONE refusal stands the relabel unit down instead of vetoing the config transition, and
+   * only because it is permanent. Codex allocates paginated rollout ordinals in its own
+   * writer, so `assertLegacyHistoryRecord` refuses every rollout on a current install and no
+   * amount of retrying changes that. While it vetoed the write, `model_catalog_json` never
+   * reached config.toml, so the app and the CLI both fell back to their built-in model list
+   * while `ocx sync` still reported success.
    *
-   * Current Codex records paginated rollouts whose ordinals only its own writer may
-   * allocate, so `assertLegacyHistoryRecord` refuses every rollout it sees and the legacy
-   * relabel protocol has to stand down permanently. While that refusal also vetoed the
-   * config write, `model_providers` and `model_catalog_json` never reached config.toml on
-   * any current Codex, so both the app and the CLI fell back to the six native models
-   * while `ocx sync` still reported success. Three legacy `opencodex`-tagged rows were
-   * enough to deadlock apply, remove, and restore at once.
-   *
-   * Writing config while history stays native is safe in this direction: an
-   * `openai`-tagged thread keeps resolving through Codex's built-in provider, which is
-   * where the overwhelming majority of rows sit. A row already tagged `opencodex` resolves
-   * only in the forms that install a provider table, and it was equally unresolvable while
-   * this refusal blocked the write, so nothing regresses. What is given up is relabeling
-   * EXISTING conversations, which `historyMessage` reports.
+   * Every other reason — an unreadable state database, a rollout whose identity changed, a
+   * preflight that could not run — describes a store that may well be relabelable on the next
+   * attempt. Treating those as a stand-down would record the transition as converged and
+   * suppress the relabel permanently, so they keep the hard refusal and the rollback.
    */
-  let historyRelabelRefusal = historyPreflight();
+  /*
+   * Re-observed inside the artifact transaction. A store that migrates to paginated history
+   * mid-write retires the relabel unit, because the config half writes no history and rolling
+   * it back is what left every paginated home with no OpenCodex models. Any other reason is
+   * still treated as a failed transition so compensation can restore the pre-images.
+   */
+  const observeHistoryRefusalOrThrow = (known: string | null): string | null => {
+    if (known) return known;
+    const observed = historyPreflight();
+    if (observed && observed !== HISTORY_RELABEL_STANDS_DOWN) throw new CodexHistoryPreflightRefusal(observed);
+    return observed;
+  };
+  const observedHistoryRefusal = historyPreflight();
+  if (observedHistoryRefusal && observedHistoryRefusal !== HISTORY_RELABEL_STANDS_DOWN) {
+    return {
+      success: false,
+      historyPreflightFailureReason: observedHistoryRefusal,
+      message: `Codex config injection refused: ${observedHistoryRefusal}. `
+        + "Existing provider definitions and conversation files were preserved. "
+        + "Paginated history requires native-writer coordination; do not run legacy recovery or retry this transition blindly.",
+    };
+  }
+  let historyRelabelRefusal = observedHistoryRefusal;
+
+  /*
+   * Rows this home may have tagged `opencodex` resolve only through a provider table. Design B
+   * normally retires that table because the relabel migrates those rows back to `openai` in
+   * the same pass; with the relabel stood down, stripping it anyway would leave every such
+   * conversation pointing at a provider id that no longer exists. Keep what was already
+   * published, and keep it BEFORE the witness so the lock admits the bytes actually written.
+   */
+  if (historyRelabelRefusal && hadOcxProviderTableOnDisk && !providerTableMode) {
+    content = applyEol(
+      content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {})),
+      eol,
+    );
+  }
 
   /*
    * The witness, built from the FINAL bytes. Everything it hashes is either the
@@ -1304,7 +1348,7 @@ async function injectCodexConfigImpl(
 
   const applyNativeArtifacts = (): void => {
     beforeHistoryArtifactCommitForTests?.(eligibility.kind);
-    if (!historyRelabelRefusal) historyRelabelRefusal = historyPreflight();
+    historyRelabelRefusal = observeHistoryRefusalOrThrow(historyRelabelRefusal);
     const preImages = captureCodexPreImages();
     try {
     historyArtifactStageForTests?.("after-preflight");
@@ -1339,10 +1383,8 @@ async function injectCodexConfigImpl(
       injectedCatalogPath: catalogPath,
     });
     historyArtifactStageForTests?.("after-artifacts");
-    // Detect migration throughout the artifact transaction, not just at entry. A store that
-    // migrates mid-transaction retires the relabel unit; it is not a reason to roll the
-    // config back, because the config half never depended on being able to write history.
-    if (!historyRelabelRefusal) historyRelabelRefusal = historyPreflight();
+    // Detect migration throughout the artifact transaction, not just at entry.
+    historyRelabelRefusal = observeHistoryRefusalOrThrow(historyRelabelRefusal);
     } catch (error) {
       const compensated = restoreCodexPreImages(preImages);
       if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
@@ -1565,6 +1607,7 @@ async function injectCodexConfigImpl(
     return {
       success: true,
       ...(nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning } : {}),
+      ...(historyRelabelRefusal ? { historyPreflightFailureReason: historyRelabelRefusal } : {}),
       message:
         `Injected opencodex as default provider into Codex config (client-side compaction mode; ChatGPT auth remains required).\n` +
         `  Your root openai_base_url was left exactly as you set it, so opencodex did not add its own.\n` +
@@ -1583,6 +1626,7 @@ async function injectCodexConfigImpl(
       ...(nativeSubagentDefaultsWarning
         ? { nativeSubagentDefaultsWarning }
         : {}),
+      ...(historyRelabelRefusal ? { historyPreflightFailureReason: historyRelabelRefusal } : {}),
       message:
         `⚠️ Codex routing NOT injected: your config already sets a root openai_base_url, and opencodex never overwrites a user-owned override.\n` +
         catalogMessage +
@@ -1733,15 +1777,11 @@ function hasOpencodexRouting(content: string): boolean {
   );
 }
 
-/*
- * Strips OUR fields from config.toml and removes the profile. It opens no state database
- * and no rollout, so a history preflight has nothing to authorize here. It used to refuse
- * on one anyway, which meant three leftover `opencodex`-tagged rows could make an
- * uninstall impossible on a home whose rollouts only Codex's own writer may extend.
- */
 export function removeCodexConfig(
   options: { preserveProfile?: boolean } = {},
 ): { success: boolean; message: string } {
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
   if (!existsSync(CODEX_CONFIG_PATH)) {
     if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
       unlinkSync(CODEX_PROFILE_PATH);
@@ -1948,15 +1988,10 @@ function failedConfigRestoreEnvelope(config: CodexRestoreConfigResult): CodexNat
   return result;
 }
 
-/**
- * The config/profile half of a native restore, reported as one artifact.
- *
- * `historyStoodDown` says the caller's entry preflight already refused, so history was never
- * going to be relabeled on this home. That distinction is the whole rule below.
- */
-function restoreCodexConfigInline(kind = "sync", historyStoodDown = false): CodexRestoreConfigResult {
+/** The config/profile half of a native restore, reported as one artifact. */
+function restoreCodexConfigInline(kind = "sync"): CodexRestoreConfigResult {
   const preImages = captureCodexPreImages();
-  const result = restoreCodexConfigInlineImpl(kind, historyStoodDown);
+  const result = restoreCodexConfigInlineImpl(kind);
   if (result.state === "failed") {
     const compensated = restoreCodexPreImages(preImages);
     if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
@@ -1964,30 +1999,11 @@ function restoreCodexConfigInline(kind = "sync", historyStoodDown = false): Code
   return result;
 }
 
-function restoreCodexConfigInlineImpl(kind: string, historyStoodDown: boolean): CodexRestoreConfigResult {
+function restoreCodexConfigInlineImpl(kind: string): CodexRestoreConfigResult {
   try {
     beforeRestoreConfigForTests?.(kind);
-    /*
-     * Two different situations wear the same refusal string, and only one of them justifies
-     * abandoning the restore.
-     *
-     * A store that MIGRATES WHILE WE WRITE is new information: history was restorable when
-     * this operation started, so the honest move is to abandon it and let the caller
-     * compensate, leaving config and history consistent with each other. Stripping the
-     * provider definition while its threads still point at it would orphan them.
-     *
-     * A store that was ALREADY paginated at the entry preflight is not new information. There
-     * the relabel was never on the table, and refusing here only means the operator can never
-     * remove OpenCodex at all — three routed rows out of 14164 froze this home's apply,
-     * removal, and restore simultaneously. Those rows are equally unresolvable either way, so
-     * the config half proceeds and the caller reports the stood-down history unit.
-     */
-    const migratedMidWrite = (): string | null =>
-      historyStoodDown ? null : preflightCodexHistoryInjection(false, false);
-    const entryHistoryError = migratedMidWrite();
-    if (entryHistoryError) {
-      return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${entryHistoryError}.` };
-    }
+    const historyError = preflightCodexHistoryInjection(false, false);
+    if (historyError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${historyError}.` };
     const journal = restoreJournalState();
     if (journal.unverified) {
       return {
@@ -1999,12 +2015,10 @@ function restoreCodexConfigInlineImpl(kind: string, historyStoodDown: boolean): 
       ? { success: true, message: "Codex config restored from opencodex journal." }
       : removeCodexConfig({ preserveProfile: journal.profileRestored || journal.profileChanged });
     if (restored.success) {
-      // A successful journal/fallback write can race native history migration too. Refuse
-      // here while preimage compensation and the remove transaction can still roll back.
-      const finalHistoryError = migratedMidWrite();
-      if (finalHistoryError) {
-        return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${finalHistoryError}.` };
-      }
+      // A successful journal/fallback write can race native history migration too.
+      // Refuse here while preimage compensation and the remove transaction can roll back.
+      const finalHistoryError = preflightCodexHistoryInjection(false, false);
+      if (finalHistoryError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${finalHistoryError}.` };
     }
     return restored.success
       ? {
@@ -2099,9 +2113,8 @@ async function restoreNativeCodexAsyncImpl(
     if (shouldSyncCodexOnStart(loadConfig())) return desiredEnabledRestoreSkip();
   }
 
-  // Scopes the history unit, never the config/catalog halves. A home whose rollouts only
-  // Codex's own writer may extend must still be able to take OpenCodex back out.
-  const historyRestoreRefusal = preflightCodexHistoryInjection(false, false);
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
 
   const eligibility = codexWriteCoordinationEligibility({
     coordinatorPath: () =>
@@ -2152,7 +2165,7 @@ async function restoreNativeCodexAsyncImpl(
         const preImages = captureCodexPreImages();
         let restored: CodexRestoreConfigResult;
         try {
-          restored = restoreCodexConfigInline(eligibility.kind, historyRestoreRefusal !== null);
+          restored = restoreCodexConfigInline(eligibility.kind);
           // Throw inside N so the published remove transition rolls back too.
           if (restored.state === "failed") throw new CodexRestoreRefusal(restored);
         } catch (error) {
@@ -2195,18 +2208,16 @@ async function restoreNativeCodexAsyncImpl(
     if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
       return desiredEnabledRestoreSkip();
     }
-    config = restoreCodexConfigInline(eligibility.kind, historyRestoreRefusal !== null);
+    config = restoreCodexConfigInline(eligibility.kind);
   }
 
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
-  const outcome: CodexHistoryJobOutcome = historyRestoreRefusal
-    ? { kind: "skipped" }
-    : await runCodexHistoryJob({
-      ...resolveCodexHistoryJobTarget(),
-      ...(options.revalidateDesiredState ? { expectedDesiredEnabled: false } : {}),
-      operation: deriveCodexHistoryOperation({ direction: "restore", resumeHistory: true, legacyMode: false }),
-    });
+  const outcome = await runCodexHistoryJob({
+    ...resolveCodexHistoryJobTarget(),
+    ...(options.revalidateDesiredState ? { expectedDesiredEnabled: false } : {}),
+    operation: deriveCodexHistoryOperation({ direction: "restore", resumeHistory: true, legacyMode: false }),
+  });
   if (transitionReceipt) {
     resolveCodexHistoryTransition(transitionReceipt, outcome);
   }
@@ -2218,12 +2229,7 @@ async function restoreNativeCodexAsyncImpl(
           : "No backed-up resume-history metadata was pending; untracked routed history was left unchanged.",
       }
     : outcome.kind === "skipped"
-      ? {
-          state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0,
-          message: historyRestoreRefusal
-            ? `Codex resume history was left to Codex's native writer (${historyRestoreRefusal}); routed provider metadata still needs that writer.`
-            : "Codex resume history was skipped.",
-        }
+      ? { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message: "Codex resume history was skipped." }
       : outcome.kind === "blocked" && (outcome.reason === "desired_disabled" || outcome.reason === "desired_enabled")
         ? {
             state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0,
@@ -2255,13 +2261,13 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
   if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
     return desiredEnabledRestoreSkip();
   }
-  // Scopes the history unit, never the config/catalog halves; see the async entry point.
-  const historyRestoreRefusal = preflightCodexHistoryInjection(false, false);
+  const historyError = preflightCodexHistoryInjection(false, false);
+  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
   // Captured before the config half: a successful journal restore DELETES the journal, and
   // restoring the config can drop `model_catalog_json`. Either one would hide the routed
   // catalog we actually wrote (#1798).
   const journaledCatalogPath = journaledInjectedCatalogPath();
-  const config = restoreCodexConfigInline(undefined, historyRestoreRefusal !== null);
+  const config = restoreCodexConfigInline();
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   // Design B (loopback) steady state: threads are already tagged openai, so prove the
@@ -2276,18 +2282,13 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
   }
   // `skipHistory` is how the async wrapper takes this work for itself: the
   // native files come down here, and history runs in the Worker under H.
-  const rawHistory = options.skipHistory || historyRestoreRefusal
+  const rawHistory = options.skipHistory
     ? { rows: 0, files: 0 }
     : syncCodexHistoryProvider("openai", undefined, undefined, {
         skipWhenProvablyNoop,
       });
   const history: CodexRestoreHistoryResult = options.skipHistory
     ? { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message: "History restoration runs asynchronously." }
-    : historyRestoreRefusal
-    ? {
-        state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0,
-        message: `Codex resume history was left to Codex's native writer (${historyRestoreRefusal}); routed provider metadata still needs that writer.`,
-      }
     : rawHistory.failed
       ? failedHistoryRestore(rawHistory.failureReason, undefined, rawHistory)
       : {

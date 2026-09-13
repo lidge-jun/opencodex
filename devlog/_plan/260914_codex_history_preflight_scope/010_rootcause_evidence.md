@@ -3,6 +3,14 @@
 The chain below was verified by direct execution on the affected machine.
 Nothing here is inferred from logs alone.
 
+The original write-up treated step 6 as a defect this unit would close
+in the same pass as the apply-path veto. That was wrong. Automated
+review on https://github.com/lidge-jun/opencodex/pull/4531 (the
+incident review was `structure/`-aware; the P1 came from the
+automated Codex reviewer) kept the remove and restore hard refusals.
+Step 6 remains a description of the original home, not a completion
+claim.
+
 ## Symptom, restated as observed state
 
 | Surface | Observed |
@@ -60,27 +68,46 @@ the message
 Model catalog synchronized; Codex config and conversation history left unchanged because paginated history requires its native writer.
 ```
 
-That is what made the regression silent. The operator, and
+That is what made the apply-path regression silent. The operator, and
 `--restart-app-server-only`, were told the catalog had synchronized.
 
-### 6. The same preflight gated remove and restore
+### 6. The same preflight gated remove and restore — and still does
 
 The same preflight also gated `removeCodexConfig`,
-`restoreCodexConfigInlineImpl`, and two `restoreNativeCodex*` sites.
+`restoreCodexConfigInlineImpl`, `restoreNativeCodex`, and
+`restoreNativeCodexAsync`.
 
 On the affected machine, 3 thread rows out of 14164 were tagged
 `model_provider = 'opencodex'`. Those 3 rows were enough to deadlock
-apply, remove, **and** restore at the same time — an unrecoverable
-state. The preflight refused every direction that would have written
-or unwound the config, so the home could not be repaired in place.
+apply, remove, **and** restore at the same time.
+
+This unit closes only the apply side of that deadlock, and only for
+`history_paginated_requires_native_writer`. Remove and restore keep
+the original hard refusal. The first draft claimed those directions
+could proceed because they open no state database and no rollout.
+Review rejected that: stripping `[model_providers.opencodex]` while
+thread rows still reference it makes those conversations
+unresolvable, and the restore path has no seam for keeping a
+compatibility provider table. The uninstall deadlock on an
+already-paginated home is therefore still open. A later fix needs
+that keep-the-table seam; it is not implied by the apply-path
+stand-down.
 
 ## What this chain does and does not prove
 
-It proves the picker failure is a config-write veto, not a catalog-file
-miss and not an app-server restart miss. The sidecar catalog was
-already right; the app-server did restart; `config.toml` never gained
-`model_catalog_json`.
+It proves the picker failure is an apply-path config-write veto, not a
+catalog-file miss and not an app-server restart miss. The sidecar
+catalog was already right; the app-server did restart; `config.toml`
+never gained `model_catalog_json`.
 
 It does not authorize writing paginated rollout bytes or retagging
 thread rows. The native-writer refusal on the history unit remains
-correct. The defect is that the refusal was bound to the wrong unit.
+correct for that shape: Codex allocates paginated rollout ordinals in
+its own writer, and no retry changes that. That is why only
+`history_paginated_requires_native_writer` stands the relabel unit
+down. Other reasons stay hard refusals so a transient miss cannot be
+recorded as a converged transition.
+
+It does not prove that remove and restore were vetoed by mistake.
+The original analysis asserted they were; review showed the opposite.
+Those refusals stay.

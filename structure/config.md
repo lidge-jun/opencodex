@@ -158,30 +158,35 @@ journal creation, and the background history restoration guardian.
 `ocx sync` and `ocx restore back` run the injector's non-writing preflight before provider
 discovery or catalog/cache replacement. Deterministic config and ownership refusals therefore
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
-A conversation-history preflight refusal scopes the history relabel unit and nothing else. It
-does not refuse the config, profile, or catalog write, in either direction. When the preflight
-reports `history_paginated_requires_native_writer`, the transition still writes config and
-`model_catalog_json`, the relabel job is skipped without spawning its Worker, and the reason
-travels in the human message and in the structured `historyPreflightFailureReason` field
-*alongside* `success: true`. Restore and removal behave the same way: the config and catalog
-halves revert while the history is left to Codex's native writer. Paginated rollout bytes and
-thread rows are never modified in this state.
+Exactly one conversation-history refusal scopes the relabel unit instead of vetoing the apply
+transition, and only because it is permanent. Codex allocates paginated rollout ordinals inside
+its own writer, so `history_paginated_requires_native_writer` is not retryable: the transition
+writes config, profile, and `model_catalog_json`, the relabel job is skipped without spawning
+its Worker, and the reason travels in the human message and in the structured
+`historyPreflightFailureReason` field *alongside* `success: true`. Every other reason — an
+unreadable state database, a rollout whose identity changed, a preflight that could not run —
+describes a store that may be relabelable on the next attempt, so those keep the hard refusal
+and the compensating rollback. Recording them as a stand-down would mark the transition
+converged and suppress the relabel permanently.
 
-Restore distinguishes two situations that wear the same refusal string. A store already
-paginated at the entry preflight is not news — the relabel was never available, so the config
-half proceeds and the report names the stood-down unit. A store that migrates *while the
-restore is writing* is news: history was restorable when the operation began, so that refusal
-still abandons the restore and the caller compensates its pre-images, because stripping a
-provider definition while its threads still point at it would orphan them.
+Standing the relabel down changes what the routing form may retire. Rows this home tagged
+`opencodex` resolve only through a `[model_providers.opencodex]` table; the loopback form
+normally retires that table precisely because the relabel migrates those rows back to `openai`
+in the same pass. With the relabel stood down, a table the home already published survives the
+write, so those conversations keep a provider id that exists. Paginated rollout bytes and thread
+rows are never modified in this state.
 
-Scoping it is not a relaxation, it is the correct boundary. `removeCodexConfig` and the config
-half of restore open no state database and no rollout, so a history preflight never authorized
-them. Treating the refusal as a veto is what made every current Codex home unusable: paginated
+Treating the refusal as a veto is what made every current Codex home unusable: paginated
 rollouts refuse unconditionally, so `model_catalog_json` never reached config.toml and both the
 app and the CLI fell back to their built-in model list. `ocx sync` reported success anyway,
 because that reason was special-cased into a `catalog-only` result — the downgrade is gone, so a
-refusal that survives is a real config or integrity failure again. Three routed thread rows out
-of 14164 were enough to deadlock apply, removal, and restore at once.
+refusal that survives is a real config or integrity failure again.
+
+Restore and removal keep the refusal. There the argument reverses: stripping the provider
+definition while its threads still point at it would orphan them, and those paths have no seam
+for keeping a compatibility table. A home that was already paginated therefore cannot yet be
+uninstalled through the product; that is tracked as open work, not as settled contract.
+
 Unattended sync, `POST /api/sync`, and every other config or ownership refusal keep the hard
 failure above.
 The real injection still revalidates under its normal write boundary after catalog convergence;
