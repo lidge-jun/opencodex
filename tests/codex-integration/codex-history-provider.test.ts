@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, restoredUserEventFor, setAfterNoopPendingCountForTests, setAfterStrictHistoryRolloutAppendForTests, setBeforeHistoryApplyTransactionForTests, setBeforeHistoryBackupConsumeForTests, setBeforeStrictHistoryRolloutAppendForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../../src/codex/history-provider";
+import { sameCodexHistoryPath } from "../../src/codex/history-manifest";
 import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "../helpers/codex-history-manifest-fixtures";
 import { preflightCodexHistoryInjection, setHistoryAppendHooksForTests } from "../../src/codex/history-provider";
 
@@ -1512,5 +1513,24 @@ describe("Design B migration helpers", () => {
     const db = new Database(pending.dbPath, { readonly: true });
     expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "openai" });
     db.close();
+  });
+
+  test("sameCodexHistoryPath normalizes Windows extended-length and device path prefixes", () => {
+    if (process.platform !== "win32") return;
+    const std = "C:\\Users\\test\\state.db";
+    const ext = "\\\\?\\C:\\Users\\test\\state.db";
+    const dev = "\\\\.\\C:\\Users\\test\\state.db";
+    const fwd = "//?/C:/Users/test/state.db";
+    expect(sameCodexHistoryPath(std, ext)).toBe(true);
+    expect(sameCodexHistoryPath(ext, std)).toBe(true);
+    expect(sameCodexHistoryPath(std, dev)).toBe(true);
+    expect(sameCodexHistoryPath(std, fwd)).toBe(true);
+  });
+
+  test("sameCodexHistoryPath normalizes Windows UNC paths with extended prefix", () => {
+    if (process.platform !== "win32") return;
+    const unc = "\\\\server\\share\\rollout.jsonl";
+    const extUnc = "\\\\?\\UNC\\server\\share\\rollout.jsonl";
+    expect(sameCodexHistoryPath(unc, extUnc)).toBe(true);
   });
 });
