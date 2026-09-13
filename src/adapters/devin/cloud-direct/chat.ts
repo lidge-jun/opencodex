@@ -46,8 +46,33 @@ import { resolveDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
  * we only trigger when the server has genuinely stopped responding.
  */
 const CLOUD_STREAM_IDLE_MS = 120_000;
-/** Time-to-first-byte timeout. */
-const CLOUD_STREAM_TTFB_MS = 60_000;
+/**
+ * Budget for the response HEADERS, which is not the same thing as a connect
+ * timeout. Cognition holds the headers until the model produces its first
+ * token, so on a high-effort reasoning model this bounds generation. A 60s
+ * value killed live swe-2 high turns at exactly 60000ms with no output while
+ * a sibling call on the same account was still alive at 76s, which is the
+ * defect this constant exists to record.
+ *
+ * It has to be at least as generous as the body idle budget above. The cost of
+ * the larger value is bounded and understood: a peer that goes silent at the
+ * TCP level without sending RST/FIN now hangs for this long instead of 60s. A
+ * peer that actually dies still rejects immediately. This timer is the only
+ * bound on that case once `timeout: 0` is set on the fetch, so it must not be
+ * removed. Override with OPENCODEX_DEVIN_TTFB_MS.
+ */
+const CLOUD_STREAM_HEADERS_DEFAULT_MS = 300_000;
+/** Upper bound for the override, so a stray value cannot wedge a turn forever. */
+const CLOUD_STREAM_HEADERS_MAX_MS = 1_800_000;
+function cloudStreamHeadersMs(): number {
+  const raw = process.env.OPENCODEX_DEVIN_TTFB_MS?.trim();
+  if (!raw) return CLOUD_STREAM_HEADERS_DEFAULT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return CLOUD_STREAM_HEADERS_DEFAULT_MS;
+  return Math.min(parsed, CLOUD_STREAM_HEADERS_MAX_MS);
+}
+/** Test seam for the headers budget; the resolver itself stays private. */
+export const cloudStreamHeadersMsForTests = cloudStreamHeadersMs;
 /** Maximum acceptable Connect-RPC frame length (16 MB). */
 const MAX_FRAME_LEN = 16 * 1024 * 1024;
 
@@ -1115,12 +1140,24 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   const framed = frameConnectStream(proto, false);
   const body = new Blob([new Uint8Array(framed)], { type: "application/connect+proto" });
 
-  // Compose caller signal with a TTFB timeout. If the cloud takes longer
-  // than CLOUD_STREAM_TTFB_MS to start the response, abort. Once any byte
-  // arrives we cancel the TTFB timer and start the per-chunk idle timer
-  // inside the read loop instead.
+  // Compose the caller signal with a deadline on the response HEADERS. The
+  // timer is cleared in the finally below, which runs when `await fetch`
+  // resolves — and fetch resolves on headers, not on the first body byte. An
+  // earlier comment here claimed "once any byte arrives", which was wrong and
+  // hid the defect: Cognition withholds headers until the first token, so this
+  // budget is a generation deadline. Body silence after headers is a separate
+  // budget, the per-chunk idle timer in the read loop below.
   const ttfbController = new AbortController();
-  const ttfbTimer = setTimeout(() => ttfbController.abort(new Error(`cloud-direct: time-to-first-byte timeout (${CLOUD_STREAM_TTFB_MS}ms)`)), CLOUD_STREAM_TTFB_MS);
+  const headersMs = cloudStreamHeadersMs();
+  // Abort with no reason and remember that we are the one who fired. Bun rejects
+  // the fetch with its own AbortError rather than handing back `signal.reason`,
+  // so attaching a typed error to abort() would be discarded; the catch below is
+  // what actually produces a classifiable failure.
+  let headersDeadlineFired = false;
+  const ttfbTimer = setTimeout(() => {
+    headersDeadlineFired = true;
+    ttfbController.abort();
+  }, headersMs);
   const ttfbSignal = ttfbController.signal;
   // Compose req.signal + ttfbSignal. AbortSignal.any was added in Node
   // 20.3 / Bun 1.0; our `engines` allows Node ≥18, so on Node 18-20.2 the
@@ -1148,7 +1185,28 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
       body,
       redirect: 'error',
       signal: initialSignal,
-    });
+      // Bun applies its own fetch idle timeout (~5 minutes) on top of ours.
+      // Two independent deadlines on the same hop means the shorter one wins
+      // silently and this function can no longer explain its own failure, so
+      // the deadline above is made the single authority. Same reason as
+      // src/server/responses/fetch-helpers.ts.
+      timeout: 0,
+    } as RequestInit);
+  } catch (err) {
+    if (headersDeadlineFired) {
+      // Ours, not the upstream failing. Raised as a typed error with an explicit
+      // status because devinErrorClassification reads CloudChatError.status and
+      // would otherwise return {} for a bare Error, leaving src/lib/errors.ts to
+      // guess from the message text. The message deliberately no longer says
+      // "timeout", so the status is the only thing carrying the classification.
+      throw new CloudChatError(
+        `cloud-direct: no response headers within ${headersMs}ms`,
+        undefined,
+        undefined,
+        504,
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(ttfbTimer);
     // The composed signal only guards the headers hop; the body is cancelled
