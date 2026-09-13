@@ -118,21 +118,6 @@ function defaultSleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function waitForExit(
-  pid: number,
-  timeoutMs: number,
-  isAlive: (pid: number) => boolean,
-  sleep: (ms: number) => void,
-  now: () => number,
-): boolean {
-  const deadline = now() + timeoutMs;
-  while (now() < deadline) {
-    if (!isAlive(pid)) return true;
-    sleep(250);
-  }
-  return !isAlive(pid);
-}
-
 /**
  * True when the pid still names the process we verified.
  *
@@ -171,6 +156,40 @@ function checkIdentity(
  * Read-only. Used by the CLI to exclude app-servers the desktop restart is about to
  * take anyway, so an operator\u2019s in-flight turn is not interrupted twice in one command.
  */
+/**
+ * Poll the platform's own process list until it stops listing this process.
+ *
+ * A single post-kill enumeration is not enough. Measured on Windows: `taskkill /T /F`
+ * succeeds, the process is genuinely dead a moment later, and yet the very next
+ * `Win32_Process` query still lists it. Checking once turned that lag into a reported
+ * survivor, which blocked the relaunch and left the machine with no app at all - the
+ * failure mode is the mirror of claiming a stop that never happened, and just as bad.
+ *
+ * Liveness is polled first because it is cheap; the enumeration is what decides. A probe
+ * that cannot run keeps the loop going rather than deciding either way, and if the
+ * deadline passes without a clean "gone" the caller treats it as a survivor.
+ */
+function waitUntilGone(
+  adapter: DesktopAppAdapter,
+  exec: DesktopExec,
+  install: Parameters<DesktopAppAdapter["listProcesses"]>[1],
+  target: DesktopProcess,
+  timeoutMs: number,
+  isAlive: (pid: number) => boolean,
+  sleep: (ms: number) => void,
+  now: () => number,
+): boolean {
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    if (!isAlive(target.pid) && checkIdentity(adapter, exec, install, target) === "gone") return true;
+    if (now() >= deadline) break;
+    sleep(250);
+  }
+  // One last look after the deadline, so a process that exited during the final sleep is
+  // not reported as surviving purely because of poll timing.
+  return checkIdentity(adapter, exec, install, target) === "gone";
+}
+
 export function listCodexDesktopAppPids(io: DesktopAppRestartIo = {}): number[] | null {
   const platform = io.platform ?? process.platform;
   const selected = ADAPTERS[platform];
@@ -264,11 +283,10 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
       } catch {
         /* a refused graceful close still gets the forced pass below */
       }
-      if (waitForExit(pid, GRACEFUL_EXIT_TIMEOUT_MS, isAlive, sleep, now)
-        && checkIdentity(adapter, exec, install, shell) === "gone") {
-        // Liveness AND enumeration have to agree before a stop is claimed. A pid-based
-        // liveness probe is a weaker instrument than the platform's own process list,
-        // and on a packaged app the two can disagree.
+      // Liveness AND enumeration have to agree before a stop is claimed. A pid-based
+      // liveness probe is a weaker instrument than the platform's own process list, and
+      // on a packaged app the two disagree in BOTH directions.
+      if (waitUntilGone(adapter, exec, install, shell, GRACEFUL_EXIT_TIMEOUT_MS, isAlive, sleep, now)) {
         stopped.push(pid);
         continue;
       }
@@ -291,8 +309,7 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
       // Same rule after the forced pass: only an enumeration that no longer contains this
       // process proves it stopped. Everything else is a survivor, and a survivor blocks
       // the relaunch rather than producing a second shell beside a live one.
-      if (waitForExit(pid, FORCED_EXIT_TIMEOUT_MS, isAlive, sleep, now)
-        && checkIdentity(adapter, exec, install, shell) === "gone") {
+      if (waitUntilGone(adapter, exec, install, shell, FORCED_EXIT_TIMEOUT_MS, isAlive, sleep, now)) {
         stopped.push(pid);
       } else {
         surviving.push(pid);
