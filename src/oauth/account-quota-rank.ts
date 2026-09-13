@@ -46,22 +46,41 @@ interface Ranked {
 const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
 
 /**
+ * Map a requested model ID to the Antigravity quota-window family prefix.
+ * Returns "Gem" for Gemini models, "Cla" for Claude/Opus/Sonnet, or undefined
+ * for unknown models (which falls back to all-window ranking).
+ */
+function classifyModelFamilyForQuota(modelId: string): "Gem" | "Cla" | undefined {
+  const lower = modelId.toLowerCase();
+  if (lower.includes("gemini") || lower === "gemini" || lower.startsWith("gemini-")) return "Gem";
+  if (lower.includes("claude") || lower.includes("opus") || lower.includes("sonnet") || lower.includes("gpt-oss") || lower.includes("gpt_oss")) return "Cla";
+  return undefined;
+}
+
+/**
  * Remaining headroom across every window the provider reports.
  *
  * The minimum wins: an account at 5% of its five-hour window is unusable right now even if
  * its monthly allowance is barely touched.
  */
-function headroomOf(provider: string, accountId: string): number | null {
+function headroomOf(provider: string, accountId: string, requestedModelId?: string): number | null {
   const quota = getCachedProviderAccountQuota(provider, accountId);
   if (!quota) return null;
   // Null, not a low rank: this must reproduce "no evidence" so a stale roster degrades to
   // the unranked ring rather than to a differently wrong answer.
   if (hasPassiveAccountQuota(provider) && Date.now() - quota.updatedAt > PASSIVE_HEADROOM_MAX_AGE_MS) return null;
+
+  const familyPrefix = provider === "google-antigravity" && requestedModelId
+    ? classifyModelFamilyForQuota(requestedModelId)
+    : undefined;
+
   const percents = [
     quota.fiveHourPercent,
     quota.weeklyPercent,
     quota.monthlyPercent,
-    ...(quota.customWindows ?? []).map(window => window.percent),
+    ...(quota.customWindows ?? [])
+      .filter(window => !familyPrefix || window.label.startsWith(familyPrefix))
+      .map(window => window.percent),
   ].filter((value): value is number => typeof value === "number");
   if (percents.length === 0) return null;
   return 100 - Math.max(...percents);
@@ -79,10 +98,10 @@ export function accountHeadroomPercent(provider: string, accountId: string): num
 }
 
 /** Unknown usage is not exhaustion; Kiro's explicit overage verdict is authoritative. */
-export function isAccountQuotaExhausted(provider: string, accountId: string): boolean {
+export function isAccountQuotaExhausted(provider: string, accountId: string, requestedModelId?: string): boolean {
   const exhaustion = provider === "kiro" ? getKiroAccountExhaustion(`${provider}\u0000${accountId}`) : null;
   if (exhaustion !== null) return exhaustion.exhausted;
-  const headroom = headroomOf(provider, accountId);
+  const headroom = headroomOf(provider, accountId, requestedModelId);
   return headroom !== null && headroom <= 0;
 }
 
@@ -92,24 +111,28 @@ export function isAccountQuotaExhausted(provider: string, accountId: string): bo
  * Returns the input untouched when no candidate has quota evidence, which keeps every
  * provider without per-account quota on exactly the behaviour it has today.
  */
-export function rankAccountsByHeadroom(provider: string, ring: readonly string[]): string[] {
+export function rankAccountsByHeadroom(
+  provider: string,
+  ring: readonly string[],
+  requestedModelId?: string,
+): string[] {
   if (ring.length < 2) return [...ring];
 
   let sawEvidence = false;
   // Same rule as hasHeadroomEvidence: a passive provider's partial roster must not rank
   // at all. The failover path calls this directly (selectFailoverAccount), so the guard
   // cannot live only in the pre-dispatch predicate.
-  if (hasPassiveAccountQuota(provider) && !ring.every(id => headroomOf(provider, id) !== null)) {
+  if (hasPassiveAccountQuota(provider) && !ring.every(id => headroomOf(provider, id, requestedModelId) !== null)) {
     return [...ring];
   }
   const ranked: Ranked[] = ring.map((id, index) => {
     // A provider-declared exhaustion verdict outranks the percentage: an account may sit at
     // 100% and still be servable when overage is enabled, and the verdict knows that.
     const exhaustion = provider === "kiro" ? getKiroAccountExhaustion(`${provider}\u0000${id}`) : null;
-    const headroom = headroomOf(provider, id);
+    const headroom = headroomOf(provider, id, requestedModelId);
     if (exhaustion !== null || headroom !== null) sawEvidence = true;
 
-    if (isAccountQuotaExhausted(provider, id)) return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
+    if (isAccountQuotaExhausted(provider, id, requestedModelId)) return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
     if (headroom === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
     return { id, bucket: RANK_HEALTHY, headroom, index };
   });
@@ -129,7 +152,7 @@ export function rankAccountsByHeadroom(provider: string, ring: readonly string[]
  * told "ranked" when nothing was measured. Pre-dispatch selection asks this first so it
  * can decline to act on a roster it knows nothing about.
  */
-export function hasHeadroomEvidence(provider: string, ids: readonly string[]): boolean {
+export function hasHeadroomEvidence(provider: string, ids: readonly string[], requestedModelId?: string): boolean {
   // A PASSIVE provider needs evidence for EVERY candidate, not any one of them.
   //
   // A probe fills the whole roster in one pass (fetchProviderAccountQuotas), so "any"
@@ -140,10 +163,10 @@ export function hasHeadroomEvidence(provider: string, ids: readonly string[]): b
   // AWAY from an unmeasured account and TOWARD the one account known to be spent, which
   // is the exact inversion of what ranking is for.
   if (hasPassiveAccountQuota(provider)) {
-    return ids.length > 0 && ids.every(id => headroomOf(provider, id) !== null);
+    return ids.length > 0 && ids.every(id => headroomOf(provider, id, requestedModelId) !== null);
   }
   return ids.some(id =>
-    headroomOf(provider, id) !== null
+    headroomOf(provider, id, requestedModelId) !== null
     || (provider === "kiro" && getKiroAccountExhaustion(`${provider}\u0000${id}`) !== null));
 }
 /**

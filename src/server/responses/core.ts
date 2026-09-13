@@ -4432,7 +4432,7 @@ async function handleResponsesInner(
         // measured as spent. A null answer means "use the active account", so every provider
         // without quota evidence keeps the resolution it has today.
         const preferredAccountId = isGenericFailoverProvider(route.providerName, route.provider)
-          ? preferredInitialAccount(config, route.providerName)
+          ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
           : null;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
@@ -5662,6 +5662,8 @@ async function handleResponsesInner(
       const nextAccountId = rotateGenericOAuthAccountOn429(
         config, route.providerName, genericFailoverAccountId,
         upstreamResponse.headers.get("retry-after"),
+        Date.now(),
+        route.modelId,
       );
       let snapshot: OAuthAccessSnapshot | undefined;
       if (nextAccountId) {
@@ -6612,6 +6614,8 @@ async function handleResponsesInner(
         route.providerName,
         genericFailoverAccountId,
         retryAfter,
+        Date.now(),
+        route.modelId,
       );
       if (!nextAccountId) return null;
       try {
@@ -6985,6 +6989,8 @@ async function handleResponsesInner(
         route.providerName,
         genericFailoverAccountId,
         null,
+        Date.now(),
+        route.modelId,
       );
       if (!nextAccountId) return false;
       try {
@@ -7719,6 +7725,8 @@ async function handleResponsesInner(
           route.providerName,
           genericFailoverAccountId,
           upstreamResponse.headers.get("retry-after"),
+          Date.now(),
+          route.modelId,
         );
         if (!nextAccountId) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -8130,6 +8138,8 @@ async function handleResponsesInner(
           route.providerName,
           genericFailoverAccountId,
           response.headers.get("retry-after"),
+          Date.now(),
+          route.modelId,
         );
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }

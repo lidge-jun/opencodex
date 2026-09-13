@@ -743,6 +743,7 @@
   "nvidia-nim-hardening.test.ts": "providers",
   "oauth-account-attribution.test.ts": "oauth",
   "oauth-account-id-collision.test.ts": "oauth",
+  "oauth-account-quota-rank.test.ts": "oauth",
   "oauth-accounts-api.test.ts": "oauth",
   "oauth-callback-binds.test.ts": "oauth",
   "oauth-callback-server.test.ts": "oauth",
