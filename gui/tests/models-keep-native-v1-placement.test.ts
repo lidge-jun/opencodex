@@ -74,7 +74,16 @@ test("both v2 surface setters route through the shared writer", () => {
     modelsSource.indexOf("const putV2Threads"),
   );
 
-  expect(setters).toContain("putV2Setting({ multiAgentMode: mode })");
+  // v1 still writes straight through the shared writer. base and v2 are staged for the
+  // approval dialog, whose Continue handler calls the same writer — the invariant here is
+  // that neither path falls back to a refetch.
+  expect(setters).toContain('putV2Setting({ multiAgentMode: "v1" })');
+  expect(setters).toContain("setPendingSurface(mode)");
   expect(setters).toContain("putV2Setting({ keepNativeChatGptOnV1: next })");
   expect(setters).not.toContain("void loadV2()");
+
+  const dialog = modelsSource.slice(modelsSource.indexOf("<SubagentSurfaceWarningModal"));
+  const props = dialog.slice(0, dialog.indexOf("/>"));
+  expect(props).toContain("putV2Setting({ multiAgentMode: next })");
+  expect(props).not.toContain("void loadV2()");
 });

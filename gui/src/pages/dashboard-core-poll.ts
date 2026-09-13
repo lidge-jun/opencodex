@@ -1,4 +1,5 @@
 import { readJsonIfOk } from "../fetch-json";
+import { readSubagentSurfaceAdvisory, type SubagentSurfaceAdvisory } from "../subagent-surface";
 import {
   beginPollEpoch,
   settingsPollMayCommit,
@@ -79,6 +80,8 @@ export type DashboardSettingsPoll = {
 
 export type DashboardMaModePoll = {
   maMode: "v1" | "default" | "v2";
+  /** Null when the runtime predates the advisory or the call failed. */
+  advisory?: SubagentSurfaceAdvisory | null;
 };
 
 export type DashboardEpochRefs = {
@@ -238,11 +241,12 @@ export async function fetchDashboardMaMode(
   try {
     const v2Res = await fetch(`${apiBase}/api/v2`, { signal });
     if (!v2Res.ok) return { maMode: "default" };
-    const v2Data = await v2Res.json() as { multiAgentMode?: unknown };
+    const v2Data = await v2Res.json() as { multiAgentMode?: unknown; multiAgentSurfaceAdvisory?: unknown };
+    const advisory = readSubagentSurfaceAdvisory(v2Data.multiAgentSurfaceAdvisory);
     if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") {
-      return { maMode: v2Data.multiAgentMode };
+      return { maMode: v2Data.multiAgentMode, advisory };
     }
-    return { maMode: "default" };
+    return { maMode: "default", advisory };
   } catch (error) {
     if (isAbortError(error, signal)) throw error;
     return { maMode: "default" };

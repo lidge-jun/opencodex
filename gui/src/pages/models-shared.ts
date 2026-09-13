@@ -141,6 +141,8 @@ export interface V2Status {
   maxConcurrentThreadsPerSession?: number | null;
   multiAgentMode?: "v1" | "default" | "v2";
   keepNativeChatGptOnV1?: boolean;
+  /** Response-only; absent on a runtime older than the v1-default advisory. */
+  multiAgentSurfaceAdvisory?: unknown;
 }
 
 export interface ShadowCallData {

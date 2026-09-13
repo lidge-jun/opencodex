@@ -77,6 +77,8 @@ import {
   type V2Status,
 } from "./models-shared";
 import { DiscoveryDependencyHint, EmptyProviderHint } from "./models-provider-hints";
+import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
+import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../subagent-surface";
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
 
@@ -344,6 +346,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [threadsCustom, setThreadsCustom] = useState("");
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
+  /** A base/v2 selection waiting on the approval dialog. Null while nothing is pending. */
+  const [pendingSurface, setPendingSurface] = useState<"default" | "v2" | null>(null);
   const [customModalOpen, setCustomModalOpen] = useState(false);
   const [displayNameModel, setDisplayNameModel] = useState<ModelRow | null>(null);
   const [priceModel, setPriceModel] = useState<ModelRow | null>(null);
@@ -1150,7 +1154,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
 
   const setMultiAgentMode = async (mode: "v1" | "default" | "v2") => {
     if (!v2 || v2.multiAgentMode === mode) return;
-    await putV2Setting({ multiAgentMode: mode });
+    // v1 applies immediately: confirming a move toward the safe default would be noise.
+    // base and v2 both put ChatGPT-native parents on the v2 surface, where a task handed
+    // to a routed child is undeliverable ciphertext, so those wait for an answer.
+    if (mode === "v1") { await putV2Setting({ multiAgentMode: "v1" }); return; }
+    setPendingSurface(mode);
   };
 
 
@@ -2019,6 +2027,17 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
               </Tooltip>
             </div>
           </div>
+        )}
+        {pendingSurface && (
+          <SubagentSurfaceWarningModal
+            reason="selection"
+            mode={pendingSurface}
+            docsUrl={readSubagentSurfaceAdvisory(v2?.multiAgentSurfaceAdvisory)?.docsUrl ?? SUBAGENT_SURFACE_GUIDE_URL}
+            busy={v2Busy}
+            onContinue={() => { const next = pendingSurface; setPendingSurface(null); void putV2Setting({ multiAgentMode: next }); }}
+            onChooseV1={() => { setPendingSurface(null); if (v2?.multiAgentMode !== "v1") void putV2Setting({ multiAgentMode: "v1" }); }}
+            onDismiss={() => setPendingSurface(null)}
+          />
         )}
       </div>
 
