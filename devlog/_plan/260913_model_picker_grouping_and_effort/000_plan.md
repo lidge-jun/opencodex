@@ -106,3 +106,21 @@ PR #4490 → `dev` `cb8f59614`. `modelReasoningEfforts`가 붙었고, 라이브 
 그룹핑 자체는 이미 있었다 — `collapseDevinModelUid`가 이 단위 이전부터 접고 있었다.
 빠진 건 접힌 행에 붙을 사다리였고, 그래서 "묶는 기능이 필요하다"는 체감이 나왔다.
 
+
+## wp3 종료 — Pi 계열 익스포트
+
+같은 머지가 `reasoningEfforts`를 채운다. `ompEfforts()`(`omp.ts:72`)가 비어 있지 않은
+배열일 때만 `thinking: { mode: "effort", efforts }`를 쓰므로, 이제 Devin 모델에도
+컨트롤이 그려진다. 영향 범위는 Pi 하나가 아니라 같은 필드를 읽는 `pi`, `aside`,
+`prime`, `omo`, `zcode`, `mcode`, `dsh`, `raycast`, OpenCode 계열 전부다.
+
+`cline` export는 effort 필드 자체가 없어 대상이 아니다.
+
+## 후속
+
+- `DEVIN_STATIC_MODELS`에 `swe-2` 부재, `stale-context-window-migration.ts:45-56`의
+  구 로스터, `src/adapters/registry.ts:26-30`의 구 주석 — #4484 잔여물이고 사다리와
+  무관해 이 단위에서 건드리지 않았다.
+- 정적 표에는 실측된 SWE-2만 있다. 다른 모델의 degraded 사다리는 계정 카탈로그를
+  실측할 기회가 생기면 줄을 추가한다.
+
