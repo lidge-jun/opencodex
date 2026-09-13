@@ -364,6 +364,11 @@ Le préréglage DeepSeek intégré route également `deepseek-v4-flash` par son 
 et conserve le streaming SSE en amont. Si ce modèle termine tous les éléments de sortie mais omet l'événement
 Responses final, opencodex applique une réparation après un délai de grâce de cinq secondes, limitée à ce
 modèle ; les flux mal formés ou partiels sont fermés comme incomplets, et non déclarés réussis.
+Le modèle DeepSeek de première partie `deepseek-flash` déclare nativement les entrées `text` et `image` ;
+les requêtes contenant une image sont donc envoyées directement à DeepSeek par défaut sans passer par le
+sidecar de vision. Les déclarations explicites `noVisionModels` ou texte seul restent prioritaires. Les modèles
+de première partie `deepseek-chat`, `deepseek-reasoner` et `deepseek-v4-flash` restent desservis par le sidecar
+par défaut ; les routes Zen sont inchangées et n'ont pas été sondées dans cette mise à jour.
 
 > **Trois routes de facturation Volcengine :** `volcengine` correspond à l'API Ark facturée à l'usage,
 > `volcengine-coding-plan` consomme le quota Coding Plan et `volcengine-agent-plan` le quota Agent Plan.

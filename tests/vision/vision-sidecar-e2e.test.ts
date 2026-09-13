@@ -413,6 +413,52 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     }
   });
 
+  test.each(["openai-chat", "openai-responses"] as const)("DeepSeek Flash preserves native images on the %s wire without a sidecar call (#4436)", async adapter => {
+    let upstreamBody = "";
+    let sidecarHits = 0;
+    upstream = adapter === "openai-chat"
+      ? serveUpstream(b => { upstreamBody = b; })
+      : serveResponsesUpstream(b => { upstreamBody = b; });
+    sidecar = serveResponsesUpstream(() => { sidecarHits += 1; });
+    const deepseek = PROVIDER_REGISTRY.find(entry => entry.id === "deepseek")!;
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "deepseeklike",
+      providers: {
+        // Carry the real registry classification to a loopback fixture on each wire.
+        deepseeklike: {
+          adapter, authMode: "key", baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          allowPrivateNetwork: true, apiKey: "key-alpha-000111222333",
+          noVisionModels: deepseek.noVisionModels,
+          modelInputModalities: deepseek.modelInputModalities,
+        },
+        helper: {
+          adapter: "openai-responses", authMode: "key", baseUrl: sidecar.url.toString().replace(/\/$/, ""),
+          allowPrivateNetwork: true, apiKey: "key-alpha-000111222333",
+          modelInputModalities: { "vision-model": ["text", "image"] },
+        },
+      },
+      visionSidecar: { enabled: true, backend: "routed", model: "helper/vision-model" },
+    };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(baseRequest("deepseeklike/deepseek-flash")),
+      });
+      expect(res.status).toBe(200);
+      expect(sidecarHits).toBe(0);
+      const body = JSON.parse(upstreamBody);
+      const content = adapter === "openai-chat" ? body.messages[0].content : body.input[0].content;
+      expect(content).toContainEqual(adapter === "openai-chat"
+        ? expect.objectContaining({ type: "image_url", image_url: expect.objectContaining({ url: PNG_DATA_URL }) })
+        : expect.objectContaining({ type: "input_image", image_url: PNG_DATA_URL }));
+      expect(upstreamBody).not.toContain("[image omitted");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   /*
    * #1043 activation evidence. The registry classification is only useful if the
    * strip actually fires for a Zen model, so this drives the real path with the

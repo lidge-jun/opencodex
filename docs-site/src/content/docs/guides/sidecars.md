@@ -135,6 +135,10 @@ allow attachments instead of blocking them before the sidecar runs. When
 use the `gpt-5.6-luna` fallback. Startup still migrates an explicitly persisted legacy
 `gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
 model field.
+The first-party DeepSeek `deepseek-flash` model is native multimodal (`text` and `image`) and does
+not use this sidecar by default. Explicit `noVisionModels` or text-only declarations remain
+authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash` remain
+sidecar-backed by default; Zen routes are unchanged and were not probed in this update.
 
 - Images can come from user, developer, and tool-result messages, including Codex's `view_image`.
 - On the OpenAI path (ChatGPT-login passthrough), each image is sent to the configured vision model

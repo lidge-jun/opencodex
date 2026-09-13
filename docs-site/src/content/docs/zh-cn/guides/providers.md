@@ -236,6 +236,10 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 内置 DeepSeek preset 同样会让 `deepseek-v4-flash` 使用原生 Responses 端点，并保留上游 SSE
 流式输出。如果该模型已经完成全部输出项却缺少最终 Responses 事件，opencodex 会应用模型级
 5 秒宽限修复；不完整或格式异常的流会以 incomplete 结束，不会被误报为成功。
+第一方 `deepseek-flash` 模型原生声明支持 `text` 和 `image` 输入，因此图像请求默认会直接发送给
+DeepSeek，不经过 vision sidecar。显式的 `noVisionModels` 或纯文本声明仍然优先。第一方
+`deepseek-chat`、`deepseek-reasoner` 和 `deepseek-v4-flash` 默认仍使用 sidecar；Zen 路由保持不变，
+本次更新未进行探测。
 
 > **三条火山方舟计费线路：**`volcengine` 是按量付费方舟 API，`volcengine-coding-plan`
 > 消耗 Coding Plan 额度，`volcengine-agent-plan` 消耗 Agent Plan 额度。密钥与端点需要属于

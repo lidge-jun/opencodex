@@ -683,10 +683,9 @@ const DEEPSEEK_V4_LEGACY_MODELS = ["deepseek-v4-flash"];
 const DEEPSEEK_NATIVE_THINKING_MODELS = ["deepseek-flash", "deepseek-v4-flash"];
 const DEEPSEEK_GATEWAY_THINKING_MODELS = ["deepseek-v4.1-flash", "deepseek-v4-flash"];
 /*
- * DeepSeek's experimental vision preview (released 2026-08-21, api-docs.deepseek.com):
- * text+image input on the V4 Flash base. DeepSeek positions it as a preview id;
- * the expectation is that vision merges into `deepseek-v4-flash` proper later,
- * at which point this id retires the same way deepseek-chat/reasoner did.
+ * DeepSeek's legacy vision preview id (released 2026-08-21). First-party probes
+ * in #4436 resolve it to image-capable `deepseek-flash`; retain the existing
+ * declarations because gateway support is specific to each served identifier.
  */
 const DEEPSEEK_VISION_PREVIEW_MODEL = "deepseek-v4-flash-vision-exp";
 /**
@@ -2164,9 +2163,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // the list only as compatibility aliases so existing saved configs and requests
     // keep validating and routing (they previously mapped to v4-flash; devlog
     // _fin/260710_provider_hardening/002_research_cn.md). The current offerings are
-    // the V4 ids — defaultModel and the model-specific wiring above use them.
-    // deepseek-v4-flash-vision-exp: experimental vision preview (2026-08-21) —
-    // expected to merge into deepseek-v4-flash later; see DEEPSEEK_VISION_PREVIEW_MODEL.
+    // V4.1-Flash — defaultModel and the model-specific wiring below use its live id.
+    // Keep the legacy vision-preview alias; see DEEPSEEK_VISION_PREVIEW_MODEL.
     models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_NATIVE_THINKING_MODELS, DEEPSEEK_VISION_PREVIEW_MODEL],
     // V4.1-Flash is the current first-party offering; `deepseek-v4-flash` now routes there
     // as a compatibility alias, so a new install should ask for the live id by name.
@@ -2174,7 +2172,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Official DeepSeek Codex setup (codex-deepseek-setup.sh) advertises 1,048,576
     // for both V4 models; the older 1,000,000 figure was a rounded approximation.
     modelContextWindows: { "deepseek-flash": 1_048_576, "deepseek-v4-flash": 1_048_576, [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576 },
-    modelInputModalities: { [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"] },
+    modelInputModalities: {
+      "deepseek-flash": ["text", "image"],
+      [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+    },
     // DeepSeek documents both V4 models as native Responses API models adapted for Codex
     // (model table marks Responses API ✓ for flash and pro; the /responses reference lists
     // both ids as accepted `model` values — verified 2026-08-13 with the V4 Pro GA,
@@ -2244,10 +2245,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_NATIVE_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     modelSupportsReasoningSummaries: Object.fromEntries(DEEPSEEK_NATIVE_THINKING_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: DEEPSEEK_NATIVE_THINKING_MODELS,
-    // Issue #88: every DeepSeek API model is text-only input (no image support upstream) — the
-    // vision sidecar describes attached images for them, and the catalog advertises image input
-    // on their behalf (same treatment as opencode-go's DeepSeek V4 entries above).
-    noVisionModels: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_NATIVE_THINKING_MODELS],
+    // #4436: first-party deepseek-flash accepts native images on Chat and Responses.
+    // Keep unprobed compatibility aliases on the #88 sidecar path. This must be fixed
+    // here: router enrichment unions this list with saved config, so config cannot remove it.
+    noVisionModels: ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"],
   },
   // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },

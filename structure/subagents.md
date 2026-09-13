@@ -117,6 +117,10 @@ featured or picker rank. Canonical `opencode-go` rows retain their configured re
 and provider-scoped context metadata both when generated and when merged from retained catalog
 state; `deepseek-v4.1-flash` therefore keeps its 1,048,576-token window, while synthetic max/ultra
 choices are not added to that provider's declared ladder.
+The first-party DeepSeek `deepseek-flash` row declares native `text` and `image` input and therefore
+does not require the vision sidecar by default; explicit `noVisionModels` or text-only declarations
+remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
+remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
 
 Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent_v2_and_history_perf/013_five_cap_v1_vs_v2.md`.
 
