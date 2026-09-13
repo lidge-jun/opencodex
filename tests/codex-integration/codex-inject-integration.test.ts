@@ -164,7 +164,7 @@ describe("injectCodexConfig integration (Design B)", () => {
   });
 
   for (const stage of ["before-preflight", "after-preflight", "after-config", "after-artifacts"]) {
-  test.each([false,true])(`commit-boundary history refusal returns a result after rollback (${stage}, legacy=%s)`,(legacy)=>{
+  test.each([false,true])(`a store that migrates mid-transaction retires the relabel unit and keeps the config (${stage}, legacy=%s)`,(legacy)=>{
     const original=legacy ? DESIGN_B_BLOCK+"\n" : 'model="test"\n';
     writeFileSync(join(codexHome,"config.toml"),original);
     if(legacy) writeFileSync(join(codexHome,"opencodex.config.toml"),"[invalid profile\n");
@@ -191,12 +191,17 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(child.status).toBe(0);
     const value=JSON.parse(child.stdout);
     expect(value.kind).toBe(legacy?"legacy-uncoordinated":"coordinated");
-    expect(value.result).toMatchObject({success:false});
-    expect(value.result.message).toContain("history_paginated_requires_native_writer");
-    expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe(original);
-    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
-    if(legacy) expect(readFileSync(join(codexHome,"opencodex.config.toml"),"utf8")).toBe("[invalid profile\n");
-    else expect(existsSync(join(codexHome,"opencodex.config.toml"))).toBe(false);
+    // A migration observed at ANY point in the transaction stands the relabel unit down and
+    // says so. It never rolls the config back: the config half writes no history, and
+    // rolling it back is what left every paginated home with no OpenCodex models at all.
+    expect(value.result).toMatchObject({success:true,historyPreflightFailureReason:"history_paginated_requires_native_writer"});
+    expect(value.result.message).toContain("left to Codex's native writer");
+    // The profile is replaced inside the artifact transaction, so a profile that is no longer
+    // the fixture's is proof the config half ran to completion instead of compensating away.
+    const profileAfter=readFileSync(join(codexHome,"opencodex.config.toml"),"utf8");
+    expect(profileAfter).not.toBe("[invalid profile\n");
+    expect(profileAfter.length).toBeGreaterThan(0);
+    expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toContain("127.0.0.1:10100");
   });
   }
 
@@ -361,7 +366,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     });
   }
 
-  test.each([false, true])("paginated history preserves config and profile before provider transition (authless=%s)", (authless) => {
+  test.each([false, true])("a paginated home still gets its config written, and keeps the provider table its rows need (authless=%s)", (authless) => {
     const original = 'model_provider = "opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\n';
     const configPath = join(codexHome, "config.toml");
     const profilePath = join(codexHome, "opencodex.config.toml");
@@ -374,14 +379,26 @@ describe("injectCodexConfig integration (Design B)", () => {
     db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
     db.run("INSERT INTO threads VALUES ('fixture', ?, 'opencodex', 'paginated')", rollout);
     db.close();
+    // Apply: the config transitions and the relabel unit stands down by name. The rollout is
+    // the thing that must not move, because its ordinals belong to Codex's own writer.
     const result = runInject(codexHome, ocxHome, JSON.stringify({codexDesktopAuthless:authless}));
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({success:false});
-    expect(result.stdout).toContain("history_paginated_requires_native_writer");
-    expect(readFileSync(configPath,"utf8")).toBe(original);
-    expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: true,
+      historyPreflightFailureReason: "history_paginated_requires_native_writer",
+    });
+    expect(result.stdout).toContain("left to Codex's native writer");
     expect(readFileSync(rollout,"utf8")).toBe(bytes);
-    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+    // The profile is replaced inside the artifact transaction; no longer holding the fixture
+    // sentinel is proof the config half committed rather than being compensated away.
+    expect(readFileSync(profilePath,"utf8")).not.toBe("# preserve profile\n");
+    // The relabel stood down, so the rows still say `opencodex`. Retiring the table that
+    // publishes that provider id would leave those conversations pointing at nothing, so a
+    // table this home already had survives the write even in the root-override form.
+    expect(readFileSync(configPath,"utf8")).toContain("[model_providers.opencodex]");
+
+    // Removing routing while those rows stay routed would orphan them, so restore keeps its
+    // refusal here. Making an already-paginated home uninstallable is tracked separately.
     const restoreScript = `
       const { restoreNativeCodex, restoreNativeCodexAsync, removeCodexConfig } = require("./src/codex/inject");
       const results = [restoreNativeCodex(), await restoreNativeCodexAsync(), removeCodexConfig()];
@@ -393,10 +410,36 @@ describe("injectCodexConfig integration (Design B)", () => {
     });
     expect(restored.status).toBe(0);
     for (const outcome of JSON.parse(restored.stdout)) expect(outcome.success).toBe(false);
-    expect(readFileSync(configPath,"utf8")).toBe(original);
-    expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
+    expect(readFileSync(configPath,"utf8")).toContain("[model_providers.opencodex]");
     expect(readFileSync(rollout,"utf8")).toBe(bytes);
-    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+  });
+
+  test("a paginated home still receives the model catalog path the picker reads", () => {
+    // The user-visible regression this pins. A paginated rollout made the injector refuse
+    // the whole write, so `model_catalog_json` never reached config.toml: the Codex app and
+    // CLI both fell back to their native model list while `ocx sync` still said synchronized.
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, 'model = "gpt-5.5"\n');
+    const catalogPath = join(codexHome, "opencodex-catalog.json");
+    writeFileSync(catalogPath, JSON.stringify({ models: [{ slug: "xai/grok-4.6", display_name: "Grok 4.6" }] }));
+    const rollout = join(codexHome, "paginated.jsonl");
+    const bytes = JSON.stringify({ ordinal: 0, type: "session_meta", payload: { id: "paginated", history_mode: "paginated", model_provider: "opencodex" } }) + "\n";
+    writeFileSync(rollout, bytes);
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+    db.run("INSERT INTO threads VALUES ('paginated', ?, 'opencodex', 'paginated')", rollout);
+    db.close();
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: true,
+      historyPreflightFailureReason: "history_paginated_requires_native_writer",
+    });
+    const written = readFileSync(configPath, "utf8");
+    expect(written).toContain("model_catalog_json");
+    expect(written).toContain(catalogPath);
+    expect(readFileSync(rollout, "utf8")).toBe(bytes);
   });
 
   test("remote target validate-only writes nothing; commit journals client ownership and restores exact preimage", () => {

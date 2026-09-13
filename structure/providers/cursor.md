@@ -81,6 +81,27 @@ does not expose authoritative cache_read_tokens.
 
 > Decision record: [ADR-0054](../decisions/ADR-0054-cursor-conversation-checkpoint-reuse.md)
 
+## Cursor root replay budgets
+
+`src/adapters/cursor/protobuf-request.ts` bounds the replayed root set at 192 blobs and 512 KiB, and
+caps the serialized arguments named inside one replayed tool-result envelope at 2 KiB. That per-call
+cap is what keeps a 600 KiB argument from consuming the aggregate budget and evicting the output it
+describes, and it still decides admission. Because it is charged while the envelope is being built,
+a small replay would otherwise clip a completed call's arguments with nearly the whole envelope
+unused. After every pruning and truncation decision is final, a second pass re-widens clipped
+invocation lines out of the leftover aggregate bytes only: newest tool result first, skipping a root
+whose own output was already elided, and never dropping, shrinking or reordering a retained root.
+The elision skip is load bearing, reached through initiator recovery rather than through truncation
+alone: a truncated root undershoots its own budget by far less than a restoration costs, but after
+the equal-share pass elides a trailing run, recovery drops an elided sibling to fit the user turn and
+the freed bytes become spare. It requires the share to land in a narrow window where the clipped
+invocation line survives but `output:` does not; outside that window the clipped-line lookup declines
+the root first.
+Root-echo eligibility is `cursorNeedsExternalToolContinuation`, which includes native
+`composer-2.5`, not only external wire models, so the restoration reaches every replay that carries
+an invocation line. Coverage lives in
+`tests/providers/cursor/cursor-tool-result-invocation.test.ts`.
+
 ## Cursor executable tool schema ownership
 
 `src/adapters/cursor/tool-schemas.ts` owns advertised and argument-normalization

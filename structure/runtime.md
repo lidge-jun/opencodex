@@ -15,7 +15,7 @@ Shared parsing and streaming follow the [request-copy](transports/byte-accountin
 | --- | --- |
 | `bin/ocx.mjs` | Published npm `bin` entry (Node shim). Resolves the bundled or explicit Bun binary before project dotenv can load, stamps its runtime provenance plus a proof-bound Anthropic parent-env snapshot, lazy-runs `bun/install.js` if only the placeholder stub is present, then execs `src/cli/index.ts` under Bun. Lets `npm install -g` work without a separately-installed Bun. The exact `system codex-cli-update` inspection namespace skips both boot repair and lazy Bun installation; missing runtime support fails closed instead of mutating state. |
 | `src/lib/bun-runtime.ts` | Bundled-Bun resolution: `isRealBunBinary()` (size gate vs the ~450-byte placeholder stub), `bundledBunPath()`, and `durableBunPath()` (path baked into service/shim artifacts). Durable selection accepts only the source/path pair already stamped for the running executable; it never re-reads a project-dotenv `OPENCODEX_BUN_PATH`. |
-| `src/cli/index.ts` | `ocx` / `opencodex` CLI. Lifecycle: init, start, stop, restart, status, sync, restore/eject, gui, service, update. Configuration: provider, account, models, combo/route, access, integrations, v2. Client launchers: Claude, OpenCode, MiniMax Code, and MiniMax CLI text. The MMX launcher owns a child-lifetime loopback path bridge from the client's hard-coded `/anthropic/v1/messages` path to the canonical `/v1/messages` data plane; the server does not expose an extra auth surface. Diagnostics: doctor, debug, observe, health. Windows adds tray. The full command surface is `src/cli/help.ts`; this table names the groups, not every verb. After help/version early exits, ordinary commands run the bounded best-effort Codex-shim auto-restore policy before dispatch. `system codex-cli-update` is the deliberate read-only exception and suppresses auto-restore for its whole namespace, including malformed invocations. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
+| `src/cli/index.ts` | `ocx` / `opencodex` CLI. Lifecycle: init, start, stop, restart, status, sync, restore/eject, gui, service, update. `restart` refuses an in-place restart requested by a CLI whose version differs from the attested `/healthz` version, because the replacement respawns from the live installation; placeholder versions (unknown/0.0.0) stay incomparable and keep the restart path. Configuration: provider, account, models, combo/route, access, integrations, v2. Client launchers: Claude, OpenCode, MiniMax Code, and MiniMax CLI text. The MMX launcher owns a child-lifetime loopback path bridge from the client's hard-coded `/anthropic/v1/messages` path to the canonical `/v1/messages` data plane; the server does not expose an extra auth surface. Diagnostics: doctor, debug, observe, health. Windows adds tray. The full command surface is `src/cli/help.ts`; this table names the groups, not every verb. After help/version early exits, ordinary commands run the bounded best-effort Codex-shim auto-restore policy before dispatch. `system codex-cli-update` is the deliberate read-only exception and suppresses auto-restore for its whole namespace, including malformed invocations. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
 | `src/server/index.ts` | Bun server entrypoint: `startServer`, `/v1/responses` HTTP + WebSocket routing (compact handled before generic Responses), exact `POST /v1/images/generations` and `POST /v1/images/edits` routing, `/v1/models`, the Anthropic-shaped `/v1/messages` and OpenAI-shaped `/v1/chat/completions` compatibility surfaces, the Live/Realtime surface, the hosted-search relay, artifact serving, `/healthz`, the `/api/*` auth gate, the `/v1/*` JSON 404 guard, GUI fallback, the opt-in loopback-only hub-management listener, and facade re-exports for split server modules. |
 | `src/server/images.ts` | Standalone Images data plane: default OpenAI or explicit custom-provider selection, Codex account affinity, bounded opaque request relay, single-attempt upstream fetch, pool health recording, and safe response/cancellation relay. |
 | `src/server/audio-transcriptions.ts` | Standalone multipart transcription; audio-specific key admission, bounded upload/response, stored OpenAI credential resolution and lease-bound cancellation. See [audio contracts](data-planes/inbound-compat.md#standalone-file-transcription). |
@@ -245,6 +245,40 @@ sidecar executor and that executor's own credential; a missing credential leaves
 disarmed rather than falling through to another paid search. A leg that mixes an intercepted
 `web_search` call with another client-executed tool still fails closed. Assistant text is not
 treated as a search instruction.
+
+The bridge backend and the global `webSearchSidecar` block are configured independently, so the
+sidecar's `model` applies to a bridge search only when `resolveSidecarBackend(webSearchSidecar.backend)`
+equals that bridge backend; otherwise the bridge runs the backend's own default. An unset global
+backend resolves to `openai`, so an unset-backend model reaches an `openai` bridge and no other.
+There is no per-provider `webSearchBridge.model`, so a mismatched backend gets the default rather
+than a vendor-specific override. This is a model and settings rule, not a credential one:
+`resolvePassthroughWebSearchBridgeAuth` switches on the bridge backend and consults only that
+backend's credential locator, so no key crosses backends. `reasoning` and `xSearch` are not gated —
+`reasoning` is a generic effort level and `xSearch` is xai-only with no per-backend default and no
+`webSearchBridge` equivalent. `resolveSidecarBackend` lives in `src/web-search/sidecar-providers.ts`
+rather than the `src/web-search/index.ts` barrel so the bridge can answer this question without a
+value import of the barrel; the barrel re-exports it.
+`tests/web-search/web-search-passthrough-bridge.test.ts` covers the mismatch and matching cases for
+anthropic, xai, and gemini, plus the unset-backend default.
+
+`providers.<name>.webSearchBridge.endpoint` names the destination that receives that provider's own
+API key, so it carries the same literal destination assessment as `baseUrl`:
+`providerDestinationConfigError` runs both at management write time, inside
+`providerWebSearchBridgeConfigError`, and at plan time inside `resolveOllamaWebSearchEndpoint`.
+Metadata destinations are refused unconditionally; loopback, localhost, and private space need the
+provider's `allowPrivateNetwork` opt-in or a registry entry that is local by default, which is what
+keeps a self-hosted Ollama on `127.0.0.1` working. Both checks are synchronous and literal-only and
+resolve no DNS, so a hostname that resolves into metadata or private space is a disclosed residual
+rather than a blocked case. That residual is strictly larger than `baseUrl`'s: `baseUrl` also runs
+the async `providerDestinationResolvedError` at management write, which the endpoint does not, and
+parity there would still leave the hand-edited-file path uncovered because the plan-time boundary is
+synchronous. The plan-time check is the
+authorization boundary rather than a second opinion: a hand-edited config file, `ocx config set`,
+and `ocx config import` all reach `configSchema` only and never call
+`providerWebSearchBridgeConfigError`, and `resolveOllamaWebSearchEndpoint` is the only reader of
+this field in the tree, so a value that survives file load still cannot be spent. It refuses
+silently by design; config-time is where the operator is told why. The planner requires the
+provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
 
 ## Remote Hub hardening ownership
 

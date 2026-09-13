@@ -322,6 +322,38 @@ describe("devin adapter", () => {
     expect(catalog.byUid.get("mystery-model")?.contextWindow).toBeUndefined();
   });
 
+  test("the catalog parser preserves image support as a tri-state", () => {
+    // ClientModelConfig #5 is supports_images. encodeVarintField(5, 0) emits
+    // real bytes ([0x28, 0x00]), so the false case is not an omission case —
+    // and a genuinely absent field must stay unknown rather than collapse to
+    // text-only (#1796).
+    const vision = Buffer.concat([
+      encodeString(1, "Vision Model"),
+      encodeVarintField(5, 1),
+      encodeString(22, "vision-model"),
+    ]);
+    const textOnly = Buffer.concat([
+      encodeString(1, "Text Model"),
+      encodeVarintField(5, 0),
+      encodeString(22, "text-model"),
+    ]);
+    const unknown = Buffer.concat([
+      encodeString(1, "Unknown Model"),
+      encodeString(22, "unknown-model"),
+    ]);
+    const catalog = parseCatalogBuffer(
+      Buffer.concat([encodeMessage(1, vision), encodeMessage(1, textOnly), encodeMessage(1, unknown)]),
+      "key",
+      "https://server.codeium.com",
+    );
+    expect(catalog.byUid.get("vision-model")?.supportsImages).toBe(true);
+    // toBe(false), not toBeFalsy: a present 0 asserts text-only.
+    expect(catalog.byUid.get("text-model")?.supportsImages).toBe(false);
+    // The entry must exist before its field can be asserted absent.
+    expect(catalog.byUid.get("unknown-model")).toBeDefined();
+    expect(catalog.byUid.get("unknown-model")?.supportsImages).toBeUndefined();
+  });
+
   test("the degraded-mode windows match what Cognition serves", () => {
     // This table was wrong for nine of its eleven rows because it had been
     // copied from each model's ORIGINAL vendor rather than measured against

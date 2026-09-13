@@ -327,9 +327,19 @@ describe("standalone transcription API", () => {
     expect((await captured[0]!.formData()).get("model")).toBeNull();
   });
 
-  test("malformed Pool response records one failure and no provisional success", async () => {
+  test("malformed Pool response records upstream status before body validation (#4502)", async () => {
     savePoolConfig();
     respond = () => Response.json({ missing: "text" });
+    const outcomes = spyOn(routing, "recordCodexUpstreamOutcome");
+    try {
+      expect((await request()).status).toBe(502);
+      expect(outcomes.mock.calls.filter(call => call[1] === "pool-a").map(call => call[2])).toEqual([200]);
+    } finally { outcomes.mockRestore(); }
+  });
+
+  test("upstream HTTP error records real failure status for Pool account", async () => {
+    savePoolConfig();
+    respond = () => new Response("upstream failure", { status: 502 });
     const outcomes = spyOn(routing, "recordCodexUpstreamOutcome");
     try {
       expect((await request()).status).toBe(502);

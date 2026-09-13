@@ -158,13 +158,37 @@ journal creation, and the background history restoration guardian.
 `ocx sync` and `ocx restore back` run the injector's non-writing preflight before provider
 discovery or catalog/cache replacement. Deterministic config and ownership refusals therefore
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
-One refusal is deliberately not terminal for an explicit `ocx sync`. When the preflight reports
-`history_paginated_requires_native_writer`, the refusal itself stands — config and conversation
-files are not touched — but the catalog and models cache still refresh through their existing
-owner, and the sync reports `catalog-only`. An explicit sync is also the refresh path for side
-profiles that read the OpenCodex catalog without injection, and a home whose history simply
-requires its native writer is not a reason to let their model list go stale. Unattended sync,
-`POST /api/sync`, and every other config or ownership refusal keep the hard failure above.
+Exactly one conversation-history refusal scopes the relabel unit instead of vetoing the apply
+transition, and only because it is permanent. Codex allocates paginated rollout ordinals inside
+its own writer, so `history_paginated_requires_native_writer` is not retryable: the transition
+writes config, profile, and `model_catalog_json`, the relabel job is skipped without spawning
+its Worker, and the reason travels in the human message and in the structured
+`historyPreflightFailureReason` field *alongside* `success: true`. Every other reason — an
+unreadable state database, a rollout whose identity changed, a preflight that could not run —
+describes a store that may be relabelable on the next attempt, so those keep the hard refusal
+and the compensating rollback. Recording them as a stand-down would mark the transition
+converged and suppress the relabel permanently.
+
+Standing the relabel down changes what the routing form may retire. Rows this home tagged
+`opencodex` resolve only through a `[model_providers.opencodex]` table; the loopback form
+normally retires that table precisely because the relabel migrates those rows back to `openai`
+in the same pass. With the relabel stood down, a table the home already published survives the
+write, so those conversations keep a provider id that exists. Paginated rollout bytes and thread
+rows are never modified in this state.
+
+Treating the refusal as a veto is what made every current Codex home unusable: paginated
+rollouts refuse unconditionally, so `model_catalog_json` never reached config.toml and both the
+app and the CLI fell back to their built-in model list. `ocx sync` reported success anyway,
+because that reason was special-cased into a `catalog-only` result — the downgrade is gone, so a
+refusal that survives is a real config or integrity failure again.
+
+Restore and removal keep the refusal. There the argument reverses: stripping the provider
+definition while its threads still point at it would orphan them, and those paths have no seam
+for keeping a compatibility table. A home that was already paginated therefore cannot yet be
+uninstalled through the product; that is tracked as open work, not as settled contract.
+
+Unattended sync, `POST /api/sync`, and every other config or ownership refusal keep the hard
+failure above.
 The real injection still revalidates under its normal write boundary after catalog convergence;
 the preflight is an early no-write guard, not an authorization token for a later write.
 

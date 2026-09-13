@@ -227,6 +227,42 @@ describe("vision eligibility core", () => {
     })).toBe(false);
   });
 
+  test("15. native model declared text-only via modelCapabilities is disqualified from vision describer eligibility (#4501)", () => {
+    const config = configWithProviders({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        modelCapabilities: {
+          "gpt-5.4-mini": { inputModalities: ["text"] },
+        },
+      },
+    });
+    const candidate: VisionCandidateModel = {
+      provider: "openai",
+      id: "gpt-5.4-mini",
+    };
+    expect(modelAcceptsImageInput(config, candidate)).toBe(false);
+    expect(isVisionEligibleModel(config, candidate)).toBe(false);
+  });
+
+  test("16. native model baseline declared text-only via modelCapabilities drops the baseline option (#4501)", () => {
+    const config = configWithProviders({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        modelCapabilities: {
+          [BASELINE_VISION_MODELS.openai]: { inputModalities: ["text"] },
+        },
+      },
+      anthropic: {
+        adapter: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+      },
+    });
+    const options = visionEligibleModelOptions(config, [], ["openai", "anthropic"], "anthropic");
+    expect(options.map(o => o.value)).toEqual([BASELINE_VISION_MODELS.anthropic]);
+  });
+
   test("5. openai baseline is present when that side is enabled", () => {
     const options = visionEligibleModelOptions(emptyConfig, [], ["openai"]);
     expect(options.map((o) => o.value)).toEqual([BASELINE_VISION_MODELS.openai]);

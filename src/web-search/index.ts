@@ -15,8 +15,10 @@ import {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
   findXaiSidecarProvider,
+  resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
   type AnthropicSidecarProvider,
+  type WebSearchBackendId,
 } from "./sidecar-providers";
 
 export { runWithWebSearch } from "./loop";
@@ -29,8 +31,10 @@ export {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
   findXaiSidecarProvider,
+  resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
   type AnthropicSidecarProvider,
+  type WebSearchBackendId,
 };
 
 const DEFAULT_SIDECAR_MODEL = "gpt-5.6-luna";
@@ -96,24 +100,6 @@ export function webSearchStallTimeoutSec(
     finiteCeil(sidecarTimeoutMs, 0) / 1000,
   );
   return Math.min(Number.MAX_VALUE, Math.ceil(largestUnitSec) + STALL_MARGIN_SEC);
-}
-
-/** Every backend id the config union admits. New ids are explicit-only and inert until their executor ships. */
-export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "exa";
-
-/**
- * Precedence: explicit config wins; unset defaults to "openai" (ChatGPT forward path). The
- * anthropic backend (web_search_20250305) is only used when explicitly configured — auto-selecting
- * it from credential availability caused the sidecar to send incompatible models (e.g. gpt-5.6-luna)
- * to the Anthropic API.
- * The 2188 follow-up ids (xai/gemini/exa) resolve to themselves the same explicit-only way; their
- * planWebSearch arms stay fail-closed until each executor layer lands.
- */
-export function resolveSidecarBackend(
-  explicit: WebSearchBackendId | undefined,
-): WebSearchBackendId {
-  if (explicit === "anthropic" || explicit === "xai" || explicit === "gemini" || explicit === "exa") return explicit;
-  return "openai";
 }
 
 export interface SidecarPlan {

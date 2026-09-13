@@ -96,6 +96,11 @@ deleting, or editing a provider's shape clears that per-provider cache; a disabl
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
 
+A Devin live row spreads its measured `inputModalities` before
+`catalogHintsFromProviderConfig`, so exact `modelCapabilities` declarations, the legacy
+`modelInputModalities` record and the vision-sidecar rewrite keep precedence and the live
+value survives only when none of them applies.
+
 For `liveModels: false`, a static provider publishes the ordered union of `models` and
 `retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that
 union before retained ids; a nonempty explicit list does not import a different default.

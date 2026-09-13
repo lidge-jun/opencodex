@@ -51,6 +51,16 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   `projectDevinCliAuthMode` rewrites any saved row that still names the retired adapter id,
   alongside the merge migration that retires the `devin-cli` provider id itself.
 
+  Before spending a chat roundtrip the adapter runs a catalog pre-flight:
+  `src/adapters/devin/cloud-direct/catalog.ts` fetches `GetCascadeModelConfigs` and preserves
+  `ClientModelConfig` field #4 as the per-account disabled gate, field #18 as the per-account
+  context window, and field #5 as an optional `supportsImages` tri-state — a present value
+  asserts image support or its absence, while an omitted field stays unknown (the #1796
+  precedent). `src/adapters/devin/live-models.ts` collapses that tri-state across the
+  rows each base model's collapsed UID gathers — the EFFORT_TOKENS suffixes, tier rows
+  like `-1m` included: unmeasured rows abstain, unanimous measured rows advertise
+  `["text"]` or `["text", "image"]`, and measured disagreement stays unadvertised.
+
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
 Codex Spark retirement removes model-specific exceptions from the Responses adapter, without

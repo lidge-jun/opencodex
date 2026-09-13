@@ -484,6 +484,7 @@
   "devin-effort-ladder.test.ts": "providers",
   "devin-hardening.test.ts": "providers",
   "devin-image-passthrough.test.ts": "providers",
+  "devin-live-models.test.ts": "providers",
   "devin-prompt-cache.test.ts": "providers",
   "devin-stream-deadline.test.ts": "providers",
   "digitalocean-scaleway-provider.test.ts": "providers",

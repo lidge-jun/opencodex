@@ -182,7 +182,7 @@ describe("Codex history provider sync", () => {
     expect(readFileSync(fixture.rollout,"utf8")).toBe(before);
     expect(existsSync(fixture.backupPath)).toBe(false);
   });
-  test("injection preflight preserves provider definitions needed by paginated threads", () => {
+  test("injection preflight reports the paginated refusal for every target set that reaches a paginated row", () => {
     const fixture = makeFixture({ includeLegacy: true });
     noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
     const db = new Database(fixture.dbPath);
