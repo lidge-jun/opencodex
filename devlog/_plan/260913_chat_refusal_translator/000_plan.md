@@ -113,3 +113,40 @@ Devin 어댑터는 proto #9를 `kind: reasoning`으로 낸다. inbound가 `chat`
 `c-1`~`c-5`는 goalplan에 등록돼 있다. 요약하면: 로드맵 존재, 원인 증명, 거절 없는
 스트림이 성공, 진짜 거절 모순은 여전히 실패, exact-head hosted CI 성공.
 
+
+## 단위 종료 (2026-09-13)
+
+| wp | 결과 | 커밋 / PR | merge SHA | exact-head CI |
+|---|---|---|---|---|
+| wp0 | 로드맵 | `0564f02cd` | — | — |
+| wp1 | 원인 증명 | `dd40258d1` | — | — |
+| wp2 | 수정 | PR #4468 (`66e1c9e67`) | `d0cbfffdd` | 25 success / 0 fail / 0 cancelled |
+
+로컬 제품 스위트·typecheck·build·install은 이 세션 내내 **NOT RUN**이다.
+
+### 착지한 변경
+
+`src/chat/outbound.ts` 두 군데.
+
+1. `snapshotRefusalItem`의 조기 return이 `outputIndex === undefined`에서
+   `!existing && !hasRefusalPart`로 바뀌었다. 거절 내용이 실제로 있는 아이템이거나,
+   진짜 거절 증거로 이미 열린 index일 때만 장부에 오른다.
+2. `output_item.added`/`done`의 `item_id` 바인딩이 이미 추적 중인 index에만 걸린다.
+   `position()`을 통하지 않는다 — 그 함수가 잘못된 index에서 `:227`을 던져,
+   거절과 무관한 스트림에 오히려 새 실패를 추가하기 때문이다.
+
+### 감사가 바꾼 것
+
+| 지적 | 원안 | 착지 |
+|---|---|---|
+| `position()`이 가드 안에서 스스로 던진다 | `refusalItems.has(position(idx))` | `typeof idx === "number" && refusalItems.has(idx)` |
+| 전역 "거절 본 적 있음" 플래그는 더 약하다 | (대안으로 검토) | per-item 스코프 유지 |
+| bridge index 재사용도 실결함이다 | (수정 후보) | 후속으로 분리, 아래 참조 |
+
+### 후속으로 남긴 것
+
+`src/bridge.ts` `flushHiddenReasoningEnvelope`가 열린 message와 같은 `output_index`에
+reasoning을 emit한다. Responses 프로토콜상 한 index에는 한 아이템이 맞다. 다만 고치면
+reasoning 순서와 Codex 렌더링에 영향이 가므로 별도 단위가 필요하다. 이번 수정만으로
+사용자에게 보이던 오류는 사라졌고, 그 재사용은 다시 무해한 상태로 돌아갔다.
+
