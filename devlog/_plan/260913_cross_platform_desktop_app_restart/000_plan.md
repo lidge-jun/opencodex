@@ -135,7 +135,7 @@ file rather than from a transcript.
 | Work-phase | State | Artifact |
 |---|---|---|
 | wp1 roadmap | **done** | `000`, `001`, `002`, `010`, `020`, `030`, `040` on `codex/260913-cross-platform-desktop-restart` |
-| wp2 shared surface | not started | `010` |
+| wp2 shared surface | **done** | `010`; commits de44e6a6..49e36f1d |
 | wp5 self-handoff | not started | `020` |
 | wp3 contract merge | not started | `030` |
 | wp4 verification and delivery | not started | `040` |
@@ -148,10 +148,23 @@ matcher being widened. Three audit rounds moved the design from "quit the app" t
 "quit the app, safely, from a process that will survive doing it", which is where the
 handoff and the singleton lock came from.
 
-**Direction for wp2.** Build `010` as written, including the folded audit items:
-boundary-aware membership (`010` §2.1), the shell predicate for root selection
-(§3.3), the two ancestry semantics (§3.4), and step 0's lock with own-pid reentrancy
-(§3.2, `020` §4.1). Changing that direction needs a recorded reason.
+**What wp2 concluded.** `010` was built as written. Two independent code audits found
+three fail-open defects that the plan had specified correctly and the code had not
+implemented: Linux ancestry returned a non-empty chain for an unreadable hop, so a
+probe failure would have quit the shell hosting the caller's own session; macOS
+classified every dead parent as unreadable, which would have made the wp5 helper
+refuse forever; and the lock was not exclusive at all, because `wx` on a uniquely
+named staging file always succeeds. All folded and re-audited to PASS.
+
+The lesson for the remaining phases: a plan section saying "fails closed" is not
+evidence that the code does. Each of the three defects reads as correct until the
+error shape is checked against what the runtime actually throws.
+
+**Direction for wp5.** Build `020` as written. The lock it depends on already exists
+and is verified, including the transfer that lets the helper inherit ownership, so
+wp5 adds `handoff.ts`, the hidden `internal` command, and the `startHandoff` seam the
+ladder already accepts. `handoff_started` is in the union and confirmed unreachable
+until that seam is supplied.
 
 **Standing constraint.** No local product suite, build, typecheck or install at any
 point in this unit (§2). Every completion claim rests on live host evidence plus
