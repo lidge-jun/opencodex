@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 
@@ -36,6 +39,11 @@ function scriptedIo(options: {
   const polls = new Map<number, number>();
   return {
     platform: "win32",
+    // A per-case lock path. The restart now takes a singleton lock, and without this
+    // the suite would contend on the developer's real ~/.opencodex lock - a leftover
+    // from an interrupted run would then fail every case with restart_in_flight, and a
+    // passing run would leave state behind in a directory the tests do not own.
+    lock: { lockPath: join(mkdtempSync(join(tmpdir(), "ocx-desktop-restart-")), "lock") },
     ancestryPids: () => options.ancestry ?? [4242],
     sleep: () => {},
     now: (() => { let t = 0; return () => (t += 500); })(),
@@ -58,10 +66,19 @@ function scriptedIo(options: {
 const DISCOVERY = [AUMID.replace("!App", ""), INSTALL, AUMID].join("\n");
 
 describe("Codex desktop app restart (#2292)", () => {
-  test("is a no-op off Windows and never execs anything", () => {
+  // macOS and Linux are no longer no-ops: they have real adapters. What survives from the
+  // original assertion is that a platform with NO adapter still refuses without execing
+  // anything, which is the fail-closed property the old windows_only case was really
+  // protecting.
+  test("is a no-op on a platform with no adapter and never execs anything", () => {
     const calls: Call[] = [];
-    const result = restartCodexDesktopApp({ platform: "darwin", execFile: (f, a) => { calls.push({ file: f, args: [...a] }); return ""; } });
-    expect(result).toEqual({ attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "windows_only" });
+    const result = restartCodexDesktopApp({
+      platform: "freebsd",
+      execFile: (f, a) => { calls.push({ file: f, args: [...a] }); return ""; },
+    });
+    expect(result).toEqual({
+      attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "unsupported_platform",
+    });
     expect(calls).toEqual([]);
   });
 

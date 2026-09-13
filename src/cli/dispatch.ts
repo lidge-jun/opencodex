@@ -978,8 +978,22 @@ async function handleDesktopAppRestart(log: Pick<Console, "log" | "error">): Pro
   const { restartCodexDesktopApp } = await import("../codex/desktop-app-restart");
   const result = restartCodexDesktopApp();
   switch (result.reason) {
-    case "windows_only":
-      log.error("--restart-desktop-app is supported on Windows only; nothing was stopped.");
+    case "unsupported_platform":
+      log.error(
+        `Restarting the Codex desktop app is not supported on ${process.platform}; `
+        + "nothing was stopped.",
+      );
+      return;
+    case "restart_in_flight":
+      log.error(
+        "Another Codex desktop-app restart is already running; this one did nothing. "
+        + "Wait for it to finish and check again.",
+      );
+      return;
+    case "relaunch_failed":
+      log.error(
+        "The Codex desktop app was stopped but could not be started again. Launch it manually.",
+      );
       return;
     case "package_discovery_failed":
       log.error(
