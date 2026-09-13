@@ -125,6 +125,7 @@ export type DesktopAppRestartReason =
   | "no_targets"
   | "self_ancestry"          // retained; wp5 turns this into a handoff
   | "targets_survived"
+  | "restart_in_flight"      // another restart holds the singleton lock (020 §4.1)
   | "relaunch_failed";       // NEW
 ```
 
@@ -143,9 +144,17 @@ wp5 extends this union with `handoff_started` (`020` §6). Treat it as open unti
 phase lands, and make the `switch` in `src/cli/dispatch.ts` exhaustive against the
 final union, not this one.
 
+`restart_in_flight` is declared here rather than in wp5 even though the lock is a wp5
+concern, because a reason code the design *guarantees* will occur cannot live outside
+the union its only `switch` is checked against. The lock is taken by
+`restartCodexDesktopApp` itself — step 0 below — and not by any caller, so every
+entry point (the CLI, the handoff helper, the management service) gets the same
+mutual exclusion and the same reason code without each having to remember it.
+
 ### 3.2 Ladder
 
 ```
+ 0. take the singleton lock (020 §4.1)            -> restart_in_flight
  1. adapter = ADAPTERS[platform] ?? null            -> unsupported_platform
  2. install = adapter.discover(exec)                -> package_discovery_failed
  3. processes = adapter.listProcesses(exec, install)
@@ -168,6 +177,10 @@ final union, not this one.
       throws -> { relaunch: "skipped", reason: "relaunch_failed" }
 10. { attempted: true, stopped, surviving: [], relaunch: "started" }
 ```
+
+Step 0 is held until step 10 returns, released in a `finally` — except on the wp5
+handoff path, where ownership is transferred to the helper instead of released
+(`020` §4.1).
 
 Steps 4, 7 and 8 are lifted unchanged from the current Windows implementation —
 `rootProcesses`, `stillSameProcess`, `waitForExit` and the two timeout constants move

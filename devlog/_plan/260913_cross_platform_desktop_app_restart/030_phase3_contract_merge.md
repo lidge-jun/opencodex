@@ -172,13 +172,19 @@ outcome gets its own optional field, so a script reading the existing field is n
 silently handed a different answer. The field is emitted only when a desktop restart
 was requested, which keeps `schemaVersion: 1` honest.
 
+`desktopAppRestarted` is `true` only for `relaunch: "started"`. Every other outcome —
+`restart_in_flight`, `targets_survived`, `relaunch_failed`, `self_ancestry`,
+`handoff_started` — is `false`, because none of them left a restarted app behind. A
+handoff in particular is **not** a success: the restart has not happened yet when the
+envelope is written, and a script that read `true` there would proceed on a promise.
+
 The docs currently say desktop restart is not part of this command, in English plus
 `zh-cn`, `zh-tw`, `tr` and `ru`. `002` §B4 records why that is reversed: it is a scope
 statement about a capability that did not exist cross-platform, not the consent
 decision that split the `sync` flags.
 
 
-### 3.3 `handleDesktopAppRestart` messages (currently lines 977-1017)
+### 3.5 `handleDesktopAppRestart` messages (currently lines 977-1017)
 
 ```ts
 -    case "windows_only":
@@ -191,6 +197,12 @@ decision that split the `sync` flags.
 +      );
 +      return;
 +    case "handoff_started": ...        // see 020 §7
++    case "restart_in_flight":
++      log.error(
++        "Another Codex desktop-app restart is already running; this one did nothing. "
++        + "Wait for it to finish and check again.",
++      );
++      return;
 +    case "relaunch_failed":
 +      log.error(
 +        "The Codex desktop app was stopped but could not be started again. "
@@ -232,6 +244,35 @@ guard validates the field's shape and its own cross-field invariants when presen
 `scalar-only` still holds: pid arrays and a closed-vocabulary reason string, never a
 command line, a path or an OS error message.
 
+`reason` carries the `DesktopAppRestartReason` value verbatim, which is what keeps it
+a closed vocabulary rather than free text — `restart_in_flight` included.
+
+### 4.2 The service refuses instead of handing off (re-audit blocker 2)
+
+`performCodexRestart` runs **inside the long-lived proxy process**, not in a
+short-lived CLI. The wp5 handoff is built on "wait for the calling pid to exit"
+(`020` §4.2), and a proxy does not exit. If the proxy were inside the desktop tree,
+every handoff it started would sit out its 20-second window and end in
+`caller_still_running` — after the operator had already been told the restart was
+handed off.
+
+So the service passes `allowHandoff: false`. When it is inside the tree it reports
+`self_ancestry` and says what to do instead:
+
+```
+"The proxy is running inside the Codex app, so restarting the app from here would
+ kill this request. Run 'ocx sync --restart-codex' from a terminal instead."
+```
+
+An honest refusal beats a promise the architecture cannot keep.
+
+**This is not the normal case.** Measured on the maintainer's machine while writing
+this: the proxy listening on :10100 is pid 60304, whose parent chain is
+`bun -> node -> launchd` with no `ChatGPT.app` process in it, while the app root is
+pid 15901. A proxy installed as a service sits outside the app tree, so the service
+path performs the restart directly and `000` §7 is satisfied. The refusal covers the
+case where someone started the proxy from a shell inside the app — a real thing
+developers do, and a bad thing to mishandle silently.
 ### 4.1 The wire `restartCodex` field does not change meaning (audit B5)
 
 `POST /api/machine/sync` accepts a `restartCodex` boolean from a remote hub

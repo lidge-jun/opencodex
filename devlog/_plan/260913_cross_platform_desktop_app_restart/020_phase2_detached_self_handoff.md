@@ -127,6 +127,12 @@ helper: run the ladder
 helper: release in finally
 ```
 
+"Release in finally" means **release a lock this process owns**. A helper that finds
+the lock naming a different live pid exits without touching it; deleting somebody
+else's live lock would destroy the mutual exclusion this section exists for. The
+release is therefore a compare-and-delete on the owner pid, never an unconditional
+`unlink`.
+
 The helper never takes the lock; it inherits one already made out to it. A concurrent
 caller arriving at any point sees a lock owned by a live pid and reports
 `restart_in_flight`, which is the behaviour B2 asked for.
@@ -144,6 +150,22 @@ A lock whose owner pid is dead, or which is older than five minutes, is stale an
 replaced atomically. That staleness rule is what recovers from a helper killed by the
 `taskkill /T` race in §8: the lock is left owned by a dead pid and the next restart
 reclaims it rather than being blocked until someone deletes a file.
+
+Both the staleness check and the helper's caller-exit poll read liveness by pid, so
+both inherit the same small exposure: a recycled pid inside the window reads as
+"still alive". Each fails in the safe direction — a false `restart_in_flight` and a
+false `caller_still_running` respectively, so the outcome is a restart that did not
+happen rather than one that happened to the wrong process — and both are bounded by
+the five-minute staleness rule.
+
+### 4.3 Who may hand off
+
+`allowHandoff` is a caller policy, not a global. It is `true` for the CLI, whose
+process is short-lived and whose exit is exactly the signal the helper waits for. It
+is `false` for the management service (`030` §4.2), because a long-lived proxy never
+exits and the helper would spend its whole window waiting for something that cannot
+happen, after the operator was already told the restart was handed off. The helper
+itself also passes `false`, which is what makes recursion structurally impossible.
 
 ### 4.2 What the helper is actually spawned as (nit N11)
 
