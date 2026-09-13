@@ -1285,6 +1285,15 @@ function stripUnsupportedForwardParams(body: unknown): unknown {
   return rest;
 }
 
+/** Drop client identity metadata only at the canonical Codex destination, not public gateways.
+ * Claude translation still owns local session/cache identity; never mutate its replay body.
+ */
+function stripCanonicalForwardUser(body: unknown): unknown {
+  if (!isPlainObject(body) || !Object.hasOwn(body, "user")) return body;
+  const { user: _user, ...rest } = body;
+  return rest;
+}
+
 /** Return the lossless text represented by one system message, or null when it is multimodal. */
 function canonicalForwardSystemText(item: Record<string, unknown>): string | null {
   const content = item.content;
@@ -2256,6 +2265,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (isCanonicalOpenAiForwardProvider(provider)) {
           outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
           outBody = stripCanonicalForwardPromptCacheOptions(outBody);
+          outBody = stripCanonicalForwardUser(outBody);
           outBody = normalizeCanonicalForwardPromptEnvelope(outBody);
           outBody = normalizeCanonicalForwardContinuationEnvelope(outBody);
         }

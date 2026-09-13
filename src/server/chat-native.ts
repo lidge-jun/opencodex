@@ -19,7 +19,7 @@ import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
-import { isModelTextOnly } from "../vision";
+import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
 import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
@@ -138,7 +138,7 @@ function isRec(value: unknown): value is Rec {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boolean {
+export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec, config?: OcxConfig): boolean {
   const provider = route.provider;
   if (provider.adapter !== "openai-chat") return false;
   if (provider.authMode !== undefined && provider.authMode !== "key" && provider.authMode !== "local") return false;
@@ -152,7 +152,12 @@ export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boo
   // site describes or strips the image. The native fast path has no vision
   // handling, so letting it keep such a request forwards raw pixels to a
   // model the operator declared blind.
-  if (isModelTextOnly(provider, route.modelId) && chatBodyCarriesImage(rawBody)) return false;
+  if (chatBodyCarriesImage(rawBody)) {
+    const needsVision = config
+      ? requiresVisionPreprocessing(config, provider, route.modelId, route.providerName)
+      : isModelTextOnly(provider, route.modelId);
+    if (needsVision) return false;
+  }
   if (Array.isArray(rawBody.tools)) {
     for (const tool of rawBody.tools) {
       if (!isRec(tool)) continue;
@@ -326,7 +331,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
               dispatchOverride: async (_input, init, execute) => {
                 if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
                   const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, options.chatBody)) {
+                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, options.chatBody, config)) {
                     throw new Error("Provider key selection is no longer available for native Chat");
                   }
                   activeProvider = current;

@@ -151,3 +151,5 @@ medium/high/max UID before accepting a suffix already present in the model id.
 The merged `devin` provider uses this resolver for every account, whichever login
 path minted the credential. Omitted effort preserves an explicit
 variant; unrelated model families retain their existing suffix precedence.
+
+Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.

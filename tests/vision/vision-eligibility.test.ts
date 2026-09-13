@@ -158,6 +158,37 @@ describe("vision eligibility core", () => {
     })).toBe(false);
   });
 
+  test("11b. canonical Codex backend metadata overrides a generic image-capable Spark row", () => {
+    const config = configWithProviders({
+      openai: {
+        adapter: "openai-responses",
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+    });
+    const candidate: VisionCandidateModel = {
+      provider: "openai",
+      id: "gpt-5.3-codex-spark",
+      inputModalities: ["text", "image"],
+    };
+    // No model-specific blacklist is required: backend metadata owns the verdict.
+    expect(isVisionSidecarConsumer(config, "openai", candidate.id)).toBe(false);
+    expect(modelAcceptsImageInput(config, candidate)).toBe(false);
+    expect(isVisionEligibleModel(config, candidate)).toBe(false);
+  });
+
+  test("11c. runtime provider hooks do not make capability enrichment uncloneable", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+      fetch: (() => Promise.reject(new Error("not called"))) as typeof fetch,
+      modelInputModalities: { vision: ["text", "image"] },
+    } as OcxProviderConfig & { fetch: typeof fetch };
+    const config = configWithProviders({ runtime: provider });
+    expect(() => modelAcceptsImageInput(config, { provider: "runtime", id: "vision" })).not.toThrow();
+    expect(modelAcceptsImageInput(config, { provider: "runtime", id: "vision" })).toBe(true);
+  });
+
   test("12. only the selected Anthropic OAuth provider contributes Anthropic options", () => {
     const config = configWithProviders({
       anthropic: {

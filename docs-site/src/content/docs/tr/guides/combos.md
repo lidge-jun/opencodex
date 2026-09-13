@@ -229,7 +229,8 @@ ikiye ayrılır.
 | --- | --- |
 | HTTP 401, 403, 404, 408, 429 veya herhangi bir 5xx | Hedefi soğutun ve bir sonraki uygun hedefe atlayın. |
 | Sınıflandırılmış kimlik doğrulama, abonelik, kota, hız sınırı, aşırı yük veya yukarı akış sunucu hatası | Yalnızca durum yeterli olmadığında bile hedefi soğutun ve atlayın. |
-| İstemci iptali (499), `origin_rejected`, siber politika reddi, bağlam taşması veya geçersiz istek | Durun ve hatayı döndürün; başka bir hedef isteği geçerli kılmaz. |
+| İstemci iptali (499), `origin_rejected`, siber politika reddi, bağlam taşması veya diğer geçersiz istek | Durun ve hatayı döndürün; başka bir hedef isteği geçerli kılmaz. |
+| `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren veya modele özgü görüntü girdisini reddeden (`param: input`) yapılandırılmış HTTP 400 | Çıktı başlamadan önce bekleme süresi kaydetmeden sonraki uygun hedefe atlar; aşağıdaki isteğe bağlı parametre uyumluluğuna bakın. |
 | Diğer sınıflandırılmamış hatalar | Durun ve hatayı döndürün. |
 
 Atlanan bir hedef varsayılan olarak 60 saniye boyunca soğuma süresine girer.
@@ -404,3 +405,9 @@ Hata hedefe özgü olmaktan ziyade uç (terminal) bir hataydı. Geçersiz girdiy
 düzeltin, aşırı büyük bir bağlamı azaltın, bir politika reddini işleyin veya
 reddedilen istek kaynağını düzeltin. Kombolar bu durumlar için atlama yapmaz.
 
+
+## İsteğe bağlı parametre uyumluluğu
+
+Sonlandırıcı 400 hatalarının dar bir istisnası vardır: `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren veya modele özgü görüntü girdisini reddeden (`param: input`) yapılandırılmış hata, çıktı başlamadan önce sonraki uygun hedefe geçebilir. Bu uyumsuzluk için bekleme süresi kaydedilmez. Güvenlik politikası reddi, iptal ve başlamış çıktı yeniden yürütülmez.
+
+[Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

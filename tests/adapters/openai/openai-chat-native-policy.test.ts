@@ -398,7 +398,7 @@ describe("main and native Chat tier authorization parity", () => {
     }
   });
 
-  test("the native lane keeps caller image bytes instead of normalizing them", async () => {
+  test("the native lane keeps caller image bytes only for positively vision-capable models", async () => {
     // Scope boundary for the openai-chat inline image budget (see
     // tests/adapters/openai/openai-chat-image-normalization.test.ts). That budget lives in
     // the adapter's buildRequest, but an eligible Chat-inbound request is dispatched down
@@ -417,7 +417,9 @@ describe("main and native Chat tier authorization parity", () => {
       });
     }) as typeof fetch;
 
-    const target = provider();
+    const target = provider({
+      modelCapabilities: { [MODEL_ID]: { inputModalities: ["text", "image"] } },
+    });
     const response = await handleChatCompletions(
       new Request("http://localhost/v1/chat/completions", {
         method: "POST",
@@ -455,6 +457,17 @@ test("explicit text-only capabilities divert image-bearing native Chat requests"
   const { routeModel } = await import("../../../src/router");
   const config = { port: 10100, defaultProvider: "custom", providers: { custom: provider({ modelCapabilities: { model: { inputModalities: ["text"] } } }) } } as OcxConfig;
   const route = routeModel(config, "custom/model");
-  expect(isNativeChatRouteEligible(route, { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,YQ==" } }] }] })).toBe(false);
-  expect(isNativeChatRouteEligible(route, { messages: [{ role: "user", content: "hello" }] })).toBe(true);
+  expect(isNativeChatRouteEligible(route, { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,YQ==" } }] }] }, config)).toBe(false);
+  expect(isNativeChatRouteEligible(route, { messages: [{ role: "user", content: "hello" }] }, config)).toBe(true);
+});
+
+test("unknown image capability retains native Chat compatibility until capability is known", async () => {
+  const { isNativeChatRouteEligible } = await import("../../../src/server/chat-native");
+  const { routeModel } = await import("../../../src/router");
+  const config = { port: 10100, defaultProvider: "custom", providers: { custom: provider() } } as OcxConfig;
+  const route = routeModel(config, "custom/model");
+  const imageBody = { messages: [{ role: "user", content: [{
+    type: "image_url", image_url: { url: "data:image/png;base64,YQ==" },
+  }] }] };
+  expect(isNativeChatRouteEligible(route, imageBody, config)).toBe(true);
 });

@@ -165,7 +165,7 @@ async function handleChatCompletionsWithBudget(
       if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
       logCtx.usageLogInputTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
     }
-    if (!effortRow && isNativeChatRouteEligible(route, chatBody)) chatNativeRoute = route;
+    if (!effortRow && isNativeChatRouteEligible(route, chatBody, config)) chatNativeRoute = route;
   } catch (err) {
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;

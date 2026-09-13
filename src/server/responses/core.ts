@@ -165,7 +165,7 @@ import {
   shouldResolveOpenAiPassthroughWebSearchBridge,
 } from "../../web-search/passthrough-bridge";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
-import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
+import { describeImagesInPlace, planVisionSidecar, requiresVisionPreprocessing, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
@@ -4769,7 +4769,7 @@ async function handleResponsesInner(
   const routedCompaction = parsed._compactionRequest === true
     && !isCanonicalOpenAiForwardProvider(route.provider);
   const needsOpenAiVision = !visionDescribeTerminal
-    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
+    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
   const needsOpenAiSearch = !routedCompaction && !adapter.runTurn
     && (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
       || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough));
@@ -4839,7 +4839,7 @@ async function handleResponsesInner(
   const visionPlan = visionDescribeTerminal
     ? undefined
     : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar, {
-      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
+      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
     });
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
@@ -4851,9 +4851,9 @@ async function handleResponsesInner(
       recordSidecarOutcome,
       translatorBudget,
     );
-  } else if (isModelTextOnly(route.provider, route.modelId)) {
-    // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
-    // disabled): fail closed — never forward raw images to a text-only upstream.
+  } else if (requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName)) {
+    // Image capability is not positively proven but no sidecar plan is dispatchable: fail closed.
+    // Never forward raw image bytes to an unverified upstream.
     stripImagesInPlace(parsed, translatorBudget);
   }
 
@@ -6292,7 +6292,7 @@ async function handleResponsesInner(
             providerApiKey: route.provider.apiKey ?? "",
             auth: webSearchBridgeAuth,
             hostedTool: parsed._webSearch,
-            describeImages: isModelTextOnly(route.provider, route.modelId),
+            describeImages: requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName),
             sidecar: config.webSearchSidecar,
           }),
           // Appending a search result can push the continuation past the ceiling the first leg
@@ -6818,7 +6818,7 @@ async function handleResponsesInner(
   //     can proceed for web-search-only turns
   const wsPlan = !routedCompaction
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
-      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
+      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
     })
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;

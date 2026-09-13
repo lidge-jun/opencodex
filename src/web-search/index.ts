@@ -1,6 +1,6 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList, toolChoiceToolPredicate } from "../types";
-import { isModelTextOnly } from "../vision";
+import { requiresVisionPreprocessing } from "../vision";
 import type { SidecarSettings } from "./executor";
 import type { CodexAuthPolicyConfig } from "../codex/auth-context";
 import { isCodexReserveRequestEligible } from "../codex/loopback-target";
@@ -152,7 +152,11 @@ export function planWebSearch(
   provider: OcxProviderConfig,
   modelId: string,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
-  options: { admission?: Pick<DataPlaneAdmission, "source">; codexAuthPolicy?: CodexAuthPolicyConfig } = {},
+  options: {
+    admission?: Pick<DataPlaneAdmission, "source">;
+    codexAuthPolicy?: CodexAuthPolicyConfig;
+    providerName?: string;
+  } = {},
 ): SidecarPlan | undefined {
   if (!parsed._webSearch || isPassthrough) return undefined;
   if (!toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) return undefined;
@@ -176,8 +180,9 @@ export function planWebSearch(
     routedModelStallTimeoutMs,
     timeoutMs,
   );
-  // The routed model being text-only means the search model must verbalize image results (either backend).
-  const describeImages = isModelTextOnly(provider, modelId);
+  // A target proven unable to accept image input receives verbalized image results instead of
+  // search-result images. A genuinely unknown custom target keeps the established pass-through.
+  const describeImages = requiresVisionPreprocessing(config, provider, modelId, options.providerName);
   const reasoning = cfg.reasoning ?? DEFAULT_SIDECAR_REASONING;
   const streamRoutedModelOutput = cfg.streamRoutedModelOutput === true;
 

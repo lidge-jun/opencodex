@@ -536,7 +536,7 @@ combo whose remaining eligible targets use other providers.
 capability ladders remove effort and thinking controls in every combo mode; adaptive mode also
 removes those controls for unknown ladders and preserves `reasoning.summary`. Known non-empty
 ladders retain the existing per-target effort resolution. This request normalization does not
-change target order, attempt accounting, or the existing provider-400 failover classification.
+change target order or attempt accounting; provider-400 decisions follow the [request-local target compatibility](../runtime.md#request-local-target-compatibility) contract.
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
@@ -598,3 +598,5 @@ Translated Chat request construction uses the [inline-image budget](streaming-he
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.

@@ -722,10 +722,9 @@ const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
  * `[404] No endpoints found that support image input` and `big-pickle` with the
  * exact deserialize error quoted in #1043.
  *
- * `mimo-v2.5-free` and `longcat-2.0-free` ACCEPT images and are deliberately
- * absent. Adding them would silently replace a working image with a caption,
- * which is worse than the loud 400 this list exists to prevent — see the negative
- * assertion in tests/providers/provider-registry-parity.test.ts.
+ * `mimo-v2.5-free` and `longcat-2.0-free` ACCEPT images. They remain absent
+ * from the blind list and are recorded separately as positive input-modality evidence,
+ * so capability-positive dispatch can forward images without relying on blacklist absence.
  *
  * Zen's roster is discovered live while this list is static, so it is a dated
  * exception list, not a capability model. Re-probe before extending it.
@@ -739,6 +738,7 @@ const OPENCODE_ZEN_TEXT_ONLY_MODELS = [
   "laguna-s-2.1-free",
   "deepseek-v4-flash-free",
 ];
+const OPENCODE_ZEN_IMAGE_MODELS = ["mimo-v2.5-free", "longcat-2.0-free"] as const;
 /*
  * DeepSeek's Codex ladder is low/high/max. With the V4 Pro GA release
  * (DeepSeek-V4-Pro-0813) the official thinking-mode table is IDENTICAL for both
@@ -3209,6 +3209,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     modelInputModalities: {
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+      ...Object.fromEntries(OPENCODE_ZEN_IMAGE_MODELS.map(id => [id, ["text", "image"] as string[]])),
     },
     noVisionModels: [...OPENCODE_ZEN_TEXT_ONLY_MODELS, ...DEEPSEEK_GATEWAY_THINKING_MODELS],
     // Same DeepSeek routes as the Go preset above, behind the same vendor, so they carry
@@ -3250,6 +3251,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     modelInputModalities: {
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+      ...Object.fromEntries(OPENCODE_ZEN_IMAGE_MODELS.map(id => [id, ["text", "image"] as string[]])),
     },
     // Same Zen roster behind the same base URL, so it carries the same measured
     // text-only list rather than only its DeepSeek member (#1043).

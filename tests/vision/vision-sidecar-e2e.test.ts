@@ -377,7 +377,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     }
   });
 
-  test("models outside noVisionModels keep their image untouched (no sidecar call)", async () => {
+  test("positively vision-capable models keep their image untouched (no sidecar call)", async () => {
     let upstreamBody = "";
     let sidecarHits = 0;
     upstream = serveUpstream(b => { upstreamBody = b; });
@@ -392,6 +392,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           allowPrivateNetwork: true,
           apiKey: "key-alpha-000111222333",
           noVisionModels: ["blind-model"],
+          modelInputModalities: { "vision-model": ["text", "image"] },
         },
         openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
       },
@@ -527,6 +528,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           allowPrivateNetwork: true,
           apiKey: "key-alpha-000111222333",
           noVisionModels: zen?.noVisionModels,
+          modelInputModalities: zen?.modelInputModalities,
         },
         openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
       },
