@@ -137,7 +137,7 @@ file rather than from a transcript.
 | wp1 roadmap | **done** | `000`, `001`, `002`, `010`, `020`, `030`, `040` on `codex/260913-cross-platform-desktop-restart` |
 | wp2 shared surface | **done** | `010`; commits de44e6a6..49e36f1d |
 | wp5 self-handoff | **built, cycle not yet closed** | `020`; commits d1efbebd, 75722903 |
-| wp3 contract merge | not started | `030` |
+| wp3 contract merge | **done** | `030`; commits 8ebbdc5c..7ac03181 |
 | wp4 verification and delivery | not started | `040` |
 
 **What wp1 concluded.** The inert `--restart-codex` is not a matcher defect — the
@@ -170,6 +170,29 @@ and is verified, including the transfer that lets the helper inherit ownership, 
 wp5 adds `handoff.ts`, the hidden `internal` command, and the `startHandoff` seam the
 ladder already accepts. `handoff_started` is in the union and confirmed unreachable
 until that seam is supplied.
+
+**What wp3 concluded.** The merged contract shipped across `sync`, `sync-cache`,
+`catalog pull` and `ocx system codex-restart`, with docs in English and seven
+locales. Three audit rounds were needed. The recurring failure was not the design
+but the seams between the pieces: `excludePids` was passed to an option that did not
+exist, `desktopAppRestarted` was computed and dropped, `restartIncomplete` was
+assigned where it should only ever be set, and three source-oracle tests still
+pinned the contract the change reverses.
+
+**Two residuals accepted, both reviewed and recorded rather than hidden:**
+
+- **Windows `excludePids` is a no-op for app-servers.** The CIM probe enumerates
+  `ChatGPT.exe` while Windows app-servers run as `codex.exe` / `codex-code-mode-host`,
+  so they still receive SIGTERM before the app quits. The restart is correct; the cost
+  is one extra interrupted turn on the platform that already had this feature. Closing
+  it means widening the query that decides what may be killed, which needs its own
+  verification. Documented at the decision point in `src/cli/restart-scope.ts`.
+- **`desktopAppRestarted` appears on an unchanged-catalog pull.** Presence means the
+  restart was requested and `true` means it relaunched; a failed relaunch is
+  `ok: false` with `code: "restart_incomplete"`, so no caller can confuse them.
+
+**Direction for wp4.** Execute `040` as written. The local macOS host cannot prove its
+own direct restart and is reserved for the handoff proof, after the merge.
 
 **Standing constraint.** No local product suite, build, typecheck or install at any
 point in this unit (§2). Every completion claim rests on live host evidence plus
