@@ -123,6 +123,7 @@
   "chat-conversation-affinity.test.ts": "responses",
   "chat-json-sse-fallback.test.ts": "responses",
   "chat-refusal.test.ts": "responses",
+  "chat-refusal-scope.test.ts": "responses",
   "chatgpt-device-auth.test.ts": "oauth",
   "chatgpt-oauth.test.ts": "oauth",
   "chatgpt-token-expiry.test.ts": "oauth",

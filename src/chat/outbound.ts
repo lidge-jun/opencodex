@@ -302,9 +302,18 @@ export function responsesSseToChatCompletionsSse(
       if (existing && existing.parts.size > 0 && item.type !== undefined) throw refusalTranslationError();
       return;
     }
-    // Unrelated sparse text messages historically need no position metadata.
-    if (outputIndex === undefined && (!Array.isArray(item.content)
-      || !item.content.some(part => isRec(part) && part.type === "refusal"))) return;
+    // Only an item that actually carries refusal content belongs in the refusal ledger.
+    // The exit used to be the position guard alone, so every message that had an index
+    // was enrolled — ordinary assistant text included — and the id/index consistency
+    // checks inside refusalItem() then governed streams containing no refusal at all.
+    // One index legitimately carrying two item ids was then fatal: a bridge that flushes
+    // a hidden reasoning envelope at the index of a still-open message failed a healthy
+    // turn with invalid_refusal. `existing` keeps a ledger already opened by real refusal
+    // evidence under the same scrutiny as before. The non-streaming collector below has
+    // always scoped itself this way; this is the streaming path catching up.
+    const hasRefusalPart = Array.isArray(item.content)
+      && item.content.some(part => isRec(part) && part.type === "refusal");
+    if (!existing && !hasRefusalPart) return;
     const known = refusalItem(outputIndex, item, "id");
     if (!Array.isArray(item.content)) return;
     item.content.forEach((part: unknown, contentIndex: number) => {
@@ -575,7 +584,15 @@ export function responsesSseToChatCompletionsSse(
             const item = isRec(data.item) ? data.item : null;
             if (item?.type === "message") {
               snapshotRefusalItem(data.output_index, item);
-              if (Object.hasOwn(data, "item_id")) refusalItem(data.output_index, data, "item_id");
+              // Bind the event-level id only for an index the refusal ledger already
+              // tracks. Testing membership directly rather than through position()
+              // matters: position() throws on a malformed index, which would add a
+              // failure to refusal-free streams instead of removing one.
+              if (Object.hasOwn(data, "item_id")
+                && typeof data.output_index === "number"
+                && refusalItems.has(data.output_index)) {
+                refusalItem(data.output_index, data, "item_id");
+              }
             }
             if (!item || item.type !== "function_call") break;
             ensureRole();
@@ -621,7 +638,11 @@ export function responsesSseToChatCompletionsSse(
             const item = isRec(data.item) ? data.item : null;
             if (!item) break;
             snapshotRefusalItem(data.output_index, item);
-            if (item.type === "message" && Object.hasOwn(data, "item_id")) refusalItem(data.output_index, data, "item_id");
+            if (item.type === "message" && Object.hasOwn(data, "item_id")
+              && typeof data.output_index === "number"
+              && refusalItems.has(data.output_index)) {
+              refusalItem(data.output_index, data, "item_id");
+            }
             if (item.type === "function_call") {
               sawToolUse = true;
               const callId = typeof item.call_id === "string" ? item.call_id : "";
