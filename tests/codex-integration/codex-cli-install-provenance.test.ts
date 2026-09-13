@@ -108,7 +108,7 @@ describe("Codex CLI install provenance", () => {
     expect(calls).toBe(0);
   });
 
-  test("Windows reports a deferred inspection rather than an absent candidate", async () => {
+  test("Windows defers without reading persisted candidate state", async () => {
     let calls = 0;
     const report = await inspectCodexCliInstall({
       ...noFilesystemDeps(() => { calls += 1; }),
