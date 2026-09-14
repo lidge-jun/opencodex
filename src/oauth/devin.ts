@@ -82,7 +82,7 @@ export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "
   // unusable host on a credential that does exist falls through to the
   // configured base URL and then the default, as it did before this window was
   // closed.
-  if (literalCredential === undefined) {
+  if (literalCredential === null || literalCredential === undefined) {
     for (const slot of devinAliasCredentialSlots(providerId)) {
       const host = validateDevinApiBaseUrl(getCredential(slot)?.apiBaseUrl);
       if (host !== undefined) return host;
