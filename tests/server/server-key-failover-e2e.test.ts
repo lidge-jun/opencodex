@@ -43,6 +43,75 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test.each(["web-search", "image"] as const)(
+    "%s bridge bounds rotations after short cooldowns expire",
+    async bridge => {
+      const originalFetch = globalThis.fetch;
+      const endpoint = "https://sidecar-key429-fixture.invalid/v1/chat/completions";
+      const seen: Array<{ authorization: string | null; tools: string[] }> = [];
+      let now = Date.now();
+      let restoreClock: (() => void) | undefined;
+      let server: ReturnType<typeof startServer> | undefined;
+      const config = {
+        port: 0, hostname: "127.0.0.1", defaultProvider: "sidecar429",
+        providers: {
+          sidecar429: {
+            adapter: "openai-chat", authMode: "key", baseUrl: "https://sidecar-key429-fixture.invalid/v1",
+            apiKey: "synthetic-sidecar-a", apiKeyPool: [
+              { id: "a", key: "synthetic-sidecar-a" }, { id: "b", key: "synthetic-sidecar-b" },
+            ],
+          },
+          // Arms image planning without OAuth or an actual image-service request.
+          ...(bridge === "image" ? { xai: {
+            adapter: "openai-chat", authMode: "key", baseUrl: "https://image-plan-fixture.invalid/v1",
+            apiKey: "synthetic-image-plan-token",
+          } } : {}),
+        },
+        ...(bridge === "web-search"
+          ? { webSearchSidecar: { enabled: true, backend: "exa", exaApiKey: "synthetic-exa-plan-token" } }
+          : { images: { bridgeEnabled: true } }),
+      } as OcxConfig;
+      try {
+        saveConfig(config);
+        server = startServer(0);
+        const clock = spyOn(Date, "now").mockImplementation(() => now);
+        restoreClock = () => clock.mockRestore();
+        globalThis.fetch = (async (input, init) => {
+          const url = input instanceof Request ? input.url : String(input);
+          if (url !== endpoint) throw new Error("unexpected outbound request in sidecar 429 fixture");
+          const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }> };
+          seen.push({ authorization: new Headers(init?.headers).get("authorization"),
+            tools: (body.tools ?? []).map(tool => tool.function?.name ?? ""),
+          });
+          // A broken rotation loop is bounded by six mocked sends, never by an infinite wait.
+          if (seen.length >= 6) throw new Error("sidecar 429 fixture send ceiling exceeded");
+          now += 1_000;
+          return Response.json({ error: { message: `sidecar429-final-${seen.length}`, type: "rate_limit_error" } },
+            { status: 429, headers: { "retry-after": "0" } });
+        }) as typeof fetch;
+        const response = await originalFetch(new URL("/v1/responses", server.url), {
+          method: "POST", headers: { "content-type": "application/json" },
+          signal: AbortSignal.timeout(10_000),
+          body: JSON.stringify({ model: "sidecar429/test", input: "Use the provided tool.", stream: true,
+            tools: [{ type: bridge === "web-search" ? "web_search" : "image_generation" }],
+          }),
+        });
+        const text = await response.text();
+        expect(seen.map(call => call.authorization)).toEqual(["Bearer synthetic-sidecar-a", "Bearer synthetic-sidecar-b"]);
+        // Verifies bridge activation rather than accidentally exercising the generic 429 loop.
+        for (const call of seen) expect(call.tools).toContain(bridge === "web-search" ? "web_search" : "image_gen");
+        expect(response.status).toBe(429);
+        expect(text).toContain("Provider error 429");
+        expect(text).toContain("sidecar429-final-2");
+        expect(getKeyCooldownUntil("sidecar429", "b", now)).toBe(now + 1);
+      } finally {
+        globalThis.fetch = originalFetch;
+        restoreClock?.();
+        await server?.stop(true);
+      }
+    }, 15_000,
+  );
+
   test.each(["exhausted", "continuation", "transient", "budget-exhausted", "unpooled"] as const)(
     "429 rotation stays request-bounded after every earlier cooldown expires (%s)",
     async mode => {

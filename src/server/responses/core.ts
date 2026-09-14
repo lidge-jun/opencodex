@@ -6996,6 +6996,15 @@ async function handleResponsesInner(
     }
   }
 
+  // Capture one API-key rotation allowance before either sidecar or ordinary dispatch.
+  // Cooldown expiry and later pool growth cannot refill it; all bridge rounds and terminal
+  // continuations share the count. This is a failover count, not a distinct-key set.
+  const initialKeyPool = route.provider.apiKeyPool ?? [];
+  const initialKeyReference = route.provider._apiKeyAttempt?.reference ?? route.provider.apiKey;
+  const initialKeyIsPooled = initialKeyPool.some(entry => entry.key === initialKeyReference);
+  const maxKeyPoolFailovers = Math.max(0, initialKeyPool.length - (initialKeyIsPooled ? 1 : 0));
+  let keyPoolFailovers = 0;
+
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
   // Routed-compaction turns must NOT hit the image bridge: compaction clears tools/_webSearch but
   // leaves _imageGeneration, so planImageBridge would activate and return a normal Responses
@@ -7023,8 +7032,10 @@ async function handleResponsesInner(
       now: Date.now(),
       attemptedKey: route.provider.apiKey,
       promptCacheKey: parsed.options.promptCacheKey,
+      allowRotation: keyPoolFailovers < maxKeyPoolFailovers,
     });
     if (rotated) {
+      keyPoolFailovers += 1;
       route.provider = rotated;
     } else if (
       // A POSITIVE gate, not an early return. An early `return null` here made every later arm
@@ -7644,14 +7655,6 @@ async function handleResponsesInner(
     : 300_000;
   activeAdapter = adapter;
 
-  // Bound 429 rotations independently of cooldown expiry. Capture the pool before the first
-  // send; a later provider refresh cannot enlarge this invocation's allowance. The initial
-  // recovery and terminal continuations share it; it is a failover count, not a distinct-key set.
-  const initialKeyPool = route.provider.apiKeyPool ?? [];
-  const initialKeyReference = route.provider._apiKeyAttempt?.reference ?? route.provider.apiKey;
-  const initialKeyIsPooled = initialKeyPool.some(entry => entry.key === initialKeyReference);
-  const maxKeyPoolFailovers = Math.max(0, initialKeyPool.length - (initialKeyIsPooled ? 1 : 0));
-  let keyPoolFailovers = 0;
   const keyPool429RetryAllowed = (continuation: boolean): boolean => {
     if (keyPoolFailovers >= maxKeyPoolFailovers) return false;
     // Adapter-owned sends retain their existing base-only admission (for example Kiro).
