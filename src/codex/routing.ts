@@ -90,6 +90,10 @@ export type CodexAffinityReason =
   | "transient"
   | "transient_hold_expired"
   | "unusable"
+  | "paused"
+  | "plan_excluded"
+  | "cooldown"
+  | "quota_avoided"
   | "generation"
   | "expired"
   | "model_lane";
@@ -100,10 +104,33 @@ export interface CodexAffinityDecision {
 }
 
 /** The decision to report once a binding has been released and selection starts over. */
-function affinityAfterRelease(releaseReason: CodexAffinityReason | undefined): CodexAffinityDecision {
+function affinityAfterRelease(
+  threadId: string | null,
+  releaseReason: CodexAffinityReason | undefined,
+): CodexAffinityDecision {
+  // Reported now, so it must not be reported again by the next request.
+  clearPendingReleaseReason(threadId);
   return releaseReason === undefined
     ? { move: "new_bind", reason: "healthy" }
     : { move: "rebound", reason: releaseReason };
+}
+
+/**
+ * What to report when selection produced no account at all. The binding is gone and nothing took
+ * it, which is a `cleared`, and the pending reason is deliberately NOT consumed: a no-account
+ * result reaches no auth context and therefore no usage entry, so the next resolve that does
+ * produce one is the first place this release can actually be seen.
+ */
+function affinityOnNoAccount(
+  threadId: string | null,
+  releaseReason: CodexAffinityReason | undefined,
+): CodexAffinityDecision | undefined {
+  if (releaseReason === undefined) return undefined;
+  // Hand it forward as well as reporting it. A reason derived from the entry this request just
+  // released lives only in a local, so without this the next resolve finds no entry and no
+  // pending reason and calls the rebind a fresh healthy bind.
+  notePendingReleaseReason(threadId, releaseReason);
+  return { move: "cleared", reason: releaseReason };
 }
 
 /**
@@ -428,7 +455,8 @@ export function clearThreadAccountMapForAccount(
 const pendingReleaseReasons = new Map<string, CodexAffinityReason>();
 const MAX_PENDING_RELEASE_REASONS = 4096;
 
-function notePendingReleaseReason(threadId: string, reason: CodexAffinityReason): void {
+function notePendingReleaseReason(threadId: string | null, reason: CodexAffinityReason): void {
+  if (threadId === null) return;
   if (!pendingReleaseReasons.has(threadId) && pendingReleaseReasons.size >= MAX_PENDING_RELEASE_REASONS) {
     const oldest = pendingReleaseReasons.keys().next();
     if (!oldest.done) pendingReleaseReasons.delete(oldest.value);
@@ -436,11 +464,20 @@ function notePendingReleaseReason(threadId: string, reason: CodexAffinityReason)
   pendingReleaseReasons.set(threadId, reason);
 }
 
-function consumePendingReleaseReason(threadId: string | null): CodexAffinityReason | undefined {
+function peekPendingReleaseReason(threadId: string | null): CodexAffinityReason | undefined {
   if (threadId === null) return undefined;
-  const reason = pendingReleaseReasons.get(threadId);
-  if (reason !== undefined) pendingReleaseReasons.delete(threadId);
-  return reason;
+  return pendingReleaseReasons.get(threadId);
+}
+
+/**
+ * Forget a release only once it has actually been reported.
+ *
+ * Consuming it at derivation time lost it whenever selection then failed to produce an account:
+ * a no-account return carries no payload, so the release went unrecorded and the next successful
+ * resolve claimed a fresh healthy bind (#4598). A release survives until some resolve reports it.
+ */
+function clearPendingReleaseReason(threadId: string | null): void {
+  if (threadId !== null) pendingReleaseReasons.delete(threadId);
 }
 
 export function clearCodexUpstreamHealth(): void {
@@ -1299,6 +1336,32 @@ function isCodexAccountSelectable(
     && !isCodexQuotaAvoided(accountId, quotaScope, now)
     && !isCodexAccountSoftAvoided(accountId, now)
     && isCodexAccountUsable(config, accountId, selectionOptions);
+}
+
+/**
+ * Which guard in {@link isCodexAccountSelectable} refused this account, if any.
+ *
+ * Deliberately the same predicates in the same order as that function, because the point is to
+ * REPORT the guard that actually fired rather than to re-derive a plausible-looking cause. An
+ * earlier version of the release reason checked only a subset and let a paused, plan-excluded,
+ * cooled-down or quota-avoided release fall through to a quota fallback, which named something
+ * routing never used -- a diagnostic that is confidently wrong in exactly the cases an operator
+ * would consult it for (#4598).
+ */
+function codexAccountBlockReason(
+  config: OcxConfig,
+  accountId: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): CodexAffinityReason | undefined {
+  if (isCodexAccountPaused(config, accountId)) return "paused";
+  if (isCodexAccountPlanExcluded(config, accountId)) return "plan_excluded";
+  if (getCodexQuotaHealthSnapshot(accountId, quotaScope, now) !== null) return "cooldown";
+  if (isCodexQuotaAvoided(accountId, quotaScope, now)) return "quota_avoided";
+  if (isCodexAccountSoftAvoided(accountId, now)) return "transient";
+  if (!isCodexAccountUsable(config, accountId, selectionOptions)) return "unusable";
+  return undefined;
 }
 
 function threadAffinityScope(quotaScope?: CodexQuotaScope): BaseThreadAffinityScope {
@@ -2889,9 +2952,8 @@ export function resolveCodexAccountForThreadDetailed(
           ? "quota_refusal"
           : isTransientHoldExpired(entry, now)
             ? "transient_hold_expired"
-            : !isCodexAccountUsable(config, entry.accountId, selectionOptions)
-              ? "unusable"
-              : "quota_headroom";
+            : codexAccountBlockReason(config, entry.accountId, now, quotaScope, selectionOptions)
+              ?? "quota_headroom";
       deleteThreadAffinity(threadId, quotaScope);
     } else {
       preserveExistingModelScopedAffinity = true;
@@ -2899,7 +2961,7 @@ export function resolveCodexAccountForThreadDetailed(
   }
   // A release recorded by the outcome path (a 429 clears the pin before the next request even
   // arrives) is the reason this request is starting cold, so it outranks having found nothing.
-  releaseReason ??= consumePendingReleaseReason(threadId);
+  releaseReason ??= peekPendingReleaseReason(threadId);
 
   // A request-scoped roster may still contain unhealthy candidates. Non-quota strategies return
   // before the quota/failover helpers below, so prefer only shared-healthy roster members here;
@@ -2940,7 +3002,7 @@ export function resolveCodexAccountForThreadDetailed(
       // the thing the preference exists to protect.
       promoteActiveCodexAccount(config, strategyPick);
     }
-    return { status: "selected", accountId: strategyPick, affinity: affinityAfterRelease(releaseReason) };
+    return { status: "selected", accountId: strategyPick, affinity: affinityAfterRelease(threadId, releaseReason) };
   }
 
   let active = getEffectiveActiveCodexAccountId(config);
@@ -2951,9 +3013,9 @@ export function resolveCodexAccountForThreadDetailed(
         selectionOptions?.nativeMainSelectionOnly === true
         && selectionOptions.modelEligibleAccountIds !== undefined
       ) {
-        return { status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID, affinity: affinityAfterRelease(releaseReason) };
+        return { status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID, affinity: affinityAfterRelease(threadId, releaseReason) };
       }
-      return { status: "none" };
+      return { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
     }
     if (!isIndependentCodexQuotaScope(quotaScope) && !modelScopedSelection) {
       setActiveCodexAccount(config, selected);
@@ -2989,15 +3051,15 @@ export function resolveCodexAccountForThreadDetailed(
       // return main only as a non-mutating sentinel so the caller's atomic claim can
       // classify maintenance. Do not fall through to the configured-but-ineligible
       // active account or persist/bind this synthetic selection.
-      return { status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID, affinity: affinityAfterRelease(releaseReason) };
+      return { status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID, affinity: affinityAfterRelease(threadId, releaseReason) };
     } else if (
       hasConfiguredPoolAccount(config, active, selectionOptions)
       && !isCodexAccountPaused(config, active)
       && !isCodexAccountPlanExcluded(config, active)
     ) {
-      return { status: "selected", accountId: active, affinity: affinityAfterRelease(releaseReason) };
+      return { status: "selected", accountId: active, affinity: affinityAfterRelease(threadId, releaseReason) };
     } else {
-      return { status: "none" };
+      return { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
     }
   }
   // Before applyQuotaAutoSwitch: its sync disk write would otherwise persist a
@@ -3037,14 +3099,14 @@ export function resolveCodexAccountForThreadDetailed(
   );
   if (!isCodexAccountUsable(config, active, selectionOptions)) {
     return hasConfiguredPoolAccount(config, active, selectionOptions)
-      ? { status: "selected", accountId: active, affinity: affinityAfterRelease(releaseReason) }
-      : { status: "none" };
+      ? { status: "selected", accountId: active, affinity: affinityAfterRelease(threadId, releaseReason) }
+      : { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
   }
-  if (isCodexAccountPaused(config, active)) return { status: "none" };
+  if (isCodexAccountPaused(config, active)) return { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
   if (getCodexQuotaHealthSnapshot(active, quotaScope, now)) {
     return hasConfiguredPoolAccount(config, active, selectionOptions)
-      ? { status: "selected", accountId: active, affinity: affinityAfterRelease(releaseReason) }
-      : { status: "none" };
+      ? { status: "selected", accountId: active, affinity: affinityAfterRelease(threadId, releaseReason) }
+      : { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
   }
   if (threadId) {
     if (preserveExistingModelScopedAffinity) {
@@ -3053,7 +3115,7 @@ export function resolveCodexAccountForThreadDetailed(
       bindThreadAffinity(threadId, active, now, quotaScope);
     }
   }
-  return { status: "selected", accountId: active, affinity: affinityAfterRelease(releaseReason) };
+  return { status: "selected", accountId: active, affinity: affinityAfterRelease(threadId, releaseReason) };
 }
 
 export function recordCodexUpstreamOutcome(
