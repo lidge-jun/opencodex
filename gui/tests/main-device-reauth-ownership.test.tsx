@@ -240,3 +240,38 @@ test("StrictMode setup-cleanup-setup still permits start and polling", async () 
   await reply(take("DELETE", "A"), { status: "cancelled" });
   expect(hook.state.phase).toBe("cancelled");
 });
+
+for (const failure of ["network", "http", "nonterminal"] as const) {
+  test(`polling observes completion after retryable cancellation ${failure}`, async () => {
+    await mount();
+    await beginFlow("A");
+    await invoke(() => hook.cancel());
+    const cancellation = take("DELETE", "A");
+    await act(async () => {
+      if (failure === "network") cancellation.response.reject(new Error("transient cancellation failure"));
+      else if (failure === "http") cancellation.reply({ code: "unavailable" }, 503);
+      else cancellation.reply({ status: "pending" });
+    });
+    expect(hook.state).toMatchObject({ phase: "pending", flowId: "A", cancelFailed: true });
+    await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+    await reply(take("GET", "A"), { status: "pending" });
+    expect(hook.state).toMatchObject({ phase: "pending", flowId: "A", cancelFailed: true });
+    await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+    await reply(take("GET", "A"), { status: "succeeded" });
+    expect(hook.state.phase).toBe("succeeded");
+    expect(completed).toBe(1);
+  });
+}
+
+test("two successful cancellation replies complete the same flow only once", async () => {
+  await mount();
+  await beginFlow("A");
+  await invoke(() => hook.cancel());
+  const first = take("DELETE", "A");
+  await invoke(() => hook.cancel());
+  const second = take("DELETE", "A");
+  await reply(first, { status: "succeeded" });
+  await reply(second, { status: "succeeded" });
+  expect(hook.state.phase).toBe("succeeded");
+  expect(completed).toBe(1);
+});

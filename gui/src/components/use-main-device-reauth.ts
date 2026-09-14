@@ -83,8 +83,8 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
 
   const cancel = useCallback(async () => {
     const flowId = flowRef.current;
-    stopPolling();
     if (!flowId) {
+      stopPolling();
       setState({ phase: "idle" });
       return;
     }
@@ -95,6 +95,7 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
       if (res.status === 404 && dto.code === "unknown_flow") {
         // The service may have expired its terminal receipt after a lost DELETE response.
         // Release the stale ID without claiming cancellation or successful authentication.
+        stopPolling();
         flowRef.current = null;
         setState({ phase: "failed", code: "request_failed" });
         return;
@@ -103,6 +104,7 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
       if (dto.status !== "cancelled" && dto.status !== "succeeded" && dto.status !== "failed") {
         throw new Error();
       }
+      stopPolling();
       flowRef.current = null;
       setState(dto.status === "failed"
         ? { phase: "failed", code: failureCode(dto.code) }
@@ -110,7 +112,7 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
       if (dto.status === "succeeded") onCompleted();
     } catch {
       if (unmountedRef.current || flowRef.current !== flowId) return;
-      // Keep ownership of the flow so the operator can retry cancellation.
+      // Retain ownership and polling so retries and device-login completion remain observable.
       setState(current => (current.phase === "pending" || current.phase === "committing") && current.flowId === flowId
         ? { ...current, cancelFailed: true }
         : current);
@@ -164,12 +166,16 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
         lastUrl = allowedVerificationUrl(dto.verificationUrl) || lastUrl;
         lastCode = humanCode(dto.deviceCode) || lastCode;
         if (dto.status === "pending" || dto.status === "committing") {
-          setState({
+          const pendingState: MainDeviceReauthState = {
             phase: dto.status,
             flowId,
             verificationUrl: lastUrl,
             deviceCode: lastCode,
-          });
+          };
+          setState(current => (current.phase === "pending" || current.phase === "committing")
+            && current.flowId === flowId && current.cancelFailed
+            ? { ...pendingState, cancelFailed: true }
+            : pendingState);
         } else if (dto.status === "succeeded") {
           flowRef.current = null;
           setState({ phase: "succeeded" });

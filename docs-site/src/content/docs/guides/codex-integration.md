@@ -805,9 +805,11 @@ If the new OAuth credential's authenticated usage lookup confirms an exhausted 5
 
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
 
-### Why an account stopped serving requests
+### Cancelling main-account device reauthentication
 
-When cancelling main-account device reauthentication, transient request failures and replies with unknown or nonterminal status values keep cancellation retryable. A DELETE response with HTTP 404 and code `unknown_flow` instead releases the expired flow so device re-login can be started again; it reports neither successful login nor confirmed cancellation. If the server reports a terminal `failed` state, the card displays that failure and also releases the old flow. After confirmed cancellation, device re-login is available again. Delayed start, status, or cancellation responses for an earlier flow do not alter the new flow or report a new login success.
+When cancelling main-account device reauthentication, a temporary DELETE or network failure, or a response with an unknown or nonterminal status, keeps the active flow and the cancellation-failure indication so cancellation can be retried; status polling continues so a login that completes can still be detected. A terminal `failed` response releases the flow and displays the normalized failure reason; only `succeeded` reports login success. A confirmed `cancelled` response releases the flow so a new device login can be started. A definitive HTTP 404 response with code `unknown_flow` also releases the expired flow ID so a new device login can be started, but does not report a successful login or confirmed cancellation. Late POST, GET, or DELETE responses from an earlier flow cannot change the new flow or report login success for it.
+
+### Why an account stopped serving requests
 
 When an account leaves pool selection, the reason travels with the decision instead of being recomputed for display, so a surface can never report an account healthy while routing is dropping it. `GET /api/codex-auth/accounts` carries `reauthReason` next to `needsReauth` on each account: `missing_credential` for a credential that was never stored, `refresh_failed` for a credential refresh that keeps failing, and `quota_unauthorized` when the usage lookup itself was rejected.
 
