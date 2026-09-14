@@ -230,6 +230,9 @@ import {
 import {
   createRequestExecutionBudget,
   isRequestExecutionBudget,
+  CODEX_TEXT_GUARDED_BUDGET_POLICY,
+  type RequestExecutionBudget,
+  type RequestExecutionBudgetPolicy,
   type SendClass,
   type SingleUseDispatchPermit,
 } from "../../lib/request-execution-budget";
@@ -2918,6 +2921,91 @@ async function applyFinalRouteRequestNormalization(args: {
 
 
 
+/**
+ * Sends one combo target may run on its own before the ladder moves on. A target is a whole
+ * request as far as its own provider is concerned, so this is the guarded profile's base
+ * allowance rather than a separate number to keep in sync.
+ */
+const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSendAllowance;
+
+/**
+ * A combo's execution policy is DECLARED by the combo, not inherited from the single-target
+ * profile.
+ *
+ * `maxTargetTransitions: 1` and `maxAlternateTargetSends: 1` describe an account move, and
+ * applying them to a combo would refuse the second hop of a three-target combo -- which is why
+ * combo was left off `reserveDispatch` when the per-request split landed. The transitions a
+ * combo may make are exactly the targets it declares minus the one it starts on. What stays
+ * capped is the TOTAL: the first target's full ladder, one send for every further declared
+ * target, and the one shared final-recovery reserve. A one-target combo reduces to the guarded
+ * profile exactly, and a three-target combo whose every target fails hard reaches upstream six
+ * times instead of the twelve #4546 measured.
+ */
+function comboExecutionBudgetPolicy(declaredTargets: number): RequestExecutionBudgetPolicy {
+  const targets = Math.max(1, Math.trunc(declaredTargets));
+  const hops = targets - 1;
+  const reserve = CODEX_TEXT_GUARDED_BUDGET_POLICY.finalRecoveryAllowance;
+  const total = COMBO_TARGET_BASE_SENDS + hops + reserve;
+  return {
+    maxTotalModelSends: total,
+    baseSendAllowance: total - reserve,
+    finalRecoveryAllowance: reserve,
+    maxAlternateTargetSends: Math.max(1, hops),
+    maxTargetTransitions: Math.max(1, hops),
+  };
+}
+
+/**
+ * A budget scope that keeps its own recovery ledgers but spends the SAME request-wide counter.
+ *
+ * `used` is redefined as an accessor onto the parent because the factory reads it back off this
+ * object -- `remainingBaseSends` and the total check both do -- so a copied number would let a
+ * combo target run its ladder against a stale total, which is precisely the per-layer counting
+ * this work exists to remove. The reserve, alternate-target and transition ledgers stay
+ * per-scope on purpose: a combo target's account failover is its own recovery decision, while
+ * the request total still bounds every target together.
+ */
+function deriveSendBudgetScope(
+  parent: RequestExecutionBudget,
+  policy: RequestExecutionBudgetPolicy,
+): RequestExecutionBudget {
+  const scope = createRequestExecutionBudget(policy, parent.logicalRequestId);
+  Object.defineProperty(scope, "used", {
+    get: () => parent.used,
+    set: (value: number) => { parent.used = value; },
+    enumerable: true,
+    configurable: true,
+  });
+  return scope;
+}
+
+/**
+ * The ladder one combo target may run, expressed as an allowance on the request-wide counter.
+ *
+ * `used + COMBO_TARGET_BASE_SENDS` gives this target its own ladder from wherever the request
+ * already stands, and the clamp holds back one send for each target still declared after it: a
+ * first target that 5xx-streaks must not eat the send the last declared target is entitled to.
+ * That guarantee is the difference between a per-target policy and a shared pool the first
+ * target drains.
+ */
+function comboTargetSendBudget(
+  comboScope: RequestExecutionBudget,
+  targetsDeclaredAfterThisOne: number,
+): RequestExecutionBudget {
+  const policy = comboScope.policy;
+  const heldForLaterTargets = Math.max(0, targetsDeclaredAfterThisOne);
+  const ceiling = Math.max(1, policy.maxTotalModelSends - heldForLaterTargets);
+  return deriveSendBudgetScope(comboScope, {
+    maxTotalModelSends: policy.maxTotalModelSends,
+    baseSendAllowance: Math.min(ceiling, comboScope.used + COMBO_TARGET_BASE_SENDS),
+    finalRecoveryAllowance: policy.finalRecoveryAllowance,
+    // Within one target the account-move shape is unchanged: three same-account sends plus one
+    // alternate is the recovery live traffic depends on, and a combo does not widen it.
+    maxAlternateTargetSends: CODEX_TEXT_GUARDED_BUDGET_POLICY.maxAlternateTargetSends,
+    maxTargetTransitions: CODEX_TEXT_GUARDED_BUDGET_POLICY.maxTargetTransitions,
+  });
+}
+
 export async function handleComboResponses(
   req: Request,
   rawBody: unknown,
@@ -2939,6 +3027,14 @@ export async function handleComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
+  // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
+  // counter with the holder that arrived on options -- a combo child already inherited that
+  // counter, but nothing read it as a limit across targets -- while its transition and
+  // alternate-target ledgers come from the target list rather than from the single-target
+  // account-move profile (#4546).
+  const comboSendScope = isRequestExecutionBudget(options.sendBudget)
+    ? deriveSendBudgetScope(options.sendBudget, comboExecutionBudgetPolicy(combo.targets.length))
+    : undefined;
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
@@ -3112,12 +3208,42 @@ export async function handleComboResponses(
   logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
 
   let lastFailure: Response | null = null;
+  // Dispatched targets, not attempted picks: it indexes the declared target list so the clamp
+  // below can tell how many targets are still entitled to a send.
+  let comboTargetsDispatched = 0;
+  // The child log behind `lastFailure`. The natural end of the ladder adopts it inside the
+  // no-more-targets branch; a budget refusal ends the ladder one iteration later, where that
+  // iteration's own `childLog` is already out of scope.
+  let lastFailedChildLog: RequestLogContext | undefined;
   // The exhausted-combo mapping below runs outside the loop, where `failure.upstreamCode`
   // is gone, so carry the loop's own classification decision instead of re-deriving a
   // weaker one from the status alone (#4149).
   let lastFailureClassifiesOverflow = false;
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    const firstComboTarget = comboTargetsDispatched === 0;
+    // The first target seeds the ledger's target identity and charges nothing; every later one
+    // is a real transition, refused once the declared hops, the alternate-target ledger or the
+    // request total are spent. `countedExternally` is required: the child charges its own
+    // physical sends, and charging here as well would halve the cap without saying so.
+    const hopDecision = comboSendScope?.reserveDispatch({
+      sendClass: firstComboTarget ? "initial" : "combo-failover",
+      targetKey: `${pick.target.provider}/${pick.target.model}`,
+      countedExternally: true,
+    });
+    if (hopDecision && hopDecision.allowed) hopDecision.permit.use();
+    else if (hopDecision && !firstComboTarget) {
+      // Out of budget is not this target's failure. The established exhaustion contract is to
+      // return the last real upstream answer with its status, headers and any quota body
+      // intact rather than to mint a synthetic error, and a later target only exists because
+      // an earlier one already recorded one.
+      if (lastFailedChildLog) adoptFailedChildLog(lastFailedChildLog);
+      break;
+    }
+    const targetSendBudget = comboSendScope
+      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
+      : options.sendBudget;
+    comboTargetsDispatched += 1;
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
@@ -3201,6 +3327,9 @@ export async function handleComboResponses(
         );
       response = await handleResponses(childRequest, config, childLog, {
         ...options,
+        // After the spread: the child must run on THIS target's ladder, not on the holder the
+        // parent arrived with.
+        sendBudget: targetSendBudget,
         comboAttempt: true,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
@@ -3322,6 +3451,7 @@ export async function handleComboResponses(
     (logCtx.attempts ??= []).push(attempt);
     attemptRetained = true;
     lastFailure = failure.response;
+    lastFailedChildLog = childLog;
     const failureDecision = comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     });
@@ -5109,6 +5239,22 @@ async function handleResponsesInner(
   // typed as the narrow holder so a caller that predates this can still pass one, so narrow it
   // once here rather than asserting at each adapter call site.
   const adapterSendBudget = isRequestExecutionBudget(sendBudget) ? sendBudget : undefined;
+  /**
+   * Records an adapter's OWN inner retries against this attempt.
+   *
+   * Ordinal 1 is the send each call site already recorded through `noteAttemptSend`, so only
+   * the extra physical sends are added here and an adapter that does not retry internally
+   * leaves its log byte-for-byte as it was. Kiro reaches roughly eighteen sends per call and
+   * Cursor re-sends a whole turn, and both reported one; a count that cannot be observed
+   * cannot be pinned by a regression, which is why the instrumentation precedes the cap.
+   */
+  const noteAdapterPhysicalSend = (
+    inputTokens: number | undefined,
+    send: { ordinal: number; recovery?: AttemptRecoveryKind },
+  ): void => {
+    if (send.ordinal <= 1) return;
+    noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
+  };
   const sendBudgetExhausted = (): boolean =>
     remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS) === 0;
   /**
@@ -7909,6 +8055,7 @@ async function handleResponsesInner(
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
         sendBudget: adapterSendBudget,
+        onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
         stream: parsed.stream,
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtInitialRequest),
@@ -8044,6 +8191,7 @@ async function handleResponsesInner(
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
             sendBudget: adapterSendBudget,
+              onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(retryRequest),
@@ -8608,6 +8756,7 @@ async function handleResponsesInner(
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
               sendBudget: adapterSendBudget,
+            onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
