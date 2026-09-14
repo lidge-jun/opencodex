@@ -90,8 +90,15 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
     }
     try {
       const res = await fetch(`${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error();
       const dto = await res.json().catch(() => ({})) as FlowDto;
+      if (res.status === 404 && dto.code === "unknown_flow") {
+        // The service may have expired its terminal receipt after a lost DELETE response.
+        // Release the stale ID without claiming cancellation or successful authentication.
+        flowRef.current = null;
+        setState({ phase: "failed", code: "request_failed" });
+        return;
+      }
+      if (!res.ok) throw new Error();
       if (dto.status !== "cancelled" && dto.status !== "succeeded" && dto.status !== "failed") {
         throw new Error();
       }

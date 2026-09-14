@@ -14,6 +14,8 @@ This is a design-first rule for contributors, not a runtime feature: opencodex i
 plumbing, not a product-creation tool, so surface coherence is enforced by review rather than by an
 interview engine. The rule stands on its own; it does not depend on an external document.
 
+Native-main device cancellation follows the [flow-ownership contract](gui-and-management-api.md#dashboard-surfaces).
+
 ## Existing surfaces and their design direction
 
 The surfaces below are examples chosen to show the design direction, not an inventory; the current

@@ -183,7 +183,11 @@ test("the hook POSTs an empty body to the dedicated route and polls to success",
   expect(requests.some(r => r.method === "DELETE")).toBe(true);
 });
 
-test("a rejected cancellation retains the flow and can be retried", async () => {
+test.each([
+  [401, "unauthorized"],
+  [404, "route_not_found"],
+  [500, "unknown_flow"],
+])("a rejected cancellation (%s, %s) retains the flow and can be retried", async (status, code) => {
   let deleteAttempts = 0;
   let completed = 0;
   Object.defineProperty(globalThis, "fetch", {
@@ -196,7 +200,7 @@ test("a rejected cancellation retains the flow and can be retried", async () => 
       if (init?.method === "DELETE") {
         deleteAttempts += 1;
         return deleteAttempts === 1
-          ? Response.json({ code: "unauthorized" }, { status: 401 })
+          ? Response.json({ code }, { status })
           : Response.json({ flowId: "f1", status: "succeeded" });
       }
       return Response.json({ flowId: "f1", status: "pending", verificationUrl: DEVICE_URL, deviceCode: DEVICE_CODE });
@@ -232,9 +236,10 @@ test("a rejected cancellation retains the flow and can be retried", async () => 
 });
 
 test.each([
-  ["identity_mismatch", "identity_mismatch"],
-  ["unknown_failure", "request_failed"],
-])("a failed cancellation terminal clears the flow and normalizes %s", async (code, expectedCode) => {
+  ["identity_mismatch", "identity_mismatch", 200],
+  ["unknown_failure", "request_failed", 200],
+  ["unknown_flow", "request_failed", 404],
+])("a failed cancellation terminal clears the flow and normalizes %s", async (code, expectedCode, status) => {
   let deleteAttempts = 0;
   let completed = 0;
   Object.defineProperty(globalThis, "fetch", {
@@ -246,7 +251,7 @@ test.each([
       }
       if (init?.method === "DELETE") {
         deleteAttempts += 1;
-        return Response.json({ flowId: "f1", status: "failed", code });
+        return Response.json(status === 404 ? { code } : { flowId: "f1", status: "failed", code }, { status });
       }
       return Response.json({ flowId: "f1", status: "pending", verificationUrl: DEVICE_URL, deviceCode: DEVICE_CODE });
     },

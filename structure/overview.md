@@ -5,6 +5,8 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 
 Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
+Native-main device cancellation follows the [flow-ownership contract](gui-and-management-api.md#dashboard-surfaces).
+
 ## Product boundary
 
 opencodex is a local proxy for Codex. It does not patch Codex binaries. It changes local Codex
