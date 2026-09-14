@@ -2534,7 +2534,9 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       modelId,
-    )).toEqual(first);
+      // The resolution now also carries the affinity decision, which legitimately differs
+      // between a first placement and a later reuse. This case is about the account.
+    )).toMatchObject({ status: "selected", accountId: firstPreview });
 
     expect(config.activeCodexAccountId).toBe("b");
     expect(config.activeCodexAccountPinned).toBe("b");
@@ -2710,7 +2712,7 @@ describe("codex account selection order", () => {
         "shared",
         eligible,
         modelId,
-      )).toEqual(first);
+      )).toMatchObject({ status: "selected", accountId: first.accountId });
     }
     expect(config.activeCodexAccountPinned).toBe("b");
   });

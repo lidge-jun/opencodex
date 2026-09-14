@@ -403,15 +403,44 @@ export function clearThreadAccountMap(): void {
   threadAffinityEntryTotal = 0;
 }
 
-export function clearThreadAccountMapForAccount(accountId: string): void {
+export function clearThreadAccountMapForAccount(
+  accountId: string,
+  reason: CodexAffinityReason = "unusable",
+): void {
   for (const [threadId, affinities] of threadAccountMap) {
     for (const [scope, entry] of affinities) {
       if (entry.accountId === accountId && affinities.delete(scope)) {
         threadAffinityEntryTotal = Math.max(0, threadAffinityEntryTotal - 1);
+        notePendingReleaseReason(threadId, reason);
       }
     }
     if (affinities.size === 0) threadAccountMap.delete(threadId);
   }
+}
+
+/**
+ * Why a binding was released, held until that thread's next resolve can report it (#4546).
+ *
+ * A release and the request that pays for it are two different moments: a 429 clears the pin
+ * inside the outcome recorder, and the next request arrives with nothing left to explain why it
+ * is starting cold. Bounded, because it is a diagnostic and must not become a leak.
+ */
+const pendingReleaseReasons = new Map<string, CodexAffinityReason>();
+const MAX_PENDING_RELEASE_REASONS = 4096;
+
+function notePendingReleaseReason(threadId: string, reason: CodexAffinityReason): void {
+  if (!pendingReleaseReasons.has(threadId) && pendingReleaseReasons.size >= MAX_PENDING_RELEASE_REASONS) {
+    const oldest = pendingReleaseReasons.keys().next();
+    if (!oldest.done) pendingReleaseReasons.delete(oldest.value);
+  }
+  pendingReleaseReasons.set(threadId, reason);
+}
+
+function consumePendingReleaseReason(threadId: string | null): CodexAffinityReason | undefined {
+  if (threadId === null) return undefined;
+  const reason = pendingReleaseReasons.get(threadId);
+  if (reason !== undefined) pendingReleaseReasons.delete(threadId);
+  return reason;
 }
 
 export function clearCodexUpstreamHealth(): void {
@@ -2868,6 +2897,9 @@ export function resolveCodexAccountForThreadDetailed(
       preserveExistingModelScopedAffinity = true;
     }
   }
+  // A release recorded by the outcome path (a 429 clears the pin before the next request even
+  // arrives) is the reason this request is starting cold, so it outranks having found nothing.
+  releaseReason ??= consumePendingReleaseReason(threadId);
 
   // A request-scoped roster may still contain unhealthy candidates. Non-quota strategies return
   // before the quota/failover helpers below, so prefer only shared-healthy roster members here;
@@ -3208,7 +3240,7 @@ export function recordCodexUpstreamOutcome(
     // The reauth flag carries the same provenance, so a replacement landing after this call cannot
     // inherit a quarantine that was never about it.
     markAccountNeedsReauth(accountId, writerGeneration, meta.credentialGeneration);
-    clearThreadAccountMapForAccount(accountId);
+    clearThreadAccountMapForAccount(accountId, "quota_refusal");
     return;
   }
 
@@ -3243,7 +3275,7 @@ export function recordCodexUpstreamOutcome(
       // threads must leave it and new requests should prefer an eligible account.
       // Reserve remains isolated so a same-account Terra/Luna combo fallback can run.
       if (quotaScope === "shared" && !meta.fixedAccount) {
-        clearThreadAccountMapForAccount(accountId);
+        clearThreadAccountMapForAccount(accountId, "quota_refusal");
         notePoolRotationFailure(POOL_KEY_CODEX, accountId);
         if (getEffectiveActiveCodexAccountId(config) === accountId) {
           // Same-request 429 retry already picked via excludeAccountId — reuse it so
@@ -3289,7 +3321,7 @@ export function recordCodexUpstreamOutcome(
         }),
     });
     if (!meta.fixedAccount) {
-      clearThreadAccountMapForAccount(accountId);
+      clearThreadAccountMapForAccount(accountId, "quota_refusal");
       // An independent native quota request may discover an account-wide throttle,
       // but it still must not advance the shared RR ring or active cursor. The next
       // shared request observes the cooldown and chooses its own fallback.
