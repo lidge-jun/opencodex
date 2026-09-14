@@ -42,6 +42,30 @@ export const TRANSIENT_PROBE_LEASE_MS = 30_000;
  */
 export const TRANSIENT_PROBE_INTERVAL_MS = 15_000;
 
+/**
+ * Grace kept on top of an entry's pacing and lease deadlines before it may be forgotten.
+ * Inside it a late settle can still answer "expired" rather than "stale", which is the
+ * distinction the settle contract exists to report.
+ */
+const PROBE_STATE_RETENTION_MS = 60_000;
+/**
+ * Hard ceiling on remembered accounts. Pacing state is per account id, and account ids churn
+ * with configuration: without a ceiling a long-lived proxy accumulates one entry per id it
+ * ever probed. Above the ceiling the entries whose pacing lapses soonest are dropped, which
+ * at worst lets one dormant account be probed earlier than its interval; an entry holding a
+ * LIVE lease is never dropped, because that would hand out a second concurrent probe and
+ * break the single-holder rule the lease exists to enforce.
+ */
+export const MAX_TRANSIENT_PROBE_STATES = 1_024;
+/** Below this the map is too small to be worth scanning on a grant. */
+const PROBE_STATE_SWEEP_THRESHOLD = 64;
+/**
+ * Eviction target once the ceiling is reached. Clearing a block at a time keeps the ordering
+ * pass off the common grant path: it runs once per block of new accounts instead of once per
+ * grant forever after the first time the ceiling is touched.
+ */
+const PROBE_STATE_EVICTION_LOW_WATER = Math.floor(MAX_TRANSIENT_PROBE_STATES * 0.9);
+
 export interface TransientProbeLease {
   readonly accountId: string;
   readonly leaseId: string;
@@ -71,6 +95,12 @@ interface AccountProbeState {
   leaseId?: string;
   leaseExpiresAt?: number;
   lastProbeAt?: number;
+  /**
+   * Moment this account's pacing interval lapses, recorded at grant time from the interval
+   * that grant actually used. Kept alongside `lastProbeAt` so cleanup honours a caller's
+   * longer interval instead of assuming the default.
+   */
+  pacedUntil?: number;
   lastOutcome?: TransientProbeOutcome;
 }
 
@@ -91,6 +121,44 @@ function liveLease(state: AccountProbeState, now: number): boolean {
 }
 
 /**
+ * Moment an entry stops carrying anything a future decision can read: its pacing interval and
+ * any unsettled lease deadline, plus the grace above.
+ */
+function probeStateRetiresAt(state: AccountProbeState): number {
+  return Math.max(state.pacedUntil ?? 0, state.leaseExpiresAt ?? 0) + PROBE_STATE_RETENTION_MS;
+}
+
+/**
+ * Bound the remembered accounts. Called on the one path that can grow the map -- a grant is
+ * the only insertion -- so the ceiling holds without a timer.
+ *
+ * The first pass drops only entries that can no longer change an answer: no live lease, the
+ * pacing interval lapsed, and the grace elapsed. Re-creating such an entry later yields the
+ * same decisions it would have produced, and a late settle against it still cannot be applied
+ * because lease ids are issued from a monotonic counter and never repeat.
+ */
+function sweepProbeStates(now: number): void {
+  if (probeStates.size <= PROBE_STATE_SWEEP_THRESHOLD) return;
+  for (const [accountId, state] of probeStates) {
+    if (liveLease(state, now)) continue;
+    if (now >= probeStateRetiresAt(state)) probeStates.delete(accountId);
+  }
+  if (probeStates.size <= MAX_TRANSIENT_PROBE_STATES) return;
+  // Still over the ceiling with nothing retired: churn is faster than the retention window.
+  // Evict in retirement order so the entries closest to meaningless go first, and never one
+  // holding a live lease.
+  const evictable = Array.from(probeStates)
+    .filter(([, state]) => !liveLease(state, now))
+    .sort((a, b) => probeStateRetiresAt(a[1]) - probeStateRetiresAt(b[1]));
+  let excess = probeStates.size - PROBE_STATE_EVICTION_LOW_WATER;
+  for (const [accountId] of evictable) {
+    if (excess <= 0) break;
+    probeStates.delete(accountId);
+    excess -= 1;
+  }
+}
+
+/**
  * Grant the single in-flight probe for a held account, or null when another
  * probe is already out or the pacing interval has not elapsed. The grant bumps
  * the epoch, so a result from any earlier lease is stale the moment it lands.
@@ -105,15 +173,22 @@ export function tryAcquireTransientProbe(
   const interval = options?.minIntervalMs ?? TRANSIENT_PROBE_INTERVAL_MS;
   if (state.lastProbeAt !== undefined && now - state.lastProbeAt < interval) return null;
   const leaseMs = options?.leaseMs ?? TRANSIENT_PROBE_LEASE_MS;
+  const leaseId = `tprobe-${(probeLeaseSeq += 1).toString(36)}`;
+  const expiresAt = now + Math.max(1, leaseMs);
   state.generation += 1;
-  state.leaseId = `tprobe-${(probeLeaseSeq += 1).toString(36)}`;
-  state.leaseExpiresAt = now + Math.max(1, leaseMs);
+  state.leaseId = leaseId;
+  state.leaseExpiresAt = expiresAt;
   state.lastProbeAt = now;
+  state.pacedUntil = now + Math.max(0, interval);
+  // After the grant, not before it: the entry this call just wrote holds a live lease and is
+  // therefore the one entry the sweep may never touch, so the ceiling is a real ceiling
+  // rather than "the ceiling plus whatever was inserted after the scan".
+  sweepProbeStates(now);
   return {
     accountId,
-    leaseId: state.leaseId,
+    leaseId,
     generation: state.generation,
-    expiresAt: state.leaseExpiresAt,
+    expiresAt,
   };
 }
 
@@ -146,7 +221,10 @@ export function settleTransientProbe(
   if (!state || state.leaseId !== lease.leaseId || state.generation !== lease.generation) {
     return "stale";
   }
-  if (now > lease.expiresAt) return "expired";
+  // `>=`, matching liveLease: at exactly the deadline the lease is already gone, so applying
+  // the outcome there would let a probe act on a lease the grant path would refuse to
+  // recognise -- two answers to the same instant.
+  if (now >= lease.expiresAt) return "expired";
   state.leaseId = undefined;
   state.leaseExpiresAt = undefined;
   state.lastOutcome = outcome;
@@ -204,6 +282,14 @@ export function transientProbeDiagnostics(accountId: string, now = Date.now()): 
 /** Test seam: lease state is module-global and must not leak between cases. */
 export function clearTransientProbeLeasesForTests(): void {
   probeStates.clear();
+}
+
+/**
+ * How many accounts currently carry probe state. Diagnostic, and the assertion surface for
+ * the {@link MAX_TRANSIENT_PROBE_STATES} bound.
+ */
+export function transientProbeStateCount(): number {
+  return probeStates.size;
 }
 
 /**

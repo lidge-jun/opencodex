@@ -11,7 +11,9 @@ import {
   settleTransientProbe,
   sharedPoolBackpressure,
   transientProbeDiagnostics,
+  transientProbeStateCount,
   tryAcquireTransientProbe,
+  MAX_TRANSIENT_PROBE_STATES,
   TRANSIENT_PROBE_INTERVAL_MS,
 } from "../../src/routing/probe-lease";
 
@@ -63,6 +65,21 @@ describe("transient probe lease", () => {
     expect(settleTransientProbe(lease, "recovered", now + 101)).toBe("expired");
   });
 
+  test("the deadline instant itself is expired for the settle and the grant alike (#4546)", () => {
+    const now = 1_000_000;
+    const lease = tryAcquireTransientProbe("acct-a", now, { leaseMs: 100 })!;
+    // The lease is already gone at its deadline as far as the grant path is concerned...
+    expect(transientProbeDiagnostics("acct-a", now + 100).held).toBe(false);
+    // ...so a settle at the same instant must not apply the outcome. Disagreeing about one
+    // millisecond is how a probe result gets written after the lease was handed to someone
+    // else.
+    expect(settleTransientProbe(lease, "recovered", now + 100)).toBe("expired");
+    expect(transientProbeDiagnostics("acct-a", now + 100).lastOutcome).toBeUndefined();
+    // One millisecond earlier the holder is still live and the outcome applies.
+    const inside = tryAcquireTransientProbe("acct-b", now, { leaseMs: 100 })!;
+    expect(settleTransientProbe(inside, "recovered", now + 99)).toBe("applied");
+  });
+
   test("invalidation fences the epoch so an outstanding probe cannot overwrite newer state", () => {
     const now = 1_000_000;
     const lease = tryAcquireTransientProbe("acct-a", now)!;
@@ -79,6 +96,62 @@ describe("transient probe lease", () => {
     expect(canAcquireTransientProbe("acct-a", now, { minIntervalMs: 0 })).toBe(true);
     // Releasing someone else's lease is a no-op.
     releaseTransientProbe({ ...lease, leaseId: "forged" });
+  });
+});
+
+describe("probe state retention", () => {
+  test("a retired account is forgotten only once it can no longer pace a probe (#4546)", () => {
+    const now = 1_000_000;
+    for (let i = 0; i < 200; i++) {
+      const lease = tryAcquireTransientProbe(`gone-${i}`, now, { leaseMs: 100 })!;
+      settleTransientProbe(lease, "failed", now + 1);
+    }
+    expect(transientProbeStateCount()).toBe(200);
+
+    // Still inside the pacing interval: dropping these now would let the very next request
+    // for any of them probe early, which is the storm the interval exists to bound.
+    tryAcquireTransientProbe("still-paced", now + TRANSIENT_PROBE_INTERVAL_MS - 1);
+    expect(transientProbeStateCount()).toBe(201);
+    // The sweep that ran on that grant kept every entry that can still refuse a probe.
+    expect(canAcquireTransientProbe("gone-0", now + TRANSIENT_PROBE_INTERVAL_MS - 1)).toBe(false);
+
+    // Past the pacing interval and the retention grace the entries cannot change an answer,
+    // so they are dropped instead of being remembered for the life of the process.
+    const retired = now + TRANSIENT_PROBE_INTERVAL_MS + 60_000 + 1;
+    tryAcquireTransientProbe("fresh", retired);
+    // Two left: the account just probed, and `still-paced`, whose lease was never settled --
+    // the grace keeps that one long enough for a late settle to still be answered "expired"
+    // rather than silently reclassified.
+    expect(transientProbeStateCount()).toBe(2);
+    // A dropped entry is indistinguishable from one that was never probed -- which is exactly
+    // why it was safe to drop: by now it would admit a probe either way.
+    expect(canAcquireTransientProbe("gone-0", retired)).toBe(true);
+  });
+
+  test("remembered accounts stay under the ceiling when churn outruns retention (#4546)", () => {
+    const now = 1_000_000;
+    // Every probe settles at once, so nothing holds a live lease: the shape a churning
+    // configuration produces, and the one that used to grow one entry per account id forever.
+    const churn = MAX_TRANSIENT_PROBE_STATES * 2;
+    for (let i = 0; i < churn; i++) {
+      const lease = tryAcquireTransientProbe(`churn-${i}`, now + i, { leaseMs: 10 })!;
+      settleTransientProbe(lease, "failed", now + i + 1);
+    }
+    expect(transientProbeStateCount()).toBeLessThanOrEqual(MAX_TRANSIENT_PROBE_STATES);
+    // The ceiling is enforced from the oldest end: the newest accounts keep their pacing.
+    expect(canAcquireTransientProbe(`churn-${churn - 1}`, now + churn)).toBe(false);
+  });
+
+  test("an account holding a live lease survives the ceiling (#4546)", () => {
+    const now = 1_000_000;
+    const held = tryAcquireTransientProbe("held-through-churn", now, { leaseMs: 10_000_000 })!;
+    for (let i = 0; i < MAX_TRANSIENT_PROBE_STATES * 2; i++) {
+      const lease = tryAcquireTransientProbe(`churn-${i}`, now + i, { leaseMs: 10 })!;
+      settleTransientProbe(lease, "failed", now + i + 1);
+    }
+    // Evicting a live lease would hand a second concurrent probe to the same held account.
+    expect(transientProbeDiagnostics("held-through-churn", now + 1).leaseId).toBe(held.leaseId);
+    expect(canAcquireTransientProbe("held-through-churn", now + 1)).toBe(false);
   });
 });
 
