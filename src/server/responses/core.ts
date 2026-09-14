@@ -173,6 +173,7 @@ import {
   createCodexReserveDispatchGuard,
   unwrapUpstreamRetryEvidenceError,
   codexPoolAffinityKey,
+  previewCodexPoolLineage,
   CodexAccountCooldownError,
   CodexAuthContextError,
   CodexMainProfileDrainingError,
@@ -201,7 +202,6 @@ import {
   type NativeMainRefreshDependencies,
 } from "../../codex/main-account";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
-import { recordCodexThreadLineage } from "../../codex/lineage";
 import {
   computeQuotaCooldown,
   codexQuotaScopeForModel,
@@ -2308,6 +2308,75 @@ type ResponsesAuthResolution =
   | { ok: false; response: Response };
 
 /**
+ * The caller credential the final Codex auth resolution will be given, as far as the ROUTE
+ * decides it: a route change that may cross a credential domain drops the raw caller credential,
+ * and a trusted Claude-main handoff replaces it.
+ *
+ * Shared with the lineage preview in `handleResponsesInner`, which has to read a conversation's
+ * family under the same authenticated scope the resolution will record it under -- that scope is
+ * an HMAC of exactly this Authorization header. Two copies of this rule would put preview and
+ * final auth in different scopes the first time one of them changed.
+ */
+function codexRouteCredentialDomainHeaders(
+  req: Request,
+  route: RouteResult,
+  options: HandleResponsesOptions,
+  credentialDomainWasRewritten: boolean,
+): Headers {
+  const trustedClaudeMainForFinalRoute = options.stripClaudeMainAuthForNoncanonicalForward === true
+    && isCanonicalOpenAiForwardProvider(route.provider)
+    ? options.trustedClaudeMainAuth : undefined;
+  if (trustedClaudeMainForFinalRoute) {
+    const claudeMainHeaders = new Headers(req.headers);
+    claudeMainHeaders.set("authorization", trustedClaudeMainForFinalRoute.authorization);
+    if (trustedClaudeMainForFinalRoute.chatgptAccountId) {
+      claudeMainHeaders.set("chatgpt-account-id", trustedClaudeMainForFinalRoute.chatgptAccountId);
+    } else {
+      claudeMainHeaders.delete("chatgpt-account-id");
+    }
+    return claudeMainHeaders;
+  }
+  // Route-changing recursion retains typed admission, never an unscoped raw
+  // caller credential. Bearer admission is substituted or stripped below.
+  const routeMayChangeCredentialDomain = options.comboAttempt === true
+    || route.routeKind === "policy"
+    || credentialDomainWasRewritten;
+  if (routeMayChangeCredentialDomain && options.admission?.source !== "bearer") {
+    const scoped = new Headers(req.headers);
+    scoped.delete("authorization");
+    scoped.delete("chatgpt-account-id");
+    return scoped;
+  }
+  return req.headers;
+}
+
+/**
+ * Does this route substitute OUR stored main credential, and does the caller own the credential
+ * this request will authenticate with?
+ *
+ * Both answers are needed twice: by the resolution below, and by the lineage preview, which must
+ * not follow a Pool family binding for a request whose credential never enters Pool state. One
+ * implementation, because two copies of this predicate disagreeing is the divergence the preview
+ * gate exists to prevent. The reasoning behind the substitution test itself is at its use site
+ * below (#1686, #2132).
+ */
+function codexRouteCredentialOwnership(
+  authInputHeaders: Headers,
+  config: OcxConfig,
+  route: RouteResult,
+  options: HandleResponsesOptions,
+): { substituteMainCredential: boolean; requestScopedMainCredential: boolean } {
+  const substituteMainCredential = options.admission?.source === "bearer"
+    && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
+  return {
+    substituteMainCredential,
+    requestScopedMainCredential: route.codexAccountMode !== undefined
+      && !substituteMainCredential
+      && hasForwardableCodexBearer(authInputHeaders, config),
+  };
+}
+
+/**
  * Resolve Codex auth for a route. On unusable contexts, releases any probe lease
  * before returning the 401 (nothing reaches upstream).
  */
@@ -2319,30 +2388,12 @@ async function resolveResponsesCodexAuth(
   credentialDomainWasRewritten = false,
 ): Promise<ResponsesAuthResolution> {
   try {
-    const routeMayChangeCredentialDomain = options.comboAttempt === true
-      || route.routeKind === "policy"
-      || credentialDomainWasRewritten;
-    const trustedClaudeMainForFinalRoute = options.stripClaudeMainAuthForNoncanonicalForward === true
-      && isCanonicalOpenAiForwardProvider(route.provider)
-      ? options.trustedClaudeMainAuth : undefined;
-    let authInputHeaders = req.headers;
-    // Route-changing recursion retains typed admission, never an unscoped raw
-    // caller credential. Bearer admission is substituted or stripped below.
-    if (routeMayChangeCredentialDomain && options.admission?.source !== "bearer"
-      && !trustedClaudeMainForFinalRoute) {
-      authInputHeaders = new Headers(req.headers);
-      authInputHeaders.delete("authorization");
-      authInputHeaders.delete("chatgpt-account-id");
-    }
-    if (trustedClaudeMainForFinalRoute) {
-      authInputHeaders = new Headers(authInputHeaders);
-      authInputHeaders.set("authorization", trustedClaudeMainForFinalRoute.authorization);
-      if (trustedClaudeMainForFinalRoute.chatgptAccountId) {
-        authInputHeaders.set("chatgpt-account-id", trustedClaudeMainForFinalRoute.chatgptAccountId);
-      } else {
-        authInputHeaders.delete("chatgpt-account-id");
-      }
-    }
+    let authInputHeaders = codexRouteCredentialDomainHeaders(
+      req,
+      route,
+      options,
+      credentialDomainWasRewritten,
+    );
     // A caller-auth transport that is not canonical OpenAI (keyless Cursor) consumes the
     // caller's Authorization as its own upstream token. Keep that contract only for a clean
     // single bearer with NO ChatGPT-domain marker. A bearer marked for the ChatGPT domain —
@@ -2406,12 +2457,13 @@ async function resolveResponsesCodexAuth(
     // bug; the transport is the authority, because the transport is what actually carries the
     // header. A key-authenticated routed provider is still not canonical-forward, so #2132's
     // no-ChatGPT-login install keeps working.
-    const substituteMainCredential = options.admission?.source === "bearer"
-      && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
+    const { substituteMainCredential, requestScopedMainCredential } = codexRouteCredentialOwnership(
+      authInputHeaders,
+      config,
+      route,
+      options,
+    );
     const stripAuthorization = options.admission?.source === "bearer" && !substituteMainCredential;
-    const requestScopedMainCredential = route.codexAccountMode !== undefined
-      && !substituteMainCredential
-      && hasForwardableCodexBearer(authInputHeaders, config);
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
       validateForwardAdmissionCredential(authInputHeaders, config);
     }
@@ -4048,7 +4100,30 @@ async function handleResponsesInner(
   // Preview has to see the same lineage resolve does. Without it, a child's first turn is
   // previewed as a cold pick and resolved onto the family account, and the subagent fallback
   // then decides model eligibility against an account the request will never use.
-  const poolLineage = recordCodexThreadLineage(req.headers);
+  //
+  // "The same" means both halves of the question the final resolution asks. The Authorization
+  // it will be given, because the lineage scope is an HMAC of exactly that header; and its own
+  // Pool-state predicate, because a fixed account selector and a request-owned credential
+  // deliberately create no affinity at all -- previewing a family binding for one of those would
+  // hand model fallback an account this request can never authenticate as. Read-only: the record
+  // is written by the resolution that binds, never by a preview that may own no Pool state.
+  const previewAuthHeaders = codexRouteCredentialDomainHeaders(
+    req,
+    route,
+    options,
+    credentialDomainWasRewritten,
+  );
+  const poolLineage = previewCodexPoolLineage(previewAuthHeaders, options.codexAuthPolicy ?? config, {
+    accountId: route.codexAccountId,
+    modelId: route.modelId,
+    admission: options.admission,
+    requestScopedMainCredential: codexRouteCredentialOwnership(
+      previewAuthHeaders,
+      config,
+      route,
+      options,
+    ).requestScopedMainCredential,
+  });
 
   try {
     if (

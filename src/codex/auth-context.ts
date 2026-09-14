@@ -40,7 +40,12 @@ import {
   resolveCodexAccountForThreadDetailed,
   type CodexAffinityDecision,
 } from "./routing";
-import { codexConversationIdentity, recordCodexThreadLineage } from "./lineage";
+import {
+  codexConversationIdentity,
+  recordCodexThreadLineage,
+  resolveCodexThreadLineage,
+  type CodexThreadLineage,
+} from "./lineage";
 import {
   entitledCodexAccountIdsForModel,
   isDirectCallerEntitledToCodexModel,
@@ -106,6 +111,65 @@ function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
  */
 export function codexPoolAffinityKey(headers: Headers): string | undefined {
   return codexConversationIdentity(headers)?.conversationKey;
+}
+
+/** What a caller needs to know to answer the Pool-state question below before auth has run. */
+export interface CodexPoolStateEligibility {
+  /** An exact account selector from the route, i.e. `options.accountId` here. */
+  readonly accountId?: string;
+  readonly modelId?: string;
+  readonly admission?: Pick<DataPlaneAdmission, "source">;
+  /** The caller presented its own forwardable ChatGPT credential for this route. */
+  readonly requestScopedMainCredential?: boolean;
+}
+
+/** The one expression both the resolution below and any preview must agree on. */
+function poolStateEligible(
+  fixedAccountId: string | undefined,
+  requestScopedMainCredential: boolean,
+): boolean {
+  return fixedAccountId === undefined && !requestScopedMainCredential;
+}
+
+/**
+ * May this request own Pool affinity state at all?
+ *
+ * Two credentials authenticate outside the Pool: an exact account selector (including the
+ * Reserve pin) and a request-owned main bearer, which exists for one request and must never
+ * fold into durable account state. Neither may read or write a binding, so neither may read
+ * or write LINEAGE either.
+ *
+ * Exported so that a preview asks the question with the code that answers it, instead of a
+ * restatement that can drift. It drifted once already: preview read a family relation from raw
+ * request headers before this function had decided anything, so it could follow a Pool family
+ * binding while the resolution below deliberately created no affinity -- and model fallback then
+ * evaluated eligibility against an account the request would never be authenticated as.
+ */
+export function codexPoolStateEligible(
+  headers: Headers,
+  policy: CodexAuthPolicyConfig | undefined,
+  options: CodexPoolStateEligibility = {},
+): boolean {
+  const reserve = requiresReserveAuthorization(policy, options.modelId, options.admission);
+  return poolStateEligible(
+    reserve ? MAIN_CODEX_ACCOUNT_ID : options.accountId,
+    options.requestScopedMainCredential === true && hasCallerCodexBearer(headers),
+  );
+}
+
+/**
+ * The lineage a PREVIEW is allowed to see: read-only, and only for a request that may hold Pool
+ * state. Recording is left to the resolution that actually binds, so a preview can never leave a
+ * record behind for a request that turned out to own no Pool state at all.
+ */
+export function previewCodexPoolLineage(
+  headers: Headers,
+  policy: CodexAuthPolicyConfig | undefined,
+  options: CodexPoolStateEligibility = {},
+): CodexThreadLineage | undefined {
+  return codexPoolStateEligible(headers, policy, options)
+    ? resolveCodexThreadLineage(headers)
+    : undefined;
 }
 
 export type CodexAuthContext =
@@ -790,7 +854,7 @@ export async function resolveCodexAuthContext(
   // A caller bearer can still accompany a request that selects a configured Pool account. Do not
   // let that request read, delete, or create a file-main affinity binding while deciding whether a
   // stored account is available; only the stored credential selected below may own Pool state.
-  const affinityKey = fixedAccountId === undefined && !requestScopedMainCredential
+  const affinityKey = poolStateEligible(fixedAccountId, requestScopedMainCredential)
     ? codexPoolAffinityKey(headers)
     : undefined;
   // The thread's family relation, recorded under the same condition as the key itself. A

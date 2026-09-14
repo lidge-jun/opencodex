@@ -1808,6 +1808,13 @@ function transientDetourAccount(
  * the warm account by one hop. A dead binding, an expired hold, and an ineligible serving
  * account all answer null -- the caller then tries a sibling, then falls back to cold
  * placement, which is the correct order because a stale home is worse than no hint.
+ *
+ * "Right now" includes the MODEL lane. A parent whose home account is not entitled to this
+ * model is being served through a model-scoped detour, which is the same "serving, not stale
+ * home" case one level further in: reading only the ordinary binding would hand the child an
+ * account this request cannot use, and it would then start cold on the very model whose
+ * warm account the family already found. The detour scope embeds the model and the quota
+ * scope, so the entry consulted here is compatible by construction.
  */
 function lineageServingAccountId(
   conversationKey: string,
@@ -1815,8 +1822,12 @@ function lineageServingAccountId(
   now: number,
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
+  modelId?: string,
 ): string | null {
-  const entry = getThreadAffinity(conversationKey, quotaScope);
+  const entry = (modelId !== undefined
+    ? getModelDetourAffinity(conversationKey, modelId, quotaScope)
+    : undefined)
+    ?? getThreadAffinity(conversationKey, quotaScope);
   if (!entry || isThreadAffinityExpired(entry, now) || !isThreadAffinityGenerationLive(entry)) {
     return null;
   }
@@ -1844,18 +1855,65 @@ function pickLineageServingAccount(
   now: number,
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
+  modelId?: string,
 ): { accountId: string; reason: CodexAffinityReason } | null {
   if (lineage.parentConversationKey !== undefined) {
     const parent = lineageServingAccountId(
-      lineage.parentConversationKey, config, now, quotaScope, selectionOptions,
+      lineage.parentConversationKey, config, now, quotaScope, selectionOptions, modelId,
     );
     if (parent) return { accountId: parent, reason: "lineage_parent" };
     for (const siblingKey of lineage.siblingConversationKeys) {
-      const sibling = lineageServingAccountId(siblingKey, config, now, quotaScope, selectionOptions);
+      const sibling = lineageServingAccountId(
+        siblingKey, config, now, quotaScope, selectionOptions, modelId,
+      );
       if (sibling) return { accountId: sibling, reason: "lineage_sibling" };
     }
   }
   return null;
+}
+
+/**
+ * Move one scope's binding from the pre-#4546 RAW parent key onto the key this thread uses now.
+ *
+ * Bindings and the key that derives them are process-local, so an ordinary restart already
+ * discards every binding and there is nothing to migrate. The case this exists for is the
+ * narrow one: a code swap under a live conversation, where the map still holds entries made by
+ * the old rule. Rebinding those cold is precisely the defect the lineage work exists to prevent,
+ * so the conversation keeps its account and the legacy entry is retired in the same step.
+ *
+ * One way, once. The legacy entry is deleted even when it was dead on arrival, because nothing
+ * can reach it again under the new rule and an orphan only spends an LRU slot a live
+ * conversation needs. Only the account moves: a transient hold describes a failure happening
+ * right now, and the ordinary path re-derives it on this very request.
+ */
+function adoptLegacyAffinityForScope(
+  threadId: string,
+  legacyKey: string,
+  now: number,
+  scope: ThreadAffinityScope,
+): void {
+  if (getThreadAffinityForScope(threadId, scope) !== undefined) return;
+  const legacy = getThreadAffinityForScope(legacyKey, scope);
+  if (legacy === undefined) return;
+  if (!isThreadAffinityExpired(legacy, now) && isThreadAffinityGenerationLive(legacy)) {
+    bindThreadAffinityForScope(threadId, legacy.accountId, now, scope);
+  }
+  deleteThreadAffinityForScope(legacyKey, scope);
+}
+
+/** Both lanes of the legacy migration: the ordinary binding and this request's model detour. */
+function adoptLegacyLineageAffinity(
+  threadId: string,
+  lineage: CodexThreadLineage | undefined,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  modelId?: string,
+): void {
+  const legacyKey = lineage?.legacyConversationKey;
+  if (legacyKey === undefined || legacyKey === threadId) return;
+  adoptLegacyAffinityForScope(threadId, legacyKey, now, threadAffinityScope(quotaScope));
+  const detourScope = modelDetourAffinityScope(modelId, quotaScope);
+  if (detourScope) adoptLegacyAffinityForScope(threadId, legacyKey, now, detourScope);
 }
 
 /** Earliest future shared short/weekly reset; missing evidence and ties use usage order. */
@@ -2800,11 +2858,27 @@ export function previewCodexAccountForRequest(
   );
   if (ordinaryPreview) return ordinaryPreview;
 
+  // A conversation carried across an in-process swap is still bound under the pre-#4546 raw
+  // parent key, and resolve adopts that binding rather than rebinding cold. Preview has to name
+  // the same account. Read-only, as everything here is: it neither adopts nor retires the entry.
+  if (threadId && !entry && lineage?.legacyConversationKey !== undefined) {
+    const legacyPreview = previewReusableAffinityAccount(
+      getThreadAffinity(lineage.legacyConversationKey, quotaScope),
+      config,
+      now,
+      quotaScope,
+      selectionOptions,
+    );
+    if (legacyPreview) return legacyPreview;
+  }
+
   // First placement mirrors resolve: a child with no binding previews the account actually
   // serving its parent (or a compatible sibling), so the subagent fallback does not decide
   // against a cold pick the real request would never make. Read-only: nothing binds here.
   if (threadId && !entry && lineage) {
-    const lineagePreview = pickLineageServingAccount(config, lineage, now, quotaScope, selectionOptions);
+    const lineagePreview = pickLineageServingAccount(
+      config, lineage, now, quotaScope, selectionOptions, modelId,
+    );
     if (lineagePreview) return lineagePreview.accountId;
   }
 
@@ -2893,6 +2967,13 @@ export function resolveCodexAccountForThreadDetailed(
       sharedSelectionOptions,
     )
   );
+
+  // A conversation that was live across an in-process code swap is still bound under the
+  // pre-#4546 raw parent key. Adopt that binding onto this thread's key BEFORE anything below
+  // reads an entry, so the conversation arrives here as an ordinary bound thread instead of a
+  // cold one: every branch that follows -- detour reuse, transient hold, quota re-eval --
+  // should treat it as the continuing conversation it is. No-op on a fresh process.
+  if (threadId) adoptLegacyLineageAffinity(threadId, lineage, now, quotaScope, modelId);
 
   if (threadId && modelScopedSelection) {
     const detourEntry = getModelDetourAffinity(threadId, modelId, quotaScope);
@@ -3087,7 +3168,9 @@ export function resolveCodexAccountForThreadDetailed(
   // also makes `preserveExistingModelScopedAffinity` unreachable here -- it is only ever set
   // while reusing an existing model-detour entry -- so this binds through the ordinary lane.
   if (threadId && entry === undefined && lineage) {
-    const lineagePick = pickLineageServingAccount(config, lineage, now, quotaScope, selectionOptions);
+    const lineagePick = pickLineageServingAccount(
+      config, lineage, now, quotaScope, selectionOptions, modelId,
+    );
     if (lineagePick) {
       bindThreadAffinity(threadId, lineagePick.accountId, now, quotaScope);
       // Deliberately no promoteActiveCodexAccount: a family hint places THIS request, it does

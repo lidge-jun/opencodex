@@ -28,6 +28,20 @@
  * Scope is an HMAC of the caller's Authorization header under a process-local key, the same
  * posture as the affinity key itself. Two callers presenting identical thread ids can never read
  * each other's lineage, and no raw identifier or durable hash is stored.
+ *
+ * LIFETIME, stated plainly because the word "affinity" invites the opposite assumption: none of
+ * this survives the process. The binding map is in memory, and the HMAC key above is fresh random
+ * bytes taken at module load, so a restart does not merely forget the table -- it makes yesterday's
+ * keys unreproducible. This is a warm-start hint for the life of one proxy process, never durable
+ * account ownership, and nothing here should be read as a promise to a conversation that outlives
+ * a restart.
+ *
+ * The one upgrade that is neither a fresh start nor an untouched process is a code swap under a
+ * live conversation, where the binding map is still populated with entries made under the
+ * pre-#4546 RAW parent key. Silently rebinding those cold is the exact defect this module exists
+ * to prevent, so a request that names a parent carries {@link CodexThreadLineage.legacyConversationKey}
+ * -- the key the old rule would have returned -- and routing adopts that binding once under the new
+ * key and retires the legacy entry. It is a one-way migration, not a second lookup path.
  */
 import { createHmac, randomBytes } from "node:crypto";
 import { retainedUtf8Bytes } from "../lib/admission";
@@ -83,6 +97,12 @@ export interface CodexThreadLineage {
   readonly rootSessionKey: string;
   readonly parentThreadId?: string;
   readonly parentConversationKey?: string;
+  /**
+   * The key the pre-#4546 rule would have returned for this request -- the RAW parent id -- when
+   * that differs from the key it binds under now. Present so routing can adopt a binding left by
+   * the old rule exactly once; see the lifetime note at the top of this file.
+   */
+  readonly legacyConversationKey?: string;
   /** Siblings under the same declared parent, most recently used first. */
   readonly siblingConversationKeys: readonly string[];
 }
@@ -94,11 +114,25 @@ export interface CodexConversationIdentity {
   readonly recordThreadId: string;
   readonly sessionId?: string;
   readonly parentThreadId?: string;
+  /** Raw parent id, i.e. the key the pre-#4546 rule returned for this request. */
+  readonly legacyConversationKey?: string;
   /** True only when the request names a parent distinct from its own thread. */
   readonly declaresParent: boolean;
 }
 
 const lineageByScope = new Map<string, CodexLineageScope>();
+
+/** A record is only evidence while it is live; an idle-expired one answers like no record. */
+function liveLineageRecord(
+  scope: CodexLineageScope | undefined,
+  threadId: string,
+  now: number,
+): CodexLineageRecord | undefined {
+  const record = scope?.records.get(threadId);
+  return record !== undefined && now - record.lastUsedAt <= CODEX_LINEAGE_IDLE_TTL_MS
+    ? record
+    : undefined;
+}
 
 function boundedLineageComponent(value: string | null): string | undefined {
   const normalized = value?.trim();
@@ -134,21 +168,39 @@ export function codexConversationKeyFor(familyId: string, threadId: string): str
  * - child (parent + own `thread-id`) -> HMAC(session ?? parent, thread), previously the raw parent
  *   id, which is what made siblings share one entry and made a child's first turn land on a key
  *   the root had never bound;
- * - parent-only (no `thread-id`) -> HMAC(parent, parent), previously the raw parent id. One parent
- *   id still maps to exactly one key, so this is the same lane under an opaque name, and it
- *   removes the last path that put a caller-supplied identifier into Pool state.
+ * - parent-only (no `thread-id`) -> the parent's OWN recorded key when this scope has one, and
+ *   otherwise HMAC(session ?? parent, parent).
+ *
+ * That last case is the one with a trap in it. A parent-only turn belongs to the parent's
+ * conversation, so it has to land on the binding the parent is already using -- but the parent's
+ * key is HMAC(session, thread), and HMAC(parent, parent) reproduces it only when the session id
+ * and the thread id are the same string. Codex's own root happens to satisfy that, which is
+ * exactly why deriving the key looks correct until a caller whose session differs from its thread
+ * starts a COLD conversation on every parent-only turn and overwrites the parent's record on the
+ * way through. So the recorded key wins, the session-derived key is the fallback that reproduces
+ * it when the parent has not been seen in this scope, and the raw parent id is never the answer.
  */
-export function codexConversationIdentity(headers: Headers): CodexConversationIdentity | undefined {
+export function codexConversationIdentity(
+  headers: Headers,
+  now = Date.now(),
+): CodexConversationIdentity | undefined {
   const threadId = boundedLineageComponent(headers.get("thread-id"));
   const sessionId = boundedLineageComponent(headers.get("session-id"));
   const parentThreadId = boundedLineageComponent(headers.get("x-codex-parent-thread-id"));
 
   if (threadId === undefined) {
     if (parentThreadId === undefined) return undefined;
+    const recorded = liveLineageRecord(
+      lineageByScope.get(codexLineageScopeKey(headers)),
+      parentThreadId,
+      now,
+    );
     return {
-      conversationKey: codexConversationKeyFor(parentThreadId, parentThreadId),
+      conversationKey: recorded?.conversationKey
+        ?? codexConversationKeyFor(sessionId ?? parentThreadId, parentThreadId),
       recordThreadId: parentThreadId,
       ...(sessionId !== undefined ? { sessionId } : {}),
+      legacyConversationKey: parentThreadId,
       declaresParent: false,
     };
   }
@@ -159,6 +211,7 @@ export function codexConversationIdentity(headers: Headers): CodexConversationId
     recordThreadId: threadId,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(parentThreadId !== undefined ? { parentThreadId } : {}),
+    ...(parentThreadId !== undefined ? { legacyConversationKey: parentThreadId } : {}),
     declaresParent: parentThreadId !== undefined && parentThreadId !== threadId,
   };
 }
@@ -233,7 +286,7 @@ function touchLineageScope(scopeKey: string, now: number): CodexLineageScope {
 }
 
 /**
- * Record this request's thread relation and return the resolved lineage.
+ * The lineage view for one identity inside one scope, computed without writing anything.
  *
  * A parent seen for the first time through one of its children is derived rather than invented:
  * the child knows the shared session, so HMAC(session, parent) reproduces the key the parent
@@ -242,22 +295,21 @@ function touchLineageScope(scopeKey: string, now: number): CodexLineageScope {
  * Depth is transitive by construction -- a grandchild inherits its parent's resolved root instead
  * of re-deriving one hop -- so a workflow never scatters across several roots.
  */
-export function recordCodexThreadLineage(
-  headers: Headers,
-  now = Date.now(),
-): CodexThreadLineage | undefined {
-  const identity = codexConversationIdentity(headers);
-  if (identity === undefined) return undefined;
-  const scope = touchLineageScope(codexLineageScopeKey(headers), now);
-
-  const previous = scope.records.get(identity.recordThreadId);
+function lineageFor(
+  scope: CodexLineageScope | undefined,
+  identity: CodexConversationIdentity,
+  now: number,
+): CodexThreadLineage {
+  const previous = liveLineageRecord(scope, identity.recordThreadId, now);
   // A turn that omits the parent header does not orphan a thread whose parent is already known.
   // That retention is the whole of the lineage-backed worker answer below.
   const parentThreadId = identity.declaresParent
     ? identity.parentThreadId
     : previous?.parentThreadId;
 
-  const parentRecord = parentThreadId !== undefined ? scope.records.get(parentThreadId) : undefined;
+  const parentRecord = parentThreadId !== undefined
+    ? liveLineageRecord(scope, parentThreadId, now)
+    : undefined;
   const parentConversationKey = parentThreadId === undefined
     ? undefined
     : parentRecord?.conversationKey
@@ -267,13 +319,57 @@ export function recordCodexThreadLineage(
     : parentRecord?.rootSessionKey ?? parentConversationKey;
 
   const siblingConversationKeys: string[] = [];
-  if (parentThreadId !== undefined) {
+  if (parentThreadId !== undefined && scope !== undefined) {
     for (const siblingThreadId of scope.childThreadIdsByParent.get(parentThreadId) ?? []) {
       if (siblingThreadId === identity.recordThreadId) continue;
-      const sibling = scope.records.get(siblingThreadId);
+      const sibling = liveLineageRecord(scope, siblingThreadId, now);
       if (sibling !== undefined) siblingConversationKeys.push(sibling.conversationKey);
     }
   }
+
+  // Only a key the old rule would have produced AND that this request no longer uses is a
+  // migration candidate. A root's key is unchanged, so it never carries one.
+  const legacyConversationKey = identity.legacyConversationKey !== undefined
+    && identity.legacyConversationKey !== identity.conversationKey
+    ? identity.legacyConversationKey
+    : undefined;
+
+  return {
+    conversationKey: identity.conversationKey,
+    rootSessionKey,
+    ...(parentThreadId !== undefined ? { parentThreadId } : {}),
+    ...(parentConversationKey !== undefined ? { parentConversationKey } : {}),
+    ...(legacyConversationKey !== undefined ? { legacyConversationKey } : {}),
+    siblingConversationKeys,
+  };
+}
+
+/**
+ * Read this request's lineage without recording it.
+ *
+ * A preview must see what the final resolution will see, but it must not be the thing that
+ * creates the record: preview runs before auth has decided whether this request may hold Pool
+ * state at all, and a record written there would outlive a decision to hold none.
+ */
+export function resolveCodexThreadLineage(
+  headers: Headers,
+  now = Date.now(),
+): CodexThreadLineage | undefined {
+  const identity = codexConversationIdentity(headers, now);
+  if (identity === undefined) return undefined;
+  return lineageFor(lineageByScope.get(codexLineageScopeKey(headers)), identity, now);
+}
+
+/** Record this request's thread relation and return the resolved lineage. */
+export function recordCodexThreadLineage(
+  headers: Headers,
+  now = Date.now(),
+): CodexThreadLineage | undefined {
+  const identity = codexConversationIdentity(headers, now);
+  if (identity === undefined) return undefined;
+  const scope = touchLineageScope(codexLineageScopeKey(headers), now);
+  const lineage = lineageFor(scope, identity, now);
+  const parentThreadId = lineage.parentThreadId;
 
   // Re-insert rather than mutate: the records map doubles as the LRU order.
   dropLineageRecord(scope, identity.recordThreadId);
@@ -281,7 +377,7 @@ export function recordCodexThreadLineage(
     threadId: identity.recordThreadId,
     conversationKey: identity.conversationKey,
     ...(parentThreadId !== undefined ? { parentThreadId } : {}),
-    rootSessionKey,
+    rootSessionKey: lineage.rootSessionKey,
     lastUsedAt: now,
   });
   scope.threadIdByConversationKey.set(identity.conversationKey, identity.recordThreadId);
@@ -293,13 +389,7 @@ export function recordCodexThreadLineage(
   }
   pruneLineageScope(scope, now);
 
-  return {
-    conversationKey: identity.conversationKey,
-    rootSessionKey,
-    ...(parentThreadId !== undefined ? { parentThreadId } : {}),
-    ...(parentConversationKey !== undefined ? { parentConversationKey } : {}),
-    siblingConversationKeys,
-  };
+  return lineage;
 }
 
 /**
@@ -331,7 +421,7 @@ export function codexThreadLineageLookup(
  * an accounting layer has no reason to invent one.
  */
 export function codexLineageRootForRequest(headers: Headers, now = Date.now()): string | undefined {
-  const identity = codexConversationIdentity(headers);
+  const identity = codexConversationIdentity(headers, now);
   if (identity === undefined) return undefined;
   return codexThreadLineageLookup(identity.conversationKey, codexLineageScopeKey(headers), now)
     ?.rootSessionKey
@@ -366,4 +456,3 @@ export function codexLineageWorkflowLane(headers: Headers, now = Date.now()): Co
 export function clearCodexThreadLineageForTests(): void {
   lineageByScope.clear();
 }
-

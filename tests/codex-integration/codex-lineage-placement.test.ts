@@ -24,7 +24,7 @@ import {
   recordCodexUpstreamOutcome,
   resolveCodexAccountForThreadDetailed,
 } from "../../src/codex/routing";
-import { codexPoolAffinityKey } from "../../src/codex/auth-context";
+import { codexPoolAffinityKey, previewCodexPoolLineage } from "../../src/codex/auth-context";
 import {
   CODEX_LINEAGE_IDLE_TTL_MS,
   CODEX_LINEAGE_MAX_ENTRIES,
@@ -100,9 +100,14 @@ function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   } as OcxConfig;
 }
 
-const rootHeaders = () => new Headers({ "session-id": "root", "thread-id": "root" });
+/**
+ * The session id is deliberately NOT the thread id. Codex's own root sends the same string for
+ * both, and a fixture that copies it makes HMAC(parent, parent) accidentally equal the root's
+ * key -- which is exactly the coincidence that hid the parent-only defect pinned below.
+ */
+const rootHeaders = () => new Headers({ "session-id": "sess", "thread-id": "root" });
 const childHeaders = (threadId: string, parentId = "root") => new Headers({
-  "session-id": "root",
+  "session-id": "sess",
   "thread-id": threadId,
   "x-codex-parent-thread-id": parentId,
 });
@@ -148,10 +153,15 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     expect(new Set([rootKey, childKey, grandchildKey]).size).toBe(3);
     // A child keys as its own conversation whether or not this turn names the parent, which is
     // what lets it hold a binding of its own across a fan-out.
-    expect(childKey).toBe(codexPoolAffinityKey(new Headers({ "session-id": "root", "thread-id": "child-1" })));
-    // A request naming only a parent rides that parent's lane. Codex's root sends its session
-    // id as its own thread id, so for the root that lane IS the root's binding.
-    expect(codexPoolAffinityKey(new Headers({ "x-codex-parent-thread-id": "root" }))).toBe(rootKey);
+    expect(childKey).toBe(codexPoolAffinityKey(new Headers({ "session-id": "sess", "thread-id": "child-1" })));
+    // A request naming only a parent rides that parent's lane. With the session in hand that lane
+    // is derivable, and it IS the parent's own key -- no record required.
+    expect(codexPoolAffinityKey(new Headers({
+      "session-id": "sess", "x-codex-parent-thread-id": "root",
+    }))).toBe(rootKey);
+    // Without the session and without a recorded parent there is nothing to reproduce it from,
+    // so the bare parent lane is its own key. The recorded case is the test below.
+    expect(codexPoolAffinityKey(new Headers({ "x-codex-parent-thread-id": "root" }))).not.toBe(rootKey);
     // Unchanged from before #4546: which requests bind at all did not move. A bare thread-id
     // with neither a session nor a parent still has no family anchor and stays unbound.
     expect(codexPoolAffinityKey(new Headers({ "thread-id": "lone" }))).toBeUndefined();
@@ -354,6 +364,121 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     expect(resolution.affinity?.reason).not.toBe("lineage_sibling");
   });
 
+  test("a parent-only turn continues the parent's conversation, session id or not", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const root = recordCodexThreadLineage(rootHeaders(), NOW)!;
+    expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW))
+      .toMatchObject({ status: "selected", accountId: "a" });
+
+    // This turn carries nothing but the parent id, so only the recorded relation can reproduce
+    // the key the parent bound under. HMAC(parent, parent) would be a different key, and this
+    // conversation would start cold on every such turn while replacing the parent's record.
+    const parentOnly = new Headers({ "x-codex-parent-thread-id": "root" });
+    expect(codexPoolAffinityKey(parentOnly)).toBe(root.conversationKey);
+
+    const followUp = recordCodexThreadLineage(parentOnly, NOW + 1)!;
+    expect(followUp.conversationKey).toBe(root.conversationKey);
+    expect(resolveCodexAccountForThreadDetailed(
+      followUp.conversationKey, config, NOW + 1, undefined, undefined, undefined, followUp,
+    )).toMatchObject({
+      status: "selected",
+      accountId: "a",
+      affinity: { move: "reused", reason: "healthy" },
+    });
+
+    // And recording it left the parent's record intact rather than overwriting it.
+    expect(codexThreadLineageLookup(root.conversationKey, codexLineageScopeKey(parentOnly), NOW + 1))
+      .toMatchObject({ conversationKey: root.conversationKey, rootSessionKey: root.rootSessionKey });
+  });
+
+  test("a binding left under the old raw-parent key is adopted, not rebound cold", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    // What a code swap under a live conversation leaves behind: a binding made by the pre-#4546
+    // rule, under the RAW parent id. c is where it sits, and c is not where a cold pick goes.
+    config.pausedCodexAccountIds = ["a", "b"];
+    expect(resolveCodexAccountForThreadDetailed("root", config, NOW))
+      .toMatchObject({ status: "selected", accountId: "c" });
+    config.pausedCodexAccountIds = [];
+    config.activeCodexAccountId = "a";
+
+    const child = recordCodexThreadLineage(childHeaders("child-1"), NOW + 1)!;
+    expect(child.legacyConversationKey).toBe("root");
+    // The conversation keeps its account AND its status as a bound thread. A cold rebind here is
+    // the exact defect this unit exists to prevent, so "reused" is the assertion, not "c".
+    expect(resolveCodexAccountForThreadDetailed(
+      child.conversationKey, config, NOW + 1, undefined, undefined, undefined, child,
+    )).toMatchObject({
+      status: "selected",
+      accountId: "c",
+      affinity: { move: "reused", reason: "healthy" },
+    });
+
+    // One way, once: nothing answers on the legacy key any more, so a request arriving there
+    // binds fresh instead of finding the account it just handed over.
+    expect(resolveCodexAccountForThreadDetailed("root", config, NOW + 2)).toMatchObject({
+      status: "selected",
+      accountId: "a",
+      affinity: { move: "new_bind" },
+    });
+  });
+
+  test("a child follows the parent's MODEL detour, not a home account that cannot serve it", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const modelId = "native-gated-model";
+    const roster = { modelEligibleAccountIds: new Set(["b", "c"]) };
+
+    const root = recordCodexThreadLineage(rootHeaders(), NOW)!;
+    // The parent's home account is a, chosen with no model roster in play.
+    expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW))
+      .toMatchObject({ status: "selected", accountId: "a" });
+    // a is not entitled to this model, so the parent is now SERVED through a model detour on b
+    // while its ordinary binding stays on a.
+    expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW, undefined, roster, modelId))
+      .toMatchObject({ status: "selected", accountId: "b" });
+
+    // Make c the cold pick inside the roster, so b is reachable only through the detour.
+    updateAccountQuota("b", 40);
+    const child = recordCodexThreadLineage(childHeaders("child-1"), NOW + 1)!;
+    expect(resolveCodexAccountForThreadDetailed(
+      child.conversationKey, config, NOW + 1, undefined, roster, modelId, child,
+    )).toMatchObject({
+      status: "selected",
+      accountId: "b",
+      affinity: { move: "new_bind", reason: "lineage_parent" },
+    });
+  });
+
+  test("a preview reads the family only for a request that may own Pool state", () => {
+    const config = makeConfig();
+    const root = recordCodexThreadLineage(rootHeaders(), NOW)!;
+    const child = childHeaders("child-1");
+
+    expect(previewCodexPoolLineage(child, config)?.parentConversationKey).toBe(root.conversationKey);
+    // An exact account selector authenticates outside the Pool and creates no affinity, so a
+    // preview that followed the family here would decide model fallback against an account the
+    // request will never be.
+    expect(previewCodexPoolLineage(child, config, { accountId: "b" })).toBeUndefined();
+    const callerOwned = childHeaders("child-2");
+    callerOwned.set("authorization", "Bearer caller-owned-credential");
+    expect(previewCodexPoolLineage(callerOwned, config, { requestScopedMainCredential: true }))
+      .toBeUndefined();
+
+    // Read-only: the record belongs to the resolution that binds. A preview must not leave one
+    // behind for a request that turns out to own no Pool state at all.
+    expect(codexThreadLineageLookup(
+      codexPoolAffinityKey(child)!, codexLineageScopeKey(child), NOW,
+    )).toBeUndefined();
+  });
+
   test("worker classification stays header-first and gains the lineage-backed answer", () => {
     // Header-only rule preserved: a parent plus a distinct thread-id is worker traffic.
     expect(codexLineageWorkflowLane(childHeaders("child-1"), NOW)).toBe("worker");
@@ -366,4 +491,3 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     expect(codexLineageWorkflowLane(new Headers({ "thread-id": "child-9" }), NOW)).toBe("worker");
   });
 });
-
