@@ -76,6 +76,19 @@ cooldown parsers cap at 10 minutes (`src/combos/failover.ts:131`).
 
 The shape to build, in order:
 
+0. **Start by making the existing budget owner cover the passthrough.** `handleResponses`
+   already declares one at `src/server/responses/core.ts:7554-7560`, and its own comment says
+   it is declared there "so BOTH the initial send and the later recovery refetches share it."
+   That holds for the adapter path. It does **not** hold for the Codex passthrough legs at
+   `:5488`, `:5570`, `:5790` and `:5885`, which sit in an earlier scope in the same function
+   and pass neither `attempts` nor `onSendsConsumed` -- so each takes the helper's fresh
+   default of 3. The measured 4/7/12 come from that gap, not from a missing mechanism, which
+   makes hoisting the owner the smallest change that removes fresh-per-leg. It also preserves
+   the 3 same-account + 1 cross-account shape the audit warned a flat ceiling would break,
+   because the cross-account send goes through `retryCodexPoolOnAlternateAccount` and is not
+   a transient attempt at all. Keep the `Math.max(1, budget - used)` floor for this step: it
+   is what lets a later leg make progress, and removing it is step 3's separate problem.
+
 1. **Use the seam that already exists.** `HandleResponsesOptions` is what combo
    already threads (`comboAttempt`, `translatorBudget`, `comboReplaySnapshot`); the
    budget belongs there and must be passed into `retryCodexPoolOnAlternateAccount`.
