@@ -27,6 +27,7 @@ import {
   type CodexAccountUsabilityOptions,
 } from "./account-usability";
 import { isCodexAccountPaused } from "./account-pause";
+import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
 import { PROVIDER_REGISTRY } from "../providers/registry";
@@ -157,8 +158,8 @@ export function buildSubagentModelChain(
   return normalizedChain(primary, config, extraFallback);
 }
 
-function quotaThreshold(config: OcxConfig): number {
-  const threshold = config.autoSwitchThreshold ?? 80;
+function quotaThreshold(config: OcxConfig, accountId: string): number {
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, accountId);
   return threshold > 0 ? threshold : Number.POSITIVE_INFINITY;
 }
 
@@ -233,7 +234,7 @@ export function isNativeModelQuotaExhausted(
   // rather than letting the scorer read wall time - the two would silently diverge.
   const usage = computeCodexUsageScore(quota, getPoolAccountPlan(config, resolvedAccountId), now);
   if (usage >= CODEX_UNKNOWN_USAGE_SCORE) return false;
-  return usage >= quotaThreshold(config);
+  return usage >= quotaThreshold(config, resolvedAccountId);
 }
 
 export function isModelHealthBlocked(

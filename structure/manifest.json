@@ -317,6 +317,17 @@
       ]
     },
     {
+      "path": "codex-account-controls.md",
+      "tier": 5,
+      "title": "Codex Account Controls",
+      "scope": "Account selection order, custom usage thresholds, and stable account-card editing.",
+      "documents": [
+        "gui/",
+        "src/cli/",
+        "src/codex/"
+      ]
+    },
+    {
       "path": "clients/integrations.md",
       "tier": 5,
       "title": "Client Integrations",

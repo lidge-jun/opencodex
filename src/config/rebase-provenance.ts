@@ -1,7 +1,16 @@
 import type { OcxConfig } from "../types";
 
 const pendingTopLevelDeletions = new WeakMap<OcxConfig, Set<string>>();
+const pendingObjectChildDeletions = new WeakMap<OcxConfig, Map<string, Set<string>>>();
 export const CONFIG_REBASE_PROVENANCE_KEY = "configRebaseProvenance";
+
+export type ConfigObjectChildDeletions = Map<string, Set<string>>;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
 
 export function parsedConfigRebaseDeletionKeys(config: OcxConfig): Set<string> | null {
   const value = config.configRebaseProvenance;
@@ -63,15 +72,73 @@ export function deleteConfigTopLevelKey<K extends keyof OcxConfig>(config: OcxCo
   pendingTopLevelDeletions.set(config, deleted);
 }
 
+/** Delete one child from a record-valued field without tombstoning concurrent sibling keys. */
+export function deleteConfigObjectChildKey<K extends keyof OcxConfig>(
+  config: OcxConfig,
+  key: K,
+  childKey: string,
+): void {
+  const record = config as unknown as Record<string, unknown>;
+  const value = record[key as string];
+  if (isPlainRecord(value)) {
+    delete value[childKey];
+    if (Object.keys(value).length === 0) delete record[key as string];
+  }
+  const byParent = pendingObjectChildDeletions.get(config) ?? new Map<string, Set<string>>();
+  const deleted = byParent.get(key as string) ?? new Set<string>();
+  deleted.add(childKey);
+  byParent.set(key as string, deleted);
+  pendingObjectChildDeletions.set(config, byParent);
+}
+
+/**
+ * Materialize record containers so the normal recursive three-way merge can adopt
+ * concurrent sibling keys. Returned child tombstones must be applied after that merge.
+ */
+export function prepareConfigObjectChildDeletionRebase(config: OcxConfig): ConfigObjectChildDeletions {
+  const pending = pendingObjectChildDeletions.get(config);
+  const active: ConfigObjectChildDeletions = new Map();
+  if (!pending) return active;
+  const record = config as unknown as Record<string, unknown>;
+  for (const [key, children] of pending) {
+    const current = record[key];
+    const deleted = new Set([...children].filter(child =>
+      !isPlainRecord(current) || !Object.hasOwn(current, child) || current[child] === undefined));
+    if (deleted.size === 0) continue;
+    active.set(key, deleted);
+    if (!isPlainRecord(current)) record[key] = {};
+  }
+  return active;
+}
+
+/** Reassert explicit child deletions after rebasing, then omit an empty parent record. */
+export function applyConfigObjectChildDeletions(
+  config: OcxConfig,
+  deletions: ConfigObjectChildDeletions,
+): void {
+  const record = config as unknown as Record<string, unknown>;
+  for (const [key, children] of deletions) {
+    const current = record[key];
+    if (!isPlainRecord(current)) continue;
+    for (const child of children) delete current[child];
+    if (Object.keys(current).length === 0) delete record[key];
+  }
+}
+
 export function clearPendingConfigTopLevelDeletions(config: OcxConfig): void {
   pendingTopLevelDeletions.delete(config);
+}
+
+export function clearPendingConfigObjectChildDeletions(config: OcxConfig): void {
+  pendingObjectChildDeletions.delete(config);
 }
 
 /**
  * Capture field replacements and deletion intent for a synchronous live-config save.
  * Restore before yielding on failure: an asynchronous rollback could overwrite a newer
  * mutation. Descriptors preserve absent versus explicitly undefined properties; the
- * private pending set must also retain its original presence, even when it was empty.
+ * private pending deletion collections must also retain their original presence, even when empty.
+ * Nested values are not cloned: callers must replace containers before mutating their children.
  * Unrelated fields and the live object's identity/baselines are left in place.
  */
 export function captureConfigTopLevelRollback(
@@ -82,6 +149,9 @@ export function captureConfigTopLevelRollback(
     .map(key => [key, Object.getOwnPropertyDescriptor(config, key)] as const));
   const pending = pendingTopLevelDeletions.get(config);
   const pendingBefore = pending === undefined ? undefined : new Set(pending);
+  const pendingChildren = pendingObjectChildDeletions.get(config);
+  const childrenBefore = pendingChildren === undefined ? undefined
+    : new Map([...pendingChildren].map(([key, children]) => [key, new Set(children)]));
   return () => {
     for (const [key, descriptor] of descriptors) {
       if (descriptor) Object.defineProperty(config, key, descriptor);
@@ -90,5 +160,8 @@ export function captureConfigTopLevelRollback(
     // The absent fields above are restoration, not new user deletion commands.
     if (pendingBefore === undefined) pendingTopLevelDeletions.delete(config);
     else pendingTopLevelDeletions.set(config, new Set(pendingBefore));
+    if (childrenBefore === undefined) pendingObjectChildDeletions.delete(config);
+    else pendingObjectChildDeletions.set(config,
+      new Map([...childrenBefore].map(([key, children]) => [key, new Set(children)])));
   };
 }

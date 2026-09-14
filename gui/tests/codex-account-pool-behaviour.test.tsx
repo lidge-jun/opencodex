@@ -92,6 +92,24 @@ beforeEach(() => {
         activePinnedAccountId = null;
         return { ok: true, json: async () => ({ ok: true, id: body.id, priority: stored }) } as unknown as Response;
       }
+      if (path === "codex-auth/auto-switch") {
+        const body = JSON.parse(String(init?.body)) as { id: string; threshold: number | null };
+        accounts = accounts.map(account => (
+          typeof account === "object" && account !== null && "id" in account
+            && (account.id === body.id || (body.id === "__main__" && "isMain" in account && account.isMain === true))
+            ? { ...account, autoSwitchThresholdOverride: body.threshold }
+            : account
+        ));
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            id: body.id,
+            autoSwitchThresholdOverride: body.threshold,
+            autoSwitchThreshold: body.threshold ?? threshold,
+          }),
+        } as unknown as Response;
+      }
       if (path === "codex-auth/accounts/pause") {
         const gate = nextPauseResponseGate;
         nextPauseResponseGate = null;
@@ -483,6 +501,26 @@ test("a confirmed selection-order save updates the row before the reload lands",
 
   // The reload confirms the same value rather than reverting it.
   expect(seen.current!.accounts.find(account => account.id === "a2")?.priority).toBe(2);
+});
+
+test("an account usage-threshold save updates the row and null restores inheritance", async () => {
+  accounts = [
+    { id: "a1", email: "main", isMain: true, paused: false, priority: 0, autoSwitchThresholdOverride: null, hasCredential: true, quota: null },
+    { id: "a2", email: "pool", isMain: false, paused: false, priority: 0, autoSwitchThresholdOverride: null, hasCredential: true, quota: null },
+  ];
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.setAccountAutoSwitchThreshold("a2", 60)).toEqual({ ok: true });
+  });
+  expect(calls).toContain("PUT codex-auth/auto-switch");
+  expect(seen.current!.accounts.find(account => account.id === "a2")?.autoSwitchThresholdOverride).toBe(60);
+  expect(seen.current!.autoSwitchUpdatingId).toBeNull();
+
+  await act(async () => {
+    expect(await seen.current!.setAccountAutoSwitchThreshold("a2", null)).toEqual({ ok: true });
+  });
+  expect(seen.current!.accounts.find(account => account.id === "a2")?.autoSwitchThresholdOverride).toBeNull();
 });
 
 test("an accepted selection-order write clears the pin before reconciliation lands", async () => {
