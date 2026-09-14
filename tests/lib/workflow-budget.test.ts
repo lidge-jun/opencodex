@@ -234,7 +234,7 @@ describe("root ceilings bound a rate, not a lifetime (#4546)", () => {
     // refused exactly as before.
     expect(admitWorkflowTurn("root-a", "worker", policy, undefined, now + 1)?.reason)
       .toBe("workflow-sends-exhausted");
-    expect(workflowSendCeilingReached("root-a", policy)).toBe(true);
+    expect(workflowSendCeilingReached("root-a", policy, now + 1)).toBe(true);
 
     // Past the window the same root is served, with no restart. This is the case that made a
     // long-lived session unusable: work it finished hours ago kept refusing it.
@@ -311,3 +311,25 @@ describe("root ceilings bound a rate, not a lifetime (#4546)", () => {
   });
 });
 
+
+describe("every ceiling on this path reads the caller's clock", () => {
+  test("no function reads Date.now() except as a parameter default", async () => {
+    // This defect has now appeared three times in two days: codexPoolAffinityKey, then
+    // chargeWorkflowSends, then workflowSendCeilingReached. Each time a caller working against
+    // a fixed clock wrote into one window and read from another, and each time the symptom was
+    // a ceiling that fired when it should not have. A function that decides admission must be
+    // askable about a moment, so the clock is a parameter and never an ambient read.
+    const source = await Bun.file(
+      new URL("../../src/lib/workflow-budget.ts", import.meta.url),
+    ).text();
+    const ambient = source
+      .split("\n")
+      .map((line, index) => ({ line: line.trim(), number: index + 1 }))
+      .filter(entry => entry.line.includes("Date.now()"))
+      .filter(entry => !entry.line.startsWith("now: number = Date.now()"))
+      .filter(entry => !entry.line.startsWith("//"))
+      // lastSeenMs feeds eviction ordering, not a ceiling, and its comment says so.
+      .filter(entry => !entry.line.includes("lastSeenMs = Date.now()"));
+    expect(ambient).toEqual([]);
+  });
+});

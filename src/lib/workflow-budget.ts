@@ -229,7 +229,11 @@ const roots = new Map<string, WorkflowState>();
  * the new root regardless, so `maxTrackedRoots` bounded nothing whenever every candidate
  * was active or exhausted -- which is precisely the fan-out this file exists to bound.
  */
-function evictOneRoot(policy: WorkflowBudgetPolicy, spendLedger?: SpendReservationLedger): boolean {
+function evictOneRoot(
+  policy: WorkflowBudgetPolicy,
+  spendLedger?: SpendReservationLedger,
+  now: number = Date.now(),
+): boolean {
   let oldestKey: string | undefined;
   let oldestAt = Number.POSITIVE_INFINITY;
   for (const [key, state] of roots) {
@@ -238,7 +242,7 @@ function evictOneRoot(policy: WorkflowBudgetPolicy, spendLedger?: SpendReservati
     // EXHAUSTED-but-idle root -- count-exhausted or spend-exhausted -- because recreating it
     // fresh under the same id resets the very ceiling that already fired.
     if (state.active > 0) continue;
-    if (windowedSends(state, policy, Date.now()) >= policy.maxPhysicalSends) continue;
+    if (windowedSends(state, policy, now) >= policy.maxPhysicalSends) continue;
     if (spendLedger?.exhausted("root", key) === true) continue;
     if (state.lastSeenMs < oldestAt) { oldestAt = state.lastSeenMs; oldestKey = key; }
   }
@@ -276,7 +280,7 @@ export function admitWorkflowTurn(
   const ledger = spendLedger ?? (spend ? sharedSpendLedger() : undefined);
   let state = roots.get(rootId);
   if (!state) {
-    if (roots.size >= policy.maxTrackedRoots && !evictOneRoot(policy, ledger)) {
+    if (roots.size >= policy.maxTrackedRoots && !evictOneRoot(policy, ledger, now)) {
       // Nothing may be forgotten, so the new root is refused instead of admitted over the
       // bound. The alternative -- evicting an exhausted root -- resets the ceiling that
       // already fired, and a caller minting fresh ids would get unlimited budget from it.
@@ -346,6 +350,8 @@ export function admitWorkflowTurn(
         const current = roots.get(rootId);
         if (current) {
           current.active = Math.max(0, current.active - 1);
+          // Eviction ordering only; no ceiling reads lastSeenMs, so the wall clock is the
+          // right source here and a caller does not need to inject one.
           current.lastSeenMs = Date.now();
         }
         // Which of the two applies depends on whether the send ever left this process.
@@ -424,10 +430,11 @@ export function abandonWorkflowSpend(sendId: string, spendLedger?: SpendReservat
 export function workflowSendCeilingReached(
   rootId: string | undefined,
   policy: WorkflowBudgetPolicy = DEFAULT_WORKFLOW_BUDGET_POLICY,
+  now: number = Date.now(),
 ): boolean {
   if (!rootId) return false;
   const state = roots.get(rootId);
-  return state !== undefined && windowedSends(state, policy, Date.now()) >= policy.maxPhysicalSends;
+  return state !== undefined && windowedSends(state, policy, now) >= policy.maxPhysicalSends;
 }
 
 export function workflowBudgetSnapshot(
