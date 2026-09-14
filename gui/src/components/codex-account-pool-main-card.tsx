@@ -219,7 +219,7 @@ export function CodexAccountPoolMainCard({
                 )}
                 <span className="faint">{t("codexAuth.mainReauthPending")}</span>
                 {mainReauth.state.cancelFailed && (
-                  <span className="badge badge-amber">{t("codexAuth.mainReauthFailed")}</span>
+                  <span role="status" className="badge badge-amber">{t("codexAuth.mainReauthFailed")}</span>
                 )}
                 <button
                   type="button"

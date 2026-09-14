@@ -113,6 +113,21 @@ test("a pending flow shows the URL and human code and cancel owns the flow", asy
   expect(calls.cancels).toBe(1);
 });
 
+test("a retryable cancellation failure is announced without removing cancellation", async () => {
+  const calls = { starts: 0, cancels: 0 };
+  await mount(calls, {
+    phase: "pending", flowId: "f1", verificationUrl: DEVICE_URL,
+    deviceCode: DEVICE_CODE, cancelFailed: true,
+  });
+  const notice = host.querySelector('.codex-main-reauth-pending [role="status"]');
+  expect(notice?.textContent).toBe("codexAuth.mainReauthFailed");
+  const cancel = Array.from(host.querySelectorAll("button.codex-auth-action-btn"))
+    .find(button => button.textContent?.includes("codexAuth.mainReauthCancel"));
+  expect(cancel).toBeDefined();
+  await act(async () => { (cancel as HTMLButtonElement).click(); });
+  expect(calls.cancels).toBe(1);
+});
+
 test("the hook POSTs an empty body to the dedicated route and polls to success", async () => {
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
