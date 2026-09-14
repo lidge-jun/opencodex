@@ -298,7 +298,7 @@ export function classifyCursorError(message: string, sizeContext?: CursorSizeCon
   ) return "Cursor authentication failed";
 
   // gRPC FAILED_PRECONDITION is deterministic and non-retryable (unlike UNAVAILABLE):
-  // the backend rejected the call because the account/plan state does not allow it —
+  // the backend rejected the call because account/plan or policy-consent state does not allow it —
   // seen live when a plan-gated model (e.g. claude-fable-5) runs on a plan without it.
   // Leaving it as "Cursor upstream error" (502) made clients retry it as overload.
   //
