@@ -2,6 +2,7 @@ import { createHash, type Hash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
+import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
@@ -187,6 +188,13 @@ export interface PersistedUsageEntry {
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   /** Whether the terminal came from upstream or a proxy-generated tail. */
   terminalSource?: "upstream" | "synthetic";
+  /**
+   * What happened to this request's Codex pool binding, and why (#4546). A move discards the
+   * prompt-cache prefix warmed on the previous account, so it is recorded as an event rather
+   * than left to be inferred from account labels across rows. Additive; older rows omit it.
+   */
+  affinity?: CodexAffinityMove;
+  affinityReason?: CodexAffinityReason;
   /**
    * Bounded route-decision trace (RI-01): why this provider/model/account was
    * selected. Additive field; old rows without it parse unchanged. Never
