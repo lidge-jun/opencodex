@@ -15,6 +15,7 @@ import {
 import {
   WORKFLOW_LOCAL_REFUSAL_HEADER,
   workflowDenialSummary,
+  recordWorkflowRefusalEvent,
   type WorkflowDenial,
 } from "../lib/workflow-budget";
 
@@ -52,8 +53,12 @@ export function workflowRefusalResponse(
   reason: WorkflowDenial,
   logCtx?: RequestLogContext,
   refusalLog?: WorkflowRefusalLog,
+  rootId?: string,
 ): Response {
   const summary = workflowDenialSummary(reason);
+  // Only a caller that decided the refusal ITSELF passes a root id. admitWorkflowTurn already
+  // records its own denials, so passing one there would double-count them.
+  if (rootId) recordWorkflowRefusalEvent(rootId, reason);
   const recordOn = logCtx ?? refusalLog?.logCtx;
   if (recordOn) {
     markLocalRequestLogRefusal(recordOn, summary.code);

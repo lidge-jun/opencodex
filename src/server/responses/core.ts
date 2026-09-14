@@ -5358,7 +5358,7 @@ async function handleResponsesInner(
   if (workflowSendCeilingReached(workflowRootId)) {
     // A log context exists here, unlike at HTTP admission, so the row this request writes is
     // marked synthetic rather than reading as a request that vanished with zero sends.
-    return workflowRefusalResponse("workflow-sends-exhausted", logCtx);
+    return workflowRefusalResponse("workflow-sends-exhausted", logCtx, undefined, workflowRootId);
   }
   // No floor. Math.max(1, ...) meant an exhausted request still funded one send on every
   // recovery leg, so a bounded per-leg allowance never became a bounded per-request one.

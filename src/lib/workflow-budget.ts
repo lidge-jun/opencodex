@@ -278,6 +278,30 @@ export function listWorkflowBudgetEvents(limit: number = WORKFLOW_EVENT_CAPACITY
   return budgetEvents.slice(-wanted).reverse();
 }
 
+/**
+ * Record a refusal decided outside `admitWorkflowTurn`.
+ *
+ * The pre-dispatch ceiling check in the responses path is a second refusal, taken after
+ * admission already succeeded, so nothing in this module sees it. Without this it was the one
+ * refusal an operator could hit that left no event behind.
+ */
+export function recordWorkflowRefusalEvent(
+  rootId: string | undefined,
+  reason: WorkflowDenial,
+  now: number = Date.now(),
+): void {
+  if (!rootId) return;
+  const state = roots.get(rootId);
+  recordBudgetEvent({
+    at: now,
+    kind: "refused",
+    rootId,
+    reason,
+    sends: state ? windowedSends(state, now) : 0,
+    children: state ? windowedChildren(state, now) : 0,
+  });
+}
+
 export type WorkflowLane = "interactive" | "worker";
 
 export interface WorkflowAdmission {

@@ -22,6 +22,7 @@ import {
   type WorkflowBudgetPolicy,
 } from "../../src/lib/workflow-budget";
 import { workflowRefusalResponse } from "../../src/server/workflow-refusal";
+import { repoPath } from "../helpers/repo-root";
 import {
   clearRequestLogsForTests,
   getRequestLogEntries,
@@ -462,6 +463,22 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     const refusal = workflowRefusalResponse("workflow-sends-exhausted");
     expect(refusal.headers.get("Access-Control-Expose-Headers"))
       .toContain(WORKFLOW_LOCAL_REFUSAL_HEADER);
+  });
+
+  test("every inbound surface that opens a log row threads its refusal into one", async () => {
+    // A unit test on the helper proves the helper. It does not prove the wiring, and the
+    // wiring is where this went wrong twice: the refusal originally reached no surface's log
+    // at all, and the fix first reached only one of nine. Exposing the header was likewise
+    // pointless until the refusal was CORS-wrapped, because without an allow-origin a browser
+    // cannot read an exposed header either.
+    const source = await Bun.file(repoPath("src/server/index.ts")).text();
+    const callSites = source.match(/return runAdmittedHttpTurn\(/g) ?? [];
+    const threaded = source.match(/, \{ requestId, start, logCtx \}\);/g) ?? [];
+    expect(callSites.length).toBeGreaterThan(1);
+    // Exactly one surface has no log context to thread: /v1/messages/count_tokens opens no
+    // request-log row at all. Every other one must, or a refusal there leaves no trace.
+    expect(callSites.length - threaded.length).toBe(1);
+    expect(source).toContain("withCors(workflowRefusalResponse(");
   });
 
   test("every refusal lands on the record with the counts that caused it", () => {
