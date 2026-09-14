@@ -7,6 +7,22 @@ const ADMIN_TOKEN_DOCS_URL = "https://opencodex.me/guides/web-dashboard/#finding
 export type AdminTokenValidation = "accepted" | "rejected" | "unavailable";
 export type AdminTokenVerifier = (token: string) => Promise<AdminTokenValidation>;
 
+const REMEMBERED_ADMIN_TOKEN_KEY = "opencodex.remembered-admin-token";
+
+/**
+ * Opt-in plaintext persistence in localStorage: this is what makes sign-in
+ * work in iOS standalone home-screen web apps, where Safari never offers
+ * password AutoFill or save. Readable by any script on this origin; the
+ * dashboard bundles no third-party scripts.
+ */
+export function getRememberedAdminToken(): string | null {
+  try { return localStorage.getItem(REMEMBERED_ADMIN_TOKEN_KEY); } catch { return null; }
+}
+
+export function clearRememberedAdminToken(): void {
+  try { localStorage.removeItem(REMEMBERED_ADMIN_TOKEN_KEY); } catch { /* storage may be disabled */ }
+}
+
 /**
  * Ask for the management credential with a real sign-in form so browsers and
  * password managers can offer save/autofill. OpenCodex itself still keeps the
@@ -91,6 +107,14 @@ export function promptForAdminToken(
     help.append(" ", docsLink);
     tokenField.append(help);
 
+    const rememberField = document.createElement("label");
+    rememberField.className = "field-label";
+    rememberField.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:var(--space-4);";
+    const remember = document.createElement("input");
+    remember.id = `${ADMIN_TOKEN_DIALOG_ID}-remember`;
+    remember.type = "checkbox";
+    rememberField.append(remember, document.createTextNode(messages["auth.adminTokenRemember"]));
+
     const validationError = document.createElement("div");
     validationError.className = "notice notice-err";
     validationError.setAttribute("role", "alert");
@@ -108,7 +132,7 @@ export function promptForAdminToken(
     submit.textContent = messages["common.ok"];
     actions.append(cancel, submit);
 
-    form.append(heading, accountField, tokenField, validationError, actions);
+    form.append(heading, accountField, tokenField, rememberField, validationError, actions);
     dialog.append(form);
 
     /*
@@ -147,6 +171,11 @@ export function promptForAdminToken(
       void verifyToken(token).then((result) => {
         if (settled) return;
         if (result === "accepted") {
+          if (remember.checked) {
+            try { localStorage.setItem(REMEMBERED_ADMIN_TOKEN_KEY, token); } catch { /* storage may be disabled */ }
+          } else {
+            clearRememberedAdminToken();
+          }
           finish(token);
           return;
         }

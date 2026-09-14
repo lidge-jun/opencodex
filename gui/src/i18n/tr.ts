@@ -96,6 +96,7 @@ export const tr: Record<TKey, string> = {
   "auth.adminTokenTitle": "OpenCodex yönetici jetonu (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Hesap",
   "auth.adminTokenFieldLabel": "Yönetici jetonu",
+  "auth.adminTokenRemember": "Bu cihazda hatırla",
   "auth.adminTokenRejected": "Bu yönetici jetonu reddedildi. Kontrol edip tekrar deneyin.",
   "auth.adminTokenUnavailable": "Yönetici jetonu doğrulanamadı. Tekrar deneyin.",
   "auth.adminTokenHelp": "Bu, sağlayıcı API anahtarı değil, OpenCodex yönetim API’sinin yönetici jetonudur. Proxy ilk açılışta bunu ~/.opencodex/admin-api-token (veya $OPENCODEX_HOME/admin-api-token) dosyasına yazar; OPENCODEX_ADMIN_AUTH_TOKEN bu değeri geçersiz kılar.",

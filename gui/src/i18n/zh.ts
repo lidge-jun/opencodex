@@ -162,6 +162,7 @@ export const zh: Record<TKey, string> = {
   "auth.adminTokenTitle": "OpenCodex 管理员令牌 (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "账户",
   "auth.adminTokenFieldLabel": "管理员令牌",
+  "auth.adminTokenRemember": "在此设备上记住",
   "auth.adminTokenRejected": "管理员令牌被拒绝。请检查后重试。",
   "auth.adminTokenUnavailable": "无法验证管理员令牌。请重试。",
   "auth.adminTokenHelp": "这是 OpenCodex 管理 API 的管理员令牌，不是服务商 API 密钥。代理首次启动时会写入 ~/.opencodex/admin-api-token（或 $OPENCODEX_HOME/admin-api-token），设置 OPENCODEX_ADMIN_AUTH_TOKEN 可覆盖该值。",

@@ -1,4 +1,4 @@
-import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
+import { clearRememberedAdminToken, getRememberedAdminToken, promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
 import { createBoundedFetch } from "./bounded-fetch";
 import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
 
@@ -282,6 +282,14 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
       if (!adminTokenPromptAllowed()) {
         state.promptCancelled = true;
         return null;
+      }
+      const remembered = getRememberedAdminToken();
+      if (remembered && remembered !== failedToken) {
+        if (await verifyAdminToken(plane, remembered) === "accepted") {
+          state.session = { token: remembered, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };
+          return remembered;
+        }
+        clearRememberedAdminToken();
       }
       const prompted = await requestAdminToken(token => verifyAdminToken(plane, token));
       if (prompted) {
