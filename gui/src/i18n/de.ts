@@ -155,6 +155,7 @@ export const de: Record<TKey, string> = {
   "auth.adminTokenTitle": "OpenCodex-Admin-Token (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Konto",
   "auth.adminTokenFieldLabel": "Admin-Token",
+  "auth.adminTokenRemember": "Auf diesem Gerät merken",
   "auth.adminTokenRejected": "Der Admin-Token wurde abgelehnt. Prüfen Sie ihn und versuchen Sie es erneut.",
   "auth.adminTokenUnavailable": "Der Admin-Token konnte nicht überprüft werden. Versuchen Sie es erneut.",
   "auth.adminTokenHelp": "Dies ist der Admin-Token der OpenCodex-Verwaltungs-API, kein Anbieter-API-Schlüssel. Beim ersten Start schreibt der Proxy ihn nach ~/.opencodex/admin-api-token (oder $OPENCODEX_HOME/admin-api-token); OPENCODEX_ADMIN_AUTH_TOKEN hat Vorrang.",
