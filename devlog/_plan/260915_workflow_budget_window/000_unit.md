@@ -66,3 +66,32 @@ same defect further away: it still refuses a session for work it finished hours
 ago, and it still cannot be seen or cleared. The window is the change; the numbers
 are a consequence of it.
 
+
+## Reproducing it
+
+Both probes carry the same body and differ only in the root id. Against a proxy
+whose process has been up long enough for a session to reach the ceiling:
+
+```bash
+BODY='{"model":"gpt-5.6-terra","input":[{"role":"user","content":[{"type":"input_text","text":"ok"}]}],"max_output_tokens":16,"stream":true}'
+
+# the long-running session's own root: refused
+curl -s -o /dev/null -w '%{http_code}\n' -N -X POST http://127.0.0.1:10100/v1/responses \
+  -H 'Content-Type: application/json' -H 'Accept: text/event-stream' \
+  -H "x-codex-parent-thread-id: <that session id>" -d "$BODY"
+
+# any root the process has not seen: served
+curl -s -o /dev/null -w '%{http_code}\n' -N -X POST http://127.0.0.1:10100/v1/responses \
+  -H 'Content-Type: application/json' -H 'Accept: text/event-stream' \
+  -H "x-codex-parent-thread-id: probe-$(date +%s)" -d "$BODY"
+```
+
+Two answers from one proxy, one body and one upstream, separated only by which
+root the request claims. That is what rules out the provider, the account and the
+model in a single step, and it is the check to run first the next time a fan-out
+starts failing for no visible reason.
+
+After a restart both return 200, which is the other half of the diagnosis: the
+ceiling is process-memory only, so the evidence disappears the moment anyone tries
+the obvious remedy.
+
