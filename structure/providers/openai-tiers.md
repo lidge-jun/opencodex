@@ -418,6 +418,7 @@ sidecar candidate and cannot hide a failed Codex credential with separately bill
 `src/server/audio-upstream.ts` uses the same selection for standalone transcription. Explicit
 native Direct auth remains caller-owned; proxy-key-only Direct claims stored main before
 materialization, replacing both bearer and account identity exclusively from that credential.
+Both synchronous and asynchronous stored-main substitution in `src/codex/auth-context.ts` remove a caller account header before copying the stored identity; an absent stored account ID leaves no account header. Caller-owned native Direct authentication retains its existing passthrough behavior.
 `src/providers/openai-sidecar.ts` releases quota-probe ownership on every
 materialization or usability failure before transferring a resolved context to its caller.
 Audio reports one terminal upstream outcome after validating the response body; redirects remain
