@@ -46,7 +46,8 @@ function collapseWholeMessageCycle(lines: string[]): string[] {
 
 export function collapseRepeatedOutput(text: string): string {
   if (text.length === 0) return text;
-  const lines = text.split("\n");
+  const hasTerminalNewline = text.endsWith("\n");
+  const lines = (hasTerminalNewline ? text.slice(0, -1) : text).split("\n");
   const collapsed = collapseConsecutiveLines(lines);
-  return collapseWholeMessageCycle(collapsed).join("\n");
+  return `${collapseWholeMessageCycle(collapsed).join("\n")}${hasTerminalNewline ? "\n" : ""}`;
 }
