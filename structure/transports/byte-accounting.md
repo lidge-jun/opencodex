@@ -36,3 +36,5 @@ These optimizations do not add request queues, retry policies, or RSS-based admi
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+Combo recall follows the [Responses retention contract](responses.md#responses-httpsse), including model-byte limits, accepted-writer invalidation and shared TTL cleanup.

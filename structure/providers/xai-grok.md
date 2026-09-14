@@ -138,3 +138,5 @@ Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#a
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
+
+Combo recall follows the [Responses retention contract](../transports/responses.md#responses-httpsse), including model-byte limits, accepted-writer invalidation and shared TTL cleanup.

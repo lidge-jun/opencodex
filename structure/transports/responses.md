@@ -166,12 +166,12 @@ alone never opt a gateway in.
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
-Combo compaction recall uses accepted completed-response callbacks to record the final client-visible
-model and originating combo target. The existing child callback gate defers publication until an
-attempt is accepted and drops discarded/failed attempts. Both compaction entry points preserve
-explicit configured selectors before consulting bounded lane state. The existing state-store
-reconciliation owns removal of obsolete targets and generation fencing; core imports no registration
-composition root or Lab code. Recall retains routing identity only, never account credentials.
+Combo compaction recall records accepted completed-response callbacks; discarded/failed attempts never publish.
+Explicit configured selectors precede lane recall. `src/server/responses/combo-session-recall.ts` bounds upstream model
+strings to 1 KiB each and 64 KiB total UTF-8 payload, plus 256 lanes and a 30-minute TTL. Oldest entries yield to either cap.
+An oversized accepted completion clears prior lane recall only after writer-generation and owner checks; stale writers cannot clear it.
+The shared state-store registration sweeps dormant expiry; all removal paths release the model-byte budget. Config reconciliation
+retains generation fencing. Recall stores routing identity, not credentials; core imports no registration composition root or Lab code.
 
 > Decision record: [ADR-0038](../decisions/ADR-0038-responses-http-sse.md)
 

@@ -83,7 +83,10 @@ The request then follows normal combo selection and failover.
 
 Explicit provider/combo selectors and configured combo aliases take precedence over this recall.
 Failed, incomplete, or cancelled responses do not replace the last successful selection. Recall is
-process-local and bounded to 256 lanes for 30 minutes; it does not store account credentials.
+process-local and bounded to 256 lanes for 30 minutes; expired records are also swept periodically.
+Model names are limited to 1 KiB each and 64 KiB total UTF-8 payload; the oldest records are evicted
+when the count or byte budget is exceeded. A newer accepted completion with an oversized model
+clears that lane's old record instead of retaining an outdated selection. No account credentials are stored.
 Without usable conversation identity or valid remembered state, normal compaction routing applies.
 A restart clears the remembered state.
 
