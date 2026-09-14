@@ -256,6 +256,28 @@ export function isKnownTerminalSource(value: unknown): value is NonNullable<Pers
   return typeof value === "string" && KNOWN_TERMINAL_SOURCES.has(value as NonNullable<PersistedUsageEntry["terminalSource"]>);
 }
 
+/**
+ * The persisted entry is built by an explicit whitelist, so a field the writer sets but this
+ * normalizer does not name is dropped without a word. #4592 added the affinity record at the
+ * call site and it never reached disk for exactly that reason.
+ */
+const KNOWN_AFFINITY_MOVES = new Set<NonNullable<PersistedUsageEntry["affinity"]>>([
+  "reused", "held", "detour", "rebound", "new_bind", "cleared",
+]);
+const KNOWN_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["affinityReason"]>>([
+  "healthy", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
+  "unusable", "paused", "plan_excluded", "cooldown", "quota_avoided", "generation",
+  "expired", "model_lane",
+]);
+
+export function isKnownAffinityMove(value: unknown): value is NonNullable<PersistedUsageEntry["affinity"]> {
+  return typeof value === "string" && KNOWN_AFFINITY_MOVES.has(value as NonNullable<PersistedUsageEntry["affinity"]>);
+}
+
+export function isKnownAffinityReason(value: unknown): value is NonNullable<PersistedUsageEntry["affinityReason"]> {
+  return typeof value === "string" && KNOWN_AFFINITY_REASONS.has(value as NonNullable<PersistedUsageEntry["affinityReason"]>);
+}
+
 export function usageLogPath(configDir?: string): string {
   return join(configDir ?? getConfigDir(), "usage.jsonl");
 }
@@ -598,6 +620,11 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const transportPhase = isKnownTransportPhase(entry.transportPhase) ? entry.transportPhase : undefined;
   const terminalSource = isKnownTerminalSource(entry.terminalSource) ? entry.terminalSource : undefined;
+  const affinity = isKnownAffinityMove(entry.affinity) ? entry.affinity : undefined;
+  // A reason without a move describes nothing, so it is only kept alongside one.
+  const affinityReason = affinity !== undefined && isKnownAffinityReason(entry.affinityReason)
+    ? entry.affinityReason
+    : undefined;
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
@@ -668,6 +695,8 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(Array.isArray(entry.attempts) ? { attempts } : {}),
     ...(transportPhase ? { transportPhase } : {}),
     ...(terminalSource ? { terminalSource } : {}),
+    ...(affinity ? { affinity } : {}),
+    ...(affinityReason ? { affinityReason } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
