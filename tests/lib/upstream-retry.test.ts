@@ -250,6 +250,42 @@ describe("retryBackoffDelayMs", () => {
     }
   });
 
+  test("treats Retry-After as a lower bound when the caller opts in (#4546)", () => {
+    const headers = new Headers({ "Retry-After": "30" });
+    // The local maximum bounds our OWN exponential backoff. Shortening a provider's stated
+    // wait to 5s just sends a request we already know will be refused, which is the storm the
+    // header exists to prevent.
+    expect(retryBackoffDelayMs(0, {
+      baseDelayMs: 250,
+      maxDelayMs: 5_000,
+      headers,
+      retryAfterIsLowerBound: true,
+    })).toBe(30_000);
+  });
+
+  test("an honoured Retry-After is still ceilinged so it cannot park a request (#4546)", () => {
+    const headers = new Headers({ "Retry-After": "3600" });
+    expect(retryBackoffDelayMs(0, {
+      baseDelayMs: 250,
+      maxDelayMs: 5_000,
+      headers,
+      retryAfterIsLowerBound: true,
+      retryAfterCeilingMs: 60_000,
+    })).toBe(60_000);
+  });
+
+  test("opting in never shortens a wait below the local backoff (#4546)", () => {
+    const headers = new Headers({ "Retry-After": "0" });
+    // A past or zero Retry-After means "no enforced wait", not "send immediately with no
+    // backoff at all" -- the count and ratio budgets still apply and so does our own pacing.
+    expect(retryBackoffDelayMs(0, {
+      baseDelayMs: 1_000,
+      maxDelayMs: 5_000,
+      headers,
+      retryAfterIsLowerBound: true,
+    })).toBeGreaterThanOrEqual(800);
+  });
+
   test("falls back to capped exponential jitter when Retry-After is absent", () => {
     const randomSpy = spyOn(Math, "random").mockReturnValue(0);
     try {

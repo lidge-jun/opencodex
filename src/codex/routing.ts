@@ -2946,6 +2946,32 @@ export function resolveCodexAccountForThreadDetailed(
     // A model-only exclusion does not invalidate the shared task binding. Health,
     // generation, pause, cooldown, and failure evidence still retire it normally.
     if (!modelScopedSelection || !healthyForSharedAffinity) {
+      // A hold that outlived its window is not the same as a conversation with nowhere to go.
+      // If the account that has actually been serving this thread is still healthy, promote it
+      // instead of deleting the entry and re-picking cold: releasing here threw away the one
+      // piece of evidence the request had -- that B works -- and handed the thread back to a
+      // fresh strategy choice, which is the cold-prefix cost #4546 is about. A timer expiring
+      // restores the right to re-decide; it is not itself a recovery.
+      const expiredDetour = entry.transientDetourAccountId;
+      if (
+        isTransientHoldExpired(entry, now)
+        && generationLive
+        && !quotaRefused
+        && expiredDetour !== undefined
+        && expiredDetour !== entry.accountId
+        && isCodexAccountSelectable(config, expiredDetour, now, quotaScope, selectionOptions)
+        && !hasUnrecoveredCodexQuotaRefusal(expiredDetour, quotaScope)
+        && !shouldFailover(config, expiredDetour, now)
+        && !isCodexAccountSoftAvoided(expiredDetour, now)
+      ) {
+        if (!isIndependentCodexQuotaScope(quotaScope)) promoteActiveCodexAccount(config, expiredDetour);
+        bindThreadAffinity(threadId, expiredDetour, now, quotaScope);
+        return {
+          status: "selected",
+          accountId: expiredDetour,
+          affinity: { move: "rebound", reason: "transient_hold_expired" },
+        };
+      }
       releaseReason = !generationLive
         ? "generation"
         : quotaRefused

@@ -133,7 +133,18 @@ export interface RetryBackoffOptions {
   baseDelayMs: number;
   maxDelayMs: number;
   headers?: Headers;
+  /**
+   * Treat a provider's `Retry-After` as the earliest legal send rather than something the
+   * local maximum may shorten. Opt-in per caller so the change lands on the transient path
+   * first instead of silently lengthening every adapter's backoff.
+   */
+  retryAfterIsLowerBound?: boolean;
+  /** Hard ceiling for an honoured `Retry-After`, so an hour-long wait cannot park a request. */
+  retryAfterCeilingMs?: number;
 }
+
+/** One minute, matching the same-target 429 ceiling the key-failover path already uses. */
+export const RETRY_AFTER_CEILING_MS = 60_000;
 
 export function abortError(signal?: AbortSignal): unknown {
   return signal?.reason ?? new DOMException("The operation was aborted", "AbortError");
@@ -284,9 +295,20 @@ function retryAfterDelayMs(headers: Headers): number | undefined {
 
 export function retryBackoffDelayMs(attempt: number, opts: RetryBackoffOptions): number {
   const retryAfter = opts.headers ? retryAfterDelayMs(opts.headers) : undefined;
-  if (retryAfter !== undefined) return Math.min(retryAfter, opts.maxDelayMs);
   const exp = Math.min(opts.baseDelayMs * (2 ** attempt), opts.maxDelayMs);
-  return Math.floor(exp * (0.8 + Math.random() * 0.4));
+  const jittered = Math.floor(exp * (0.8 + Math.random() * 0.4));
+  if (retryAfter === undefined) return jittered;
+  if (opts.retryAfterIsLowerBound !== true) {
+    // Historical behaviour, still the default for every caller that has not opted in.
+    return Math.min(retryAfter, opts.maxDelayMs);
+  }
+  // A provider that names a wait is stating when it will serve again; sending earlier is a
+  // request we already know will be refused, and refusing it twice is the retry storm the
+  // header exists to prevent. The local maximum bounds our OWN exponential backoff and has no
+  // business shortening someone else's instruction. The ceiling is separate: it stops an
+  // hour-long Retry-After from parking a request forever.
+  const ceiling = opts.retryAfterCeilingMs ?? RETRY_AFTER_CEILING_MS;
+  return Math.min(Math.max(retryAfter, jittered), ceiling);
 }
 
 export function cancelResponseBodyBestEffort(res: Response): void {
@@ -504,6 +526,7 @@ export async function fetchWithTransientRetry(
       baseDelayMs: TRANSIENT_RETRY_BASE_DELAY_MS,
       maxDelayMs: TRANSIENT_RETRY_MAX_DELAY_MS,
       headers: res.headers,
+      retryAfterIsLowerBound: true,
     });
     cancelResponseBodyBestEffort(res);
     // Throws on abort (see sleepWithAbort): the rejection propagates, and the body we just
