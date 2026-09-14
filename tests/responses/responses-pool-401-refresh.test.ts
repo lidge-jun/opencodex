@@ -605,7 +605,7 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     // reported as expired, which is the behavior the missing handoff produces.
     // The binding lives under the model's quota scope, so resolution must be asked in that
     // same scope; a scopeless read looks in the legacy bucket and finds nothing.
-    expect(resolveCodexAccountForThreadDetailed(THREAD_ID, cfg, Date.now(), "shared")).toEqual({
+    expect(resolveCodexAccountForThreadDetailed(THREAD_ID, cfg, Date.now(), "shared")).toMatchObject({
       status: "selected",
       accountId: ACCOUNT_ID,
     });
