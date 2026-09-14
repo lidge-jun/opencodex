@@ -2205,16 +2205,15 @@ function previewReusableAffinityAccount(
       // Preview must agree with resolve: this is the second copy of the same rule, and the
       // suite asserts the two answer identically.
       if (mayRebindAffinityForQuota(config, entry.accountId, usage, threshold, selectionOptions)) {
-        const best = pickLowerUsageAccount(
+        const best = pickCacheSafeQuotaReplacement(
           config,
           entry.accountId,
           usage,
           now,
           quotaScope,
           selectionOptions,
-          true,
         );
-        if (best !== entry.accountId) return best;
+        if (best) return best;
       }
     }
   }
@@ -2265,8 +2264,57 @@ function resetFirstAffinityReplacement(
 }
 
 /**
- * Re-evaluate an affined account under the quota strategy. Returns a strictly
- * cooler replacement, or null when the current binding should remain.
+ * Quota-strategy replacement for a LIVE binding (#4546).
+ *
+ * "Strictly cooler by any margin" — what {@link pickLowerUsageAccount} answers — is the
+ * right rule for an unbound request and the wrong one for a bound thread. Once every
+ * account sits in the threshold band the coolest is still over it, so a long-running
+ * conversation was handed from account to account on consecutive turns. Codex prompt
+ * caches are account-isolated, so each hop restarted from a cold prefix; the reporter
+ * measured 7k-token turns becoming 150k-token turns.
+ *
+ * The destination must clear the same bar {@link resetFirstAffinityReplacement} already
+ * applies — genuine headroom via {@link hasCodexQuotaHeadroom} — AND be strictly cooler
+ * than the bound account. Headroom alone is not sufficient: that predicate deliberately
+ * answers true for unknown usage, which is the right default for an unbound pick but a
+ * guess when a warm prefix is at stake. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so an
+ * unobserved account can never be strictly cooler than a known over-threshold score and
+ * the second bar excludes it without a special case.
+ *
+ * This narrows a preference, never a refusal: callers release the binding on a 429/402,
+ * failover, or exhaustion before this helper is consulted, so a thread cannot be wedged
+ * on an account that cannot serve.
+ */
+function pickCacheSafeQuotaReplacement(
+  config: OcxConfig,
+  boundAccountId: string,
+  boundUsage: number,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  const candidates = getEligiblePoolAccounts(
+    config,
+    boundAccountId,
+    now,
+    quotaScope,
+    selectionOptions,
+    true,
+  ).filter(id => hasCodexQuotaHeadroom(config, id, selectionOptions, now));
+  const best = pickLowestUsageAmong(config, candidates, selectionOptions, now);
+  if (best === null || best === boundAccountId) return null;
+  const bestUsage = computeCodexUsageScore(
+    getAccountQuota(best),
+    getPoolAccountPlanForSelection(config, best, selectionOptions),
+    now,
+  );
+  return bestUsage < boundUsage ? best : null;
+}
+
+/**
+ * Re-evaluate an affined account under the quota strategy. Returns a replacement
+ * that has genuine quota headroom and is strictly cooler than the bound account,
+ * or null when the current binding should remain (#4546).
  */
 function reevaluateAffinityQuota(
   entry: ThreadAffinityEntry,
@@ -2302,16 +2350,14 @@ function reevaluateAffinityQuota(
   }
   entry.lastReevalAt = now;
   if (!mayRebind) return null;
-  const best = pickLowerUsageAccount(
+  return pickCacheSafeQuotaReplacement(
     config,
     entry.accountId,
     usage,
     now,
     quotaScope,
     selectionOptions,
-    true,
   );
-  return best === entry.accountId ? null : best;
 }
 
 /**
@@ -2499,7 +2545,10 @@ export function resolveCodexAccountForThreadDetailed(
     ) {
       entry.lastUsedAt = now;
       // Periodic quota re-eval: a long-lived bound thread must still switch when
-      // it crosses autoSwitchThreshold and a strictly-cooler account exists.
+      // it crosses autoSwitchThreshold, but only onto an account that has genuine
+      // quota headroom AND is strictly cooler — moving to a destination still over
+      // the threshold just trades the warmed prompt-cache prefix for an equally hot
+      // account, which is the #4546 ping-pong.
       // Without this the reuse branch returns before applyQuotaAutoSwitch and the
       // thread stays pinned for the full idle TTL (the WSL "never switches" report).
       // Over-threshold pins re-eval immediately so a depleted primary does not keep
