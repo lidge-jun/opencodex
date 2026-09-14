@@ -2185,7 +2185,8 @@ describe("codex routing", () => {
 
   // Phase 40 (260630_wsl-account-autoswitch): bound-thread quota re-eval.
   test("bound thread over threshold switches after the re-eval interval", () => {
-    const config = makeConfig();
+    // Capacity-first is now opt-in, so this pins it explicitly (#4546).
+    const config = makeConfig({ pool: { cacheAffinity: false } });
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -2200,7 +2201,7 @@ describe("codex routing", () => {
   });
 
   test("bound thread over threshold switches immediately without waiting for re-eval (#584)", () => {
-    const config = makeConfig();
+    const config = makeConfig({ pool: { cacheAffinity: false } });
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -2241,7 +2242,7 @@ describe("codex routing", () => {
   });
 
   test("bound thread over threshold switches once and does not ping-pong", () => {
-    const config = makeConfig();
+    const config = makeConfig({ pool: { cacheAffinity: false } });
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -2565,6 +2566,7 @@ describe("codex account selection order", () => {
     const threadId = "quota-detour-failover-candidate";
     const modelId = "gpt-daybreak-blue-latest";
     const config = makeConfig({
+      pool: { cacheAffinity: false },
       accountPoolStrategy: "quota",
       activeCodexAccountId: "c",
       codexAccounts: [
@@ -2626,6 +2628,7 @@ describe("codex account selection order", () => {
     const now = 1_800_000_000_000;
     const threadId = "ordinary-quota-failover-candidate";
     const config = makeConfig({
+      pool: { cacheAffinity: false },
       accountPoolStrategy: "quota",
       activeCodexAccountId: "a",
       codexAccounts: [
@@ -3417,7 +3420,7 @@ describe("codex account selection order", () => {
   });
 
   test("a bound thread over threshold moves to the highest tier with headroom", () => {
-    const config = makeConfig({ activeCodexAccountId: "b" });
+    const config = makeConfig({ activeCodexAccountId: "b", pool: { cacheAffinity: false } });
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
     expect(resolveCodexAccountForThread("thread-1", config)).toBe("b");

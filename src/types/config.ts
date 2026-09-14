@@ -850,14 +850,26 @@ export interface OcxConfig {
   pool?: {
     kernel?: boolean;
     /**
-     * Opt-in cache-affinity ordering, off by default.
+     * Cache-affinity ordering for bound Codex threads. **On unless set to `false`.**
      *
-     * With it on, a bound Codex thread keeps its account until that account genuinely cannot
-     * serve, instead of moving the moment usage crosses `autoSwitchThreshold`. Moving a live
+     * A bound Codex thread keeps its account until that account genuinely cannot serve,
+     * instead of moving the moment usage crosses `autoSwitchThreshold`. Moving a live
      * conversation throws away the prompt cache warmed on that account, and a threshold
-     * crossing is a hint rather than evidence the account is spent. Separate from `kernel`
-     * on purpose: that one governs the generic OAuth strategy consumer, and one switch
-     * carrying two unrelated meanings cannot be turned on alone.
+     * crossing is a hint rather than evidence the account is spent.
+     *
+     * This shipped as an opt-in (#4292) and then #4546 measured what the opt-in default
+     * costs: a pool whose accounts all sit in the 80-99% band hands a conversation from
+     * account to account, re-sending the whole prefix every turn, and the install that gets
+     * hurt is precisely the one that never heard of this setting. `false` restores
+     * capacity-first routing for operators who want it.
+     *
+     * Separate from `kernel` on purpose: that one governs the generic OAuth strategy
+     * consumer, and one switch carrying two unrelated meanings cannot be turned on alone.
+     *
+     * Note what this does NOT govern. Unbound placement still follows
+     * `autoSwitchThreshold` and the configured strategy. A bound thread's destination must
+     * have real headroom under either setting, and a transient failure streak holds the
+     * binding under either setting -- neither is a cache-affinity preference.
      */
     cacheAffinity?: boolean;
   };
