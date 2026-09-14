@@ -1652,8 +1652,14 @@ async function retryCodexPoolOnAlternateAccount(
     while (true) {
       // The same-account gated-model 400 ladder below keeps its own `maxRetrySends` bound and
       // does not take the reserve again; only the move itself does.
-      accountMovePermit?.use();
-      accountMovePermit = undefined;
+      if (accountMovePermit) {
+        const charged = accountMovePermit.use();
+        accountMovePermit = undefined;
+        if (!charged) {
+          recordUnmovedTransientOutcome();
+          return { kind: "no-alternate" };
+        }
+      }
       noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
       try {
         upstreamResponse = await fetchWithHeaderTimeout(
@@ -5682,7 +5688,11 @@ async function handleResponsesInner(
         );
         return await fetchWithTransientRetry(
           innerRecovery => {
-            allowance.permit?.use();
+            // Gated on the return, not fire-and-forget: a consumed permit means this leg
+            // already sent once, and letting the second call through would be a free send.
+            if (allowance.permit && !allowance.permit.use()) {
+              throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+            }
             noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, innerRecovery ?? recovery);
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
@@ -7872,7 +7882,9 @@ async function handleResponsesInner(
             : undefined;
           return await refetchWithPolicy(
             recoveryKind => {
-              refetchAllowance?.permit?.use();
+              if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
+                throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
+              }
               return fetchWithHeaderTimeout(retryRequest.url,
               applyUpstreamRecoveryInit({
                 method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
