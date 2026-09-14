@@ -215,3 +215,41 @@ pinned counts at once is undiagnosable. They ship in this order, one PR each:
 Kiro (up to ~18 sends per call, ~36 with the text fallback) and Cursor ride
 `AdapterFetchContext`; that field must be optional and unlimited by default or every adapter
 unit test that calls the transport context-free breaks.
+
+## Slice A landed, and the four counterexamples that shaped it
+
+PR #4609 carries the guarded profile from the PRD: four model sends per logical request, a base
+allowance of three, and one final-recovery reserve that an account move and a validated rebuild
+share. An adversarial audit round found four things that would have shipped as defects.
+
+**Charging the same send twice.** `permit.use()` increments `used`, and `onSendsConsumed`
+increments it again for anything routed through the retry helper. A four-send cap would have
+behaved as a two-send cap and every acceptance row would have been off by a factor of two. The
+intent now carries `countedExternally`, so a helper-routed permit books the reserve and the
+alternate-target ledgers but leaves `used` to the reporter.
+
+**Removing the floor kills a recovery the PRD wants kept.** The pinned sanitized-rebuild case
+at `responses-opaque-blob-recovery.test.ts:600` is three 502s plus one rebuild, and its own
+comment says the rebuild "draws on what is LEFT of that same budget" -- which is the floor. With
+the floor gone the rebuild gets zero and the request dies at three. `recoverySendAllowance`
+spends the base allowance first and only then draws the reserve, which is what keeps that fourth
+send alive for the right reason instead of by accident.
+
+**The exhaustion contract is a call-site problem.** A typed throw inside the helper cannot
+restore a body the caller already cancelled, and every catch on these paths launders a rejection
+into 502 `upstream_error`. So the OAuth 401 replay and the same-target 429 wait check the
+remainder in their own conditions, before the cancel, and an exhausted request returns the real
+401 or 429 with its `Retry-After`. The typed error stays only as the backstop for a leg that
+never had a prior response.
+
+**Reserving too early burns the slot on a request that never moved.** The same-account
+gated-model 400 ladder runs through the same function and is bounded at eight sends by
+`maxRetrySends`. Reserving before `retrySameConfirmedAccount` is known would have spent the
+single failover slot on it. The reservation is guarded on `!retryAuthCtx`, which the ladder has
+already set.
+
+Residual, accepted rather than hidden: `maxTargetTransitions` and `maxAlternateTargetSends`
+would refuse the pinned three-target combo hop, so combo hops are not wired to
+`reserveDispatch` in this slice and those fields are exercised only by the account-failover
+path. Wiring combo needs a per-target policy, not a per-request transition cap. Compact, Kiro,
+Cursor and the generic OAuth hops still hold their own allowances.
