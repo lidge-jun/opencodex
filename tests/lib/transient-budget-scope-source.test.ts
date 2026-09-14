@@ -25,8 +25,14 @@ describe("transient send budget stays request-scoped", () => {
   test("every transient-retry call site draws from the shared counter", () => {
     const core = source("server/responses/core.ts");
 
-    // One owner per request, declared before any leg can send.
-    expect(core.match(/let transientSendsUsed = 0;/g)).toHaveLength(1);
+    // One holder per LOGICAL request, read before any leg can send and inherited by combo
+    // children through the options spread rather than recreated per child turn.
+    expect(core.match(/const sendBudget = options\.sendBudget \?\? createTransientSendBudget\(\);/g))
+      .toHaveLength(1);
+    // Genuine ingress mints it; a child arrives with the parent's and must not replace it.
+    expect(core).toContain("sendBudget: options.sendBudget ?? createTransientSendBudget(),");
+    // The regressed shape: a counter local to one call frame, which a combo child restarts.
+    expect(core).not.toContain("let transientSendsUsed = 0;");
     expect(core.match(/const remainingTransientSendBudget = \(budget: number\): number =>/g)).toHaveLength(1);
 
     // Seven legs report into the same counter: the adapter initial send, the 429/rotation

@@ -57,6 +57,21 @@ const RESET_RETRY_MAX_DELAY_MS = 1_000;
 // Transient-5xx status retry layer (pre-stream only; devlog/_plan/260716_claudecode_hardening/010).
 /** Total sends one transient-retry helper call may make: 1 initial + 2 retries. */
 export const TRANSIENT_RETRY_MAX_ATTEMPTS = 3;
+
+/**
+ * Transient sends already spent by one LOGICAL request.
+ *
+ * A mutable holder rather than a counter local to one call frame, because the thing that has to
+ * share it spans frames: a combo parent runs a separate child turn per target, and a per-child
+ * counter is what let one logical request reach upstream three times per target (#4546).
+ */
+export interface TransientSendBudget {
+  used: number;
+}
+
+export function createTransientSendBudget(): TransientSendBudget {
+  return { used: 0 };
+}
 const TRANSIENT_RETRY_BASE_DELAY_MS = 400;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 5_000;
 // A failed attempt slower than this is the "slow 502" incident shape (191s observed on

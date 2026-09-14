@@ -224,6 +224,8 @@ import {
   prepareSameTarget429Wait,
   sleepWithAbort,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
+  createTransientSendBudget,
+  type TransientSendBudget,
 } from "../../lib/upstream-retry";
 import {
   ForwardAdmissionCredentialError,
@@ -1903,6 +1905,12 @@ export interface HandleResponsesOptions {
   /** Caller-owned for Chat/Claude replay; omitted only at genuine Responses ingress. */
   translatorBudget?: TranslatorBudget;
   /**
+   * Transient sends already spent by this logical request. Combo children inherit the parent's
+   * holder through the options spread, so a fan-out shares one allowance instead of taking a
+   * fresh one per target (#4546).
+   */
+  sendBudget?: TransientSendBudget;
+  /**
    * Terminal vision-describe marker (roadmap 180): true when the inbound
    * request IS the vision sidecar's own loopback describe call. The plan site
    * then STRIPS images instead of planning another describe — a depth cap of 1
@@ -3448,6 +3456,9 @@ export async function handleResponses(
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",
       translatorBudget,
+      // Created once at genuine ingress; a combo child arrives with the parent's holder already
+      // in options and must not start a fresh allowance.
+      sendBudget: options.sendBudget ?? createTransientSendBudget(),
     });
     return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
   } catch (error) {
@@ -4972,15 +4983,16 @@ async function handleResponsesInner(
     routedMuseToolNameAliases = builtRequest.convertedMuseToolNameAliases ?? new Map();
   };
 
-  // One request-scoped transient-retry budget owner, declared ABOVE the passthrough branch so
-  // that branch shares it too. It used to sit below, which put it in the temporal dead zone for
-  // the passthrough sends and left each recovery leg taking the helper's fresh default of 3 --
-  // the source of the measured amplification in #4546. A per-leg budget lets a request that
-  // recovers several times multiply upstream load.
-  let transientSendsUsed = 0;
-  const noteTransientSends = (used: number): void => { transientSendsUsed += Math.max(0, used); };
+  // One transient-retry budget for the whole LOGICAL request, read ABOVE the passthrough branch
+  // so that branch shares it too. It used to be a local declared below, which put it in the
+  // temporal dead zone for the passthrough sends and left each recovery leg taking the helper's
+  // fresh default of 3. It is now a holder carried on options, so a combo child inherits the
+  // parent's spend instead of starting over per target -- both halves of the measured
+  // amplification in #4546.
+  const sendBudget = options.sendBudget ?? createTransientSendBudget();
+  const noteTransientSends = (used: number): void => { sendBudget.used += Math.max(0, used); };
   const remainingTransientSendBudget = (budget: number): number =>
-    Math.max(1, budget - transientSendsUsed);
+    Math.max(1, budget - sendBudget.used);
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     let hostAdmissionLease = pendingHostAdmissionLease;
