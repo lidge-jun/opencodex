@@ -52,3 +52,5 @@ The pairing panel names the hub, offers an origin-specific command to run on tha
 Cline uses the existing file-integration page, tabs, status badge and rollback dialogs. Its localized semantics identify both files and the required stop/restart boundary before users mutate them.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
+
+Native-main reauthentication cancellation follows the [GUI state contract](gui-and-management-api.md#dashboard-surfaces): failed requests remain retryable, while confirmed failed flows release ownership and show the existing normalized failure state.

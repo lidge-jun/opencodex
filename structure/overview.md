@@ -147,3 +147,5 @@ Translated Chat request construction uses the [inline-image budget](transports/s
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+Native-main reauthentication cancellation follows the [GUI state contract](gui-and-management-api.md#dashboard-surfaces): failed requests remain retryable, while confirmed failed flows release ownership and show the existing normalized failure state.
