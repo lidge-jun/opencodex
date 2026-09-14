@@ -732,6 +732,9 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
     if (code === "restart_capability_unsupported") {
       console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
       console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
+    } else if (code === "restart_version_skew") {
+      console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
+      console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
     } else {
       console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
     }

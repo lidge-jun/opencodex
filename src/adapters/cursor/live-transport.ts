@@ -53,9 +53,11 @@ import {
 } from "./gen/agent_pb";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { classifyCursorError, CursorUnexpectedCancelError, isCursorAbortError, isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor-errors";
+import { cursorPolicyErrorExplanation } from "./policy-error";
 import { mcpArgsFromToolCall } from "./protobuf-events";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import {
+  cursorNativeExecRedirectHint,
   handleCursorNativeExec,
   handleCursorNativeKv,
   releaseCursorBlobRequestScope,
@@ -209,7 +211,8 @@ export function parseConnectEndStreamError(payload: Uint8Array): Error | null {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(payload)) as { error?: { code?: string; message?: string } };
     if (parsed?.error) {
-      return new Error(`Cursor Connect error ${parsed.error.code ?? "unknown"}: ${parsed.error.message ?? "Unknown error"}`);
+      const explanation = cursorPolicyErrorExplanation(parsed.error);
+      return new Error(`Cursor Connect error ${parsed.error.code ?? "unknown"}: ${explanation ?? parsed.error.message ?? "Unknown error"}`);
     }
     return null;
   } catch {
@@ -697,6 +700,7 @@ class LiveCursorTransport implements CursorTransport {
       clientToolDefs,
       rejectNativeFileMutations: cursorRequestAdvertisesApplyPatch(request.tools, request.toolChoice),
       structuredEditAvailable: syntheticStructuredEditToolNames.size > 0,
+      nativeExecRedirectHint: cursorNativeExecRedirectHint(cursorVisibleTools, this.execContext.mcpToolDefs ?? []),
     };
     const toolSchemas = new Map<string, unknown>();
     const cursorToolNameMap = new Map<string, string>();

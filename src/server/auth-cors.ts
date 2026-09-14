@@ -766,7 +766,7 @@ export function providerManagementConfigError(
   if (requestPacingError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${requestPacingError}`;
   }
-  const webSearchBridgeError = providerWebSearchBridgeConfigError(raw.webSearchBridge);
+  const webSearchBridgeError = providerWebSearchBridgeConfigError(raw.webSearchBridge, name, typed);
   if (webSearchBridgeError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${webSearchBridgeError}`;
   }

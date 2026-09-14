@@ -5,8 +5,8 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 
 ## Dashboard serving
 
-The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui`
-starts the proxy when needed and opens `http://localhost:<port>`.
+The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui` starts
+the proxy when needed and opens `http://localhost:<port>`, or `http://127.0.0.1:<management port>` when `hub.managementIngress.enabled` is true — see [the hub management dashboard address](runtime.md#hub-management-dashboard-address).
 
 All ordinary HTTP responses (excluding successful WebSocket upgrades) include `X-Frame-Options: DENY` and
 `Content-Security-Policy: frame-ancestors 'none'`. This prevents another page from framing the local

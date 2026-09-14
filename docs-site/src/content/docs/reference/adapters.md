@@ -414,6 +414,16 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+- The denial reply is a silent redirect whose wording follows the request catalog. A catalog that
+  carries `shell_command`/`exec_command` or a unified `exec` keeps the bridge wording; a catalog
+  that carries neither — an orchestrator client exposing only its own Responses tools, for example —
+  is redirected to the request's actual wire names, so the model is pointed at a tool that exists
+  rather than at an alias it cannot see.
+- A recognized Cursor data-policy gate is reported with its title, the action it requires, and the
+  Cursor Dashboard review URL instead of a bare `failed_precondition: Error`. Recognition is limited
+  to the known structured detail: unknown or malformed details keep the generic Connect error, no
+  upstream text, button, URL, or consent action is forwarded or executed, and the failure stays
+  non-retryable. Reviewing and accepting a data policy remains a user action in Cursor itself.
 
 Codex-compatible shell schemas retain sandbox permissions, justification, reusable
 prefix rules and login mode. Freeform tools expose one required string `input`

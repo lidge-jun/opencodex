@@ -999,7 +999,7 @@ describe("Codex auth context", () => {
       .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
   });
 
-  test("late transient failure cannot delete a newer Desktop affinity binding", async () => {
+  test("late transient failure cannot disturb a held Desktop affinity binding", async () => {
     const cfg = config();
     cfg.autoSwitchThreshold = 0;
     cfg.upstreamFailoverThreshold = 3;
@@ -1036,7 +1036,11 @@ describe("Codex auth context", () => {
     clearCodexUpstreamHealth();
     cfg.activeCodexAccountId = "pool-a";
     await expect(resolveCodexAuthContext(headers, cfg, "pool"))
-      .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+      // The streak detoured this session onto pool-b but never surrendered its binding
+      // (#4546), so with pool-a healthy again the session comes home to its warm prefix.
+      // That is also what proves the late failure did no damage: a guard that had dropped
+      // the held pin would leave nothing to come home to.
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
   });
 
   test("selection order never bypasses an exact account selector", async () => {

@@ -350,6 +350,31 @@ export function printData(value: unknown, wantsJson: boolean, lines?: string[]):
   else for (const line of lines) console.log(line);
 }
 
+/**
+ * Render untrusted diagnostic text without letting it control the operator's terminal. Catalog
+ * values are hub-supplied and surface on more than one CLI path -- first-time `ocx connect` and the
+ * connected `ocx sync` refresh both print them -- so the escaping sits beside `printData`, at the
+ * one boundary that already separates human output from structured output. Structured output keeps
+ * the exact value: escaping is a rendering decision for a tty, not a change to the data.
+ */
+export function terminalSafeText(value: string): string {
+  return value.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, character => {
+    const code = character.charCodeAt(0);
+    return code <= 0x7f
+      ? `\\x${code.toString(16).padStart(2, "0")}`
+      : `\\u${code.toString(16).padStart(4, "0")}`;
+  });
+}
+
+/**
+ * The same rendering for a failure about to be printed or rethrown. The original is kept as
+ * `cause` rather than discarded, so a caller that inspects the domain error still reads the exact
+ * message and fields it threw.
+ */
+export function terminalSafeError(error: unknown): Error {
+  return new Error(terminalSafeText(error instanceof Error ? error.message : String(error)), { cause: error });
+}
+
 /** Compact human view for safe management DTOs; JSON remains available for complete fidelity. */
 export function summaryLines(value: unknown, prefix = "", depth = 0): string[] {
   if (!value || typeof value !== "object" || depth > 1) return [`${prefix || "value"}: ${String(value)}`];

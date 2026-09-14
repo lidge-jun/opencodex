@@ -263,20 +263,19 @@ decision, not a broken connection.
 
 ## 10. Invite one more machine onto a hub
 
-Run on the **hub**. This is the whole flow; do not assemble an `ocx connect` line by hand.
+Inspect non-secret state on the **hub** first:
 
 ```bash
 ocx status                 # read the Hub: block first -- origins, listener, token source
-ocx hub invite --json
 ```
 
-`--json` gives `{ code, expiresAt, dataUrl, managementUrl, command }` on stdout. Hand the
-operator `command` to run on the other machine; it already carries the data origin, the
-management origin and `--pairing-code-stdin`. The code is a secret with a five-minute TTL and
-one use: do not persist it, do not put it in a file, and prefer letting the operator copy it
-rather than keeping it in a transcript.
+Have the operator run `ocx hub invite` in a human-operated terminal outside the agent session.
+Both output modes expose a plaintext pairing grant or the command embedding it; `--json`
+is not a safe agent-output alternative. The operator transfers the generated command directly
+to the other machine. It already carries both origins and `--pairing-code-stdin`, so do not
+assemble it by hand or ask for it in chat. The code is secret, single-use, and expires in five minutes.
 
-**Also relay the `Bound browser origin:` line from stderr.** It is not in the JSON envelope,
+**Ask only for non-secret confirmation, such as expiry and the `Bound browser origin:` line.** That line is on stderr rather than in the JSON envelope,
 and when the bound origin is not `http://localhost:10100` the joining machine has to already
 be running on that port or the exchange is refused and the code is spent.
 

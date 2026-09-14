@@ -1,6 +1,6 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList, toolChoiceToolPredicate } from "../types";
-import { isModelTextOnly } from "../vision";
+import { requiresVisionPreprocessing } from "../vision";
 import type { SidecarSettings } from "./executor";
 import type { CodexAuthPolicyConfig } from "../codex/auth-context";
 import { isCodexReserveRequestEligible } from "../codex/loopback-target";
@@ -15,8 +15,10 @@ import {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
   findXaiSidecarProvider,
+  resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
   type AnthropicSidecarProvider,
+  type WebSearchBackendId,
 } from "./sidecar-providers";
 
 export { runWithWebSearch } from "./loop";
@@ -29,8 +31,10 @@ export {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
   findXaiSidecarProvider,
+  resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
   type AnthropicSidecarProvider,
+  type WebSearchBackendId,
 };
 
 const DEFAULT_SIDECAR_MODEL = "gpt-5.6-luna";
@@ -98,24 +102,6 @@ export function webSearchStallTimeoutSec(
   return Math.min(Number.MAX_VALUE, Math.ceil(largestUnitSec) + STALL_MARGIN_SEC);
 }
 
-/** Every backend id the config union admits. New ids are explicit-only and inert until their executor ships. */
-export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "exa";
-
-/**
- * Precedence: explicit config wins; unset defaults to "openai" (ChatGPT forward path). The
- * anthropic backend (web_search_20250305) is only used when explicitly configured — auto-selecting
- * it from credential availability caused the sidecar to send incompatible models (e.g. gpt-5.6-luna)
- * to the Anthropic API.
- * The 2188 follow-up ids (xai/gemini/exa) resolve to themselves the same explicit-only way; their
- * planWebSearch arms stay fail-closed until each executor layer lands.
- */
-export function resolveSidecarBackend(
-  explicit: WebSearchBackendId | undefined,
-): WebSearchBackendId {
-  if (explicit === "anthropic" || explicit === "xai" || explicit === "gemini" || explicit === "exa") return explicit;
-  return "openai";
-}
-
 export interface SidecarPlan {
   /** Which executor runs the search. Anthropic does not require a forward provider. */
   backend: WebSearchBackendId;
@@ -166,7 +152,11 @@ export function planWebSearch(
   provider: OcxProviderConfig,
   modelId: string,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
-  options: { admission?: Pick<DataPlaneAdmission, "source">; codexAuthPolicy?: CodexAuthPolicyConfig } = {},
+  options: {
+    admission?: Pick<DataPlaneAdmission, "source">;
+    codexAuthPolicy?: CodexAuthPolicyConfig;
+    providerName?: string;
+  } = {},
 ): SidecarPlan | undefined {
   if (!parsed._webSearch || isPassthrough) return undefined;
   if (!toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) return undefined;
@@ -190,8 +180,9 @@ export function planWebSearch(
     routedModelStallTimeoutMs,
     timeoutMs,
   );
-  // The routed model being text-only means the search model must verbalize image results (either backend).
-  const describeImages = isModelTextOnly(provider, modelId);
+  // A target proven unable to accept image input receives verbalized image results instead of
+  // search-result images. A genuinely unknown custom target keeps the established pass-through.
+  const describeImages = requiresVisionPreprocessing(config, provider, modelId, options.providerName);
   const reasoning = cfg.reasoning ?? DEFAULT_SIDECAR_REASONING;
   const streamRoutedModelOutput = cfg.streamRoutedModelOutput === true;
 

@@ -461,7 +461,7 @@ simgeyi kontrol eder; proxy'yi kontrol etmek için menüsünü kullanın.
 ### `ocx gui`
 
 Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://localhost:<port>`
-adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın.
+adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar.
 
 ## Güncelleme
 

@@ -78,8 +78,8 @@ plus `thread-id` pair is mapped to an opaque HMAC under a random process-local k
 oversized components remain unbound, raw identifiers and durable hashes are never stored, and
 account-qualified selectors skip both lookup and mutation. Selection, subagent fallback preview,
 and terminal outcome accounting carry the same key so route planning cannot preview one account
-and authenticate another, and a transient failure clears the binding that actually selected the
-account.
+and authenticate another. A transient-failure streak does not delete the live binding that
+actually selected the account; the request is served by another account while the binding is kept.
 
 > Decision record: [ADR-0085](../decisions/ADR-0085-public-provider-contract.md)
 
@@ -250,10 +250,12 @@ the auto-switch threshold, cooling down, soft-avoided, paused, or needs reauth; 
 drains a tier, and every tier drained leaves the eligible list untouched. Ordering never admits an
 account that pause, cooldown, health, or reauth already excluded, and never overrides those
 exclusions. It adds no new rebind cause for a bound thread, which still moves only for the reasons it
-already had: a quota-strategy threshold re-evaluation, a failover streak, an account that stopped
-being selectable, or affinity expiry. The stable `__main__` alias carries an order on equal terms with
-added accounts, which is what lets the Desktop login be ordered last. An absent or empty map
-reproduces the prior selection sequence exactly.
+already had: a quota-strategy re-evaluation when `pool.cacheAffinity` is off (threshold) or the bound
+account cannot serve (the default), an account that stopped being selectable, or affinity expiry.
+A transient-failure streak does not delete a live binding. A bound move requires genuine quota
+headroom and strictly lower usage on the destination. The stable `__main__` alias carries an order on
+equal terms with added accounts, which is what lets the Desktop login be ordered last. An absent or
+empty map reproduces the prior selection sequence exactly.
 
 Preemption moves unbound requests back up when a higher tier regains headroom, and it holds the
 runtime cursor only. Under an independent quota scope it must never touch the shared active cursor,
@@ -515,6 +517,33 @@ The history read API reports a median effective token estimate and interval samp
 
 `src/codex/routing.ts` supports Codex-only `accountPoolStrategy: "reset-first"`. For new shared-quota assignments it chooses the earliest future short/weekly reset after existing eligibility, priority and usage-threshold filtering; ties and absent/elapsed deadlines use the existing usage order. Seconds and milliseconds are normalized with `resetAtToMs`. Threshold zero disables usage filtering while retaining reset ordering. Monthly deadlines do not order this strategy.
 
-Live bindings obey the existing cache-affinity release policy: with `pool.cacheAffinity`, threshold crossing alone retains a healthy account. Manual preference, scoped health and shared-cursor guards remain authoritative. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
+Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on by default, so threshold crossing alone retains a healthy account. A bound thread that does leave may move only onto an account with genuine quota headroom and strictly lower usage. Manual preference, scoped health and shared-cursor guards remain authoritative. Set the flag false to restore threshold rebinding of bound tasks. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
 
 The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic and Anthropic parsers reject reset-first. The dashboard offers it only for Codex; API, CLI and translated guides preserve the same contract.
+
+## Bound-thread rebind destination
+
+A quota-strategy re-evaluation may move a LIVE thread binding only to an account that has genuine
+quota headroom and is also strictly cooler than the bound account. Both bars are load-bearing.
+Without the headroom bar, "strictly cooler" has no floor, so a pool whose every member sits in the
+80-100% band hands a long conversation from account to account on consecutive turns; Codex prompt
+caches are account-isolated, so each hop restarts from a cold prefix and a 7k-token turn becomes a
+150k-token one (#4546). Without the strictly-cooler bar, `hasCodexQuotaHeadroom` — which answers
+true for unknown usage, correctly for an unbound pick — would trade a warm prefix for an unmeasured
+account. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so the second bar excludes an unobserved destination
+without a special case.
+
+Movement is therefore bounded by the number of accounts rather than the number of turns. The rule
+narrows a preference and never a refusal: a 429/402 with no success since, a failover streak, pause,
+cooldown, lost generation and an unusable account all still release the binding before this rule is
+consulted, and they run in `resolveCodexAccountForThreadDetailed` ahead of it. A known score of 100
+with no recorded refusal is deliberately not a release path on its own — stickiness until the
+account actually refuses is intended — but it does surrender the binding as soon as a sibling with
+headroom exists. Unbound assignment is untouched and still takes the coolest eligible account,
+because a fresh request has no warm prefix to lose. `pool.cacheAffinity` remains the stronger
+opt-in, raising the bar from the threshold to genuine exhaustion.
+
+Two call sites need the rule — the live path in `reevaluateAffinityQuota` and the side-effect-free
+`previewReusableAffinityAccount` that subagent fallback reads — and they share one helper rather
+than restating it, because the suite asserts the two answer identically and a preview that
+disagreed would hand fallback a different account than the request actually uses.

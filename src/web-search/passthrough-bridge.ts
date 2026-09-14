@@ -18,10 +18,19 @@
  *
  * Deliberate boundaries of this first slice:
  *   - Streaming SSE turns only. A non-streaming turn stays on the existing path.
- *   - A leg that mixes the search call with any OTHER client tool call fails closed with an
- *     explicit error. Answering both would need the raw mixed-tool continuation contract the
- *     2.47 track deferred (devlog/_plan/260907_track2_protocol/040_hosted_search_disposition.md),
- *     and silently half-doing it would drop the client's own tool call.
+ *   - A leg that mixes the search call with a client-executed tool call ends the turn ON that
+ *     leg: the intercepted searches still run proxy-side so the hosted cell completes, the
+ *     held client calls are released for Codex to run, and the leg's own terminal closes the
+ *     turn. No continuation is sent upstream, because the client's call is unanswered and the
+ *     conversation owes the client a turn, not the gateway. When the leg's terminal already
+ *     ended the turn (response.failed / response.incomplete) the searches are not run at all:
+ *     the opened cells close unanswered and that terminal is relayed, because billing a search
+ *     for a dead turn buys nothing. What is still not fixed: the
+ *     gateway never receives the executed search result -- Codex replays the hosted
+ *     web_search_call cell (query and sources, no result text) on the next turn and the
+ *     gateway's own function_call/function_call_output pair is not reconstructed. Making it
+ *     whole needs the outbound body rewritten before the first leg is dispatched, which lives
+ *     in src/server/responses/core.ts and is out of this module's scope.
  *   - Assistant text is never treated as a search instruction. The bridge intercepts structured
  *     function_call / custom_tool_call items named web_search, not XML-like prose.
  *   - Non-Ollama backends reuse the sidecar executors and those executors' own credentials.
@@ -61,12 +70,55 @@ import {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
   findXaiSidecarProvider,
+  resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
 } from "./sidecar-providers";
+import { providerDestinationConfigError } from "../lib/destination-policy";
+import { redactSecretString } from "../lib/redact";
 
 /** Canonical Ollama Cloud origin. The only origin the "ollama" backend derives on its own. */
 export const OLLAMA_CLOUD_ORIGIN = "https://ollama.com";
 const OLLAMA_WEB_SEARCH_PATH = "/api/web_search";
+
+/**
+ * Providers already warned about a destination-refused bridge endpoint. The planner runs per
+ * request, so without this a refused endpoint would warn on every turn. Keyed on provider plus
+ * endpoint so that editing the config warns again; the key itself is never logged.
+ */
+const warnedRefusedBridgeEndpoints = new Set<string>();
+/** Bound the dedupe set so a pathological config cannot grow it without limit. */
+const MAX_WARNED_REFUSED_ENDPOINTS = 64;
+
+/**
+ * A refused endpoint disarms the bridge, and the refusal itself has to stay silent at the point of
+ * use -- returning undefined is what keeps the key unspent. But silence alone made a real
+ * configuration fail invisibly: a provider keyed under a CUSTOM name (say "my-ollama") pointing at
+ * a loopback endpoint used to arm, and the destination policy now refuses it because only the
+ * registry ids are local by default. The config file never reaches
+ * "providerWebSearchBridgeConfigError", so nothing else would tell the operator. One warning per
+ * provider and endpoint gives them the remedy without leaking the destination: the URL is
+ * deliberately omitted and the provider name is redacted, because a provider key is
+ * caller-controlled and can be token-shaped.
+ */
+function warnRefusedBridgeEndpointOnce(providerName: string, endpoint: string): void {
+  const key = providerName + "\u0000" + endpoint;
+  if (warnedRefusedBridgeEndpoints.has(key)) return;
+  if (warnedRefusedBridgeEndpoints.size >= MAX_WARNED_REFUSED_ENDPOINTS) {
+    warnedRefusedBridgeEndpoints.clear();
+  }
+  warnedRefusedBridgeEndpoints.add(key);
+  console.warn(
+    "[web-search] provider " + JSON.stringify(redactSecretString(providerName))
+    + " webSearchBridge.endpoint was refused by destination policy, so the bridge stays disarmed."
+    + " Set allowPrivateNetwork:true for an intentionally local endpoint, or key the provider under"
+    + " its registry id (ollama, vllm, lm-studio, litellm).",
+  );
+}
+
+/** Test seam: the dedupe is process-wide, so a test that asserts the warning must reset it. */
+export function resetRefusedBridgeEndpointWarningsForTests(): void {
+  warnedRefusedBridgeEndpoints.clear();
+}
 
 const DEFAULT_BRIDGE_MAX_SEARCHES = 3;
 const DEFAULT_BRIDGE_TIMEOUT_MS = 60_000;
@@ -77,6 +129,11 @@ const MAX_RETAINED_OUTPUT_ITEMS = 500;
 /** Refuse to buffer an unbounded partial SSE event from a misbehaving upstream. */
 const MAX_SSE_BUFFER_CHARS = 8 * 1024 * 1024;
 
+/**
+ * Retained for importers that pinned the first slice's contract: a leg mixing the search with
+ * a client-executed call used to fail with this code. Such legs now end the turn on the leg
+ * instead of failing, so nothing emits it any more.
+ */
 export const WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE = "web_search_bridge_mixed_tools";
 export const WEB_SEARCH_BRIDGE_ERROR_CODE = "web_search_bridge_failed";
 
@@ -122,13 +179,33 @@ function originOf(value: string | undefined): string | undefined {
  * that receives this provider's API key. Without one, the origin must be canonical Ollama Cloud
  * -- a renamed row pointing at an arbitrary host must not silently receive the key just because
  * its adapter happens to be openai-responses.
+ *
+ * Naming a destination is not the same as it being an allowed one. The endpoint therefore gets the
+ * same literal destination assessment "baseUrl" already gets (#4519): metadata addresses are
+ * refused outright, and loopback/private need the provider's "allowPrivateNetwork" opt-in or a
+ * registry entry that is local by definition, so a local Ollama on 127.0.0.1 keeps working. This
+ * is the ONLY reader of "webSearchBridge.endpoint" in the tree, which is what lets it act as the
+ * authorization boundary for a config file the operator edited by hand -- that path never reaches
+ * "providerWebSearchBridgeConfigError", so a value that survives file load simply cannot be spent.
+ * The refusal returns undefined rather than an error, because disarming is what keeps the key
+ * unspent -- but it is not silent: see warnRefusedBridgeEndpointOnce for why a custom-named local
+ * provider has to be told, once, that its endpoint was refused and how to re-authorize it.
  */
 export function resolveOllamaWebSearchEndpoint(
+  providerName: string,
   provider: OcxProviderConfig,
 ): string | undefined {
   const configured = provider.webSearchBridge?.endpoint;
   if (configured !== undefined) {
-    return originOf(configured) === undefined ? undefined : configured;
+    if (originOf(configured) === undefined) return undefined;
+    if (providerDestinationConfigError(providerName, {
+      baseUrl: configured,
+      allowPrivateNetwork: provider.allowPrivateNetwork,
+    })) {
+      warnRefusedBridgeEndpointOnce(providerName, configured);
+      return undefined;
+    }
+    return configured;
   }
   return originOf(provider.baseUrl) === OLLAMA_CLOUD_ORIGIN
     ? OLLAMA_CLOUD_ORIGIN + OLLAMA_WEB_SEARCH_PATH
@@ -210,6 +287,12 @@ export function planPassthroughWebSearchBridge(
   parsed: OcxParsedRequest,
   provider: OcxProviderConfig,
   options: {
+    /**
+     * Registry key for this provider. Required rather than optional: the destination assessment
+     * consults the registry's local-by-default entries, and an absent name would silently pick a
+     * different answer than the operator configured.
+     */
+    providerName: string;
     isPassthrough: boolean;
     stream: boolean;
     auth?: PassthroughWebSearchBridgeAuth;
@@ -238,7 +321,7 @@ export function planPassthroughWebSearchBridge(
     ? bridge.timeoutMs!
     : DEFAULT_BRIDGE_TIMEOUT_MS;
   if (backend === "ollama") {
-    const endpoint = resolveOllamaWebSearchEndpoint(provider);
+    const endpoint = resolveOllamaWebSearchEndpoint(options.providerName, provider);
     if (!endpoint) return undefined;
     return { backend, endpoint, maxSearches, timeoutMs };
   }
@@ -357,10 +440,16 @@ async function* readSseBlocks(
   }
 }
 interface LegDecision {
-  kind: "end" | "continue" | "fail";
+  kind: "end" | "endAfterSearch" | "endWithoutSearch" | "continue" | "fail";
   searches: InterceptedSearchCall[];
   message?: string;
   code?: string;
+  /**
+   * Whether an endWithoutSearch leg may hand its withheld client-executed calls back.
+   * Only `response.incomplete` may: the client can still act on that turn. A
+   * `response.failed` terminal must not, for the same reason the fail path drops them.
+   */
+  releaseHeldCalls?: boolean;
 }
 
 /** One client-executed call event held until the leg's fate is known. */
@@ -584,21 +673,40 @@ class BridgeStreamState {
     return blocks;
   }
 
+  /**
+   * Discard the withheld client-executed calls without emitting them. Used when the turn is
+   * ending in a state the client cannot act on, where releasing the call would start work
+   * under a turn that is already over.
+   */
+  dropHeldCalls(): void {
+    this.heldCalls = [];
+  }
+
   /** Decide what the leg's terminal means once the whole leg has been read. */
   decide(remainingLegs: number): LegDecision {
     if (this.searches.length === 0) return { kind: "end", searches: [] };
-    if (this.sawClientExecutedCall) {
-      return {
-        kind: "fail",
-        searches: this.searches,
-        code: WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE,
-        message: "routed provider requested web_search alongside another client tool in one turn; "
-          + "the web-search bridge cannot answer both without dropping the client's call",
-      };
-    }
     const terminalType = this.terminalPayload?.type;
     if (terminalType === "response.failed" || terminalType === "response.incomplete") {
-      return { kind: "end", searches: [] };
+      // The upstream terminal already ended this leg, so running the intercepted searches now
+      // would bill a search for a dead turn. The opened cells are closed unanswered instead.
+      //
+      // The two terminals differ in what happens to a withheld client-executed call, and
+      // lumping them together released one under a failed turn. `response.incomplete` leaves a
+      // turn the client can still act on, so its held call goes back. `response.failed` does
+      // not, and handing Codex a tool call to start executing inside a dead turn is the exact
+      // thing the fail path below refuses to do.
+      return {
+        kind: "endWithoutSearch",
+        searches: this.searches,
+        releaseHeldCalls: terminalType === "response.incomplete",
+      };
+    }
+    if (this.sawClientExecutedCall) {
+      // The client's own call is unanswered, so this leg cannot continue upstream: the
+      // conversation owes the client a turn, not the gateway. The intercepted searches still
+      // run so the hosted cell completes rather than dangling, then the held calls go back to
+      // the client and the leg's own terminal ends the turn.
+      return { kind: "endAfterSearch", searches: this.searches };
     }
     if (remainingLegs <= 0) {
       return {
@@ -677,7 +785,7 @@ export interface PassthroughWebSearchBridgeExecutorContext {
   auth?: PassthroughWebSearchBridgeAuth;
   hostedTool?: Record<string, unknown>;
   describeImages?: boolean;
-  sidecar?: Pick<OcxWebSearchSidecarConfig, "model" | "reasoning" | "xSearch">;
+  sidecar?: Pick<OcxWebSearchSidecarConfig, "backend" | "model" | "reasoning" | "xSearch">;
 }
 
 const DEFAULT_OPENAI_BRIDGE_MODEL = "gpt-5.6-luna";
@@ -686,18 +794,52 @@ const DEFAULT_XAI_BRIDGE_MODEL = "grok-4.6";
 const DEFAULT_GEMINI_BRIDGE_MODEL = "gemini-3.8-flash";
 const DEFAULT_BRIDGE_REASONING = "low";
 
-function sidecarSettingsForBridge(
+/**
+ * Search model each bridge backend runs when the global sidecar block was configured for a
+ * DIFFERENT backend (see modelForBridgeBackend). Exhaustive over the backend union on purpose:
+ * a seventh backend must decide its own default here rather than fall through to a ChatGPT model.
+ * The `ollama` and `exa` rows are inert — runOllamaWebSearch takes no model argument and
+ * runExaWebSearch reads only settings.timeoutMs — and must stay that way.
+ */
+const DEFAULT_BRIDGE_MODELS: Record<ProviderWebSearchBridgeBackend, string> = {
+  ollama: DEFAULT_OPENAI_BRIDGE_MODEL,
+  openai: DEFAULT_OPENAI_BRIDGE_MODEL,
+  anthropic: DEFAULT_ANTHROPIC_BRIDGE_MODEL,
+  xai: DEFAULT_XAI_BRIDGE_MODEL,
+  gemini: DEFAULT_GEMINI_BRIDGE_MODEL,
+  exa: DEFAULT_OPENAI_BRIDGE_MODEL,
+};
+
+/**
+ * `sidecar` is the GLOBAL `config.webSearchSidecar` block, which carries the model chosen for
+ * ITS backend. The bridge backend is the per-provider `webSearchBridge.backend` and the two are
+ * configured independently, so the operator's model only means anything here when they agree:
+ * a global {backend:"openai", model:"gpt-5.6-luna"} otherwise reaches runAnthropicWebSearch and
+ * Anthropic rejects the model. On a mismatch the bridge falls back to the backend's own default.
+ * The same reasoning already pins the backend first in planWebSearch.
+ *
+ * Only the model is gated. `reasoning` is a generic effort level, and `xSearch` is xai-only with
+ * no per-backend default and no `webSearchBridge.xSearch` equivalent, so gating it would make an
+ * openai sidecar plus an xai bridge plus x_search impossible to express at all.
+ */
+function modelForBridgeBackend(
+  backend: ProviderWebSearchBridgeBackend,
+  sidecar: Pick<OcxWebSearchSidecarConfig, "backend" | "model">,
+): string {
+  const backendDefault = DEFAULT_BRIDGE_MODELS[backend];
+  if (resolveSidecarBackend(sidecar.backend) !== backend) return backendDefault;
+  return sidecar.model ?? backendDefault;
+}
+
+/** The settings a bridge executor will run with. Exported for tests; the executor closes over it. */
+export function sidecarSettingsForBridge(
   backend: ProviderWebSearchBridgeBackend,
   plan: PassthroughWebSearchBridgePlan,
   context: PassthroughWebSearchBridgeExecutorContext,
 ): SidecarSettings {
   const sidecar = context.sidecar ?? {};
-  const model = backend === "anthropic" ? sidecar.model ?? DEFAULT_ANTHROPIC_BRIDGE_MODEL
-    : backend === "xai" ? sidecar.model ?? DEFAULT_XAI_BRIDGE_MODEL
-    : backend === "gemini" ? sidecar.model ?? DEFAULT_GEMINI_BRIDGE_MODEL
-    : sidecar.model ?? DEFAULT_OPENAI_BRIDGE_MODEL;
   return {
-    model,
+    model: modelForBridgeBackend(backend, sidecar),
     reasoning: sidecar.reasoning ?? DEFAULT_BRIDGE_REASONING,
     timeoutMs: plan.timeoutMs,
     describeImages: context.describeImages === true,
@@ -881,6 +1023,26 @@ async function* bridgeStreamBlocks(
       return;
     }
 
+    if (decision.kind === "endWithoutSearch") {
+      // The upstream terminal already ended this leg, so billing a search now would pay for a
+      // dead turn. The opened cells still have to close -- an in_progress web_search_call left
+      // under a finished turn is the same dangling "Searching the web" spinner the failure path
+      // above closes for. This also tightens the pre-existing non-mixed failed-leg path, which
+      // used to drop the searches and leave the cell open.
+      for (const call of decision.searches) {
+        yield* emit(state.searchEndFrames(call, [], {
+          text: "",
+          sources: [],
+          error: "the upstream turn ended before the web search could run",
+        }));
+      }
+      // Only an incomplete terminal hands the withheld call back; a failed one drops it.
+      if (decision.releaseHeldCalls) yield* emit(state.flushHeldCalls());
+      else state.dropHeldCalls();
+      yield* emit(state.terminalFrames());
+      return;
+    }
+
     const turns: { call: InterceptedSearchCall; output: string }[] = [];
     for (const call of decision.searches) {
       const queries = parseQueries(call.argumentsText);
@@ -905,6 +1067,17 @@ async function* bridgeStreamBlocks(
         // tool result rather than as a turn failure, so it can still answer without the search.
         output: outcome.error ? "Web search failed: " + outcome.error : outcome.text,
       });
+    }
+
+    if (decision.kind === "endAfterSearch") {
+      // A mixed leg ends here rather than continuing upstream: the client's own call is
+      // unanswered, so the conversation owes the CLIENT a turn, not the gateway. The searches
+      // completed their hosted cells above; now the held calls go back for Codex to run and
+      // the leg's terminal closes the turn. No continuation is sent and no function_call_output
+      // is fabricated for a call the bridge cannot execute.
+      yield* emit(state.flushHeldCalls());
+      yield* emit(state.terminalFrames());
+      return;
     }
 
     const nextBody = appendBridgeSearchTurn(requestBody, turns);

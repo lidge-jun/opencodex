@@ -29,6 +29,8 @@ import {
   takeFlag,
   takeIntegerOption,
   takeOption,
+  terminalSafeError,
+  terminalSafeText,
   type RuntimeApiDeps,
 } from "./runtime-api";
 
@@ -40,6 +42,15 @@ export interface ClientCommandDeps extends RuntimeApiDeps {
 export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
   /** Injected in tests; defaults to reading the materialized client catalog off disk. */
   readCatalogBody?: () => string | null;
+  /**
+   * A Codex command the caller already resolved, handed over so readiness skips resolving it
+   * again. General `ocx status` resolves the full runtime for its diagnostics block; the resolver
+   * memo is keyed by discovery scope and holds one entry, so a priority-only readiness resolve
+   * and the full one miss each other and re-probe the same command with `--version` — up to eight
+   * seconds apiece. Passing the command across adds no cache state, and it cannot disagree with
+   * what status prints because it is the selection status is printing.
+   */
+  selectedCodexCommand?: string;
 }
 
 export const CONNECT_USAGE = `Usage:
@@ -101,11 +112,15 @@ function readInstalledCatalogBody(): string | null {
  * `codexSupportedReasoningEfforts()` with no deps reaches `resolveAndPersistCodexRuntime`, which
  * writes codex-runtime.json. `ocx status` deliberately resolves without persisting, and a
  * read-only diagnostics command should not start writing runtime selection state because a
- * readiness check was added to it. Handing the already-resolved command in as the only candidate
- * skips that path and reuses the resolve cache `ocx status` has usually already filled.
+ * readiness check was added to it. Stop at the first valid runtime, then hand only that command
+ * to the catalog probe: readiness does not consume alternative-runtime diagnostics. The resolver
+ * keeps this priority-only cache separate from the full discovery used by `ocx status`.
+ *
+ * A caller that has already resolved passes its selection in through `selectedCodexCommand` rather
+ * than paying for a second `--version` probe of the command it just resolved.
  */
-function observeLocalCodexEffortLadder(): ReadonlySet<string> | null {
-  const command = resolveCodexRuntime().runtime.command;
+function observeLocalCodexEffortLadder(selected?: string): ReadonlySet<string> | null {
+  const command = selected ?? resolveCodexRuntime({ discoverAlternatives: false }).runtime.command;
   return codexSupportedReasoningEfforts({ commandCandidates: () => [command] });
 }
 
@@ -117,7 +132,8 @@ function observeLocalCodexEffortLadder(): ReadonlySet<string> | null {
  * a single `ocx connect`.
  */
 function catalogObserver(deps: ClientCatalogProbeDeps | undefined): CatalogCompatibilityDeps {
-  return { supportedEfforts: deps?.supportedEfforts ?? observeLocalCodexEffortLadder };
+  const selected = deps?.selectedCodexCommand;
+  return { supportedEfforts: deps?.supportedEfforts ?? (() => observeLocalCodexEffortLadder(selected)) };
 }
 
 /** The stat half of the catalog verdict, shared by the status collector and `ocx connect`. */
@@ -212,7 +228,7 @@ function readinessLine(status: ClientConnectionStatus): string {
     : status.readiness === "incompatible"
       ? "not ready"
       : "unverified";
-  return `Local Codex CLI: ${label}${status.readinessReason ? ` (${status.readinessReason})` : ""}`;
+  return `Local Codex CLI: ${label}${status.readinessReason ? ` (${terminalSafeText(status.readinessReason)})` : ""}`;
 }
 
 export type ConnectCompletionReport = {
@@ -249,9 +265,10 @@ export function connectCompletionReport(
   if (readiness.kind === "unverified") {
     // Not a failure. A client with no observable Codex CLI is a working configuration, and the
     // write-time gate deliberately lets it through; saying so is the honest middle report.
-    return { lines: [connected, `Local Codex CLI: unverified (${readiness.reason}).`], failure: null };
+    return { lines: [connected, `Local Codex CLI: unverified (${terminalSafeText(readiness.reason)}).`], failure: null };
   }
-  const verdict = `Local Codex CLI: not ready (${readiness.reason})`;
+  const safeReason = terminalSafeText(readiness.reason);
+  const verdict = `Local Codex CLI: not ready (${safeReason})`;
   if (!selectedClients.includes("codex")) {
     return {
       lines: [connected, `${verdict} This connection selected ${selectedClients.join(", ")}, so nothing here launches Codex.`],
@@ -260,7 +277,7 @@ export function connectCompletionReport(
   }
   return {
     lines: [verdict, `The connection to ${connection.serverUrl} as key ${connection.apiKeyId} was saved; run 'ocx connect status' to see it.`],
-    failure: `client_not_ready: ${readiness.reason}`,
+    failure: `client_not_ready: ${safeReason}`,
   };
 }
 
@@ -344,6 +361,10 @@ async function runConnect(argv: string[], deps: ClientCommandDeps): Promise<void
     // production would let the gate fall back to its own probing, persisting default, so one
     // command could run two probes and act on two different ladders.
     catalogCompatibility: catalogObserver(deps.catalogProbeDeps),
+  }).catch((error: unknown) => {
+    // Compatibility refusals happen before the completion report and reach stderr.
+    // Keep the domain error untouched; render its message only at the CLI boundary.
+    throw terminalSafeError(error);
   });
   // The hub and the credential are proven at this point; the local runtime is not. Reporting
   // only the first half is what #4207 was filed for, so the catalog now on disk is checked

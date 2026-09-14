@@ -15,6 +15,8 @@ ocx connect status
 ocx sync
 ```
 
+面向人阅读的就绪诊断会把目录值中的 C0/C1 控制字符、DEL 以及 Unicode 行分隔符和段落分隔符（U+2028、U+2029）显示为可见的十六进制转义，首次连接时如此，`ocx sync` 拒绝重新获取的 hub 目录时也一样。JSON 状态仍保留原始的诊断值。
+
 客户端密钥写入仅所有者可读的 `service-api-token`，绝不会写入 `config.json`。连接期间，使用记录来自 hub 并按稳定的 `apiKeyId` 过滤；断开后显示本地记录。两者不会镜像。
 
 Admin token 只能执行普通管理，永远不能创建用户同意会话。用户同意操作必须使用服务器签发的 `gui-session`、匹配的 Origin 和 CSRF。`Tailscale-User-Login` 只在独立管理入口可信；请在 `remoteGui.allowedTailscaleUsers` 中填写准确登录名。

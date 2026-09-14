@@ -317,6 +317,37 @@ const MODEL_ROSTER_VERSIONS_PER_ACCOUNT_MAX = 4;
  * roster.
  */
 const MODEL_ROSTER_FLIGHTS_PER_ACCOUNT_MAX = 4;
+
+/**
+ * Distinct caller-selected roster versions admitted per account in one roster window.
+ *
+ * The cache budget and the flight budget both bound STATE, not WORK. A caller that cycles
+ * `client_version` and waits for each answer misses the cache by design and misses the flight
+ * key by design, so it can renew an authenticated upstream request under EVERY stored account
+ * token as often as it likes, and the gated-model checks it displaces fail closed while it does.
+ *
+ * DISTINCT VERSIONS are counted, never attempts. One legitimate client retrying a single version
+ * through an upstream outage comes back every 15s on the failure TTL; charging each attempt would
+ * spend the whole allowance on that one version and then refuse it for the rest of the 5-minute
+ * window, turning a recovered upstream into several more minutes without gated models.
+ */
+const MODEL_ROSTER_VERSION_MISSES_PER_ACCOUNT_MAX = 4;
+
+interface AccountVersionMissBudget {
+  credentialIdentity: string;
+  /** Version -> when this version stops occupying the allowance. */
+  versions: Map<string, number>;
+}
+
+/**
+ * One row per ACCOUNT, not per credential identity.
+ *
+ * A Pool access-token refresh increments the generation, so an identity-keyed map would gain a
+ * permanent row per generation for the lifetime of the process: a protection against renewable
+ * work would have introduced an unbounded cache. A generation change replaces the row instead,
+ * which is also the right budget semantics — new credential, new allowance.
+ */
+const accountModelsMisses = new Map<string, AccountVersionMissBudget>();
 const DIRECT_CALLER_ACCOUNT_PREFIX = "__direct_codex__:";
 
 export interface CodexModelEntitlementCredentialSnapshot {
@@ -670,6 +701,7 @@ async function modelsForCredential(
   fetcher: typeof fetch,
   now: number,
   clientVersion: string,
+  trustedClientVersion: string,
   credentialMutationEpoch?: number,
 ): Promise<CachedAccountModels> {
   const cached = accountModelsCache.get(cacheKeyFor(credential.accountId, clientVersion));
@@ -698,6 +730,21 @@ async function modelsForCredential(
       confirmed: false,
     };
   }
+  // Cache hits, joined flights and capacity refusals start no upstream request. Charge only
+  // after capacity admission; the locally selected runtime version remains exempt.
+  if (
+    !credential.accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)
+    && clientVersion !== trustedClientVersion
+    && !admitVersionMiss(credential, clientVersion, now)
+  ) {
+    return {
+      credentialIdentity: credential.credentialIdentity,
+      clientVersion,
+      expiresAt: now,
+      models: new Set(),
+      confirmed: false,
+    };
+  }
   const flight = fetchAccountModels(credential, fetcher, now, clientVersion)
     .then(result => {
       if (
@@ -714,6 +761,30 @@ async function modelsForCredential(
     });
   accountModelsFlights.set(flightKey, flight);
   return flight;
+}
+
+/** Whether this caller-selected version may open a new upstream request for the account. */
+function admitVersionMiss(
+  credential: CodexModelEntitlementCredentialSnapshot,
+  clientVersion: string,
+  now: number,
+): boolean {
+  const stored = accountModelsMisses.get(credential.accountId);
+  const budget = stored && stored.credentialIdentity === credential.credentialIdentity
+    ? stored
+    : { credentialIdentity: credential.credentialIdentity, versions: new Map<string, number>() };
+  for (const [version, expiresAt] of budget.versions) {
+    if (expiresAt <= now) budget.versions.delete(version);
+  }
+  const alreadyCharged = budget.versions.has(clientVersion);
+  const admitted = alreadyCharged
+    || budget.versions.size < MODEL_ROSTER_VERSION_MISSES_PER_ACCOUNT_MAX;
+  // A repeat keeps its ORIGINAL expiry. Refreshing it here would let a caller hold one version
+  // open indefinitely, and it is the retry case this distinction exists to protect.
+  if (admitted && !alreadyCharged) budget.versions.set(clientVersion, now + MODEL_ROSTER_TTL_MS);
+  if (budget.versions.size === 0) accountModelsMisses.delete(credential.accountId);
+  else accountModelsMisses.set(credential.accountId, budget);
+  return admitted;
 }
 
 function candidateAccountIds(config: Pick<OcxConfig, "codexAccounts">): string[] {
@@ -992,6 +1063,10 @@ export async function resolveCodexModelEntitlements(
       fetcher,
       now,
       clientVersion,
+      resolveCodexEntitlementClientVersion(
+        null,
+        options.loadPersistedRuntime ?? loadPersistedCodexRuntime,
+      ),
       options.credentialMutationEpoch,
     ),
   })));
@@ -1049,6 +1124,7 @@ export async function isDirectCallerEntitledToCodexModel(
     credential,
     options.fetcher ?? fetch,
     options.now ?? Date.now(),
+    clientVersion,
     clientVersion,
   );
   return codexModelEntitlementStateForRoster(
@@ -1128,11 +1204,13 @@ export function invalidateCodexModelEntitlementsForAccount(accountId: string | n
   for (const key of [...accountModelsCache.keys()]) {
     if (accountIdOfCacheKey(key) === accountId) accountModelsCache.delete(key);
   }
+  accountModelsMisses.delete(accountId);
 }
 
 export function resetCodexModelEntitlementCacheForTests(): void {
   accountModelsCache.clear();
   accountModelsFlights.clear();
+  accountModelsMisses.clear();
   negativeCredentialMemo.clear();
   entitlementEnsureFlights.clear();
   runtimeVersionMemo = null;

@@ -2,10 +2,14 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { BinaryWriter } from "@bufbuild/protobuf/wire";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createLiveCursorTransport, CursorMissingCredentialError, parseConnectEndStreamError, resolveCursorToken } from "../../../src/adapters/cursor/live-transport";
+import { safeCursorErrorMessage } from "../../../src/adapters/cursor/cursor-errors";
+import { isRetryableCursorError } from "../../../src/adapters/cursor/transport-retry";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import { CURSOR_EXTERNAL_ROOT_BLOB_LIMIT, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT, CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT, prepareCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
+import { classifyError, inferHttpStatusFromAdapterMessage } from "../../../src/lib/errors";
 import { estimateTokens } from "../../../src/lib/token-estimate";
 import type { OcxMessage } from "../../../src/types";
 import type { CursorRunRequest } from "../../../src/adapters/cursor/types";
@@ -25,6 +29,82 @@ import {
 } from "../../../src/adapters/cursor/native-exec-shell";
 import { AgentClientMessageSchema, BackgroundShellSpawnArgsSchema, ConversationStateStructureSchema, ExecServerMessageSchema, GetBlobArgsSchema, KvServerMessageSchema, type AgentRunRequest } from "../../../src/adapters/cursor/gen/agent_pb";
 import type { CursorProtobufEventState } from "../../../src/adapters/cursor/protobuf-events";
+
+describe("Cursor Fable policy gate details (#4508)", () => {
+  const title = "Review Data Policy";
+  const detail = "You must acknowledge Claude Fable 5's data retention policy to use the model.";
+  const reviewUrl = "https://cursor.com/dashboard/restricted_models/claude-fable-5";
+  function binary(overrides: { title?: string; detail?: string; error?: number; extras?: Uint8Array } = {}): string {
+    const custom = new BinaryWriter().uint32(10).string(overrides.title ?? title)
+      .uint32(18).string(overrides.detail ?? detail)
+      .uint32(32).bool(false).uint32(40).bool(false);
+    if (overrides.extras) custom.raw(overrides.extras);
+    return Buffer.from(new BinaryWriter().uint32(8).uint32(overrides.error ?? 58)
+      .uint32(18).bytes(custom.finish()).uint32(24).bool(true).finish()).toString("base64");
+  }
+  function parse(details: unknown, code = "failed_precondition", message = "Error") {
+    return parseConnectEndStreamError(new TextEncoder().encode(JSON.stringify({ error: { code, message, details } })))!;
+  }
+  function entry(value = binary()) { return { type: "aiserver.v1.ErrorDetails", value }; }
+  const fallback = "Cursor Connect error failed_precondition: Error";
+
+  test("binary without debug produces the review path and preserves 400/non-retryable behaviour", () => {
+    const error = parse([entry()]);
+    const message = safeCursorErrorMessage(error.message);
+    expect(message).toContain(title);
+    expect(message).toContain(detail);
+    expect(message).toContain(reviewUrl);
+    expect(message.length).toBeLessThan(500);
+    expect(inferHttpStatusFromAdapterMessage(message)).toBe(400);
+    expect(classifyError(400, "", message)).toMatchObject({ type: "invalid_request_error", code: "invalid_request_error" });
+    expect(isRetryableCursorError(error)).toBe(false);
+  });
+
+  test("does not forward upstream messages, buttons, actions, URLs or debug text", () => {
+    const extras = new BinaryWriter().uint32(66).bytes(new TextEncoder().encode("secret-token consent-action https://untrusted.invalid"))
+      .uint32(82).bytes(new TextEncoder().encode("private-analytics")).finish();
+    const error = parse([{ ...entry(binary({ extras })), debug: { title: "rate limit Bearer secret-token" } }], "failed_precondition", "Bearer another-secret");
+    expect(error.message).toContain(reviewUrl);
+    for (const text of ["secret-token", "another-secret", "consent-action", "untrusted.invalid", "private-analytics", "rate limit"]) {
+      expect(error.message).not.toContain(text);
+    }
+  });
+
+  test("does not trust debug in place of the binary value", () => {
+    expect(parse([{ type: "aiserver.v1.ErrorDetails", debug: { error: "ERROR_MODEL_BLOCKED", details: { title, detail } } }]).message).toBe(fallback);
+  });
+
+  test("unknown type, error kind, policy text and other Connect codes retain generic behaviour", () => {
+    expect(parse([{ type: "other.ErrorDetails", value: binary() }]).message).toBe(fallback);
+    expect(parse([entry(binary({ error: 1 }))]).message).toBe(fallback);
+    expect(parse([entry(binary({ title: "Another policy" }))]).message).toBe(fallback);
+    expect(parse([entry(binary({ detail: "rate limit or quota exhausted" }))]).message).toBe(fallback);
+    expect(parse([entry()], "resource_exhausted").message).toBe("Cursor Connect error resource_exhausted: Error");
+    expect(parse([entry()], "unauthenticated").message).toBe("Cursor Connect error unauthenticated: Error");
+  });
+
+  test("malformed and oversized protobuf/base64 values fall back without throwing", () => {
+    for (const value of ["!invalid!", "", "Cg==", "A".repeat(16385), "Cg////8P", "Cw==", "AA==", "____"]) {
+      expect(parse([entry(value)]).message).toBe(fallback);
+    }
+    expect(parse([entry(binary({ title: "a".repeat(257) }))]).message).toBe(fallback);
+    expect(parse([entry(binary({ extras: new Uint8Array([0x0a, 0x00]) }))]).message).toBe(fallback);
+    expect(parse([entry(binary({ extras: new Uint8Array([0x0b]) }))]).message).toBe(fallback);
+  });
+
+  test("limits scanned fields and entries and skips unrecognized entries", () => {
+    const extras = new BinaryWriter();
+    for (let i = 0; i < 129; i++) extras.uint32(80).uint32(0);
+    expect(parse([entry(binary({ extras: extras.finish() }))]).message).toBe(fallback);
+    expect(parse([null, {}, entry()]).message).toContain(reviewUrl);
+    expect(parse([...Array(8).fill(null), entry()]).message).toBe(fallback);
+    for (const details of [null, {}, "not-an-array"]) expect(parse(details).message).toBe(fallback);
+  });
+
+  test("accepts equivalent unpadded base64", () => {
+    expect(parse([entry(binary().replace(/=+$/, ""))]).message).toContain(reviewUrl);
+  });
+});
 
 class TransportFakeChild extends EventEmitter {
   readonly stdin = new PassThrough();

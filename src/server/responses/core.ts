@@ -165,7 +165,7 @@ import {
   shouldResolveOpenAiPassthroughWebSearchBridge,
 } from "../../web-search/passthrough-bridge";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
-import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
+import { describeImagesInPlace, planVisionSidecar, requiresVisionPreprocessing, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
@@ -781,6 +781,18 @@ function isEncryptedFunctionOutputRejection(bodyText: string): boolean {
   }
 }
 
+/**
+ * #4469: reasoning encrypted_content is minted per caller identity, so replaying it under a
+ * different caller is rejected with "reasoning `encrypted_content` was not issued to this
+ * caller". Substring checks tolerate the optional backticks and a leading or trailing
+ * sentence, while the "was not issued to this caller" anchor plus an encrypted-content or
+ * reasoning subject keep unrelated invalid_request_error prose from gaining a hidden resend.
+ */
+function isReasoningBlobCallerMismatchMessage(message: string): boolean {
+  if (!message.includes("was not issued to this caller")) return false;
+  return message.includes("encrypted_content") || message.includes("reasoning");
+}
+
 function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
   if (isEncryptedFunctionOutputRejection(bodyText)) return true;
   try {
@@ -793,7 +805,7 @@ function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
   try {
     const payload = JSON.parse(bodyText) as unknown;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-    const record = payload as { code?: unknown; error?: unknown };
+    const record = payload as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
 
     if (record.error && typeof record.error === "object" && !Array.isArray(record.error)) {
       const error = record.error as { type?: unknown; code?: unknown; message?: unknown };
@@ -807,8 +819,22 @@ function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
             " could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
           )
         ) return true;
+        // #4469: the caller-mismatch wording arrives without a dedicated code, so the
+        // message itself is the identity. It is not gated on code being null — the upstream
+        // may attach a generic code — because the anchored phrase is already specific.
+        if (typeof error.message === "string" && isReasoningBlobCallerMismatchMessage(error.message)) {
+          return true;
+        }
       }
     }
+
+    // The flat stream-error envelope carries type/message at the top level rather than under
+    // an error object; the same anchored identity applies there.
+    if (
+      record.type === "invalid_request_error"
+      && typeof record.message === "string"
+      && isReasoningBlobCallerMismatchMessage(record.message)
+    ) return true;
 
     if (record.code !== "invalid-argument" || typeof record.error !== "string") return false;
     return record.error.startsWith("Could not decode the compaction blob")
@@ -824,8 +850,9 @@ function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
  * The outbound-body check is intentional: the inbound transcript may contain a proxy envelope or
  * compaction blob that the adapter already lowered, in which case a replay would be byte-identical.
  * OpenAI usually exposes a dedicated nested code; ChatGPT also emits one exact code-less
- * unverifiable-ciphertext message. xAI's code is generic, so its two concrete decoder error
- * identities are also required. Unrelated error prose must never gain a hidden resend.
+ * unverifiable-ciphertext message, and #4469 added the anchored caller-mismatch wording for
+ * reasoning blobs minted under a different caller. xAI's code is generic, so its two concrete
+ * decoder error identities are also required. Unrelated error prose must never gain a hidden resend.
  */
 export function shouldAttemptOpaqueBlobRecovery(args: {
   status: number;
@@ -4187,6 +4214,13 @@ async function handleResponsesInner(
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
   logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
+  // A move is the expensive event: it discards the prefix warmed on the previous account. Record
+  // it as an event with its cause, so the operator reads it off one line instead of inferring it
+  // from account labels across many (#4546).
+  if (authCtx.kind === "pool" && authCtx.affinityDecision) {
+    logCtx.affinity = authCtx.affinityDecision.move;
+    logCtx.affinityReason = authCtx.affinityDecision.reason;
+  }
   // Seed an account-derived scope before final adapter binding. Cursor never treats it as
   // authoritative: bindRouteReasoningReplayScope replaces it with the exact route owner or a
   // per-request fail-closed sentinel after the final provider and credential are known.
@@ -4769,7 +4803,7 @@ async function handleResponsesInner(
   const routedCompaction = parsed._compactionRequest === true
     && !isCanonicalOpenAiForwardProvider(route.provider);
   const needsOpenAiVision = !visionDescribeTerminal
-    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
+    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
   const needsOpenAiSearch = !routedCompaction && !adapter.runTurn
     && (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
       || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough));
@@ -4839,7 +4873,7 @@ async function handleResponsesInner(
   const visionPlan = visionDescribeTerminal
     ? undefined
     : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar, {
-      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
+      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
     });
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
@@ -4851,9 +4885,9 @@ async function handleResponsesInner(
       recordSidecarOutcome,
       translatorBudget,
     );
-  } else if (isModelTextOnly(route.provider, route.modelId)) {
-    // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
-    // disabled): fail closed — never forward raw images to a text-only upstream.
+  } else if (requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName)) {
+    // Image capability is not positively proven but no sidecar plan is dispatchable: fail closed.
+    // Never forward raw image bytes to an unverified upstream.
     stripImagesInPlace(parsed, translatorBudget);
   }
 
@@ -6251,6 +6285,7 @@ async function handleResponsesInner(
         openAiSidecar,
       );
       const webSearchBridgePlan = planPassthroughWebSearchBridge(parsed, route.provider, {
+        providerName: route.providerName,
         isPassthrough: true,
         stream: parsed.stream === true,
         auth: webSearchBridgeAuth,
@@ -6291,7 +6326,7 @@ async function handleResponsesInner(
             providerApiKey: route.provider.apiKey ?? "",
             auth: webSearchBridgeAuth,
             hostedTool: parsed._webSearch,
-            describeImages: isModelTextOnly(route.provider, route.modelId),
+            describeImages: requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName),
             sidecar: config.webSearchSidecar,
           }),
           // Appending a search result can push the continuation past the ceiling the first leg
@@ -6817,7 +6852,7 @@ async function handleResponsesInner(
   //     can proceed for web-search-only turns
   const wsPlan = !routedCompaction
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
-      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
+      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
     })
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;

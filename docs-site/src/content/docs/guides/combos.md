@@ -213,7 +213,8 @@ Combo failures are divided into **hop** failures and **terminal** failures.
 | HTTP 401, 403, 404, 408, 429, or any 5xx | Cool the target and hop to the next eligible target. |
 | HTTP 410 with an explicit model end-of-life, retired, deprecated, sunset, decommissioned, or no-longer-available signal | Cool that target and hop. Unrelated 410 responses remain terminal. |
 | Classified authentication, subscription, quota, rate-limit, overload, or upstream-server error | Cool the target and hop, even when the status alone is not sufficient. |
-| Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or invalid request | Stop and return the error; another target would not make the request valid. |
+| Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or other invalid request | Stop and return the error; another target would not make the request valid. |
+| Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, or model-scoped image input | Hop before output commitment without cooling; see request-local target compatibility below. |
 | Any other unclassified error | Stop and return the error. |
 
 When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
@@ -227,8 +228,8 @@ fallback for upstream rate-limit codes `1302`/`1305` → the 60-second default. 
 `Retry-After: 0` remains an immediate upstream directive rather than being replaced by a configured
 cooldown.
 
-The current request never retries the same attempted target. Later requests skip it until its
-cooldown expires. A `Retry-After` HTTP-date that is already in the past is also preserved as an
+The current request never retries the same attempted target. Later requests skip a cooled target until its
+cooldown expires; request-local compatibility rejections do not cool the target. A `Retry-After` HTTP-date that is already in the past is also preserved as an
 immediate upstream directive, just like `Retry-After: 0`. Set `waitForCooldownMs` to allow a later
 request to wait for the earliest eligible target cooldown, up to that cap on each selection attempt,
 and then make one fresh selection. A request may therefore wait up to `hops × waitForCooldownMs`
@@ -253,6 +254,12 @@ the target is committed: a later stream failure is returned to the client and is
 another provider, which prevents duplicate text and tool execution. If the pre-output buffer reaches
 its safety cap without a terminal or output boundary, OpenCodex also commits the current target
 instead of growing memory without a bound.
+
+## Request-local target compatibility
+
+When routing Claude Code to the canonical ChatGPT Codex backend, OpenCodex removes the unsupported top-level `user` metadata field without changing the session/cache key, input messages, tool schemas, or safety identifiers. Public Responses API and noncanonical forward gateways keep that field.
+
+A combo can also advance after an intact HTTP 400 `invalid_request_error` that specifically rejects `user`, reports `unsupported_value` for `reasoning.effort`/`reasoning_effort`, or reports `param: input` with an exact model-scoped `does not support image inputs` rejection. This is a mismatch for that request, not evidence that the target is unhealthy, so it records no cooldown. This compatibility recovery does not silently change `none` into a different effort or broaden this exception to arbitrary invalid requests. Policy refusals, cancellation and already-committed output remain non-replayable. A single-target request still returns an unresolved upstream rejection.
 
 ## Default reasoning effort
 

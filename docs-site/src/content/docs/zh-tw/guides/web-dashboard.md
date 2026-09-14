@@ -12,7 +12,7 @@ opencodex 內建了一個由代理提供服務的本機 web 儀表板（`gui/` �
 ocx gui
 ```
 
-該命令會在瀏覽器中開啟 `http://localhost:<port>`；如果代理尚未執行，會先自動啟動。開發時也可
+該命令會在瀏覽器中開啟 `http://localhost:<port>`；在啟用管理 ingress 的 hub 上則開啟 `http://127.0.0.1:<管理埠>`；如果代理尚未執行，會先自動啟動。開發時也可
 讓 GUI dev server 單獨連線到正在執行的代理：
 
 ```bash
@@ -111,9 +111,10 @@ Dashboard 的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以
 
 - 手動選擇帳號會影響下一次新建的 Codex session；已經繫結帳號的 thread 不會因為這次手動切換而
   在中途轉移。
-- Thread affinity 可避免每個請求都來回切換帳號。啟用配額自動切換後，長時間執行的 thread 會被
-  定期重新評估；當相關 usage 達到閾值，並且存在使用率確實更低的可用帳號時，該 thread 可能會
-  重新繫結。
+- Thread affinity 可避免每個請求都來回切換帳號。預設開啟 `pool.cacheAffinity` 後，長時間執行的
+  thread 不會只因 usage 達到閾值就重新繫結；只有帳號耗盡或無法繼續服務時才會離開，並且只重新繫結到
+  確有額度餘裕且使用率確實更低的帳號。關閉該設定後，才會在存在使用率確實更低且確有額度餘裕的
+  可用帳號時依閾值重新繫結。
 - 新 session 可以選擇 usage 最低的可用帳號。付費計劃按已知 5h、每週、30d 視窗中的最高使用率
   評分；Go/Free 計劃只使用 30d 視窗。
 - **Refresh quotas** 會立即重新讀取帳號 usage，使路由邏輯與頁面上的帳號卡片使用同一份資料。

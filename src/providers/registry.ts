@@ -707,9 +707,35 @@ const COMMAND_CODE_IMAGE_MODELS = [
   "meta/muse-spark-1.3-contributor",
   "meta/muse-spark-1.2",
   "meta/muse-spark-1.2-contributor",
+  // Native Z.AI VLM (docs.z.ai/guides/vlm/glm-5.3-flash). This exact id is already
+  // classified as natively vision-capable in NVIDIA_NIM_VISION_MODELS in this file;
+  // it is not one of the verified-negative ids the header names (those are
+  // deepseek/deepseek-v4-flash, zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6 —
+  // different ids). Adding it on the shared GLM-5.3 prefix would be the family-
+  // resemblance mistake the header forbids; the VLM docs are the evidence (#4505).
+  "z-ai/glm-5.3-flash",
 ] as const;
-const COMMAND_CODE_MODEL_INPUT_MODALITIES: Record<string, ["text", "image"]> =
-  Object.fromEntries(COMMAND_CODE_IMAGE_MODELS.map(id => [id, ["text", "image"]]));
+/**
+ * Native image stays sourced from COMMAND_CODE_IMAGE_MODELS. Text-only routes
+ * sit beside that list so the catalog can still advertise sidecar coverage
+ * without claiming the gateway itself accepts a picture.
+ *
+ * The gateway-prefixed DeepSeek V4.1 Flash route has no verified native image
+ * support, so declaring it image-capable would hand it a picture it drops. A
+ * positive text-only declaration makes it a vision-sidecar consumer
+ * (src/vision/eligibility.ts), so the catalog advertises image input on its
+ * behalf and the four-target combo in #4505 intersects to ["text","image"]
+ * instead of ["text"] — without claiming native vision. modelInputModalities
+ * is per-key filled, so this reaches an existing install even when
+ * noVisionModels was persisted before the id joined that list.
+ */
+const COMMAND_CODE_TEXT_ONLY_MODELS = [
+  "deepseek/deepseek-v4.1-flash",
+] as const;
+const COMMAND_CODE_MODEL_INPUT_MODALITIES: Record<string, ["text"] | ["text", "image"]> = {
+  ...Object.fromEntries(COMMAND_CODE_IMAGE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
+  ...Object.fromEntries(COMMAND_CODE_TEXT_ONLY_MODELS.map(id => [id, ["text"] as ["text"]])),
+};
 const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
 /*
  * Zen free models that reject `image_url` upstream (#1043, and the reproducible
@@ -722,10 +748,9 @@ const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
  * `[404] No endpoints found that support image input` and `big-pickle` with the
  * exact deserialize error quoted in #1043.
  *
- * `mimo-v2.5-free` and `longcat-2.0-free` ACCEPT images and are deliberately
- * absent. Adding them would silently replace a working image with a caption,
- * which is worse than the loud 400 this list exists to prevent — see the negative
- * assertion in tests/providers/provider-registry-parity.test.ts.
+ * `mimo-v2.5-free` and `longcat-2.0-free` ACCEPT images. They remain absent
+ * from the blind list and are recorded separately as positive input-modality evidence,
+ * so capability-positive dispatch can forward images without relying on blacklist absence.
  *
  * Zen's roster is discovered live while this list is static, so it is a dated
  * exception list, not a capability model. Re-probe before extending it.
@@ -739,6 +764,7 @@ const OPENCODE_ZEN_TEXT_ONLY_MODELS = [
   "laguna-s-2.1-free",
   "deepseek-v4-flash-free",
 ];
+const OPENCODE_ZEN_IMAGE_MODELS = ["mimo-v2.5-free", "longcat-2.0-free"] as const;
 /*
  * DeepSeek's Codex ladder is low/high/max. With the V4 Pro GA release
  * (DeepSeek-V4-Pro-0813) the official thinking-mode table is IDENTICAL for both
@@ -1856,8 +1882,27 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     modelInputModalities: {
       "kimi-k3": ["text", "image"],
+      // glm-5.3-flash is a native VLM (docs.z.ai/guides/vlm/glm-5.3-flash). It is
+      // deliberately absent from this preset's noVisionModels, which is the
+      // correct NEGATIVE half, but with no positive modelInputModalities entry
+      // configuredInputModalities returns undefined and the catalog falls through
+      // to the ["text"] floor. The same model is already declared ["text","image"]
+      // on the zai and zhipu-bigmodel-coding presets, so the registry described
+      // one model two ways (#4505).
+      "glm-5.3-flash": ["text", "image"],
       // Experimental DeepSeek vision preview — expected to merge into deepseek-v4-flash later.
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+      // This route is text-only upstream — it is already listed in this preset's
+      // noVisionModels, which routes images through the proxy's vision sidecar and
+      // makes the catalog advertise image input on its behalf. The positive
+      // text-only declaration is what reaches an EXISTING install: derive.ts fills
+      // noVisionModels all-or-nothing, so a config persisted before this id joined
+      // the list keeps a stale list, the sidecar predicate never matches, the row
+      // carries no modality at all, and any combo containing it collapses to
+      // ["text"] (#4505). modelInputModalities IS per-key filled, so this
+      // declaration lands on old configs. It states the route's real upstream
+      // capability and keeps the sidecar explicitly distinct from native vision.
+      "deepseek-v4.1-flash": ["text"],
       // Muse Spark Contributor is natively multimodal on Zen Go: it accepts input_image
       // parts over /responses (probed 2026-08-26). Without this declaration the catalog
       // advertises it text-only and the Codex app blocks image attachments client-side with
@@ -3209,6 +3254,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     modelInputModalities: {
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+      ...Object.fromEntries(OPENCODE_ZEN_IMAGE_MODELS.map(id => [id, ["text", "image"] as string[]])),
     },
     noVisionModels: [...OPENCODE_ZEN_TEXT_ONLY_MODELS, ...DEEPSEEK_GATEWAY_THINKING_MODELS],
     // Same DeepSeek routes as the Go preset above, behind the same vendor, so they carry
@@ -3250,6 +3296,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     modelInputModalities: {
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
+      ...Object.fromEntries(OPENCODE_ZEN_IMAGE_MODELS.map(id => [id, ["text", "image"] as string[]])),
     },
     // Same Zen roster behind the same base URL, so it carries the same measured
     // text-only list rather than only its DeepSeek member (#1043).

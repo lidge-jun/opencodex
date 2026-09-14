@@ -1,7 +1,8 @@
 # Outcome — the contributor carry train
 
 Twelve lanes were dispatched to land the open contributor work scored 60 or
-higher. Eleven landed, one needed nothing, and one is recorded separately below.
+higher. Eleven landed and one needed nothing, because the work it was sent to carry was
+already on dev.
 
 ## What landed
 
@@ -18,6 +19,7 @@ higher. Eleven landed, one needed nothing, and one is recorded separately below.
 | 2 | I3 | #4500 | 94063d0798 | #4467 jaychou0642-create, issue #3775 |
 | 2 | I4 | #4498 | 8e6c99608c | issue #4454 |
 | 2 | H | — | — | nothing to carry; #3663 was already on dev |
+| 2 | I5 | #4515 | cb2e15ba6f | issue #4429, scoped slice |
 
 Every merge used the same gate: a Cross-platform CI run concluded success on the
 exact tip head SHA, the merge commit was verified with
@@ -88,6 +90,40 @@ first incident turned into a standing check.
 Both directions are the same defect in the plan, not in the lanes: a snapshot of
 the open queue is stale the moment it is taken, and only the lane touching the
 code can tell.
+
+## The lane that did not close its issue
+
+Lane I5 is the one outcome in this train that is deliberately partial, and it is
+the better result.
+
+Issue #4429 reads as a missing executor: a key-auth gateway echoes hosted web_search as
+a client function_call, and webSearchBridge had an executor only for ollama.
+Arming the other five backends is what #4515 landed. It does not fix the reported
+failure, and the lane said so rather than closing the issue.
+
+The reporter's own probe is why. It ends with two pending client calls, exec and
+web_search, which the bridge refuses with web_search_bridge_mixed_tools. The
+boundary is the mixed-tool leg, not the missing backend, so a continuation has to
+preserve the client's exec call and call_id and their ordering without executing
+it proxy-side and without losing hosted-search items the relay already completed.
+The issue stays open for that, with the scoping recorded on it.
+
+The DeepSeek case in the same thread stays separate on purpose: it emits no
+function calls at all, only assistant text, and making matching prose executable
+would turn model output into tool execution.
+
+A scoped slice with an accurate description is what the packet asked for, and
+refusing to close the issue is the part that makes it honest.
+
+## Final integration evidence
+
+Cross-platform CI run [34760250023](https://github.com/lidge-jun/opencodex/actions/runs/34760250023)
+completed successfully on `cb2e15ba6f8ac17af0620d6ff04fcfa7d88e3dcd`, the
+merge commit for the last implementation PR, #4515. This verifies the integrated
+batch; conditional jobs remain skips rather than claimed passes.
+
+Issue #4429 remains partially unresolved: the non-Ollama executor slice landed, while
+mixed-tool continuation remains open. Issue #4519 separately tracks the Ollama endpoint destination-policy gap; it is not the mixed-tool continuation tracker.
 
 ## Honest limits of the proof
 

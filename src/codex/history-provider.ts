@@ -171,6 +171,41 @@ function readFirstRolloutLine(fd: number): string | null {
   return nlIndex === -1 ? null : collected.subarray(0, nlIndex).toString("utf8");
 }
 
+/**
+ * Bounded tail of complete JSONL lines, newest-last.
+ *
+ * Used to refuse a rollout that *became* paginated after a legacy first line
+ * (#4311). Line 1 can still look writable after a newer Codex migrates the
+ * thread in place, and the native projector then dies on the first
+ * out-of-sequence ordinal a legacy append introduces. Every record written
+ * after such a migration carries an ordinal, so the newest records are where
+ * the evidence is.
+ *
+ * One read of a fixed window from EOF, split once. An earlier draft grew the
+ * window chunk by chunk and re-decoded the accumulated buffer on every
+ * iteration, which is quadratic: a rollout whose only `session_meta` sits at
+ * the top would have decoded and split up to the whole window ~256 times. The
+ * window is a cap, not a target — it is not walked and it is not the file.
+ *
+ * Returns `null` only when the file cannot be measured, which the caller
+ * treats as an unreadable record rather than a writable rollout.
+ */
+const ROLLOUT_TAIL_WINDOW_BYTES = 1 << 20;
+
+function readRolloutTailCompleteLines(fd: number): string[] | null {
+  const size = Number(fstatSync(fd).size);
+  if (!Number.isFinite(size) || size < 0) return null;
+  if (size === 0) return [];
+  const start = Math.max(0, size - ROLLOUT_TAIL_WINDOW_BYTES);
+  const window = Buffer.alloc(size - start);
+  const read = readSync(fd, window, 0, window.length, start);
+  if (read === 0) return [];
+  const lines = window.subarray(0, read).toString("utf8").split("\n");
+  // Unless the window reached BOF, the first element starts mid-record (and
+  // possibly mid-codepoint), so it is not a complete line.
+  return (start === 0 ? lines : lines.slice(1)).filter(line => line.length > 0);
+}
+
 function planFirstLineProvider(firstLine: string, expectedId: string, provider: string): FirstLineProviderPlan {
   const meta = parseSessionMetaLine(firstLine);
   if (!meta || meta.record.payload.id !== expectedId) return { state: "unsafe" };
@@ -315,6 +350,26 @@ function assertLegacyHistoryWritable(path: string, heldFd?: number): void {
     const first = readFirstRolloutLine(fd);
     if (!first) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
     assertLegacyHistoryRecord(first);
+    // Line 1 is not enough: a newer Codex can migrate a live rollout in place,
+    // leaving the original session_meta and writing ordinals / history_mode only
+    // onto later records (#4311). The native projector then stops at the first
+    // cloned ordinal-0 append. Inspect a bounded window of the newest records
+    // and refuse before any mutation of the rollout, the row, or the manifest.
+    const tail = readRolloutTailCompleteLines(fd);
+    if (tail === null) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+    if (tail.length === 0) return;
+    const last = tail[tail.length - 1];
+    if (!last) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+    if (last !== first) assertLegacyHistoryRecord(last);
+    // Cheap filter: only re-parse tail lines that look paginated. Needed because
+    // a compensating append can make the last line look legacy again while an
+    // earlier-in-tail native conversion still carries ordinals (#4311).
+    for (const line of tail) {
+      if (line === first || line === last) continue;
+      if (line.includes("\"ordinal\"") || line.includes("\"history_mode\"")) {
+        assertLegacyHistoryRecord(line);
+      }
+    }
   } finally {
     if (heldFd === undefined) closeSync(fd);
   }

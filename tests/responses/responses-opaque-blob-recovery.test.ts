@@ -53,6 +53,17 @@ const XAI_DECRYPT_ERROR = JSON.stringify({
   code: "invalid-argument",
   error: "Could not decrypt the provided encrypted_content: invalid payload",
 });
+// #4469: reasoning encrypted_content is minted per caller identity, so a replay under a
+// different caller is rejected with this exact invalid_request_error wording (backticks are
+// part of the upstream message). No dedicated code accompanies it.
+const CALLER_MISMATCH_BLOB_ERROR = JSON.stringify({
+  error: {
+    message: "reasoning `encrypted_content` was not issued to this caller",
+    type: "invalid_request_error",
+    param: "input",
+    code: null,
+  },
+});
 
 let testDir = "";
 
@@ -471,6 +482,55 @@ describe("opaque blob recovery trigger", () => {
       outboundBody: JSON.stringify({
         model: "model-a",
         input: [{ type: "agent_message", content: [{ type: "input_text", text: "plain" }] }],
+      }),
+    })).toBe(false);
+  });
+
+  test("#4469 accepts the caller-mismatch reasoning blob rejection and still rejects unrelated prose", () => {
+    expect(shouldAttemptOpaqueBlobRecovery({
+      ...base,
+      errorBody: CALLER_MISMATCH_BLOB_ERROR,
+    })).toBe(true);
+    // The same identity without backticks and wrapped in a leading/trailing sentence.
+    expect(shouldAttemptOpaqueBlobRecovery({
+      ...base,
+      errorBody: JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          code: null,
+          message: "Upstream rejected the replay: reasoning encrypted_content was not issued to this caller.",
+        },
+      }),
+    })).toBe(true);
+    // The flat stream-error envelope carries the same identity at the top level.
+    expect(shouldAttemptOpaqueBlobRecovery({
+      ...base,
+      errorBody: JSON.stringify({
+        type: "invalid_request_error",
+        message: "reasoning `encrypted_content` was not issued to this caller",
+      }),
+    })).toBe(true);
+    // Unrelated invalid_request_error prose must never gain a hidden resend: neither a
+    // caller-worded rejection without the anchor phrase nor the anchor without a
+    // reasoning/encrypted_content subject qualifies.
+    expect(shouldAttemptOpaqueBlobRecovery({
+      ...base,
+      errorBody: JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          code: null,
+          message: "Encrypted content is not supported for this caller.",
+        },
+      }),
+    })).toBe(false);
+    expect(shouldAttemptOpaqueBlobRecovery({
+      ...base,
+      errorBody: JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          code: null,
+          message: "The credential was not issued to this caller.",
+        },
       }),
     })).toBe(false);
   });
@@ -1100,6 +1160,24 @@ data: ${JSON.stringify(created)}
       return outbound.length === 1
         ? rejection(CHATGPT_UNVERIFIABLE_BLOB_ERROR)
         : success("resp-2247-recovered");
+    }) as typeof fetch;
+
+    const response = await handleResponses(request(), config(), { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(outbound).toHaveLength(2);
+    expect(hasBlob(outbound[0]!)).toBe(true);
+    expect(hasBlob(outbound[1]!)).toBe(false);
+  });
+
+  test("#4469 retries the reported caller-mismatch reasoning blob rejection once", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return outbound.length === 1
+        ? rejection(CALLER_MISMATCH_BLOB_ERROR)
+        : success("resp-4469-recovered");
     }) as typeof fetch;
 
     const response = await handleResponses(request(), config(), { model: "", provider: "" });

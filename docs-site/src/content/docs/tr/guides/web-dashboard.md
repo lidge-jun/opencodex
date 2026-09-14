@@ -15,7 +15,7 @@ ocx gui
 ```
 
 Bu, gerekirse önce proxy'yi otomatik olarak başlatarak tarayıcınızda
-`http://localhost:<port>` adresini açar. Geliştirme sırasında GUI geliştirme
+`http://localhost:<port>` adresini açar; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar. Geliştirme sırasında GUI geliştirme
 sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash
@@ -175,10 +175,12 @@ ve diğer sağlayıcılardan ayrıdır.
   (ana) hesabı diğerleri gibi sıralanır, böylece **Son** olarak ayarlanabilir ve
   yedek olarak tutulabilir. Bu beş önayarın dışındaki `ocx account priority`'den
   ayarlanan bir sıra kartta görünür ve seçilebilir kalır.
-- İş parçacığı bağlılığı istek başına dalgalanmayı önler. Kota otomatik geçişi
-  etkinken uzun süredir çalışan bir iş parçacığı düzenli olarak yeniden
-  değerlendirilir ve ilgili kullanımı eşiğe ulaştıktan ve kesinlikle daha düşük
-  kullanımlı uygun bir hesap mevcut olduğunda yeniden bağlanabilir.
+- İş parçacığı bağlılığı istek başına dalgalanmayı önler. `pool.cacheAffinity`
+  varsayılan olarak açıkken uzun süredir çalışan bir iş parçacığı, kullanım eşiğe
+  ulaştı diye yeniden bağlanmaz; hesap tükenene veya hizmet veremez hale gelene
+  kadar kalır ve o zaman yalnızca kullanımı kesin olarak daha düşük ve gerçek kota
+  payı olan bir hesaba geçer. Bayrağı kapatınca, kesinlikle daha düşük kullanımlı
+  uygun bir hesap varsa eşik yeniden bağlaması geri gelir.
 - Yeni oturumlar en düşük kullanımlı uygun hesabı seçebilir. Ücretli planlar
   bilinen en sıcak 5 saatlik, haftalık veya 30 günlük pencereyi puanlar;
   Go/Ücretsiz planlar yalnızca 30 günlük pencereyi kullanır.

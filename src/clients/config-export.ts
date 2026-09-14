@@ -627,10 +627,20 @@ function opencodeProviderConnection(baseURL: string, config: OcxConfig): Opencod
  * override a default the user controls in opencodex. Variants are opt-in per selection,
  * which is the same reason we never emit `defaultModel` for MCode.
  *
- * `none` is dropped even when a ladder declares it. It is a valid *declared* effort, but the
- * chat ingress filters wire efforts against `OUTPUT_CONFIG_EFFORTS`, which has no `none`, so
- * selecting it would send no effort at all and silently fall back to the proxy default — a
- * selectable value that cannot do what its label says. Same call MCode makes for its picker.
+ * `none` is dropped even when a ladder declares it.
+ *
+ * The original reason no longer holds and is recorded here so it is not repeated: the chat
+ * ingress `OUTPUT_CONFIG_EFFORTS` allowlist DID omit `none`, so selecting it sent no effort
+ * at all and fell back to the proxy default. That allowlist now accepts `none` (audit F7),
+ * because it is the runtime's disable sentinel and dropping it let a provider default
+ * re-enable thinking a caller had turned off.
+ *
+ * The variant stays filtered anyway, deliberately and narrowly: emitting it would change
+ * what this exporter writes into a user's opencode config, and whether opencode's own
+ * picker round-trips `reasoningEffort: "none"` to the wire this proxy reads has not been
+ * verified here. Re-enabling it is a scoped follow-up that needs that check first, not a
+ * side effect of an ingress fix. MCode and ZCode filter `none` for their own separate
+ * reasons, documented at their call sites.
  */
 function opencodeEffortVariants(model: OpencodeCatalogModel): OpencodeModelVariant[] | undefined {
   if (model.reasoningEfforts === undefined) return undefined;

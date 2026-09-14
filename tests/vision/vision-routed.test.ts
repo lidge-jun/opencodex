@@ -147,7 +147,10 @@ describe("describeImageRouted unit", () => {
       apiKey: "routed-key",
       noVisionModels: ["text-model"],
     };
-    const vlm: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://vlm.test/v1", apiKey: "k" };
+    const vlm: OcxProviderConfig = {
+      adapter: "openai-chat", baseUrl: "https://vlm.test/v1", apiKey: "k",
+      modelInputModalities: { "qwen-vl": ["text", "image"] },
+    };
     const request = parseRequest({
       model: "routed/text-model",
       input: [{
@@ -292,7 +295,7 @@ describe("chat-surface recursion fence (full path)", () => {
     }
   });
 
-  test("routed describer end-to-end: image described via loopback before the text-only main call", async () => {
+  test("routed describer end-to-end: declared text-only main target receives only the caption", async () => {
     const mainBodies: string[] = [];
     const describerBodies: string[] = [];
     upstream = Bun.serve({
@@ -332,7 +335,7 @@ describe("chat-surface recursion fence (full path)", () => {
           baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
           allowPrivateNetwork: true,
           apiKey: "k",
-          noVisionModels: ["text-only"],
+          modelInputModalities: { "text-only": ["text"] },
         },
         vision: {
           adapter: "openai-chat",

@@ -524,6 +524,31 @@ function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | 
   return listUnixProcSnapshots(getuid());
 }
 
+export interface ListProcessSnapshotsOptions {
+  platform?: NodeJS.Platform;
+  getuid?: () => number | undefined;
+}
+
+/**
+ * Raw process snapshots for callers that need to match their own predicate.
+ *
+ * Throws on enumeration failure. That is the contract routing-adoption needs:
+ * a thrown read is "could not enumerate" and must never collapse to an empty
+ * list. listCodexAppServerProcesses maps the same failure to [] for the #476
+ * kill path, which would otherwise print a false adopted for #4550.
+ */
+export function listProcessSnapshots(options: ListProcessSnapshotsOptions = {}): ProcessSnapshot[] {
+  const platform = options.platform ?? process.platform;
+  const getuid = options.getuid ?? (() => {
+    try {
+      return typeof process.getuid === "function" ? process.getuid() : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  return defaultListSnapshots(platform, getuid);
+}
+
 export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): CodexAppServerProcess[] {
   const platform = io.platform ?? process.platform;
   const getuid = io.getuid ?? (() => {

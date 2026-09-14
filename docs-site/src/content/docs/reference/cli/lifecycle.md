@@ -325,9 +325,9 @@ The URL must name `/v1/catalog` at the host root. A reverse proxy that serves th
 path prefix is not supported by this command.
 
 The command downloads the full catalog and compares bytes locally instead of issuing an `ETag` /
-`If-None-Match` conditional request. Identical bytes are treated as a complete no-op, so a home
-whose catalog is correct but whose `models_cache.json` is missing or stale is not repaired by this
-command; use `ocx sync-cache` for that.
+`If-None-Match` conditional request. Identical bytes are treated as a complete no-op, so a
+Codex home whose catalog is correct but whose `models_cache.json` is missing or stale is not
+repaired by this command; use `ocx sync-cache` for that.
 
 `--json` emits one stable envelope on stdout. `schemaVersion`, `ok`, `status`, `catalogWritten`,
 `cacheSynced`, and `codexRestarted` are always present. `codexRestarted` still means app-servers
@@ -598,7 +598,8 @@ proxy controls. `start` and `stop` control the icon only; use its menu to contro
 
 ### `ocx gui`
 
-Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>`, auto-starting the proxy
+Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>` — or at
+`http://127.0.0.1:<management port>` when hub management ingress is enabled — auto-starting the proxy
 if it is not running.
 
 ## Updating

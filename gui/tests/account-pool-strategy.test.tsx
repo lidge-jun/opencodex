@@ -162,7 +162,7 @@ describe("AccountPoolStrategyControls", () => {
     // Custom Select only paints the active label until opened (sidecar DNA).
     expect(quota).toContain("Quota");
     expect(quota).toContain("select-trigger");
-    expect(quota).toContain("Quota can also rebind an existing task on its next request after the usage threshold is crossed.");
+    expect(quota).toContain("rebinds an existing task at the usage threshold only when");
     expect(quota).not.toContain("New/unbound assignments before rotate");
 
     const rr = renderToStaticMarkup(
