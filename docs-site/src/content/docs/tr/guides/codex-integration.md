@@ -476,4 +476,4 @@ Konuşmaları kendiniz taşımak için etkin sayfalanmış geçmişi veya iş pa
 
 ## Ana hesabın yeniden kimlik doğrulamasını iptal etme
 
-Ana hesabın cihaz koduyla yeniden kimlik doğrulaması iptal edilirken `unknown_flow` koduyla HTTP 404 yanıtı alınırsa süresi dolmuş akış serbest bırakılarak cihaz koduyla yeniden giriş başlatılabilir, ancak girişin başarılı olduğu veya iptalin onaylandığı bildirilmez.
+Ana hesabın cihaz koduyla yeniden kimlik doğrulaması iptal edilirken `unknown_flow` koduyla HTTP 404 yanıtı alınırsa süresi dolmuş akış serbest bırakılarak cihaz koduyla yeniden giriş başlatılabilir, ancak girişin başarılı olduğu veya iptalin onaylandığı bildirilmez. İptal onaylandıktan sonra cihaz koduyla yeniden giriş başlatılabilir. Önceki akışın başlatma, durum veya iptal yanıtları gecikse bile yeni akışı değiştirmez ve başarılı giriş bildirmez.

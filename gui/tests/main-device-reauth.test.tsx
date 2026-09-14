@@ -86,9 +86,9 @@ async function mount(ui: Parameters<typeof cardProps>[1], state: MainDeviceReaut
   });
 }
 
-test("expired main card shows the device Re-login CTA and starts the flow", async () => {
+test.each(["idle", "cancelled"] as const)("expired main card in %s state shows the device Re-login CTA and starts the flow", async (phase) => {
   const calls = { starts: 0, cancels: 0 };
-  await mount(calls, { phase: "idle" });
+  await mount(calls, { phase });
   // The pause control ships the same class and renders first, so select the CTA by its
   // label the way the cancel test below already does.
   const actions = Array.from(host.querySelectorAll("button.codex-auth-action-btn"));

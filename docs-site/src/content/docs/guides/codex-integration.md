@@ -807,7 +807,7 @@ Background revalidation is separate and off by default. It requires Token Guardi
 
 ### Why an account stopped serving requests
 
-When cancelling main-account device reauthentication, transient request failures and replies with unknown or nonterminal status values keep cancellation retryable. A DELETE response with HTTP 404 and code `unknown_flow` instead releases the expired flow so device re-login can be started again; it reports neither successful login nor confirmed cancellation. If the server reports a terminal `failed` state, the card displays that failure and also releases the old flow.
+When cancelling main-account device reauthentication, transient request failures and replies with unknown or nonterminal status values keep cancellation retryable. A DELETE response with HTTP 404 and code `unknown_flow` instead releases the expired flow so device re-login can be started again; it reports neither successful login nor confirmed cancellation. If the server reports a terminal `failed` state, the card displays that failure and also releases the old flow. After confirmed cancellation, device re-login is available again. Delayed start, status, or cancellation responses for an earlier flow do not alter the new flow or report a new login success.
 
 When an account leaves pool selection, the reason travels with the decision instead of being recomputed for display, so a surface can never report an account healthy while routing is dropping it. `GET /api/codex-auth/accounts` carries `reauthReason` next to `needsReauth` on each account: `missing_credential` for a credential that was never stored, `refresh_failed` for a credential refresh that keeps failing, and `quota_unauthorized` when the usage lookup itself was rejected.
 

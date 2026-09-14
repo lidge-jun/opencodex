@@ -91,6 +91,7 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
     try {
       const res = await fetch(`${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`, { method: "DELETE" });
       const dto = await res.json().catch(() => ({})) as FlowDto;
+      if (unmountedRef.current || flowRef.current !== flowId) return;
       if (res.status === 404 && dto.code === "unknown_flow") {
         // The service may have expired its terminal receipt after a lost DELETE response.
         // Release the stale ID without claiming cancellation or successful authentication.
@@ -108,8 +109,9 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
         : { phase: dto.status });
       if (dto.status === "succeeded") onCompleted();
     } catch {
+      if (unmountedRef.current || flowRef.current !== flowId) return;
       // Keep ownership of the flow so the operator can retry cancellation.
-      setState(current => current.phase === "pending" || current.phase === "committing"
+      setState(current => (current.phase === "pending" || current.phase === "committing") && current.flowId === flowId
         ? { ...current, cancelFailed: true }
         : current);
     }
@@ -120,24 +122,25 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
     flowRef.current = null;
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const isCurrent = () => !ctrl.signal.aborted && !unmountedRef.current && abortRef.current === ctrl;
     setState({ phase: "starting" });
     let flowId: string;
     try {
       // Empty body by contract: the route rejects any request keys with 400.
       const res = await fetch(`${apiBase}/api/codex-auth/main/reauth-device`, { method: "POST", signal: ctrl.signal });
+      const dto = await res.json().catch(() => ({})) as FlowDto;
+      if (!isCurrent()) return;
       if (!res.ok) {
-        const failed = await res.json().catch(() => ({})) as FlowDto;
-        setState({ phase: "failed", code: failureCode(failed.code) });
+        setState({ phase: "failed", code: failureCode(dto.code) });
         return;
       }
-      const dto = await res.json().catch(() => ({})) as FlowDto;
       if (typeof dto.flowId !== "string" || !dto.flowId) {
         setState({ phase: "failed", code: "request_failed" });
         return;
       }
       flowId = dto.flowId;
     } catch {
-      if (!ctrl.signal.aborted) setState({ phase: "failed", code: "request_failed" });
+      if (isCurrent()) setState({ phase: "failed", code: "request_failed" });
       return;
     }
     flowRef.current = flowId;
@@ -145,19 +148,19 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
     let lastCode = "";
     // Poll immediately: the start response predates the usercode reply, so the
     // URL and human code only arrive through status reads.
-    while (!ctrl.signal.aborted) {
-      if (ctrl.signal.aborted || unmountedRef.current || flowRef.current !== flowId) return;
+    while (isCurrent()) {
+      if (flowRef.current !== flowId) return;
       try {
         const res = await fetch(
           `${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`,
           { signal: AbortSignal.any([ctrl.signal, AbortSignal.timeout(POLL_TICK_TIMEOUT_MS)]) },
         );
+        const dto = await res.json().catch(() => ({})) as FlowDto;
+        if (!isCurrent() || flowRef.current !== flowId) return;
         if (!res.ok) {
-          const failed = await res.json().catch(() => ({})) as FlowDto;
-          setState({ phase: "failed", code: failureCode(failed.code) });
+          setState({ phase: "failed", code: failureCode(dto.code) });
           return;
         }
-        const dto = await res.json().catch(() => ({})) as FlowDto;
         lastUrl = allowedVerificationUrl(dto.verificationUrl) || lastUrl;
         lastCode = humanCode(dto.deviceCode) || lastCode;
         if (dto.status === "pending" || dto.status === "committing") {
@@ -182,7 +185,7 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
           return;
         }
       } catch {
-        if (ctrl.signal.aborted || unmountedRef.current) return;
+        if (!isCurrent() || flowRef.current !== flowId) return;
         // A tick failure is transient: the service flow keeps its own deadline.
       }
       await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
@@ -190,6 +193,7 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
   }, [apiBase, onCompleted, stopPolling]);
 
   useEffect(() => {
+    unmountedRef.current = false;
     return () => {
       unmountedRef.current = true;
       stopPolling();

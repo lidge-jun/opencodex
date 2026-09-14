@@ -425,4 +425,4 @@ Ne réécrivez pas un historique paginé actif ni une ligne de conversation pour
 
 ## Annulation de la réauthentification du compte principal
 
-Lors de l’annulation de la réauthentification du compte principal par code d’appareil, une réponse HTTP 404 avec le code `unknown_flow` libère le flux expiré pour permettre une nouvelle connexion par code d’appareil, sans indiquer une connexion réussie ni une annulation confirmée.
+Lors de l’annulation de la réauthentification du compte principal par code d’appareil, une réponse HTTP 404 avec le code `unknown_flow` libère le flux expiré pour permettre une nouvelle connexion par code d’appareil, sans indiquer une connexion réussie ni une annulation confirmée. Après confirmation de l’annulation, une nouvelle connexion par code d’appareil est possible. Les réponses tardives de démarrage, de suivi ou d’annulation d’un ancien flux ne modifient pas le nouveau flux et ne signalent pas de nouvelle connexion réussie.
