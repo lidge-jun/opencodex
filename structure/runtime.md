@@ -13,6 +13,10 @@ Shared parsing and streaming follow the [request-copy](transports/byte-accountin
 
 Catalog-derived reasoning-level diagnostics are escaped only at the human-output boundary, which `src/cli/runtime-api.ts` owns alongside the human/JSON print split. Every CLI path that prints a hub-supplied catalog value renders it there: the first-time refusal in `src/cli/connect.ts` and the connected `ocx sync` refusal in `src/cli/dispatch.ts`. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason, and a rendered failure keeps the domain error as its `cause`. The ready/unverified/incompatible classification and exit policy are unchanged.
 
+## Native main reauth JSON output
+
+`src/cli/account-main.ts` emits one JSON object to stdout when `ocx account main reauth --device --no-wait --json` succeeds. The human-readable `follow up:` line is emitted only without `--json`; `flowId` remains available for status polling. `tests/cli/cli-native-profile.test.ts` parses the complete captured stdout and preserves coverage of the human follow-up.
+
 ## Hub management dashboard address
 
 When hub management ingress is enabled, `src/cli/dispatch.ts` opens the dashboard on the literal IPv4 loopback address and configured ingress port, matching the listener in `src/server/index.ts`. Other dashboard address selection is unchanged.

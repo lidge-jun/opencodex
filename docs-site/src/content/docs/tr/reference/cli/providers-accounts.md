@@ -370,6 +370,8 @@ ocx account main switch <profil-id-veya-etiket> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
 
+`ocx account main reauth --device --no-wait --json` başarılı olduğunda stdout'a tek bir JSON nesnesi yazar; insan tarafından okunabilir `follow up:` satırını yazmaz. İlerlemeyi kontrol etmek için döndürülen `flowId` değerini `ocx account main reauth status --flow <id> --json` komutuna iletin.
+
 Değiştiren her komut çalışan proxy tarafından döndürülen kurallı etkin
 `CODEX_HOME`'u bildirir. Bu yol arayanın `CODEX_HOME`'undan farklı olabilir;
 JSON'ı destekleyen komutlar aynı değeri `effectiveCodexHome` olarak açığa

@@ -12,6 +12,8 @@ Claude-only connections keep their existing non-failing readiness policy; displa
 
 The hub-side CLI dashboard uses the [management ingress address](../runtime.md#hub-management-dashboard-address); this does not change connected Desktop profile endpoints.
 
+Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
+
 ## Connected Claude Desktop profiles
 
 The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership); general status hands its resolved command to this check instead of probing the version twice.
