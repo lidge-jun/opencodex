@@ -711,19 +711,25 @@ describe("the bridged client stream", () => {
     expect(body.trimEnd().endsWith("data: [DONE]")).toBe(true);
   });
 
-  test("a search mixed with another client tool call fails closed instead of dropping it", async () => {
-    let sends = 0;
+  test("a search mixed with another client tool call ends the turn on that leg", async () => {
+    const sent: string[] = [];
+    const executed: string[][] = [];
     const clientCall = {
       type: "function_call",
       id: "fc_2",
       call_id: "call_2",
       name: "exec",
-      arguments: "{}",
+      arguments: "{\"cmd\":\"ls\"}",
     };
     const mixedLeg = sseBody(
       frame("response.output_item.added", { output_index: 0, item: { ...searchCall, arguments: "" } }),
       frame("response.output_item.done", { output_index: 0, item: searchCall }),
       frame("response.output_item.added", { output_index: 1, item: { ...clientCall, arguments: "" } }),
+      frame("response.function_call_arguments.done", {
+        output_index: 1,
+        item_id: "fc_2",
+        arguments: clientCall.arguments,
+      }),
       frame("response.output_item.done", { output_index: 1, item: clientCall }),
       frame("response.completed", {
         response: { id: "resp_1", status: "completed", output: [searchCall, clientCall] },
@@ -734,28 +740,165 @@ describe("the bridged client stream", () => {
       plan,
       firstLeg: streamFromText(mixedLeg),
       requestBody: initialBody,
-      send: async () => {
-        sends += 1;
+      send: async (body) => {
+        sent.push(body);
         return new Response(null, { status: 500 });
       },
-      execute: async () => ({ text: "unused", sources: [] }),
+      execute: async (queries) => {
+        executed.push(queries);
+        return { text: "opencodex 2.50.0 shipped", sources: [{ url: "https://example.test/rel", title: "Releases" }] };
+      },
     });
 
     const body = await new Response(stream).text();
-    expect(sends).toBe(0);
-    // The client tool call is withheld and dropped: releasing it under a failed turn would let
-    // Codex start running exec for a turn that never completes.
-    expect(body).not.toContain("\"name\":\"exec\"");
-    const failed = clientEvents(body).find(event => event.type === "response.failed");
-    expect(failed).toBeDefined();
-    const error = (failed!.response as { error: Record<string, unknown> }).error;
-    expect(error.code).toBe(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
-    expect(String(error.message)).toContain("another client tool");
-    // The opened hosted cell is closed as failed rather than left spinning.
-    const cell = clientEvents(body).find(event =>
+    const events = clientEvents(body);
+
+    // The client's own call is unanswered, so the conversation owes the client a turn, not the
+    // gateway: the search still runs, then the leg ends with no continuation POST upstream.
+    expect(sent).toEqual([]);
+    expect(executed).toEqual([["opencodex release"]]);
+    expect(body).not.toContain("response.failed");
+    expect(body).not.toContain(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
+
+    // The hosted cell completes with its real queries and sources, exactly as on a pure leg.
+    const cellDone = events.find(event =>
       event.type === "response.output_item.done"
       && (event.item as Record<string, unknown>).type === "web_search_call");
-    expect((cell!.item as Record<string, unknown>).status).toBe("failed");
+    expect(cellDone).toBeDefined();
+    const cellItem = cellDone!.item as Record<string, unknown>;
+    expect(cellItem.status).toBe("completed");
+    expect(cellItem.action).toEqual({
+      type: "search",
+      query: "opencodex release",
+      queries: ["opencodex release"],
+    });
+    expect(cellItem.sources).toEqual([{ url: "https://example.test/rel", title: "Releases" }]);
+
+    // The held client call is released with its own item id, call_id, and arguments intact.
+    const execDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "function_call");
+    expect(execDone).toBeDefined();
+    expect(execDone!.item as Record<string, unknown>).toMatchObject({
+      id: "fc_2",
+      call_id: "call_2",
+      name: "exec",
+      arguments: clientCall.arguments,
+    });
+
+    // One terminal, and its snapshot carries both items in the order upstream emitted them.
+    const completed = events.filter(event => event.type === "response.completed");
+    expect(completed).toHaveLength(1);
+    const output = (completed[0]!.response as { output: Record<string, unknown>[] }).output;
+    expect(output.map(item => item.type)).toEqual(["web_search_call", "function_call"]);
+    expect(output[1]).toMatchObject({ call_id: "call_2", name: "exec" });
+  });
+
+  test("a mixed leg where the client call streams first keeps the streamed order in the snapshot", async () => {
+    const sent: string[] = [];
+    const clientCall = {
+      type: "function_call",
+      id: "fc_0",
+      call_id: "call_0",
+      name: "exec",
+      arguments: "{}",
+    };
+    const mixedLeg = sseBody(
+      frame("response.output_item.added", { output_index: 0, item: { ...clientCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 0, item: clientCall }),
+      frame("response.output_item.added", { output_index: 1, item: { ...searchCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 1, item: searchCall }),
+      frame("response.completed", {
+        response: { id: "resp_1", status: "completed", output: [clientCall, searchCall] },
+      }),
+    );
+
+    const stream = createPassthroughWebSearchBridgeStream({
+      plan,
+      firstLeg: streamFromText(mixedLeg),
+      requestBody: initialBody,
+      send: async (body) => {
+        sent.push(body);
+        return new Response(null, { status: 500 });
+      },
+      execute: async () => ({ text: "a result", sources: [] }),
+    });
+
+    const events = clientEvents(await new Response(stream).text());
+    expect(sent).toEqual([]);
+
+    // The held call reaches the client AFTER the hosted cell, because it is only released once
+    // the leg is known to end here; output_index follows that streamed order with no gap.
+    const added = events.filter(event => event.type === "response.output_item.added");
+    expect(added.map(event => (event.item as Record<string, unknown>).type))
+      .toEqual(["web_search_call", "function_call"]);
+    expect(added.map(event => event.output_index)).toEqual([0, 1]);
+
+    // The retained snapshot follows the same streamed order -- it exists so response.output
+    // matches the turn the client received, so a divergence here would contradict the stream.
+    const completed = events.find(event => event.type === "response.completed");
+    const output = (completed!.response as { output: Record<string, unknown>[] }).output;
+    expect(output.map(item => item.type)).toEqual(["web_search_call", "function_call"]);
+    expect(output[1]).toMatchObject({ call_id: "call_0", name: "exec" });
+  });
+
+  test("a mixed leg whose upstream terminal already ended runs no search and closes the cell", async () => {
+    const sent: string[] = [];
+    let executes = 0;
+    const clientCall = {
+      type: "function_call",
+      id: "fc_3",
+      call_id: "call_3",
+      name: "exec",
+      arguments: "{}",
+    };
+    const mixedLeg = sseBody(
+      frame("response.output_item.added", { output_index: 0, item: { ...searchCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 0, item: searchCall }),
+      frame("response.output_item.added", { output_index: 1, item: { ...clientCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 1, item: clientCall }),
+      frame("response.incomplete", {
+        response: { id: "resp_1", status: "incomplete", output: [searchCall, clientCall] },
+      }),
+    );
+
+    const stream = createPassthroughWebSearchBridgeStream({
+      plan,
+      firstLeg: streamFromText(mixedLeg),
+      requestBody: initialBody,
+      send: async (body) => {
+        sent.push(body);
+        return new Response(null, { status: 500 });
+      },
+      execute: async () => {
+        executes += 1;
+        return { text: "unused", sources: [] };
+      },
+    });
+
+    const body = await new Response(stream).text();
+    const events = clientEvents(body);
+
+    // The upstream terminal already ended the turn, so no search is billed and nothing is
+    // sent back upstream.
+    expect(executes).toBe(0);
+    expect(sent).toEqual([]);
+
+    // The opened hosted cell still closes -- as failed, not left in_progress under a finished
+    // turn -- and the held client call is released rather than dropped.
+    const cellDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "web_search_call");
+    expect((cellDone!.item as Record<string, unknown>).status).toBe("failed");
+    const execDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "function_call");
+    expect(execDone!.item as Record<string, unknown>).toMatchObject({ call_id: "call_3", name: "exec" });
+
+    // The upstream terminal is relayed as it stood: incomplete, not a bridge failure.
+    const incomplete = events.filter(event => event.type === "response.incomplete");
+    expect(incomplete).toHaveLength(1);
+    expect(body).not.toContain("response.failed");
   });
 
   test("already-hosted web_search_call items pass through without a proxy search", async () => {
@@ -797,9 +940,9 @@ describe("the bridged client stream", () => {
     expect(body).not.toContain("response.failed");
   });
 
-  test("probe B mixed hosted cells plus exec plus web_search still fail closed", async () => {
-    let sends = 0;
-    let executes = 0;
+  test("probe B mixed hosted cells plus exec plus web_search ends the turn on that leg", async () => {
+    const sent: string[] = [];
+    const executed: string[][] = [];
     const hosted = {
       type: "web_search_call",
       id: "ws_hosted",
@@ -828,22 +971,42 @@ describe("the bridged client stream", () => {
       plan,
       firstLeg: streamFromText(probeB),
       requestBody: initialBody,
-      send: async () => {
-        sends += 1;
+      send: async (body) => {
+        sent.push(body);
         return new Response(null, { status: 500 });
       },
-      execute: async () => {
-        executes += 1;
-        return { text: "unused", sources: [] };
+      execute: async (queries) => {
+        executed.push(queries);
+        return { text: "a result", sources: [] };
       },
     });
     const body = await new Response(stream).text();
-    expect(sends).toBe(0);
-    expect(executes).toBe(0);
-    expect(body).not.toContain("\"name\":\"exec\"");
-    const failed = clientEvents(body).find(event => event.type === "response.failed");
-    expect((failed!.response as { error: Record<string, unknown> }).error.code)
-      .toBe(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
+    const events = clientEvents(body);
+    // Only the intercepted call is executed proxy-side; the already-hosted cell is upstream's
+    // own item and passes through, and the leg still ends without a continuation.
+    expect(sent).toEqual([]);
+    expect(executed).toEqual([["opencodex release"]]);
+    expect(body).not.toContain("response.failed");
+    expect(body).not.toContain(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
+    // The held exec call is released for Codex to run with its identity intact.
+    const execDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "function_call");
+    expect(execDone).toBeDefined();
+    expect(execDone!.item as Record<string, unknown>).toMatchObject({
+      id: "fc_exec",
+      call_id: "call_exec",
+      name: "exec",
+      arguments: "{\"cmd\":\"python fetch.py\"}",
+    });
+    // The snapshot follows the streamed order: the hosted cell, the new cell, then the
+    // released client call.
+    const completed = events.find(event => event.type === "response.completed");
+    const output = (completed!.response as { output: Record<string, unknown>[] }).output;
+    expect(output.map(item => item.type))
+      .toEqual(["web_search_call", "web_search_call", "function_call"]);
+    expect(output[0]).toMatchObject({ id: "ws_hosted" });
+    expect(output[2]).toMatchObject({ call_id: "call_exec", name: "exec" });
   });
 
   test("DeepSeek-style XML assistant text is not dispatched as a search", async () => {
@@ -1433,7 +1596,7 @@ describe("the reported turn, end to end through handleResponses", () => {
     expect(result.destinations.every(destination => destination.authorization === "Bearer fixture-key")).toBe(true);
   });
 
-  test("an exa-backed mixed exec/search turn still fails closed", async () => {
+  test("an exa-backed mixed exec/search turn ends the turn on that leg", async () => {
     const cfg = {
       port: 0,
       defaultProvider: "fixture",
@@ -1448,26 +1611,34 @@ describe("the reported turn, end to end through handleResponses", () => {
       },
       webSearchSidecar: { exaApiKey: "exa-canary" },
     } as unknown as OcxConfig;
-    const execCall = {
+    // The client call uses the one function name the request declares ("wait"); anything else
+    // would trip the undeclared-tool guard for a reason unrelated to the bridge.
+    const waitCall = {
       type: "function_call",
-      id: "fc_exec",
-      call_id: "call_exec",
-      name: "exec",
+      id: "fc_wait",
+      call_id: "call_wait",
+      name: "wait",
       arguments: "{}",
     };
     const mixedLeg = sseBody(
       frame("response.output_item.added", { output_index: 0, item: { ...searchCall, arguments: "" } }),
       frame("response.output_item.done", { output_index: 0, item: searchCall }),
-      frame("response.output_item.added", { output_index: 1, item: { ...execCall, arguments: "" } }),
-      frame("response.output_item.done", { output_index: 1, item: execCall }),
+      frame("response.output_item.added", { output_index: 1, item: { ...waitCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 1, item: waitCall }),
       frame("response.completed", {
-        response: { id: "resp_1", status: "completed", output: [searchCall, execCall] },
+        response: { id: "resp_1", status: "completed", output: [searchCall, waitCall] },
       }),
     );
     const result = await post(cfg, [mixedLeg]);
-    expect(result.searches).toBe(0);
-    expect(result.body).toContain(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
-    expect(result.body).not.toContain("\"name\":\"exec\"");
+    // The exa search still ran proxy-side, the leg ended the turn, and no continuation POST
+    // went back to the gateway: the client's call is answered by the client, not upstream.
+    expect(result.searches).toBe(1);
+    expect(result.outbound).toHaveLength(1);
+    expect(result.body).not.toContain(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
+    expect(result.body).not.toContain("response.failed");
+    expect(result.body).toContain("\"type\":\"web_search_call\"");
+    expect(result.body).toContain("\"name\":\"wait\"");
+    expect(result.body).toContain("call_wait");
   });
 
   test("exa without a key stays disarmed on a non-ollama gateway", async () => {

@@ -251,8 +251,15 @@ first-dispatch reselection and result preservation.
 on the planned search endpoint. `openai`, `anthropic`, `xai`, `gemini`, and `exa` reuse the matching
 sidecar executor and that executor's own credential; a missing credential leaves the bridge
 disarmed rather than falling through to another paid search. A leg that mixes an intercepted
-`web_search` call with another client-executed tool still fails closed. Assistant text is not
-treated as a search instruction.
+`web_search` call with another client-executed tool ends the turn on that leg: the intercepted
+searches run, their hosted cells complete, the held client calls are released for the caller to
+execute, and the leg's own terminal closes the turn with no continuation sent upstream. The
+destination therefore never receives the executed search result — the caller replays the hosted
+`web_search_call` cell, which carries the query and sources but no result text, so the
+destination's own `function_call`/`function_call_output` pair is not reconstructed. A leg whose
+upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
+any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
+instruction.
 
 The bridge backend and the global `webSearchSidecar` block are configured independently, so the
 sidecar's `model` applies to a bridge search only when `resolveSidecarBackend(webSearchSidecar.backend)`
