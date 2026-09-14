@@ -63,16 +63,22 @@ The governing policy, stated once:
 wp2 and wp3 are the incident. wp4 through wp6 are the amplifiers that turn a
 routing mistake into a cost event; they ship after the incident is closed.
 
-## Relationship to the L2 lane unit
+## Relationship to #4581
 
-`devlog/_plan/260914_l2_pool_routing_cache/010_cache_safe_rebind.md` proposes the
-headroom floor for the same issue and reaches it by a different route: it keeps
-the threshold eviction rule and constrains the destination. That analysis is
-correct and this unit **absorbs it** as one half of wp2 rather than competing with
-it. The difference is that a headroom floor alone still evicts a live session from
-an 85% account to a 5% account, which discards a warm prefix for a capacity
-preference the session never needed. Holding the binding is the primary rule; the
-headroom floor is what protects the operator who explicitly opts back out.
+The L2 lane unit `devlog/_plan/260914_l2_pool_routing_cache/010_cache_safe_rebind.md`
+reached the headroom floor by a different route -- keep the threshold eviction rule,
+constrain the destination -- and landed on `dev` as #4581 while this unit was in
+flight. That analysis is correct and this work **builds on it** rather than beside
+it: `pickCacheSafeQuotaReplacement` is the shipped destination rule and both call
+sites here use it unchanged.
+
+What it deliberately left open, recorded in its own review, is this unit's scope: a
+below-threshold sibling still takes the thread once, so the prefix is lost one time
+before affinity goes sticky; cache affinity was still opt-in; and the transient path
+was untouched. A headroom floor alone still evicts a live session from an 85%
+account to a 5% account, which discards a warm prefix for a capacity preference the
+session never had. Holding the binding is the primary rule; the headroom floor is
+what protects the operator who explicitly opts back out.
 
 ## Write scope
 
