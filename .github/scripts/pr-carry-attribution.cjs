@@ -89,7 +89,7 @@ function stripFencedCode(text) {
       while (line[contentStart] === " " || line[contentStart] === "\t") {
         contentStart++;
       }
-      while (line[contentEnd - 1] === " " || line[contentEnd - 1] === "\t") {
+      while (line[contentEnd - 1] === " " || line[contentEnd - 1] === "\t" || line[contentEnd - 1] === "\r") {
         contentEnd--;
       }
       if (line.slice(contentStart, contentEnd) !== pendingFence) {
