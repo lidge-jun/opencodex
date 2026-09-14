@@ -1265,5 +1265,7 @@
   "usage-log-ws-stage.test.ts": "usage",
   "main-device-reauth.test.ts": "codex-integration",
   "main-device-reauth-api.test.ts": "codex-integration",
-  "main-device-reauth-ui.test.ts": "gui"
+  "main-device-reauth-ui.test.ts": "gui",
+  "adapter-input-media-guard.test.ts": "adapters",
+  "chat-media-translation.test.ts": "responses"
 }

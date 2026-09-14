@@ -323,13 +323,13 @@ the IR has no audio carrier and no adapter consumes one. The parser stays non-th
 because the native Responses passthrough also runs through `parseRequest` before the
 adapter forwards `_rawBody`, so refusing there would regress raw passthrough.
 
-**There is no adapter-level refusal for audio today.** By the time an adapter sees the
-turn the part is already a text marker, so it continues rather than rejecting. A typed
-unsupported-modality signal that survives to final adapter dispatch — leaving raw
-passthrough untouched — is a separate, recorded residual. `input_file` likewise keeps
-its existing filename-only marker, and Chat inbound still has no file or audio
-translation, so a Chat request can lose media before this parser sees it. No payload
-bytes and no media URL ever enter a marker or an error message.
+The final registered adapter also checks the original input under the
+[untranslated-media contract](../adapters/registry.md#untranslated-input-media). Audio/file
+attachments cannot succeed merely because the normalized representation retained a text
+marker: translated adapters refuse them, while native Responses retains the original body.
+Chat conversion rejects recognized audio/file parts before projection; the native Chat wire
+is unchanged. No audio/file transport or automatic URL fetch is added, and no client filename,
+payload, URL or metadata is included in the new error messages.
 
 The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images as
 real image blocks rather than flattening them to the text `[image]`, and orders image

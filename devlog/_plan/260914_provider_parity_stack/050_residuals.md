@@ -20,29 +20,19 @@ provider B, and a cache lifetime. `src/responses/reasoning-replay-cache.ts`
 already solves a narrower version of this inside one provider's session and is the
 natural starting point. It is a design unit, not a line change.
 
-## R2 — real audio/file transport, and any adapter-level refusal (from F5)
+## R2 — native audio/file transport (from F5)
 
-**F5 is PRESENCE-ONLY and is not fixed.** Phase 4 records that an audio attachment
-existed and explicitly does not add audio support. `OcxContentPart` has no audio
-member, no adapter consumes one, and per-provider audio capability is not recorded
-anywhere in the catalog — `src/providers/registry.ts:1062` notes exactly this when it
-omits audio from the Baseten hints.
+Layer 4 added presence markers but could still report successful translation after losing
+an attachment. Layer 5 closes that silent-success gap: registered translated adapters inspect
+the original content before dispatch, and Chat projection rejects recognized audio/file parts
+before losing them. Build, stateful runTurn and local-completion hooks share that contract;
+native Responses/Azure and native Chat retain their existing wire behavior. See the
+[current registry contract](../../../structure/adapters/registry.md#untranslated-input-media).
 
-Two things are residual, not delivered:
-
-- **Transport.** A carrier type, capability data across the provider set, and a wire
-  mapping per vendor. Guessing any one of those produces a request that fails at call
-  time instead of a modality that works.
-- **Refusal.** There is no adapter-level rejection of audio. By final dispatch the part
-  is already a text marker, so every adapter continues. Doing this properly needs a
-  typed unsupported-modality signal that survives to final adapter dispatch — including
-  `runTurn`, compaction and sidecar paths — while raw Responses passthrough stays
-  untouched. An early throw in the shared parser is not acceptable: raw passthrough
-  runs through `parseRequest` before the adapter forwards `_rawBody`.
-
-`input_file` keeps its existing filename-only marker, and Chat inbound has no file or
-audio translation at all, so a Chat request can lose media before the Responses parser
-sees it. Neither is addressed here.
+**Native audio/file transport through the normalized IR remains unimplemented.** This stack
+does not add a carrier type, per-model capability data, file-ID resolution, URL fetching or
+new upstream mappings. Unsupported translation now fails explicitly rather than pretending
+to consume an attachment. A filename/audio marker alone is still not the attachment.
 
 ## R3 — Kiro remote images stay uninlined
 

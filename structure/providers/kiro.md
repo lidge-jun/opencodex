@@ -83,3 +83,5 @@ rebuilds a turn's content from its collected texts and would otherwise discard i
 No fetch is introduced: resolving the reference server-side would add an outbound
 request on a request path. The marker carries a count and no URL, because a remote
 image URL can carry a signed token.
+
+Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.

@@ -6,6 +6,7 @@
  * responsesRequestSchema so routing/OAuth/pool/sidecars are inherited unchanged.
  */
 import { chatImageUrlFromPart } from "./image-parts";
+import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
 
 export class ChatCompletionsRequestError extends Error {}
 
@@ -277,6 +278,13 @@ function resolveReasoningSummary(raw: Rec): string | undefined {
  */
 export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   assertChatCompletionsRoutingBody(raw);
+  // Only the translated path reaches this function. Native Chat can retain its
+  // provider-specific file/audio blocks; projecting them here would discard them.
+  const unsupportedMedia = untranslatedChatInputMedia(raw);
+  if (unsupportedMedia) {
+    throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
+  }
+
 
   const systemParts: string[] = [];
   const input: Rec[] = [];
@@ -310,6 +318,16 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
         const blocks = assistantContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "assistant", content: blocks });
         if (msg.tool_calls !== undefined) toolCallsToItems(msg.tool_calls, input, knownNameByCallId);
+        break;
+      }
+      case "function": {
+        // Native eligibility diverts legacy image results too, but this translator
+        // has no legacy function_call/name pairing. Never silently discard them.
+        if (Array.isArray(msg.content) && msg.content.some(part => isRec(part) && imageUrlFromPart(part))) {
+          throw new ChatCompletionsRequestError(
+            "Legacy function-result image translation is not implemented. Use tool_calls and role:tool with tool_call_id.",
+          );
+        }
         break;
       }
       case "tool": {

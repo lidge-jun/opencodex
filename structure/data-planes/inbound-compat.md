@@ -316,3 +316,14 @@ omitting the wire parameter, and the Pi client export maps Pi's `off` thinking l
 onto it. Dropping it let a provider default re-enable reasoning the caller had
 explicitly turned off, which is not neutral for the Anthropic families that think by
 default and require an explicit `thinking:{type:"disabled"}` to stop.
+
+
+## Media at the Chat translation boundary
+
+The native Chat path retains provider-native file/audio blocks. When a request instead needs
+Chat-to-Responses projection, `src/chat/inbound.ts` rejects recognized audio/file content
+before it can become empty text, regardless of message role. Legacy `function`-role images
+also return an explicit error; their call/result pairing is not implemented by this projection.
+Modern `tool` images continue through the existing following-user carrier. These errors state
+an OpenCodex conversion limit, not a provider capability claim. Final Responses-to-adapter
+admission follows the [registry contract](../adapters/registry.md#untranslated-input-media).
