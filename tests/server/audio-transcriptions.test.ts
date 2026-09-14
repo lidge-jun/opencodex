@@ -284,6 +284,27 @@ describe("standalone transcription API", () => {
     expect((await captured[0]!.formData()).get("model")).toBeNull();
   });
 
+  test("stored Direct credentials never inherit a caller account ID", async () => {
+    writeFileSync(join(codex.path, "auth.json"), JSON.stringify({ tokens: { access_token: "fixture-main-access" } }));
+    clearMainAccountInfoCache();
+    const cfg = config();
+    cfg.defaultProvider = "openai";
+    cfg.providers = { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" } };
+    saveConfig(cfg);
+
+    for (const headers of [
+      { authorization: "", "x-opencodex-api-key": KEY, "chatgpt-account-id": "caller-workspace" },
+      { authorization: "", "x-api-key": KEY, "chatgpt-account-id": "caller-workspace" },
+    ]) {
+      expect((await request(form(), headers)).status).toBe(200);
+    }
+    expect(captured).toHaveLength(2);
+    for (const upstream of captured) {
+      expect(upstream.headers.get("authorization")).toBe("Bearer fixture-main-access");
+      expect(upstream.headers.get("chatgpt-account-id")).toBeNull();
+    }
+  });
+
   test("a missing stored Direct credential fails without paid-provider fallback", async () => {
     const cfg = config();
     cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" };
