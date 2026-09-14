@@ -1898,6 +1898,21 @@ dialog.modal-overlay::backdrop {
 .account-pool-strategy-controls { margin: 0; display: grid; gap: 8px; }
 .account-pool-strategy-controls .field { display: grid; gap: 6px; margin: 0; }
 .account-pool-strategy-controls .field-label { margin-bottom: 0; }
+.account-pool-strategy-controls .setting-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.account-pool-strategy-controls .setting-controls .custom-select {
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+.account-pool-threshold-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: normal;
+}
 .account-pool-strategy-controls .custom-select { width: 100%; max-width: 100%; }
 .account-pool-strategy-controls .select-trigger {
   width: 100%;
