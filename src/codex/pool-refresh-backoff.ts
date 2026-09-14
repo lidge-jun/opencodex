@@ -51,6 +51,15 @@ export function clearCodexPoolRefreshFailure(accountId: string): void {
   backoffByAccount.delete(accountId);
 }
 
+/**
+ * Drop every remembered failure. Called when the routing layer discards its per-account state,
+ * because a cooldown outliving the binding it was learned alongside would keep an account out of
+ * selection for a roster the operator has already replaced.
+ */
+export function clearAllCodexPoolRefreshFailures(): void {
+  backoffByAccount.clear();
+}
+
 function currentNow(now?: number): number {
   return now ?? nowOverride ?? Date.now();
 }

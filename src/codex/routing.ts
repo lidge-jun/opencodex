@@ -38,7 +38,7 @@ import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { retainedUtf8Bytes } from "../lib/admission";
 import { recordUpstreamHostFailure } from "./upstream-host-health";
 
-import { isCodexPoolRefreshCooling } from "./pool-refresh-backoff";
+import { clearAllCodexPoolRefreshFailures, isCodexPoolRefreshCooling } from "./pool-refresh-backoff";
 
 type ThreadAffinityEntry = {
   accountId: string;
@@ -430,6 +430,9 @@ export function listLiveCodexAccountIds(config: OcxConfig): ReadonlySet<string> 
 export function clearThreadAccountMap(): void {
   threadAccountMap.clear();
   threadAffinityEntryTotal = 0;
+  // A refresh cooldown is per-account runtime state learned alongside these bindings. Leaving it
+  // behind here keeps an account out of selection after the roster it belonged to is gone.
+  clearAllCodexPoolRefreshFailures();
 }
 
 export function clearThreadAccountMapForAccount(
