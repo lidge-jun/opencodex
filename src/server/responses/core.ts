@@ -7718,7 +7718,7 @@ async function handleResponsesInner(
       upstreamResponse = await activeAdapter.fetchResponse(builtInitialRequest, {
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
-              sendBudget,
+        sendBudget,
         stream: parsed.stream,
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtInitialRequest),
@@ -7853,7 +7853,7 @@ async function handleResponsesInner(
             return await activeAdapter.fetchResponse(retryRequest, {
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
-              sendBudget,
+            sendBudget,
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(retryRequest),
