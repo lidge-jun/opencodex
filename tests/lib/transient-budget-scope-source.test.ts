@@ -145,9 +145,11 @@ describe("every dispatch path reports into the shared budget", () => {
 
   test("credential hops keep their roster cap AND reserve from the shared budget", () => {
     const core = source("server/responses/core.ts");
-    // Four hop sites: the native passthrough 429, the shared sidecar hook's generic and
-    // Anthropic arms, and the runTurn preflight 429.
-    expect(core.match(/reserveCredentialHop\(/g)).toHaveLength(4);
+    // Six hop sites: the native passthrough 429, the shared sidecar hook's generic and
+    // Anthropic arms, the runTurn preflight 429, the adapter recovery loop, and the
+    // continuation loop. The last two were the arms that actually iterate the roster, so
+    // leaving them out meant the claim held everywhere except where it mattered most.
+    expect(core.match(/reserveCredentialHop\(/g)).toHaveLength(6);
     // The per-roster caps are NOT replaced. The effective allowance is the intersection, so
     // removing either half is a behaviour change that has to be argued for.
     expect(core).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");

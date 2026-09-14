@@ -8615,13 +8615,25 @@ async function handleResponsesInner(
         && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
+        // Intersection with the shared request budget. This arm re-sends through
+        // rebuildAndRefetch, so the roster cap alone would let one request walk the roster on
+        // an allowance the rest of the request cannot see. A refusal ends the ladder with the
+        // real 429 already in hand, which is the decided exhaustion contract.
+        const hop = reserveCredentialHop(
+          "auth-recovery",
+          `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
+        );
+        if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOn429(
           config,
           route.providerName,
           genericFailoverAccountId,
           upstreamResponse.headers.get("retry-after"),
         );
-        if (!nextAccountId) break;
+        if (!nextAccountId) {
+          hop.permit?.release();
+          break;
+        }
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         try {
           // The FULL snapshot, not just the bearer: Antigravity pairs an account-matched
@@ -8629,7 +8641,10 @@ async function handleResponsesInner(
           // would mix one account's credential with another's routing data.
           const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
             genericFailovers += 1;
-          if (!await applyFailoverSnapshot(snapshot)) break;
+          if (!await applyFailoverSnapshot(snapshot)) {
+            hop.permit?.release();
+            break;
+          }
           invalidateSameTargetRequest();
           activeAdapter = resolveSelectionAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
@@ -9085,12 +9100,22 @@ async function handleResponsesInner(
         && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
-        const nextAccountId = rotateGenericOAuthAccountOn429(
-          config,
-          route.providerName,
-          genericFailoverAccountId,
-          response.headers.get("retry-after"),
+        // Intersection with the shared request budget. The continuation loop re-sends the
+        // turn, so without this the per-request bound could be re-armed simply by reaching a
+        // different loop -- which is the divergence the comment above already warns about.
+        const hop = reserveCredentialHop(
+          "auth-recovery",
+          `${route.providerName}|${route.modelId}|continuation-oauth-429`,
         );
+        const nextAccountId = hop.allowed
+          ? rotateGenericOAuthAccountOn429(
+            config,
+            route.providerName,
+            genericFailoverAccountId,
+            response.headers.get("retry-after"),
+          )
+          : null;
+        if (!nextAccountId) hop.permit?.release();
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           try {
@@ -9100,7 +9125,9 @@ async function handleResponsesInner(
             // routing data.
             const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
                 genericFailovers += 1;
-            if (await applyFailoverSnapshot(snapshot, nextParsed)) {
+            const applied = await applyFailoverSnapshot(snapshot, nextParsed);
+            if (!applied) hop.permit?.release();
+            if (applied) {
               invalidateSameTargetRequest();
               activeAdapter = resolveSelectionAdapter(
                 resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
