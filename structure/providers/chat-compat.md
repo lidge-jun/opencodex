@@ -91,8 +91,9 @@ boundary so the proxy does not retain request state across the whole stream. Thi
 pre-flight is the primary path and covers threads the process has served while their record remains
 inside the TTL/LRU bounds. Missing, expired, evicted, and
 pre-process history stays fail-soft on the first send. If a Responses upstream then returns its own
-self-identifying opaque-blob 4xx (`invalid_encrypted_content`, or xAI's two `invalid-argument`
-decoder errors), the proxy rebuilds once through the same sanitation path: reasoning
+self-identifying opaque-blob 4xx (`invalid_encrypted_content`, a reasoning `encrypted_content`
+that "was not issued to this caller" (#4469), or xAI's two `invalid-argument` decoder errors),
+the proxy rebuilds once through the same sanitation path: reasoning
 `encrypted_content` is removed and compaction blobs use the existing text degradation. A one-shot
 guard makes a second rejection terminal, and a successful recovery records the current serving
 identity so later route changes return to deterministic pre-flight. A cold-record cross-backend

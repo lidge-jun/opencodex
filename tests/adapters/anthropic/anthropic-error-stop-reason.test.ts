@@ -176,3 +176,70 @@ describe("an upstream error stop_reason is a failure, not a stop", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 });
+
+/**
+ * A content-filter terminal used to leave the adapter as `done` with stopReason
+ * `content_filter`. The bridge then emitted `response.incomplete` without
+ * `retryable`, and Codex retried the same refusal five times (#4312).
+ */
+describe("an upstream content_filter stop_reason is a non-retryable incomplete", () => {
+  const filteredStops = ["refusal", "content_filter"] as const;
+
+  function streamFrames(stopReason: string, includeMessageStop: boolean): string {
+    const frames = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n',
+      `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"${stopReason}"},"usage":{"output_tokens":4}}\n\n`,
+    ];
+    if (includeMessageStop) frames.push('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+    return frames.join("");
+  }
+
+  async function collectStream(frames: string): Promise<AdapterEvent[]> {
+    const events: AdapterEvent[] = [];
+    for await (const e of createAnthropicAdapter(provider).parseStream(new Response(frames, {
+      status: 200, headers: { "content-type": "text/event-stream" },
+    }))) events.push(e);
+    return events;
+  }
+
+  function expectFilteredIncomplete(events: AdapterEvent[], stopReason: string): void {
+    expect(events.filter(e => e.type === "text_delta")).toEqual([{ type: "text_delta", text: "partial" }]);
+    const terminals = events.filter(e => e.type === "done" || e.type === "error" || e.type === "incomplete");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({
+      type: "incomplete",
+      reason: "content_filter",
+      retryable: false,
+      message: `upstream ended the turn with stop_reason "${stopReason}"`,
+      usage: { inputTokens: 10, outputTokens: 4 },
+    });
+  }
+
+  test.each(filteredStops)("streaming: stop_reason %s yields one incomplete with retryable false", async (stopReason) => {
+    expectFilteredIncomplete(await collectStream(streamFrames(stopReason, true)), stopReason);
+  });
+
+  test.each(filteredStops)("streaming EOF without message_stop: stop_reason %s stays non-retryable", async (stopReason) => {
+    // Compatible providers may close after message_delta. That branch bypasses emitDone,
+    // so a missing check here would still emit `done` and Codex would retry.
+    expectFilteredIncomplete(await collectStream(streamFrames(stopReason, false)), stopReason);
+  });
+
+  test.each(filteredStops)("buffered: stop_reason %s yields one incomplete with retryable false", async (stopReason) => {
+    const events = await createAnthropicAdapter(provider).parseResponse!(new Response(JSON.stringify({
+      content: [{ type: "text", text: "partial" }],
+      stop_reason: stopReason,
+      usage: { input_tokens: 10, output_tokens: 4 },
+    }), { status: 200 })) as AdapterEvent[];
+    expectFilteredIncomplete(events, stopReason);
+  });
+
+  test("streaming: max_tokens still completes as done", async () => {
+    const events = await collectStream(streamFrames("max_tokens", true));
+    expect(events.filter(e => e.type === "text_delta")).toEqual([{ type: "text_delta", text: "partial" }]);
+    expect(events.filter(e => e.type === "incomplete" || e.type === "error")).toEqual([]);
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "max_tokens" });
+  });
+});

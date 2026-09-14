@@ -28,6 +28,7 @@ export { getNormalizeStatsForTests, resetNormalizeStateForTests, setNormalizeCac
 export { anthropicImageNormalizeRetainedStoreSnapshot, evictOldestAnthropicImageNormalizeForBudget } from "./anthropic-image-codec";
 
 import { bunImageEncode, bunImageValidate, processAt, TERMINAL_POS, TIER0_COUNT, TIER1_COUNT } from "./anthropic-image-codec";
+import { recordedEmittedPosition, recordEmittedPosition } from "./anthropic-image-codec";
 import { IMAGE_NORMALIZE_CONCURRENCY, MAX_INPUT_BASE64_LENGTH, MAX_INPUT_PIXELS } from "./anthropic-image-codec";
 import type { NormalizeOptions } from "./anthropic-image-codec";
 
@@ -149,7 +150,13 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
         continue;
       }
       const sourceMedia = target.mediaType.toLowerCase();
-      const pos = initialPosition(newestFirstIndex, bias);
+      // #4532: pin the start position to the image's own identity. A never-seen
+      // image still gets the age-derived tier; a seen image resumes where it last
+      // EMITTED, so appending a newer image cannot re-encode history and bust
+      // Anthropic's prompt prefix cache. tierBias (413 retry) applies on top of
+      // either base and still clamps to TERMINAL_POS.
+      const recorded = recordedEmittedPosition(b64, sourceMedia);
+      const pos = Math.min((recorded ?? initialPosition(newestFirstIndex, 0)) + Math.max(0, bias), TERMINAL_POS);
       const result = await processAt(b64, pos, sourceMedia, encode, validate);
       if (result.kind === "failed") {
         target.drop(UNDECODABLE_TEXT);
@@ -175,6 +182,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
         size = result.data.length;
       }
       entries[i] = { target, sourceB64: b64, sourceMedia, pos: result.pos, size, done: result.pos >= TERMINAL_POS };
+      recordEmittedPosition(b64, sourceMedia, result.pos);
     }
   };
   await Promise.all(Array.from({ length: workerCount }, () => worker().catch(err => {
@@ -216,6 +224,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
     entry.size = newSize;
     entry.pos = result.pos;
     entry.done = result.pos >= TERMINAL_POS;
+    recordEmittedPosition(entry.sourceB64, entry.sourceMedia, result.pos);
   }
 
   // Terminal overflow (050 audit round 1, blocker 3): with no downstream guard, drop

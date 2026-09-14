@@ -781,6 +781,18 @@ function isEncryptedFunctionOutputRejection(bodyText: string): boolean {
   }
 }
 
+/**
+ * #4469: reasoning encrypted_content is minted per caller identity, so replaying it under a
+ * different caller is rejected with "reasoning `encrypted_content` was not issued to this
+ * caller". Substring checks tolerate the optional backticks and a leading or trailing
+ * sentence, while the "was not issued to this caller" anchor plus an encrypted-content or
+ * reasoning subject keep unrelated invalid_request_error prose from gaining a hidden resend.
+ */
+function isReasoningBlobCallerMismatchMessage(message: string): boolean {
+  if (!message.includes("was not issued to this caller")) return false;
+  return message.includes("encrypted_content") || message.includes("reasoning");
+}
+
 function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
   if (isEncryptedFunctionOutputRejection(bodyText)) return true;
   try {
@@ -793,7 +805,7 @@ function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
   try {
     const payload = JSON.parse(bodyText) as unknown;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-    const record = payload as { code?: unknown; error?: unknown };
+    const record = payload as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
 
     if (record.error && typeof record.error === "object" && !Array.isArray(record.error)) {
       const error = record.error as { type?: unknown; code?: unknown; message?: unknown };
@@ -807,8 +819,22 @@ function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
             " could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
           )
         ) return true;
+        // #4469: the caller-mismatch wording arrives without a dedicated code, so the
+        // message itself is the identity. It is not gated on code being null — the upstream
+        // may attach a generic code — because the anchored phrase is already specific.
+        if (typeof error.message === "string" && isReasoningBlobCallerMismatchMessage(error.message)) {
+          return true;
+        }
       }
     }
+
+    // The flat stream-error envelope carries type/message at the top level rather than under
+    // an error object; the same anchored identity applies there.
+    if (
+      record.type === "invalid_request_error"
+      && typeof record.message === "string"
+      && isReasoningBlobCallerMismatchMessage(record.message)
+    ) return true;
 
     if (record.code !== "invalid-argument" || typeof record.error !== "string") return false;
     return record.error.startsWith("Could not decode the compaction blob")
@@ -824,8 +850,9 @@ function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
  * The outbound-body check is intentional: the inbound transcript may contain a proxy envelope or
  * compaction blob that the adapter already lowered, in which case a replay would be byte-identical.
  * OpenAI usually exposes a dedicated nested code; ChatGPT also emits one exact code-less
- * unverifiable-ciphertext message. xAI's code is generic, so its two concrete decoder error
- * identities are also required. Unrelated error prose must never gain a hidden resend.
+ * unverifiable-ciphertext message, and #4469 added the anchored caller-mismatch wording for
+ * reasoning blobs minted under a different caller. xAI's code is generic, so its two concrete
+ * decoder error identities are also required. Unrelated error prose must never gain a hidden resend.
  */
 export function shouldAttemptOpaqueBlobRecovery(args: {
   status: number;
