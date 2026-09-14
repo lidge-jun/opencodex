@@ -2919,7 +2919,7 @@ export function resolveCodexAccountForThreadDetailed(
         selectionOptions?.nativeMainSelectionOnly === true
         && selectionOptions.modelEligibleAccountIds !== undefined
       ) {
-        return { status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID };
+        return { status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID, affinity: affinityAfterRelease(releaseReason) };
       }
       return { status: "none" };
     }
@@ -2957,13 +2957,13 @@ export function resolveCodexAccountForThreadDetailed(
       // return main only as a non-mutating sentinel so the caller's atomic claim can
       // classify maintenance. Do not fall through to the configured-but-ineligible
       // active account or persist/bind this synthetic selection.
-      return { status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID };
+      return { status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID, affinity: affinityAfterRelease(releaseReason) };
     } else if (
       hasConfiguredPoolAccount(config, active, selectionOptions)
       && !isCodexAccountPaused(config, active)
       && !isCodexAccountPlanExcluded(config, active)
     ) {
-      return { status: "selected", accountId: active };
+      return { status: "selected", accountId: active, affinity: affinityAfterRelease(releaseReason) };
     } else {
       return { status: "none" };
     }
@@ -3005,13 +3005,13 @@ export function resolveCodexAccountForThreadDetailed(
   );
   if (!isCodexAccountUsable(config, active, selectionOptions)) {
     return hasConfiguredPoolAccount(config, active, selectionOptions)
-      ? { status: "selected", accountId: active }
+      ? { status: "selected", accountId: active, affinity: affinityAfterRelease(releaseReason) }
       : { status: "none" };
   }
   if (isCodexAccountPaused(config, active)) return { status: "none" };
   if (getCodexQuotaHealthSnapshot(active, quotaScope, now)) {
     return hasConfiguredPoolAccount(config, active, selectionOptions)
-      ? { status: "selected", accountId: active }
+      ? { status: "selected", accountId: active, affinity: affinityAfterRelease(releaseReason) }
       : { status: "none" };
   }
   if (threadId) {
@@ -3021,7 +3021,7 @@ export function resolveCodexAccountForThreadDetailed(
       bindThreadAffinity(threadId, active, now, quotaScope);
     }
   }
-  return { status: "selected", accountId: active };
+  return { status: "selected", accountId: active, affinity: affinityAfterRelease(releaseReason) };
 }
 
 export function recordCodexUpstreamOutcome(

@@ -1690,13 +1690,13 @@ describe("codex routing", () => {
     updateAccountQuota("b", 10);
     const now = 1_800_000_000_000;
     expect(resolveCodexAccountForThreadDetailed("expired-detailed", config, now))
-      .toEqual({ status: "selected", accountId: "a" });
+      .toMatchObject({ status: "selected", accountId: "a" });
 
     expect(resolveCodexAccountForThreadDetailed(
       "expired-detailed",
       config,
       now + CODEX_THREAD_AFFINITY_IDLE_TTL_MS + 1,
-    )).toEqual({ status: "expired", accountId: "a" });
+    )).toMatchObject({ status: "expired", accountId: "a" });
   });
 
   test("thread affinity LRU cap evicts the oldest mapping", () => {
@@ -2469,7 +2469,7 @@ describe("codex account selection order", () => {
       now + 1,
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
 
     expect(config.activeCodexAccountId).toBe("b");
     expect(config.activeCodexAccountPinned).toBe("b");
@@ -2516,7 +2516,7 @@ describe("codex account selection order", () => {
       eligible,
       modelId,
     );
-    expect(first).toEqual({ status: "selected", accountId: firstPreview });
+    expect(first).toMatchObject({ status: "selected", accountId: firstPreview });
     expect(["a", "c"]).toContain(firstPreview);
 
     expect(previewCodexAccountForRequest(
@@ -2549,7 +2549,7 @@ describe("codex account selection order", () => {
       "shared",
       { modelEligibleAccountIds: new Set([other]) },
       modelId,
-    )).toEqual({ status: "selected", accountId: other });
+    )).toMatchObject({ status: "selected", accountId: other });
     expect(resolveCodexAccountForThreadDetailed(
       threadId,
       config,
@@ -2557,7 +2557,7 @@ describe("codex account selection order", () => {
       "shared",
       { modelEligibleAccountIds: new Set(["a", "b", "c"]) },
       modelId,
-    )).toEqual({ status: "selected", accountId: other });
+    )).toMatchObject({ status: "selected", accountId: other });
     expect(resolveCodexAccountForThread(threadId, config, now + 6, "shared")).toBe("b");
   });
 
@@ -2588,7 +2588,7 @@ describe("codex account selection order", () => {
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
       modelId,
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     // B is the highest tier after the detour exists. Filtering only after tier
     // selection would drop B without ever exposing healthy C to the picker.
     config.codexAccountPriorities = { b: 2, c: 1 };
@@ -2618,7 +2618,7 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       modelId,
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
     expect(config.activeCodexAccountId).toBe("c");
     expect(config.activeCodexAccountPinned).toBeUndefined();
     expect(getEffectiveActiveCodexAccountId(config)).toBe("c");
@@ -2659,7 +2659,7 @@ describe("codex account selection order", () => {
       config,
       resolveAt,
       "shared",
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
     expect(config.activeCodexAccountId).toBe("c");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("c");
   });
@@ -2801,7 +2801,7 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       "gated-model-0",
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     for (let index = 1; index <= CODEX_THREAD_AFFINITY_MAX_ENTRIES; index += 1) {
       expect(resolveCodexAccountForThreadDetailed(
         threadId,
@@ -2829,7 +2829,7 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       "gated-model-0",
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
     expect(resolveCodexAccountForThreadDetailed(
       threadId,
       config,
@@ -2837,7 +2837,7 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       "gated-model-0",
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
   }, STORE_BUDGET_MS);
 
   test("a gated first request binds its actual account without replacing global active", () => {
@@ -2852,7 +2852,7 @@ describe("codex account selection order", () => {
       now,
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("b");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
     expect(resolveCodexAccountForThread("gated-first-task", config, now + 1, "shared")).toBe("a");
@@ -2872,14 +2872,14 @@ describe("codex account selection order", () => {
       Date.now(),
       "shared",
       selectionOptions,
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(resolveCodexAccountForThreadDetailed(
       null,
       config,
       Date.now() + 1,
       "shared",
       selectionOptions,
-    )).toEqual({ status: "selected", accountId: "b" });
+    )).toMatchObject({ status: "selected", accountId: "b" });
     expect(config.activeCodexAccountId).toBe("b");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
   });
@@ -2906,7 +2906,7 @@ describe("codex account selection order", () => {
         now + 1,
         "shared",
         { modelEligibleAccountIds: new Set(["a"]) },
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
 
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBe("b");
@@ -2956,7 +2956,7 @@ describe("codex account selection order", () => {
         now + CODEX_TRANSIENT_SOFT_AVOID_MS + 4,
         "shared",
         selectionOptions,
-      )).toEqual({ status: "selected", accountId: "b" });
+      )).toMatchObject({ status: "selected", accountId: "b" });
       expect(config.activeCodexAccountId).toBe("c");
       expect(config.activeCodexAccountPinned).toBe("c");
       expect(getEffectiveActiveCodexAccountId(config)).toBe("c");
@@ -2986,7 +2986,7 @@ describe("codex account selection order", () => {
         now + 1,
         "shared",
         { modelEligibleAccountIds: new Set(["a"]) },
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
@@ -3024,7 +3024,7 @@ describe("codex account selection order", () => {
         resolveAt,
         "shared",
         { modelEligibleAccountIds: new Set(["a"]) },
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
@@ -3064,7 +3064,7 @@ describe("codex account selection order", () => {
         now,
         "shared",
         selectionOptions,
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
@@ -3107,7 +3107,7 @@ describe("codex account selection order", () => {
         resolveAt,
         "shared",
         selectionOptions,
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
@@ -3130,7 +3130,7 @@ describe("codex account selection order", () => {
         nativeMainSelectionOnly: true,
         modelEligibleAccountIds: new Set(),
       },
-    )).toEqual({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
+    )).toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
 
@@ -3160,7 +3160,7 @@ describe("codex account selection order", () => {
       now + CODEX_TRANSIENT_SOFT_AVOID_MS + 3,
       "shared",
       { modelEligibleAccountIds: new Set(["a", "c"]) },
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
     expect(config.activeCodexAccountId).toBe("b");
     expect(config.activeCodexAccountPinned).toBe("b");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
@@ -3180,7 +3180,7 @@ describe("codex account selection order", () => {
       Date.now(),
       "shared",
       { modelEligibleAccountIds: new Set(["a", "b"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
@@ -3205,7 +3205,7 @@ describe("codex account selection order", () => {
       now + CODEX_TRANSIENT_SOFT_AVOID_MS + 3,
       "shared",
       { modelEligibleAccountIds: new Set(["a", "b"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
@@ -3224,7 +3224,7 @@ describe("codex account selection order", () => {
       Date.now(),
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
@@ -3249,7 +3249,7 @@ describe("codex account selection order", () => {
       now + CODEX_TRANSIENT_SOFT_AVOID_MS + 3,
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
