@@ -418,7 +418,8 @@
       }
     ],
     "oversizeDocs": [
-      "gui-and-management-api.md"
+      "gui-and-management-api.md",
+      "transports/responses.md"
     ],
     "staleRefs": []
   }
