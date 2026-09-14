@@ -164,7 +164,8 @@ Combo 失敗分為**跳轉**失敗與**終端**失敗。
 | --- | --- |
 | HTTP 401、403、404、408、429 或任何 5xx | 冷卻目標並跳到下一個合格目標。 |
 | 分類為認證、訂閱、配額、限流、過載或上游伺服器錯誤 | 冷卻目標並跳轉，即使單靠狀態碼不足。 |
-| 客戶端取消（499）、`origin_rejected`、cyber-policy 拒絕、上下文溢出或無效請求 | 停止並回傳錯誤；另一個目標不會讓請求變為有效。 |
+| 客戶端取消（499）、`origin_rejected`、cyber-policy 拒絕、上下文溢出或其他無效請求 | 停止並回傳錯誤；另一個目標不會讓請求變為有效。 |
+| 結構化 HTTP 400，明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值，或回傳模型特定影像輸入拒絕（`param: input`） | 在輸出開始前跳轉到下一個符合條件的目標，且不記錄冷卻時間；參見下方選用參數相容性。 |
 | 任何其他未分類錯誤 | 停止並回傳錯誤。 |
 
 跳轉的目標預設進入 60 秒冷卻。若上游回應包含有效的 `Retry-After` 值，opencodex 改用它。接受數字秒與 HTTP-date 值，且每次冷卻上限為 10 分鐘。
@@ -290,3 +291,9 @@ Combo id 未知。回應為 HTTP 404 並帶 type `invalid_request_error`。執�
 ### 為什麼 failover 在第一個錯誤後就停止了？
 
 該錯誤是終端的而非目標特定的。修正無效輸入、縮減過大的上下文、處理策略拒絕，或更正被拒的請求來源。Combo 對那些情況不會跳轉。
+
+## 選用參數相容性
+
+一般 400 錯誤仍會終止請求，但明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值，或回傳模型特定影像輸入拒絕（`param: input`）的結構化錯誤，可讓 combo 在輸出開始前嘗試下一個符合條件的目標，而不記錄冷卻時間。安全政策拒絕、取消及已開始的輸出仍不可重播。
+
+[Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

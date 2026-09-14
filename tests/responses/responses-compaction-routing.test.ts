@@ -2282,7 +2282,10 @@ describe("computer screenshot output translation boundary", () => {
   test("rejects before an otherwise active vision description", async () => {
     const config = keyProviderConfig({ adapter: "openai-chat", noVisionModels: ["model"] });
     config.visionSidecar = { enabled: true, backend: "routed", model: "vision/seeing" };
-    config.providers.vision = { adapter: "openai-chat", baseUrl: "https://vision.example/v1", apiKey: "test-key" };
+    config.providers.vision = {
+      adapter: "openai-chat", baseUrl: "https://vision.example/v1", apiKey: "test-key",
+      modelInputModalities: { seeing: ["text", "image"] },
+    };
     // Routed vision needs no live OpenAI account for this controlled description dependency.
     const resolveAuth = spyOn(visionModule, "shouldResolveOpenAiVisionSidecar").mockReturnValue(false);
     const describe = spyOn(visionModule, "describeImagesInPlace").mockImplementation(async () => {});

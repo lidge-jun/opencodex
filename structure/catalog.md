@@ -81,6 +81,14 @@ mapped account reports it. A failed or malformed discovery is not positive evide
 hides the gated row until a later refresh. The same snapshot gates Pool selection, so the catalog
 and runtime cannot disagree by advertising through one account and dispatching through another.
 
+`client_version` arrives on the inbound request and is part of that cache identity, so
+`src/codex/model-entitlements.ts` bounds the work as well as the state: stored versions per account, concurrent
+roster flights per account, and distinct caller-selected versions admitted per account in one roster
+window. Repeating a version already charged still retries on the failure TTL, and the locally
+selected runtime version is never charged, so a legitimate refresh survives. Over the bound the
+answer is unconfirmed, which hides the gated row rather than confirming a denial. Flight capacity
+is checked before charging a distinct version, so a capacity refusal consumes no miss allowance.
+
 The app-server's model list comes from this shared catalog, not from patching the App. Codex Desktop
 may still apply its remote native-only allowlist after `model/list`; an explicitly configured combo
 `nativeAlias` is the bounded compatibility path. It replaces one supported bare native row with a
@@ -95,6 +103,11 @@ Provider live-model lists are cached with a configured TTL (`src/codex/model-cac
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+
+A Devin live row spreads its measured `inputModalities` before
+`catalogHintsFromProviderConfig`, so exact `modelCapabilities` declarations, the legacy
+`modelInputModalities` record and the vision-sidecar rewrite keep precedence and the live
+value survives only when none of them applies.
 
 For `liveModels: false`, a static provider publishes the ordered union of `models` and
 `retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that

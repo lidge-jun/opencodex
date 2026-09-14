@@ -2951,7 +2951,26 @@ function unavailableAntigravityQuota(failure: QuotaFailureCode): AntigravityQuot
   return { kind: "unavailable", failure, legacy: { kind: "null" } };
 }
 
-/** Final attempt determines the safe diagnosis; a successful fallback clears the first failure. */
+/**
+ * Prefer a summary network-policy diagnosis over a vaguer fallback. A blocked
+ * destination is an actionable local-network fact, while "upstream_error" tells
+ * the operator to go look at Google. A successful models probe still clears
+ * the first failure completely.
+ */
+function antigravityUnavailableFailure(
+  summaryFailure: QuotaFailureCode | undefined,
+  fallbackFailure: QuotaFailureCode,
+): QuotaFailureCode {
+  if (
+    (summaryFailure === "destination_blocked" || summaryFailure === "dns_failed")
+    && fallbackFailure !== "destination_blocked"
+    && fallbackFailure !== "dns_failed"
+  ) {
+    return summaryFailure;
+  }
+  return fallbackFailure;
+}
+
 async function probeAntigravityUsageQuota(accessToken: string, projectId: string): Promise<AntigravityQuotaProbeResult> {
   const fetchQuota = (url: string) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
     headers: {
@@ -2960,6 +2979,7 @@ async function probeAntigravityUsageQuota(accessToken: string, projectId: string
     },
     body: JSON.stringify({ project: projectId }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   }, antigravityOutboundDependencies);
+  let summaryFailure: QuotaFailureCode | undefined;
   try {
     const response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL);
     if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_SUMMARY_URL)) return unavailableAntigravityQuota("redirect_blocked");
@@ -2968,19 +2988,30 @@ async function probeAntigravityUsageQuota(accessToken: string, projectId: string
       const quota = parseAntigravityQuotaSummary(asRecord(await readQuotaJson(response)));
       if (quota) return { kind: "available", quota, source: "google-antigravity:retrieveUserQuotaSummary" };
     }
-  } catch {
+  } catch (error) {
     // Existing behavior: summary transport/parse failure may recover through the models probe.
+    summaryFailure = quotaTransportFailure(error);
   }
   try {
     const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL);
-    if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_MODELS_URL)) return unavailableAntigravityQuota("redirect_blocked");
-    if (!response.ok) return unavailableAntigravityQuota(quotaHttpFailure(response.status));
+    if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_MODELS_URL)) {
+      return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, "redirect_blocked"));
+    }
+    if (!response.ok) {
+      return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, quotaHttpFailure(response.status)));
+    }
     const customWindows = antigravityWindowsFromModels(asRecord(await readQuotaJson(response)));
-    if (!customWindows.length) return unavailableAntigravityQuota("response_unusable");
+    if (!customWindows.length) {
+      return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, "response_unusable"));
+    }
     return { kind: "available", quota: { customWindows, updatedAt: Date.now() }, source: "google-antigravity:fetchAvailableModels" };
   } catch (error) {
     // The public compatibility wrapper still rejects this exact fallback error; it never enters a DTO.
-    return { kind: "unavailable", failure: quotaTransportFailure(error), legacy: { kind: "throw", error } };
+    return {
+      kind: "unavailable",
+      failure: antigravityUnavailableFailure(summaryFailure, quotaTransportFailure(error)),
+      legacy: { kind: "throw", error },
+    };
   }
 }
 

@@ -182,7 +182,7 @@ describe("Codex history provider sync", () => {
     expect(readFileSync(fixture.rollout,"utf8")).toBe(before);
     expect(existsSync(fixture.backupPath)).toBe(false);
   });
-  test("injection preflight preserves provider definitions needed by paginated threads", () => {
+  test("injection preflight reports the paginated refusal for every target set that reaches a paginated row", () => {
     const fixture = makeFixture({ includeLegacy: true });
     noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
     const db = new Database(fixture.dbPath);
@@ -214,12 +214,61 @@ describe("Codex history provider sync", () => {
     });
   }
 
+  for (const marker of ["ordinal", "history_mode"] as const) {
+    test(`refuses a later paginated ${marker} when the first line is still legacy`, () => {
+      const fixture = makeFixture();
+      noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+      const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const first = records[0];
+      // Keep line 1 legacy. A later native migration writes the paginated marker
+      // onto a new session_meta (and, for ordinals, the following event) so the
+      // first-line-only guard would miss it and clone ordinal 0 (#4311).
+      const laterMeta = marker === "ordinal"
+        ? { ordinal: 0, type: "session_meta", payload: { ...first.payload } }
+        : { type: "session_meta", payload: { ...first.payload, history_mode: "paginated" } };
+      const laterEvent = marker === "ordinal"
+        ? { ordinal: 1, type: "event_msg", timestamp: "2026-01-01T00:00:00.000Z", payload: { message: "x" } }
+        : { type: "event_msg", timestamp: "2026-01-01T00:00:00.000Z", payload: { message: "x" } };
+      const before = [first, laterMeta, laterEvent].map(record => JSON.stringify(record)).join("\n") + "\n";
+      writeFileSync(fixture.rollout, before);
+      const result = syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath);
+      expect(result).toMatchObject({ rows: 0, files: 0, failed: true, integrityCode: "history_paginated_requires_native_writer" });
+      expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+      expect(existsSync(fixture.backupPath)).toBe(false);
+      const db = new Database(fixture.dbPath, { readonly: true });
+      expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "openai" });
+      db.close();
+    });
+  }
+
   test("preserves a routed paginated rollout and its restore manifest", () => {
     const fixture = makeFixture();
     noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
     expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).failed).toBeUndefined();
     const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
     records.forEach((record, ordinal) => { record.ordinal = ordinal; });
+    const before = records.map(record => JSON.stringify(record)).join("\n") + "\n";
+    writeFileSync(fixture.rollout, before);
+    const manifest = readFileSync(fixture.backupPath, "utf8");
+    for (const result of [syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath), restoreLegacyOpenaiHistory(fixture.dbPath)]) {
+      expect(result).toMatchObject({ rows: 0, files: 0, failed: true, integrityCode: "history_paginated_requires_native_writer" });
+    }
+    expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+    expect(readFileSync(fixture.backupPath, "utf8")).toBe(manifest);
+    const db = new Database(fixture.dbPath, { readonly: true });
+    expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "opencodex" });
+    db.close();
+  });
+
+  test("preserves a routed rollout that later becomes paginated past line 1", () => {
+    const fixture = makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).failed).toBeUndefined();
+    const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    // First line stays legacy. Native conversion appends paginated records after
+    // routing, which is the #4311 projector-stop shape if we cloned ordinal 0.
+    records.push({ ordinal: 0, type: "session_meta", payload: { id: "thread-1", model_provider: "opencodex", history_mode: "paginated" } });
+    records.push({ ordinal: 1, type: "event_msg", timestamp: "2026-01-01T00:00:01.000Z", payload: { message: "x" } });
     const before = records.map(record => JSON.stringify(record)).join("\n") + "\n";
     writeFileSync(fixture.rollout, before);
     const manifest = readFileSync(fixture.backupPath, "utf8");

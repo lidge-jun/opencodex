@@ -103,3 +103,96 @@ function normalizeCatalogFailureCause(value: unknown): CatalogFailureCause | und
 export function catalogRefreshIsPending(disposition: CatalogDisposition): boolean {
   return disposition.status !== "committed";
 }
+
+export interface CatalogAutoRefreshOutcome {
+  readonly at: number;
+  readonly disposition: CatalogDisposition;
+  readonly changed: boolean;
+  /**
+   * A refresh that has failed repeatedly is the signal an operator needs, and the
+   * boolean disposition alone cannot express it: skipped and failed look the same
+   * as a one-off busy skip until this count climbs.
+   */
+  readonly consecutiveFailures: number;
+}
+
+let lastAutoRefreshOutcome: CatalogAutoRefreshOutcome | null = null;
+
+/** Rebuild and freeze so a management reader cannot mutate scheduler state. */
+function freezeCatalogDisposition(disposition: CatalogDisposition): CatalogDisposition {
+  if (disposition.status === "committed") {
+    return Object.freeze({
+      status: "committed" as const,
+      changed: disposition.changed,
+      degraded: disposition.degraded,
+      notices: Object.freeze([...disposition.notices]),
+    });
+  }
+  if (disposition.status === "skipped") {
+    return Object.freeze({
+      status: "skipped" as const,
+      reason: disposition.reason,
+      retryable: disposition.retryable,
+    });
+  }
+  const cause = disposition.cause
+    ? Object.freeze({
+        kind: disposition.cause.kind,
+        ...(disposition.cause.code ? { code: disposition.cause.code } : {}),
+      })
+    : undefined;
+  return Object.freeze({
+    status: "failed" as const,
+    reason: disposition.reason,
+    phase: disposition.phase,
+    retryable: disposition.retryable,
+    partialWrite: disposition.partialWrite,
+    ...(cause ? { cause } : {}),
+  });
+}
+
+function freezeCatalogAutoRefreshOutcome(
+  outcome: CatalogAutoRefreshOutcome,
+): CatalogAutoRefreshOutcome {
+  return Object.freeze({
+    at: outcome.at,
+    disposition: freezeCatalogDisposition(outcome.disposition),
+    changed: outcome.changed,
+    consecutiveFailures: outcome.consecutiveFailures,
+  });
+}
+
+/**
+ * Record one auto-refresh tick. The disposition is rebuilt through
+ * normalizeCatalogDisposition before anything is stored: an unnormalizable
+ * value is exactly the case this privacy boundary exists for, so it is dropped
+ * rather than copied through into a management response.
+ */
+export function recordCatalogAutoRefreshOutcome(
+  disposition: CatalogDisposition,
+  changed: boolean,
+): CatalogAutoRefreshOutcome | null {
+  const normalized = normalizeCatalogDisposition(disposition);
+  if (normalized === null) return null;
+  const consecutiveFailures = catalogRefreshIsPending(normalized)
+    ? (lastAutoRefreshOutcome?.consecutiveFailures ?? 0) + 1
+    : 0;
+  const outcome = freezeCatalogAutoRefreshOutcome({
+    at: Date.now(),
+    disposition: normalized,
+    changed: changed === true,
+    consecutiveFailures,
+  });
+  lastAutoRefreshOutcome = outcome;
+  return freezeCatalogAutoRefreshOutcome(outcome);
+}
+
+export function lastCatalogAutoRefreshOutcome(): CatalogAutoRefreshOutcome | null {
+  return lastAutoRefreshOutcome === null
+    ? null
+    : freezeCatalogAutoRefreshOutcome(lastAutoRefreshOutcome);
+}
+
+export function resetCatalogAutoRefreshStatusForTests(): void {
+  lastAutoRefreshOutcome = null;
+}

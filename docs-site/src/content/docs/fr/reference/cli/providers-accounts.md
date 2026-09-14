@@ -229,9 +229,8 @@ entrée. **L'omission de la valeur lit** la commande actuelle au lieu d'en écri
 comptes éligibles, en prenant le niveau de commande le plus élevé qui dispose encore d'une marge de quota et en laissant
 `accountPoolStrategy` pour choisir à l'intérieur. La pause, le temps de recharge et la réauthentification ne sont pas affectés.
 Les modifications s'appliquent à partir de la **prochaine requête non liée**, et pas seulement à partir des sessions nouvellement démarrées : mouvements de préemption
-une demande non liée augmente dès qu'un ordre supérieur retrouve de la marge. Sujets déjà liés à un compte
-conservez-le normalement jusqu’à ce que ce compte soit vidé ; un échec de réauthentification, un temps de recharge du quota ou un
-une séquence de défaillances transitoires libère la liaison avant cela. Toute écriture acceptée publie également un manuel
+une demande non liée augmente dès qu'un ordre supérieur retrouve de la marge. Les fils déjà liés à un compte
+le conservent normalement jusqu’à ce que ce compte soit vidé ; un échec de réauthentification ou un temps de recharge du quota libère encore la liaison avant cela. Une séquence de défaillances transitoires (5xx et autres échecs hors quota atteignant `upstreamFailoverThreshold`, 3 par défaut) ne supprime pas une liaison active : la requête est servie par un autre compte, puis le fil y revient dès que le sien sert à nouveau ; si le compte échoue encore après 10 minutes, la liaison est libérée normalement. Toute écriture acceptée publie également un manuel
 épingle "utiliser ce compte maintenant", sur le compte qui le détenait, y compris une écriture qui stocke le
 commander un compte déjà possédé — c'est le seul moyen d'effacer un code PIN tout en conservant le compte
 qui est actuellement sélectionné. (La compensation du compte actif via la gestion API libère un

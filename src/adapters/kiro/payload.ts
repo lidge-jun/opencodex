@@ -22,7 +22,12 @@ import {
 } from "../kiro-constants";
 import { EMPTY_EXEC_OUTPUT_MESSAGE, annotateCodeModeHostFailure, normalizeEmptyExecToolResultText } from "../exec-tool-result-normalize";
 import { identifyRoutedModel } from "../identity";
-import { extractKiroImages, type KiroImage } from "../kiro-images";
+import {
+  countKiroUninlinableImages,
+  extractKiroImages,
+  kiroUninlinableImageMarker,
+  type KiroImage,
+} from "../kiro-images";
 import { convertKiroToolContext } from "../kiro-tools";
 import { createKiroToolNameRegistry, mapModelId, normalizeToolId, stableConversationId } from "../kiro-wire";
 import { buildNonOpenAIToolCatalogNudgeFromNames, isBareShellBridgeTool, isCodexCodeModeExecTool } from "../tool-catalog-nudge";
@@ -233,9 +238,13 @@ export function buildKiroPayload(
     // Original-message adjacency matters even when a turn is collapsed or skipped below.
     if (msg.role !== "toolResult") finishAdjacentResult();
     if (msg.role === "user" || msg.role === "developer") {
-      const text = userContentText((msg as { content: string | OcxContentPart[] }).content);
-      const images = extractKiroImages((msg as { content: string | OcxContentPart[] }).content);
-      pushUser(text, images);
+      const content = (msg as { content: string | OcxContentPart[] }).content;
+      const images = extractKiroImages(content);
+      // Kiro inlines base64 bytes only. A remote reference used to vanish with neither
+      // bytes nor a trace; attach a bounded, URL-free marker so the loss is visible.
+      const marker = kiroUninlinableImageMarker(countKiroUninlinableImages(content));
+      const text = userContentText(content);
+      pushUser(marker ? (text ? text + "\n" + marker : marker) : text, images);
     } else if (msg.role === "assistant") {
       const aMsg = msg as OcxAssistantMessage;
       const text = (aMsg.content || [])
@@ -281,7 +290,15 @@ export function buildKiroPayload(
       const annotatedExecText = normalizedExecText === undefined && codeModeExecName !== undefined
         ? annotateCodeModeHostFailure(text, execOptions)
         : undefined;
-      const resultText = normalizedExecText ?? annotatedExecText ?? (text.trim() ? text : KIRO_EMPTY_TOOL_RESULT_MESSAGE);
+      const uninlinableMarker = kiroUninlinableImageMarker(countKiroUninlinableImages(tr.content));
+      // Appended to the SELECTED result text, not to `text`: when an exec normalization
+      // fires, resultText below takes normalizedExecText/annotatedExecText instead, and
+      // a marker attached to `text` would be dropped — reinstating the silent loss this
+      // exists to remove.
+      const chosenText = normalizedExecText ?? annotatedExecText ?? (text.trim() ? text : KIRO_EMPTY_TOOL_RESULT_MESSAGE);
+      const resultText = uninlinableMarker
+        ? (chosenText ? chosenText + "\n" + uninlinableMarker : uninlinableMarker)
+        : chosenText;
       const images = extractKiroImages(tr.content);
       const toolUseId = normalizeToolId(tr.toolCallId);
       const call = priorCalls.get(toolUseId);
@@ -289,8 +306,13 @@ export function buildKiroPayload(
         throw new Error(`Kiro history contains an orphaned tool result for call ${JSON.stringify(tr.toolCallId)}`);
       }
       // Keep real whitespace and failed wrappers, but no empty-success wrapper boilerplate.
-      const rawGroupText = text.length > 0 && (!text.trim() || normalizedExecText !== EMPTY_EXEC_OUTPUT_MESSAGE)
+      const rawGroupBase = text.length > 0 && (!text.trim() || normalizedExecText !== EMPTY_EXEC_OUTPUT_MESSAGE)
         ? (annotatedExecText ?? text) : undefined;
+      // The grouping path rebuilds a collapsed turn's content from these texts, so the
+      // marker has to ride along here too or an adjacent-result turn loses it.
+      const rawGroupText = uninlinableMarker
+        ? (rawGroupBase ? rawGroupBase + "\n" + uninlinableMarker : uninlinableMarker)
+        : rawGroupBase;
       const last = turns.at(-1);
       if (
         adjacentResult?.rawId === tr.toolCallId

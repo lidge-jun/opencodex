@@ -21,8 +21,10 @@
  *   drift) we silently fall back to the chat path so a transient catalog
  *   outage can't take chat down with it.
  *
- * Schema (verified against the bundled `extension.js`,
- * `exa.codeium_common_pb.ClientModelConfig`):
+ * Schema (#1/#4/#22 verified against the bundled `extension.js`,
+ * `exa.codeium_common_pb.ClientModelConfig`; #18 identified from a live
+ * catalog dump against vendor-known windows; #5 corroborated against the
+ * public WindsurfAPI `ClientModelConfig` documentation):
  *
  *   GetCascadeModelConfigsResponse {
  *     #1 client_model_configs: repeated ClientModelConfig
@@ -30,6 +32,8 @@
  *   ClientModelConfig {
  *     #1  label                string
  *     #4  disabled             bool   ← the gate this module reads
+ *     #5  supports_images      bool   ← tri-state: absent stays unknown
+ *     #18 max_input_tokens     varint ← per-account context window
  *     #22 model_uid            string ← what `GetChatMessage` accepts
  *   }
  *
@@ -78,6 +82,15 @@ export interface ModelCatalogEntry {
    * degrades: the caller keeps its static fallback instead of reporting zero.
    */
   contextWindow?: number;
+  /**
+   * Image-input support from `ClientModelConfig` field #5, kept as a
+   * tri-state: a present `true` asserts text+image support, a present
+   * `false` asserts text-only, and an OMITTED field stays `undefined`
+   * (unknown). Deliberately unlike `disabled`, which defaults to false —
+   * collapsing "never asserted" into "text-only" was the #1796 regression
+   * (see src/providers/antigravity-models.ts).
+   */
+  supportsImages?: boolean;
 }
 
 export interface CacheEntry {
@@ -113,12 +126,17 @@ export function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): C
     let modelUid = '';
     let disabled = false;
     let contextWindow = 0;
+    let supportsImages: boolean | undefined;
     for (const sf of iterFields(f.value as Buffer)) {
       if (sf.num === 1 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
         label = (sf.value as Buffer).toString('utf8');
       } else if (sf.num === 4 && sf.wire === 0) {
         // #4 = disabled (bool, varint 0/1)
         disabled = sf.value === 1n;
+      } else if (sf.num === 5 && sf.wire === 0) {
+        // #5 = supportsImages (bool, varint 0/1). Absent stays unknown — see
+        // ModelCatalogEntry; do not default it like disabled.
+        supportsImages = sf.value === 1n;
       } else if (sf.num === 18 && sf.wire === 0) {
         // #18 = max input tokens. Identified by dumping a live catalog and
         // reading the varints back against models whose windows are known from
@@ -135,6 +153,7 @@ export function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): C
         label: label || modelUid,
         disabled,
         ...(contextWindow > 0 ? { contextWindow } : {}),
+        ...(supportsImages !== undefined ? { supportsImages } : {}),
       });
     }
   }
@@ -273,6 +292,19 @@ export async function getCachedCatalog(
  */
 export function clearCachedCatalog(): void {
   cached = null;
+  inFlight = null;
+  inFlightKey = null;
+  cacheEpoch++;
+}
+
+/**
+ * Test seam: install a catalog as the live cache entry. Mirrors
+ * clearCachedCatalog's invalidation — the in-flight slot is dropped and the
+ * epoch bumped — so a fetch racing the seed cannot overwrite it, and a null
+ * entry resets the cache between tests.
+ */
+export function setCachedCatalogForTests(entry: CacheEntry | null): void {
+  cached = entry;
   inFlight = null;
   inFlightKey = null;
   cacheEpoch++;

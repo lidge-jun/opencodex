@@ -28,7 +28,7 @@ import { restoreNativeCodexAsync } from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
 import { handleRestartScopeAfterWrite, readRestartScope, type RestartScope } from "./restart-scope";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
-import { isJsonOption, takeFlag } from "./runtime-api";
+import { isJsonOption, takeFlag, terminalSafeError } from "./runtime-api";
 import type { ClientConnectionState } from "../client/state";
 import { OCX_NATIVE_REPLAY_RECOVERY_NOTE } from "../responses/compaction";
 
@@ -70,7 +70,7 @@ export function selectDefaultGuiUrl(
   probeHostname: (hostname: string | undefined) => string,
 ): string {
   const ingress = config.runtimeRole === "hub" ? config.hub?.managementIngress : undefined;
-  if (ingress?.enabled) return `http://localhost:${ingress.port}`;
+  if (ingress?.enabled) return `http://127.0.0.1:${ingress.port}`;
 
   const guiHost = probeHostname(live?.hostname ?? config.hostname);
   const hostname = guiHost === "127.0.0.1" ? "localhost" : guiHost;
@@ -405,7 +405,11 @@ const commandRunners: Record<string, CommandRunner> = {
         // types it as `number | string`; only a numeric code means anything here.
         return typeof process.exitCode === "number" ? process.exitCode : 0;
       } catch (error) {
-        console.error(`Connected sync failed without local fallback: ${error instanceof Error ? error.message : String(error)}`);
+        // The refresh path reaches the same hub catalog `ocx connect` validates, so a rejected
+        // reasoning level arrives here as hub-supplied text. Rendering it through the shared
+        // terminal boundary is what keeps the routine refresh from forging output; the domain
+        // error itself is left alone for callers that inspect it.
+        console.error(`Connected sync failed without local fallback: ${terminalSafeError(error).message}`);
         return 1;
       }
     }

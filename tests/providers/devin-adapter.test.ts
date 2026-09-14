@@ -1,12 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
 import { sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
 import { DEPRECATED_OAUTH_PROVIDER_ALIASES, OAUTH_PROVIDERS, resolveRefreshPolicy } from "../../src/oauth";
+import { DEVIN_DEFAULT_API_SERVER } from "../../src/oauth/devin";
+import { saveCredential } from "../../src/oauth/store";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
-import type { OcxParsedRequest } from "../../src/types";
+import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 describe("devin adapter", () => {
   test("is registered as an oauth provider and adapter", () => {
@@ -322,6 +329,38 @@ describe("devin adapter", () => {
     expect(catalog.byUid.get("mystery-model")?.contextWindow).toBeUndefined();
   });
 
+  test("the catalog parser preserves image support as a tri-state", () => {
+    // ClientModelConfig #5 is supports_images. encodeVarintField(5, 0) emits
+    // real bytes ([0x28, 0x00]), so the false case is not an omission case —
+    // and a genuinely absent field must stay unknown rather than collapse to
+    // text-only (#1796).
+    const vision = Buffer.concat([
+      encodeString(1, "Vision Model"),
+      encodeVarintField(5, 1),
+      encodeString(22, "vision-model"),
+    ]);
+    const textOnly = Buffer.concat([
+      encodeString(1, "Text Model"),
+      encodeVarintField(5, 0),
+      encodeString(22, "text-model"),
+    ]);
+    const unknown = Buffer.concat([
+      encodeString(1, "Unknown Model"),
+      encodeString(22, "unknown-model"),
+    ]);
+    const catalog = parseCatalogBuffer(
+      Buffer.concat([encodeMessage(1, vision), encodeMessage(1, textOnly), encodeMessage(1, unknown)]),
+      "key",
+      "https://server.codeium.com",
+    );
+    expect(catalog.byUid.get("vision-model")?.supportsImages).toBe(true);
+    // toBe(false), not toBeFalsy: a present 0 asserts text-only.
+    expect(catalog.byUid.get("text-model")?.supportsImages).toBe(false);
+    // The entry must exist before its field can be asserted absent.
+    expect(catalog.byUid.get("unknown-model")).toBeDefined();
+    expect(catalog.byUid.get("unknown-model")?.supportsImages).toBeUndefined();
+  });
+
   test("the degraded-mode windows match what Cognition serves", () => {
     // This table was wrong for nine of its eleven rows because it had been
     // copied from each model's ORIGINAL vendor rather than measured against
@@ -415,5 +454,121 @@ describe("effort suffix detection and caller effort values are different sets", 
     for (const uid of ["claude-opus-5", "swe-1-7", "glm-5-3"]) {
       expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(`${uid}-high`);
     }
+  });
+});
+
+describe("devin adapter api-server host resolution (#4503)", () => {
+  // The `devin-cli` -> `devin` merge rekeys a config row and its credential
+  // slot together at startup, so until that migration runs a row already named
+  // `devin` can have its only credential — and the tenant apiBaseUrl recorded
+  // on it — still sitting under the `devin-cli` slot. runTurn resolves the
+  // dispatch host through resolveDevinApiServer(provider.baseUrl,
+  // credentialProviderId), which must follow the DEPRECATED_OAUTH_PROVIDER_ALIASES
+  // link to that slot before falling back to the configured baseUrl and then
+  // the US default. Without it an EU/FedStart tenant's traffic — api_key
+  // included — is sent to a host the account is not provisioned on.
+  const EU_TENANT_HOST = "https://eu.windsurf.com/_route/api_server";
+  const FEDSTART_TENANT_HOST = "https://windsurf.fedstart.com/_route/api_server";
+  // A valid, non-default configured baseUrl. If the credential slots were
+  // skipped the adapter would dispatch here; if baseUrl were also skipped it
+  // would land on DEVIN_DEFAULT_API_SERVER. The assertions below reject both.
+  const CONFIGURED_BASE_URL = "https://server-staging.codeium.com";
+
+  const previousHome = process.env.OPENCODEX_HOME;
+  const previousFetch = globalThis.fetch;
+  let home = "";
+  let seenUrls: string[] = [];
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ocx-devin-host-"));
+    process.env.OPENCODEX_HOME = home;
+    seenUrls = [];
+    // This adapter's transport fetches through the global fetch — it does not
+    // consume IncomingMeta.providerFetch — so the stub observes every upstream
+    // URL the turn dispatches to.
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seenUrls.push(String(input));
+      return new Response("down", { status: 500 });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = previousFetch;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(home);
+  });
+
+  // Drive one real runTurn. The stubbed 500 ends the turn in an upstream error
+  // only after every outbound URL has been recorded.
+  async function runOneTurn(apiKey: string): Promise<AdapterEvent[]> {
+    const adapter = createDevinAdapter(
+      { adapter: "devin", baseUrl: CONFIGURED_BASE_URL, apiKey },
+      { providerId: "devin" },
+    );
+    const parsed: OcxParsedRequest = {
+      modelId: "swe-2-high",
+      stream: true,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      options: {},
+    };
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(
+      parsed,
+      { headers: new Headers(), translatorBudget: createTranslatorBudget() },
+      (event) => events.push(event),
+    );
+    return events;
+  }
+
+  function expectDispatchedTo(host: string): void {
+    expect(seenUrls.length).toBeGreaterThan(0);
+    for (const url of seenUrls) expect(url).toStartWith(host);
+  }
+
+  test("a devin row adopts the tenant host from an un-rekeyed devin-cli credential", async () => {
+    await saveCredential("devin-cli", {
+      access: "devin-cli-session",
+      refresh: "devin-cli-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli",
+      apiBaseUrl: EU_TENANT_HOST,
+    });
+
+    const events = await runOneTurn("ocx-test-alias-slot-key");
+
+    expectDispatchedTo(EU_TENANT_HOST);
+    expect(seenUrls.some((url) => url.startsWith(DEVIN_DEFAULT_API_SERVER))).toBe(false);
+    expect(seenUrls.some((url) => url.startsWith(CONFIGURED_BASE_URL))).toBe(false);
+    // The turn reached the transport and failed there on the stubbed 500 —
+    // proof the recorded URLs came from a real dispatch, not an early return.
+    expect(events.some((event) => event.type === "error")).toBe(true);
+  });
+
+  test("a usable literal devin slot still wins over the aliased devin-cli slot", async () => {
+    await saveCredential("devin", {
+      access: "devin-session",
+      refresh: "devin-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "oauth",
+      apiBaseUrl: FEDSTART_TENANT_HOST,
+    });
+    await saveCredential("devin-cli", {
+      access: "devin-cli-session",
+      refresh: "devin-cli-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli",
+      apiBaseUrl: EU_TENANT_HOST,
+    });
+
+    await runOneTurn("ocx-test-literal-slot-key");
+
+    expectDispatchedTo(FEDSTART_TENANT_HOST);
+  });
+
+  test("with neither credential slot populated the configured baseUrl still applies", async () => {
+    await runOneTurn("ocx-test-no-credential-key");
+
+    expectDispatchedTo(CONFIGURED_BASE_URL);
   });
 });

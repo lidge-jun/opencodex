@@ -507,9 +507,15 @@ export function requestPacingConfigError(value: unknown): string | null {
 /**
  * Bounds for the opt-in passthrough web-search bridge (`providers.<name>.webSearchBridge`,
  * #3761). Strict for the same reason `retryOn429` is: a misspelled key here would silently
- * leave the bridge disarmed while the operator believes they enabled it. `endpoint` is only
- * shape-checked here; `planPassthroughWebSearchBridge` re-validates the origin before any key
- * is sent to it, because config validation is not an authorization boundary.
+ * leave the bridge disarmed while the operator believes they enabled it.
+ *
+ * `endpoint` names the destination that receives this provider's API key, so it gets the same
+ * literal destination assessment `baseUrl` gets (#4519) — see `providerWebSearchBridgeConfigError`
+ * below. This schema itself still only shape-checks: it is `.catch(undefined)` at the provider
+ * row, and a hand-edited config file never reaches the error function at all. The authorization
+ * boundary is therefore `resolveOllamaWebSearchEndpoint`, which runs the same assessment and is
+ * the only reader of this field in the tree; config validation is where an operator is told why,
+ * not what makes the value safe.
  */
 const providerWebSearchBridgeSchema = z.object({
   enabled: z.boolean().optional(),
@@ -519,7 +525,11 @@ const providerWebSearchBridgeSchema = z.object({
   endpoint: z.string().min(1).optional(),
 }).strict();
 
-export function providerWebSearchBridgeConfigError(value: unknown): string | null {
+export function providerWebSearchBridgeConfigError(
+  value: unknown,
+  providerName: string,
+  provider: Pick<OcxProviderConfig, "allowPrivateNetwork">,
+): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return "webSearchBridge must be a plain object";
@@ -540,6 +550,17 @@ export function providerWebSearchBridgeConfigError(value: unknown): string | nul
     }
     if (url.protocol !== "https:" && url.protocol !== "http:") {
       return "webSearchBridge.endpoint must be an absolute http(s) URL";
+    }
+    // Same classifier baseUrl uses, so a metadata address is refused outright and loopback or
+    // private space needs the provider's allowPrivateNetwork opt-in (or a registry entry that is
+    // local by definition, which is what keeps a self-hosted Ollama working). Literal-only and
+    // synchronous, exactly as at the baseUrl boundary: no DNS is resolved here.
+    const destinationError = providerDestinationConfigError(providerName, {
+      baseUrl: endpoint,
+      allowPrivateNetwork: provider.allowPrivateNetwork,
+    });
+    if (destinationError) {
+      return destinationError.replace(/^baseUrl/, "webSearchBridge.endpoint");
     }
   }
   return null;
@@ -1206,6 +1227,24 @@ const quotaResetNotifySchema = z.object({
   command: z.array(z.string()).optional(),
 }).strict();
 
+/**
+ * Catalog auto-refresh section (issue #3630).
+ *
+ * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
+ * rejected write rather than a silently ignored key that leaves the operator believing they
+ * enabled something.
+ *
+ * `intervalMinutes` admits 0 (configured but dormant, no timer) and the resolver clamps
+ * anything between 1 and the 15-minute floor. Bounds live in the resolver rather than here
+ * so a hand-edited value degrades to a sane one instead of discarding the whole section.
+ * The 1440 ceiling keeps a hand edit from scheduling the refresh further out than a day,
+ * which is operator error far more often than intent.
+ */
+const catalogAutoRefreshSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(0).max(1440).optional(),
+}).strict();
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   // A malformed hand edit must disable only remote-role behavior, not discard
@@ -1310,6 +1349,8 @@ const configSchema = z.object({
   agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
   // Same rationale: a bad notify section must not cost the operator their providers.
   quotaResetNotify: quotaResetNotifySchema.optional().catch(undefined),
+  // Same rationale: a bad auto-refresh section must not cost the operator their providers.
+  catalogAutoRefresh: catalogAutoRefreshSchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide
@@ -2351,6 +2392,15 @@ function malformedQuotaResetNotifyWarning(rawParsed: unknown): string | null {
   return `quotaResetNotify${field ? `.${field}` : ""} ignored: invalid quota-reset notification configuration`;
 }
 
+function malformedCatalogAutoRefreshWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "catalogAutoRefresh")) return null;
+  const result = catalogAutoRefreshSchema.safeParse(raw.catalogAutoRefresh);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `catalogAutoRefresh${field ? `.${field}` : ""} ignored: invalid catalog auto-refresh configuration`;
+}
+
 /**
  * Same silent-in-the-wrong-direction failure as the notification block: a dropped pool policy means
  * the accounts the operator meant to exclude keep taking traffic, and the only visible symptom is
@@ -2374,6 +2424,18 @@ function malformedCodexPoolWarning(rawParsed: unknown): string | null {
  */
 function warnDegradedQuotaResetNotify(rawParsed: unknown): void {
   const warning = malformedQuotaResetNotifyWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
+/**
+ * Warn once per load that the section was dropped.
+ *
+ * Same silent-in-the-wrong-direction failure as the notification block: a dropped section
+ * means the scheduler never starts, so the operator sees a stale catalog — which is exactly
+ * what they would see if the feature were working and no new models had shipped.
+ */
+function warnDegradedCatalogAutoRefresh(rawParsed: unknown): void {
+  const warning = malformedCatalogAutoRefreshWarning(rawParsed);
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
@@ -2552,6 +2614,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
       warnDegradedQuotaResetNotify(parsed);
+      warnDegradedCatalogAutoRefresh(parsed);
       warnDegradedCodexPool(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
@@ -2594,6 +2657,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
       warnDegradedQuotaResetNotify(parsed);
+      warnDegradedCatalogAutoRefresh(parsed);
       warnDegradedCodexPool(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
@@ -2621,6 +2685,7 @@ export function loadConfig(): OcxConfig {
         warnDegradedRuntimeRole(parsed);
         warnDegradedOptionalRemoteBlocks(parsed);
         warnDegradedQuotaResetNotify(parsed);
+        warnDegradedCatalogAutoRefresh(parsed);
         warnDegradedCodexPool(parsed);
         return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
       }
@@ -2767,6 +2832,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (clientWarning) warnings.push(clientWarning);
   const notifyWarning = malformedQuotaResetNotifyWarning(rawParsed);
   if (notifyWarning) warnings.push(notifyWarning);
+  const catalogRefreshWarning = malformedCatalogAutoRefreshWarning(rawParsed);
+  if (catalogRefreshWarning) warnings.push(catalogRefreshWarning);
   const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
   if (codexPoolWarning) warnings.push(codexPoolWarning);
   const plaintextWarning = malformedPlaintextV2AgentMessagesWarning(rawParsed);
@@ -2930,6 +2997,16 @@ function quotaResetNotifyError(value: unknown): string | null {
   const issue = result.error.issues[0];
   const field = issue?.path.join(".");
   return `schema_invalid: quotaResetNotify${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
+}
+
+function catalogAutoRefreshError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "catalogAutoRefresh") || raw.catalogAutoRefresh === undefined) return null;
+  const result = catalogAutoRefreshSchema.safeParse(raw.catalogAutoRefresh);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return `schema_invalid: catalogAutoRefresh${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
 }
 
 /**
@@ -3167,6 +3244,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? plaintextV2AgentMessagesError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
+    ?? catalogAutoRefreshError(value)
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
@@ -3765,6 +3843,48 @@ export function websocketsEnabled(config: Pick<OcxConfig, "websockets">): boolea
  */
 export function ultraFastTierEnabled(config: Pick<OcxConfig, "ultraFastTier">): boolean {
   return config.ultraFastTier === true;
+}
+
+/**
+ * Default cadence for the opt-in catalog auto-refresh (issue #3630): one converge pass
+ * per hour. Each pass spends a live /models call against every enabled provider, and
+ * provider catalogs are themselves cached upstream for minutes, so an hour is fresh
+ * enough for newly released models to appear without an `ocx sync`.
+ */
+export const CATALOG_AUTO_REFRESH_DEFAULT_INTERVAL_MS: number = 60 * 60_000;
+
+/**
+ * Floor under the configured cadence, for the same reason src/quota/reset-poller.ts has
+ * MIN_INTERVAL_MS: below this the refresh buys no freshness — upstream caches have not
+ * moved — and only multiplies the chance of a rate limit across every enabled provider.
+ */
+export const CATALOG_AUTO_REFRESH_MIN_INTERVAL_MS: number = 15 * 60_000;
+
+/**
+ * Opt-in master switch, read with the house `=== true` idiom so an absent key and a
+ * malformed one both mean off. Pure on purpose: the scheduler calls this from a
+ * dynamically imported context, so it takes an explicit config slice and reads nothing
+ * global.
+ */
+export function isCatalogAutoRefreshEnabled(
+  config: Pick<OcxConfig, "catalogAutoRefresh">,
+): boolean {
+  return config.catalogAutoRefresh?.enabled === true;
+}
+
+/**
+ * Resolved tick interval in milliseconds. An explicit `intervalMinutes: 0` returns 0 —
+ * the section stays configured but the timer stays dormant — and any other value is
+ * clamped up to CATALOG_AUTO_REFRESH_MIN_INTERVAL_MS so a hand edit cannot outrun the
+ * upstream catalog caches. Absent means the hourly default.
+ */
+export function resolveCatalogAutoRefreshIntervalMs(
+  config: Pick<OcxConfig, "catalogAutoRefresh">,
+): number {
+  const minutes = config.catalogAutoRefresh?.intervalMinutes;
+  if (minutes === undefined) return CATALOG_AUTO_REFRESH_DEFAULT_INTERVAL_MS;
+  if (minutes === 0) return 0;
+  return Math.max(CATALOG_AUTO_REFRESH_MIN_INTERVAL_MS, Math.floor(minutes * 60_000));
 }
 
 // ---------------------------------------------------------------------------

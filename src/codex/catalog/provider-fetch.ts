@@ -418,6 +418,40 @@ function captureModelsRequest(
   });
 }
 
+/**
+ * Fill the registry seed's per-model numeric capability maps beneath the provider's own
+ * values, mutating `prov` in place. The merge is per key — an operator's entry always
+ * wins; a model the persisted map never mentions picks up its seed value — matching
+ * `mergeRecordFill` in src/router.ts exactly.
+ *
+ * Routing already performs this fill at resolve time (routedProviderConfig in
+ * src/router.ts) and the catalog did not, and that divergence is #4570:
+ * zhipu-bigmodel-coding/glm-5.3-flash reached the live catalog with correct modalities
+ * but no context window, because an install persisted before Flash joined the seed map
+ * held a truthy partial `modelContextWindows` that shadowed the whole seed.
+ *
+ * This lives here and not in enrichProviderFromRegistry because enrichment output is
+ * persisted on a management POST, and #1409 (pinned by
+ * tests/server/management-provider-validation.test.ts) requires that a save never write
+ * registry seed keys into the operator's config. The gather clone is detached and
+ * frozen, never saved, so the catalog can see the seed without the config gaining it.
+ */
+export function applyRegistryCapabilitySeedFill(name: string, prov: OcxProviderConfig): void {
+  // router.ts resolves the canonical OpenAI API provider's token maps with
+  // mergePositiveNumberCaps (user values cap the seed rather than replace it), so a
+  // plain fill here would give that one provider catalog semantics routing never has.
+  if (name === OPENAI_API_PROVIDER_ID) return;
+  if (!providerMatchesRegistryTransport(name, prov)) return;
+  const entry = getProviderRegistryEntry(name);
+  if (!entry) return;
+  if (entry.modelContextWindows || prov.modelContextWindows) {
+    prov.modelContextWindows = { ...(entry.modelContextWindows ?? {}), ...(prov.modelContextWindows ?? {}) };
+  }
+  if (entry.modelMaxOutputTokens || prov.modelMaxOutputTokens) {
+    prov.modelMaxOutputTokens = { ...(entry.modelMaxOutputTokens ?? {}), ...(prov.modelMaxOutputTokens ?? {}) };
+  }
+}
+
 function captureProviderGather(
   name: string,
   configured: OcxProviderConfig,
@@ -427,6 +461,7 @@ function captureProviderGather(
 ): CapturedProviderGather {
   const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
   enrichProviderFromRegistry(name, enriched);
+  applyRegistryCapabilitySeedFill(name, enriched);
   const registryTransportMatch = providerMatchesRegistryTransport(name, enriched);
   const provider = recursivelyFreeze(enriched);
   const fastPolicyAuthority = captureFastPolicyAuthority(
@@ -1745,6 +1780,12 @@ async function fetchProviderModelsWithAuth(
           // away, and every client that keys an effort control off this field —
           // the Pi-shaped exports — renders no control at all.
           ...(liveResult.efforts[id]?.length ? { reasoningEfforts: liveResult.efforts[id] } : {}),
+          // The account catalog's per-base supportsImages vote collapses to one
+          // modalities value. It spreads before the hints so exact
+          // modelCapabilities declarations, the legacy modelInputModalities
+          // record and the vision-sidecar rewrite keep winning — the live
+          // value survives only when none of them applies.
+          ...(liveResult.inputModalities[id]?.length ? { inputModalities: liveResult.inputModalities[id] } : {}),
           ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
         } as CatalogModel;
       });

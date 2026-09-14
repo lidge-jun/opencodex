@@ -123,11 +123,9 @@ failures after response headers have started are delivered as `response.failed` 
 
 ## Vision sidecar
 
-When the routed model is listed in its provider's `noVisionModels` — or declared text-only for
-that model via `modelInputModalities` — and a request carries an image, opencodex describes each
-image **before** the main call and replaces it with text, provided a vision sidecar plan is
-available. Without an available plan the raw image is stripped rather than forwarded to a
-text-only backend. The model catalog advertises image input for every sidecar-covered model.
+Image routing is capability-aware. Before an image-bearing upstream send, opencodex resolves the selected model's effective input modalities from runtime provider evidence, explicit operator declarations, backend/registry metadata, and generated vendor metadata. A target positively known to be text-only goes through the Vision Sidecar first; the image is described **before** the main call and replaced inline with text. A target positively known to support images receives the image directly. Unknown custom models keep the existing compatibility behavior rather than being guessed text-only.
+
+For the canonical ChatGPT Codex route, opencodex uses the `openai-codex` metadata bundle rather than public OpenAI API metadata, so backend-specific modality differences are respected. The native Chat fast path uses the same gate and cannot bypass a known text-only verdict. Without an available sidecar plan, raw images are stripped before a proven text-only backend.
 Combos advertise image input only when every member accepts images, either natively or through a
 sidecar, and the combo's `imageInput` setting is not disabled, so clients such as the Codex app
 allow attachments instead of blocking them before the sidecar runs. When
@@ -164,10 +162,12 @@ sidecar-backed by default; Zen routes are unchanged and were not probed in this 
   keys (Anthropic keys omit it, since that field is ignored there); mutable `https:` images are not
   cached.
 
-The management API and Dashboard picker now list models that can actually accept image input.
-When the matching backend is available, `gpt-5.6-luna` (OpenAI) and `claude-haiku-4-5` (Anthropic)
-are always offered as baseline options. `PUT /api/sidecar-settings` rejects a model known to be
-text-only, but still accepts an unknown id so custom or ahead-of-catalog names keep working.
+The management API and Dashboard picker list models that can accept image input. When the matching
+backend is available, `gpt-5.6-luna` (OpenAI) and `claude-haiku-4-5` (Anthropic) are always offered
+as baseline options. `PUT /api/sidecar-settings` may retain an unknown custom/ahead-of-catalog id.
+An explicitly configured routed Vision Sidecar is therefore usable unless capability evidence proves
+that model cannot accept images; this preserves operator-selected custom sidecars without allowing a
+known text-only sidecar to receive image bytes.
 
 ```json
 {

@@ -267,6 +267,33 @@ export function formatAnthropicErrorBody(status: number, _headers: Headers, payl
   return redactSecretString(detail).slice(0, 400);
 }
 
+function isAnthropicContentFilterStopReason(
+  stopReason: string | undefined,
+): stopReason is "refusal" | "content_filter" {
+  return stopReason === "refusal" || stopReason === "content_filter";
+}
+
+/**
+ * Anthropic `refusal` / `content_filter` is a permanent sampling decision, not a disconnect.
+ * Emitting `done` with that stopReason used to surface as `response.incomplete` without
+ * `retryable`, which Codex treats as a dropped stream and retries five times (#4312).
+ * The explicit incomplete event is what the bridge already forwards into
+ * `incomplete_details.retryable`. Usage is preserved: a filtered turn still consumed tokens.
+ * `max_tokens` stays a `done` so the client can continue from a legitimate truncation.
+ */
+function anthropicContentFilterIncomplete(
+  stopReason: string,
+  usage: OcxUsage | undefined,
+): Extract<AdapterEvent, { type: "incomplete" }> {
+  return {
+    type: "incomplete",
+    reason: "content_filter",
+    retryable: false,
+    message: `upstream ended the turn with stop_reason "${stopReason}"`,
+    usage,
+  };
+}
+
 function isAnthropicRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -1019,6 +1046,22 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         else if (tc === "required") body.tool_choice = { type: "any" };
         else if (isAllowedToolChoice(tc)) body.tool_choice = { type: tc.mode === "required" ? "any" : "auto" };
         else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(resolveToolChoiceWireName(parsed.context.tools, tc.name)) };
+      } else if (tools && parsed.options.parallelToolCalls === false) {
+        // The caller asked for one tool call at a time but sent no explicit choice.
+        // Anthropic carries that intent INSIDE tool_choice, so the implicit default
+        // has to be stated before the flag has somewhere to live.
+        body.tool_choice = { type: "auto" };
+      }
+      // disable_parallel_tool_use is nested in tool_choice and caps the model at one
+      // tool call for auto/any/tool. Under type "none" tool use is already off, so the
+      // flag is irrelevant there, and with no tools on the wire no tool_choice exists.
+      // This constrains the model's OUTPUT, not execution order: sequential tool use is
+      // enforced by the caller returning each tool_result before the next request.
+      const settledToolChoice = body.tool_choice as { type?: string } | undefined;
+      if (parsed.options.parallelToolCalls === false
+          && settledToolChoice !== undefined
+          && settledToolChoice.type !== "none") {
+        body.tool_choice = { ...settledToolChoice, disable_parallel_tool_use: true };
       }
 
       const url = anthropicMessagesUrl(provider.baseUrl);
@@ -1092,6 +1135,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
             errorType: "upstream_error",
             usage: usageFromAnthropic(pendingUsage),
           };
+          return;
+        }
+        // Refusal / content_filter must not look like a dropped stream. `done` with that
+        // stopReason becomes `response.incomplete` without `retryable`, and Codex retries
+        // the same refusal five times (#4312).
+        if (isAnthropicContentFilterStopReason(pendingStopReason)) {
+          yield anthropicContentFilterIncomplete(pendingStopReason, usageFromAnthropic(pendingUsage));
           return;
         }
         yield {
@@ -1268,16 +1318,19 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
             };
             return;
           }
-          const stopReason = pendingStopReason === "max_tokens"
-            ? "max_tokens"
-            : pendingStopReason === "refusal" || pendingStopReason === "content_filter"
-              ? "content_filter"
-              : pendingStopReason;
+          // Same rule as emitDone: refusal / content_filter is a permanent decision, not a
+          // disconnect. This branch bypasses emitDone, so the check has to be repeated here
+          // or the EOF route still emits `done` and Codex retries the refusal (#4312).
+          if (isAnthropicContentFilterStopReason(pendingStopReason)) {
+            emittedDone = true;
+            yield anthropicContentFilterIncomplete(pendingStopReason, usageFromAnthropic(pendingUsage));
+            return;
+          }
           emittedDone = true;
           yield {
             type: "done",
             usage: usageFromAnthropic(pendingUsage),
-            ...(stopReason ? { stopReason } : {}),
+            ...(pendingStopReason ? { stopReason: pendingStopReason } : {}),
           };
         } else if (provider.anthropicEofTolerance === true) {
           // AgentRouter-style compatibility profile (#658): the upstream can close the stream
@@ -1390,6 +1443,15 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           errorType: "upstream_error",
           usage: usageFromAnthropic(usage),
         });
+        retainTranslatedEventBatch(events, budget);
+        return events;
+      }
+      // Same rule as the streaming terminals: a refusal is explicit and non-retryable.
+      // Leaving it as `done` hides `retryable: false` and Codex retries the filtered
+      // turn as if the stream dropped (#4312). Partial content above is already in
+      // `events`; the incomplete event carries usage the same way `done` did.
+      if (isAnthropicContentFilterStopReason(stopReason)) {
+        events.push(anthropicContentFilterIncomplete(stopReason, usageFromAnthropic(usage)));
         retainTranslatedEventBatch(events, budget);
         return events;
       }

@@ -15,6 +15,8 @@ ocx connect status
 ocx sync
 ```
 
+Les diagnostics de disponibilité lisibles par un humain affichent les caractères de contrôle des valeurs du catalogue sous forme d’échappements hexadécimaux visibles, aussi bien à la première connexion que lorsque `ocx sync` refuse un catalogue de hub actualisé. Le statut JSON conserve la valeur de diagnostic d’origine.
+
 La clé client est écrite dans le fichier privé `service-api-token`, jamais dans `config.json`. En mode connecté, l’usage provient du hub et est filtré par `apiKeyId`; après déconnexion, il provient du stockage local. Il n’existe aucune réplication entre les deux.
 
 Le jeton admin permet la gestion ordinaire mais ne peut jamais créer une session de consentement. Les actions de consentement exigent une `gui-session`, une Origin correspondante et un jeton CSRF. `Tailscale-User-Login` n’est fiable que sur l’entrée de gestion dédiée; renseignez les identités exactes dans `remoteGui.allowedTailscaleUsers`.

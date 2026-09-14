@@ -12,6 +12,11 @@ import {
 } from "../storage/policy-scheduler";
 import { startQuotaResetPoller, stopQuotaResetPoller } from "../quota/reset-poller";
 import {
+  startCatalogAutoRefresh,
+  stopCatalogAutoRefresh,
+  syncCatalogAutoRefreshCadence,
+} from "../codex/catalog-auto-refresh";
+import {
   cancelQueuedStorageWorkerSpawns,
   drainStorageWorkers,
 } from "../storage/worker-lifecycle";
@@ -70,6 +75,17 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next tick adopts it.
       });
+    // Opt-in: the tick is a no-op unless catalogAutoRefresh.enabled is true, and the
+    // interval is unref'd, so a default install pays one dormant timer. The scheduler
+    // module keeps every heavy import inside its tick, so naming it statically here
+    // costs a module record and nothing else.
+    startCatalogAutoRefresh();
+    // The scheduler starts at its default cadence because resolving the operator's value
+    // reads the config barrel. Fire-and-forget: startup must not await an optional
+    // subsystem, and the next tick adopts the cadence anyway.
+    void syncCatalogAutoRefreshCadence().catch(() => {
+      // The next tick adopts it.
+    });
     // Install the delivery sink now rather than waiting out the first poll interval, which is 15
     // minutes by default. Without this, an enabled install would observe nothing for its first
     // quarter hour — including the live request path, which is gated on the sink existing.
@@ -85,6 +101,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     stateStoreSweeper?.stop();
     stopStorageCleanupScheduler();
     stopQuotaResetPoller();
+    stopCatalogAutoRefresh();
     setLivePolicyOwner(null);
     throw error;
   }
@@ -97,6 +114,7 @@ function stopProcessLoops(): void {
   loops?.stateStoreSweeper.stop();
   stopStorageCleanupScheduler();
   stopQuotaResetPoller();
+  stopCatalogAutoRefresh();
   setLivePolicyOwner(null);
 }
 

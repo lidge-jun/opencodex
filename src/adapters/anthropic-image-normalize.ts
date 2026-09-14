@@ -28,6 +28,7 @@ export { getNormalizeStatsForTests, resetNormalizeStateForTests, setNormalizeCac
 export { anthropicImageNormalizeRetainedStoreSnapshot, evictOldestAnthropicImageNormalizeForBudget } from "./anthropic-image-codec";
 
 import { bunImageEncode, bunImageValidate, processAt, TERMINAL_POS, TIER0_COUNT, TIER1_COUNT } from "./anthropic-image-codec";
+import { recordedEmittedPosition, recordEmittedPosition } from "./anthropic-image-codec";
 import { IMAGE_NORMALIZE_CONCURRENCY, MAX_INPUT_BASE64_LENGTH, MAX_INPUT_PIXELS } from "./anthropic-image-codec";
 import type { NormalizeOptions } from "./anthropic-image-codec";
 
@@ -149,7 +150,23 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
         continue;
       }
       const sourceMedia = target.mediaType.toLowerCase();
-      const pos = initialPosition(newestFirstIndex, bias);
+      // #4532: pin the start position to the image's own identity. A never-seen
+      // image still gets the age-derived tier; a seen image resumes where it last
+      // EMITTED, so appending a newer image cannot re-encode history and bust
+      // Anthropic's prompt prefix cache. tierBias (413 retry) applies on top of
+      // either base and still clamps to TERMINAL_POS.
+      //
+      // Every read in this pass sees the store as it was BEFORE this request,
+      // because nothing is written until the whole request settles (see the
+      // record loop at the end). That is load-bearing, not incidental: an image
+      // can appear more than once in one history, and identity keying collapses
+      // those occurrences onto one entry. Writing during the pass let the OLDEST
+      // occurrence's tier win a race against the newest one and drag it down —
+      // 30 copies of a screenshot all landed on the oldest copy's tier instead of
+      // the age pyramid. Reading a fixed snapshot gives each occurrence its own
+      // age tier on a cold store, which is the pre-#4532 behaviour.
+      const recorded = recordedEmittedPosition(b64, sourceMedia);
+      const pos = Math.min((recorded ?? initialPosition(newestFirstIndex, 0)) + Math.max(0, bias), TERMINAL_POS);
       const result = await processAt(b64, pos, sourceMedia, encode, validate);
       if (result.kind === "failed") {
         target.drop(UNDECODABLE_TEXT);
@@ -216,6 +233,16 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
     entry.size = newSize;
     entry.pos = result.pos;
     entry.done = result.pos >= TERMINAL_POS;
+  }
+
+  // #4532: commit the positions these images actually went out at, now that the
+  // first pass and the aggregate demotion loop have both settled. Written here
+  // rather than inline so every read above saw one consistent pre-request
+  // snapshot. `recordEmittedPosition` keeps the deeper of the stored and the new
+  // position, so a repeated image converges on the most-demoted tier it was ever
+  // emitted at and never moves back up.
+  for (const entry of entries) {
+    if (entry) recordEmittedPosition(entry.sourceB64, entry.sourceMedia, entry.pos);
   }
 
   // Terminal overflow (050 audit round 1, blocker 3): with no downstream guard, drop

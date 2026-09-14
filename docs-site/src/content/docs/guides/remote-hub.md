@@ -19,6 +19,8 @@ exchange; see [Remote Workspace](/guides/remote-workspace/). Do not publish its
 port directly, do not add a cloud-firewall rule for it, and do not use Tailscale Funnel. Funnel is a
 public-internet surface and is outside this deployment model.
 
+With management ingress enabled, the local dashboard command opens `http://127.0.0.1:<management port>` so the address matches the IPv4-only listener without resolving `localhost`.
+
 ## Trust and consent boundaries
 
 - Provider and OAuth credentials stay on the hub. Never copy them into a client, image layer,
@@ -47,6 +49,8 @@ ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
 ocx connect status
 ocx sync
 ```
+
+Human-readable readiness diagnostics show control characters in catalog values as visible hexadecimal escapes, both when you first connect and when `ocx sync` refuses a refreshed hub catalog. Structured JSON status retains the original diagnostic value.
 
 You do not have to assemble that line by hand. `ocx hub invite`, run on the hub, mints the code and
 prints the exact command — including both origins — for the machine that is joining. See
@@ -78,6 +82,11 @@ the persisted `apiKeyId`; it accepts no id override. Browser session logout/expi
 data-key rotation, revocation, and disconnect.
 
 ### What a connected client shows
+
+`ocx connect` and `ocx connect status` check catalog readiness against the first valid local
+Codex runtime in selection order. Failed preferred candidates can fall back, but lower-priority
+alternatives are not probed after a valid runtime is selected. This check leaves the saved runtime
+selection unchanged. General `ocx status` still discovers alternatives for runtime diagnostics.
 
 A client stores no provider credentials and no catalog of its own, so its local config and
 credential store are empty by design — and reading them as the truth produces a confident, wrong

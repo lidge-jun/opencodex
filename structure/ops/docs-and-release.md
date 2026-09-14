@@ -5,6 +5,10 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
+Human-readable connect and sync-refresh diagnostics follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics), with regression coverage for both paths in `tests/cli/cli-connect-readiness.test.ts`.
+
+The CLI default dashboard address follows the [management ingress bind](../runtime.md#hub-management-dashboard-address), covered by `tests/cli/cli-dispatch.test.ts`.
+
 ## Public docs
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
@@ -16,6 +20,9 @@ sidebar and either add localized copies or intentionally accept Starlight fallba
 Native retirement keeps active model/quota instructions aligned across locales with the
 [catalog contract](../catalog.md#shared-catalog). Historical records and other providers
 sharing a model-name fragment remain distinct from current Codex-native support.
+
+The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
+`tests/cli/cli-connect-readiness.test.ts` exercises that boundary and general status's single discovery pass with isolated executable fixtures.
 
 ## GitHub Pages
 

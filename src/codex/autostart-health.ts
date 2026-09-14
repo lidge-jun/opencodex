@@ -2,6 +2,7 @@ import { codexAutoStartEnabled } from "../config";
 import { diagnoseService, type ServiceDiagnostic } from "../service";
 import type { OcxConfig } from "../types";
 import { getCodexRoutingKind, type CodexRoutingKind } from "./inject";
+import { collectRoutingAdoption, type RoutingAdoptionEvidence } from "./routing-adoption";
 import { diagnoseCodexShim, type CodexShimDiagnostic } from "./shim";
 
 export type StartupProtection = "service" | "shim" | "none";
@@ -22,6 +23,7 @@ export interface StartupHealthInputs {
   shimHealthy: boolean;
   platform: NodeJS.Platform;
   diagnosticStale?: boolean;
+  routingAdoption?: RoutingAdoptionEvidence;
 }
 
 export interface StartupHealth {
@@ -51,6 +53,7 @@ export interface StartupHealth {
     installShim: string;
     restoreNative: string;
   };
+  routingAdoption?: RoutingAdoptionEvidence;
 }
 
 const COMMANDS = {
@@ -115,6 +118,7 @@ export interface StartupHealthDiagnostics {
   routingKind?: CodexRoutingKind;
   service?: ServiceDiagnostic;
   shim?: CodexShimDiagnostic;
+  routingAdoption?: RoutingAdoptionEvidence;
 }
 
 /** Collect current machine state without mutating config, services, or shims. */
@@ -124,8 +128,11 @@ export function collectStartupHealth(
 ): StartupHealth {
   const shim = diagnostics.shim ?? diagnoseCodexShim();
   const service = diagnostics.service ?? diagnoseService();
+  const routingKind = diagnostics.routingKind ?? getCodexRoutingKind();
+  const routingAdoption = diagnostics.routingAdoption
+    ?? (routingKind === "opencodex-local" ? collectRoutingAdoption({ routingKind }) : undefined);
   return deriveStartupHealth({
-    routingKind: diagnostics.routingKind ?? getCodexRoutingKind(),
+    routingKind,
     autostartEnabled: codexAutoStartEnabled(config),
     serviceInstalled: service.installed,
     serviceViable: service.viable,
@@ -137,10 +144,17 @@ export function collectStartupHealth(
     shimInstalled: shim.installed,
     shimHealthy: shim.healthy,
     platform: process.platform,
+    ...(routingAdoption ? { routingAdoption } : {}),
   });
 }
 
 export function startupHealthSummary(health: StartupHealth): string {
+  const summary = classifyStartupHealthSummary(health);
+  const action = pendingClientRestartAction(health);
+  return action ? `${summary}; ${action}` : summary;
+}
+
+function classifyStartupHealthSummary(health: StartupHealth): string {
   if (health.status === "native") return health.routingKind === "custom-remote"
     ? "custom remote Codex routing (no local restart dependency)"
     : "native Codex routing (no opencodex restart dependency)";
@@ -153,6 +167,24 @@ export function startupHealthSummary(health: StartupHealth): string {
   if (health.serviceStale) return `AT RISK after restart (background service files are stale; run '${command}')`;
   if (health.serviceInstalled && !health.serviceViable) return `AT RISK after restart (installed service is disabled, stopped, or unhealthy; run '${command}')`;
   return `AT RISK after restart (no viable background service; run '${command}')`;
+}
+
+function pendingClientRestartAction(health: StartupHealth): string | null {
+  const adoption = health.routingAdoption;
+  if (adoption?.adoption !== "pending-client-restart") return null;
+  const pids = adoption.staleClients.map(client => client.pid);
+  if (pids.length === 0) return null;
+  const pidList = pids.join(", ");
+  return pids.length === 1
+    ? `restart Codex client pid ${pidList} so it adopts the injected proxy route`
+    : `restart Codex clients pid ${pidList} so they adopt the injected proxy route`;
+}
+
+function pendingClientRestartDetail(adoption: RoutingAdoptionEvidence | undefined): string | null {
+  if (adoption?.adoption !== "pending-client-restart") return null;
+  const pids = adoption.staleClients.map(client => client.pid);
+  if (pids.length === 0) return null;
+  return `clients=pending-restart(pid ${pids.join(", ")})`;
 }
 
 /**
@@ -168,5 +200,7 @@ export function formatStartupRoutingDetail(health: StartupHealth): string {
   const shim = health.shimHealthy
     ? "healthy"
     : health.shimInstalled ? "stale" : "absent";
-  return `routing=${health.routingKind}, service=${service}, shim=${shim}`;
+  const base = `routing=${health.routingKind}, service=${service}, shim=${shim}`;
+  const token = pendingClientRestartDetail(health.routingAdoption);
+  return token ? `${base}, ${token}` : base;
 }

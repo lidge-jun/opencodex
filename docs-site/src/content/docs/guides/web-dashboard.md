@@ -13,7 +13,8 @@ settings, and request traffic.
 ocx gui
 ```
 
-This opens `http://localhost:<port>` in your browser, auto-starting the proxy first if needed. In
+This opens `http://localhost:<port>` in your browser — or `http://127.0.0.1:<management port>` when hub
+management ingress is enabled — auto-starting the proxy first if needed. In
 development you can run the GUI dev server separately against a running proxy:
 
 ```bash
@@ -249,9 +250,11 @@ maintainers do not provide policy advice and cannot resolve provider enforcement
   thread that is already bound. The Codex Desktop (main) account is ordered like any other, so it can
   be set to **Last** and kept as the reserve. An order set from `ocx account priority` outside those
   five presets stays visible and selectable on the card.
-- Thread affinity prevents per-request flapping. With quota auto-switch enabled, a long-running
-  thread is periodically re-evaluated and may rebind after its relevant usage reaches the threshold
-  and a strictly lower-usage eligible account exists.
+- Thread affinity prevents per-request flapping. With `pool.cacheAffinity` on (the default), a
+  long-running thread is not rebound merely because usage crossed the threshold; it stays until the
+  account is exhausted or cannot serve, and then only onto an account with genuine quota headroom
+  and strictly lower usage. Set the flag `false` to restore threshold rebinding, still only onto
+  such a destination.
 - New sessions can choose the lowest-usage eligible account. Paid plans score the hottest known 5h,
   weekly, or 30d window; Go/Free plans use the 30d window only.
 - When WHAM supplies `limit_window_seconds`, Codex Auth classifies a primary window of at least 28

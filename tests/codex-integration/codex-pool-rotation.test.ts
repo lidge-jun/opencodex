@@ -32,6 +32,7 @@ import {
   reconcileCodexRoutingHealth,
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
+  resolveCodexAccountForThreadDetailed,
 } from "../../src/codex/routing";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
@@ -439,7 +440,7 @@ describe("accountPoolStrategy new-session routing", () => {
   });
 
   test("reset-first keeps affinity until either window reaches the threshold", () => {
-    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-first" });
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-first", pool: { cacheAffinity: false } });
     const now = Date.now();
     const seconds = now / 1000;
     setAccountQuotaFromParsed("a", { weeklyPercent: 10, weeklyResetAt: seconds + 100 });
@@ -1180,7 +1181,7 @@ describe("selection order across rotation strategies", () => {
         accountPoolStrategy: "quota",
         autoSwitchThreshold: 80,
         activeCodexAccountId: "a",
-        ...(cacheAffinity ? { pool: { cacheAffinity: true } } : {}),
+        pool: { cacheAffinity },
       } as Partial<OcxConfig>);
       const threadId = "cache-affine-thread";
       // Bind the thread while "a" is the natural quota pick, which is how a real conversation
@@ -1248,6 +1249,357 @@ describe("selection order across rotation strategies", () => {
     // answer would hand subagent fallback a different account than the request actually uses.
     expect(previewCodexAccountForRequest(threadId, config, later)).toBe("a");
     expect(resolveCodexAccountForThread(threadId, config, later)).toBe("a");
+  });
+
+  // #4546: under quota strategy with no cacheAffinity, a live binding may only
+  // move to an account that has genuine headroom AND is strictly cooler. These
+  // cases share the bind-then-re-eval harness with the cache-affinity tests
+  // above; they pin the narrowed preference, not a pin.
+  test("a bound thread does not ping-pong among over-threshold accounts", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "cache-safe-death-spiral";
+    // Bind the thread while "a" is the natural quota pick, which is how a real conversation
+    // acquires its affinity in the first place.
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    // Every account is now in the 80–100% band, and the scores are unequal on
+    // purpose: before the fix, each of these resolves handed the thread to
+    // whichever account was one point cooler, discarding the account-isolated
+    // prompt cache. Equal scores would not move even before the fix, so the
+    // case would pass for the wrong reason.
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 90);
+    updateAccountQuota("c", 97);
+
+    const now = Date.now();
+    for (const later of [
+      now,
+      now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1,
+      now + 2 * CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 2,
+    ]) {
+      // Two copies of the same rule live in this file; a preview that disagreed with the
+      // final answer would hand subagent fallback a different account than the request uses.
+      expect(previewCodexAccountForRequest(threadId, config, later)).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, later)).toBe("a");
+    }
+  });
+
+  test("a bound thread still moves once onto an account with genuine headroom", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      // This case is about WHERE a threshold-driven move may land, so it states the
+      // capacity-first setting explicitly (#4546). Under the default a bound thread does
+      // not move on a threshold crossing at all, and the destination rule never runs.
+      pool: { cacheAffinity: false },
+    } as Partial<OcxConfig>);
+    const threadId = "cache-safe-real-improvement";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    // "a" crossed the threshold; "b" still has headroom. The fix narrowed the
+    // replacement rule, it did not pin the thread.
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 5);
+    updateAccountQuota("c", 50);
+
+    const movedAt = Date.now();
+    expect(previewCodexAccountForRequest(threadId, config, movedAt)).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, movedAt)).toBe("b");
+
+    // "b" is under the threshold, so a later re-eval has nothing to move toward.
+    const later = movedAt + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(previewCodexAccountForRequest(threadId, config, later)).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, later)).toBe("b");
+  });
+
+  test("a 429 still releases a binding the preference rule would have kept", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "cache-safe-429-release";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    // Same all-hot band as the ping-pong case: the preference rule has no legal
+    // destination, so without the refusal the thread would stay on "a". The 429
+    // is the stronger signal and must still win. Resolve at the refusal instant
+    // so "a" is still in its default cooldown and is not a selectable destination;
+    // "b" is then the only remaining account that is both selectable and
+    // unambiguously coolest.
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 90);
+    updateAccountQuota("c", 97);
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, "a", 429, { now });
+    expect(previewCodexAccountForRequest(threadId, config, now)).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, now)).toBe("b");
+  });
+
+  test("a fully spent bound account still moves to a sibling with headroom", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "cache-safe-exhausted-with-headroom";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    // 100% is exhaustion, not a pin. With cacheAffinity off, a 100 score without a
+    // 429/402 does not drop the binding by itself — stickiness-until-refusal is
+    // intended — but a sibling with genuine headroom is a real improvement and
+    // must still be taken. (An all-hot pool would keep the thread on "a".)
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 5);
+    updateAccountQuota("c", 50);
+    const later = Date.now() + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(previewCodexAccountForRequest(threadId, config, later)).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, later)).toBe("b");
+  });
+
+  test("an install that never configured pool keeps a bound thread on its account (#4546)", () => {
+    // No pool key at all. This is the case the incident was reported from: the operator had
+    // never heard of cacheAffinity, so the protection has to be the default or it is not
+    // protection.
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "default-affinity-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    updateAccountQuota("a", 90);
+    updateAccountQuota("b", 5);
+    updateAccountQuota("c", 5);
+    const later = Date.now() + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(resolveCodexAccountForThread(threadId, config, later)).toBe("a");
+    expect(previewCodexAccountForRequest(threadId, config, later)).toBe("a");
+  });
+
+  test("capacity-first refuses a destination with no headroom (#4546 ping-pong)", () => {
+    // The reported spiral, reproduced with the historical rule explicitly restored: every
+    // account is over the threshold, so every turn found a "cooler" account and moved again.
+    // A move now has to be worth making, so the thread stays and keeps its prefix.
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      pool: { cacheAffinity: false },
+    } as Partial<OcxConfig>);
+    const threadId = "hot-pool-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 90);
+    updateAccountQuota("c", 85);
+    let at = Date.now() + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(resolveCodexAccountForThread(threadId, config, at)).toBe("a");
+    at += CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(resolveCodexAccountForThread(threadId, config, at)).toBe("a");
+    expect(previewCodexAccountForRequest(threadId, config, at)).toBe("a");
+  });
+
+  test("capacity-first still moves a bound thread to an account that has headroom", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      pool: { cacheAffinity: false },
+    } as Partial<OcxConfig>);
+    const threadId = "capacity-first-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 50);
+    const later = Date.now() + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(resolveCodexAccountForThread(threadId, config, later)).toBe("b");
+  });
+
+  test("a transient streak detours the request and keeps the binding (#4546)", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "transient-hold-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 503);
+    recordCodexUpstreamOutcome(config, "a", 503);
+    recordCodexUpstreamOutcome(config, "a", 503);
+
+    // Served elsewhere, because "a" cannot take this request right now.
+    const served = resolveCodexAccountForThread(threadId, config);
+    expect(served).not.toBe("a");
+    // Preview agrees once the request path has chosen a detour, so subagent fallback scores
+    // the account that will actually serve.
+    expect(previewCodexAccountForRequest(threadId, config)).toBe(served);
+
+    // The binding was never surrendered: past the soft-avoid window and the failure window,
+    // the thread is home again with its prefix intact. A deleted binding could not do this.
+    const recovered = Date.now() + 6 * 60_000;
+    expect(resolveCodexAccountForThread(threadId, config, recovered)).toBe("a");
+  });
+
+  test("preview names the same detour as resolve before any detour is recorded", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "preview-first-detour-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+
+    // Preview FIRST, before any detour exists. Subagent fallback scores this account's usage to
+    // decide whether a model is still reachable, so a preview that named the bound account here
+    // would retire a model over usage the request was never going to touch.
+    const previewed = previewCodexAccountForRequest(threadId, config, start);
+    const served = resolveCodexAccountForThread(threadId, config, start);
+    expect(previewed).toBe(served);
+    expect(served).not.toBe("a");
+  });
+
+  test("every binding decision records what happened and why (#4546)", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "affinity-reason-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+
+    // A thread with no binding yet is a placement, not a move.
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      accountId: "a",
+      affinity: { move: "new_bind", reason: "healthy" },
+    });
+    // Served by its own healthy account.
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      affinity: { move: "reused", reason: "healthy" },
+    });
+
+    // A transient streak sends this request elsewhere while the binding stays put.
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      accountId: "b",
+      affinity: { move: "detour", reason: "transient" },
+    });
+
+    // A quota refusal is the account telling this thread it cannot serve, so the binding goes
+    // and the record names which cause fired instead of leaving it to be inferred.
+    recordCodexUpstreamOutcome(config, "a", 429, { now: start });
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start).affinity)
+      .toMatchObject({ move: "rebound", reason: "quota_refusal" });
+  });
+
+  test("a transient block with nowhere to detour keeps the binding", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "provider-wide-outage-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    // A provider-wide 503 hits every account, so every sibling is soft-avoided too and the
+    // detour has nowhere to go. Losing the binding here would rebuild the cold prefix somewhere
+    // else for exactly the failure the hold exists to survive.
+    for (const id of ["a", "b", "c"]) {
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+    }
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+    expect(previewCodexAccountForRequest(threadId, config, start)).toBe("a");
+
+    // Once the outage clears the thread is still on its own warm account, with no rebind.
+    const recovered = start + 6 * 60_000;
+    expect(resolveCodexAccountForThread(threadId, config, recovered)).toBe("a");
+  });
+
+  test("a transient hold that outlives its window releases the binding", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "transient-hold-expiry-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("b");
+
+    // Still failing eleven minutes later: a hold is a grace period, not a pin, so the binding
+    // is released and the thread rebinds to whatever can actually serve it.
+    const late = start + 11 * 60_000;
+    recordCodexUpstreamOutcome(config, "a", 503, { now: late });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: late });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: late });
+    expect(resolveCodexAccountForThread(threadId, config, late)).toBe("b");
+
+    // "a" is healthy again, and the thread does NOT return: it lives on "b" now, which is the
+    // difference between a released binding and a held one.
+    const healthy = late + 6 * 60_000;
+    expect(resolveCodexAccountForThread(threadId, config, healthy)).toBe("b");
   });
 
     test("the pool moves, then a manual pick wins the next unbound dispatch", () => {

@@ -15,6 +15,8 @@ ocx connect status
 ocx sync
 ```
 
+準備状況を人が読む出力では、カタログ値に含まれる C0/C1 制御文字、DEL、Unicode の行・段落区切り文字（U+2028、U+2029）を目に見える 16 進エスケープとして表示します。初回の接続だけでなく、`ocx sync` が取得し直したハブのカタログを拒否したときも同じです。JSON 形式の状態には元の診断値をそのまま残します。
+
 発行されたキーは所有者だけが読める `service-api-token` に保存され、`config.json` には入りません。接続中の使用量は hub 側で同じ `apiKeyId` に絞り込まれ、切断後はローカル保存分を表示します。両者はミラーリングされません。
 
 管理トークンは通常の管理だけに使え、同意セッションを作ることは永久にできません。同意操作にはサーバー発行の `gui-session`、一致する Origin、CSRF が必要です。`Tailscale-User-Login` は専用管理リスナーでのみ信頼し、許可する ID を `remoteGui.allowedTailscaleUsers` に正確に設定します。

@@ -15,6 +15,8 @@ ocx connect status
 ocx sync
 ```
 
+供人閱讀的就緒診斷會把目錄值中的控制字元顯示為可見的十六進位逸出序列，首次連線時如此，`ocx sync` 拒絕重新取得的 hub 目錄時也一樣。JSON 狀態仍保留原始的診斷值。
+
 用戶端金鑰會寫入只有擁有者可讀的 `service-api-token`，絕不寫入 `config.json`。連線期間，用量來自 hub 並依穩定的 `apiKeyId` 篩選；中斷後則顯示本機記錄。兩者不會互相鏡像。
 
 Admin token 只能執行一般管理，永遠不能建立使用者同意工作階段。同意操作必須使用伺服器簽發的 `gui-session`、相符的 Origin 與 CSRF。`Tailscale-User-Login` 只在獨立管理入口可信；請在 `remoteGui.allowedTailscaleUsers` 填入完整且正確的登入名稱。

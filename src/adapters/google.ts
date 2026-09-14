@@ -789,6 +789,37 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       : {}),
 
     async buildRequest(parsed: OcxParsedRequest) {
+      // Structured-output admission runs FIRST, before messagesToGeminiFormat writes
+      // lastInjectedCallIds/lastReasoningReplayScope: a refused request must not leave
+      // adapter-scoped replay state pointing at call ids that never went out. These
+      // refusals are local and precede any fetch, and carry no request content, schema
+      // body, URL or credential.
+      const requestedTextFormat = parsed.options.textFormat;
+      if (requestedTextFormat) {
+        if (provider.googleMode === "cloud-code-assist") {
+          // Not implemented or verified by opencodex for the Cloud Code Assist envelope,
+          // including Claude models served through it. This is not a claim that the
+          // upstream cannot do it — silence would return unconstrained prose as success,
+          // which is the failure this fix exists to remove.
+          throw new Error(
+            "google cloud-code-assist structured output is not implemented by opencodex — "
+            + "remove response_format or route this model through AI Studio or Vertex",
+          );
+        }
+        if (isImageCapableModel(parsed.modelId)) {
+          // An image-output model is configured with responseModalities; constraining the
+          // same turn to JSON text is contradictory. Say so rather than dropping the schema.
+          throw new Error(
+            "google image-capable models cannot combine image output with structured output — "
+            + "remove response_format or select a text model",
+          );
+        }
+        if (requestedTextFormat.type === "json_schema" && !requestedTextFormat.schema) {
+          // Downgrading a malformed json_schema to bare JSON mode would silently drop the
+          // constraint the caller asked for.
+          throw new Error("google structured output requires text.format.schema for type json_schema");
+        }
+      }
       const routedModelId = provider.googleMode === "cloud-code-assist"
         ? resolveAntigravityEffortWireModel(
             parsed.modelId,
@@ -845,6 +876,21 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (thinkingLevel) generationConfig.thinkingConfig = { thinkingLevel };
       if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
         generationConfig.responseModalities = ["TEXT", "IMAGE"];
+      }
+      // Structured output travels in generationConfig on generateContent itself.
+      // responseJsonSchema takes ordinary JSON Schema (lowercase types), which is what
+      // options.textFormat.schema already holds; responseSchema would require Gemini's
+      // uppercase typed Schema form, and the docs require omitting it when
+      // responseJsonSchema is used. The response type does not change — the model
+      // returns text containing the conforming JSON — so response parsing is untouched.
+      // The tool-parameter sanitizer is deliberately NOT applied: it narrows a schema
+      // to the function-declaration subset and would corrupt a valid output schema.
+      const textFormat = parsed.options.textFormat;
+      if (textFormat) {
+        generationConfig.responseMimeType = "application/json";
+        if (textFormat.type === "json_schema" && textFormat.schema) {
+          generationConfig.responseJsonSchema = textFormat.schema;
+        }
       }
       if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 

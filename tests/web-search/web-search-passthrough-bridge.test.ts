@@ -15,11 +15,14 @@ import {
   planPassthroughWebSearchBridge,
   resolveOllamaWebSearchEndpoint,
   resolvePassthroughWebSearchBridgeAuth,
+  resetRefusedBridgeEndpointWarningsForTests,
   shouldResolveOpenAiPassthroughWebSearchBridge,
+  sidecarSettingsForBridge,
   WEB_SEARCH_BRIDGE_ERROR_CODE,
   WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE,
   type PassthroughWebSearchBridgePlan,
 } from "../../src/web-search/passthrough-bridge";
+import { providerWebSearchBridgeConfigError, validateConfigCandidate } from "../../src/config";
 import { mapOllamaSearchResponse } from "../../src/web-search/ollama-executor";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../src/server/responses-undeclared-tool-guard";
 import { handleResponses } from "../../src/server/responses";
@@ -28,7 +31,7 @@ import {
   setProviderRequestPacingRuntimeForTest,
   waitForProviderRequestSlot,
 } from "../../src/providers/request-pacing";
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig, ProviderWebSearchBridgeConfig } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig, ProviderWebSearchBridgeBackend, ProviderWebSearchBridgeConfig } from "../../src/types";
 
 /** One SSE event block without its blank-line delimiter. */
 function frame(type: string, payload: Record<string, unknown>): string {
@@ -93,6 +96,7 @@ const armed: ProviderWebSearchBridgeConfig = { enabled: true, backend: "ollama" 
 describe("planPassthroughWebSearchBridge arming", () => {
   test("arms for an enabled ollama-backed key provider on the canonical origin", () => {
     const plan = planPassthroughWebSearchBridge(parsedFixture(), providerFixture(armed), {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
     });
@@ -112,6 +116,7 @@ describe("planPassthroughWebSearchBridge arming", () => {
     ];
     for (const bridge of off) {
       expect(planPassthroughWebSearchBridge(parsedFixture(), providerFixture(bridge), {
+        providerName: "gateway",
         isPassthrough: true,
         stream: true,
       })).toBeUndefined();
@@ -123,28 +128,35 @@ describe("planPassthroughWebSearchBridge arming", () => {
       expect(planPassthroughWebSearchBridge(
         parsedFixture(),
         providerFixture(armed, { authMode }),
-        { isPassthrough: true, stream: true },
+        { providerName: "gateway", isPassthrough: true, stream: true },
       )).toBeUndefined();
     }
   });
 
   test("stays disarmed off the passthrough, without hosted web_search, and for non-streaming turns", () => {
     const provider = providerFixture(armed);
-    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, { isPassthrough: false, stream: true }))
-      .toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: false,
+      stream: true,
+    })).toBeUndefined();
     expect(planPassthroughWebSearchBridge(parsedFixture({ _webSearch: undefined }), provider, {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
     })).toBeUndefined();
-    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, { isPassthrough: true, stream: false }))
-      .toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: false,
+    })).toBeUndefined();
   });
 
   test("a tool_choice that excludes search excludes the bridge", () => {
     expect(planPassthroughWebSearchBridge(
       parsedFixture({ options: { toolChoice: { type: "function", name: "exec" } } }),
       providerFixture(armed),
-      { isPassthrough: true, stream: true },
+      { providerName: "gateway", isPassthrough: true, stream: true },
     )).toBeUndefined();
   });
 
@@ -153,22 +165,26 @@ describe("planPassthroughWebSearchBridge arming", () => {
       expect(planPassthroughWebSearchBridge(
         parsedFixture(),
         providerFixture({ enabled: true, backend }),
-        { isPassthrough: true, stream: true },
+        { providerName: "gateway", isPassthrough: true, stream: true },
       )).toBeUndefined();
     }
   });
 
   test("the ollama backend refuses a non-canonical origin unless the operator names the endpoint", () => {
     const renamed = providerFixture(armed, { baseUrl: "https://gateway.example/v1" });
-    expect(resolveOllamaWebSearchEndpoint(renamed)).toBeUndefined();
-    expect(planPassthroughWebSearchBridge(parsedFixture(), renamed, { isPassthrough: true, stream: true }))
-      .toBeUndefined();
+    expect(resolveOllamaWebSearchEndpoint("gateway", renamed)).toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), renamed, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
 
     const operatorSet = providerFixture(
       { enabled: true, backend: "ollama", endpoint: "https://search.internal/api/web_search" },
       { baseUrl: "https://gateway.example/v1" },
     );
     const plan = planPassthroughWebSearchBridge(parsedFixture(), operatorSet, {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
     });
@@ -179,7 +195,7 @@ describe("planPassthroughWebSearchBridge arming", () => {
     const plan = planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "ollama", maxSearches: 99, timeoutMs: 1 }),
-      { isPassthrough: true, stream: true },
+      { providerName: "gateway", isPassthrough: true, stream: true },
     );
     expect(plan?.maxSearches).toBe(3);
     expect(plan?.timeoutMs).toBe(60_000);
@@ -188,6 +204,7 @@ describe("planPassthroughWebSearchBridge arming", () => {
   test("an openai backend arms only when the ChatGPT sidecar is present", () => {
     const provider = providerFixture({ enabled: true, backend: "openai" }, { baseUrl: "https://gateway.example/v1" });
     expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
     })).toBeUndefined();
@@ -199,6 +216,7 @@ describe("planPassthroughWebSearchBridge arming", () => {
       headers: new Headers({ authorization: "Bearer chatgpt" }),
     };
     const planned = planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
       isPassthrough: true,
       stream: true,
       auth: { openAiSidecar },
@@ -216,33 +234,33 @@ describe("planPassthroughWebSearchBridge arming", () => {
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "anthropic" }, gateway),
-      { isPassthrough: true, stream: true, auth: { anthropic } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { anthropic } },
     )?.backend).toBe("anthropic");
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "xai" }, gateway),
-      { isPassthrough: true, stream: true, auth: { xai } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { xai } },
     )?.backend).toBe("xai");
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "gemini" }, gateway),
-      { isPassthrough: true, stream: true, auth: { gemini } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { gemini } },
     )?.backend).toBe("gemini");
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "exa" }, gateway),
-      { isPassthrough: true, stream: true, auth: { exaApiKey: "exa-canary" } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { exaApiKey: "exa-canary" } },
     )?.backend).toBe("exa");
     // A named backend does not borrow a different credential.
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "exa" }, gateway),
-      { isPassthrough: true, stream: true, auth: { anthropic, xai, gemini } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { anthropic, xai, gemini } },
     )).toBeUndefined();
     expect(planPassthroughWebSearchBridge(
       parsedFixture(),
       providerFixture({ enabled: true, backend: "openai" }, gateway),
-      { isPassthrough: true, stream: true, auth: { exaApiKey: "exa-canary" } },
+      { providerName: "gateway", isPassthrough: true, stream: true, auth: { exaApiKey: "exa-canary" } },
     )).toBeUndefined();
   });
 
@@ -259,6 +277,278 @@ describe("planPassthroughWebSearchBridge arming", () => {
     expect(resolvePassthroughWebSearchBridgeAuth("xai", cfg)).toEqual({});
     expect(resolvePassthroughWebSearchBridgeAuth("gemini", cfg)).toEqual({});
     expect(resolvePassthroughWebSearchBridgeAuth("ollama", cfg)).toEqual({});
+  });
+});
+
+// webSearchBridge.endpoint names the destination that receives this provider's API key, so it
+// gets the same literal destination assessment baseUrl already gets: metadata is refused
+// outright, and loopback or private space needs the provider's allowPrivateNetwork opt-in or a
+// registry entry that is local by default. Every provider here sits on a non-canonical baseUrl
+// so the configured endpoint, not the Ollama Cloud fallback, decides the outcome.
+describe("webSearchBridge.endpoint destination policy", () => {
+  const gateway = { baseUrl: "https://gateway.example/v1" };
+
+  test("a configured metadata endpoint disarms the bridge", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://169.254.169.254/latest/meta-data" },
+      gateway,
+    );
+    expect(resolveOllamaWebSearchEndpoint("gateway", provider)).toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("allowPrivateNetwork does not waive a metadata endpoint", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://169.254.169.254/latest/meta-data" },
+      { ...gateway, allowPrivateNetwork: true },
+    );
+    expect(resolveOllamaWebSearchEndpoint("gateway", provider)).toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("the Aliyun metadata address stays refused under the opt-in", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://100.100.100.200/api/web_search" },
+      { ...gateway, allowPrivateNetwork: true },
+    );
+    expect(resolveOllamaWebSearchEndpoint("gateway", provider)).toBeUndefined();
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("a private-network endpoint stays disarmed without the opt-in", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5/api/web_search" },
+      gateway,
+    );
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("allowPrivateNetwork arms a private-network endpoint", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5/api/web_search" },
+      { ...gateway, allowPrivateNetwork: true },
+    );
+    expect(resolveOllamaWebSearchEndpoint("gateway", provider)).toBe("http://10.0.0.5/api/web_search");
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("http://10.0.0.5/api/web_search");
+  });
+
+  test("a self-hosted ollama keeps its loopback endpoint because the registry entry is local by default", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://127.0.0.1:11434/api/web_search" },
+      gateway,
+    );
+    expect(resolveOllamaWebSearchEndpoint("ollama", provider)).toBe("http://127.0.0.1:11434/api/web_search");
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "ollama",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("http://127.0.0.1:11434/api/web_search");
+  });
+
+  test("the same loopback endpoint is refused under a name with no registry default", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://127.0.0.1:11434/api/web_search" },
+      gateway,
+    );
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+
+  test("a local-by-default registry name also covers private space, not just loopback", () => {
+    // allowPrivateNetworkByDefault is not loopback-only; it is the same waiver baseUrl gets, so a
+    // LAN Ollama arms too. Pinned because the rule is broader than the 127.0.0.1 case suggests.
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5:11434/api/web_search" },
+      gateway,
+    );
+    expect(resolveOllamaWebSearchEndpoint("ollama", provider)).toBe("http://10.0.0.5:11434/api/web_search");
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "ollama",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("http://10.0.0.5:11434/api/web_search");
+  });
+
+  test("a public endpoint still arms", () => {
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "https://ollama.com/api/web_search" },
+      gateway,
+    );
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("https://ollama.com/api/web_search");
+  });
+
+  test("a hostname that merely resembles a metadata address still arms", () => {
+    // The synchronous classifier is literal-only and resolves no DNS, exactly as at the baseUrl
+    // boundary, so a lookalike hostname is just a hostname here.
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "https://imds.example.test/latest/meta-data" },
+      gateway,
+    );
+    expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })?.endpoint).toBe("https://imds.example.test/latest/meta-data");
+  });
+});
+
+// The refusal disarms the bridge without an error, which is what keeps the key unspent. That
+// silence broke a real configuration: a provider keyed under a CUSTOM name pointing at loopback
+// used to arm, and only the registry ids are local by default. The operator has to be told once.
+describe("a refused endpoint tells the operator once", () => {
+  const gateway = { baseUrl: "https://gateway.example/v1" };
+
+  function captureWarnings(run: () => void): string[] {
+    const lines: string[] = [];
+    const saved = console.warn;
+    console.warn = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+    try {
+      run();
+    } finally {
+      console.warn = saved;
+    }
+    return lines;
+  }
+
+  test("a custom-named local provider is warned, with the remedy and without the endpoint", () => {
+    resetRefusedBridgeEndpointWarningsForTests();
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://127.0.0.1:11434/api/web_search" },
+      gateway,
+    );
+    const warnings = captureWarnings(() => {
+      expect(resolveOllamaWebSearchEndpoint("my-ollama", provider)).toBeUndefined();
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("my-ollama");
+    expect(warnings[0]).toContain("allowPrivateNetwork");
+    // The destination itself never reaches the log.
+    expect(warnings[0]).not.toContain("127.0.0.1");
+    expect(warnings[0]).not.toContain("/api/web_search");
+  });
+
+  test("the same refusal does not warn again on every later request", () => {
+    resetRefusedBridgeEndpointWarningsForTests();
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5/api/web_search" },
+      gateway,
+    );
+    const warnings = captureWarnings(() => {
+      for (let i = 0; i < 5; i += 1) {
+        expect(planPassthroughWebSearchBridge(parsedFixture(), provider, {
+          providerName: "local-llm",
+          isPassthrough: true,
+          stream: true,
+        })).toBeUndefined();
+      }
+    });
+    expect(warnings).toHaveLength(1);
+  });
+
+  test("an accepted endpoint is not warned about", () => {
+    resetRefusedBridgeEndpointWarningsForTests();
+    const provider = providerFixture(
+      { enabled: true, backend: "ollama", endpoint: "http://127.0.0.1:11434/api/web_search" },
+      gateway,
+    );
+    const warnings = captureWarnings(() => {
+      expect(resolveOllamaWebSearchEndpoint("ollama", provider)).toBe("http://127.0.0.1:11434/api/web_search");
+    });
+    expect(warnings).toEqual([]);
+  });
+});
+
+// The blocker this policy exists for: config load does NOT run providerWebSearchBridgeConfigError,
+// so a metadata endpoint reaches running config intact. Plan time is what refuses to spend it.
+describe("a metadata endpoint survives config load and is refused at plan time", () => {
+  test("configSchema accepts the block and the planner still disarms", () => {
+    const result = validateConfigCandidate({
+      port: 0,
+      defaultProvider: "gateway",
+      providers: {
+        gateway: {
+          adapter: "openai-responses",
+          baseUrl: "https://gateway.example/v1",
+          authMode: "key",
+          apiKey: "fixture-key",
+          webSearchBridge: {
+            enabled: true,
+            backend: "ollama",
+            endpoint: "http://169.254.169.254/latest/meta-data",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    const loaded = (result as { ok: true; config: OcxConfig }).config.providers.gateway!;
+    // It really did survive validation, untouched.
+    expect(loaded.webSearchBridge?.endpoint).toBe("http://169.254.169.254/latest/meta-data");
+    expect(planPassthroughWebSearchBridge(parsedFixture(), loaded, {
+      providerName: "gateway",
+      isPassthrough: true,
+      stream: true,
+    })).toBeUndefined();
+  });
+});
+
+describe("providerWebSearchBridgeConfigError endpoint destination policy", () => {
+  test("names webSearchBridge.endpoint rather than baseUrl in a metadata refusal", () => {
+    const value = { enabled: true, backend: "ollama", endpoint: "http://169.254.169.254/latest/meta-data" };
+    const error = providerWebSearchBridgeConfigError(value, "gateway", {});
+    expect(error).toContain("webSearchBridge.endpoint");
+    expect(error).toContain("metadata");
+    expect(error).not.toStartWith("baseUrl");
+    expect(providerWebSearchBridgeConfigError(value, "gateway", { allowPrivateNetwork: true })).not.toBeNull();
+  });
+
+  test("a private-network endpoint errors without the opt-in and passes with it", () => {
+    const value = { enabled: true, backend: "ollama", endpoint: "http://10.0.0.5/api/web_search" };
+    expect(providerWebSearchBridgeConfigError(value, "gateway", {})).toContain("allowPrivateNetwork");
+    expect(providerWebSearchBridgeConfigError(value, "gateway", { allowPrivateNetwork: true })).toBeNull();
+  });
+
+  test("a public endpoint and an absent endpoint both pass", () => {
+    expect(providerWebSearchBridgeConfigError(
+      { enabled: true, backend: "ollama", endpoint: "https://ollama.com/api/web_search" },
+      "gateway",
+      {},
+    )).toBeNull();
+    expect(providerWebSearchBridgeConfigError({ enabled: true, backend: "ollama" }, "gateway", {})).toBeNull();
+  });
+
+  test("the shape check still runs before the destination check", () => {
+    expect(providerWebSearchBridgeConfigError(
+      { enabled: true, backend: "ollama", endpoint: "not-a-url" },
+      "gateway",
+      {},
+    )).toBe("webSearchBridge.endpoint must be an absolute http(s) URL");
   });
 });
 
@@ -421,19 +711,25 @@ describe("the bridged client stream", () => {
     expect(body.trimEnd().endsWith("data: [DONE]")).toBe(true);
   });
 
-  test("a search mixed with another client tool call fails closed instead of dropping it", async () => {
-    let sends = 0;
+  test("a search mixed with another client tool call ends the turn on that leg", async () => {
+    const sent: string[] = [];
+    const executed: string[][] = [];
     const clientCall = {
       type: "function_call",
       id: "fc_2",
       call_id: "call_2",
       name: "exec",
-      arguments: "{}",
+      arguments: "{\"cmd\":\"ls\"}",
     };
     const mixedLeg = sseBody(
       frame("response.output_item.added", { output_index: 0, item: { ...searchCall, arguments: "" } }),
       frame("response.output_item.done", { output_index: 0, item: searchCall }),
       frame("response.output_item.added", { output_index: 1, item: { ...clientCall, arguments: "" } }),
+      frame("response.function_call_arguments.done", {
+        output_index: 1,
+        item_id: "fc_2",
+        arguments: clientCall.arguments,
+      }),
       frame("response.output_item.done", { output_index: 1, item: clientCall }),
       frame("response.completed", {
         response: { id: "resp_1", status: "completed", output: [searchCall, clientCall] },
@@ -444,28 +740,227 @@ describe("the bridged client stream", () => {
       plan,
       firstLeg: streamFromText(mixedLeg),
       requestBody: initialBody,
-      send: async () => {
-        sends += 1;
+      send: async (body) => {
+        sent.push(body);
         return new Response(null, { status: 500 });
       },
-      execute: async () => ({ text: "unused", sources: [] }),
+      execute: async (queries) => {
+        executed.push(queries);
+        return { text: "opencodex 2.50.0 shipped", sources: [{ url: "https://example.test/rel", title: "Releases" }] };
+      },
     });
 
     const body = await new Response(stream).text();
-    expect(sends).toBe(0);
-    // The client tool call is withheld and dropped: releasing it under a failed turn would let
-    // Codex start running exec for a turn that never completes.
-    expect(body).not.toContain("\"name\":\"exec\"");
-    const failed = clientEvents(body).find(event => event.type === "response.failed");
-    expect(failed).toBeDefined();
-    const error = (failed!.response as { error: Record<string, unknown> }).error;
-    expect(error.code).toBe(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
-    expect(String(error.message)).toContain("another client tool");
-    // The opened hosted cell is closed as failed rather than left spinning.
-    const cell = clientEvents(body).find(event =>
+    const events = clientEvents(body);
+
+    // The client's own call is unanswered, so the conversation owes the client a turn, not the
+    // gateway: the search still runs, then the leg ends with no continuation POST upstream.
+    expect(sent).toEqual([]);
+    expect(executed).toEqual([["opencodex release"]]);
+    expect(body).not.toContain("response.failed");
+    expect(body).not.toContain(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
+
+    // The hosted cell completes with its real queries and sources, exactly as on a pure leg.
+    const cellDone = events.find(event =>
       event.type === "response.output_item.done"
       && (event.item as Record<string, unknown>).type === "web_search_call");
-    expect((cell!.item as Record<string, unknown>).status).toBe("failed");
+    expect(cellDone).toBeDefined();
+    const cellItem = cellDone!.item as Record<string, unknown>;
+    expect(cellItem.status).toBe("completed");
+    expect(cellItem.action).toEqual({
+      type: "search",
+      query: "opencodex release",
+      queries: ["opencodex release"],
+    });
+    expect(cellItem.sources).toEqual([{ url: "https://example.test/rel", title: "Releases" }]);
+
+    // The held client call is released with its own item id, call_id, and arguments intact.
+    const execDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "function_call");
+    expect(execDone).toBeDefined();
+    expect(execDone!.item as Record<string, unknown>).toMatchObject({
+      id: "fc_2",
+      call_id: "call_2",
+      name: "exec",
+      arguments: clientCall.arguments,
+    });
+
+    // One terminal, and its snapshot carries both items in the order upstream emitted them.
+    const completed = events.filter(event => event.type === "response.completed");
+    expect(completed).toHaveLength(1);
+    const output = (completed[0]!.response as { output: Record<string, unknown>[] }).output;
+    expect(output.map(item => item.type)).toEqual(["web_search_call", "function_call"]);
+    expect(output[1]).toMatchObject({ call_id: "call_2", name: "exec" });
+  });
+
+  test("a mixed leg where the client call streams first keeps the streamed order in the snapshot", async () => {
+    const sent: string[] = [];
+    const clientCall = {
+      type: "function_call",
+      id: "fc_0",
+      call_id: "call_0",
+      name: "exec",
+      arguments: "{}",
+    };
+    const mixedLeg = sseBody(
+      frame("response.output_item.added", { output_index: 0, item: { ...clientCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 0, item: clientCall }),
+      frame("response.output_item.added", { output_index: 1, item: { ...searchCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 1, item: searchCall }),
+      frame("response.completed", {
+        response: { id: "resp_1", status: "completed", output: [clientCall, searchCall] },
+      }),
+    );
+
+    const stream = createPassthroughWebSearchBridgeStream({
+      plan,
+      firstLeg: streamFromText(mixedLeg),
+      requestBody: initialBody,
+      send: async (body) => {
+        sent.push(body);
+        return new Response(null, { status: 500 });
+      },
+      execute: async () => ({ text: "a result", sources: [] }),
+    });
+
+    const events = clientEvents(await new Response(stream).text());
+    expect(sent).toEqual([]);
+
+    // The held call reaches the client AFTER the hosted cell, because it is only released once
+    // the leg is known to end here; output_index follows that streamed order with no gap.
+    const added = events.filter(event => event.type === "response.output_item.added");
+    expect(added.map(event => (event.item as Record<string, unknown>).type))
+      .toEqual(["web_search_call", "function_call"]);
+    expect(added.map(event => event.output_index)).toEqual([0, 1]);
+
+    // The retained snapshot follows the same streamed order -- it exists so response.output
+    // matches the turn the client received, so a divergence here would contradict the stream.
+    const completed = events.find(event => event.type === "response.completed");
+    const output = (completed!.response as { output: Record<string, unknown>[] }).output;
+    expect(output.map(item => item.type)).toEqual(["web_search_call", "function_call"]);
+    expect(output[1]).toMatchObject({ call_id: "call_0", name: "exec" });
+  });
+
+  test("a mixed leg whose upstream terminal already ended runs no search and closes the cell", async () => {
+    const sent: string[] = [];
+    let executes = 0;
+    const clientCall = {
+      type: "function_call",
+      id: "fc_3",
+      call_id: "call_3",
+      name: "exec",
+      arguments: "{}",
+    };
+    const mixedLeg = sseBody(
+      frame("response.output_item.added", { output_index: 0, item: { ...searchCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 0, item: searchCall }),
+      frame("response.output_item.added", { output_index: 1, item: { ...clientCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 1, item: clientCall }),
+      frame("response.incomplete", {
+        response: { id: "resp_1", status: "incomplete", output: [searchCall, clientCall] },
+      }),
+    );
+
+    const stream = createPassthroughWebSearchBridgeStream({
+      plan,
+      firstLeg: streamFromText(mixedLeg),
+      requestBody: initialBody,
+      send: async (body) => {
+        sent.push(body);
+        return new Response(null, { status: 500 });
+      },
+      execute: async () => {
+        executes += 1;
+        return { text: "unused", sources: [] };
+      },
+    });
+
+    const body = await new Response(stream).text();
+    const events = clientEvents(body);
+
+    // The upstream terminal already ended the turn, so no search is billed and nothing is
+    // sent back upstream.
+    expect(executes).toBe(0);
+    expect(sent).toEqual([]);
+
+    // The opened hosted cell still closes -- as failed, not left in_progress under a finished
+    // turn -- and the held client call is released rather than dropped.
+    const cellDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "web_search_call");
+    expect((cellDone!.item as Record<string, unknown>).status).toBe("failed");
+    const execDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "function_call");
+    expect(execDone!.item as Record<string, unknown>).toMatchObject({ call_id: "call_3", name: "exec" });
+
+    // The upstream terminal is relayed as it stood: incomplete, not a bridge failure.
+    const incomplete = events.filter(event => event.type === "response.incomplete");
+    expect(incomplete).toHaveLength(1);
+    expect(body).not.toContain("response.failed");
+  });
+
+  test("a mixed leg whose upstream terminal FAILED closes the cell and drops the held call", async () => {
+    // Sibling of the incomplete case above, and the reason the two terminals are not one branch.
+    // An incomplete turn is one the client can still act on, so its withheld call goes back. A
+    // failed turn is over, and handing Codex a tool call to start executing inside it is the
+    // exact thing the bridge's failure path refuses to do.
+    const sent: string[] = [];
+    let executes = 0;
+    const clientCall = {
+      type: "function_call",
+      id: "fc_4",
+      call_id: "call_4",
+      name: "exec",
+      arguments: "{}",
+    };
+    const mixedLeg = sseBody(
+      frame("response.output_item.added", { output_index: 0, item: { ...searchCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 0, item: searchCall }),
+      frame("response.output_item.added", { output_index: 1, item: { ...clientCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 1, item: clientCall }),
+      frame("response.failed", {
+        response: { id: "resp_1", status: "failed", output: [searchCall, clientCall] },
+      }),
+    );
+
+    const stream = createPassthroughWebSearchBridgeStream({
+      plan,
+      firstLeg: streamFromText(mixedLeg),
+      requestBody: initialBody,
+      send: async (body) => {
+        sent.push(body);
+        return new Response(null, { status: 500 });
+      },
+      execute: async () => {
+        executes += 1;
+        return { text: "unused", sources: [] };
+      },
+    });
+
+    const body = await new Response(stream).text();
+    const events = clientEvents(body);
+
+    // No search is billed and nothing goes back upstream, same as the incomplete case.
+    expect(executes).toBe(0);
+    expect(sent).toEqual([]);
+
+    // The opened hosted cell still closes rather than dangling under a finished turn.
+    const cellDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "web_search_call");
+    expect((cellDone!.item as Record<string, unknown>).status).toBe("failed");
+
+    // The withheld client call is NOT released: no function_call reaches the client.
+    const execDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "function_call");
+    expect(execDone).toBeUndefined();
+    expect(body).not.toContain("call_4");
+
+    // The upstream terminal is relayed as it stood: failed.
+    expect(events.filter(event => event.type === "response.failed")).toHaveLength(1);
   });
 
   test("already-hosted web_search_call items pass through without a proxy search", async () => {
@@ -507,9 +1002,9 @@ describe("the bridged client stream", () => {
     expect(body).not.toContain("response.failed");
   });
 
-  test("probe B mixed hosted cells plus exec plus web_search still fail closed", async () => {
-    let sends = 0;
-    let executes = 0;
+  test("probe B mixed hosted cells plus exec plus web_search ends the turn on that leg", async () => {
+    const sent: string[] = [];
+    const executed: string[][] = [];
     const hosted = {
       type: "web_search_call",
       id: "ws_hosted",
@@ -538,22 +1033,42 @@ describe("the bridged client stream", () => {
       plan,
       firstLeg: streamFromText(probeB),
       requestBody: initialBody,
-      send: async () => {
-        sends += 1;
+      send: async (body) => {
+        sent.push(body);
         return new Response(null, { status: 500 });
       },
-      execute: async () => {
-        executes += 1;
-        return { text: "unused", sources: [] };
+      execute: async (queries) => {
+        executed.push(queries);
+        return { text: "a result", sources: [] };
       },
     });
     const body = await new Response(stream).text();
-    expect(sends).toBe(0);
-    expect(executes).toBe(0);
-    expect(body).not.toContain("\"name\":\"exec\"");
-    const failed = clientEvents(body).find(event => event.type === "response.failed");
-    expect((failed!.response as { error: Record<string, unknown> }).error.code)
-      .toBe(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
+    const events = clientEvents(body);
+    // Only the intercepted call is executed proxy-side; the already-hosted cell is upstream's
+    // own item and passes through, and the leg still ends without a continuation.
+    expect(sent).toEqual([]);
+    expect(executed).toEqual([["opencodex release"]]);
+    expect(body).not.toContain("response.failed");
+    expect(body).not.toContain(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
+    // The held exec call is released for Codex to run with its identity intact.
+    const execDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "function_call");
+    expect(execDone).toBeDefined();
+    expect(execDone!.item as Record<string, unknown>).toMatchObject({
+      id: "fc_exec",
+      call_id: "call_exec",
+      name: "exec",
+      arguments: "{\"cmd\":\"python fetch.py\"}",
+    });
+    // The snapshot follows the streamed order: the hosted cell, the new cell, then the
+    // released client call.
+    const completed = events.find(event => event.type === "response.completed");
+    const output = (completed!.response as { output: Record<string, unknown>[] }).output;
+    expect(output.map(item => item.type))
+      .toEqual(["web_search_call", "web_search_call", "function_call"]);
+    expect(output[0]).toMatchObject({ id: "ws_hosted" });
+    expect(output[2]).toMatchObject({ call_id: "call_exec", name: "exec" });
   });
 
   test("DeepSeek-style XML assistant text is not dispatched as a search", async () => {
@@ -752,6 +1267,76 @@ describe("bridge helpers", () => {
     expect(mapped.error).toBeUndefined();
     expect(mapped.sources).toEqual([{ url: "https://example.test/rel", title: "Releases" }]);
     expect(mapped.text).toContain("2.50.0 is out");
+  });
+});
+
+// The global webSearchSidecar block carries the model chosen for ITS backend, while the bridge
+// backend is per-provider and configured independently. Without the agreement check a global
+// { backend: "openai", model: "gpt-5.6-luna" } would reach runAnthropicWebSearch on an anthropic
+// bridge, and Anthropic rejects the model.
+describe("sidecarSettingsForBridge backend/model agreement", () => {
+  function bridgePlan(backend: ProviderWebSearchBridgeBackend): PassthroughWebSearchBridgePlan {
+    return { backend, maxSearches: 3, timeoutMs: 60_000 };
+  }
+
+  test("a global sidecar model configured for another backend does not reach this bridge", () => {
+    const sidecar = { backend: "openai", model: "gpt-5.6-luna" } as const;
+    expect(sidecarSettingsForBridge("anthropic", bridgePlan("anthropic"), { sidecar }).model)
+      .toBe("claude-sonnet-5");
+    expect(sidecarSettingsForBridge("xai", bridgePlan("xai"), { sidecar }).model)
+      .toBe("grok-4.6");
+    expect(sidecarSettingsForBridge("gemini", bridgePlan("gemini"), { sidecar }).model)
+      .toBe("gemini-3.8-flash");
+  });
+
+  test("a global sidecar model configured for the same backend is kept as the operator override", () => {
+    expect(sidecarSettingsForBridge("anthropic", bridgePlan("anthropic"), {
+      sidecar: { backend: "anthropic", model: "claude-opus-4-6" },
+    }).model).toBe("claude-opus-4-6");
+    expect(sidecarSettingsForBridge("xai", bridgePlan("xai"), {
+      sidecar: { backend: "xai", model: "grok-4.6-fast" },
+    }).model).toBe("grok-4.6-fast");
+    expect(sidecarSettingsForBridge("gemini", bridgePlan("gemini"), {
+      sidecar: { backend: "gemini", model: "gemini-3.8-pro" },
+    }).model).toBe("gemini-3.8-pro");
+  });
+
+  test("an unset global sidecar backend resolves to openai and matches only an openai bridge", () => {
+    const sidecar = { model: "gpt-5.6-terra" } as const;
+    expect(sidecarSettingsForBridge("openai", bridgePlan("openai"), { sidecar }).model)
+      .toBe("gpt-5.6-terra");
+    expect(sidecarSettingsForBridge("anthropic", bridgePlan("anthropic"), { sidecar }).model)
+      .toBe("claude-sonnet-5");
+  });
+
+  test("an explicit openai sidecar backend keeps its model on an openai bridge", () => {
+    const sidecar = { backend: "openai", model: "gpt-5.6-terra" } as const;
+    expect(sidecarSettingsForBridge("openai", bridgePlan("openai"), { sidecar }).model)
+      .toBe("gpt-5.6-terra");
+  });
+
+  test("a missing global sidecar block still yields a model for the ollama bridge", () => {
+    // createOllamaBridgeExecutor passes no sidecar; the ollama arm is inert anyway since
+    // runOllamaWebSearch takes no model argument.
+    const settings = sidecarSettingsForBridge("ollama", bridgePlan("ollama"), {});
+    expect(typeof settings.model).toBe("string");
+    expect(settings.model.length).toBeGreaterThan(0);
+  });
+
+  test("reasoning, timeout, and describeImages still come from the sidecar block, the plan, and the context", () => {
+    const settings = sidecarSettingsForBridge("xai", bridgePlan("xai"), {
+      describeImages: true,
+      sidecar: { backend: "xai", model: "grok-4.6-fast", reasoning: "high" },
+    });
+    expect(settings.reasoning).toBe("high");
+    expect(settings.timeoutMs).toBe(60_000);
+    expect(settings.describeImages).toBe(true);
+
+    const unset = sidecarSettingsForBridge("xai", bridgePlan("xai"), {
+      sidecar: { backend: "xai" },
+    });
+    expect(unset.reasoning).toBe("low");
+    expect(unset.describeImages).toBe(false);
   });
 });
 
@@ -1073,7 +1658,7 @@ describe("the reported turn, end to end through handleResponses", () => {
     expect(result.destinations.every(destination => destination.authorization === "Bearer fixture-key")).toBe(true);
   });
 
-  test("an exa-backed mixed exec/search turn still fails closed", async () => {
+  test("an exa-backed mixed exec/search turn ends the turn on that leg", async () => {
     const cfg = {
       port: 0,
       defaultProvider: "fixture",
@@ -1088,26 +1673,34 @@ describe("the reported turn, end to end through handleResponses", () => {
       },
       webSearchSidecar: { exaApiKey: "exa-canary" },
     } as unknown as OcxConfig;
-    const execCall = {
+    // The client call uses the one function name the request declares ("wait"); anything else
+    // would trip the undeclared-tool guard for a reason unrelated to the bridge.
+    const waitCall = {
       type: "function_call",
-      id: "fc_exec",
-      call_id: "call_exec",
-      name: "exec",
+      id: "fc_wait",
+      call_id: "call_wait",
+      name: "wait",
       arguments: "{}",
     };
     const mixedLeg = sseBody(
       frame("response.output_item.added", { output_index: 0, item: { ...searchCall, arguments: "" } }),
       frame("response.output_item.done", { output_index: 0, item: searchCall }),
-      frame("response.output_item.added", { output_index: 1, item: { ...execCall, arguments: "" } }),
-      frame("response.output_item.done", { output_index: 1, item: execCall }),
+      frame("response.output_item.added", { output_index: 1, item: { ...waitCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 1, item: waitCall }),
       frame("response.completed", {
-        response: { id: "resp_1", status: "completed", output: [searchCall, execCall] },
+        response: { id: "resp_1", status: "completed", output: [searchCall, waitCall] },
       }),
     );
     const result = await post(cfg, [mixedLeg]);
-    expect(result.searches).toBe(0);
-    expect(result.body).toContain(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
-    expect(result.body).not.toContain("\"name\":\"exec\"");
+    // The exa search still ran proxy-side, the leg ended the turn, and no continuation POST
+    // went back to the gateway: the client's call is answered by the client, not upstream.
+    expect(result.searches).toBe(1);
+    expect(result.outbound).toHaveLength(1);
+    expect(result.body).not.toContain(WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE);
+    expect(result.body).not.toContain("response.failed");
+    expect(result.body).toContain("\"type\":\"web_search_call\"");
+    expect(result.body).toContain("\"name\":\"wait\"");
+    expect(result.body).toContain("call_wait");
   });
 
   test("exa without a key stays disarmed on a non-ollama gateway", async () => {

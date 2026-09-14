@@ -139,7 +139,13 @@ export const DEVIN_MODEL_EFFORTS: Record<string, string[]> = {
 export const DEVIN_DEFAULT_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
 export type DevinUsableModelsResult =
-  | { ok: true; models: string[]; contextWindows: Record<string, number>; efforts: Record<string, string[]> }
+  | {
+      ok: true;
+      models: string[];
+      contextWindows: Record<string, number>;
+      efforts: Record<string, string[]>;
+      inputModalities: Record<string, string[]>;
+    }
   | { ok: false; error: "auth" | "http" | "empty" | "unknown"; detail?: string };
 
 /**
@@ -160,6 +166,8 @@ export async function fetchDevinUsableModels(opts: {
     const contextWindows: Record<string, number> = {};
     // Effort rungs per base, recovered from the suffixes the collapse strips.
     const rungs = new Map<string, Set<string>>();
+    // supportsImages votes per base; only rows that asserted field #5 vote.
+    const imageVotes = new Map<string, { sawTrue: boolean; sawFalse: boolean }>();
     for (const entry of catalog.byUid.values()) {
       if (entry.disabled) continue;
       // Skip internal enum constants (e.g. MODEL_GPT_5_2_LOW, MODEL_PRIVATE_*).
@@ -183,6 +191,15 @@ export async function fetchDevinUsableModels(opts: {
         const seen = contextWindows[base];
         contextWindows[base] = seen === undefined ? entry.contextWindow : Math.min(seen, entry.contextWindow);
       }
+      if (entry.supportsImages !== undefined) {
+        let votes = imageVotes.get(base);
+        if (!votes) {
+          votes = { sawTrue: false, sawFalse: false };
+          imageVotes.set(base, votes);
+        }
+        if (entry.supportsImages) votes.sawTrue = true;
+        else votes.sawFalse = true;
+      }
     }
     if (bases.size === 0) return { ok: false, error: "empty" };
     const efforts: Record<string, string[]> = {};
@@ -191,7 +208,21 @@ export async function fetchDevinUsableModels(opts: {
       // would draw a picker whose only option is the value already in effect.
       if (set.size > 1) efforts[base] = sortDevinRungs(set);
     }
-    return { ok: true, models: [...bases].sort(), contextWindows, efforts };
+    // supportsImages arrives tri-state per catalog row, so the collapse votes:
+    // a row that never asserted field #5 abstains, which keeps an unsuffixed
+    // unknown row from poisoning a base whose effort variants were measured
+    // image-capable. Unanimous measured rows advertise; measured disagreement
+    // advertises nothing, because a single measured false is not outvoted by
+    // its siblings. One accepted mismatch: resolveWireModelUid prefers the
+    // plain UID when the catalog lists it, so a base advertised
+    // ["text","image"] on variant evidence can still route a no-effort request
+    // to a plain row that never asserted the field.
+    const inputModalities: Record<string, string[]> = {};
+    for (const [base, votes] of imageVotes) {
+      if (votes.sawTrue && votes.sawFalse) continue;
+      inputModalities[base] = votes.sawTrue ? ["text", "image"] : ["text"];
+    }
+    return { ok: true, models: [...bases].sort(), contextWindows, efforts, inputModalities };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/unauth|401|invalid token|login/i.test(message)) return { ok: false, error: "auth", detail: message };
