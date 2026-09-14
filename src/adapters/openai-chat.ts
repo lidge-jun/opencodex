@@ -42,6 +42,7 @@ import {
   TRANSLATOR_MAX_SSE_EVENT_BYTES,
   type TranslatorBudget,
 } from "../lib/translator-budget";
+import { collapseRepeatedOutput } from "../responses/repetition-breaker";
 
 // Providers may opt into stripping one trailing "[...]" group from the wire model id.
 // Z.AI needs this because its OpenAI path rejects glm-5.2[1m] with 400 code 1211;
@@ -830,7 +831,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
         const thinkingParts = aMsg.content.filter(p => p.type === "thinking") as OcxThinkingContent[];
         const toolCalls = aMsg.content.filter(p => p.type === "toolCall") as OcxToolCall[];
         const chatMsg: Record<string, unknown> = { role: "assistant" };
-        if (textParts.length > 0) chatMsg.content = textParts.map(p => p.text).join("");
+        if (textParts.length > 0) chatMsg.content = collapseRepeatedOutput(textParts.map(p => p.text).join(""));
         let reasoningContent = thinkingParts.map(p => p.thinking).join("");
         if (
           reasoningContent.length === 0

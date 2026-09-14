@@ -356,6 +356,66 @@ describe("usage and content retention (F2)", () => {
 });
 
 describe("openai-chat tool history repair", () => {
+  test("collapses repeated assistant output before replaying it upstream", async () => {
+    const adapter = createOpenAIChatAdapter(provider);
+    const repeated = Array.from({ length: 1451 }, () => "Checking the adapter state.").join("\n");
+    const request = await adapter.buildRequest({
+      modelId: "deepseek-v4",
+      context: {
+        messages: [
+          { role: "user", content: "start", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: repeated }], model: "deepseek-v4", timestamp: 1 },
+          { role: "user", content: "continue", timestamp: 2 },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as { messages: Array<{ content: string }> };
+
+    expect(body.messages[1]?.content).toBe("Checking the adapter state.\n[ocx: repeated 1451 times in source output]");
+  });
+
+  test("collapses a repeated multi-line assistant message before replaying it upstream", async () => {
+    const adapter = createOpenAIChatAdapter(provider);
+    const paragraph = "Checking the adapter state.\nRunning the focused test.";
+    const request = await adapter.buildRequest({
+      modelId: "deepseek-v4",
+      context: {
+        messages: [
+          { role: "user", content: "start", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: Array.from({ length: 4 }, () => paragraph).join("\n") }], model: "deepseek-v4", timestamp: 1 },
+          { role: "user", content: "continue", timestamp: 2 },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as { messages: Array<{ content: string }> };
+
+    expect(body.messages[1]?.content).toBe(`${paragraph}\n[ocx: repeated 4 times in source output]`);
+  });
+
+  test("preserves ordinary assistant output when replaying it upstream", async () => {
+    const adapter = createOpenAIChatAdapter(provider);
+    const text = "Checking the adapter state.\nChecking the adapter state.";
+    const request = await adapter.buildRequest({
+      modelId: "deepseek-v4",
+      context: {
+        messages: [
+          { role: "user", content: "start", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text }], model: "deepseek-v4", timestamp: 1 },
+          { role: "user", content: "continue", timestamp: 2 },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as { messages: Array<{ content: string }> };
+
+    expect(body.messages[1]?.content).toBe(text);
+  });
+
   test("inserts a synthetic assistant tool_call before orphan tool results", async () => {
     const adapter = createOpenAIChatAdapter(provider);
     const request = await adapter.buildRequest({
