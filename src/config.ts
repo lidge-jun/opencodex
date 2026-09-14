@@ -2202,7 +2202,11 @@ function degradedCredentialGroupsWarning(rawParsed: unknown): string | null {
   if (!pool || pool.credentialGroups === undefined) return null;
   const parsed = credentialGroupsSchema.safeParse(pool.credentialGroups);
   if (parsed.success) return null;
-  const details = parsed.error.issues.map(issue => issue.message).join("; ");
+  // Every issue message is redacted before it is joined. The custom messages embed the
+  // offending member through `JSON.stringify`, so a malformed credential string that
+  // happens to carry secret material would otherwise be printed verbatim at config load
+  // — a config file is exactly where a pasted token ends up in the wrong field.
+  const details = parsed.error.issues.map(issue => redactSecretString(issue.message)).join("; ");
   return `pool.credentialGroups is invalid (${details}) — declared quota grouping is disabled; other pool settings were preserved`;
 }
 

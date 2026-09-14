@@ -245,7 +245,10 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   domain once and reports unknown-domain credentials separately, and
   `canPortConversationState` keeps conversational-state portability a separate question from
   cache compatibility by refusing any request that carries `previous_response_id`, a
-  provider-side conversation id, uploaded file ids, or encrypted reasoning.
+  provider-side conversation id, uploaded file ids, or encrypted reasoning. The classifier is groundwork that no routing boundary calls yet: it lands with its tests
+  so the consuming layers can be reviewed one at a time. Until one of them wires it, declaring
+  `pool.credentialGroups` changes no routing decision, and the rules above state the contract
+  those consumers must honour rather than behaviour an operator can rely on today.
 - **Proven separation and proven sharing are separate facts** (`src/routing/identity-domains.ts`).
   Every domain carries `evidence` alongside its provenance: a rule that documents only that two
   credentials are in different domains never lets an equal key mean "shared". OpenAI's cache rule
