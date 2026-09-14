@@ -449,7 +449,7 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
 
     const written = getRequestLogEntries();
     expect(written.length).toBe(before + 1);
-    const row = written.find(entry => entry.id === "req-refusal-1");
+    const row = written.find(entry => entry.requestId === "req-refusal-1");
     expect(row?.terminalSource).toBe("synthetic");
     expect(row?.localTerminalReason).toBe("workflow_children_exhausted");
     expect(row?.errorCode).toBe("workflow_children_exhausted");
