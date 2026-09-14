@@ -3,6 +3,7 @@ import { useT } from "../i18n/shared";
 import { IconAlert } from "../icons";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
+import { maxQuotaUtilisation } from "./QuotaBars";
 
 export function CodexAccountSwitchModal({
   confirm,
@@ -10,6 +11,7 @@ export function CodexAccountSwitchModal({
   accountModeState,
   switchingId,
   orderBusy = false,
+  threshold,
   onCancel,
   onConfirm,
 }: {
@@ -23,6 +25,7 @@ export function CodexAccountSwitchModal({
    * the button has to be unavailable rather than silently ineffective.
    */
   orderBusy?: boolean;
+  threshold?: number;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -38,6 +41,8 @@ export function CodexAccountSwitchModal({
     e.preventDefault();
     onCancel();
   }, [onCancel]);
+
+  const exceedsThreshold = threshold !== undefined && threshold > 0 && maxQuotaUtilisation(confirm.quota) >= threshold;
 
   return (
     <dialog
@@ -63,6 +68,11 @@ export function CodexAccountSwitchModal({
         </div>
         {confirm.id !== "__main__" && (
           <div className="notice-warn"><IconAlert width={14} /> {t("codexAuth.cacheWarning")}</div>
+        )}
+        {exceedsThreshold && (
+          <div className="notice-warn" data-testid="codex-switch-threshold-warning">
+            <IconAlert width={14} /> {t("codexAuth.switchExceedsThresholdWarning", { threshold })}
+          </div>
         )}
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>{t("codexAuth.cancel")}</button>

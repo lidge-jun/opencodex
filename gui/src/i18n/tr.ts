@@ -1939,6 +1939,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.switchTitle": "Aktif hesap değiştirilsin mi?",
   "codexAuth.switchDesc": "Anında yürürlüğe girer. Mevcut hesaba bağlı iş parçacıkları ve işlenmekte olan istekler yakalanan hesaplarını korur; yeni veya bağımsız istekler seçilen hesabın sıra kademesini kullanır ve aynı seçim sırasındaki hesaplar sırayla görev almaya devam eder.",
   "codexAuth.cacheWarning": "Hesap değiştirildiğinde önbellek sıfırlanır.",
+  "codexAuth.switchExceedsThresholdWarning": "Bu hesap geçiş eşiğine (%{threshold}) ulaştı veya aştı. Kota payı yoksa sabitlenen seçim serbest bırakılır.",
   "codexAuth.setAsNext": "Sonraki istekte bu hesabı kullan",
   "codexAuth.cancel": "İptal",
   "codexAuth.switchBack": "Ana hesaba geri dönülsün mü?",
@@ -1999,6 +2000,10 @@ export const tr: Record<TKey, string> = {
   "accountPool.stickyLimitInvalid": "1 ile 100 arasında bir tam sayı girin",
   "accountPool.strategyLoadFailed": "Strateji yüklenemedi.",
   "accountPool.strategyUpdateFailed": "Strateji kaydedilemedi.",
+  "accountPool.switchAtThreshold": "%{threshold} düzeyinde geçiş",
+  "accountPool.drainAtThreshold": "%{threshold} düzeyinde boşaltma",
+  "accountPool.thresholdNotUsed": "eşik kullanılmıyor",
+  "accountPool.proactiveSwitchingOff": "önleyici geçiş kapalı",
 
   "accountPool.quotaWindow": "Kota penceresi",
   "accountPool.quotaWindowDesc": "Kotaya dayalı yeni oturum seçimi, İlk doldurma eşik kontrolleri ve uygun 429 yedekleri için hangi önbelleğe alınmış kullanım çubuğunun kullanılacağını belirler.",

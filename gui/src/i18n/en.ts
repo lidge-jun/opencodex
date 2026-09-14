@@ -1982,6 +1982,7 @@ export const en = {
   "codexAuth.switchTitle": "Switch active account?",
   "codexAuth.switchDesc": "Takes effect immediately. Existing account-affine threads and requests already in flight keep their captured account; new or unbound requests use the selected account's order tier, and accounts at the same selection order still take turns.",
   "codexAuth.cacheWarning": "Prompt cache resets on account switch. New session starts with empty cache.",
+  "codexAuth.switchExceedsThresholdWarning": "This account usage meets or exceeds the switch threshold ({threshold}%). Pinned selection will be released if quota headroom is unavailable.",
   "codexAuth.setAsNext": "Use this account next",
   "codexAuth.cancel": "Cancel",
   "codexAuth.switchBack": "Switch back to Main?",
@@ -2053,6 +2054,10 @@ export const en = {
   "accountPool.stickyLimitInvalid": "Enter a whole number from 1 to 100",
   "accountPool.strategyLoadFailed": "Rotation strategy could not be loaded.",
   "accountPool.strategyUpdateFailed": "Rotation strategy could not be saved.",
+  "accountPool.switchAtThreshold": "switch at {threshold}%",
+  "accountPool.drainAtThreshold": "drain at {threshold}%",
+  "accountPool.thresholdNotUsed": "threshold not used",
+  "accountPool.proactiveSwitchingOff": "proactive switching off",
 
   // The three window labels double as the {window} name inlined into
   // anthropicPool.enabledDesc, so each locale owns its own inline casing instead of the
