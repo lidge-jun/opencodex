@@ -59,7 +59,8 @@ export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "
   // the wrong slot for that window. An EU or FedStart tenant is recorded on the
   // credential rather than in the registry, so a fixed "devin" slot would send
   // the key to the wrong host either way.
-  const literal = validateDevinApiBaseUrl(getCredential(providerId)?.apiBaseUrl);
+  const literalCredential = getCredential(providerId);
+  const literal = validateDevinApiBaseUrl(literalCredential?.apiBaseUrl);
   if (literal !== undefined) return literal;
 
   // The startup merge saves providers["devin"] synchronously but fires the
@@ -72,9 +73,20 @@ export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "
   // "devin-cli" credential, and a lingering "devin-cli" row finds a credential
   // already rekeyed to "devin". Every candidate passes the same allowlist — an
   // alias slot is not trusted more than the literal one.
-  for (const slot of devinAliasCredentialSlots(providerId)) {
-    const host = validateDevinApiBaseUrl(getCredential(slot)?.apiBaseUrl);
-    if (host !== undefined) return host;
+  // Only when this id owns no credential at all. A present credential whose
+  // apiBaseUrl is missing or off-allowlist is a different situation: the rekey
+  // refuses an occupied destination slot, so both ids can hold credentials that
+  // belong to two different accounts. Borrowing a tenant across that pair would
+  // send this account's key to the other account's EU or FedStart host, which
+  // is the exact misdirection the provider-scoped lookup exists to prevent. An
+  // unusable host on a credential that does exist falls through to the
+  // configured base URL and then the default, as it did before this window was
+  // closed.
+  if (literalCredential === undefined) {
+    for (const slot of devinAliasCredentialSlots(providerId)) {
+      const host = validateDevinApiBaseUrl(getCredential(slot)?.apiBaseUrl);
+      if (host !== undefined) return host;
+    }
   }
 
   return validateDevinApiBaseUrl(configuredBaseUrl) ?? DEVIN_DEFAULT_API_SERVER;

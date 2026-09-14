@@ -279,6 +279,18 @@ describe("devin tenant selection is provider-scoped", () => {
     expect(resolveDevinApiServer(undefined, "devin-cli")).toBe(FEDSTART_HOST);
   });
 
+  test("a credential that exists but has no usable tenant does not borrow the alias tenant", async () => {
+    // rekeyProviderCredentials refuses when both slots are occupied, so this
+    // pair can be two different accounts. If the alias host were consulted
+    // whenever the literal host is merely unusable — rather than when the
+    // literal slot is empty — this account's key would go to the other
+    // account's FedStart tenant.
+    await seedSlot("devin", "https://api.githubcopilot.com");
+    await seedSlot("devin-cli", FEDSTART_HOST);
+    expect(resolveDevinApiServer(undefined, "devin")).toBe(US_HOST);
+    expect(resolveDevinApiServer(EU_HOST, "devin")).toBe(EU_HOST);
+  });
+
   test("an alias slot with a non-Devin apiBaseUrl is not trusted", async () => {
     // The store allowlists Copilot and Devin together, so a Copilot origin is
     // the host that survives persist and still fails validateDevinApiBaseUrl.
