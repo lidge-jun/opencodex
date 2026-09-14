@@ -1367,6 +1367,8 @@ describe("selection order across rotation strategies", () => {
     const later = Date.now() + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
     expect(previewCodexAccountForRequest(threadId, config, later)).toBe("b");
     expect(resolveCodexAccountForThread(threadId, config, later)).toBe("b");
+  });
+
   test("an install that never configured pool keeps a bound thread on its account (#4546)", () => {
     // No pool key at all. This is the case the incident was reported from: the operator had
     // never heard of cacheAffinity, so the protection has to be the default or it is not
