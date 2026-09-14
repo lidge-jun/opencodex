@@ -35,6 +35,22 @@ describe("apply_patch envelope repair", () => {
 
   test("unwraps the function-call {input} wrapper before top-level repair", () => {
     expect(repairFreeformToolInput(JSON.stringify({ input: DECORATED_PATCH }), "apply_patch")).toBe(CANONICAL_PATCH);
+    expect(repairFreeformToolInput(JSON.stringify({ patch: DECORATED_PATCH }), "apply_patch")).toBe(CANONICAL_PATCH);
+    expect(repairFreeformToolInput(JSON.stringify({ code: "const x = 1;" }), "exec")).toBe("const x = 1;");
+    expect(repairFreeformToolInput(JSON.stringify({ script: "const x = 2;" }), "exec")).toBe("const x = 2;");
+    expect(repairFreeformToolInput(JSON.stringify({ command: "ls -la" }), "shell")).toBe("ls -la");
+    expect(repairFreeformToolInput("```js\nconst y = 3;\n```", "exec")).toBe("const y = 3;");
+    expect(repairFreeformToolInput("```diff\n" + DECORATED_PATCH + "\n```", "apply_patch")).toBe(CANONICAL_PATCH);
+    // Annotated fences (language plus filename or other info strings) unwrap the same way
+    expect(repairFreeformToolInput("```js example.ts\nconst y = 3;\n```", "exec")).toBe("const y = 3;");
+    expect(repairFreeformToolInput("```diff patch\n" + DECORATED_PATCH + "\n```", "apply_patch")).toBe(CANONICAL_PATCH);
+    // Multiple candidate keys: explicit `input` always takes strict precedence over fallback keys
+    expect(repairFreeformToolInput(JSON.stringify({ input: "const a = 1;", code: "const b = 2;" }), "exec")).toBe("const a = 1;");
+    // Candidate key precedence order: code beats command
+    expect(repairFreeformToolInput(JSON.stringify({ code: "const c = 3;", command: "ls" }), "exec")).toBe("const c = 3;");
+    // Internal markdown fence in JavaScript strings/templates is never stripped
+    const internalFenceJs = 'const md = "\n```js\nlet z = 1;\n```\n";';
+    expect(repairFreeformToolInput(internalFenceJs, "exec")).toBe(internalFenceJs);
   });
 
   test("repairs only bare and reserved-functions apply_patch grammars", () => {
