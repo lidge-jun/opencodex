@@ -134,6 +134,7 @@ import {
   type RequestLogEntry,
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
+import { admitWorkflowTurn, type WorkflowLane } from "../lib/workflow-budget";
 export {
   addFinalRequestLog,
   filterRequestLogs,
@@ -1292,13 +1293,36 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   ): Promise<Response> {
     const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
     if (!lease) return serverBusyResponse(req, "active turns", policy);
+    // A fan-out shares the conversation it serves. Without a reserve, a worker burst takes every
+    // slot under its own root and the interactive turn that started it waits behind its own
+    // children. A request that names a parent is treated as that fan-out; a top-level request is
+    // the conversation and may use the reserved slots.
+    const workflowRootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+    const workflowThreadId = req.headers.get("thread-id")?.trim() || undefined;
+    const workflowLane: WorkflowLane = workflowRootId !== undefined
+      && workflowThreadId !== undefined
+      && workflowThreadId !== workflowRootId
+      ? "worker"
+      : "interactive";
+    const workflow = admitWorkflowTurn(workflowRootId, workflowLane, undefined, workflowThreadId);
+    if (workflow && !workflow.admitted) {
+      lease.release();
+      return formatErrorResponse(
+        429,
+        workflow.reason === "workflow-sends-exhausted" ? "workflow_budget_exhausted" : "queue_capacity_exceeded",
+        "This task has reached its concurrent-work limit, so no further upstream request was made. Work already in flight settles as it finishes.",
+      );
+    }
+    const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
     let response: Response;
     try {
       response = await work(lease);
     } catch (error) {
+      releaseWorkflow();
       lease.release();
       throw error;
     }
+    releaseWorkflow();
     if (!lease.isTransferred()) {
       lease.release();
     }
