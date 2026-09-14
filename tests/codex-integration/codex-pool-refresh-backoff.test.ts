@@ -1,5 +1,6 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import {
+  CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES,
   CODEX_POOL_REFRESH_FAILURE_BACKOFF_MS,
   CodexPoolRefreshCooldownError,
   clearCodexPoolRefreshFailure,
@@ -31,26 +32,34 @@ describe("codex pool refresh failure backoff", () => {
     const now = 1_000_000;
     setCodexPoolRefreshFailureNowForTests(now);
 
-    const first = noteCodexPoolRefreshFailure("acct-a", "unknown");
-    expect(first.openedWindow).toBe(true);
-    expect(first.consecutiveFailures).toBe(1);
-    expect(first.cooldownUntil).toBe(now + CODEX_POOL_REFRESH_FAILURE_BACKOFF_MS[0]!);
-    expect(isCodexPoolRefreshCooling("acct-a")).toBe(true);
+    // The first failures do NOT withhold anything. One token-endpoint blip is the ordinary case
+    // the next attempt clears, and a withheld refresh never runs -- so withholding early would
+    // stop a revoked grant from ever being discovered and turn its terminal 401 into a 503 that
+    // never resolves.
+    for (let attempt = 1; attempt < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; attempt += 1) {
+      const early = noteCodexPoolRefreshFailure("acct-a", "unknown");
+      expect(early.consecutiveFailures).toBe(attempt);
+      expect(isCodexPoolRefreshCooling("acct-a")).toBe(false);
+    }
 
-    // A second failure INSIDE the window does not grow it. Growth requires another real
-    // attempt, otherwise a burst of concurrent requests would race the account to the ceiling.
+    const opened = noteCodexPoolRefreshFailure("acct-a", "unknown");
+    expect(opened.consecutiveFailures).toBe(CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES);
+    expect(isCodexPoolRefreshCooling("acct-a")).toBe(true);
+    expect(getCodexPoolRefreshCooldownUntil("acct-a")).toBe(opened.cooldownUntil);
+
+    // Once it IS withholding, a further failure inside the window does not grow it: growth needs
+    // another real attempt, or a burst of concurrent requests would race it to the ceiling.
     const during = noteCodexPoolRefreshFailure("acct-a", "unknown");
     expect(during.openedWindow).toBe(false);
-    expect(during.consecutiveFailures).toBe(1);
-    expect(during.cooldownUntil).toBe(first.cooldownUntil);
+    expect(during.consecutiveFailures).toBe(CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES);
+    expect(during.cooldownUntil).toBe(opened.cooldownUntil);
 
-    setCodexPoolRefreshFailureNowForTests(first.cooldownUntil + 1);
+    setCodexPoolRefreshFailureNowForTests(opened.cooldownUntil + 1);
     expect(isCodexPoolRefreshCooling("acct-a")).toBe(false);
 
-    const second = noteCodexPoolRefreshFailure("acct-a", "unknown");
-    expect(second.consecutiveFailures).toBe(2);
-    expect(second.cooldownUntil - (first.cooldownUntil + 1))
-      .toBe(CODEX_POOL_REFRESH_FAILURE_BACKOFF_MS[1]!);
+    const next = noteCodexPoolRefreshFailure("acct-a", "unknown");
+    expect(next.consecutiveFailures).toBe(CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES + 1);
+    expect(isCodexPoolRefreshCooling("acct-a")).toBe(true);
   });
 
   test("the cooldown is bounded by the last configured step", () => {
@@ -61,6 +70,7 @@ describe("codex pool refresh failure backoff", () => {
       const opened = noteCodexPoolRefreshFailure("acct-ceiling", "unknown", now);
       expect(opened.cooldownUntil - now).toBeLessThanOrEqual(ceiling);
       now = opened.cooldownUntil + 1;
+      // Below the threshold nothing is withheld, so the window is advisory until it opens.
       setCodexPoolRefreshFailureNowForTests(now);
     }
   });
@@ -68,7 +78,9 @@ describe("codex pool refresh failure backoff", () => {
   test("a success clears the cooldown so recovery is automatic", () => {
     const now = 5_000;
     setCodexPoolRefreshFailureNowForTests(now);
-    noteCodexPoolRefreshFailure("acct-b", "generation_conflict");
+    for (let i = 0; i < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; i += 1) {
+      noteCodexPoolRefreshFailure("acct-b", "generation_conflict", now + i);
+    }
     expect(isCodexPoolRefreshCooling("acct-b")).toBe(true);
 
     clearCodexPoolRefreshFailure("acct-b");
@@ -78,7 +90,9 @@ describe("codex pool refresh failure backoff", () => {
 
   test("one account cooling never cools a sibling", () => {
     setCodexPoolRefreshFailureNowForTests(10_000);
-    noteCodexPoolRefreshFailure("acct-broken", "unknown");
+    for (let i = 0; i < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; i += 1) {
+      noteCodexPoolRefreshFailure("acct-broken", "unknown", 10_000 + i);
+    }
     expect(isCodexPoolRefreshCooling("acct-broken")).toBe(true);
     // The whole point of the cooldown is that selection moves to a healthy sibling.
     expect(isCodexPoolRefreshCooling("acct-healthy")).toBe(false);

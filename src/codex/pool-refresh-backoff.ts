@@ -60,9 +60,21 @@ function delayFor(consecutiveFailures: number): number {
   return CODEX_POOL_REFRESH_FAILURE_BACKOFF_MS[index]!;
 }
 
+/**
+ * How many consecutive non-terminal failures must land before a refresh is WITHHELD.
+ *
+ * Withholding on the first failure was wrong twice over. A single token-endpoint blip is the
+ * ordinary case that the very next attempt clears, and -- worse -- a withheld refresh never runs,
+ * so an account whose grant is actually revoked can no longer discover that: the terminal 401 it
+ * owes the operator turns into a retryable 503 that never resolves. The cooldown exists for the
+ * account that keeps failing, not for the one that failed once.
+ */
+export const CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES = 3;
+
 export function getCodexPoolRefreshCooldownUntil(accountId: string, now = currentNow()): number | null {
   const entry = backoffByAccount.get(accountId);
   if (!entry) return null;
+  if (entry.consecutiveFailures < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES) return null;
   return entry.cooldownUntil > now ? entry.cooldownUntil : null;
 }
 
@@ -82,7 +94,13 @@ export function noteCodexPoolRefreshFailure(
   now = currentNow(),
 ): { consecutiveFailures: number; cooldownUntil: number; openedWindow: boolean } {
   const existing = backoffByAccount.get(accountId);
-  if (existing && existing.cooldownUntil > now) {
+  // The "do not grow inside an open window" rule applies only once the window is actually
+  // WITHHOLDING. Below the threshold no refresh is being withheld, so every failure is a real
+  // attempt that really failed and must count -- otherwise a client retrying the 503 once a
+  // second can never reach the threshold the cooldown is meant to protect against.
+  const withholding = existing !== undefined
+    && existing.consecutiveFailures >= CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES;
+  if (existing && withholding && existing.cooldownUntil > now) {
     return {
       consecutiveFailures: existing.consecutiveFailures,
       cooldownUntil: existing.cooldownUntil,
