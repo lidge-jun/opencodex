@@ -1392,6 +1392,13 @@ const configSchema = z.object({
   pool: z.object({
     kernel: z.boolean().optional(),
     cacheAffinity: z.boolean().optional(),
+    // Declared quota domains degrade the same way: one malformed group drops the
+    // list, never the providers.
+    credentialGroups: z.array(z.object({
+      id: z.string().min(1),
+      credentials: z.array(z.string().min(1)),
+      note: z.string().optional(),
+    })).optional(),
   }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),

@@ -234,6 +234,18 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   generation it started from still holds; a lost race raises a generation-conflict error rather
   than overwriting the newer credential (`src/codex/account-store.ts`). Callers handle that error;
   they do not assume a silent retry.
+- **Authentication identity, quota domain, and cache domain are tracked separately**
+  (`src/routing/identity-domains.ts`). `classifyCredential` returns all three with provenance:
+  `pool.credentialGroups` supplies operator-declared quota domains, a small built-in table
+  supplies the provider-documented cases (OpenAI limits per organization and project and caches
+  per organization and region, Anthropic cache per workspace, Azure per deployment), and every
+  other answer is `unknown`. `unknown` is a first-class relation result, never silently read as
+  shared or as distinct: `assessQuotaRotation` reports `same-domain` so a quota refusal is not
+  answered by rotating inside the limit that refused, `countQuotaCapacity` counts one known
+  domain once and reports unknown-domain credentials separately, and
+  `canPortConversationState` keeps conversational-state portability a separate question from
+  cache compatibility by refusing any request that carries `previous_response_id`, a
+  provider-side conversation id, uploaded file ids, or encrypted reasoning.
 
 Warmup issues a bounded request with a fallback model so a cold account reports usability before a
 real turn depends on it (`src/codex/warmup.ts`).
