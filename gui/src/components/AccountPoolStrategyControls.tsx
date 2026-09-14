@@ -66,6 +66,11 @@ export default function AccountPoolStrategyControls({
     if (strategy === "round-robin") {
       return t("accountPool.thresholdNotUsed");
     }
+    if (strategy === "reset-first") {
+      // Threshold in reset-first acts as an eligibility cutoff for earliest-reset candidate selection,
+      // not an active switch trigger, so suppress the generic switch-at-threshold badge.
+      return null;
+    }
     if (threshold > 0) {
       if (strategy === "fill-first") {
         return t("accountPool.drainAtThreshold", { threshold: String(threshold) });
