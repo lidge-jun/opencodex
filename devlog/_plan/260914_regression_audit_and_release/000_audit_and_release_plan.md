@@ -84,11 +84,13 @@ the preflight runs one `bun test --isolate tests` with path-ignores and then
 seven isolated files one at a time. Same files, different partitioning. CI is the
 broader of the two, since it adds the macOS matrix the preflight never runs.
 
-`audit:high` is not uncovered either — `release.yml` runs it as a publish step.
-What has no equivalent anywhere outside the script are the release-metadata
-guards: the clean-tree and branch checks, `assertUnusedReleaseVersion`, and
-`assertChannelVersionMovesForward`. Those are checked by hand here before each
-dispatch instead.
+`audit:high` is not uncovered either — `release.yml` runs it as a publish step,
+and so are the branch match and the unused-version, unused-tag and
+unused-GitHub-release checks, which run in `validate-dispatch` and
+`Preflight release metadata`. Only two things are genuinely script-only: the
+clean-working-tree guard, and `assertChannelVersionMovesForward`, which reads
+the live npm dist-tags and refuses a channel that would move backwards. Both are
+checked by hand before each dispatch.
 
 Everything the script does after step 1 is performed the same way, with one real
 difference: the script bumps, commits and **pushes directly** to `main` or
@@ -96,26 +98,34 @@ difference: the script bumps, commits and **pushes directly** to `main` or
 branch at all. The version line moves inside the promotion pull request, and the
 merge commit becomes the release SHA.
 
-### The version-line ordering, which the audit caught
+### The version-line ordering, which the audit caught twice
 
-The first draft of this plan said `dev` already carries 2.55.0 so 2.55.0 is what
-ships. That is backwards, and `release.yml` would have refused the publish.
+The first draft said `dev` already carries 2.55.0 so 2.55.0 is what ships. That
+is backwards, and `release.yml` would have refused the publish. Its **Require
+dev to be ready for this release** step runs `version-line.ts assert-ahead`
+against `origin/dev:package.json`, and equal versions fail. `dev` is opened at
+the NEXT version before a release, not at the version being released — exactly
+what commit `866367a6ff` in this very delta did when it opened `dev` at 2.55.0
+ahead of shipping 2.54.0.
 
-Its **Require dev to be ready for this release** step runs
-`version-line.ts assert-ahead` against `origin/dev:package.json`, and equal
-versions fail. `dev` is opened at the NEXT version before a release, not at the
-version being released — which is exactly what commit `866367a6ff` in this very
-delta did when it opened `dev` at 2.55.0 ahead of shipping 2.54.0.
+The second draft still said one product tree goes to both branches. It cannot.
+`release.yml` requires `package.json` to **equal** the dispatched version, and a
+`preview` dispatch must carry a prerelease version. So `preview` and `main`
+carry two different version lines over the same product tree, which is what
+2.54.0 did: `main` at `2.54.0`, `preview` at `2.54.0-preview.20260914`.
 
-So the order is:
+The order, then:
 
-1. Promote the current `dev` tree — which carries the 2.55.0 line — to `preview`
-   and to `main`.
-2. Publish `2.55.0-preview.<stamp>` from `preview`. This one needs no dev move,
-   because a stable 2.55.0 on `dev` already outranks that prerelease.
-3. Move `dev` to 2.56.0 through the `dev-version-bump` workflow, which opens a
-   pull request rather than pushing, and merge it.
-4. Only then publish stable `2.55.0` from `main`.
+1. Promote the audited `dev` tree to `preview` through a pull request whose
+   branch **rewrites `package.json` to `2.55.0-preview.<stamp>`**.
+2. Publish that preview from `preview`. No dev move is needed first, because a
+   stable 2.55.0 on `dev` already outranks the prerelease.
+3. Promote the same audited tree to `main` through a pull request that leaves
+   `package.json` at `2.55.0`.
+4. Move `dev` to 2.56.0 by dispatching `dev-version-bump` with
+   `intended-version=2.55.0` — the input is the version about to be released,
+   and the workflow opens a pull request rather than pushing — then merge it.
+5. Only then publish stable `2.55.0` from `main`.
 
 Dispatch inputs for both publishes are `version`, `tag`, `expected-sha` and
 `dry-run`. `expected-sha` must be the full 40-character SHA and must equal the
@@ -123,10 +133,13 @@ branch head at dispatch time, which is what makes a branch that moved fail the
 publish instead of shipping something unaudited. Each publish is dispatched once
 as a dry run and then re-dispatched with `dry-run=false`.
 
-Before either dispatch, both Cross-platform CI and Service lifecycle must be
-green at that exact SHA: `package.json` is a service-lifecycle trigger path, and
-`release.yml` refuses to publish without a successful Service lifecycle run for
-the release commit.
+Two prerequisites at the release SHA, both easy to get wrong:
+
+- `release.yml` accepts only a successful **push-event** `ci.yml` run on
+  `main`/`preview` for that commit. A green pull-request run at the same SHA is
+  refused, so the run that counts is the one the merge itself triggers.
+- Service lifecycle must also be green there, because `package.json` is a
+  service-lifecycle trigger path.
 
 ## Acceptance criteria
 
