@@ -5,6 +5,8 @@ import {
   canPortConversationState,
   classifyCredential,
   countQuotaCapacity,
+  credentialGroupIssues,
+  CREDENTIAL_GROUP_MEMBER_PATTERN,
   relateCacheDomain,
   relateQuotaDomain,
   type CredentialIdentity,
@@ -32,7 +34,7 @@ describe("credential identity domains", () => {
 
   test("operator-declared groups win over the provider table for quota", () => {
     const groups: DeclaredCredentialGroup[] = [
-      { id: "team", credentials: ["key-a", "key-b"], note: "same billed org" },
+      { id: "team", credentials: ["openai:key-a", "openai:key-b"], note: "same billed org" },
     ];
     const a = identity("key-a", { provider: "openai", organizationId: "org-1", projectId: "p-1" }, groups);
     const b = identity("key-b", { provider: "openai", organizationId: "org-9", projectId: "p-9" }, groups);
@@ -42,10 +44,10 @@ describe("credential identity domains", () => {
 
   test("a declared quota group says nothing about cache compatibility", () => {
     const groups: DeclaredCredentialGroup[] = [
-      { id: "team", credentials: ["key-a", "key-b"] },
+      { id: "team", credentials: ["openai:key-a", "openai:key-b"] },
     ];
-    const a = identity("key-a", {}, groups);
-    const b = identity("key-b", {}, groups);
+    const a = identity("key-a", { provider: "openai" }, groups);
+    const b = identity("key-b", { provider: "openai" }, groups);
     expect(relateQuotaDomain(a, b)).toBe("shared");
     expect(relateCacheDomain(a, b)).toBe("unknown");
   });
@@ -64,6 +66,28 @@ describe("credential identity domains", () => {
     const same = identity("key-b", { provider: "openai", organizationId: "org-1" });
     expect(orgOnly.quotaDomain.provenance).toBe("unknown");
     expect(relateQuotaDomain(orgOnly, same)).toBe("unknown");
+  });
+
+  test("OpenAI proves cache SEPARATION without proving cache sharing", () => {
+    const sameOrgRegion = { provider: "openai", organizationId: "org-1", region: "us" };
+    const a = identity("key-a", sameOrgRegion);
+    const b = identity("key-b", sameOrgRegion);
+    const otherRegion = identity("key-c", { ...sameOrgRegion, region: "eu" });
+    const otherOrg = identity("key-d", { ...sameOrgRegion, organizationId: "org-2" });
+    // A different organization or region is documented as a different cache.
+    expect(relateCacheDomain(a, otherRegion)).toBe("distinct");
+    expect(relateCacheDomain(a, otherOrg)).toBe("distinct");
+    // The same organization and region is NOT documented as one cache: changing keys
+    // inside an organization is explicitly not guaranteed to hit, so the equal key is
+    // separation evidence only and the relation stays unknown.
+    expect(a.cacheDomain.key).toBe(b.cacheDomain.key);
+    expect(a.cacheDomain.provenance).toBe("provider-documented");
+    expect(a.cacheDomain.evidence).toBe("separates");
+    expect(relateCacheDomain(a, b)).toBe("unknown");
+    // The quota rule for the same provider does promise sharing, and is unaffected.
+    const quotaA = identity("key-a", { ...sameOrgRegion, projectId: "p-1" });
+    const quotaB = identity("key-b", { ...sameOrgRegion, projectId: "p-1" });
+    expect(relateQuotaDomain(quotaA, quotaB)).toBe("shared");
   });
 
   test("unknown is never read as shared and never as distinct", () => {
@@ -91,6 +115,71 @@ describe("credential identity domains", () => {
     expect(relateQuotaDomain(a, b)).toBe("shared");
     expect(relateCacheDomain(a, b)).toBe("shared");
     expect(relateQuotaDomain(a, other)).toBe("distinct");
+  });
+});
+
+describe("declared groups are unambiguous or they do not apply", () => {
+  test("a bare credential id never matches: membership is provider-scoped", () => {
+    const groups: DeclaredCredentialGroup[] = [{ id: "team", credentials: ["key-a"] }];
+    const a = identity("key-a", { provider: "openai", organizationId: "org-1", projectId: "p-1" }, groups);
+    expect(a.quotaDomain.provenance).toBe("provider-documented");
+    expect(credentialGroupIssues(groups)).toHaveLength(1);
+    expect(credentialGroupIssues(groups)[0]).toContain("provider-qualified");
+    expect(CREDENTIAL_GROUP_MEMBER_PATTERN.test("key-a")).toBe(false);
+    expect(CREDENTIAL_GROUP_MEMBER_PATTERN.test("openai:key-a")).toBe(true);
+  });
+
+  test("the provider segment normalizes through the same aliases as a ref", () => {
+    const groups: DeclaredCredentialGroup[] = [{ id: "team", credentials: ["chatgpt:key-a"] }];
+    const a = identity("key-a", { provider: "codex" }, groups);
+    expect(a.quotaDomain.provenance).toBe("operator-declared");
+    expect(credentialGroupIssues(groups)).toEqual([]);
+  });
+
+  test("a credential claimed by two groups is reported, not resolved by order", () => {
+    const groups: DeclaredCredentialGroup[] = [
+      { id: "left", credentials: ["openai:key-a"] },
+      { id: "right", credentials: ["openai:key-a"] },
+    ];
+    const a = identity("key-a", { provider: "openai", organizationId: "org-1", projectId: "p-1" }, groups);
+    expect(a.declaredGroupConflict).toEqual(["left", "right"]);
+    // Falls back to the documented answer rather than joining whichever group came first.
+    expect(a.quotaDomain.provenance).toBe("provider-documented");
+    expect(credentialGroupIssues(groups).join("; ")).toContain("more than one group");
+  });
+
+  test("a duplicated group id is a conflict, because both groups key the same domain", () => {
+    const groups: DeclaredCredentialGroup[] = [
+      { id: "team", credentials: ["openai:key-a"] },
+      { id: "team", credentials: ["openai:key-b"] },
+    ];
+    const a = identity("key-a", { provider: "openai" }, groups);
+    const b = identity("key-b", { provider: "openai" }, groups);
+    expect(a.declaredGroupConflict).toEqual(["team"]);
+    expect(b.declaredGroupConflict).toEqual(["team"]);
+    expect(relateQuotaDomain(a, b)).toBe("unknown");
+    expect(credentialGroupIssues(groups).join("; ")).toContain("duplicate group id");
+  });
+
+  test("an empty member list and a repeated member are reported", () => {
+    expect(credentialGroupIssues([{ id: "team", credentials: [] }]).join("; "))
+      .toContain("lists no credentials");
+    expect(credentialGroupIssues([{ id: "team", credentials: ["openai:key-a", "openai:key-a"] }]).join("; "))
+      .toContain("listed twice");
+  });
+
+  test("an unambiguous declaration still applies", () => {
+    const groups: DeclaredCredentialGroup[] = [
+      { id: "left", credentials: ["openai:key-a"] },
+      { id: "right", credentials: ["azure:key-a"] },
+    ];
+    const openai = identity("key-a", { provider: "openai" }, groups);
+    const azure = identity("key-a", { provider: "azure", deploymentId: "dep-1" }, groups);
+    expect(openai.declaredGroupConflict).toBeUndefined();
+    expect(openai.quotaDomain.key).toBe("declared:left");
+    expect(azure.quotaDomain.key).toBe("declared:right");
+    expect(relateQuotaDomain(openai, azure)).toBe("distinct");
+    expect(credentialGroupIssues(groups)).toEqual([]);
   });
 });
 

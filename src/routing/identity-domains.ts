@@ -17,6 +17,12 @@
  * silently read as "no sharing" and never as "shared" -- relations report it explicitly
  * so the caller applies its own conservative rule.
  *
+ * Provenance is only half of it. A documented rule can prove that two credentials are in
+ * DIFFERENT domains without proving that two others are in the SAME one, so every domain
+ * also carries which of those two facts its key supports ({@link DomainEvidence}). That
+ * is why two OpenAI keys in one organization and region relate "unknown" for cache: the
+ * documentation separates, then declines to promise the hit.
+ *
  * Conversational-state portability is a separate question from cache compatibility and
  * is deliberately not folded into the domain keys: a request carrying
  * previous_response_id, a provider-side conversation id, uploaded file ids, or encrypted
@@ -28,13 +34,33 @@
 export type IdentityDomainProvenance = "operator-declared" | "provider-documented" | "unknown";
 
 /**
+ * What a domain key is evidence FOR, which is two facts rather than one.
+ *
+ * Proven SEPARATION and proven SHARING are different claims, and a provider routinely
+ * gives the first without the second. OpenAI documents that prompt caches are not shared
+ * across organizations or processing regions, and in the same breath documents that
+ * changing keys inside one organization does not guarantee a hit. So a different
+ * org-or-region key proves two domains, while an identical one proves nothing: a
+ * positive cache inference needs the provider to actually promise the hit, and here the
+ * provider declines to. Inferring "shared" from an equal key would be the same guess
+ * this module exists to refuse, only pointed the other way.
+ *
+ * "separates" therefore means two different keys are two different domains while two
+ * identical keys stay "unknown". "separates-and-shares" means the same source also
+ * promised that one key is one domain.
+ */
+export type DomainEvidence = "separates" | "separates-and-shares";
+
+/**
  * An opaque, comparable domain. `key` is only meaningful for equality when both sides
  * are known; two "unknown" domains never compare shared because each carries a key
- * derived from its own credential id.
+ * derived from its own credential id. `evidence` decides whether an equal key is even
+ * allowed to mean "shared".
  */
 export interface IdentityDomain {
   readonly key: string;
   readonly provenance: IdentityDomainProvenance;
+  readonly evidence: DomainEvidence;
 }
 
 /**
@@ -59,17 +85,39 @@ export interface CredentialIdentity {
   readonly quotaDomain: IdentityDomain;
   /** The conservative prompt-cache compatibility class. */
   readonly cacheDomain: IdentityDomain;
+  /**
+   * Group ids that claim this credential when the declaration is ambiguous: the same
+   * group id declared twice, or the credential listed in more than one group. An
+   * ambiguous declaration is never resolved by list order -- the quota domain falls back
+   * to the provider-documented or unknown answer and the conflict is reported here.
+   * `pool.credentialGroups` rejects such a declaration on write and drops it on load, so
+   * this covers a caller that assembled groups some other way.
+   */
+  readonly declaredGroupConflict?: readonly string[];
 }
 
 /**
  * How two domains relate. "unknown" is returned rather than collapsed into either
  * answer, because treating it as "distinct" rotates within a shared limit (paying a
  * cold prefix for zero capacity) and treating it as "shared" strands capacity that may
- * be independent.
+ * be independent. An equal key whose evidence only proves separation also relates
+ * "unknown", which is how a documented non-sharing rule stays a non-sharing rule.
  */
 export type DomainRelation = "shared" | "distinct" | "unknown";
 
-/** Operator-declared grouping from `pool.credentialGroups`. */
+/**
+ * Operator-declared grouping from `pool.credentialGroups`.
+ *
+ * `credentials` holds PROVIDER-QUALIFIED ids, `"<provider>:<credential-id>"`. A bare id
+ * is ambiguous: credential ids are provider-scoped everywhere else -- `src/oauth/store.ts`
+ * keys an account by provider and id -- so `"acct-1"` names one credential per provider,
+ * and a bare declaration would silently merge unrelated quota domains. The provider
+ * segment normalizes through the same alias table as a classified ref, so
+ * `"chatgpt:acct-1"` and `"codex:acct-1"` name the same credential.
+ *
+ * Group ids must be unique, `credentials` must be non-empty, and a credential may appear
+ * in at most one group. {@link credentialGroupIssues} is the shared checker.
+ */
 export interface DeclaredCredentialGroup {
   readonly id: string;
   readonly credentials: readonly string[];
@@ -87,31 +135,66 @@ export interface DeclaredCredentialGroup {
  *   (Cache-read tokens are also excluded from input TPM there, which is quota
  *   accounting, not domain shape, so it does not appear here.)
  * - Azure: limits and cache breakpoints are per deployment.
+ *
+ * Each rule also carries what its documented sentence proves ({@link DomainEvidence}),
+ * because two of these are separation rules and the rest promise sharing as well.
  */
+interface DocumentedDomainRule {
+  key(ref: CredentialDomainRef): string | undefined;
+  readonly evidence: DomainEvidence;
+}
+
 const PROVIDER_DOCUMENTED_DOMAINS: Record<string, {
-  quotaKey?(ref: CredentialDomainRef): string | undefined;
-  cacheKey?(ref: CredentialDomainRef): string | undefined;
+  quota?: DocumentedDomainRule;
+  cache?: DocumentedDomainRule;
 }> = {
   openai: {
-    quotaKey: (ref) => ref.organizationId !== undefined && ref.projectId !== undefined
-      ? `openai:org:${ref.organizationId}:project:${ref.projectId}`
-      : undefined,
-    cacheKey: (ref) => ref.organizationId !== undefined && ref.region !== undefined
-      ? `openai:org:${ref.organizationId}:region:${ref.region}`
-      : undefined,
+    quota: {
+      // Positive on both halves: the limit is defined per organization and project, and
+      // model groups share one limit, so two keys in one org and project are one limit.
+      key: (ref) => ref.organizationId !== undefined && ref.projectId !== undefined
+        ? `openai:org:${ref.organizationId}:project:${ref.projectId}`
+        : undefined,
+      evidence: "separates-and-shares",
+    },
+    cache: {
+      // Separation only. The documentation says caches are not shared across
+      // organizations or processing regions, and says in the same place that changing
+      // keys inside one organization does not guarantee a hit. So a different org or
+      // region is proven distinct, while same org and region is "unknown" -- claiming
+      // "shared" there would assert a warm prefix the provider explicitly refuses to
+      // promise, and the caller would pay for it by replaying a long prompt that misses.
+      key: (ref) => ref.organizationId !== undefined && ref.region !== undefined
+        ? `openai:org:${ref.organizationId}:region:${ref.region}`
+        : undefined,
+      evidence: "separates",
+    },
   },
   anthropic: {
-    cacheKey: (ref) => ref.workspaceId !== undefined
-      ? `anthropic:workspace:${ref.workspaceId}`
-      : undefined,
+    cache: {
+      // The cache is scoped to the workspace as a resource: isolated from other
+      // workspaces inside one organization, and reused within it. Both halves come from
+      // the same documented scoping, so an equal key may mean shared.
+      key: (ref) => ref.workspaceId !== undefined
+        ? `anthropic:workspace:${ref.workspaceId}`
+        : undefined,
+      evidence: "separates-and-shares",
+    },
   },
   azure: {
-    quotaKey: (ref) => ref.deploymentId !== undefined
-      ? `azure:deployment:${ref.deploymentId}`
-      : undefined,
-    cacheKey: (ref) => ref.deploymentId !== undefined
-      ? `azure:deployment:${ref.deploymentId}`
-      : undefined,
+    quota: {
+      // Quota and cache are both properties of the deployment resource itself.
+      key: (ref) => ref.deploymentId !== undefined
+        ? `azure:deployment:${ref.deploymentId}`
+        : undefined,
+      evidence: "separates-and-shares",
+    },
+    cache: {
+      key: (ref) => ref.deploymentId !== undefined
+        ? `azure:deployment:${ref.deploymentId}`
+        : undefined,
+      evidence: "separates-and-shares",
+    },
   },
 };
 
@@ -130,7 +213,96 @@ function normalizedProvider(provider: string | undefined): string | undefined {
 function unknownDomain(kind: "quota" | "cache", credentialId: string): IdentityDomain {
   // The credential id in the key keeps two unknown domains from ever comparing equal:
   // uniqueness is what makes "unknown" impossible to misread as "shared".
-  return { key: `unknown:${kind}:${credentialId}`, provenance: "unknown" };
+  return { key: `unknown:${kind}:${credentialId}`, provenance: "unknown", evidence: "separates" };
+}
+
+function documentedDomain(
+  rule: DocumentedDomainRule | undefined,
+  ref: CredentialDomainRef,
+): IdentityDomain | undefined {
+  const key = rule?.key(ref);
+  if (rule === undefined || key === undefined) return undefined;
+  return { key, provenance: "provider-documented", evidence: rule.evidence };
+}
+
+/** `"<provider>:<credential-id>"`, the only accepted spelling of a declared member. */
+export const CREDENTIAL_GROUP_MEMBER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*:\S+$/;
+
+function splitMember(member: string): { provider: string; credentialId: string } | undefined {
+  if (!CREDENTIAL_GROUP_MEMBER_PATTERN.test(member)) return undefined;
+  const separator = member.indexOf(":");
+  const provider = normalizedProvider(member.slice(0, separator));
+  if (provider === undefined || provider === "") return undefined;
+  return { provider, credentialId: member.slice(separator + 1) };
+}
+
+function canonicalMember(member: string): string {
+  const parsed = splitMember(member);
+  return parsed === undefined ? `unqualified:${member}` : `${parsed.provider}:${parsed.credentialId}`;
+}
+
+function memberMatches(member: string, ref: CredentialDomainRef): boolean {
+  const parsed = splitMember(member);
+  if (parsed === undefined) return false;
+  if (parsed.credentialId !== ref.credentialId) return false;
+  const refProvider = normalizedProvider(ref.provider);
+  // A ref without a provider cannot be matched to a provider-scoped declaration, so it
+  // keeps the documented or unknown answer instead of borrowing someone else's group.
+  return refProvider !== undefined && refProvider === parsed.provider;
+}
+
+/**
+ * Every way a declared grouping can be ambiguous, as operator-readable messages. The
+ * config write path rejects on any of these and the load path drops the list, so an
+ * ambiguous declaration is reported rather than resolved by whichever group came first.
+ */
+export function credentialGroupIssues(groups: readonly DeclaredCredentialGroup[]): string[] {
+  const issues: string[] = [];
+  const seenIds = new Set<string>();
+  const owner = new Map<string, string>();
+  for (const group of groups) {
+    // A duplicate id is not cosmetic: both groups key to `declared:<id>`, so the second
+    // group's members join the first group's quota domain without anyone saying so.
+    if (seenIds.has(group.id)) issues.push(`duplicate group id ${JSON.stringify(group.id)}`);
+    seenIds.add(group.id);
+    if (group.credentials.length === 0) {
+      issues.push(`group ${JSON.stringify(group.id)} lists no credentials`);
+    }
+    for (const member of group.credentials) {
+      if (splitMember(member) === undefined) {
+        issues.push(
+          `group ${JSON.stringify(group.id)} member ${JSON.stringify(member)} must be provider-qualified as "<provider>:<credential-id>"`,
+        );
+        continue;
+      }
+      const existing = owner.get(canonicalMember(member));
+      if (existing === group.id) {
+        issues.push(`credential ${JSON.stringify(member)} is listed twice in group ${JSON.stringify(group.id)}`);
+      } else if (existing !== undefined) {
+        issues.push(
+          `credential ${JSON.stringify(member)} is declared in more than one group (${existing}, ${group.id})`,
+        );
+      } else {
+        owner.set(canonicalMember(member), group.id);
+      }
+    }
+  }
+  return issues;
+}
+
+function resolveDeclaredGroup(
+  ref: CredentialDomainRef,
+  groups: readonly DeclaredCredentialGroup[],
+): { group?: DeclaredCredentialGroup; conflict?: readonly string[] } {
+  const matches = groups.filter((group) => group.credentials.some((member) => memberMatches(member, ref)));
+  if (matches.length === 0) return {};
+  const conflicting = new Set<string>();
+  for (const match of matches) {
+    if (matches.length > 1) conflicting.add(match.id);
+    if (groups.filter((group) => group.id === match.id).length > 1) conflicting.add(match.id);
+  }
+  if (conflicting.size > 0) return { conflict: [...conflicting] };
+  return { group: matches[0] };
 }
 
 /**
@@ -138,32 +310,40 @@ function unknownDomain(kind: "quota" | "cache", credentialId: string): IdentityD
  * declaration wins over the provider table because the operator can observe account
  * topology the table cannot. Declared groups speak only to quota: sharing a usage
  * limit says nothing about cache compatibility, so the cache domain never reads them.
+ *
+ * An ambiguous declaration -- a duplicated group id, or a credential claimed by two
+ * groups -- is not resolved by taking the first match. It is reported on
+ * `declaredGroupConflict` and the quota domain falls back to the documented or unknown
+ * answer, so a config that slipped past validation cannot silently merge two unrelated
+ * quota domains.
  */
 export function classifyCredential(
   ref: CredentialDomainRef,
   declaredGroups: readonly DeclaredCredentialGroup[] = [],
 ): CredentialIdentity {
-  const declared = declaredGroups.find((group) => group.credentials.includes(ref.credentialId));
+  const { group: declared, conflict } = resolveDeclaredGroup(ref, declaredGroups);
   const documented = PROVIDER_DOCUMENTED_DOMAINS[normalizedProvider(ref.provider) ?? ""] ?? {};
 
-  const documentedQuotaKey = documented.quotaKey?.(ref);
   const quotaDomain: IdentityDomain = declared !== undefined
-    ? { key: `declared:${declared.id}`, provenance: "operator-declared" }
-    : documentedQuotaKey !== undefined
-      ? { key: documentedQuotaKey, provenance: "provider-documented" }
-      : unknownDomain("quota", ref.credentialId);
+    ? { key: `declared:${declared.id}`, provenance: "operator-declared", evidence: "separates-and-shares" }
+    : documentedDomain(documented.quota, ref) ?? unknownDomain("quota", ref.credentialId);
 
-  const documentedCacheKey = documented.cacheKey?.(ref);
-  const cacheDomain: IdentityDomain = documentedCacheKey !== undefined
-    ? { key: documentedCacheKey, provenance: "provider-documented" }
-    : unknownDomain("cache", ref.credentialId);
+  const cacheDomain: IdentityDomain = documentedDomain(documented.cache, ref)
+    ?? unknownDomain("cache", ref.credentialId);
 
-  return { authIdentity: ref.credentialId, quotaDomain, cacheDomain };
+  return conflict === undefined
+    ? { authIdentity: ref.credentialId, quotaDomain, cacheDomain }
+    : { authIdentity: ref.credentialId, quotaDomain, cacheDomain, declaredGroupConflict: conflict };
 }
 
 function relateDomains(a: IdentityDomain, b: IdentityDomain): DomainRelation {
   if (a.provenance === "unknown" || b.provenance === "unknown") return "unknown";
-  return a.key === b.key ? "shared" : "distinct";
+  if (a.key !== b.key) return "distinct";
+  // Equal keys are proof of sharing only when both sides' evidence includes the sharing
+  // half. A separation-only rule (OpenAI's cache) stops here at "unknown".
+  return a.evidence === "separates-and-shares" && b.evidence === "separates-and-shares"
+    ? "shared"
+    : "unknown";
 }
 
 export function relateQuotaDomain(a: CredentialIdentity, b: CredentialIdentity): DomainRelation {

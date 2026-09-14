@@ -246,6 +246,22 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   `canPortConversationState` keeps conversational-state portability a separate question from
   cache compatibility by refusing any request that carries `previous_response_id`, a
   provider-side conversation id, uploaded file ids, or encrypted reasoning.
+- **Proven separation and proven sharing are separate facts** (`src/routing/identity-domains.ts`).
+  Every domain carries `evidence` alongside its provenance: a rule that documents only that two
+  credentials are in different domains never lets an equal key mean "shared". OpenAI's cache rule
+  is the case that forces it — caches are documented as not shared across organizations or
+  processing regions, while changing keys inside one organization is documented as not
+  guaranteeing a hit, so a different org or region relates `distinct` and the same org and region
+  relates `unknown`. OpenAI quota, Anthropic workspace cache, and Azure deployment domains carry
+  the sharing half as well and still relate `shared`.
+- **A declared credential group cannot mean two things** (`src/routing/identity-domains.ts`,
+  `src/config.ts`). `credentialGroupIssues` is the one definition of a valid grouping: unique
+  group ids, a non-empty member list, and each credential in at most one group, with members
+  written `"<provider>:<credential-id>"` because ids are provider-scoped in the auth store. The
+  config write path rejects a declaration that breaks any of those and the load path drops the
+  list with a warning, keeping `pool.kernel` and `pool.cacheAffinity`; `classifyCredential`
+  reports an ambiguous claim on `declaredGroupConflict` and falls back to the documented or
+  unknown answer rather than taking the first matching group.
 
 Warmup issues a bounded request with a fallback model so a cold account reports usability before a
 real turn depends on it (`src/codex/warmup.ts`).

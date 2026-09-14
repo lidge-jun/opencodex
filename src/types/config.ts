@@ -893,11 +893,21 @@ export interface OcxConfig {
      * prompt-cache compatibility, which keeps its own provider-documented domain.
      * Absent or empty means no declared grouping, so an unconfigured install behaves
      * exactly as before.
+     *
+     * A declaration has to mean exactly one thing, so the config rejects the spellings
+     * that could mean two. Credential ids are provider-scoped elsewhere (the auth store
+     * keys an account by provider and id), so each member is written
+     * `"<provider>:<credential-id>"` -- a bare `"acct-1"` names one credential per
+     * provider and would merge unrelated domains. The provider segment is matched
+     * case-insensitively through the usual aliases, so `chatgpt:` and `codex:` both mean
+     * OpenAI. Group ids must be unique, `credentials` must be non-empty, and a credential
+     * may belong to at most one group; a declaration that breaks any of those is rejected
+     * on write and dropped with a warning on load, never resolved by list order.
      */
     credentialGroups?: Array<{
       /** Operator-chosen group identifier; only equality matters. */
       id: string;
-      /** Credential ids that share this one usage limit. */
+      /** Provider-qualified credential ids (`"<provider>:<credential-id>"`), non-empty. */
       credentials: string[];
       /** Free-text provenance note for the operator's own records. */
       note?: string;

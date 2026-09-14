@@ -60,6 +60,7 @@ import {
 import { parseAccountPriority } from "./codex/pool-rotation";
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
 import { routingProfileIssues } from "./routing/profile";
+import { credentialGroupIssues } from "./routing/identity-domains";
 import { POLICY_NAMESPACE } from "./routing/profile-namespace";
 import {
   forgetEphemeralSecretPath,
@@ -1202,6 +1203,43 @@ const codexPoolSchema = z.object({
 }).strict();
 
 /**
+ * Shape guard for the cross-element checks below. Zod runs an array-level check even
+ * when an element failed its own validation, and a failed element is not the shape the
+ * checker expects — reading `credentials.length` off it would throw out of `safeParse`
+ * and take the whole config load with it. Those elements already carry their own issues.
+ */
+function isCredentialGroupShape(value: unknown): value is { id: string; credentials: string[] } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const group = value as { id?: unknown; credentials?: unknown };
+  return typeof group.id === "string"
+    && Array.isArray(group.credentials)
+    && group.credentials.every(member => typeof member === "string");
+}
+
+/**
+ * Operator-declared quota domains (`pool.credentialGroups`).
+ *
+ * Loose enough to hand-write, strict enough that it cannot mean two things: unique group
+ * ids, a non-empty member list, provider-qualified members, and each credential in at
+ * most one group. Those are not tidiness rules. `classifyCredential` keys a declared
+ * domain by group id, so a duplicate id or a credential listed twice merges two quota
+ * domains the operator never said were one -- after which the pool counts real capacity
+ * once and declines to rotate into it. A bare credential id is ambiguous for the same
+ * reason ids are provider-scoped in the auth store, so members carry their provider.
+ * {@link credentialGroupIssues} is the single definition, shared with the classifier.
+ */
+const credentialGroupsSchema = z.array(z.object({
+  id: z.string().trim().min(1),
+  credentials: z.array(z.string().trim().min(1)).min(1),
+  note: z.string().optional(),
+})).superRefine((groups, ctx) => {
+  if (!Array.isArray(groups) || !groups.every(isCredentialGroupShape)) return;
+  for (const message of credentialGroupIssues(groups)) {
+    ctx.addIssue({ code: "custom", message });
+  }
+});
+
+/**
  * Quota-reset notification section.
  *
  * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
@@ -1392,13 +1430,12 @@ const configSchema = z.object({
   pool: z.object({
     kernel: z.boolean().optional(),
     cacheAffinity: z.boolean().optional(),
-    // Declared quota domains degrade the same way: one malformed group drops the
-    // list, never the providers.
-    credentialGroups: z.array(z.object({
-      id: z.string().min(1),
-      credentials: z.array(z.string().min(1)),
-      note: z.string().optional(),
-    })).optional(),
+    // The catch belongs on the list, not on `pool`. Left to the outer catch below, one
+    // malformed group failed this nested object and dropped the whole `pool` -- taking
+    // `kernel` and `cacheAffinity` with it, which is a live routing change the operator
+    // never made. Scoped here, a malformed or ambiguous group costs only the declared
+    // grouping: loadConfig warns, and the write path rejects it outright.
+    credentialGroups: credentialGroupsSchema.optional().catch(undefined),
   }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
@@ -2155,6 +2192,26 @@ function warnDegradedCodexQuotaAutoRefresh(rawParsed: unknown, validated: OcxCon
 }
 
 /**
+ * Companion to the degrade warnings above, for a malformed or ambiguous declared
+ * grouping. The list now degrades on its own so the rest of `pool` survives, which is
+ * also why it needs a voice: nothing else about the config looks different afterwards,
+ * and silently ungrouped credentials read as capacity the pool does not have.
+ */
+function degradedCredentialGroupsWarning(rawParsed: unknown): string | null {
+  const pool = rawConfigRecord(rawConfigRecord(rawParsed)?.pool);
+  if (!pool || pool.credentialGroups === undefined) return null;
+  const parsed = credentialGroupsSchema.safeParse(pool.credentialGroups);
+  if (parsed.success) return null;
+  const details = parsed.error.issues.map(issue => issue.message).join("; ");
+  return `pool.credentialGroups is invalid (${details}) — declared quota grouping is disabled; other pool settings were preserved`;
+}
+
+function warnDegradedCredentialGroups(rawParsed: unknown): void {
+  const warning = degradedCredentialGroupsWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}`);
+}
+
+/**
  * The apiKeys schema salvages entry by entry rather than failing the parse, so a
  * dropped key is otherwise invisible — and it will not be re-saved by the next
  * mutation. Say so out loud. Compares the raw array against the validated one,
@@ -2623,6 +2680,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedQuotaResetNotify(parsed);
       warnDegradedCatalogAutoRefresh(parsed);
       warnDegradedCodexPool(parsed);
+      warnDegradedCredentialGroups(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
@@ -2666,6 +2724,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedQuotaResetNotify(parsed);
       warnDegradedCatalogAutoRefresh(parsed);
       warnDegradedCodexPool(parsed);
+      warnDegradedCredentialGroups(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Still failing, but if every complaint is about one or more named entries
@@ -2694,6 +2753,7 @@ export function loadConfig(): OcxConfig {
         warnDegradedQuotaResetNotify(parsed);
         warnDegradedCatalogAutoRefresh(parsed);
         warnDegradedCodexPool(parsed);
+        warnDegradedCredentialGroups(parsed);
         return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
       }
     }
@@ -3057,6 +3117,26 @@ function codexAccountPrioritiesError(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Same reasoning as {@link codexAccountPrioritiesError}, plus one of its own. The read
+ * path drops an invalid grouping, so a degraded write would erase a declaration the
+ * operator is still editing and still report success. And an ambiguous declaration --
+ * one id used twice, one credential in two groups -- has no safe silent answer at all:
+ * resolving it by list order would quietly merge two quota domains. A live caller is
+ * told which group is the problem instead.
+ */
+function poolCredentialGroupsError(value: unknown): string | null {
+  const pool = rawConfigRecord(rawConfigRecord(value)?.pool);
+  if (!pool || pool.credentialGroups === undefined) return null;
+  const parsed = credentialGroupsSchema.safeParse(pool.credentialGroups);
+  if (parsed.success) return null;
+  const details = parsed.error.issues.map(issue => {
+    const path = issue.path.join(".");
+    return path ? `${path}: ${issue.message}` : issue.message;
+  }).join("; ");
+  return `schema_invalid: pool.credentialGroups: ${details}`;
+}
+
 function codexQuotaAutoRefreshError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw || raw.codexQuotaAutoRefresh === undefined) return null;
@@ -3255,6 +3335,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
+    ?? poolCredentialGroupsError(value)
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)
     ?? emptyCompletionRetryError(value)
