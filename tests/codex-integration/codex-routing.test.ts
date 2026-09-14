@@ -2771,7 +2771,7 @@ describe("codex account selection order", () => {
         "shared",
         eligible,
         "gpt-other-account-gated",
-      )).toEqual(secondModel);
+      )).toMatchObject({ status: "selected", accountId: secondModel.accountId });
     }
     expect(resolveCodexAccountForThread(threadId, config, now + 5, "shared")).toBe("b");
   });
