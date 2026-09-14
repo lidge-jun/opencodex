@@ -4214,6 +4214,13 @@ async function handleResponsesInner(
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
   logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
+  // A move is the expensive event: it discards the prefix warmed on the previous account. Record
+  // it as an event with its cause, so the operator reads it off one line instead of inferring it
+  // from account labels across many (#4546).
+  if (authCtx.kind === "pool" && authCtx.affinityDecision) {
+    logCtx.affinity = authCtx.affinityDecision.move;
+    logCtx.affinityReason = authCtx.affinityDecision.reason;
+  }
   // Seed an account-derived scope before final adapter binding. Cursor never treats it as
   // authoritative: bindRouteReasoningReplayScope replaces it with the exact route owner or a
   // per-request fail-closed sentinel after the final provider and credential are known.

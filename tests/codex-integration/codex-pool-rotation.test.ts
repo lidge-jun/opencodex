@@ -32,6 +32,7 @@ import {
   reconcileCodexRoutingHealth,
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
+  resolveCodexAccountForThreadDetailed,
 } from "../../src/codex/routing";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
@@ -1497,6 +1498,45 @@ describe("selection order across rotation strategies", () => {
     const served = resolveCodexAccountForThread(threadId, config, start);
     expect(previewed).toBe(served);
     expect(served).not.toBe("a");
+  });
+
+  test("every binding decision records what happened and why (#4546)", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "affinity-reason-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+
+    // A thread with no binding yet is a placement, not a move.
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      accountId: "a",
+      affinity: { move: "new_bind", reason: "healthy" },
+    });
+    // Served by its own healthy account.
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      affinity: { move: "reused", reason: "healthy" },
+    });
+
+    // A transient streak sends this request elsewhere while the binding stays put.
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      accountId: "b",
+      affinity: { move: "detour", reason: "transient" },
+    });
+
+    // A quota refusal is the account telling this thread it cannot serve, so the binding goes
+    // and the record names which cause fired instead of leaving it to be inferred.
+    recordCodexUpstreamOutcome(config, "a", 429, { now: start });
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start).affinity)
+      .toMatchObject({ move: "rebound", reason: "quota_refusal" });
   });
 
   test("a transient block with nowhere to detour keeps the binding", () => {

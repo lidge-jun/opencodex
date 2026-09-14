@@ -59,9 +59,52 @@ type ThreadAffinityEntry = {
 };
 
 export type CodexThreadResolution =
-  | { status: "selected"; accountId: string }
-  | { status: "none" }
-  | { status: "expired"; accountId: string };
+  | { status: "selected"; accountId: string; affinity?: CodexAffinityDecision }
+  | { status: "none"; affinity?: CodexAffinityDecision }
+  | { status: "expired"; accountId: string; affinity?: CodexAffinityDecision };
+
+/** What happened to this thread's binding on this request (#4546). */
+export type CodexAffinityMove =
+  /** Served by its own bound account, which was healthy. */
+  | "reused"
+  /** Served by its own bound account while something transient was wrong with it. */
+  | "held"
+  /** Served by another account while the binding stayed put. */
+  | "detour"
+  /** The binding was released and a different account took the thread. */
+  | "rebound"
+  /** There was no live binding; this request established one. */
+  | "new_bind"
+  /** The binding was released without a replacement on this request. */
+  | "cleared";
+
+/**
+ * Why. A move is the expensive event -- it discards the prompt-cache prefix warmed on the old
+ * account -- so the operator should not have to infer it from account labels across log lines,
+ * which is how #4546 had to be diagnosed.
+ */
+export type CodexAffinityReason =
+  | "healthy"
+  | "quota_headroom"
+  | "quota_refusal"
+  | "transient"
+  | "transient_hold_expired"
+  | "unusable"
+  | "generation"
+  | "expired"
+  | "model_lane";
+
+export interface CodexAffinityDecision {
+  move: CodexAffinityMove;
+  reason: CodexAffinityReason;
+}
+
+/** The decision to report once a binding has been released and selection starts over. */
+function affinityAfterRelease(releaseReason: CodexAffinityReason | undefined): CodexAffinityDecision {
+  return releaseReason === undefined
+    ? { move: "new_bind", reason: "healthy" }
+    : { move: "rebound", reason: releaseReason };
+}
 
 /**
  * Process-local cursor for automatic RR/fill-first (and quota-429 when not
@@ -2701,9 +2744,9 @@ export function resolveCodexAccountForThreadDetailed(
         );
         if (cooler) {
           bindModelDetourAffinity(threadId, cooler, now, modelId, quotaScope);
-          return { status: "selected", accountId: cooler };
+          return { status: "selected", accountId: cooler, affinity: { move: "rebound", reason: "model_lane" } };
         }
-        return { status: "selected", accountId: detourEntry.accountId };
+        return { status: "selected", accountId: detourEntry.accountId, affinity: { move: "reused", reason: "model_lane" } };
       }
       // The model lane gets the same transient hold as the ordinary one. Without it a
       // model-scoped request drops its detour pin on three 503s and falls back to an ordinary
@@ -2717,13 +2760,13 @@ export function resolveCodexAccountForThreadDetailed(
         detourEntry.lastUsedAt = now;
         if (lane !== null && lane !== detourEntry.accountId) {
           detourEntry.transientDetourAccountId = lane;
-          return { status: "selected", accountId: lane };
+          return { status: "selected", accountId: lane, affinity: { move: "detour", reason: "transient" } };
         }
         // A provider-wide outage soft-avoids every sibling, so there is nowhere to detour.
         // That is a statement about where this request can go, not about who owns the
         // conversation: dropping the pin here would rebuild the cold prefix elsewhere for
         // exactly the failure mode the hold exists to survive.
-        return { status: "selected", accountId: detourEntry.accountId };
+        return { status: "selected", accountId: detourEntry.accountId, affinity: { move: "held", reason: "transient" } };
       }
       // Detour expiry or invalidation must not expire the ordinary task. Drop only
       // this model lane and select from ordinary/shared state below.
@@ -2731,11 +2774,14 @@ export function resolveCodexAccountForThreadDetailed(
     }
   }
 
+  // Why the binding went away, when it did. Carried to the selection below so the request that
+  // pays for a cold prefix can say what it paid for.
+  let releaseReason: CodexAffinityReason | undefined;
   const entry = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
   if (threadId && entry) {
     if (isThreadAffinityExpired(entry, now)) {
       deleteThreadAffinity(threadId, quotaScope);
-      return { status: "expired", accountId: entry.accountId };
+      return { status: "expired", accountId: entry.accountId, affinity: { move: "cleared", reason: "expired" } };
     }
     const generationLive = isThreadAffinityGenerationLive(entry);
     const selectableForSharedState = generationLive
@@ -2779,9 +2825,9 @@ export function resolveCodexAccountForThreadDetailed(
           promoteActiveCodexAccount(config, cooler);
         }
         bindThreadAffinity(threadId, cooler, now, quotaScope); // rebinds + resets clocks
-        return { status: "selected", accountId: cooler };
+        return { status: "selected", accountId: cooler, affinity: { move: "rebound", reason: "quota_headroom" } };
       }
-      return { status: "selected", accountId: entry.accountId };
+      return { status: "selected", accountId: entry.accountId, affinity: { move: "reused", reason: "healthy" } };
     }
     // Transient trouble on the bound account is a reason to send elsewhere, not a reason to
     // give up the conversation. Detour this request and KEEP the binding, so recovery is free
@@ -2798,16 +2844,25 @@ export function resolveCodexAccountForThreadDetailed(
         entry.transientDetourAccountId = detour;
         // Deliberately no promoteActiveCodexAccount and no rebind: this is one request routing
         // around a blip, not the pool deciding where the conversation now lives.
-        return { status: "selected", accountId: detour };
+        return { status: "selected", accountId: detour, affinity: { move: "detour", reason: "transient" } };
       }
       // No sibling can take it either -- the usual shape of a provider-wide 503. The binding
       // survives: "cannot send right now" and "forget which account owns this conversation"
       // are different answers, and conflating them is what the hold was added to stop.
-      return { status: "selected", accountId: entry.accountId };
+      return { status: "selected", accountId: entry.accountId, affinity: { move: "held", reason: "transient" } };
     }
     // A model-only exclusion does not invalidate the shared task binding. Health,
     // generation, pause, cooldown, and failure evidence still retire it normally.
     if (!modelScopedSelection || !healthyForSharedAffinity) {
+      releaseReason = !generationLive
+        ? "generation"
+        : quotaRefused
+          ? "quota_refusal"
+          : isTransientHoldExpired(entry, now)
+            ? "transient_hold_expired"
+            : !isCodexAccountUsable(config, entry.accountId, selectionOptions)
+              ? "unusable"
+              : "quota_headroom";
       deleteThreadAffinity(threadId, quotaScope);
     } else {
       preserveExistingModelScopedAffinity = true;
@@ -2853,7 +2908,7 @@ export function resolveCodexAccountForThreadDetailed(
       // the thing the preference exists to protect.
       promoteActiveCodexAccount(config, strategyPick);
     }
-    return { status: "selected", accountId: strategyPick };
+    return { status: "selected", accountId: strategyPick, affinity: affinityAfterRelease(releaseReason) };
   }
 
   let active = getEffectiveActiveCodexAccountId(config);

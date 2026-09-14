@@ -38,6 +38,7 @@ import {
   tryAcquireCodexQuotaScopeProbeLease,
   pickAlternateCodexAccount,
   resolveCodexAccountForThreadDetailed,
+  type CodexAffinityDecision,
 } from "./routing";
 import {
   entitledCodexAccountIdsForModel,
@@ -137,6 +138,8 @@ export type CodexAuthContext =
       probeLeaseId?: string;
       /** Native model quota group selected for this request, when known. */
       quotaScope?: CodexQuotaScope;
+      /** What happened to this thread's binding on this request (#4546). */
+      affinityDecision?: CodexAffinityDecision;
       /** Scope that owns `probeLeaseId`, when it is a scoped recovery probe. */
       probeQuotaScope?: CodexQuotaScope;
     }
@@ -845,6 +848,9 @@ export async function resolveCodexAuthContext(
     // and may still route to non-main pool accounts without touching switch state.
     if (reserve && !nativeMainReadsForbidden && !selectionAdmission) throw new CodexMainProfileDrainingError();
     if (!nativeMainReadsForbidden) reconcileMainCodexAccountRuntimeState();
+    // Why this request is on this account, carried to the request log so a move is visible as
+    // an event rather than inferred from account labels across lines (#4546).
+    let affinityDecision: CodexAffinityDecision | undefined;
     const resolution = fixedAccountId !== undefined
       ? { status: "selected" as const, accountId: fixedAccountId }
       : options.excludeAccountId
@@ -870,6 +876,7 @@ export async function resolveCodexAuthContext(
         );
     if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
     const selected = resolution.status === "selected" ? resolution.accountId : null;
+    affinityDecision = resolution.affinity;
     if (!selected) {
       // A retry that excluded a failed Pool account may still use the validated caller-owned
       // main credential. Treating every exclusion as if main itself had failed strands a healthy
@@ -1047,6 +1054,7 @@ export async function resolveCodexAuthContext(
       ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
       ...(probeQuotaScope ? { probeQuotaScope } : {}),
+      ...(affinityDecision ? { affinityDecision } : {}),
     };
   }
 

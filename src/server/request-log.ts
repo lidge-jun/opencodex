@@ -12,6 +12,7 @@ import {
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
+import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
@@ -139,7 +140,9 @@ export interface RequestLogContext {
   errorCode?: string;
   /** Structured reason from `response.incomplete`; internal-only input to log classification. */
   terminalIncompleteReason?: string;
-  affinity?: "reused" | "new_bind" | "rebound" | "cleared";
+  affinity?: CodexAffinityMove;
+  /** Why the binding was kept, moved, or released (#4546). */
+  affinityReason?: CodexAffinityReason;
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
@@ -204,7 +207,9 @@ export interface RequestLogEntry {
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
   /** Codex pool affinity decision for this request (diagnostics for #186). */
-  affinity?: "reused" | "new_bind" | "rebound" | "cleared";
+  affinity?: CodexAffinityMove;
+  /** Why that decision was made (#4546): a move is the expensive event, so it names its cause. */
+  affinityReason?: CodexAffinityReason;
   /** Where the upstream terminal/failure was observed. */
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   /** Whether the terminal came from a real upstream SSE event or a proxy synthetic tail. */
@@ -1080,6 +1085,7 @@ export function addFinalRequestLog(
     ...(totalTokens !== undefined ? { totalTokens } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
     ...(logCtx.affinity ? { affinity: logCtx.affinity } : {}),
+    ...(logCtx.affinityReason ? { affinityReason: logCtx.affinityReason } : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
