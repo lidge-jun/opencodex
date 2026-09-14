@@ -144,10 +144,12 @@ For a custom usage interval, the server must confirm the exact requested start a
 If an older running proxy does not support those bounds, the dashboard and CLI reject its report;
 upgrade and restart that proxy before retrying. Resetting a manual model price affects only that
 model, preserving other rates saved independently.
-The **Usage** Models and Providers tables show the estimated priced portion for each row; any
-requests without a matching price or usable usage are counted as excluded beside that amount.
-A row with only excluded requests shows an em dash rather than a zero-dollar estimate; a displayed
-zero-dollar value is therefore a confirmed priced estimate.
+The **Usage** Models and Providers tables show the estimated priced portion for each row. Requests
+without a matching price or usable usage are counted as excluded beside that amount when the proxy
+reports pricing coverage fields. A row with only excluded requests shows an em dash with that count
+instead of a zero-dollar estimate, and a displayed zero-dollar value is a confirmed priced estimate.
+An older proxy that reports no coverage fields keeps a bare em dash with no count, so missing
+coverage stays distinct from an all-excluded row and from a confirmed zero estimate.
 These are not billing receipts or evidence of an actual charge; subscription usage or provider credits
 may apply instead.
 
