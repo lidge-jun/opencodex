@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { relaySseEagerBounded } from "../../src/server/relay-eager";
+import { appendUsageEntry, type PersistedUsageEntry } from "../../src/usage/log";
 import {
   classifyCodexWsFailure,
   closedBeforeTerminalMessage,
@@ -383,6 +388,76 @@ describe("codex ws stage record marker (#4191)", () => {
     expect(adopted?.closeCode).toBe(1006);
     expect(adopted?.upstreamFrames).toBe(2);
     expect(adopted?.relayedEvents).toBe(2);
+  });
+
+  test("cancel-drain byte expiry persists the finalized WS stage in usage.jsonl", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-ws-stage-cancel-"));
+    const upstream = new AbortController();
+    let finish!: () => void;
+    const done = new Promise<void>(resolve => { finish = resolve; });
+    let relayStarted = false;
+    try {
+      installFake(ws => {
+        ws.emit("open", {});
+        ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+      });
+      const response = await codexWsUpstreamFetch(
+        CODEX_URL,
+        { ...streamingInit(), signal: upstream.signal },
+        noFallback as unknown as typeof fetch,
+        BOUNDED_WS_RUNTIME,
+      );
+      const adopted = readCodexWsStage(response);
+      expect(adopted).toBeDefined();
+      expect(adopted?.requestBytes).toBeNull();
+      const entry: PersistedUsageEntry = {
+        requestId: "req-ws-stage-cancel", timestamp: 1, provider: "openai", model: "gpt-5.5",
+        status: 499, durationMs: 1000, usageStatus: "unreported",
+        attempts: [{ ordinal: 1, provider: "openai", model: "gpt-5.5", adapter: "openai-responses",
+          status: 499, durationMs: 1000, sendCount: 1, recoveryKinds: [], usageStatus: "unreported",
+          codexWsStage: adopted }],
+      };
+      const synthetic = jest.fn();
+      const onClientCancel = jest.fn(() => {
+        // The real writer is synchronous: keep this test-only path override in the same turn.
+        const previous = process.env.OPENCODEX_HOME;
+        process.env.OPENCODEX_HOME = dir;
+        try { appendUsageEntry(entry); }
+        finally {
+          if (previous === undefined) delete process.env.OPENCODEX_HOME;
+          else process.env.OPENCODEX_HOME = previous;
+        }
+      });
+      const reader = relaySseEagerBounded(response.body!, upstream, {
+        inspectChunk: () => {}, finishInspection: () => {}, sawTerminal: () => false,
+        onSynthetic: synthetic, onClientCancel, onDone: finish,
+      }, { postCancelDrainBytes: 1 }).getReader();
+      relayStarted = true;
+      await reader.read();
+      await reader.cancel();
+      const ws = FakeWebSocket.instances[0]!;
+      ws.emit("message", { data: JSON.stringify({
+        type: "response.output_text.delta", delta: "hi", item_id: "m1", output_index: 0, content_index: 0,
+      }) });
+      await done;
+
+      const rows = readFileSync(join(dir, "usage.jsonl"), "utf8").trim().split("\n");
+      expect(rows).toHaveLength(1);
+      const persisted = JSON.parse(rows[0]!) as PersistedUsageEntry;
+      const logged = persisted.attempts?.[0]?.codexWsStage;
+      expect(logged?.requestBytes).toBe(Buffer.byteLength(ws.sent[0]!, "utf8"));
+      expect(logged?.upstreamFrames).toBe(2);
+      expect(logged?.relayedEvents).toBe(2);
+      expect(logged?.closeCode).toBeNull();
+      expect(logged).toEqual(adopted);
+      expect(onClientCancel).toHaveBeenCalledTimes(1);
+      expect(synthetic).not.toHaveBeenCalled();
+      expect(upstream.signal.aborted).toBe(true);
+    } finally {
+      upstream.abort();
+      if (relayStarted) await done;
+      rmSync(dir, { recursive: true });
+    }
   });
 
   test("the serialized record is numeric/boolean/semver only", () => {
