@@ -5063,6 +5063,10 @@ async function handleResponsesInner(
     isRequestExecutionBudget(sendBudget)
       ? sendBudget.remainingBaseSends(budget)
       : Math.max(0, budget - sendBudget.used);
+  // The adapter contract needs the full budget, not just the counter. options.sendBudget is
+  // typed as the narrow holder so a caller that predates this can still pass one, so narrow it
+  // once here rather than asserting at each adapter call site.
+  const adapterSendBudget = isRequestExecutionBudget(sendBudget) ? sendBudget : undefined;
   const sendBudgetExhausted = (): boolean =>
     remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS) === 0;
   /**
@@ -7745,7 +7749,7 @@ async function handleResponsesInner(
       upstreamResponse = await activeAdapter.fetchResponse(builtInitialRequest, {
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
-        sendBudget,
+        sendBudget: adapterSendBudget,
         stream: parsed.stream,
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtInitialRequest),
@@ -7880,7 +7884,7 @@ async function handleResponsesInner(
             return await activeAdapter.fetchResponse(retryRequest, {
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
-            sendBudget,
+            sendBudget: adapterSendBudget,
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(retryRequest),
@@ -8438,7 +8442,7 @@ async function handleResponsesInner(
           return await activeAdapter.fetchResponse(builtContinuationRequest, {
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
-              sendBudget,
+              sendBudget: adapterSendBudget,
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
