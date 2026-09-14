@@ -1595,8 +1595,12 @@ describe("native fallback account preview", () => {
     }
 
     // And both must actually forward it into the preview call, not merely accept it.
+    // The guarantee is that BOTH sites forward the eligible set, which is what recovery lost.
+    // `modelId` is no longer the final argument -- #4546 appends the resolved pool lineage so
+    // preview and final resolution agree on a child's first turn -- so anything after it is
+    // allowed here rather than pinning the argument count.
     const forwarded = source.match(
-      /\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \},\s*modelId,\s*\)/g,
+      /\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \},\s*modelId,[^)]*\)/g,
     ) ?? [];
     expect(forwarded).toHaveLength(2);
   });
