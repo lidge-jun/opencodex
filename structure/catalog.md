@@ -230,6 +230,13 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   an omitted flag preserves the established behavior of a nonempty hand-written selector map.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
+- **A transient hold is probed half-open, never opened all at once.** While a bound account is
+  held for a 5xx streak, one in-flight probe may test it and every other request keeps the
+  remembered detour; the lease carries a deadline and a generation so a late answer from a
+  probe that already lost cannot overwrite a newer binding or failure state. When every
+  candidate is held the caller gets a typed withheld outcome, not a send. Recovery dispatches
+  (retries and probes, never a new request's initial send) sit under a pool-wide ratio ceiling
+  measured over a sliding window (`src/routing/probe-lease.ts`).
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the
   generation it started from still holds; a lost race raises a generation-conflict error rather
   than overwriting the newer credential (`src/codex/account-store.ts`). Callers handle that error;
