@@ -444,6 +444,12 @@ interface LegDecision {
   searches: InterceptedSearchCall[];
   message?: string;
   code?: string;
+  /**
+   * Whether an endWithoutSearch leg may hand its withheld client-executed calls back.
+   * Only `response.incomplete` may: the client can still act on that turn. A
+   * `response.failed` terminal must not, for the same reason the fail path drops them.
+   */
+  releaseHeldCalls?: boolean;
 }
 
 /** One client-executed call event held until the leg's fate is known. */
@@ -667,6 +673,15 @@ class BridgeStreamState {
     return blocks;
   }
 
+  /**
+   * Discard the withheld client-executed calls without emitting them. Used when the turn is
+   * ending in a state the client cannot act on, where releasing the call would start work
+   * under a turn that is already over.
+   */
+  dropHeldCalls(): void {
+    this.heldCalls = [];
+  }
+
   /** Decide what the leg's terminal means once the whole leg has been read. */
   decide(remainingLegs: number): LegDecision {
     if (this.searches.length === 0) return { kind: "end", searches: [] };
@@ -674,7 +689,17 @@ class BridgeStreamState {
     if (terminalType === "response.failed" || terminalType === "response.incomplete") {
       // The upstream terminal already ended this leg, so running the intercepted searches now
       // would bill a search for a dead turn. The opened cells are closed unanswered instead.
-      return { kind: "endWithoutSearch", searches: this.searches };
+      //
+      // The two terminals differ in what happens to a withheld client-executed call, and
+      // lumping them together released one under a failed turn. `response.incomplete` leaves a
+      // turn the client can still act on, so its held call goes back. `response.failed` does
+      // not, and handing Codex a tool call to start executing inside a dead turn is the exact
+      // thing the fail path below refuses to do.
+      return {
+        kind: "endWithoutSearch",
+        searches: this.searches,
+        releaseHeldCalls: terminalType === "response.incomplete",
+      };
     }
     if (this.sawClientExecutedCall) {
       // The client's own call is unanswered, so this leg cannot continue upstream: the
@@ -1011,7 +1036,9 @@ async function* bridgeStreamBlocks(
           error: "the upstream turn ended before the web search could run",
         }));
       }
-      yield* emit(state.flushHeldCalls());
+      // Only an incomplete terminal hands the withheld call back; a failed one drops it.
+      if (decision.releaseHeldCalls) yield* emit(state.flushHeldCalls());
+      else state.dropHeldCalls();
       yield* emit(state.terminalFrames());
       return;
     }

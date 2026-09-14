@@ -65,21 +65,68 @@ dispatch fails the publish instead of shipping an unaudited commit.
 ### One deliberate deviation, stated plainly
 
 `scripts/release.ts` is the release authority, and its step 1 preflight runs a
+branch and clean-tree guard, version-availability and channel-forward checks, a
 dependency audit, a typecheck, the full test suite and a privacy scan locally
 before it will bump anything. This unit does not run that preflight, because the
 standing rule for this work is that no local suite runs and hosted exact-head CI
 is the proof of record.
 
-That substitution is defensible for three of the four checks and worth being
-precise about. The CI `gates` job runs the typecheck, the privacy scan, the
-generated-surface check, GUI lint, GUI tests and the GUI build; the test shards
-run the same suite in the same grouping the preflight deliberately copied from
-CI. The one check with no CI equivalent is `audit:high`, the dependency audit.
-That one is run directly, since it is a dependency scan rather than a suite.
+An audit of this plan corrected three things about that substitution, and the
+corrections matter more than the original claim did.
 
-Everything the preflight does after step 1 — bump, commit, push, wait for CI,
-dispatch with `expected-sha`, watch the run — is performed the same way the
-script performs it.
+The typecheck and privacy scan really are covered: the CI `gates` job runs
+`bun x tsc --noEmit` and `bun run privacy:scan` directly. But the suite is
+**not** run in the same grouping. The preflight copies CI's isolation policy, not
+its shard layout: CI runs four Linux shards through
+`scripts/ci/run-bun-test-batches.sh` with the worker-heavy files pulled into
+dedicated jobs, plus two macOS shards and an unsharded macOS control job, while
+the preflight runs one `bun test --isolate tests` with path-ignores and then
+seven isolated files one at a time. Same files, different partitioning. CI is the
+broader of the two, since it adds the macOS matrix the preflight never runs.
+
+`audit:high` is not uncovered either — `release.yml` runs it as a publish step.
+What has no equivalent anywhere outside the script are the release-metadata
+guards: the clean-tree and branch checks, `assertUnusedReleaseVersion`, and
+`assertChannelVersionMovesForward`. Those are checked by hand here before each
+dispatch instead.
+
+Everything the script does after step 1 is performed the same way, with one real
+difference: the script bumps, commits and **pushes directly** to `main` or
+`preview` using a release deploy key. This unit does not push to a protected
+branch at all. The version line moves inside the promotion pull request, and the
+merge commit becomes the release SHA.
+
+### The version-line ordering, which the audit caught
+
+The first draft of this plan said `dev` already carries 2.55.0 so 2.55.0 is what
+ships. That is backwards, and `release.yml` would have refused the publish.
+
+Its **Require dev to be ready for this release** step runs
+`version-line.ts assert-ahead` against `origin/dev:package.json`, and equal
+versions fail. `dev` is opened at the NEXT version before a release, not at the
+version being released — which is exactly what commit `866367a6ff` in this very
+delta did when it opened `dev` at 2.55.0 ahead of shipping 2.54.0.
+
+So the order is:
+
+1. Promote the current `dev` tree — which carries the 2.55.0 line — to `preview`
+   and to `main`.
+2. Publish `2.55.0-preview.<stamp>` from `preview`. This one needs no dev move,
+   because a stable 2.55.0 on `dev` already outranks that prerelease.
+3. Move `dev` to 2.56.0 through the `dev-version-bump` workflow, which opens a
+   pull request rather than pushing, and merge it.
+4. Only then publish stable `2.55.0` from `main`.
+
+Dispatch inputs for both publishes are `version`, `tag`, `expected-sha` and
+`dry-run`. `expected-sha` must be the full 40-character SHA and must equal the
+branch head at dispatch time, which is what makes a branch that moved fail the
+publish instead of shipping something unaudited. Each publish is dispatched once
+as a dry run and then re-dispatched with `dry-run=false`.
+
+Before either dispatch, both Cross-platform CI and Service lifecycle must be
+green at that exact SHA: `package.json` is a service-lifecycle trigger path, and
+`release.yml` refuses to publish without a successful Service lifecycle run for
+the release commit.
 
 ## Acceptance criteria
 
