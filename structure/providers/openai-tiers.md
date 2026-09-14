@@ -541,7 +541,7 @@ headroom exists. Unbound assignment is untouched and still takes the coolest eli
 because a fresh request has no warm prefix to lose. `pool.cacheAffinity` remains the stronger
 opt-in, raising the bar from the threshold to genuine exhaustion.
 
-The rule is written twice on purpose — the live path in `reevaluateAffinityQuota` and the
-side-effect-free `previewReusableAffinityAccount` that subagent fallback reads — and the suite
-asserts the two answer identically. A preview that disagreed would hand fallback a different
-account than the request actually uses.
+Two call sites need the rule — the live path in `reevaluateAffinityQuota` and the side-effect-free
+`previewReusableAffinityAccount` that subagent fallback reads — and they share one helper rather
+than restating it, because the suite asserts the two answer identically and a preview that
+disagreed would hand fallback a different account than the request actually uses.

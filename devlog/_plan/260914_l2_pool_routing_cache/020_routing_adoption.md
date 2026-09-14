@@ -53,9 +53,22 @@ Both halves already exist in this repository:
   `adopted` vacuously true — the same false reassurance the issue reports.
   `probeNativeCodexProcesses` cannot stand in either: it is async and returns a count, while
   `collectStartupHealth` is synchronous. So the extracted predicate comes with a **synchronous**
-  CLI lister returning `{ pid, commandLine }`. On Windows the existing PowerShell path emits only
-  `@($items).Count` and yields no PIDs, so that platform reports "cannot enumerate" — a distinct
-  outcome from an empty list, because empty means "none running" and would resolve to `adopted`.
+  CLI lister returning `{ pid, commandLine }`.
+
+  Round 2 narrowed that further: "Windows cannot enumerate" is true only of
+  `windowsProcessCount`'s `@($items).Count`, not of the platform. All three snapshot listers in
+  `app-server-processes.ts` are already synchronous and already return `{ pid, commandLine }` —
+  `listUnixProcSnapshots` reads `/proc`, `listDarwinSnapshots` and `listWindowsSnapshots` use
+  `execFileSync` — and the Windows pre-filter `WINDOWS_CODEX_BASENAME_CANDIDATE_RE` already admits
+  CLI `codex.exe`/`codex.cmd` lines, with `isCodexAppServerCommandLine` applied only afterwards.
+  So the lister filters those snapshots with the extracted predicate instead of shelling out to
+  `ps` a second time, and Windows yields PIDs like the others.
+
+  What must NOT be reused is `listCodexAppServerProcesses` itself: it deliberately maps
+  enumeration failure to an empty array for the #476 kill contract, and for adoption an empty array
+  means "no clients running" and resolves to `adopted`. "Could not enumerate" has to stay a
+  distinct outcome that resolves to `unknown`. Where that distinction cannot be preserved the
+  conservative answer is `unknown`; a platform that cannot enumerate must never report `adopted`.
 
 A Codex client whose start time precedes the injection cannot have read the injected route.
 That is a sound inference, and it is the one the operator needed.
@@ -80,6 +93,13 @@ collectRoutingAdoption(...): RoutingAdoptionEvidence   // journal + process enum
   that keeps an already-open direct WebSocket even though its process started after injection, and an
   `OPENAI_BASE_URL` or profile override in the client's own environment. Anything unverifiable is
   `unknown`.
+  Round 2 added four more the comment must name: a start time in the SAME second as the injection,
+  which we deliberately treat as not stale; an empty match set, which is vacuously `adopted`; a
+  client running against a different `CODEX_HOME` or config path than the journal we read; and
+  Codex surfaces the CLI predicate does not match at all — `codex-code-mode-host`, Electron
+  helpers, VS Code extension hosts. None of these restores the original "config on disk implies
+  live traffic" overclaim, but a status line that sounds more certain than its evidence is the whole
+  defect in #4550, so the limits belong in the code.
 - `pending-client-restart` — at least one running Codex client predates the injection.
 - `unknown` — no injection time, or process start times unreadable. Enumeration failure reports
   `unknown`; it never invents a clean bill of health, matching the `#476` restart contract.
