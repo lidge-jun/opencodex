@@ -215,6 +215,39 @@ function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
  * surfaced on Claude-on-Antigravity; the guard lives here because this is where the parts are
  * built. Mirrors the Anthropic adapter's own empty-block guard (src/adapters/anthropic.ts).
  */
+/**
+ * A video URI Gemini fetches on its own behalf, as a `file_data` reference.
+ *
+ * Deliberately an allowlist of the two forms Google documents, not "anything
+ * that is not a data: URL". `file_data` tells Gemini to go and get the bytes;
+ * pointing it at an arbitrary host would either fail upstream or make the proxy
+ * the reason a caller's private URL got dereferenced by Google. Anything not
+ * matched here keeps the existing `[video: …]` text marker.
+ *
+ * YouTube is the case agentic video understanding is built around; the Files API
+ * uri is what `files.upload` hands back for a clip that was uploaded first.
+ */
+function geminiFetchableVideoUri(url: string): { uri: string; mimeType: string } | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") return null;
+
+  const host = parsed.hostname.toLowerCase();
+  const youtubeHosts = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"]);
+  if (youtubeHosts.has(host)) return { uri: url, mimeType: "video/*" };
+
+  // https://generativelanguage.googleapis.com/v1beta/files/<id>
+  if (host === "generativelanguage.googleapis.com" && /\/files\/[^/]+$/.test(parsed.pathname)) {
+    return { uri: url, mimeType: "video/*" };
+  }
+
+  return null;
+}
+
 const GEMINI_EMPTY_PLACEHOLDER = "(empty)";
 const GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER = "(empty tool output)";
 const GEMINI_MISSING_TOOL_RESULT = "[missing tool_result for this tool_use in history]";
@@ -321,10 +354,28 @@ function messagesToGeminiFormat(
               continue;
             }
             if (p.type === "video") {
+              // Gemini accepts inline video bytes in the same Part union as images.
               const data = parseDataUrl(p.videoUrl);
-              // Gemini accepts inline video bytes in the same Part union as images. Arbitrary
-              // remote URLs are not valid fileData references, so retain only a short marker.
-              parts.push(data ? { inline_data: { mime_type: data.mediaType, data: data.base64 } } : { text: `[video: ${p.videoUrl}]` });
+              if (data) {
+                parts.push({ inline_data: { mime_type: data.mediaType, data: data.base64 } });
+                continue;
+              }
+              // Two URI forms Gemini fetches itself: a YouTube watch URL and a Files API
+              // uri. Those ARE valid file_data references (#3271), and flattening them to
+              // a text marker was the whole reason agentic video could not be reached —
+              // the video never arrived as a video. Every other remote URL keeps the
+              // marker: we have no mime type for it and no evidence Gemini can fetch it.
+              const fileUri = geminiFetchableVideoUri(p.videoUrl);
+              if (fileUri) {
+                parts.push({
+                  file_data: { file_uri: fileUri.uri, mime_type: fileUri.mimeType },
+                  // Carried verbatim from the caller; emitted only when they asked for it,
+                  // so no existing request gains an unknown field.
+                  ...(p.processing ? { processing: p.processing } : {}),
+                });
+                continue;
+              }
+              parts.push({ text: `[video: ${p.videoUrl}]` });
               continue;
             }
             // Drop empty/malformed text instead of emitting `{ text: "" }` or a bare `{}` part.
