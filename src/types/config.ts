@@ -668,6 +668,16 @@ export interface OcxConfig {
    * so absence is the only default state this feature has.
    */
   quotaResetNotify?: OcxQuotaResetNotifyConfig;
+  /**
+   * Periodic provider model-catalog refresh (issue #3630). Absent means off: no timer, no
+   * refresh pass, no outcome record.
+   *
+   * Off by default for the same reason every optional subsystem here is: a refresh spends a
+   * live /models call against every enabled provider, and this repository's rule is that a
+   * default install runs no detection code and starts no live timer work. Not in
+   * `getDefaultConfig()` — absence is the only default state this feature has.
+   */
+  catalogAutoRefresh?: OcxCatalogAutoRefreshConfig;
   /** Active provider context limits; native long windows remain within their supported ceilings. */
   providerContextCaps?: Record<string, number>;
   /** Last selected provider caps; retained while a cap is switched off. Not an active limit. */
@@ -1302,4 +1312,27 @@ export interface OcxQuotaResetNotifyConfig {
    * cannot become a shell-injection surface.
    */
   command?: string[];
+}
+
+/**
+ * Periodic model-catalog auto-refresh settings (issue #3630).
+ *
+ * Every field is optional and the whole section defaults to off. Each tick converges the
+ * served catalog the same way `ocx sync` does, which costs a live /models call against
+ * every enabled provider — so an install that never asked for this must run no refresh
+ * code and start no timer, matching the optional-subsystem rule the rest of this file
+ * follows.
+ */
+export interface OcxCatalogAutoRefreshConfig {
+  /** Master switch. Default false — no scheduler, no tick, no upstream calls. */
+  enabled?: boolean;
+  /**
+   * Minutes between refresh ticks. Default 60, floor 15, and 0 keeps the timer dormant
+   * while leaving the section configured.
+   *
+   * The floor exists for the same reason src/quota/reset-poller.ts has MIN_INTERVAL_MS:
+   * provider catalogs are cached upstream for minutes, so a faster cadence buys no
+   * freshness and only risks a rate limit against every enabled provider at once.
+   */
+  intervalMinutes?: number;
 }
