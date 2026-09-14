@@ -296,7 +296,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(macosControlJob?.if).toBe("github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
@@ -328,10 +328,10 @@ describe("GitHub Actions hardening", () => {
     // cannot fail the unsharded macOS control run. A plain dispatch still runs
     // everything, including Windows, which is what empty-or-all encodes.
     expect(ci.on?.workflow_dispatch?.inputs?.lane).toEqual({
-      description: "all (default) or macos-control",
+      description: "all (default), release-gates, or macos-control",
       type: "choice",
       default: "all",
-      options: ["all", "macos-control"],
+      options: ["all", "release-gates", "macos-control"],
     });
 
     // Windows runs the same suite, sharded like the Linux legs, and keeps the
@@ -424,6 +424,43 @@ describe("GitHub Actions hardening", () => {
       .find(step => step.run?.includes("git clean -xffd"));
     expect(wipe?.run).not.toContain("|| true");
     expect(wipe?.run).toContain("git rev-parse --is-inside-work-tree");
+  });
+
+  test("manual release-gates keeps ordinary jobs and skips only diagnostic suites", async () => {
+    const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
+      jobs: Record<string, { if?: string; needs?: string | string[] }>;
+    };
+    // These job conditions use boolean operators and lowercase string comparisons.
+    // Evaluate the checked-in expressions, rather than a second implementation of them.
+    const enabled = (job: string, event: string, lane: string, scope = "true", packaging = "true") => {
+      const condition = ci.jobs[job]!.if ?? "true";
+      const evaluate = new Function("github", "needs", `return (${condition});`);
+      return evaluate(
+        { event_name: event, event: { inputs: { lane } } },
+        { changes: { outputs: { ci: scope, packaging } } },
+      );
+    };
+    for (const [event, lane, windows, control] of [
+      ["push", "", false, false],
+      ["pull_request", "", false, false],
+      ["workflow_dispatch", "", true, true],
+      ["workflow_dispatch", "all", true, true],
+      ["workflow_dispatch", "macos-control", false, true],
+      ["workflow_dispatch", "release-gates", false, false],
+    ] as const) {
+      expect(enabled("platform-windows", event, lane)).toBe(windows);
+      expect(enabled("macos-control", event, lane)).toBe(control);
+      for (const job of ["test", "platform-macos", "gates", "storage-policy", "api-usage", "keyring-smoke", "docker-smoke"]) {
+        expect(enabled(job, event, lane)).toBe(true);
+        expect(enabled(job, event, lane, "false")).toBe(event !== "pull_request");
+      }
+      expect(enabled("npm-global-smoke", event, lane, "true", "true")).toBe(true);
+      expect(enabled("npm-global-smoke", event, lane, "true", "false")).toBe(false);
+    }
+    expect(ci.jobs.ci!.needs).toEqual(expect.arrayContaining([
+      "test", "platform-macos", "gates", "storage-policy", "api-usage",
+      "keyring-smoke", "docker-smoke", "npm-global-smoke", "platform-windows", "macos-control",
+    ]));
   });
 
   test("PR checks reach every branch the target gate accepts", async () => {
@@ -577,7 +614,7 @@ describe("GitHub Actions hardening", () => {
     }
     const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
     expect(macosControlIf?.needs).toBe("changes");
-    expect(macosControlIf?.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(macosControlIf?.if).toBe("github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
   });
 
   test("Docker smoke executes the source-build lifecycle and gates its result", async () => {
