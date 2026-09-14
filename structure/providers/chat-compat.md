@@ -292,3 +292,17 @@ byte-limit boundaries.
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+## Anthropic parallel tool use
+
+`options.parallelToolCalls === false` maps onto Anthropic's nested
+`tool_choice.disable_parallel_tool_use`. Because the flag lives inside
+`tool_choice`, a request that carries only the parallel intent and no explicit
+choice gets a synthesized `{type:"auto"}` so the flag has somewhere to live;
+`required` maps to `{type:"any"}` and a named choice to `{type:"tool"}`, and both
+accept it. `{type:"none"}` does not receive the flag because tool use is already off,
+and a request with no tools on the wire emits no `tool_choice` at all. An unset or
+true `parallelToolCalls` is byte-identical to previous behavior.
+
+The flag constrains the model's output, not execution ordering. Sequential tool use
+is enforced by the caller's own loop returning each `tool_result` before issuing the
+next request; this mapping does not provide that.

@@ -149,6 +149,14 @@ function compileGenerationConfig(value: unknown): JsonObject | undefined {
     const valid = value.responseModalities.filter((m): m is string => typeof m === "string" && ["TEXT", "IMAGE", "AUDIO"].includes(m));
     if (valid.length > 0) out.responseModalities = valid;
   }
+  // Structured output. This compiler is a whitelist, so without these two the adapter
+  // could set a schema and it would still be dropped before the wire.
+  if (typeof value.responseMimeType === "string" && value.responseMimeType.length > 0) {
+    out.responseMimeType = value.responseMimeType;
+  }
+  // Carried through unmodified: a caller-authored output schema is not a tool
+  // declaration, so sanitizeGeminiToolParameters must not touch it.
+  if (isObject(value.responseJsonSchema)) out.responseJsonSchema = value.responseJsonSchema;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
