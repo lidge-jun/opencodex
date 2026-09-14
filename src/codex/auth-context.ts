@@ -109,8 +109,12 @@ function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
  * The derivation itself lives in ./lineage so a lineage record's conversation key and the key
  * the thread actually binds under can never drift apart.
  */
-export function codexPoolAffinityKey(headers: Headers): string | undefined {
-  return codexConversationIdentity(headers)?.conversationKey;
+export function codexPoolAffinityKey(headers: Headers, now = Date.now()): string | undefined {
+  // `now` is threaded rather than read inside because a parent-only turn resolves its key
+  // through the recorded lineage, and that record is TTL-bounded: a caller working against a
+  // fixed clock would otherwise see a live record as expired and fall back to a key the parent
+  // never bound under.
+  return codexConversationIdentity(headers, now)?.conversationKey;
 }
 
 /** What a caller needs to know to answer the Pool-state question below before auth has run. */

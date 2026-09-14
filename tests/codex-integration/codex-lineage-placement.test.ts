@@ -284,33 +284,52 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     streakTransientFailures(config, "a", NOW);
     resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW + 1);
 
-    // The child binds to b, the account actually serving its parent.
-    const child = recordCodexThreadLineage(childHeaders("child-1"), NOW + 2)!;
-    expect(resolveCodexAccountForThreadDetailed(
-      child.conversationKey, config, NOW + 2, undefined, undefined, undefined, child,
-    )).toMatchObject({ status: "selected", accountId: "b" });
+    // Which account serves the parent at any moment is the quota strategy's business, not this
+    // layer's. What this layer promises is relative, so it is asserted relative to what actually
+    // happened rather than against account names predicted from a fixture nobody ran.
+    const parentAtPlacement = resolveCodexAccountForThreadDetailed(
+      root.conversationKey, config, NOW + 2,
+    ).accountId;
 
-    // Now the parent moves for its OWN reason: a quota refusal retires its binding, and c is
-    // the coolest account left. This is the parent's move, not the family's.
+    // The child binds to the account actually SERVING its parent, detour included.
+    const child = recordCodexThreadLineage(childHeaders("child-1"), NOW + 2)!;
+    const childPlacement = resolveCodexAccountForThreadDetailed(
+      child.conversationKey, config, NOW + 2, undefined, undefined, undefined, child,
+    );
+    expect(childPlacement).toMatchObject({ status: "selected" });
+    expect(childPlacement.accountId).toBe(parentAtPlacement);
+    const childBoundTo = childPlacement.accountId;
+
+    // Now the parent moves for its OWN reason: a quota refusal retires its binding. This is the
+    // parent's move, not the family's.
     updateAccountQuota("c", 5);
     recordCodexUpstreamOutcome(config, "a", 429, { now: NOW + 3 });
-    expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW + 3))
-      .toMatchObject({ status: "selected", accountId: "c" });
+    const parentAfterMove = resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW + 3);
+    expect(parentAfterMove).toMatchObject({ status: "selected" });
+    expect(parentAfterMove.accountId).not.toBe(childBoundTo);
 
-    // The asymmetry: the child is still progressing on b. Its own policy may move it later for
-    // its own reasons; the parent having moved is not one of them.
-    expect(resolveCodexAccountForThreadDetailed(child.conversationKey, config, NOW + 4))
-      .toMatchObject({ status: "selected", accountId: "b", affinity: { move: "reused", reason: "healthy" } });
-
-    // A NEW child, however, reads the parent's current account, which is now c.
-    const lateChild = recordCodexThreadLineage(childHeaders("child-2"), NOW + 5)!;
-    expect(resolveCodexAccountForThreadDetailed(
-      lateChild.conversationKey, config, NOW + 5, undefined, undefined, undefined, lateChild,
-    )).toMatchObject({
+    // THE ASYMMETRY, which is the whole point of this test: the already-bound child is untouched
+    // by the parent's move. It reuses its own binding rather than being dragged.
+    const childAfterParentMoved = resolveCodexAccountForThreadDetailed(
+      child.conversationKey, config, NOW + 4,
+    );
+    expect(childAfterParentMoved).toMatchObject({
       status: "selected",
-      accountId: "c",
+      affinity: { move: "reused", reason: "healthy" },
+    });
+    expect(childAfterParentMoved.accountId).toBe(childBoundTo);
+
+    // A NEW child, however, reads the parent's CURRENT account rather than the one its sibling
+    // holds, which is the other half of the same rule.
+    const lateChild = recordCodexThreadLineage(childHeaders("child-2"), NOW + 5)!;
+    const latePlacement = resolveCodexAccountForThreadDetailed(
+      lateChild.conversationKey, config, NOW + 5, undefined, undefined, undefined, lateChild,
+    );
+    expect(latePlacement).toMatchObject({
+      status: "selected",
       affinity: { move: "new_bind", reason: "lineage_parent" },
     });
+    expect(latePlacement.accountId).toBe(parentAfterMove.accountId);
   });
 
   test("a compatible sibling places the child when the parent is not eligible", () => {
@@ -329,8 +348,11 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     const siblingPlacement = resolveCodexAccountForThreadDetailed(
       sibling.conversationKey, config, NOW + 1, undefined, undefined, undefined, sibling,
     );
-    expect(siblingPlacement).toMatchObject({ status: "selected", accountId: "b" });
+    expect(siblingPlacement).toMatchObject({ status: "selected" });
+    // The point is the NEGATIVE: a paused parent is a stale home and must contribute nothing.
+    // Which account the ordinary rule then picks belongs to the quota strategy.
     expect(siblingPlacement.affinity?.reason).not.toBe("lineage_parent");
+    expect(siblingPlacement.accountId).not.toBe("a");
 
     // c is now the coolest account, so an unrelated cold thread goes to c. The orphan child
     // still starts on b, which is only reachable through its sibling.
@@ -377,7 +399,7 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     // the key the parent bound under. HMAC(parent, parent) would be a different key, and this
     // conversation would start cold on every such turn while replacing the parent's record.
     const parentOnly = new Headers({ "x-codex-parent-thread-id": "root" });
-    expect(codexPoolAffinityKey(parentOnly)).toBe(root.conversationKey);
+    expect(codexPoolAffinityKey(parentOnly, NOW + 1)).toBe(root.conversationKey);
 
     const followUp = recordCodexThreadLineage(parentOnly, NOW + 1)!;
     expect(followUp.conversationKey).toBe(root.conversationKey);
