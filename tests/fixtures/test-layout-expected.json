@@ -6,7 +6,6 @@
   "cli-usage-hub.test.ts": "cli",
   "abort-idle-deadline.test.ts": "lib",
   "abort-race.test.ts": "adapters",
-  "account-change-state-scrub.test.ts": "responses",
   "account-import.test.ts": "server",
   "account-pool-management-api.test.ts": "server",
   "acl-error-classification.test.ts": "lib",
@@ -1285,5 +1284,6 @@
   "chat-media-translation.test.ts": "responses",
   "execution-budget-permits.test.ts": "lib",
   "spend-instrumentation-log.test.ts": "server",
-  "codex-pool-refresh-backoff.test.ts": "codex-integration"
+  "codex-pool-refresh-backoff.test.ts": "codex-integration",
+  "responses-account-change-scrub.test.ts": "responses"
 }
