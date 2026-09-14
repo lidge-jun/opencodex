@@ -1271,6 +1271,7 @@
     "skill-ocx.test.ts": "ci-workflows",
     "slug-codec.test.ts": "codex-integration",
     "sponsor-presets.test.ts": "providers",
+    "spend-ledger-file-journal.test.ts": "lib",
     "spend-reservation-ledger.test.ts": "lib",
     "sse-client-frame-bounds.test.ts": "responses",
     "sse-decoder.test.ts": "responses",

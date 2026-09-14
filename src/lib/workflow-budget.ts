@@ -38,7 +38,12 @@ export interface WorkflowBudgetPolicy {
    * root still gets admitted; without this a worker burst starves the conversation it serves.
    */
   readonly interactiveReserve: number;
-  /** Roots tracked at once. Bounded so a caller minting new ids cannot grow this forever. */
+  /**
+   * Roots tracked at once, as a hard bound rather than a hint. At the ceiling one idle,
+   * under-limit root is evicted to make room; when no root may be forgotten safely the new
+   * root is REFUSED with `workflow-tracking-exhausted`. Admitting it anyway is what made a
+   * caller minting new ids able to grow this map past the number written here.
+   */
   readonly maxTrackedRoots: number;
 }
 
@@ -54,12 +59,28 @@ export type WorkflowDenial =
   | "workflow-concurrency-exhausted"
   | "workflow-sends-exhausted"
   | "workflow-children-exhausted"
-  | "workflow-spend-exhausted";
+  | "workflow-spend-exhausted"
+  /**
+   * The root table is full and every entry is active or exhausted, so admitting this root
+   * would mean evicting one whose ceiling has already fired. Refusing is the honest answer:
+   * `maxTrackedRoots` is a bound, and inserting anyway made it a suggestion.
+   */
+  | "workflow-tracking-exhausted"
+  /** This send id was already reserved once; a repeat buys no second dispatch. */
+  | "workflow-send-replayed"
+  /** The reservation could not be made durable, and a configured ceiling requires it. */
+  | "workflow-spend-undurable";
 
 export type WorkflowLane = "interactive" | "worker";
 
 export interface WorkflowAdmission {
   readonly rootId: string;
+  /**
+   * The request is about to leave for upstream. Call this at the dispatch boundary: until it
+   * runs, releasing the lease costs nothing, and after it a missing usage frame is booked as
+   * unresolved spend.
+   */
+  markDispatched(): void;
   release(): void;
 }
 
@@ -99,7 +120,14 @@ interface WorkflowState {
 
 const roots = new Map<string, WorkflowState>();
 
-function pruneOldestRoot(policy: WorkflowBudgetPolicy, spendLedger?: SpendReservationLedger): void {
+/**
+ * Evict the oldest root that is safe to forget, and report whether one was found.
+ *
+ * The return value is the point. An earlier version returned void and the caller inserted
+ * the new root regardless, so `maxTrackedRoots` bounded nothing whenever every candidate
+ * was active or exhausted -- which is precisely the fan-out this file exists to bound.
+ */
+function evictOneRoot(policy: WorkflowBudgetPolicy, spendLedger?: SpendReservationLedger): boolean {
   let oldestKey: string | undefined;
   let oldestAt = Number.POSITIVE_INFINITY;
   for (const [key, state] of roots) {
@@ -112,7 +140,9 @@ function pruneOldestRoot(policy: WorkflowBudgetPolicy, spendLedger?: SpendReserv
     if (spendLedger?.exhausted("root", key) === true) continue;
     if (state.lastSeenMs < oldestAt) { oldestAt = state.lastSeenMs; oldestKey = key; }
   }
-  if (oldestKey !== undefined) roots.delete(oldestKey);
+  if (oldestKey === undefined) return false;
+  roots.delete(oldestKey);
+  return true;
 }
 
 /**
@@ -123,9 +153,11 @@ function pruneOldestRoot(policy: WorkflowBudgetPolicy, spendLedger?: SpendReserv
  *
  * When `spend` is given, admission also reserves its tokens on the spend ledger -- at the
  * root, identity and pool scopes at once -- before a concurrency slot is taken. A turn
- * released without settlement moves its reservation to unresolved spend, because a send
- * whose usage never arrived may still have been billed; releasing it would understate the
- * scope.
+ * released without settlement is resolved by whether it was ever DISPATCHED: an undispatched
+ * turn gives its tokens back, and a dispatched one keeps them as unresolved spend, because a
+ * send whose usage never arrived may still have been billed. Call `lease.markDispatched()`
+ * at the point the request leaves for upstream; without it, admission followed by a local
+ * validation or routing failure would book spend that never happened.
  */
 export function admitWorkflowTurn(
   rootId: string | undefined,
@@ -142,7 +174,12 @@ export function admitWorkflowTurn(
   const ledger = spendLedger ?? (spend ? sharedSpendLedger() : undefined);
   let state = roots.get(rootId);
   if (!state) {
-    if (roots.size >= policy.maxTrackedRoots) pruneOldestRoot(policy, ledger);
+    if (roots.size >= policy.maxTrackedRoots && !evictOneRoot(policy, ledger)) {
+      // Nothing may be forgotten, so the new root is refused instead of admitted over the
+      // bound. The alternative -- evicting an exhausted root -- resets the ceiling that
+      // already fired, and a caller minting fresh ids would get unlimited budget from it.
+      return { admitted: false, reason: "workflow-tracking-exhausted", rootId };
+    }
     state = { active: 0, sends: 0, children: new Set(), lastSeenMs: now };
     roots.set(rootId, state);
   }
@@ -171,11 +208,22 @@ export function admitWorkflowTurn(
       at: now,
     });
     if (!decision.reserved) {
+      const denial = decision.denial;
+      // Every ledger refusal denies a DISPATCH. A duplicate send id and an undurable
+      // reservation are reported as themselves rather than folded into "exhausted", because
+      // an operator reading a 429 needs to know which of the three happened.
+      const reason: WorkflowDenial = denial.reason === "duplicate-send-id"
+        ? "workflow-send-replayed"
+        : denial.reason === "reserve-not-durable" || denial.reason === "journal-corrupt"
+          ? "workflow-spend-undurable"
+          : denial.reason === "tracking-capacity-exhausted"
+            ? "workflow-tracking-exhausted"
+            : "workflow-spend-exhausted";
       return {
         admitted: false,
-        reason: "workflow-spend-exhausted",
+        reason,
         rootId,
-        spendScope: decision.denial.scope,
+        spendScope: denial.reason === "spend-limit-exceeded" ? denial.scope : undefined,
       };
     }
   }
@@ -187,6 +235,9 @@ export function admitWorkflowTurn(
     admitted: true,
     lease: {
       rootId,
+      markDispatched(): void {
+        if (spend && ledger) ledger.markDispatched(spend.sendId);
+      },
       release(): void {
         if (released) return;
         released = true;
@@ -195,10 +246,14 @@ export function admitWorkflowTurn(
           current.active = Math.max(0, current.active - 1);
           current.lastSeenMs = Date.now();
         }
-        // A turn that ends without a settlement keeps its cost as unresolved spend rather
-        // than being released: the send may have been billed even though its usage frame
-        // never arrived. markLost is a no-op once settleWorkflowSpend already ran.
-        if (spend && ledger) ledger.markLost(spend.sendId);
+        // Which of the two applies depends on whether the send ever left this process.
+        // `abandon` succeeds only while the reservation is undispatched -- a turn refused by
+        // local validation or routing releases its tokens and books nothing, because
+        // inventing debt the account never incurred breaks the budget in the other
+        // direction. Once dispatched, abandon refuses and markLost keeps the cost as
+        // unresolved spend, since a send whose usage frame never arrived may still have been
+        // billed. Both are no-ops once settleWorkflowSpend already ran.
+        if (spend && ledger && !ledger.abandon(spend.sendId)) ledger.markLost(spend.sendId);
       },
     },
   };
@@ -228,6 +283,27 @@ export function settleWorkflowSpend(
   spendLedger?: SpendReservationLedger,
 ): boolean {
   return (spendLedger ?? sharedSpendLedger()).settle(sendId, usage);
+}
+
+/**
+ * Record that the send left for upstream.
+ *
+ * This is the line between "may be released for free" and "may have been billed". Admission
+ * alone is not dispatch: a turn can be admitted and then fail request validation, provider
+ * routing, or a local guard without a single byte reaching a model. Booking those as spend
+ * invents debt the account never incurred, so the reservation only becomes unresolvable
+ * after this call.
+ */
+export function dispatchWorkflowSpend(sendId: string, spendLedger?: SpendReservationLedger): boolean {
+  return (spendLedger ?? sharedSpendLedger()).markDispatched(sendId);
+}
+
+/**
+ * Give a reservation back because the send never happened. Refused once dispatched, where
+ * settle or markLost is the only honest outcome.
+ */
+export function abandonWorkflowSpend(sendId: string, spendLedger?: SpendReservationLedger): boolean {
+  return (spendLedger ?? sharedSpendLedger()).abandon(sendId);
 }
 
 /**
