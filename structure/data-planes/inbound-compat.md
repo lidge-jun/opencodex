@@ -269,6 +269,32 @@ are preserved; the native path is a whitelist passthrough, so an incidental deep
 would itself be a behavior change. A remote reference is recognized and rewritten,
 never fetched.
 
+## Translated Chat control fidelity
+
+A translated Chat turn keeps the controls the caller sent. The Chat ingress pins
+`store:false` for every `openai-responses` route and strips nothing else: the
+sampling and output-cap restrictions that the canonical ChatGPT backend requires are
+applied at the final outgoing body in `src/adapters/openai-responses.ts`, gated on
+`isCanonicalOpenAiForwardProvider`, which additionally requires `authMode: "forward"`
+and the canonical base URL.
+
+Deciding at the ingress was wrong on two axes. Seven providers share the
+`openai-responses` adapter string, so a generic key gateway lost controls it
+accepts; and `settledRoute` is the ingress-time route, while a combo or policy route
+resolves its concrete child later, so the decision preceded knowledge of the real
+target in both directions. `stripCanonicalForwardSamplingParams` returns a copy and
+no-ops when none of its keys are present, so `_rawBody` stays caller-owned. The
+separate forward-wide `max_output_tokens`/`metadata` sanitizer is unchanged.
+
+An assistant turn's `reasoning_content` or `reasoning_details` is carried into the
+projection as a `reasoning` input item emitted immediately before its assistant
+message, matching the parser's buffer-and-prepend adjacency. Only representable
+plaintext crosses: no signature, encrypted payload or provider item id is
+reconstructed, because those attest to content this proxy never received. Opaque
+reasoning replay across a Chat boundary remains unimplemented by design.
+`presence_penalty` and `frequency_penalty` are carried too; per-model
+`noPenaltyModels` opt-outs still apply at the adapter.
+
 ## Explicit reasoning disable on the Chat ingress
 
 The Chat inbound effort allowlist accepts `none` alongside the ladder values.

@@ -226,13 +226,23 @@ async function handleChatCompletionsWithBudget(
   // for non-streaming clients. Native Chat uses the caller's original stream bit.
   internalBody.stream = true;
   if (settledRoute?.provider.adapter === "openai-responses") {
-    // ChatGPT backend rejects store:true and unsupported sampling knobs.
+    // The proxy never wants upstream-side retention for a translated Chat turn, so
+    // store stays pinned for every Responses route.
+    //
+    // The sampling and output-cap restrictions used to be applied here too, keyed on
+    // the adapter string. That was wrong twice over. Seven providers share this
+    // adapter (openai, openai-apikey, meta-model, meta-muse, zai,
+    // zhipu-bigmodel-responses, volcengine-agent-plan), so a generic key gateway lost
+    // controls it accepts. And settledRoute is the route settled at INGRESS: a combo
+    // or policy route resolves its concrete child later in the Responses pipeline, so
+    // deciding here mutates shared intent before the real target is known — a
+    // canonical-first combo that falls back to a key gateway had already lost the
+    // caller's controls, while a non-canonical-first combo that falls back to
+    // canonical still shipped them.
+    //
+    // Canonical-backend sanitization now happens at the final outgoing body in
+    // src/adapters/openai-responses.ts, where the concrete provider is known.
     internalBody.store = false;
-    delete internalBody.max_output_tokens;
-    delete internalBody.temperature;
-    delete internalBody.top_p;
-    delete internalBody.stop;
-    delete internalBody.user;
   } else if (internalBody.store === undefined) {
     internalBody.store = false;
   }

@@ -96,6 +96,31 @@ function userContentToBlocks(content: unknown): Rec[] {
   return blocks;
 }
 
+/**
+ * The assistant's prior thinking, as plaintext, from either Chat spelling.
+ *
+ * The outbound direction already reconstructs these for providers listed in
+ * `preserveReasoningContentModels` (src/adapters/openai-chat.ts), so a client
+ * replaying a turn sends them back. Dropping them here made the round trip lossy and
+ * left interleaved-thinking providers seeing a bare continuation.
+ *
+ * Only representable plaintext is read. No signature, encrypted payload or
+ * provider-issued item id is reconstructed — see the reasoning item built below.
+ */
+function assistantReasoningText(msg: Rec): string | undefined {
+  if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) {
+    return msg.reasoning_content;
+  }
+  if (Array.isArray(msg.reasoning_details)) {
+    const segments: string[] = [];
+    for (const raw of msg.reasoning_details) {
+      if (isRec(raw) && typeof raw.text === "string" && raw.text.length > 0) segments.push(raw.text);
+    }
+    if (segments.length > 0) return segments.join("");
+  }
+  return undefined;
+}
+
 function assistantContentToBlocks(content: unknown): Rec[] {
   if (typeof content === "string") {
     return content.length > 0 ? [{ type: "output_text", text: content }] : [];
@@ -273,6 +298,15 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
         break;
       }
       case "assistant": {
+        // A reasoning item precedes the assistant message it belongs to: the
+        // Responses assistant item schema admits only output content blocks, so there
+        // is no attachment point on the message itself, and the parser buffers a
+        // reasoning item and prepends it to the NEXT assistant message. Emitting it
+        // here keeps that adjacency intact.
+        const reasoningText = assistantReasoningText(msg);
+        if (reasoningText !== undefined) {
+          input.push({ type: "reasoning", content: [{ type: "reasoning_text", text: reasoningText }] });
+        }
         const blocks = assistantContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "assistant", content: blocks });
         if (msg.tool_calls !== undefined) toolCallsToItems(msg.tool_calls, input, knownNameByCallId);
@@ -320,6 +354,13 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   if (typeof maxTokens === "number") body.max_output_tokens = maxTokens;
   if (typeof raw.temperature === "number") body.temperature = raw.temperature;
   if (typeof raw.top_p === "number") body.top_p = raw.top_p;
+  // responsesRequestSchema accepts both, parser.ts reads them into
+  // options.presencePenalty/frequencyPenalty, and the openai-chat adapter writes them
+  // back to the wire. Only this first link was missing, so a Chat caller's penalties
+  // never reached a provider that supports them. Per-model noPenaltyModels opt-outs
+  // still apply at the adapter.
+  if (typeof raw.presence_penalty === "number") body.presence_penalty = raw.presence_penalty;
+  if (typeof raw.frequency_penalty === "number") body.frequency_penalty = raw.frequency_penalty;
   if (raw.stop !== undefined) body.stop = raw.stop;
   if (typeof raw.user === "string") body.user = raw.user;
   if (typeof raw.parallel_tool_calls === "boolean") body.parallel_tool_calls = raw.parallel_tool_calls;
