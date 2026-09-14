@@ -801,6 +801,9 @@ export async function resolveCodexAuthContext(
   const affinityKey = fixedAccountId === undefined && !requestScopedMainCredential
     ? codexPoolAffinityKey(headers)
     : undefined;
+  // Why this request is on this account, carried to the request log so a move reads as an event
+  // instead of something inferred from account labels across lines (#4546).
+  let affinityDecision: CodexAffinityDecision | undefined;
   // Retained startup recovery makes the physical main identity ineligible. Routing
   // can still preserve service by selecting a healthy configured pool account. A
   // request-owned bearer likewise cannot inspect or reconcile file-main state.
@@ -848,9 +851,6 @@ export async function resolveCodexAuthContext(
     // and may still route to non-main pool accounts without touching switch state.
     if (reserve && !nativeMainReadsForbidden && !selectionAdmission) throw new CodexMainProfileDrainingError();
     if (!nativeMainReadsForbidden) reconcileMainCodexAccountRuntimeState();
-    // Why this request is on this account, carried to the request log so a move is visible as
-    // an event rather than inferred from account labels across lines (#4546).
-    let affinityDecision: CodexAffinityDecision | undefined;
     const resolution = fixedAccountId !== undefined
       ? { status: "selected" as const, accountId: fixedAccountId }
       : options.excludeAccountId
@@ -876,7 +876,7 @@ export async function resolveCodexAuthContext(
         );
     if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
     const selected = resolution.status === "selected" ? resolution.accountId : null;
-    affinityDecision = resolution.affinity;
+    affinityDecision = "affinity" in resolution ? resolution.affinity : undefined;
     if (!selected) {
       // A retry that excluded a failed Pool account may still use the validated caller-owned
       // main credential. Treating every exclusion as if main itself had failed strands a healthy
@@ -1054,7 +1054,6 @@ export async function resolveCodexAuthContext(
       ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
       ...(probeQuotaScope ? { probeQuotaScope } : {}),
-      ...(affinityDecision ? { affinityDecision } : {}),
     };
   }
 
@@ -1074,6 +1073,7 @@ export async function resolveCodexAuthContext(
       ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
       ...(probeQuotaScope ? { probeQuotaScope } : {}),
+      ...(affinityDecision ? { affinityDecision } : {}),
     };
   } catch (cause) {
     if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
