@@ -1544,6 +1544,46 @@ describe("entitlement client version (#2886)", () => {
     expect(fetches).toBe(afterFill + 1);
   });
 
+  test("completed caller-selected version misses are bounded per account", async () => {
+    // The cache budget bounds stored state and the flight budget bounds concurrency. Neither
+    // bounds COMPLETED work, so a caller cycling client_version and waiting for each answer could
+    // renew an authenticated upstream request under the account token as often as it liked.
+    let fetches = 0;
+    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const credentials = [{
+      accountId: "pool-miss-budget",
+      accessToken: "tok-miss",
+      chatgptAccountId: "acct-miss",
+      credentialIdentity: "pool:1:acct-miss",
+    }];
+    const ask = (clientVersion: string) => resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      fetcher: backend,
+      now: 1_000,
+      clientVersion,
+      credentials,
+      loadPersistedRuntime: () => ({ selectedVersion: "0.300.0" }),
+    });
+
+    for (let i = 0; i < 8; i += 1) await ask(`0.${400 + i}.0`);
+    expect(fetches).toBe(4);
+
+    // Over the allowance the answer is UNCONFIRMED - the same fail-closed shape a discovery
+    // failure produces, never a confirmed denial assembled from a roster nobody fetched.
+    const refused = await ask("0.499.0");
+    expect(refused.confirmedAccountIds.has("pool-miss-budget")).toBe(false);
+    expect(fetches).toBe(4);
+
+    // A version already charged keeps retrying. One client coming back every 15s on the failure
+    // TTL must not spend the allowance and lock itself out for the rest of the roster window.
+    await ask("0.400.0");
+    expect(fetches).toBe(5);
+
+    // The locally selected runtime version is never charged, so its legitimate refresh survives
+    // an untrusted caller spending everything else.
+    await ask("0.300.0");
+    expect(fetches).toBe(6);
+  });
+
   test("the class budget counts accounts, not cached keys", async () => {
     // The documented budget is 64 ACCOUNTS per class. Counting keys instead would silently divide
     // that by the per-account version bound, so a deployment well inside the intended limit would
