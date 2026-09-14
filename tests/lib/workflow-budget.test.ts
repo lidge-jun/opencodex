@@ -228,7 +228,7 @@ describe("root ceilings bound a rate, not a lifetime (#4546)", () => {
     const first = admitWorkflowTurn("root-a", "worker", policy, undefined, now);
     expect(first?.admitted).toBe(true);
     first?.lease.release();
-    chargeWorkflowSends("root-a", policy.maxPhysicalSends, policy);
+    chargeWorkflowSends("root-a", policy.maxPhysicalSends, policy, now);
 
     // Inside the window the ceiling still fires: the burst this cap was written against is
     // refused exactly as before.
@@ -286,7 +286,7 @@ describe("root ceilings bound a rate, not a lifetime (#4546)", () => {
     let lifetime = 0;
     for (let i = 0; i < policy.maxPhysicalSends * 3; i += 1) {
       const at = now + i * (WINDOW / 2);
-      chargeWorkflowSends("root-d", 1, policy);
+      chargeWorkflowSends("root-d", 1, policy, at);
       lifetime += 1;
       const snapshot = workflowBudgetSnapshot("root-d", policy, at);
       if (snapshot) expect(snapshot.sends).toBeLessThanOrEqual(lifetime);
@@ -297,7 +297,7 @@ describe("root ceilings bound a rate, not a lifetime (#4546)", () => {
     const now = 1_700_000_000_000;
     const admitted = admitWorkflowTurn("root-e", "worker", policy, undefined, now);
     admitted?.lease.release();
-    chargeWorkflowSends("root-e", 3, policy);
+    chargeWorkflowSends("root-e", 3, policy, now);
     const inside = workflowBudgetSnapshot("root-e", policy, now);
     expect(inside?.sends).toBe(3);
     expect(inside?.lifetimeSends).toBe(3);

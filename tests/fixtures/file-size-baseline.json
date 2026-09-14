@@ -25,7 +25,7 @@
     "src/config.ts": 4799,
     "src/providers/registry.ts": 3744,
     "src/server/index.ts": 3400,
-    "src/server/responses/core.ts": 9360,
+    "src/server/responses/core.ts": 9387,
     "tests/ci-workflows/ci-workflows.test.ts": 5628,
     "tests/cli/cli-account.test.ts": 2313,
     "tests/codex-integration/codex-auth-api.test.ts": 6549,

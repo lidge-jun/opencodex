@@ -369,11 +369,11 @@ export function chargeWorkflowSends(
   rootId: string | undefined,
   sends: number,
   policy: WorkflowBudgetPolicy = DEFAULT_WORKFLOW_BUDGET_POLICY,
+  now: number = Date.now(),
 ): void {
   if (!rootId || sends <= 0) return;
   const state = roots.get(rootId);
   if (!state) return;
-  const now = Date.now();
   state.sends += sends;
   // The same policy the ceiling will read, so the ring slot size cannot disagree with it.
   recordWindowedSends(state, policy, now, sends);
