@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
-  test.each(["exhausted", "continuation", "transient", "budget-exhausted"] as const)(
+  test.each(["exhausted", "continuation", "transient", "budget-exhausted", "unpooled"] as const)(
     "429 rotation stays request-bounded after every earlier cooldown expires (%s)",
     async mode => {
       const originalFetch = globalThis.fetch;
@@ -58,7 +58,7 @@ describe("server 429 key failover (end-to-end)", () => {
         port: 0, hostname: "127.0.0.1", defaultProvider: "key429fixture",
         providers: { key429fixture: {
           adapter: "openai-chat", baseUrl: "https://key429-fixture.invalid/v1", authMode: "key",
-          apiKey: "synthetic-key-a", apiKeyPool: [
+          apiKey: mode === "unpooled" ? "synthetic-key-outside" : "synthetic-key-a", apiKeyPool: [
             { id: "a", key: "synthetic-key-a" }, { id: "b", key: "synthetic-key-b" },
             ...(mode === "budget-exhausted" ? [{ id: "c", key: "synthetic-key-c" }] : []),
           ],
@@ -108,7 +108,9 @@ describe("server 429 key failover (end-to-end)", () => {
         });
         const text = await result.text();
         expect(seen).toHaveLength(expectedSends);
-        expect(seen).toEqual(mode === "budget-exhausted"
+        expect(seen).toEqual(mode === "unpooled"
+          ? ["Bearer synthetic-key-outside", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
+          : mode === "budget-exhausted"
           ? ["Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
           : mode === "transient"
           ? ["Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]

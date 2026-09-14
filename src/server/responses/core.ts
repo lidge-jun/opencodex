@@ -7647,7 +7647,10 @@ async function handleResponsesInner(
   // Bound 429 rotations independently of cooldown expiry. Capture the pool before the first
   // send; a later provider refresh cannot enlarge this invocation's allowance. The initial
   // recovery and terminal continuations share it; it is a failover count, not a distinct-key set.
-  const maxKeyPoolFailovers = Math.max(0, (route.provider.apiKeyPool?.length ?? 0) - 1);
+  const initialKeyPool = route.provider.apiKeyPool ?? [];
+  const initialKeyReference = route.provider._apiKeyAttempt?.reference ?? route.provider.apiKey;
+  const initialKeyIsPooled = initialKeyPool.some(entry => entry.key === initialKeyReference);
+  const maxKeyPoolFailovers = Math.max(0, initialKeyPool.length - (initialKeyIsPooled ? 1 : 0));
   let keyPoolFailovers = 0;
   const keyPool429RetryAllowed = (continuation: boolean): boolean => {
     if (keyPoolFailovers >= maxKeyPoolFailovers) return false;
