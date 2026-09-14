@@ -577,8 +577,12 @@ test("a webSearchSidecar backend with no credential does not fall through to ano
   );
   expect(response.status).toBe(400);
   const json = await response.json() as { error: { message: string } };
-  expect(json.error.message).toContain("ChatGPT forward provider");
-  expect(json.error.message).toContain("webSearchSidecar");
+  // The operator already chose anthropic, so the refusal names what anthropic is missing rather
+  // than telling them to go configure the ChatGPT auth they were trying to avoid.
+  expect(json.error.message).toContain("anthropic");
+  expect(json.error.message).toContain("Anthropic OAuth");
+  expect(json.error.message).not.toContain("ChatGPT forward provider");
+  expect(json.error.message).toContain("not sent to any other backend");
   expect(captured).toHaveLength(0);
 });
 

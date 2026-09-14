@@ -63,6 +63,20 @@ type ResolvedAlphaSearchSidecar =
   | { backend: "gemini"; providerName: string; provider: OcxProviderConfig }
   | { backend: "exa"; apiKey: string };
 
+/**
+ * Why this path cannot serve the request, kept distinct from "nobody asked for it".
+ *
+ * The two refusals read identically to the operator but mean opposite things: `unconfigured` is
+ * a deployment that never named a backend, while `missing-credential` is one that named a
+ * backend the proxy cannot authenticate. Answering both with the ChatGPT-auth sentence is the
+ * behaviour the feature request called out — it tells an operator who already chose Exa to go
+ * set up ChatGPT OAuth, which is the one thing they were trying to avoid.
+ */
+export type AlphaSearchSidecarResolution =
+  | { status: "ready"; sidecar: ResolvedAlphaSearchSidecar }
+  | { status: "unconfigured" }
+  | { status: "missing-credential"; backend: AlphaSearchSidecarBackend };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -73,30 +87,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * time we are here; auto-selecting a different paid backend from leftover keys is how an
  * anthropic-named config would silently spend Exa.
  */
-export function resolveAlphaSearchSidecar(config: OcxConfig): ResolvedAlphaSearchSidecar | undefined {
+export function resolveAlphaSearchSidecar(config: OcxConfig): AlphaSearchSidecarResolution {
   const sidecar = config.webSearchSidecar;
   // The master switch is the operator saying this sidecar may not run. planWebSearch honors it the
   // same way, and ignoring it here would make `enabled: false` mean "off for the routed loop, on
   // for alpha/search" — the one reading under which a disabled backend still spends money.
-  if (sidecar?.enabled === false) return undefined;
+  if (sidecar?.enabled === false) return { status: "unconfigured" };
   const backend = resolveSidecarBackend(sidecar?.backend);
-  if (backend === "openai") return undefined;
+  if (backend === "openai") return { status: "unconfigured" };
   switch (backend) {
     case "anthropic": {
       const found = findAnthropicSidecarProvider(config);
-      return found ? { backend, providerName: found.providerName, provider: found.provider } : undefined;
+      return found
+        ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider } }
+        : { status: "missing-credential", backend };
     }
     case "xai": {
       const found = findXaiSidecarProvider(config);
-      return found ? { backend, providerName: found.providerName, provider: found.provider } : undefined;
+      return found
+        ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider } }
+        : { status: "missing-credential", backend };
     }
     case "gemini": {
       const found = findGeminiSidecarProvider(config);
-      return found ? { backend, providerName: found.providerName, provider: found.provider } : undefined;
+      return found
+        ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider } }
+        : { status: "missing-credential", backend };
     }
     case "exa": {
       const apiKey = sidecar?.exaApiKey;
-      return typeof apiKey === "string" && apiKey.length > 0 ? { backend, apiKey } : undefined;
+      return typeof apiKey === "string" && apiKey.length > 0
+        ? { status: "ready", sidecar: { backend, apiKey } }
+        : { status: "missing-credential", backend };
     }
   }
 }
@@ -202,6 +224,25 @@ const NO_FORWARD_PROVIDER_MESSAGE =
   + "Configure webSearchSidecar.backend (anthropic, xai, gemini, or exa) with that backend's credential instead.";
 
 /**
+ * What a named backend is missing, said in the operator's own terms.
+ *
+ * An operator who already chose a backend does not need to be told to configure ChatGPT auth —
+ * that answer is what the request asked this path to stop giving. They need to know which
+ * credential the backend they named could not find.
+ */
+function missingCredentialMessage(backend: AlphaSearchSidecarBackend): string {
+  const detail: Record<AlphaSearchSidecarBackend, string> = {
+    anthropic: "no usable stored Anthropic OAuth account was found",
+    xai: "no usable stored Grok OAuth account was found",
+    gemini: "no usable stored Antigravity OAuth account with a discovered project was found",
+    exa: "webSearchSidecar.exaApiKey is not set",
+  };
+  return "Built-in web search is configured to use the " + backend + " backend, but "
+    + detail[backend] + ". Restore that backend's credential, or choose another "
+    + "webSearchSidecar.backend. This request was not sent to any other backend.";
+}
+
+/**
  * Run the named sidecar backend against an alpha/search body. Callers must already know there
  * is no ChatGPT forward candidate — this function does not re-check that, so a mis-call would
  * spend the sidecar even when the relay could have copied bytes.
@@ -212,10 +253,17 @@ export async function handleAlphaSearchSidecarFallback(
   signal?: AbortSignal,
   logCtx?: { provider: string },
 ): Promise<Response> {
-  const resolved = resolveAlphaSearchSidecar(config);
-  if (!resolved) {
+  const resolution = resolveAlphaSearchSidecar(config);
+  if (resolution.status === "missing-credential") {
+    // Never the ChatGPT-auth sentence here: the operator already named a backend, so the honest
+    // answer names what that backend is missing.
+    if (logCtx) logCtx.provider = resolution.backend;
+    return formatErrorResponse(400, "invalid_request_error", missingCredentialMessage(resolution.backend));
+  }
+  if (resolution.status !== "ready") {
     return formatErrorResponse(400, "invalid_request_error", NO_FORWARD_PROVIDER_MESSAGE);
   }
+  const resolved = resolution.sidecar;
   if (logCtx) logCtx.provider = resolved.backend;
 
   const queries = extractAlphaSearchQueries(body);
