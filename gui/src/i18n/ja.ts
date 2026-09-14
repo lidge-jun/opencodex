@@ -1912,7 +1912,7 @@ export const ja: Record<TKey, string> = {
   "accountPool.strategyLoadFailed": "ローテーション戦略を読み込めませんでした。",
   "accountPool.strategyUpdateFailed": "ローテーション戦略を保存できませんでした。",
   "accountPool.switchAtThreshold": "{threshold}% で切り替え",
-  "accountPool.drainAtThreshold": "{threshold}% で消費完了",
+  "accountPool.drainAtThreshold": "{threshold}% で新規割り当て停止",
   "accountPool.thresholdNotUsed": "しきい値は未使用",
   "accountPool.proactiveSwitchingOff": "事前切り替えオフ",
 
