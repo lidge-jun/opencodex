@@ -1665,11 +1665,17 @@ async function retryCodexPoolOnAlternateAccount(
   // was called to make -- the move already paid for itself with its own permit -- and each rung
   // past the first reserves its own send below, so a refusal stops the ladder with the last
   // upstream answer intact.
-  const ladderTargetKey = `${route.providerName}|${route.modelId}|${retryAuthCtx.accountId}`;
-  const sharedSendsLeft = executionBudget
-    ? Math.max(1, executionBudget.policy.maxTotalModelSends - executionBudget.used)
-    : Number.POSITIVE_INFINITY;
-  const maxRetrySends = Math.min(retrySameConfirmedAccount ? 7 : 1, sharedSendsLeft);
+  // The ladder replays to the SAME account, so it must reserve under the same target key the
+  // other legs use. Folding the account id in made every rung read as a target change, which
+  // spent the one cross-account slot a real move needs on a same-account replay.
+  const ladderTargetKey = `${route.providerName}|${route.modelId}`;
+  // The ladder keeps its OWN bound rather than drawing on what the request has left. Clamping it
+  // to the shared total looked right and broke a working, pinned path: #2097 fixes this recovery
+  // at eight same-account dispatches (tests/server/server-auth.test.ts), and a request that has
+  // already spent sends would silently stop short of it. Reconciling an eight-send same-account
+  // ladder with a four-send request total is a policy decision, not a clamp to add in passing.
+  // What this diff does fix is that the rungs are now CHARGED instead of free.
+  const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;
   let retrySendCount = 0;
   let upstreamResponse: Response;
   try {
@@ -1745,12 +1751,18 @@ async function retryCodexPoolOnAlternateAccount(
       // same-target replay, charged as an ordinary transient send rather than as a move.
       // Reserved here, immediately before looping back, so a refusal stops the ladder with the
       // last upstream 400 intact instead of spending a send it cannot make.
+      // Every rung is CHARGED, and a refusal does not end the ladder. That asymmetry is
+      // deliberate and it is the one place the shared cap yields. This is a same-account,
+      // same-target replay of a model-gating 400 whose own bound is eight dispatches, pinned by
+      // #2097; letting a spent request budget cut it to four would break a recovery that works
+      // today, which is precisely the mistake 040_send_budget.md warns a flat ceiling makes.
+      // The request total still governs everything that changes target or credential.
       if (executionBudget) {
         const rung = executionBudget.reserveDispatch({
           sendClass: "transient",
           targetKey: ladderTargetKey,
         });
-        if (!rung.allowed || !rung.permit.use()) break;
+        if (rung.allowed) rung.permit.use();
         chargeWorkflowSends(args.options.workflowRootId, 1);
       }
       await upstreamResponse.body?.cancel().catch(() => undefined);

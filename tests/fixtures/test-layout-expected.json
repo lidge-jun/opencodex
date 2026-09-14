@@ -960,7 +960,6 @@
   "repo-hygiene.test.ts": "ci-workflows",
   "request-decompress.test.ts": "usage",
   "request-evidence.test.ts": "usage",
-  "request-execution-budget.test.ts": "lib",
   "request-history-index.test.ts": "usage",
   "request-log-conversation.test.ts": "usage",
   "request-log-estimate-cap.test.ts": "usage",
@@ -1277,5 +1276,6 @@
   "main-device-reauth-api.test.ts": "codex-integration",
   "main-device-reauth-ui.test.ts": "gui",
   "adapter-input-media-guard.test.ts": "adapters",
-  "chat-media-translation.test.ts": "responses"
+  "chat-media-translation.test.ts": "responses",
+  "execution-budget-permits.test.ts": "lib"
 }

@@ -1,4 +1,20 @@
-import { describe, expect, test } from "bun:test";
+  test("the gated-model 400 ladder is charged, and keeps its own bound", () => {
+    const core = source("server/responses/core.ts");
+    // Every rung reserves and charges, so the ladder is visible to later legs instead of
+    // spending the request's allowance invisibly -- that part was the real defect.
+    expect(core).toContain("targetKey: ladderTargetKey,");
+    expect(core).toContain("if (rung.allowed) rung.permit.use();");
+    // A same-account replay must reserve under the SAME target key the other legs use. Folding
+    // the account id in made every rung read as a target change and spent the one cross-account
+    // slot a genuine move needs.
+    expect(core).toContain("const ladderTargetKey = `${route.providerName}|${route.modelId}`;");
+    expect(core).not.toContain("|${retryAuthCtx.accountId}`;");
+    // The ladder keeps its own bound and a budget refusal does NOT end it. #2097 pins this
+    // recovery at eight same-account dispatches; clamping it to what the request has left would
+    // cut a working path to four, which is the flat-ceiling mistake 040 warns about.
+    expect(core).toContain("const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;");
+    expect(core).not.toContain("Math.min(retrySameConfirmedAccount ? 7 : 1, sharedSendsLeft)");
+  });import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
@@ -144,15 +160,20 @@ describe("every dispatch path reports into the shared budget", () => {
     expect(core).toContain("pendingHopPermit = hop.permit;");
   });
 
-  test("the gated-model 400 ladder cannot outrun the request's total", () => {
+  test("the gated-model 400 ladder is charged, and keeps its own bound", () => {
     const core = source("server/responses/core.ts");
-    // The ladder keeps its own bound; the shared total is the other half of the minimum.
-    expect(core).toContain("Math.min(retrySameConfirmedAccount ? 7 : 1, sharedSendsLeft)");
-    expect(core).toContain("executionBudget.policy.maxTotalModelSends - executionBudget.used");
-    // Every rung past the first reserves its own send, so the ladder is visible to later legs
-    // instead of spending the request's allowance invisibly.
+    // Every rung reserves and charges, so the ladder is visible to later legs instead of
+    // spending the request's allowance invisibly -- that was the real defect.
     expect(core).toContain("targetKey: ladderTargetKey,");
-    // The regressed shape: a flat seven-rung ladder that no request-level bound could see.
-    expect(core).not.toContain("const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;");
+    expect(core).toContain("if (rung.allowed) rung.permit.use();");
+    // A same-account replay reserves under the SAME target key the other legs use. Folding the
+    // account id in made every rung read as a target change and spent the one cross-account slot
+    // a genuine move needs.
+    expect(core).toContain("const ladderTargetKey = `${route.providerName}|${route.modelId}`;");
+    // The ladder keeps its own bound and a budget refusal does NOT end it. #2097 pins this
+    // recovery at eight same-account dispatches; clamping it to what the request has left cut a
+    // working path to four, which is the flat-ceiling mistake 040_send_budget.md warns about.
+    expect(core).toContain("const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;");
+    expect(core).not.toContain("Math.min(retrySameConfirmedAccount ? 7 : 1, sharedSendsLeft)");
   });
 });

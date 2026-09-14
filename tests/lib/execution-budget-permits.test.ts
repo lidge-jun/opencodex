@@ -132,30 +132,34 @@ describe("layer caps intersect the shared budget", () => {
     // far it walks, and the shared total decides how many sends the request may make. A move
     // between pools is "account-failover", which is bounded to a single alternate target so a
     // request cannot shop the whole estate.
+    // Production reserves every roster hop under ONE key per hop site -- provider|model|site --
+    // because a CHANGED target key is an alternate target whatever the send class says. Using a
+    // per-account key here would have tested a shape the code never produces.
+    const ROSTER_KEY = "openai|gpt-5.6|sidecar-oauth-429";
     const roster = createRequestExecutionBudget(CODEX_TEXT_GUARDED_BUDGET_POLICY);
-    const initial = roster.reserveDispatch({ sendClass: "initial", targetKey: "acct-1" });
+    const initial = roster.reserveDispatch({ sendClass: "initial", targetKey: ROSTER_KEY });
     if (!initial.allowed) throw new Error("unreachable");
     initial.permit.use();
 
-    const firstHop = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: "acct-2" });
+    const firstHop = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: ROSTER_KEY });
     expect(firstHop.allowed).toBe(true);
     if (!firstHop.allowed) throw new Error("unreachable");
     firstHop.permit.use();
 
     // The second hop is what a roster of three 429'd accounts needs. Classifying it as a
     // cross-account move would refuse it here and strand a free third account.
-    const secondHop = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: "acct-3" });
+    const secondHop = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: ROSTER_KEY });
     expect(secondHop.allowed).toBe(true);
     if (!secondHop.allowed) throw new Error("unreachable");
     secondHop.permit.use();
     expect(roster.used).toBe(3);
 
     // The shared total is the real bound: the fourth send is the reserve, and a fifth is gone.
-    const fourth = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: "acct-4" });
+    const fourth = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: ROSTER_KEY });
     expect(fourth.allowed).toBe(true);
     if (!fourth.allowed) throw new Error("unreachable");
     fourth.permit.use();
-    const fifth = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: "acct-5" });
+    const fifth = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: ROSTER_KEY });
     expect(fifth.allowed).toBe(false);
     expect(roster.used).toBe(CODEX_TEXT_GUARDED_BUDGET_POLICY.maxTotalModelSends);
 
