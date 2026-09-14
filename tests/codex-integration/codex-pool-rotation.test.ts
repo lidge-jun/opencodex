@@ -1472,6 +1472,63 @@ describe("selection order across rotation strategies", () => {
     expect(resolveCodexAccountForThread(threadId, config, recovered)).toBe("a");
   });
 
+  test("preview names the same detour as resolve before any detour is recorded", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "preview-first-detour-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+
+    // Preview FIRST, before any detour exists. Subagent fallback scores this account's usage to
+    // decide whether a model is still reachable, so a preview that named the bound account here
+    // would retire a model over usage the request was never going to touch.
+    const previewed = previewCodexAccountForRequest(threadId, config, start);
+    const served = resolveCodexAccountForThread(threadId, config, start);
+    expect(previewed).toBe(served);
+    expect(served).not.toBe("a");
+  });
+
+  test("a transient block with nowhere to detour keeps the binding", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "provider-wide-outage-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    // A provider-wide 503 hits every account, so every sibling is soft-avoided too and the
+    // detour has nowhere to go. Losing the binding here would rebuild the cold prefix somewhere
+    // else for exactly the failure the hold exists to survive.
+    for (const id of ["a", "b", "c"]) {
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+    }
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+    expect(previewCodexAccountForRequest(threadId, config, start)).toBe("a");
+
+    // Once the outage clears the thread is still on its own warm account, with no rebind.
+    const recovered = start + 6 * 60_000;
+    expect(resolveCodexAccountForThread(threadId, config, recovered)).toBe("a");
+  });
+
   test("a transient hold that outlives its window releases the binding", () => {
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "quota",

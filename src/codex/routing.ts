@@ -1628,7 +1628,7 @@ function transientDetourAccount(
   now: number,
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
-  allowFreshPick = true,
+  mode: "commit" | "peek" = "commit",
 ): string | null {
   const held = entry.transientDetourAccountId;
   if (
@@ -1641,11 +1641,12 @@ function transientDetourAccount(
   ) {
     return held;
   }
-  // A fresh pick is a side effect under round-robin: pickRoundRobinAccount commits and advances
-  // the ring. The preview path is contractually read-only, so it reports a detour only once the
-  // request path has actually chosen one, rather than moving the ring to answer a question.
-  if (!allowFreshPick) return null;
-  return pickAlternateCodexAccount(config, entry.accountId, now, quotaScope, selectionOptions);
+  // Preview must name the same account resolve would, including before any detour has been
+  // recorded -- but without advancing the round-robin ring, which is the one side effect in
+  // the selection path.
+  return mode === "peek"
+    ? peekAlternateCodexAccount(config, entry.accountId, now, quotaScope, selectionOptions)
+    : pickAlternateCodexAccount(config, entry.accountId, now, quotaScope, selectionOptions);
 }
 
 /** Earliest future shared short/weekly reset; missing evidence and ties use usage order. */
@@ -1941,6 +1942,32 @@ export function pickAlternateCodexAccount(
     return pickResetFirstCodexAccount(config, getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions), now, selectionOptions);
   }
   return pickLowestUsageCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
+}
+
+/**
+ * The account {@link pickAlternateCodexAccount} WOULD return, without returning it.
+ *
+ * Only the round-robin branch has a side effect -- `pickRoundRobinAccount` commits the pick and
+ * advances the ring -- so every other strategy delegates rather than growing a second copy of
+ * the selection rule that could drift from it.
+ *
+ * This exists because preview and resolve have to agree on the FIRST transient detour, not just
+ * on later ones. Preview feeds subagent model-availability scoring, so a preview that reported
+ * the bound account while resolve was about to serve from a cool sibling could retire a model
+ * over usage the request would never have touched.
+ */
+function peekAlternateCodexAccount(
+  config: OcxConfig,
+  excludeId: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  if (accountPoolStrategyForScope(config, quotaScope) === "round-robin") {
+    const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
+    return peekRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config));
+  }
+  return pickAlternateCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
 }
 
 /** Effective active: automatic runtime cursor, else operator/persisted selection. */
@@ -2330,8 +2357,10 @@ function previewReusableAffinityAccount(
       !isTransientHoldExpired(entry, now)
       && isTransientOnlyAffinityBlock(config, entry, now, quotaScope, selectionOptions)
     ) {
-      const detour = transientDetourAccount(config, entry, now, quotaScope, selectionOptions, false);
+      const detour = transientDetourAccount(config, entry, now, quotaScope, selectionOptions, "peek");
       if (detour !== null && detour !== entry.accountId) return detour;
+      // Nowhere to detour still means the thread keeps its account, so preview says so too.
+      return entry.accountId;
     }
     return null;
   }
@@ -2407,7 +2436,19 @@ function resetFirstAffinityReplacement(
   const usage = computeCodexUsageScore(getAccountQuota(entry.accountId), getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions), now);
   if (!mayRebindAffinityForQuota(config, entry.accountId, usage, threshold, selectionOptions)) return null;
   const candidates = getEligiblePoolAccounts(config, entry.accountId, now, quotaScope, selectionOptions, true)
-    .filter(id => hasCodexQuotaHeadroom(config, id, selectionOptions, now));
+    // Headroom alone answers true for an UNMEASURED account, which is the right default for an
+    // unbound request and the wrong bet for a bound one. The quota strategy already excludes
+    // those through the strictly-cooler compare; reset ordering has no such compare, so it has
+    // to say it. Moving a warm conversation onto an account nobody has a reading for is a
+    // guess, not an improvement.
+    .filter(id => {
+      if (!hasCodexQuotaHeadroom(config, id, selectionOptions, now)) return false;
+      return !isUnknownUsage(computeCodexUsageScore(
+        getAccountQuota(id),
+        getPoolAccountPlanForSelection(config, id, selectionOptions),
+        now,
+      ));
+    });
   return pickResetFirstCodexAccount(config, candidates, now, selectionOptions);
 }
 
@@ -2672,12 +2713,17 @@ export function resolveCodexAccountForThreadDetailed(
         && isTransientOnlyAffinityBlock(config, detourEntry, now, quotaScope, selectionOptions)
       ) {
         const lane = transientDetourAccount(config, detourEntry, now, quotaScope, selectionOptions);
+        detourEntry.transientHoldSince ??= now;
+        detourEntry.lastUsedAt = now;
         if (lane !== null && lane !== detourEntry.accountId) {
-          detourEntry.transientHoldSince ??= now;
           detourEntry.transientDetourAccountId = lane;
-          detourEntry.lastUsedAt = now;
           return { status: "selected", accountId: lane };
         }
+        // A provider-wide outage soft-avoids every sibling, so there is nowhere to detour.
+        // That is a statement about where this request can go, not about who owns the
+        // conversation: dropping the pin here would rebuild the cold prefix elsewhere for
+        // exactly the failure mode the hold exists to survive.
+        return { status: "selected", accountId: detourEntry.accountId };
       }
       // Detour expiry or invalidation must not expire the ordinary task. Drop only
       // this model lane and select from ordinary/shared state below.
@@ -2746,14 +2792,18 @@ export function resolveCodexAccountForThreadDetailed(
       && isTransientOnlyAffinityBlock(config, entry, now, quotaScope, selectionOptions)
     ) {
       const detour = transientDetourAccount(config, entry, now, quotaScope, selectionOptions);
+      entry.transientHoldSince ??= now;
+      entry.lastUsedAt = now;
       if (detour !== null && detour !== entry.accountId) {
-        entry.transientHoldSince ??= now;
         entry.transientDetourAccountId = detour;
-        entry.lastUsedAt = now;
         // Deliberately no promoteActiveCodexAccount and no rebind: this is one request routing
         // around a blip, not the pool deciding where the conversation now lives.
         return { status: "selected", accountId: detour };
       }
+      // No sibling can take it either -- the usual shape of a provider-wide 503. The binding
+      // survives: "cannot send right now" and "forget which account owns this conversation"
+      // are different answers, and conflating them is what the hold was added to stop.
+      return { status: "selected", accountId: entry.accountId };
     }
     // A model-only exclusion does not invalidate the shared task binding. Health,
     // generation, pause, cooldown, and failure evidence still retire it normally.
