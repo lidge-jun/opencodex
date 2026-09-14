@@ -13,6 +13,7 @@ import type {
 } from "../../types";
 import type { ProviderAdapter } from "../base";
 import type { AdapterFetchContext, AdapterRequest } from "../base";
+import type { RequestExecutionBudget } from "../../lib/request-execution-budget";
 import { safeKiroHttpErrorMessage } from "../kiro-errors";
 import { calibrateKiroEstimate } from "../kiro-calibration";
 import { normalizeKiroImages } from "../kiro-images";
@@ -58,6 +59,9 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
   let requestSnapshot: OcxParsedRequest | undefined;
   let firstRequestBodyBytes = 0;
   let requestAbortSignal: AbortSignal | undefined;
+  // Captured the same way as the abort signal, because the text-fallback rebuild below runs
+  // outside the fetchResponse frame and used to construct a context without either (#4546).
+  let requestSendBudget: RequestExecutionBudget | undefined;
 
   const build = async (
     parsed: OcxParsedRequest,
@@ -208,6 +212,9 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         abortSignal: requestAbortSignal,
         returnRawErrors: true,
         stream: true,
+        // The text-fallback rebuild used to construct a fresh context and drop the budget,
+        // so everything after the first send escaped the per-request cap.
+        ...(requestSendBudget ? { sendBudget: requestSendBudget } : {}),
       });
       return {
         response,
@@ -278,6 +285,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       // Keep it for the adapter-owned bounded continuation so cancelling the client turn aborts
       // both the first Kiro request and its one allowed completion retry.
       if (ctx?.abortSignal) requestAbortSignal = ctx.abortSignal;
+      if (ctx?.sendBudget) requestSendBudget = ctx.sendBudget;
       return fetchKiroWithRetry(request, ctx);
     },
 

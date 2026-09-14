@@ -5,6 +5,7 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { parseRetryAfterMs } from "../combos";
 import {
+  SendBudgetExhaustedError,
   abortError,
   cancelResponseBodyBestEffort,
   fetchWithAttemptDeadline,
@@ -162,6 +163,13 @@ async function fetchWithResetRecovery(
   let lastError: unknown;
   for (let attempt = 0; attempt < RESET_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
+    // Every physical send is admitted, not just the adapter entry. Kiro nests a throttle loop
+    // over this ladder and can run the ladder twice per throttle round, so counting one entry
+    // as one send hid up to eighteen upstream requests from the per-request cap (#4546).
+    const decision = ctx.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: url });
+    if (decision && (!decision.allowed || !decision.permit.use())) {
+      throw new SendBudgetExhaustedError(url);
+    }
     try {
       const headers = new Headers(request.headers);
       const recovered = attempt > 0;

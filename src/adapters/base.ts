@@ -1,5 +1,6 @@
 import type { AdapterEvent, OcxParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
@@ -139,6 +140,13 @@ export interface AdapterFetchContext {
   stream?: boolean;
   /** Custom fetch executor to use for physical upstream network requests (defaults to globalThis.fetch). */
   executor?: typeof globalThis.fetch;
+  /**
+   * The logical request's send budget (#4546). Optional and unlimited when absent, so an
+   * adapter unit test that calls a transport context-free keeps its own retry shape. An
+   * adapter that retries internally must admit EVERY physical send against it: counting one
+   * adapter entry as one send is how a nested 3x3 ladder stayed invisible to a request cap.
+   */
+  sendBudget?: RequestExecutionBudget;
 }
 
 /**
