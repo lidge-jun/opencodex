@@ -43,6 +43,13 @@ export interface ResolveCodexRuntimeResult {
   readonly runtime: ResolvedCodexRuntime;
   readonly failures: readonly RuntimeProbeFailure[];
   readonly replacedConfigured?: Readonly<{ from: ResolvedCodexRuntime; reason: string }>;
+  /**
+   * Set when an unpinned, still-runnable persisted discovery is handed over to a
+   * strictly newer valid candidate. Distinct from replacedConfigured, which means
+   * the configured runtime became invalid; conflating "gone" with "superseded"
+   * would make the doctor output lie.
+   */
+  readonly supersededDiscovered?: Readonly<{ from: ResolvedCodexRuntime; to: ResolvedCodexRuntime; reason: string }>;
   readonly newerAvailable?: ResolvedCodexRuntime;
   /** Set when the selected runtime could not be written to codex-runtime.json. */
   readonly persistError?: string;
@@ -98,12 +105,24 @@ export interface ResolveCodexRuntimeDeps {
   statSync?: (path: string) => { mtimeMs: number; isDirectory(): boolean };
 }
 
+/**
+ * How a `codex-runtime.json` record got onto disk.
+ *
+ * "pinned" is an intentional operator selection (doctor --fix). "discovered" is
+ * automatic resolve-and-persist. Absent is the pre-field shape and is treated
+ * as discovered, not pinned: every such file was written by
+ * resolveAndPersistCodexRuntime, so reading it as a pin would leave issue 4204
+ * unfixed on exactly the installs that have it.
+ */
+export type CodexRuntimePinOrigin = "pinned" | "discovered";
+
 export interface PersistedCodexRuntimeState {
   readonly version: 1;
   readonly command: string;
   readonly source: CodexRuntimeSource;
   readonly selectedVersion?: string | null;
   readonly updatedAt: string;
+  readonly origin?: CodexRuntimePinOrigin;
 }
 
 const PERSIST_FILE = "codex-runtime.json";
@@ -146,6 +165,10 @@ function isCodexRuntimeSource(value: unknown): value is CodexRuntimeSource {
     || value === "installed"
     || value === "path"
     || value === "fallback";
+}
+
+function isCodexRuntimePinOrigin(value: unknown): value is CodexRuntimePinOrigin {
+  return value === "pinned" || value === "discovered";
 }
 
 export function codexRuntimeStatePath(configDir: string = getConfigDir()): string {
@@ -282,6 +305,9 @@ export function parsePersistedCodexRuntime(
     if (raw.selectedVersion !== undefined
       && raw.selectedVersion !== null
       && typeof raw.selectedVersion !== "string") return null;
+    // Absent origin is legal (pre-field files). A present value that is neither
+    // literal makes the whole record invalid, same as every other field.
+    if (raw.origin !== undefined && !isCodexRuntimePinOrigin(raw.origin)) return null;
     return cloneAndDeepFreeze(raw as PersistedCodexRuntimeState);
   } catch {
     return null;
@@ -300,9 +326,35 @@ export function loadPersistedCodexRuntime(
   }
 }
 
+/**
+ * True only when the operator intentionally pinned this runtime.
+ *
+ * A record with no origin is NOT pinned: every such file predates this field
+ * and was written by resolveAndPersistCodexRuntime, which is auto-discovery.
+ * Reading a missing origin as an intentional pin would leave issue 4204
+ * unfixed on exactly the installs that have it — the still-runnable 0.135.0
+ * CLI that kept winning over a 0.153.4 Desktop runtime sitting right there.
+ */
+export function persistedCodexRuntimeIsPinned(
+  state: DeepReadonly<PersistedCodexRuntimeState> | null | undefined,
+): boolean {
+  return state?.origin === "pinned";
+}
+
+/**
+ * Persist the selected Codex runtime.
+ *
+ * `origin` defaults to "pinned" ON PURPOSE: a direct call is a deliberate
+ * selection. src/cli/doctor.ts calls this from `doctor --fix`. The automatic
+ * discovery path is resolveAndPersistCodexRuntime, which passes "discovered"
+ * explicitly. Flipping the default would make doctor --fix look like an
+ * accident, and a later resolve would silently replace the operator's choice
+ * (issue 4204).
+ */
 export function persistCodexRuntime(
   runtime: ResolvedCodexRuntime,
   deps: ResolveCodexRuntimeDeps = {},
+  origin: CodexRuntimePinOrigin = "pinned",
 ): void {
   const configDir = deps.configDir ?? getConfigDir();
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
@@ -312,6 +364,7 @@ export function persistCodexRuntime(
     source: runtime.source,
     selectedVersion: runtime.version,
     updatedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+    origin,
   };
   // Invalidate process authority before the persisted replacement is visible.
   clearCodexRuntimeResolveCache();
@@ -766,14 +819,37 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
 
   const seen = new Set<string>();
   const valid: ResolvedCodexRuntime[] = [];
+  // A caller that declined PATH-wide discovery normally gets the first valid
+  // candidate and nothing else, which is right for a hot path and wrong for
+  // exactly one arrangement: an unpinned persisted selection sitting in front of
+  // a Codex App runtime that PATH never exposes.
+  //
+  // That arrangement is issue 4204. The catalog's bundled loader passes
+  // discoverAlternatives: false, so it stopped at a still-runnable codex-cli
+  // 0.135.0 and derived the reasoning ladder from it while the Desktop app was
+  // running 0.153.4 out of LOCALAPPDATA. Nothing downstream could notice,
+  // because the newer runtime was never probed.
+  //
+  // So the early stop keeps skipping PATH — which is the expensive part, 100+
+  // launcher probes on a dev machine — but still probes the `installed` roots,
+  // a bounded set with one entry per Codex App version directory. A pinned
+  // record skips even that: the operator's choice is not up for revision, and
+  // there is then nothing to compare it against.
+  const persistedIsUnpinned = Boolean(persisted?.command) && !persistedCodexRuntimeIsPinned(persisted);
   for (const candidate of ordered) {
     const key = candidate.command.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
+    if (
+      deps.discoverAlternatives === false
+      && valid.length > 0
+      && !(persistedIsUnpinned && candidate.source === "installed")
+    ) {
+      continue;
+    }
     const resolved = tryCandidate(candidate, failures, deps);
     if (!resolved) continue;
     valid.push(resolved);
-    if (deps.discoverAlternatives === false) break;
   }
 
   if (valid.length === 0) {
@@ -786,6 +862,7 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
   // Prefer first valid in priority order (environment → configured → shim → path → installed → fallback).
   let selected = valid[0]!;
   let replacedConfigured: ResolveCodexRuntimeResult["replacedConfigured"];
+  let supersededDiscovered: ResolveCodexRuntimeResult["supersededDiscovered"];
 
   const envValid = envPath
     ? valid.find(item => sameRuntimeCommand(item.command, envPath) && item.source === "environment")
@@ -811,6 +888,31 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
     } else if (!envValid && configuredStillValid) {
       // Stick to configured even when a later PATH entry is also valid.
       selected = valid.find(item => sameRuntimeCommand(item.command, persisted.command)) ?? selected;
+      // An explicit pin is the user's decision and this change must never
+      // silently replace it — issue 4204 says so in as many words. Stick.
+      // An unpinned record (missing origin, or origin "discovered") may hand
+      // over to a strictly newer valid candidate. Unknown (null) versions on
+      // either side are not evidence of an upgrade: compareCodexVersions treats
+      // null as less-than, which would otherwise make any known alternative
+      // look newer than a deferred probe. probeVersion === false yields null
+      // everywhere, so the comparison cannot fire there; equal versions stick.
+      if (!persistedCodexRuntimeIsPinned(persisted)) {
+        const newerDiscovered = valid
+          .filter(item =>
+            !sameRuntimeCommand(item.command, selected.command)
+            && typeof item.version === "string"
+            && typeof selected.version === "string"
+            && compareCodexVersions(item.version, selected.version) > 0)
+          .sort((a, b) => compareCodexVersions(b.version, a.version))[0];
+        if (newerDiscovered) {
+          supersededDiscovered = {
+            from: selected,
+            to: newerDiscovered,
+            reason: `discovered runtime ${selected.version} superseded by newer runtime ${newerDiscovered.version}`,
+          };
+          selected = newerDiscovered;
+        }
+      }
     }
   }
 
@@ -826,6 +928,7 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
     runtime: selected,
     failures,
     replacedConfigured,
+    supersededDiscovered,
     newerAvailable: newer,
   };
 }
@@ -846,7 +949,7 @@ export function resolveAndPersistCodexRuntime(
     && (persistedRuntime.selectedVersion ?? null) === (result.runtime.version ?? null);
   if (result.runtime.command && result.runtime.source !== "fallback" && !selectionUnchanged) {
     try {
-      persistCodexRuntime(result.runtime, deps);
+      persistCodexRuntime(result.runtime, deps, "discovered");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const persistError = redactUserPath(redactSecretString(message)).slice(0, 200);

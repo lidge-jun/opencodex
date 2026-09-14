@@ -23,6 +23,7 @@ import { codexExecInvocation } from "./exec-invocation";
 import { resolveCodexHomeDir } from "./home";
 import {
   CODEX_PROGRAM_NOT_FOUND_REASON,
+  displayCodexRuntimePath,
   resolveCodexRuntime,
   type CodexRuntimeSource,
   type ResolveCodexRuntimeResult,
@@ -186,8 +187,18 @@ function completedExecution(value: PromptProbeExecutionResult | null): PromptPro
   return { result: Promise.resolve(value), closed: Promise.resolve() };
 }
 
+/**
+ * The command line as it may be shown to a caller.
+ *
+ * Redacted, because this response is served over the management API and a
+ * resolved Codex path is a user path: the Windows Codex App lives under the
+ * profile directory, so echoing the raw command would put the account name in
+ * a diagnostic. `displayCodexRuntimePath` is the same helper the runtime log
+ * line and doctor output already use, so the probe reports a path in the form
+ * the rest of the product reports it.
+ */
 function commandDescription(command: ProbeCommand): string {
-  return [command.binary, ...command.args].join(" ");
+  return [displayCodexRuntimePath(command.binary), ...command.args].join(" ");
 }
 
 function probeFailure(
@@ -230,7 +241,9 @@ function classifyRuntimeFailure(result: ResolveCodexRuntimeResult): PromptProbeF
   const kind: PromptProbeFailureKind = !representative || isNotFound(representative.reason)
     ? "program-not-found"
     : "execution-failed";
-  const command = representative?.command ?? result.runtime.command;
+  // Same redaction obligation as commandDescription: a rejected candidate is a
+  // real filesystem path, and every one of them is reported to the caller.
+  const command = displayCodexRuntimePath(representative?.command ?? result.runtime.command);
   const phrase = kind === "program-not-found" ? "codex program not found" : "codex runtime could not be probed";
   return { kind, command, detail: `${phrase}: ${command}` };
 }
@@ -569,6 +582,13 @@ export async function probePromptText(
   // its command is the bare word "codex", not a located binary. Reporting it as
   // resolved would just relabel the same not-found as a spawn failure.
   const binary = probeCommandForTests?.binary ?? runtime?.command ?? null;
+  // The response travels over the management API, so the reported runtime is
+  // redacted while `binary` keeps the real path the spawn needs. On Windows the
+  // Codex App install sits under the user's profile directory, so the raw
+  // command carries the account name.
+  const reportedRuntime = runtime
+    ? { command: displayCodexRuntimePath(runtime.command), source: runtime.source }
+    : undefined;
   if (!binary) {
     const failure = resolved
       ? classifyRuntimeFailure(resolved)
@@ -581,7 +601,7 @@ export async function probePromptText(
       ok: false,
       codexHome,
       layers: {},
-      ...(runtime ? { runtime } : {}),
+      ...(reportedRuntime ? { runtime: reportedRuntime } : {}),
       failure,
       detail: "codex binary not found",
     };
@@ -599,7 +619,7 @@ export async function probePromptText(
       ok: false,
       codexHome,
       layers: {},
-      ...(runtime ? { runtime } : {}),
+      ...(reportedRuntime ? { runtime: reportedRuntime } : {}),
       ...(outcome.kind === "failed" && outcome.failure ? { failure: outcome.failure } : {}),
       detail: signal?.aborted
         ? "prompt probe cancelled"
@@ -617,7 +637,7 @@ export async function probePromptText(
       ok: false,
       codexHome,
       layers: {},
-      ...(runtime ? { runtime } : {}),
+      ...(reportedRuntime ? { runtime: reportedRuntime } : {}),
       failure: probeFailure(
         command,
         "output-invalid",
@@ -658,7 +678,7 @@ export async function probePromptText(
   for (const id of UNMAPPED_LAYER_IDS) {
     layers[id] ??= { text: null, reason: "not-exposed", bytes: 0 };
   }
-  return { ok: true, codexHome, layers, ...(runtime ? { runtime } : {}) };
+  return { ok: true, codexHome, layers, ...(reportedRuntime ? { runtime: reportedRuntime } : {}) };
 }
 
 /** Test-only command seam; production always resolves the installed Codex binary. */

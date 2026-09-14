@@ -20,6 +20,7 @@ import {
   setPromptTextProbeRuntimeForTests,
 } from "../../src/codex/prompt-text-probe";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { displayCodexRuntimePath } from "../../src/codex/runtime";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 const lifecycleRoots: string[] = [];
@@ -337,7 +338,12 @@ describe("runtime resolution and failure classification", () => {
 
     expect(result.ok).toBe(true);
     expect(result.detail).not.toBe("codex binary not found");
-    expect(result.runtime).toEqual({ command: process.execPath, source: "installed" });
+    // The reported command is redacted the same way every other runtime path in
+    // the product is, because this response is served over the management API.
+    expect(result.runtime).toEqual({
+      command: displayCodexRuntimePath(process.execPath),
+      source: "installed",
+    });
     expect(existsSync(started)).toBe(true);
   });
 
@@ -366,8 +372,11 @@ describe("runtime resolution and failure classification", () => {
   });
 
   test("an unknown-subcommand exit yields command-unsupported without echoing stderr", async () => {
-    const marker = `stderr-marker-${process.pid}-do-not-echo`;
-    const source = `process.stderr.write(${JSON.stringify("error: unrecognized subcommand 'prompt-input' ")} + ${JSON.stringify(marker)}); process.exit(2);`;
+    // The sentinels are concatenated inside the child so they exist only on
+    // stderr: failure.detail legitimately echoes the attempted command line, so
+    // a marker written literally into argv would make these assertions vacuous.
+    const marker = "stderr-marker-do-not-echo";
+    const source = `process.stderr.write("error: " + "unrecognized" + " subcommand 'prompt-input' " + "stderr-marker-" + "do-not-echo"); process.exit(2);`;
     setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
 
     const result = await probePromptText(2_000);
@@ -380,10 +389,10 @@ describe("runtime resolution and failure classification", () => {
   });
 
   test("an ordinary non-zero exit yields execution-failed without echoing stderr", async () => {
-    const marker = `stderr-marker-${process.pid}-do-not-echo`;
+    const marker = "stderr-marker-do-not-echo";
     setPromptTextProbeCommandForTests({
       binary: process.execPath,
-      args: ["-e", `process.stderr.write(${JSON.stringify("boom ")} + ${JSON.stringify(marker)}); process.exit(1);`],
+      args: ["-e", `process.stderr.write("boom " + "stderr-marker-" + "do-not-echo"); process.exit(1);`],
     });
 
     const result = await probePromptText(2_000);

@@ -28,6 +28,8 @@ import {
   loadLastEffortClamp,
   loadPersistedCodexRuntime,
   parseCodexVersionOutput,
+  parsePersistedCodexRuntime,
+  persistedCodexRuntimeIsPinned,
   peekCodexRuntimeProcessCache,
   persistCodexRuntime,
   persistEffortClamp,
@@ -1321,5 +1323,274 @@ describe("installed Codex discovery and deferred version probes", () => {
     expect(result.runtime.command).toBe(installed);
     expect(result.runtime.source).toBe("installed");
     expect(result.runtime.version).toBe("0.154.0-alpha.6.2");
+  });
+});
+
+describe("unpinned discovered runtime handover (issue 4204)", () => {
+  function writeLegacyPersisted(
+    configDir: string,
+    command: string,
+    selectedVersion: string,
+    origin?: "pinned" | "discovered",
+  ): void {
+    const payload: Record<string, unknown> = {
+      version: 1,
+      command,
+      source: "configured",
+      selectedVersion,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    if (origin !== undefined) payload.origin = origin;
+    writeFileSync(join(configDir, "codex-runtime.json"), JSON.stringify(payload));
+  }
+
+  test("a still-runnable persisted 0.135.0 with no origin yields to 0.153.4 and reports supersededDiscovered", () => {
+    // Issue 4204: resolveAndPersistCodexRuntime wrote every automatic selection
+    // without an origin, so a still-runnable 0.135.0 CLI kept winning over a
+    // 0.153.4 Desktop runtime sitting on PATH. The catalog clamp then observed
+    // the old ladder and stripped max/ultra.
+    const configDir = tempConfigDir();
+    writeLegacyPersisted(configDir, "C:\\old\\codex.exe", "0.135.0");
+    expect(persistedCodexRuntimeIsPinned(loadPersistedCodexRuntime({ configDir }))).toBe(false);
+    const execFileSync: RuntimeExecFile = (file) => {
+      const text = String(file);
+      if (text.includes("old")) return "codex-cli 0.135.0";
+      if (text.includes("new")) return "codex-cli 0.153.4";
+      return "codex-cli 0.120.0";
+    };
+    const result = resolveCodexRuntime({
+      configDir,
+      env: { PATH: "C:\\new" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync,
+    });
+    expect(result.runtime.command).toContain("new");
+    expect(result.runtime.version).toBe("0.153.4");
+    expect(result.supersededDiscovered?.from).toEqual({
+      command: "C:\\old\\codex.exe",
+      version: "0.135.0",
+      source: "configured",
+    });
+    expect(result.supersededDiscovered?.to.command).toContain("new");
+    expect(result.supersededDiscovered?.to.version).toBe("0.153.4");
+    expect(result.supersededDiscovered?.reason).toBe(
+      "discovered runtime 0.135.0 superseded by newer runtime 0.153.4",
+    );
+    expect(result.replacedConfigured).toBeUndefined();
+  });
+
+  test("origin pinned still resolves to 0.135.0 and reports no handover", () => {
+    const configDir = tempConfigDir();
+    writeLegacyPersisted(configDir, "C:\\old\\codex.exe", "0.135.0", "pinned");
+    expect(persistedCodexRuntimeIsPinned(loadPersistedCodexRuntime({ configDir }))).toBe(true);
+    const execFileSync: RuntimeExecFile = (file) => {
+      const text = String(file);
+      if (text.includes("old")) return "codex-cli 0.135.0";
+      if (text.includes("new")) return "codex-cli 0.153.4";
+      return "codex-cli 0.120.0";
+    };
+    const result = resolveCodexRuntime({
+      configDir,
+      env: { PATH: "C:\\new" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync,
+    });
+    expect(result.runtime.command).toBe("C:\\old\\codex.exe");
+    expect(result.runtime.version).toBe("0.135.0");
+    expect(result.supersededDiscovered).toBeUndefined();
+    expect(result.newerAvailable?.command).toContain("new");
+    expect(result.newerAvailable?.version).toBe("0.153.4");
+  });
+
+  test("origin discovered still yields to a strictly newer runtime", () => {
+    const configDir = tempConfigDir();
+    writeLegacyPersisted(configDir, "C:\\old\\codex.exe", "0.135.0", "discovered");
+    const execFileSync: RuntimeExecFile = (file) => {
+      const text = String(file);
+      if (text.includes("old")) return "codex-cli 0.135.0";
+      if (text.includes("new")) return "codex-cli 0.153.4";
+      return "codex-cli 0.120.0";
+    };
+    const result = resolveCodexRuntime({
+      configDir,
+      env: { PATH: "C:\\new" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync,
+    });
+    expect(result.runtime.version).toBe("0.153.4");
+    expect(result.supersededDiscovered?.reason).toBe(
+      "discovered runtime 0.135.0 superseded by newer runtime 0.153.4",
+    );
+  });
+
+  test("an unpinned persisted record with an equal-version alternative sticks", () => {
+    const configDir = tempConfigDir();
+    writeLegacyPersisted(configDir, "C:\\old\\codex.exe", "0.135.0");
+    const execFileSync: RuntimeExecFile = (file) => {
+      const text = String(file);
+      if (text.includes("old")) return "codex-cli 0.135.0";
+      if (text.includes("new")) return "codex-cli 0.135.0";
+      return "codex-cli 0.120.0";
+    };
+    const result = resolveCodexRuntime({
+      configDir,
+      env: { PATH: "C:\\new" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync,
+    });
+    expect(result.runtime.command).toBe("C:\\old\\codex.exe");
+    expect(result.supersededDiscovered).toBeUndefined();
+  });
+
+  test("an unpinned persisted record whose alternative has an unknown version sticks", () => {
+    // probeVersion === false yields null versions everywhere, so the strictly-
+    // newer comparison cannot fire. Absence of a version is not evidence of an
+    // upgrade — the same conservative rule as the in-place clamp diagnostic.
+    const configDir = tempConfigDir();
+    writeLegacyPersisted(configDir, "C:\\old\\codex.exe", "0.135.0");
+    const result = resolveCodexRuntime({
+      configDir,
+      env: { PATH: "C:\\new" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync: () => "codex-cli 0.153.4",
+      probeVersion: false,
+    });
+    expect(result.runtime.command).toBe("C:\\old\\codex.exe");
+    expect(result.runtime.version).toBeNull();
+    expect(result.supersededDiscovered).toBeUndefined();
+  });
+
+  test("resolveAndPersistCodexRuntime writes origin discovered; persistCodexRuntime writes pinned", () => {
+    const discoveredDir = tempConfigDir();
+    resolveAndPersistCodexRuntime({
+      configDir: discoveredDir,
+      env: { CODEX_CLI_PATH: "C:\\keep\\codex.exe", PATH: "" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync: () => "codex-cli 0.153.4",
+    });
+    const discovered = loadPersistedCodexRuntime({ configDir: discoveredDir });
+    expect(discovered?.origin).toBe("discovered");
+    expect(persistedCodexRuntimeIsPinned(discovered)).toBe(false);
+
+    const pinnedDir = tempConfigDir();
+    persistCodexRuntime({
+      command: "C:\\keep\\codex.exe",
+      version: "0.153.4",
+      source: "configured",
+    }, { configDir: pinnedDir });
+    const pinned = loadPersistedCodexRuntime({ configDir: pinnedDir });
+    expect(pinned?.origin).toBe("pinned");
+    expect(persistedCodexRuntimeIsPinned(pinned)).toBe(true);
+  });
+
+  test("parsePersistedCodexRuntime accepts a missing origin and rejects a junk origin", () => {
+    const base = {
+      version: 1 as const,
+      command: "C:\\old\\codex.exe",
+      source: "configured",
+      selectedVersion: "0.135.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const withoutOrigin = parsePersistedCodexRuntime(JSON.stringify(base));
+    expect(withoutOrigin?.command).toBe("C:\\old\\codex.exe");
+    expect(withoutOrigin?.origin).toBeUndefined();
+    expect(persistedCodexRuntimeIsPinned(withoutOrigin)).toBe(false);
+
+    expect(parsePersistedCodexRuntime(JSON.stringify({ ...base, origin: "pinned" }))?.origin).toBe("pinned");
+    expect(parsePersistedCodexRuntime(JSON.stringify({ ...base, origin: "discovered" }))?.origin).toBe("discovered");
+    expect(parsePersistedCodexRuntime(JSON.stringify({ ...base, origin: "accidental" }))).toBeNull();
+  });
+});
+
+describe("Codex App handover without PATH-wide discovery (issue 4204)", () => {
+  const LOCAL_APP_DATA = "C:\\Users\\test\\AppData\\Local";
+  const APP_ROOT = join(LOCAL_APP_DATA, "OpenAI", "Codex", "bin");
+  const APP_EXE = join(APP_ROOT, "0.153.4", "codex.exe");
+  const STALE = "C:\\Users\\test\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
+
+  function appDeps(configDir: string) {
+    return {
+      configDir,
+      env: { LOCALAPPDATA: LOCAL_APP_DATA, PATH: NO_CODEX_PATH },
+      platform: "win32" as const,
+      existsSync: (path: string) => path === STALE || path === APP_EXE,
+      readdirSync: (path: string) => path === APP_ROOT ? ["0.153.4"] : [],
+      statSync: (path: string) => path === join(APP_ROOT, "0.153.4")
+        ? { mtimeMs: 2_000, isDirectory: () => true }
+        : { mtimeMs: 0, isDirectory: () => false },
+      execFileSync: ((file: string) => {
+        if (String(file) === STALE) return "codex-cli 0.135.0";
+        if (String(file) === APP_EXE) return "codex-cli 0.153.4";
+        throw Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+      }) as RuntimeExecFile,
+      discoverAlternatives: false as const,
+    };
+  }
+
+  function writePersisted(configDir: string, origin?: "pinned" | "discovered"): void {
+    const payload: Record<string, unknown> = {
+      version: 1,
+      command: STALE,
+      source: "configured",
+      selectedVersion: "0.135.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    if (origin !== undefined) payload.origin = origin;
+    writeFileSync(join(configDir, "codex-runtime.json"), JSON.stringify(payload));
+  }
+
+  test("an unpinned stale pin still yields to the Codex App runtime PATH never exposes", () => {
+    // This is the arrangement issue 4204 actually reports. The catalog's bundled
+    // loader passes discoverAlternatives: false, so before this the resolve
+    // stopped at the still-runnable 0.135.0 under Programs\OpenAI and never
+    // probed the 0.153.4 the Desktop app was running out of LOCALAPPDATA.
+    const configDir = tempConfigDir();
+    writePersisted(configDir);
+    const result = resolveCodexRuntime(appDeps(configDir));
+    expect(result.runtime.command).toBe(APP_EXE);
+    expect(result.runtime.version).toBe("0.153.4");
+    expect(result.runtime.source).toBe("installed");
+    expect(result.supersededDiscovered?.from.version).toBe("0.135.0");
+    expect(result.supersededDiscovered?.to.version).toBe("0.153.4");
+  });
+
+  test("a pinned stale selection is left alone even though the App runtime is newer", () => {
+    const configDir = tempConfigDir();
+    writePersisted(configDir, "pinned");
+    const result = resolveCodexRuntime(appDeps(configDir));
+    expect(result.runtime.command).toBe(STALE);
+    expect(result.runtime.version).toBe("0.135.0");
+    expect(result.supersededDiscovered).toBeUndefined();
+  });
+
+  test("with no persisted record the early stop still skips the installed roots", () => {
+    // Nothing to supersede means nothing to compare against, so the hot path
+    // keeps its original cost: first valid candidate wins and the scan ends.
+    const configDir = tempConfigDir();
+    const probed: string[] = [];
+    const deps = appDeps(configDir);
+    // A colon-free PATH entry: pathCandidates splits on node's path delimiter,
+    // which is ":" on the POSIX runners this suite also runs on, so a drive
+    // letter here would split into two directories that match nothing.
+    const pathDir = "/opt/on-path";
+    const pathExe = join(pathDir, "codex.exe");
+    const result = resolveCodexRuntime({
+      ...deps,
+      env: { LOCALAPPDATA: LOCAL_APP_DATA, PATH: pathDir },
+      existsSync: (path: string) => path === pathExe || path === APP_EXE,
+      execFileSync: ((file: string) => {
+        probed.push(String(file));
+        return "codex-cli 0.140.0";
+      }) as RuntimeExecFile,
+    });
+    expect(result.runtime.source).toBe("path");
+    expect(result.runtime.command).toBe(pathExe);
+    expect(probed).not.toContain(APP_EXE);
   });
 });
