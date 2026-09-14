@@ -181,6 +181,7 @@
     "adapter-buffered-tool-conformance.test.ts": "adapters",
     "adapter-error-inline.test.ts": "adapters",
     "adapter-event-oauth-failover.test.ts": "oauth",
+    "adapter-inner-send-budget-wiring.test.ts": "adapters",
     "adapter-inner-send-budget.test.ts": "adapters",
     "adapter-registry-authority.test.ts": "adapters",
     "adapter-resolve.test.ts": "server",

@@ -7655,6 +7655,9 @@ async function handleResponsesInner(
             abortSignal: runTurnAbort.signal,
             translatorBudget,
             providerFetch: runTurnProviderFetch,
+            // The only way the request budget reaches a transport the adapter owns. Without it
+            // a Cursor turn's inner ladder was three physical sends the cap read as one.
+            ...(adapterSendBudget ? { sendBudget: adapterSendBudget } : {}),
           },
           targetQueue.push,
         );

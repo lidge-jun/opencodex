@@ -21,6 +21,16 @@ export interface IncomingMeta {
    * the anthropic and openai-chat adapters; others ignore it.
    */
   imageTierBias?: number;
+  /**
+   * The enclosing request's send budget, for adapters that own their upstream transport.
+   *
+   * A `runTurn` adapter never receives an `AdapterFetchContext`, so the budget that bounds every
+   * other leg could not reach it: Cursor re-sends a whole turn up to three times inside one
+   * adapter call, and the request cap counted that as one send. Optional, and absent means
+   * unlimited, because adapter unit tests build a meta with neither a budget nor a request
+   * behind it (#4546).
+   */
+  sendBudget?: RequestExecutionBudget;
 }
 
 export interface ProviderAdapter {
