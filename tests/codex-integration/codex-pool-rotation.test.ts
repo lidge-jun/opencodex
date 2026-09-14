@@ -1295,7 +1295,11 @@ describe("selection order across rotation strategies", () => {
       accountPoolStrategy: "quota",
       autoSwitchThreshold: 80,
       activeCodexAccountId: "a",
-    });
+      // This case is about WHERE a threshold-driven move may land, so it states the
+      // capacity-first setting explicitly (#4546). Under the default a bound thread does
+      // not move on a threshold crossing at all, and the destination rule never runs.
+      pool: { cacheAffinity: false },
+    } as Partial<OcxConfig>);
     const threadId = "cache-safe-real-improvement";
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 50);
