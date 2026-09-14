@@ -36,6 +36,7 @@ import {
 } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-store-multi-test");
 let previousOpencodexHome: string | undefined;
@@ -150,6 +151,41 @@ describe("multi-account auth store", () => {
     const raw = JSON.parse(readFileSync(authPath, "utf-8"));
     expect(Array.isArray(raw.xai.accounts)).toBe(true);
     expect(existsSync(`${authPath}.pre-multiauth`)).toBe(true);
+  });
+
+  test("uninstall removes a legacy recovery backup from an owned home", async () => {
+    const dir = join(TEST_DIR, "owned");
+    const path = join(dir, "auth.json");
+    process.env.OPENCODEX_HOME = dir;
+    try {
+      expect(recordOwnedConfigPath(dir, path)).toBe(true);
+      const original = JSON.stringify({ xai: cred({ email: "old@example.test" }) });
+      writeFileSync(path, original);
+      await saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
+      expect(readFileSync(`${path}.pre-multiauth`, "utf8")).toBe(original);
+      await flushConfigDirHardeningForTests();
+      expect(removeOwnedConfigState(dir).status).toBe("removed");
+      expect(existsSync(`${path}.pre-multiauth`)).toBe(false);
+    } finally {
+      process.env.OPENCODEX_HOME = TEST_DIR;
+    }
+  });
+
+  test("migration leaves a pre-existing unregistered backup unchanged and unclaimed", async () => {
+    const dir = join(TEST_DIR, "existing-backup");
+    const path = join(dir, "auth.json");
+    process.env.OPENCODEX_HOME = dir;
+    try {
+      expect(recordOwnedConfigPath(dir, path)).toBe(true);
+      writeFileSync(path, JSON.stringify({ xai: cred({ email: "old@example.test" }) }));
+      writeFileSync(`${path}.pre-multiauth`, "prior-recovery-fixture");
+      await saveCredential("xai", cred({ email: "old@example.test" }));
+      await flushConfigDirHardeningForTests();
+      expect(removeOwnedConfigState(dir).status).toBe("partial");
+      expect(readFileSync(`${path}.pre-multiauth`, "utf8")).toBe("prior-recovery-fixture");
+    } finally {
+      process.env.OPENCODEX_HOME = TEST_DIR;
+    }
   });
 
   test("legacy credential WITHOUT identity gets a deterministic account id across loads", async () => {

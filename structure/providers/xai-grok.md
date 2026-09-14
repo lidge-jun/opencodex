@@ -35,6 +35,8 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
   (`expectedGeneration` → superseded adoption), conditional `needsReauth`, bounded jittered
   retry for transient token-endpoint failures.
+  Newly created legacy-store recovery copies follow the [backup ownership contract](../config.md#restore);
+  an ownership-registration failure does not discard downgrade recovery.
 - **Reactive 401 replay:** both the adapter recovery loop and native Responses passthrough branch
   force-refresh once (singleflight, generation-checked) and replay OAuth-backed xAI requests
   exactly once with a re-resolved transport; API-key/BYOK paths are excluded

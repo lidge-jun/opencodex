@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
+import * as ownership from "../../src/lib/config-ownership";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,10 +9,56 @@ import {
   recordOwnedConfigPath,
   removeOwnedConfigState,
 } from "../../src/lib/config-ownership";
-import { getDefaultConfig, saveConfig } from "../../src/config";
+import { backupInvalidConfig, getDefaultConfig, saveConfig } from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 describe("owned config uninstall", () => {
+  test("ownership registration exceptions do not invalidate a completed recovery backup", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-backup-register-failure-"));
+    const path = join(dir, "config.json");
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = dir;
+    writeFileSync(path, "recover-this-fixture");
+    const registration = spyOn(ownership, "recordOwnedConfigPath").mockImplementation(() => { throw new Error("fixture failure"); });
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const backup = backupInvalidConfig(path);
+      expect(backup).not.toBeNull();
+      expect(readFileSync(backup!, "utf8")).toBe("recover-this-fixture");
+      expect(warning).toHaveBeenCalledTimes(1);
+    } finally {
+      registration.mockRestore();
+      warning.mockRestore();
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  for (const owned of [true, false]) {
+    test(`invalid-config backup preserves recovery and respects ownership (${owned})`, () => {
+      const dir = mkdtempSync(join(tmpdir(), "ocx-backup-owned-"));
+      const path = join(dir, "config.json");
+      const previous = process.env.OPENCODEX_HOME;
+      process.env.OPENCODEX_HOME = dir;
+      try {
+        if (owned) expect(recordOwnedConfigPath(dir, path)).toBe(true);
+        writeFileSync(path, '{"recovery-fixture":');
+        if (!owned) expect(recordOwnedConfigPath(dir, path)).toBe(false);
+        const backup = backupInvalidConfig(path);
+        expect(backup).not.toBeNull();
+        expect(readFileSync(backup!, "utf8")).toBe(readFileSync(path, "utf8"));
+        const removal = removeOwnedConfigState(dir);
+        expect(removal.status).toBe(owned ? "removed" : "refused");
+        expect(existsSync(backup!)).toBe(!owned);
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = previous;
+        removeTreeWithRetry(dir);
+      }
+    });
+  }
+
   test("first owned write creates a missing config root and its metadata", () => {
     const parent = mkdtempSync(join(tmpdir(), "ocx-config-first-owned-path-"));
     const dir = join(parent, "config");

@@ -4700,6 +4700,12 @@ export function backupInvalidConfig(configPath: string): string | null {
   try {
     copyFileSync(configPath, backupPath);
     try { chmodSync(backupPath, 0o600); } catch { /* best-effort */ }
+    try {
+      // Legacy/shared homes may intentionally refuse ownership. Preserve recovery anyway.
+      recordOwnedConfigPath(getConfigDir(), backupPath);
+    } catch {
+      console.warn("[config] Recovery backup created, but uninstall ownership registration failed.");
+    }
     return backupPath;
   } catch {
     return null;
