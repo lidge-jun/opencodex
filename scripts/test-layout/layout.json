@@ -888,6 +888,7 @@
     "management-origin-tls.test.ts": "server",
     "management-provider-validation.test.ts": "server",
     "management-route-registry.test.ts": "server",
+    "management-workflow-budget-routes.test.ts": "server",
     "memory-watchdog.test.ts": "server",
     "meta-model-api-provider.test.ts": "providers",
     "meta-muse-oauth.test.ts": "providers",

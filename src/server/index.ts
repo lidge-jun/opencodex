@@ -135,6 +135,7 @@ import {
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
 import { admitWorkflowTurn, type WorkflowLane } from "../lib/workflow-budget";
+import { workflowRefusalResponse } from "./workflow-refusal";
 export {
   addFinalRequestLog,
   filterRequestLogs,
@@ -1307,11 +1308,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     const workflow = admitWorkflowTurn(workflowRootId, workflowLane, undefined, workflowThreadId);
     if (workflow && !workflow.admitted) {
       lease.release();
-      return formatErrorResponse(
-        429,
-        workflow.reason === "workflow-sends-exhausted" ? "workflow_budget_exhausted" : "queue_capacity_exceeded",
-        "This task has reached its concurrent-work limit, so no further upstream request was made. Work already in flight settles as it finishes.",
-      );
+      // No log context here: this runs before the body is parsed, so there is no model or
+      // provider to attribute a row to. The refusal is recorded by the budget itself.
+      return workflowRefusalResponse(workflow.reason);
     }
     const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
     let response: Response;

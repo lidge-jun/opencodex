@@ -243,6 +243,7 @@ import {
   chargeWorkflowSends,
   workflowSendCeilingReached,
 } from "../../lib/workflow-budget";
+import { workflowRefusalResponse } from "../workflow-refusal";
 import {
   ForwardAdmissionCredentialError,
   hasForwardableCodexBearer,
@@ -5355,11 +5356,9 @@ async function handleResponsesInner(
   // laundering this ceiling exists to stop. The client is told the task needs a new grant
   // rather than being given a synthetic upstream error.
   if (workflowSendCeilingReached(workflowRootId)) {
-    return formatErrorResponse(
-      429,
-      "workflow_budget_exhausted",
-      "This task has used its whole send budget, so no further upstream request was made. Requests already in flight settle as they finish.",
-    );
+    // A log context exists here, unlike at HTTP admission, so the row this request writes is
+    // marked synthetic rather than reading as a request that vanished with zero sends.
+    return workflowRefusalResponse("workflow-sends-exhausted", logCtx);
   }
   // No floor. Math.max(1, ...) meant an exhausted request still funded one send on every
   // recovery leg, so a bounded per-leg allowance never became a bounded per-request one.
