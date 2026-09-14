@@ -7,12 +7,31 @@
  * refusal, and because the non-obvious part below has to be stated once and not twice.
  */
 import { formatErrorResponse } from "../bridge";
-import { markLocalRequestLogRefusal, type RequestLogContext } from "./request-log";
+import {
+  addFinalRequestLog,
+  markLocalRequestLogRefusal,
+  type RequestLogContext,
+} from "./request-log";
 import {
   WORKFLOW_LOCAL_REFUSAL_HEADER,
   workflowDenialSummary,
   type WorkflowDenial,
 } from "../lib/workflow-budget";
+
+/**
+ * What a caller needs to hand over for the refusal to become a row on `/api/logs`.
+ *
+ * The HTTP admission check refuses before the body is parsed, so its `logCtx` still carries the
+ * `unknown` model and provider the caller seeded it with. That is the honest record -- this
+ * request genuinely never resolved either -- and it is the same placeholder the native
+ * passthrough path already writes. Skipping the row entirely was the worse option: an operator
+ * reading the logs saw no trace at all of a request the proxy had refused.
+ */
+export interface WorkflowRefusalLog {
+  readonly requestId: string;
+  readonly start: number;
+  readonly logCtx: RequestLogContext;
+}
 
 /**
  * Build the 429 for a refusal this proxy made itself.
@@ -24,22 +43,37 @@ import {
  * that fired and says no provider was contacted, and the header carries the machine-readable
  * name. Nothing upstream sets that header, so its presence is conclusive.
  *
- * When a request-log context exists, the row is additionally marked synthetic through the helper
- * #4639 introduced for the same problem. The HTTP admission check has no context to pass -- it
- * runs before the body is parsed, so there is no model and no provider yet -- which is why that
- * argument is optional rather than required.
+ * The row is where an operator actually looks, so it gets the same treatment #4639 established:
+ * `terminalSource: "synthetic"`, a local reason, and an error code naming the ceiling. Pass
+ * `logCtx` when the caller is inside a turn that will write its own row, or `refusalLog` when
+ * the refusal happens before any row exists and this is the only chance to write one.
  */
 export function workflowRefusalResponse(
   reason: WorkflowDenial,
   logCtx?: RequestLogContext,
+  refusalLog?: WorkflowRefusalLog,
 ): Response {
   const summary = workflowDenialSummary(reason);
-  if (logCtx) markLocalRequestLogRefusal(logCtx, summary.code);
+  const recordOn = logCtx ?? refusalLog?.logCtx;
+  if (recordOn) {
+    markLocalRequestLogRefusal(recordOn, summary.code);
+    // A locally assigned code wins in addFinalRequestLog, so this is what names the ceiling in
+    // the logs column rather than the generic rate-limit classification a 429 would get.
+    recordOn.errorCode = summary.code;
+  }
+  if (refusalLog) {
+    addFinalRequestLog(refusalLog.requestId, refusalLog.start, refusalLog.logCtx, 429, {
+      closeReason: "terminal",
+    });
+  }
   const refusal = formatErrorResponse(
     429,
     reason === "workflow-sends-exhausted" ? "workflow_budget_exhausted" : "queue_capacity_exceeded",
     summary.message,
   );
   refusal.headers.set(WORKFLOW_LOCAL_REFUSAL_HEADER, summary.code);
+  // Without this a browser dashboard cannot read the header at all: the data plane never sets
+  // Access-Control-Expose-Headers, so a cross-origin reader sees only the CORS-safelisted ones.
+  refusal.headers.set("Access-Control-Expose-Headers", WORKFLOW_LOCAL_REFUSAL_HEADER);
   return refusal;
 }

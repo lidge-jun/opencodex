@@ -135,7 +135,7 @@ import {
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
 import { admitWorkflowTurn, type WorkflowLane } from "../lib/workflow-budget";
-import { workflowRefusalResponse } from "./workflow-refusal";
+import { workflowRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
   filterRequestLogs,
@@ -1291,6 +1291,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     req: Request,
     policy: RequestPolicyView,
     work: (lease: ActiveTurnLease) => Promise<Response>,
+    refusalLog?: WorkflowRefusalLog,
   ): Promise<Response> {
     const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
     if (!lease) return serverBusyResponse(req, "active turns", policy);
@@ -1308,9 +1309,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     const workflow = admitWorkflowTurn(workflowRootId, workflowLane, undefined, workflowThreadId);
     if (workflow && !workflow.admitted) {
       lease.release();
-      // No log context here: this runs before the body is parsed, so there is no model or
-      // provider to attribute a row to. The refusal is recorded by the budget itself.
-      return workflowRefusalResponse(workflow.reason);
+      return workflowRefusalResponse(workflow.reason, undefined, refusalLog);
     }
     const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
     let response: Response;
@@ -2585,7 +2584,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, policy),
             requestId,
           );
-        });
+          // Only this surface needs a refusal row: the workflow root is the Codex
+          // x-codex-parent-thread-id header, which no other inbound wire carries.
+        }, { requestId, start, logCtx });
       }
 
       // Anthropic Messages inbound (Claude Code). count_tokens FIRST (longer path).

@@ -22,7 +22,11 @@ import {
   type WorkflowBudgetPolicy,
 } from "../../src/lib/workflow-budget";
 import { workflowRefusalResponse } from "../../src/server/workflow-refusal";
-import type { RequestLogContext } from "../../src/server/request-log";
+import {
+  clearRequestLogsForTests,
+  getRequestLogEntries,
+  type RequestLogContext,
+} from "../../src/server/request-log";
 
 const memoryJournal = (): SpendJournal & { lines: string[] } => {
   const lines: string[] = [];
@@ -423,6 +427,41 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     workflowRefusalResponse("workflow-sends-exhausted", logCtx);
     expect(logCtx.terminalSource).toBe("synthetic");
     expect(logCtx.localTerminalReason).toBe("workflow_sends_exhausted");
+    // A locally assigned code wins over the 429 classification, so this is what the logs
+    // column shows instead of a generic rate limit.
+    expect(logCtx.errorCode).toBe("workflow_sends_exhausted");
+  });
+
+  test("a refusal before the body is parsed still leaves a row in the logs", () => {
+    // The defect this closes: the HTTP admission check returns before the turn runs, so a
+    // refused request left no trace at all on /api/logs. The model and provider stay
+    // "unknown" because they genuinely never resolved -- the same placeholder the native
+    // passthrough path already writes -- and the row says who refused and why.
+    clearRequestLogsForTests();
+    const before = getRequestLogEntries().length;
+    const logCtx = { model: "unknown", provider: "unknown" } as RequestLogContext;
+    const refusal = workflowRefusalResponse("workflow-children-exhausted", undefined, {
+      requestId: "req-refusal-1",
+      start: Date.now() - 5,
+      logCtx,
+    });
+    expect(refusal.status).toBe(429);
+
+    const written = getRequestLogEntries();
+    expect(written.length).toBe(before + 1);
+    const row = written.find(entry => entry.id === "req-refusal-1");
+    expect(row?.terminalSource).toBe("synthetic");
+    expect(row?.localTerminalReason).toBe("workflow_children_exhausted");
+    expect(row?.errorCode).toBe("workflow_children_exhausted");
+    clearRequestLogsForTests();
+  });
+
+  test("the ceiling name is readable by a browser dashboard, not only by curl", () => {
+    // A header the data plane never exposes is invisible to cross-origin JavaScript, which
+    // would have made this marker useful to curl and to nothing else.
+    const refusal = workflowRefusalResponse("workflow-sends-exhausted");
+    expect(refusal.headers.get("Access-Control-Expose-Headers"))
+      .toContain(WORKFLOW_LOCAL_REFUSAL_HEADER);
   });
 
   test("every refusal lands on the record with the counts that caused it", () => {
@@ -507,9 +546,14 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
 
   test("tracked roots are listed most recently active first and bounded", () => {
     const now = 1_700_000_000_000;
+    // The leases are deliberately left open. `release()` stamps `lastSeenMs` from the wall
+    // clock -- it feeds eviction ordering, not a ceiling -- which would collapse the injected
+    // ordering this test is about into three near-identical real timestamps.
     for (const [index, root] of ["root-v", "root-w", "root-x"].entries()) {
-      admitWorkflowTurn(root, "worker", DEFAULT_WORKFLOW_BUDGET_POLICY, undefined, now + index)
-        ?.lease.release();
+      const admitted = admitWorkflowTurn(
+        root, "worker", DEFAULT_WORKFLOW_BUDGET_POLICY, undefined, now + index,
+      );
+      expect(admitted?.admitted).toBe(true);
     }
     const listed = listTrackedWorkflowRoots(2, DEFAULT_WORKFLOW_BUDGET_POLICY, now + 10);
     expect(listed.length).toBe(2);
@@ -517,4 +561,3 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     expect(listed[1]?.rootId).toBe("root-w");
   });
 });
-
