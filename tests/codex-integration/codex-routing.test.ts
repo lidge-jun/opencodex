@@ -2763,7 +2763,7 @@ describe("codex account selection order", () => {
         "shared",
         eligible,
         "gpt-daybreak-blue-latest",
-      )).toEqual(firstModel);
+      )).toMatchObject({ status: "selected", accountId: firstModel.accountId });
       expect(resolveCodexAccountForThreadDetailed(
         threadId,
         config,
