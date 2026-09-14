@@ -7,7 +7,7 @@ Hosted Responses image-tool eligibility uses the shared compatibility policy wit
 Codex Spark exception; standalone Images retain the separate relay contract below. See
 [Responses transport](../transports/responses.md#responses-httpsse).
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
 
 ## Standalone Images
 

@@ -6,7 +6,7 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 The Chat adapter's [OpenCode Go instruction ordering](../providers/chat-compat.md#opencode-go-chronological-instructions)
 changes translated message placement only; endpoint selection and transport stay with their existing owners.
 
-Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314).
 
 ## Transport inventory
 

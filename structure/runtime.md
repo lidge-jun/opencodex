@@ -7,7 +7,7 @@ Chat request serialization owns the destination-scoped
 [OpenCode Go instruction ordering](providers/chat-compat.md#opencode-go-chronological-instructions);
 it requires no runtime lifecycle change or new configuration option.
 
-Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
 
 ## CLI readiness diagnostics
 
