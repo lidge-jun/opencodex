@@ -234,6 +234,10 @@ import {
   type SingleUseDispatchPermit,
 } from "../../lib/request-execution-budget";
 import {
+  chargeWorkflowSends,
+  workflowSendCeilingReached,
+} from "../../lib/workflow-budget";
+import {
   ForwardAdmissionCredentialError,
   hasForwardableCodexBearer,
   isProxyAdmissionSecret,
@@ -1297,6 +1301,8 @@ interface CodexPoolAccountRetryArgs {
     resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
     /** The logical request's execution budget: the account move is its fourth send. */
     sendBudget?: TransientSendBudget;
+    /** Root workflow this turn belongs to, so the move is charged there as well. */
+    workflowRootId?: string;
   };
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
@@ -1659,6 +1665,8 @@ async function retryCodexPoolOnAlternateAccount(
           recordUnmovedTransientOutcome();
           return { kind: "no-alternate" };
         }
+        // The move is a physical send like any other, so the root workflow is charged too.
+        chargeWorkflowSends(args.options.workflowRootId, 1);
       }
       noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
       try {
@@ -5029,7 +5037,26 @@ async function handleResponsesInner(
   // parent's spend instead of starting over per target -- both halves of the measured
   // amplification in #4546.
   const sendBudget = options.sendBudget ?? createRequestExecutionBudget();
-  const noteTransientSends = (used: number): void => { sendBudget.used += Math.max(0, used); };
+  // The root workflow is the user-visible task. A per-request cap cannot bound a fan-out that
+  // sends once per child seven hundred times, so every send charged to the request is charged
+  // to the root as well (#4546).
+  const workflowRootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  const noteTransientSends = (used: number): void => {
+    const charged = Math.max(0, used);
+    sendBudget.used += charged;
+    chargeWorkflowSends(workflowRootId, charged);
+  };
+  // Refused before any dispatch, and deliberately not by evicting the root's ledger entry:
+  // dropping the record to make room would hand the fan-out a fresh allowance, which is the
+  // laundering this ceiling exists to stop. The client is told the task needs a new grant
+  // rather than being given a synthetic upstream error.
+  if (workflowSendCeilingReached(workflowRootId)) {
+    return formatErrorResponse(
+      429,
+      "workflow_budget_exhausted",
+      "This task has used its whole send budget, so no further upstream request was made. Requests already in flight settle as they finish.",
+    );
+  }
   // No floor. Math.max(1, ...) meant an exhausted request still funded one send on every
   // recovery leg, so a bounded per-leg allowance never became a bounded per-request one.
   const remainingTransientSendBudget = (budget: number): number =>
@@ -6102,7 +6129,7 @@ async function handleResponsesInner(
           route,
           parsed,
           logCtx,
-          options,
+          options: { ...options, workflowRootId },
           firstAuthCtx: authCtx,
           firstResponse: upstreamResponse,
           outcomeStatus: poolRetryOutcome,
