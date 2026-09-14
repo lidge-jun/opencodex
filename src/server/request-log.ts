@@ -254,7 +254,11 @@ export interface RequestLogEntry {
   affinityReason?: CodexAffinityReason;
   /** Where the upstream terminal/failure was observed. */
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
-  /** Whether the terminal came from a real upstream SSE event or a proxy synthetic tail. */
+  /**
+   * Whether the HTTP status and message originated upstream or were synthesized by this
+   * proxy. Covers SSE tails and pre-stream JSON refusals. Management surfaces this so a
+   * local refusal cannot be presented as an upstream reason.
+   */
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
@@ -813,6 +817,15 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
     };
   }
   return undefined;
+}
+
+/**
+ * Mark a refusal this proxy synthesized locally. Sets origin to `synthetic` and a
+ * distinct local reason so the request log cannot be read as an upstream overload.
+ */
+export function markLocalRequestLogRefusal(logCtx: RequestLogContext, reason: string): void {
+  logCtx.localTerminalReason = reason;
+  logCtx.terminalSource = "synthetic";
 }
 
 export function inspectResponseLogJson(logCtx: RequestLogContext, text: string): void {

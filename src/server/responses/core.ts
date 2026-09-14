@@ -1,4 +1,5 @@
 import { capturePoolQuotaWriter } from "../../codex/account-store";
+import { CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON } from "../../codex/pool-refresh-backoff";
 import type { Server } from "bun";
 import { recordContextSessionOwner } from "../../codex/context-owner";
 import { contextRelayActivated } from "../../codex/context-compat";
@@ -211,6 +212,7 @@ import {
 } from "../../codex/routing";
 import {
   TokenRefreshError,
+  isTerminalCodexPoolRefreshFailure,
   forceRefreshCodexPoolToken,
   readCodexAccountRecord,
 } from "../../codex/account-store";
@@ -349,6 +351,7 @@ import {
   recordAttemptCredentialSource,
   usageFromResponsesPayload,
   type RequestLogContext,
+  markLocalRequestLogRefusal,
 } from "../request-log";
 import {
   conversationIdFromResponsesRequest,
@@ -2521,7 +2524,11 @@ async function resolveResponsesCodexAuth(
  * defect this path exists to fix (#2887).
  */
 function isTerminalPoolRefreshFailure(error: unknown): boolean {
-  return error instanceof TokenRefreshError && (error.reason === "revoked" || error.reason === "expired");
+  // Delegated so "terminal" has ONE definition. A missing record or a missing refresh-grant
+  // fingerprint is permanent -- retrying cannot conjure a credential -- and used to be a bare
+  // Error, which fell through to the retryable 503 and told the operator to keep retrying a
+  // request that could never succeed.
+  return isTerminalCodexPoolRefreshFailure(error);
 }
 
 /**
@@ -2554,7 +2561,12 @@ export function poolCredentialRefreshIncompleteResponse(args: {
   authCtx: CodexAuthContext;
   config: Pick<OcxConfig, "codexAccounts">;
   accountSelector?: string;
+  logCtx?: RequestLogContext;
 }): Response {
+  // The wire contract below is unchanged on purpose, so the record has to carry the origin
+  // instead. Without it an operator reads this sentence under a field named "Upstream reason"
+  // and goes looking at the provider's status page for a refusal that never left this process.
+  if (args.logCtx) markLocalRequestLogRefusal(args.logCtx, CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON);
   const label = args.accountSelector ?? codexAuthContextLogLabel(args.authCtx, args.config);
   const account = label ? `Codex pool account ${label}` : "the selected Codex pool account";
   const response = formatErrorResponse(
@@ -2574,6 +2586,7 @@ export function poolCredentialRefreshIncompleteResponse(args: {
  * which must retire the account, from a transient failure, which must not.
  */
 async function refreshPoolForwardAuth(args: {
+  logCtx?: RequestLogContext;
   req: Request;
   config: OcxConfig;
   route: RouteResult;
@@ -2646,6 +2659,7 @@ async function refreshPoolForwardAuth(args: {
         authCtx,
         config,
         accountSelector: route.codexAccountNamespace,
+        logCtx: args.logCtx,
       }),
     };
   }
@@ -6002,7 +6016,7 @@ async function handleResponsesInner(
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
       const poolReplay = poolAuthCtx
-        ? await refreshPoolForwardAuth({ req, config, route, authCtx: poolAuthCtx, substituteMainCredential, options })
+        ? await refreshPoolForwardAuth({ req, config, route, authCtx: poolAuthCtx, substituteMainCredential, options, logCtx })
         : undefined;
       const replay = poolReplay
         ?? await refreshNativeMainForwardAuth({ req, config, route, authCtx, substituteMainCredential, options });

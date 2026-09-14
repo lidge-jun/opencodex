@@ -1282,5 +1282,6 @@
   "adapter-input-media-guard.test.ts": "adapters",
   "chat-media-translation.test.ts": "responses",
   "execution-budget-permits.test.ts": "lib",
-  "spend-instrumentation-log.test.ts": "server"
+  "spend-instrumentation-log.test.ts": "server",
+  "codex-pool-refresh-backoff.test.ts": "codex-integration"
 }

@@ -38,6 +38,8 @@ import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { retainedUtf8Bytes } from "../lib/admission";
 import { recordUpstreamHostFailure } from "./upstream-host-health";
 
+import { isCodexPoolRefreshCooling } from "./pool-refresh-backoff";
+
 type ThreadAffinityEntry = {
   accountId: string;
   generation: number;
@@ -1335,6 +1337,7 @@ function isCodexAccountSelectable(
     && getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
     && !isCodexQuotaAvoided(accountId, quotaScope, now)
     && !isCodexAccountSoftAvoided(accountId, now)
+    && !isCodexPoolRefreshCooling(accountId, now)
     && isCodexAccountUsable(config, accountId, selectionOptions);
 }
 
@@ -1360,6 +1363,7 @@ function codexAccountBlockReason(
   if (getCodexQuotaHealthSnapshot(accountId, quotaScope, now) !== null) return "cooldown";
   if (isCodexQuotaAvoided(accountId, quotaScope, now)) return "quota_avoided";
   if (isCodexAccountSoftAvoided(accountId, now)) return "transient";
+  if (isCodexPoolRefreshCooling(accountId, now)) return "transient";
   if (!isCodexAccountUsable(config, accountId, selectionOptions)) return "unusable";
   return undefined;
 }
@@ -1600,6 +1604,7 @@ function getEligiblePoolAccounts(
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
     .filter(account => !isCodexQuotaAvoided(account.id, quotaScope, now))
+    .filter(account => !isCodexPoolRefreshCooling(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
     .map(account => account.id);
   // The main Codex account is not stored in config.codexAccounts; include it as a
@@ -1616,6 +1621,7 @@ function getEligiblePoolAccounts(
     // earned it: the cooldown caps at fifteen minutes, the window runs up to six hours, and
     // in between the main account returns as a first-class candidate.
     && !isCodexQuotaAvoided(MAIN_CODEX_ACCOUNT_ID, quotaScope, now)
+    && !isCodexPoolRefreshCooling(MAIN_CODEX_ACCOUNT_ID, now)
     && (!skipFailoverReadyCandidates || !shouldFailover(config, MAIN_CODEX_ACCOUNT_ID, now))
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)
   ) {
@@ -1725,7 +1731,9 @@ function isTransientOnlyAffinityBlock(
   if (!isCodexAccountUsable(config, entry.accountId, selectionOptions)) return false;
   if (getCodexQuotaHealthSnapshot(entry.accountId, quotaScope, now) !== null) return false;
   if (isCodexQuotaAvoided(entry.accountId, quotaScope, now)) return false;
-  return shouldFailover(config, entry.accountId, now) || isCodexAccountSoftAvoided(entry.accountId, now);
+  return shouldFailover(config, entry.accountId, now)
+    || isCodexAccountSoftAvoided(entry.accountId, now)
+    || isCodexPoolRefreshCooling(entry.accountId, now);
 }
 
 /** Has a held binding waited longer than a transient failure can reasonably explain? */
