@@ -31,8 +31,8 @@ export type MainDeviceReauthFailureCode =
 export type MainDeviceReauthState =
   | { phase: "idle" }
   | { phase: "starting" }
-  | { phase: "pending"; flowId: string; verificationUrl: string; deviceCode: string }
-  | { phase: "committing"; flowId: string; verificationUrl: string; deviceCode: string }
+  | { phase: "pending"; flowId: string; verificationUrl: string; deviceCode: string; cancelFailed?: boolean }
+  | { phase: "committing"; flowId: string; verificationUrl: string; deviceCode: string; cancelFailed?: boolean }
   | { phase: "succeeded" }
   | { phase: "cancelled" }
   | { phase: "failed"; code: MainDeviceReauthFailureCode };
@@ -84,16 +84,27 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
   const cancel = useCallback(async () => {
     const flowId = flowRef.current;
     stopPolling();
-    flowRef.current = null;
     if (!flowId) {
       setState({ phase: "idle" });
       return;
     }
     try {
-      await fetch(`${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`, { method: "DELETE" });
-    } catch { /* best-effort: the flow expires on its own */ }
-    setState({ phase: "cancelled" });
-  }, [apiBase, stopPolling]);
+      const res = await fetch(`${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      const dto = await res.json().catch(() => ({})) as FlowDto;
+      if (dto.status !== "cancelled" && dto.status !== "succeeded") {
+        throw new Error();
+      }
+      flowRef.current = null;
+      setState({ phase: dto.status });
+      if (dto.status === "succeeded") onCompleted();
+    } catch {
+      // Keep ownership of the flow so the operator can retry cancellation.
+      setState(current => current.phase === "pending" || current.phase === "committing"
+        ? { ...current, cancelFailed: true }
+        : current);
+    }
+  }, [apiBase, onCompleted, stopPolling]);
 
   const start = useCallback(async () => {
     stopPolling();

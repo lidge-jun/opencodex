@@ -167,3 +167,51 @@ test("the hook POSTs an empty body to the dedicated route and polls to success",
   expect(captured!.state.phase).toBe("cancelled");
   expect(requests.some(r => r.method === "DELETE")).toBe(true);
 });
+
+test("a rejected cancellation retains the flow and can be retried", async () => {
+  let deleteAttempts = 0;
+  let completed = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/codex-auth/main/reauth-device") && init?.method === "POST") {
+        return Response.json({ flowId: "f1", status: "pending" });
+      }
+      if (init?.method === "DELETE") {
+        deleteAttempts += 1;
+        return deleteAttempts === 1
+          ? Response.json({ code: "unauthorized" }, { status: 401 })
+          : Response.json({ flowId: "f1", status: "succeeded" });
+      }
+      return Response.json({ flowId: "f1", status: "pending", verificationUrl: DEVICE_URL, deviceCode: DEVICE_CODE });
+    },
+  });
+  let captured: ReturnType<typeof useMainDeviceReauth> | null = null;
+  const Probe = () => {
+    const value = useMainDeviceReauth("", () => { completed += 1; });
+    useEffect(() => { captured = value; });
+    return null;
+  };
+  const { createRoot } = await import("react-dom/client");
+  const { createElement } = await import("react");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(createElement(Probe));
+  });
+  await act(async () => {
+    void captured!.start();
+    const deadline = Date.now() + 2000;
+    while (captured!.state.phase !== "pending" && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  });
+
+  await act(async () => { await captured!.cancel(); });
+  expect(captured!.state).toMatchObject({ phase: "pending", flowId: "f1", cancelFailed: true });
+
+  await act(async () => { await captured!.cancel(); });
+  expect(deleteAttempts).toBe(2);
+  expect(captured!.state.phase).toBe("succeeded");
+  expect(completed).toBe(1);
+});
