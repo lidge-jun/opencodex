@@ -16,15 +16,20 @@ const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
-// Reads back what a TOML consumer would see for a top-level basic-string key. A Windows path
+// Reads back what a TOML consumer would see for a top-level string key. A Windows path
 // is stored with escaped separators, so the raw file text never contains the unescaped path.
-function decodeTomlBasicString(toml: string, key: string): string | undefined {
-  const line = toml.split(/\r?\n/u).find(candidate => candidate.trimStart().startsWith(`${key} =`));
-  if (!line) return undefined;
-  const value = line.slice(line.indexOf("=") + 1).trim();
-  if (!value.startsWith(String.fromCharCode(34))) return undefined;
-  return JSON.parse(value) as string;
+function readRootTomlString(toml: string, key: string): string | undefined {
+  const value = Bun.TOML.parse(toml)[key];
+  return typeof value === "string" ? value : undefined;
 }
+
+test("catalog readback requires a root string rather than a nested namesake", () => {
+  const key = "model_catalog_json";
+  const catalog = String.raw`C:\Codex\catalog.json`;
+  expect(readRootTomlString(`${key} = ${JSON.stringify(catalog)}\n[profile]\n${key} = "nested"\n`, key)).toBe(catalog);
+  expect(readRootTomlString(`[profile]\n${key} = ${JSON.stringify(catalog)}\n`, key)).toBeUndefined();
+  expect(readRootTomlString(`[[profiles]]\n${key} = ${JSON.stringify(catalog)}\n`, key)).toBeUndefined();
+});
 
 // Full injectCodexConfig runs in a subprocess with isolated CODEX_HOME/OPENCODEX_HOME so
 // module-level path constants bind to the temp dirs (same pattern as codex-journal.test.ts).
@@ -451,7 +456,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     // What the picker reads is the decoded TOML value, not the raw file text. A Windows path
     // is written as a basic string with escaped separators, so asserting on the raw text
     // compared an unescaped path against escaped bytes and failed on Windows only.
-    expect(decodeTomlBasicString(written, "model_catalog_json")).toBe(catalogPath);
+    expect(readRootTomlString(written, "model_catalog_json")).toBe(catalogPath);
     expect(readFileSync(rollout, "utf8")).toBe(bytes);
   });
 
