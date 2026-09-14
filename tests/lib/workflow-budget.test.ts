@@ -228,7 +228,7 @@ describe("root ceilings bound a rate, not a lifetime (#4546)", () => {
     const first = admitWorkflowTurn("root-a", "worker", policy, undefined, now);
     expect(first?.admitted).toBe(true);
     first?.lease.release();
-    chargeWorkflowSends("root-a", policy.maxPhysicalSends, policy, now);
+    chargeWorkflowSends("root-a", policy.maxPhysicalSends, now);
 
     // Inside the window the ceiling still fires: the burst this cap was written against is
     // refused exactly as before.
@@ -282,22 +282,61 @@ describe("root ceilings bound a rate, not a lifetime (#4546)", () => {
     // The safety argument stated as a test rather than trusted as prose: a count inside a
     // window is bounded by the same count over a lifetime, so for identical traffic the
     // windowed ceiling fires no earlier than the lifetime one did.
+    //
+    // The root is admitted first on purpose. An earlier version of this test charged a root
+    // that had never been admitted, so `chargeWorkflowSends` returned at its `!state` guard,
+    // the snapshot came back undefined, and every assertion sat behind `if (snapshot)`. It
+    // would have passed with the ring deleted.
     const now = 1_700_000_000_000;
+    const seeded = admitWorkflowTurn("root-d", "worker", policy, undefined, now);
+    expect(seeded?.admitted).toBe(true);
+    seeded?.lease.release();
+
     let lifetime = 0;
+    let refusals = 0;
     for (let i = 0; i < policy.maxPhysicalSends * 3; i += 1) {
       const at = now + i * (WINDOW / 2);
-      chargeWorkflowSends("root-d", 1, policy, at);
+      chargeWorkflowSends("root-d", 1, at);
       lifetime += 1;
       const snapshot = workflowBudgetSnapshot("root-d", policy, at);
-      if (snapshot) expect(snapshot.sends).toBeLessThanOrEqual(lifetime);
+      expect(snapshot).toBeDefined();
+      expect(snapshot?.lifetimeSends).toBe(lifetime);
+      expect(snapshot?.sends).toBeLessThanOrEqual(lifetime);
+      if (workflowSendCeilingReached("root-d", policy, at)) {
+        refusals += 1;
+        expect(lifetime).toBeGreaterThanOrEqual(policy.maxPhysicalSends);
+      }
     }
+
+    // Spread half a window apart, this traffic is a trickle and is never refused, while the
+    // lifetime count passed the same ceiling three times over. That gap is the whole change.
+    expect(refusals).toBe(0);
+    expect(lifetime).toBeGreaterThan(policy.maxPhysicalSends);
+  });
+
+  test("the window a root was created with is the one its ceiling reads", () => {
+    // Charging on one scale and reading on another is not hypothetical: the slot ids written
+    // under a long window look ancient to a short one, `windowedSends` returns zero, and the
+    // ceiling stops firing at all. The geometry therefore belongs to the root, not to
+    // whichever policy the current caller happens to be holding.
+    const now = 1_700_000_000_000;
+    const seeded = admitWorkflowTurn("root-f", "worker", policy, undefined, now);
+    expect(seeded?.admitted).toBe(true);
+    seeded?.lease.release();
+    chargeWorkflowSends("root-f", policy.maxPhysicalSends, now);
+
+    const wider: WorkflowBudgetPolicy = { ...policy, windowMs: WINDOW * 100 };
+    const narrower: WorkflowBudgetPolicy = { ...policy, windowMs: 1_000 };
+    expect(workflowSendCeilingReached("root-f", wider, now + 1)).toBe(true);
+    expect(workflowSendCeilingReached("root-f", narrower, now + 1)).toBe(true);
+    expect(workflowBudgetSnapshot("root-f", narrower, now + 1)?.windowMs).toBe(WINDOW);
   });
 
   test("the snapshot separates the window from the lifetime total", () => {
     const now = 1_700_000_000_000;
     const admitted = admitWorkflowTurn("root-e", "worker", policy, undefined, now);
     admitted?.lease.release();
-    chargeWorkflowSends("root-e", 3, policy, now);
+    chargeWorkflowSends("root-e", 3, now);
     const inside = workflowBudgetSnapshot("root-e", policy, now);
     expect(inside?.sends).toBe(3);
     expect(inside?.lifetimeSends).toBe(3);

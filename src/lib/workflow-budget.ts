@@ -88,8 +88,18 @@ function workflowWindowMs(policy: WorkflowBudgetPolicy): number {
     : WORKFLOW_DEFAULT_WINDOW_MS;
 }
 
-function windowSlotMs(policy: WorkflowBudgetPolicy): number {
-  return Math.max(1, Math.ceil(workflowWindowMs(policy) / WORKFLOW_WINDOW_SLOTS));
+/**
+ * Slot size for one root's own window.
+ *
+ * The geometry is read off the state rather than off whatever policy the current caller
+ * happens to hold. Two callers may legitimately pass different policies for the same root --
+ * the ceiling numbers are the caller's business -- but if they also disagreed about
+ * `windowMs`, the slot ids one of them wrote would be on a scale the other cannot read, and
+ * charging with a long window while reading with a short one makes every stored slot look
+ * ancient and the ceiling never fire at all.
+ */
+function windowSlotMs(windowMs: number): number {
+  return Math.max(1, Math.ceil(windowMs / WORKFLOW_WINDOW_SLOTS));
 }
 
 /**
@@ -98,13 +108,8 @@ function windowSlotMs(policy: WorkflowBudgetPolicy): number {
  * A ring rather than a list of timestamps because the storage has to be bounded: a root that
  * sends forever would otherwise grow forever, and this ledger exists to bound a fan-out.
  */
-function recordWindowedSends(
-  state: WorkflowState,
-  policy: WorkflowBudgetPolicy,
-  now: number,
-  sends: number,
-): void {
-  const slotMs = windowSlotMs(policy);
+function recordWindowedSends(state: WorkflowState, now: number, sends: number): void {
+  const slotMs = windowSlotMs(state.windowMs);
   const slot = Math.floor(now / slotMs);
   const index = ((slot % WORKFLOW_WINDOW_SLOTS) + WORKFLOW_WINDOW_SLOTS) % WORKFLOW_WINDOW_SLOTS;
   if (state.sendSlotAt[index] !== slot) {
@@ -115,8 +120,8 @@ function recordWindowedSends(
 }
 
 /** Sends inside the window. A slot older than the window contributes nothing. */
-function windowedSends(state: WorkflowState, policy: WorkflowBudgetPolicy, now: number): number {
-  const slotMs = windowSlotMs(policy);
+function windowedSends(state: WorkflowState, now: number): number {
+  const slotMs = windowSlotMs(state.windowMs);
   const oldest = Math.floor(now / slotMs) - (WORKFLOW_WINDOW_SLOTS - 1);
   let total = 0;
   for (let index = 0; index < WORKFLOW_WINDOW_SLOTS; index += 1) {
@@ -133,8 +138,8 @@ function windowedSends(state: WorkflowState, policy: WorkflowBudgetPolicy, now: 
  * Pruning on read keeps the map bounded without a timer: every admission pays for the children
  * it can still see, and a root that goes quiet is cleaned up the next time it speaks.
  */
-function windowedChildren(state: WorkflowState, policy: WorkflowBudgetPolicy, now: number): number {
-  const cutoff = now - workflowWindowMs(policy);
+function windowedChildren(state: WorkflowState, now: number): number {
+  const cutoff = now - state.windowMs;
   for (const [childId, lastSeenMs] of state.children) {
     if (lastSeenMs <= cutoff) state.children.delete(childId);
   }
@@ -207,9 +212,11 @@ interface WorkflowState {
   /** Child id to the last time it was admitted, so a child that stops ages out of the count. */
   children: Map<string, number>;
   lastSeenMs: number;
+  /** Window this root's ring and child map are measured over, fixed when the root appeared. */
+  windowMs: number;
 }
 
-function newWorkflowState(now: number): WorkflowState {
+function newWorkflowState(now: number, policy: WorkflowBudgetPolicy): WorkflowState {
   return {
     active: 0,
     sends: 0,
@@ -217,6 +224,7 @@ function newWorkflowState(now: number): WorkflowState {
     sendSlotAt: new Array<number>(WORKFLOW_WINDOW_SLOTS).fill(Number.NEGATIVE_INFINITY),
     children: new Map<string, number>(),
     lastSeenMs: now,
+    windowMs: workflowWindowMs(policy),
   };
 }
 
@@ -242,7 +250,7 @@ function evictOneRoot(
     // EXHAUSTED-but-idle root -- count-exhausted or spend-exhausted -- because recreating it
     // fresh under the same id resets the very ceiling that already fired.
     if (state.active > 0) continue;
-    if (windowedSends(state, policy, now) >= policy.maxPhysicalSends) continue;
+    if (windowedSends(state, now) >= policy.maxPhysicalSends) continue;
     if (spendLedger?.exhausted("root", key) === true) continue;
     if (state.lastSeenMs < oldestAt) { oldestAt = state.lastSeenMs; oldestKey = key; }
   }
@@ -286,16 +294,16 @@ export function admitWorkflowTurn(
       // already fired, and a caller minting fresh ids would get unlimited budget from it.
       return { admitted: false, reason: "workflow-tracking-exhausted", rootId };
     }
-    state = newWorkflowState(now);
+    state = newWorkflowState(now, policy);
     roots.set(rootId, state);
   }
   state.lastSeenMs = now;
 
-  if (windowedSends(state, policy, now) >= policy.maxPhysicalSends) {
+  if (windowedSends(state, now) >= policy.maxPhysicalSends) {
     return { admitted: false, reason: "workflow-sends-exhausted", rootId };
   }
   if (childId !== undefined && !state.children.has(childId)
-    && windowedChildren(state, policy, now) >= policy.maxDistinctChildren) {
+    && windowedChildren(state, now) >= policy.maxDistinctChildren) {
     return { admitted: false, reason: "workflow-children-exhausted", rootId };
   }
   const ceiling = lane === "worker"
@@ -374,15 +382,16 @@ export function admitWorkflowTurn(
 export function chargeWorkflowSends(
   rootId: string | undefined,
   sends: number,
-  policy: WorkflowBudgetPolicy = DEFAULT_WORKFLOW_BUDGET_POLICY,
   now: number = Date.now(),
 ): void {
   if (!rootId || sends <= 0) return;
   const state = roots.get(rootId);
   if (!state) return;
   state.sends += sends;
-  // The same policy the ceiling will read, so the ring slot size cannot disagree with it.
-  recordWindowedSends(state, policy, now, sends);
+  // Geometry comes off the root itself, so no caller can charge on one scale and read on
+  // another. This function does not take a policy at all any more: it has no ceiling to
+  // compare, and the only thing a policy could have supplied here was that scale.
+  recordWindowedSends(state, now, sends);
   state.lastSeenMs = now;
 }
 
@@ -434,7 +443,7 @@ export function workflowSendCeilingReached(
 ): boolean {
   if (!rootId) return false;
   const state = roots.get(rootId);
-  return state !== undefined && windowedSends(state, policy, now) >= policy.maxPhysicalSends;
+  return state !== undefined && windowedSends(state, now) >= policy.maxPhysicalSends;
 }
 
 export function workflowBudgetSnapshot(
@@ -457,10 +466,10 @@ export function workflowBudgetSnapshot(
   if (!state) return undefined;
   return {
     active: state.active,
-    sends: windowedSends(state, policy, now),
-    children: windowedChildren(state, policy, now),
+    sends: windowedSends(state, now),
+    children: windowedChildren(state, now),
     lifetimeSends: state.sends,
-    windowMs: workflowWindowMs(policy),
+    windowMs: state.windowMs,
     maxPhysicalSends: policy.maxPhysicalSends,
     maxDistinctChildren: policy.maxDistinctChildren,
   };
