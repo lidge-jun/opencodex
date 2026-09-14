@@ -209,3 +209,105 @@ describe("workflow spend reservation", () => {
     if (denied && !denied.admitted) expect(denied.reason).toBe("workflow-spend-exhausted");
   });
 });
+
+describe("root ceilings bound a rate, not a lifetime (#4546)", () => {
+  const WINDOW = 60_000;
+  const policy: WorkflowBudgetPolicy = {
+    ...DEFAULT_WORKFLOW_BUDGET_POLICY,
+    maxPhysicalSends: 4,
+    maxDistinctChildren: 2,
+    windowMs: WINDOW,
+  };
+
+  beforeEach(() => {
+    resetWorkflowBudgetsForTest();
+  });
+
+  test("a root at the send ceiling is admitted again once its window rolls", () => {
+    const now = 1_700_000_000_000;
+    const first = admitWorkflowTurn("root-a", "worker", policy, undefined, now);
+    expect(first?.admitted).toBe(true);
+    first?.lease.release();
+    chargeWorkflowSends("root-a", policy.maxPhysicalSends, policy);
+
+    // Inside the window the ceiling still fires: the burst this cap was written against is
+    // refused exactly as before.
+    expect(admitWorkflowTurn("root-a", "worker", policy, undefined, now + 1)?.reason)
+      .toBe("workflow-sends-exhausted");
+    expect(workflowSendCeilingReached("root-a", policy)).toBe(true);
+
+    // Past the window the same root is served, with no restart. This is the case that made a
+    // long-lived session unusable: work it finished hours ago kept refusing it.
+    const rolled = admitWorkflowTurn("root-a", "worker", policy, undefined, now + WINDOW + 1);
+    expect(rolled?.admitted).toBe(true);
+    rolled?.lease.release();
+  });
+
+  test("distinct children age out of the count the same way sends do", () => {
+    const now = 1_700_000_000_000;
+    for (const child of ["c1", "c2"]) {
+      const admitted = admitWorkflowTurn("root-b", "worker", policy, child, now);
+      expect(admitted?.admitted).toBe(true);
+      admitted?.lease.release();
+    }
+    // A third distinct child inside the window is refused at the configured ceiling.
+    expect(admitWorkflowTurn("root-b", "worker", policy, "c3", now + 1)?.reason)
+      .toBe("workflow-children-exhausted");
+
+    // Once c1 and c2 have aged out, c3 is a new child under an empty count rather than the
+    // third member of a set the root can never shrink.
+    const later = admitWorkflowTurn("root-b", "worker", policy, "c3", now + WINDOW + 1);
+    expect(later?.admitted).toBe(true);
+    later?.lease.release();
+  });
+
+  test("a child that keeps working holds its slot; one that stops does not", () => {
+    const now = 1_700_000_000_000;
+    for (const at of [now, now + WINDOW / 2, now + WINDOW]) {
+      const busy = admitWorkflowTurn("root-c", "worker", policy, "busy", at);
+      expect(busy?.admitted).toBe(true);
+      busy?.lease.release();
+    }
+    const quiet = admitWorkflowTurn("root-c", "worker", policy, "quiet", now);
+    expect(quiet?.admitted).toBe(true);
+    quiet?.lease.release();
+
+    // "busy" was seen inside the window and still counts; "quiet" was not and does not, so
+    // there is room for exactly one more distinct child rather than none.
+    const snapshot = workflowBudgetSnapshot("root-c", policy, now + WINDOW + 1);
+    expect(snapshot?.children).toBe(1);
+  });
+
+  test("windowing never refuses traffic the lifetime count would have admitted", () => {
+    // The safety argument stated as a test rather than trusted as prose: a count inside a
+    // window is bounded by the same count over a lifetime, so for identical traffic the
+    // windowed ceiling fires no earlier than the lifetime one did.
+    const now = 1_700_000_000_000;
+    let lifetime = 0;
+    for (let i = 0; i < policy.maxPhysicalSends * 3; i += 1) {
+      const at = now + i * (WINDOW / 2);
+      chargeWorkflowSends("root-d", 1, policy);
+      lifetime += 1;
+      const snapshot = workflowBudgetSnapshot("root-d", policy, at);
+      if (snapshot) expect(snapshot.sends).toBeLessThanOrEqual(lifetime);
+    }
+  });
+
+  test("the snapshot separates the window from the lifetime total", () => {
+    const now = 1_700_000_000_000;
+    const admitted = admitWorkflowTurn("root-e", "worker", policy, undefined, now);
+    admitted?.lease.release();
+    chargeWorkflowSends("root-e", 3, policy);
+    const inside = workflowBudgetSnapshot("root-e", policy, now);
+    expect(inside?.sends).toBe(3);
+    expect(inside?.lifetimeSends).toBe(3);
+    expect(inside?.windowMs).toBe(WINDOW);
+
+    const after = workflowBudgetSnapshot("root-e", policy, now + WINDOW * 2);
+    // The ceiling reads the window and sees nothing; the lifetime total is still reported, so
+    // an operator can tell an idle root from one that never worked.
+    expect(after?.sends).toBe(0);
+    expect(after?.lifetimeSends).toBe(3);
+  });
+});
+
