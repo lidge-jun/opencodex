@@ -21,6 +21,7 @@ import {
   materializeCodexUpstreamAuth,
   CodexMainSubstitutionUnavailableError,
   isCodexAuthContextUsable,
+  codexPoolAffinityKey,
   resolveCodexAuthContext,
   shouldMarkAccountNeedsReauthForCodexAuthFailure,
   stripCodexRuntimeProviderFields,
@@ -896,7 +897,7 @@ describe("Codex auth context", () => {
     });
   });
 
-  test("the canonical parent-thread affinity stays authoritative over Desktop fallback headers", async () => {
+  test("a parent-bearing Desktop request keys as its own thread, not as its parent (#4546 wp8)", async () => {
     const cfg = config();
     cfg.autoSwitchThreshold = 0;
     saveCodexAccountCredential("pool-a", {
@@ -912,11 +913,24 @@ describe("Codex auth context", () => {
     });
 
     const resolved = await resolveCodexAuthContext(headers, cfg, "pool");
-    expect(resolved).toMatchObject({
-      kind: "pool",
-      accountId: "pool-a",
-      affinityKey: "canonical-parent-thread",
-    });
+    expect(resolved).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    if (resolved.kind !== "pool") throw new Error("expected pool context");
+    // The parent used to BE the key, so every child of one parent shared a single binding
+    // entry and none of them could hold one of their own. A child now keys as its own
+    // conversation; the parent qualifies placement, not identity.
+    expect(resolved.affinityKey?.startsWith("app:")).toBe(true);
+    expect(resolved.affinityKey).not.toContain("canonical-parent-thread");
+    expect(resolved.affinityKey).not.toContain("desktop-session-private");
+    expect(resolved.affinityKey).not.toContain("desktop-thread-private");
+    // Stable across turns that drop the parent header: the key is the session/thread pair.
+    expect(resolved.affinityKey).toBe(codexPoolAffinityKey(new Headers({
+      "session-id": "desktop-session-private",
+      "thread-id": "desktop-thread-private",
+    })));
+    // And distinct from the parent's own lane, which is what a parent-only request rides.
+    expect(resolved.affinityKey).not.toBe(codexPoolAffinityKey(new Headers({
+      "x-codex-parent-thread-id": "canonical-parent-thread",
+    })));
   });
 
   test("an oversized parent-thread id falls back to the bounded Desktop pair", async () => {

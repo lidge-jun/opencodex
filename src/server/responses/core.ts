@@ -201,6 +201,7 @@ import {
   type NativeMainRefreshDependencies,
 } from "../../codex/main-account";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
+import { recordCodexThreadLineage } from "../../codex/lineage";
 import {
   computeQuotaCooldown,
   codexQuotaScopeForModel,
@@ -4044,6 +4045,10 @@ async function handleResponsesInner(
   let subagentQuotaFailureModel = parsed.modelId;
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
   const poolAffinityKey = codexPoolAffinityKey(req.headers) ?? null;
+  // Preview has to see the same lineage resolve does. Without it, a child's first turn is
+  // previewed as a cold pick and resolved onto the family account, and the subagent fallback
+  // then decides model eligibility against an account the request will never use.
+  const poolLineage = recordCodexThreadLineage(req.headers);
 
   try {
     if (
@@ -4082,6 +4087,7 @@ async function handleResponsesInner(
       codexQuotaScopeForModel(modelId),
       { ...previewSelectionOptions, modelEligibleAccountIds },
       modelId,
+      poolLineage,
     );
     const previewAccountId = route.codexAccountId ?? subagentFallbackAccountPreview(
       route.modelId,
@@ -4227,6 +4233,7 @@ async function handleResponsesInner(
                 codexQuotaScopeForModel(modelId),
                 { ...recoverySelectionOptions, modelEligibleAccountIds },
                 modelId,
+                poolLineage,
               );
               const recoveryPreviewAccountId = subagentFallbackAccountPreview(
                 parsed.modelId,

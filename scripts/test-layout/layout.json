@@ -470,6 +470,7 @@
     "codex-integration-record.test.ts": "codex-integration",
     "codex-journal.test.ts": "codex-integration",
     "codex-legacy-config-keys.test.ts": "codex-integration",
+    "codex-lineage-placement.test.ts": "codex-integration",
     "codex-log-guard-coderabbit.test.ts": "codex-integration",
     "codex-log-guard-doctor-coderabbit.test.ts": "codex-integration",
     "codex-log-guard-doctor-protection.test.ts": "codex-integration",

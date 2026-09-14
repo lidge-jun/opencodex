@@ -71,15 +71,35 @@ support them.
 
 > Decision record: [ADR-0084](../decisions/ADR-0084-public-provider-contract.md)
 
-Pool affinity preserves the existing `x-codex-parent-thread-id` supplied by ordinary Codex clients.
-The parent id is trimmed and bounded under the same 512-byte component limit as the Desktop
-fallback. When Codex Desktop omits it or sends an unusable value, the complete bounded `session-id`
-plus `thread-id` pair is mapped to an opaque HMAC under a random process-local key. Missing or
-oversized components remain unbound, raw identifiers and durable hashes are never stored, and
+Pool affinity keys every Codex V2 thread as itself. A request carrying `thread-id` maps to an
+opaque `app:HMAC(session-id ?? x-codex-parent-thread-id, thread-id)` under a random process-local
+key, so a root is keyed exactly as before while each child holds an independent binding instead of
+collapsing onto the raw parent id shared by all its siblings. A request naming only
+`x-codex-parent-thread-id` rides that parent's own lane as `app:HMAC(parent, parent)`: one parent
+id still maps to exactly one lane, and no caller-supplied identifier reaches Pool state. Which
+requests bind at all is unchanged -- a bare `thread-id` with neither a session nor a parent has no
+family anchor and stays unbound. Components are trimmed and bounded at 512 bytes, missing or
+oversized values stay unbound, raw identifiers and durable hashes are never stored, and
 account-qualified selectors skip both lookup and mutation. Selection, subagent fallback preview,
 and terminal outcome accounting carry the same key so route planning cannot preview one account
 and authenticate another. A transient-failure streak does not delete the live binding that
 actually selected the account; the request is served by another account while the binding is kept.
+
+`src/codex/lineage.ts` owns that derivation and records the family relation behind it: each
+thread's own conversation key, its immediate parent's thread id, and the transitive root, so a
+grandchild resolves to the same root as its parent. Records are held per authenticated scope (an
+HMAC of the caller's Authorization under the same process-local key), and bounded in both
+dimensions -- idle TTL and an LRU cap on records per scope, and an LRU cap on scopes.
+
+First placement is the only routing decision that consults lineage. A thread that has never bound
+starts on the account CURRENTLY serving its parent, which includes a live transient detour rather
+than the parent's stale home, then on a compatible sibling's current serving account, then on
+ordinary cold placement. An ineligible or dead family account contributes nothing, because a stale
+home is worse than no hint. The child then holds an ordinary binding of its own: a later move of
+the parent does not drag it, and the hint does not move the shared active-account cursor. The same
+module exposes the root lookup other layers use for cost attribution and a lineage-backed
+worker/interactive answer; admission's header-only classification is unchanged and does not yet
+read it.
 
 > Decision record: [ADR-0085](../decisions/ADR-0085-public-provider-contract.md)
 
