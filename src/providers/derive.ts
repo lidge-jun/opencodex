@@ -121,6 +121,13 @@ function fillRecordOfArrays(
   return { ...cloneRecordOfArrays(seed), ...(user ? cloneRecordOfArrays(user) : {}) };
 }
 
+function fillRecordOfNumbers(
+  seed: Record<string, number>,
+  user: Record<string, number> | undefined,
+): Record<string, number> {
+  return { ...seed, ...(user ?? {}) };
+}
+
 function cloneNestedRecord(input: Record<string, Record<string, string>>): Record<string, Record<string, string>> {
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, { ...value }]));
 }
@@ -498,7 +505,18 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.models && seed.models) prov.models = [...seed.models];
   if (prov.liveModels === undefined && seed.liveModels !== undefined) prov.liveModels = seed.liveModels;
   if (prov.contextWindow === undefined && seed.contextWindow !== undefined) prov.contextWindow = seed.contextWindow;
-  if (!prov.modelContextWindows && seed.modelContextWindows) prov.modelContextWindows = { ...seed.modelContextWindows };
+  // Absence of a key in a persisted per-model map means the install predates that
+  // roster entry, not that the operator declined the value. An all-or-nothing copy
+  // let one customized model hide the registry's knowledge of every other model,
+  // which is how zhipu-bigmodel-coding/glm-5.3-flash reached the live catalog with
+  // correct modalities (per-key filled) and NO context window (all-or-nothing)
+  // while its sibling glm-5.3 reported 1M (#4570). Routing already merges per
+  // key (`mergeRecordFill` in src/router.ts), and modelDisplayNames /
+  // modelInputModalities / modelReasoningEfforts already fill per key, so this
+  // closes the last numeric gap.
+  if (seed.modelContextWindows) {
+    prov.modelContextWindows = fillRecordOfNumbers(seed.modelContextWindows, prov.modelContextWindows);
+  }
   // Per-model fill, not all-or-nothing: an operator who renamed ONE model must still receive
   // labels for the rest, and an existing install must pick up newly seeded rows on enrich.
   if (seed.modelDisplayNames) {
@@ -506,7 +524,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   }
   if (seed.modelInputModalities) prov.modelInputModalities = fillRecordOfArrays(seed.modelInputModalities, prov.modelInputModalities);
   if (prov.defaultMaxOutputTokens === undefined && seed.defaultMaxOutputTokens !== undefined) prov.defaultMaxOutputTokens = seed.defaultMaxOutputTokens;
-  if (!prov.modelMaxOutputTokens && seed.modelMaxOutputTokens) prov.modelMaxOutputTokens = { ...seed.modelMaxOutputTokens };
+  if (seed.modelMaxOutputTokens) {
+    prov.modelMaxOutputTokens = fillRecordOfNumbers(seed.modelMaxOutputTokens, prov.modelMaxOutputTokens);
+  }
   if ((!prov.reasoningEfforts || hasLegacyClinePassReasoningEfforts(name, prov)) && seed.reasoningEfforts) {
     prov.reasoningEfforts = [...seed.reasoningEfforts];
   }
