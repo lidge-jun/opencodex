@@ -109,6 +109,17 @@ function openAIChatTransport(provider: OcxProviderConfig): {
 }
 
 /**
+ * The translated Chat route has no video mapping: this adapter does not implement one,
+ * and the marker records that fact so the payload is not dropped in silence.
+ *
+ * The wording is deliberately about opencodex's own translation, not the provider or
+ * model. An earlier revision said "unsupported by this provider", which attributed an
+ * opencodex mapping limit to upstream capability the proxy has not established. Native
+ * Chat passthrough and Google inline video are unaffected by this route.
+ */
+const VIDEO_UNSUPPORTED_MARKER = "[video omitted: the translated Chat route has no video mapping]";
+
+/**
  * Build a provider request from an inbound Chat Completions body without translating it
  * through the Responses contract. This is deliberately a whitelist: Chat-only caller
  * fields retain their exact wire representation, while provider capability gates remain
@@ -784,11 +795,29 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
         } else if (typeof msg.content === "string") {
           chatMsg = { role: "user", content: msg.content };
         } else if (!hasImages) {
-          chatMsg = { role: "user", content: parts!.map(p => (p as OcxTextContent).text).join("") };
+          // A video part has no `text`, so joining it produced "" and the whole message
+          // was dropped: a video-only or text-plus-video turn vanished silently. OpenAI's
+          // Chat Completions wire has no video content part, so state the omission
+          // instead of losing it. Scoped to this adapter's wire, not a claim about video
+          // support in general — native Chat passthrough and Google inline video are
+          // unaffected.
+          chatMsg = {
+            role: "user",
+            content: parts!.map(p => (p.type === "video"
+              ? VIDEO_UNSUPPORTED_MARKER
+              : (p as OcxTextContent).text)).join(""),
+          };
         } else {
-          const chatParts = parts!.map(p => p.type === "image"
-            ? { type: "image_url", image_url: { url: p.imageUrl, ...(p.detail ? { detail: p.detail } : {}) } }
-            : { type: "text", text: (p as OcxTextContent).text });
+          const chatParts = parts!.map(p => {
+            if (p.type === "image") {
+              return { type: "image_url", image_url: { url: p.imageUrl, ...(p.detail ? { detail: p.detail } : {}) } };
+            }
+            // Previously this produced { type: "text", text: undefined } for a video
+            // part — a malformed part, worse than a drop because it can fail upstream
+            // schema validation.
+            if (p.type === "video") return { type: "text", text: VIDEO_UNSUPPORTED_MARKER };
+            return { type: "text", text: (p as OcxTextContent).text };
+          });
           chatMsg = { role: "user", content: chatParts };
         }
         if (pendingToolCalls.length > 0) deferredBarrierMessages.push(chatMsg);

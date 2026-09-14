@@ -20,17 +20,29 @@ provider B, and a cache lifetime. `src/responses/reasoning-replay-cache.ts`
 already solves a narrower version of this inside one provider's session and is the
 natural starting point. It is a design unit, not a line change.
 
-## R2 — real audio transport in the translated IR (from F5)
+## R2 — real audio/file transport, and any adapter-level refusal (from F5)
 
-Phase 4 preserves the *presence* of an audio attachment and explicitly does not add
-audio support. `OcxContentPart` has no audio member, no adapter consumes one, and
-per-provider audio capability is not recorded anywhere in the catalog —
-`src/providers/registry.ts:1062` notes exactly this when it omits audio from the
-Baseten hints.
+**F5 is PRESENCE-ONLY and is not fixed.** Phase 4 records that an audio attachment
+existed and explicitly does not add audio support. `OcxContentPart` has no audio
+member, no adapter consumes one, and per-provider audio capability is not recorded
+anywhere in the catalog — `src/providers/registry.ts:1062` notes exactly this when it
+omits audio from the Baseten hints.
 
-Adding it means a carrier type, capability data for 93 providers, and a wire mapping
-per vendor. Guessing any one of those produces a request that fails at call time
-instead of a modality that works.
+Two things are residual, not delivered:
+
+- **Transport.** A carrier type, capability data across the provider set, and a wire
+  mapping per vendor. Guessing any one of those produces a request that fails at call
+  time instead of a modality that works.
+- **Refusal.** There is no adapter-level rejection of audio. By final dispatch the part
+  is already a text marker, so every adapter continues. Doing this properly needs a
+  typed unsupported-modality signal that survives to final adapter dispatch — including
+  `runTurn`, compaction and sidecar paths — while raw Responses passthrough stays
+  untouched. An early throw in the shared parser is not acceptable: raw passthrough
+  runs through `parseRequest` before the adapter forwards `_rawBody`.
+
+`input_file` keeps its existing filename-only marker, and Chat inbound has no file or
+audio translation at all, so a Chat request can lose media before the Responses parser
+sees it. Neither is addressed here.
 
 ## R3 — Kiro remote images stay uninlined
 

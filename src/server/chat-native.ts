@@ -1,5 +1,5 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
-import { chatBodyCarriesImage } from "../chat/image-parts";
+import { chatBodyCarriesImage, chatBodyCarriesToolResultImage } from "../chat/image-parts";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import {
   chatCompletionsErrorBody,
@@ -148,6 +148,13 @@ export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boo
   if (rawBody.store === true || rawBody.background === true) return false;
   if (typeof rawBody.previous_response_id === "string" && rawBody.previous_response_id.length > 0) return false;
   if (rawBody.compaction_trigger !== undefined) return false;
+  // A standard Chat tool message accepts a string or text parts, not image_url, so
+  // normalizing a Pi/Anthropic tool image into image_url is not enough on its own —
+  // the part is still inside a tool message. The translated adapter already places
+  // tool-result images in a following user carrier after the complete paired batch
+  // (flushToolResultImages), so divert these requests there. Ordinary user images and
+  // text-only tool results keep the native fast path.
+  if (chatBodyCarriesToolResultImage(rawBody)) return false;
   // Vision sidecar coverage (roadmap 180): a text-only routed model with an
   // image-bearing body must go through the Responses pipeline, whose plan
   // site describes or strips the image. The native fast path has no vision

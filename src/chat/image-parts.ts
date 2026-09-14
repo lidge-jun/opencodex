@@ -81,38 +81,71 @@ export function chatBodyCarriesImage(rawBody: Rec): boolean {
 /**
  * Rewrite every recognized non-OpenAI image part into `image_url` form.
  *
- * Returns the SAME object reference when nothing needed rewriting, so a body with no
- * image — and a body whose images are already `image_url` — is passed through
- * untouched. The native path is a whitelist passthrough, so an incidental deep clone
- * would itself be a behavior change: only the `messages` array, the messages holding
- * a rewritten part, and their `content` arrays are rebuilt. Every sibling part,
- * every other message field and every top-level body field keep their exact value.
+ * Copy-on-write, and genuinely lazy: replacement arrays are allocated only after a
+ * part actually needs rewriting. An ordinary text or native-Chat request walks the
+ * messages and allocates nothing, and the original object reference is returned.
+ * An earlier revision mapped every message and content array eagerly and only then
+ * compared — identity was preserved, but the transient arrays were not, so the
+ * "only rewritten paths are rebuilt" claim was false for the common path.
  *
- * Each rewritten Pi/Anthropic base64 part costs one copy of its payload string. On
- * the translated path that copy already happened inside the old recognizer; on the
- * native path it is new peak memory, bounded by the inbound body limit that
- * `readChatBody` already enforces.
+ * Every sibling part, every other message field and every top-level body field keep
+ * their exact value: the native path is a whitelist passthrough, so an incidental
+ * deep clone would itself be a behavior change.
+ *
+ * Each rewritten Pi/Anthropic base64 part costs one copy of its payload string,
+ * bounded by the inbound body limit `readChatBody` already enforces.
  */
 export function normalizeChatImageParts(rawBody: Rec): Rec {
   const messages = rawBody.messages;
   if (!Array.isArray(messages)) return rawBody;
-  let bodyChanged = false;
-  const nextMessages = messages.map(message => {
-    if (!isRec(message) || !Array.isArray(message.content)) return message;
-    let messageChanged = false;
-    const nextContent = message.content.map(part => {
+  let nextMessages: unknown[] | undefined;
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages[messageIndex];
+    if (!isRec(message) || !Array.isArray(message.content)) continue;
+    const content = message.content;
+    let nextContent: unknown[] | undefined;
+    for (let partIndex = 0; partIndex < content.length; partIndex++) {
+      const part = content[partIndex];
       // Already-OpenAI parts are left byte-identical; only foreign shapes are rewritten.
-      if (!isRec(part) || part.type === "image_url") return part;
+      if (!isRec(part) || part.type === "image_url") continue;
       const url = chatImageUrlFromPart(part);
-      if (url === null) return part;
-      messageChanged = true;
+      if (url === null) continue;
       const detail = chatImageDetailFromPart(part);
-      return { type: "image_url", image_url: { url, ...(detail ? { detail } : {}) } };
-    });
-    if (!messageChanged) return message;
-    bodyChanged = true;
-    return { ...message, content: nextContent };
-  });
-  if (!bodyChanged) return rawBody;
-  return { ...rawBody, messages: nextMessages };
+      nextContent ??= content.slice();
+      nextContent[partIndex] = { type: "image_url", image_url: { url, ...(detail ? { detail } : {}) } };
+    }
+    if (!nextContent) continue;
+    nextMessages ??= messages.slice();
+    nextMessages[messageIndex] = { ...message, content: nextContent };
+  }
+  return nextMessages ? { ...rawBody, messages: nextMessages } : rawBody;
+}
+
+/**
+ * True when a `role: "tool"` message carries a recognized image, in any accepted shape.
+ *
+ * Shape normalization alone does NOT make such a request safe on the native fast path.
+ * A standard Chat tool message accepts a string or text parts only — not `image_url` —
+ * so rewriting a Pi/Anthropic tool image into `image_url` still leaves an image part
+ * inside a tool message, which a standard-enforcing endpoint rejects.
+ *
+ * The translated openai-chat adapter already solves placement: it collects tool-result
+ * images and flushes them into a following `user` carrier after the complete paired
+ * tool-result batch. Diverting these requests there is narrower than reimplementing
+ * that carrier on the native path, and it leaves ordinary user images and text-only
+ * tool results on the native fast path untouched.
+ */
+export function chatBodyCarriesToolResultImage(rawBody: Rec): boolean {
+  const messages = rawBody.messages;
+  if (!Array.isArray(messages)) return false;
+  for (const message of messages) {
+    // The legacy `function` role carries a tool result under the same schema constraint,
+    // so it needs the same diversion.
+    if (!isRec(message) || (message.role !== "tool" && message.role !== "function")) continue;
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (isRec(part) && chatImageUrlFromPart(part) !== null) return true;
+    }
+  }
+  return false;
 }

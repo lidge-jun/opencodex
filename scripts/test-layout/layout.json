@@ -167,6 +167,8 @@
     }
   },
   "explicit": {
+    "chat-responses-control-integration.test.ts": "responses",
+    "coding-agent-tool-result-images.test.ts": "adapters",
     "hub-usage.test.ts": "server",
     "client-hub-usage.test.ts": "clients",
     "cli-usage-hub.test.ts": "cli",
@@ -787,6 +789,7 @@
     "kiro-oauth.test.ts": "providers/kiro",
     "kiro-pool-rank.test.ts": "providers/kiro",
     "kiro-reasoning-roundtrip.test.ts": "providers/kiro",
+    "kiro-remote-image.test.ts": "providers/kiro",
     "kiro-retry.test.ts": "providers/kiro",
     "kiro-review-regressions.test.ts": "providers/kiro",
     "kiro-stream.test.ts": "providers/kiro",
@@ -988,6 +991,7 @@
     "openai-chat-system-order.test.ts": "adapters/openai",
     "openai-chat-tool-result-images.test.ts": "adapters/openai",
     "openai-chat-url.test.ts": "adapters/openai",
+    "openai-chat-video-part.test.ts": "adapters/openai",
     "openai-provider-option-e2e.test.ts": "adapters/openai",
     "openai-provider-option-migration.test.ts": "adapters/openai",
     "openai-provider-option-startup.test.ts": "adapters/openai",
@@ -1013,6 +1017,7 @@
     "owned-service-home.test.ts": "server",
     "package-tree-integrity.test.ts": "ci-workflows",
     "parallel-tool-calls-optin.test.ts": "codex-integration",
+    "parser-content-audio.test.ts": "responses",
     "passive-route-linker.test.ts": "server",
     "passthrough-abort.test.ts": "responses",
     "passthrough-headers.test.ts": "responses",

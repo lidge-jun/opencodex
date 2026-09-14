@@ -259,6 +259,19 @@ route-eligibility matched only `image_url`, so a text-only routed model kept a
 Pi-shaped or Anthropic-shaped image body and the native whitelist passthrough
 forwarded the foreign part verbatim.
 
+Normalization is copy-on-write and lazy: replacement arrays are allocated only once a
+part actually needs rewriting, so an ordinary text request walks the messages and
+allocates nothing.
+
+**Shape normalization alone does not make a tool-result image safe on the native fast
+path.** A standard Chat `role: "tool"` message accepts a string or text parts, not
+`image_url`, so rewriting a Pi or Anthropic tool image still leaves an image part
+inside a tool message. `chatBodyCarriesToolResultImage` therefore makes such a request
+ineligible for the native shortcut, and the translated openai-chat adapter owns it —
+that adapter already collects tool-result images and flushes them into a following
+`user` carrier after the complete paired tool-result batch. Ordinary user images and
+text-only tool results keep the native fast path.
+
 `normalizeChatImageParts` runs in `handleChatCompletionsWithBudget` immediately
 after routing-body validation and before `routeModel`, so the text-only diversion in
 `isNativeChatRouteEligible` and the forwarded native wire observe the same parts. It

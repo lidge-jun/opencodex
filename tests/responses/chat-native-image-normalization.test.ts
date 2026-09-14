@@ -19,6 +19,10 @@ import {
   normalizeChatImageParts,
 } from "../../src/chat/image-parts";
 import { isNativeChatRouteEligible } from "../../src/server/chat-native";
+import { chatCompletionsToResponsesBody } from "../../src/chat/inbound";
+import { parseRequest } from "../../src/responses/parser";
+import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import type { OcxProviderConfig } from "../../src/types";
 import type { RouteResult } from "../../src/router";
 
@@ -159,5 +163,109 @@ describe("F1 text-only diversion sees every image shape", () => {
   test("a vision-capable route keeps an image-bearing body on the native path", () => {
     const body = userBody([{ type: "image", data: PNG, mimeType: "image/png" }]);
     expect(isNativeChatRouteEligible(route(), body)).toBe(true);
+  });
+});
+
+describe("F1 normalization does not allocate on the common path", () => {
+  test("a text-only body is returned by reference with its arrays untouched", () => {
+    const body = userBody([{ type: "text", text: "plain" }]);
+    const messages = body.messages;
+    const content = (messages as Record<string, unknown>[])[0]!.content;
+
+    const out = normalizeChatImageParts(body);
+
+    // Identity of the nested arrays too: an earlier revision preserved only the
+    // top-level reference while still rebuilding every message and content array.
+    expect(out).toBe(body);
+    expect(out.messages).toBe(messages);
+    expect((out.messages as Record<string, unknown>[])[0]!.content).toBe(content);
+  });
+
+  test("an unchanged message keeps its own reference when a sibling is rewritten", () => {
+    const untouched = { role: "user", content: [{ type: "text", text: "first" }] };
+    const body = {
+      model: "m",
+      messages: [untouched, { role: "user", content: [{ type: "image", data: PNG, mimeType: "image/png" }] }],
+    };
+
+    const out = normalizeChatImageParts(body);
+    const outMessages = out.messages as Record<string, unknown>[];
+
+    expect(out).not.toBe(body);
+    expect(outMessages[0]).toBe(untouched);
+    expect(outMessages[1]).not.toBe(body.messages[1]);
+  });
+});
+
+describe("F1 tool-role images use the standard Chat carrier", () => {
+  // A standard Chat tool message accepts a string or text parts only. Rewriting a
+  // foreign tool image into image_url leaves it inside a tool message, which a
+  // standard-enforcing endpoint rejects — so shape normalization alone is not enough.
+  const toolImageVariants: Array<[string, Record<string, unknown>]> = [
+    ["Pi/MCP data part", { type: "image", data: PNG, mimeType: "image/png" }],
+    ["Anthropic base64 source", { type: "image", source: { type: "base64", media_type: "image/png", data: PNG } }],
+    ["already-OpenAI image_url", { type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } }],
+  ];
+
+  for (const [label, part] of toolImageVariants) {
+    test(`diverts a tool image off the native path: ${label}`, () => {
+      const body = { model: "vision-model", messages: [{ role: "tool", tool_call_id: "call1", content: [part] }] };
+
+      // Both before and after normalization: the shape changes, the placement problem does not.
+      expect(isNativeChatRouteEligible(route(), body)).toBe(false);
+      expect(isNativeChatRouteEligible(route(), normalizeChatImageParts(body))).toBe(false);
+    });
+  }
+
+  test("a text-only tool result stays on the native fast path", () => {
+    const body = { model: "vision-model", messages: [{ role: "tool", tool_call_id: "call1", content: "done" }] };
+    expect(isNativeChatRouteEligible(route(), body)).toBe(true);
+  });
+
+  test("a tool result with text parts only stays native", () => {
+    const body = {
+      model: "vision-model",
+      messages: [{ role: "tool", tool_call_id: "call1", content: [{ type: "text", text: "done" }] }],
+    };
+    expect(isNativeChatRouteEligible(route(), body)).toBe(true);
+  });
+
+  test("a user image on a vision-capable route is unaffected by the tool-image rule", () => {
+    expect(isNativeChatRouteEligible(route(), userBody([{ type: "image", data: PNG, mimeType: "image/png" }]))).toBe(true);
+  });
+
+  test("the translated wire puts the screenshot in a user carrier after a string tool result", async () => {
+    const body = normalizeChatImageParts({
+      model: "vision-model",
+      messages: [
+        { role: "user", content: "Describe the screenshot." },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "call1", type: "function", function: { name: "screenshot", arguments: "{}" } }],
+        },
+        { role: "tool", tool_call_id: "call1", content: [{ type: "image", data: PNG, mimeType: "image/png" }] },
+      ],
+    });
+
+    expect(isNativeChatRouteEligible(route(), body)).toBe(false);
+
+    const parsed = parseRequest(chatCompletionsToResponsesBody(body));
+    const adapter = withTestTranslatorBudget(createOpenAIChatAdapter(route().provider));
+    const wire = JSON.parse((await adapter.buildRequest(parsed)).body as string) as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+
+    const toolIndex = wire.messages.findIndex(m => m.role === "tool");
+    expect(toolIndex).toBeGreaterThanOrEqual(0);
+
+    // Every tool message is a plain string: this is the standard-schema requirement
+    // a permissive mock that merely counts image parts would not catch.
+    expect(wire.messages.every(m => m.role !== "tool" || typeof m.content === "string")).toBe(true);
+
+    const carrierIndex = wire.messages.findIndex(m => m.role === "user"
+      && Array.isArray(m.content)
+      && (m.content as Array<Record<string, unknown>>).some(p => p?.type === "image_url"));
+    expect(carrierIndex).toBeGreaterThan(toolIndex);
   });
 });

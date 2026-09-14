@@ -306,3 +306,33 @@ true `parallelToolCalls` is byte-identical to previous behavior.
 The flag constrains the model's output, not execution ordering. Sequential tool use
 is enforced by the caller's own loop returning each `tool_result` before issuing the
 next request; this mapping does not provide that.
+## Unmapped modalities are recorded, not dropped
+
+The translated Chat route has no video mapping — this adapter does not implement one.
+Both serialization branches emit a bounded marker for a video part: the image-bearing
+branch previously produced `{type:"text", text: undefined}`, a malformed part, and the
+text-only branch joined it to `""` so a video-only or text-plus-video message was
+dropped entirely. The marker names opencodex's own missing mapping; it does not assert
+anything about the provider's or model's capability, which the proxy has not
+established. Native Chat passthrough and Google inline video are separate routes and
+are unaffected.
+
+`input_audio` parts are recognized in the shared Responses parser and recorded as a
+presence marker in the translated IR. This is **presence only and not audio support**:
+the IR has no audio carrier and no adapter consumes one. The parser stays non-throwing
+because the native Responses passthrough also runs through `parseRequest` before the
+adapter forwards `_rawBody`, so refusing there would regress raw passthrough.
+
+**There is no adapter-level refusal for audio today.** By the time an adapter sees the
+turn the part is already a text marker, so it continues rather than rejecting. A typed
+unsupported-modality signal that survives to final adapter dispatch — leaving raw
+passthrough untouched — is a separate, recorded residual. `input_file` likewise keeps
+its existing filename-only marker, and Chat inbound still has no file or audio
+translation, so a Chat request can lose media before this parser sees it. No payload
+bytes and no media URL ever enter a marker or an error message.
+
+The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images as
+real image blocks rather than flattening them to the text `[image]`, and orders image
+blocks chronologically — history before current — so attachment order matches the
+prose the model reads beside them. Vendor tool execution stays disabled on both
+adapters, and Qoder's explicit refusal of original images is unchanged.

@@ -145,7 +145,7 @@ than a drop because it can fail schema validation upstream.
             // bounded marker keeps the turn well-formed and tells the model an
             // attachment it cannot see was sent; the previous code produced a text
             // part whose text was undefined.
-            if (p.type === "video") return { type: "text", text: "[video omitted: unsupported by this provider]" };
+            if (p.type === "video") return { type: "text", text: "[video omitted: the translated Chat route has no video mapping]" };
             return { type: "text", text: (p as OcxTextContent).text };
           });
 ```
