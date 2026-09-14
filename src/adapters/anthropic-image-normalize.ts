@@ -155,6 +155,16 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
       // EMITTED, so appending a newer image cannot re-encode history and bust
       // Anthropic's prompt prefix cache. tierBias (413 retry) applies on top of
       // either base and still clamps to TERMINAL_POS.
+      //
+      // Every read in this pass sees the store as it was BEFORE this request,
+      // because nothing is written until the whole request settles (see the
+      // record loop at the end). That is load-bearing, not incidental: an image
+      // can appear more than once in one history, and identity keying collapses
+      // those occurrences onto one entry. Writing during the pass let the OLDEST
+      // occurrence's tier win a race against the newest one and drag it down —
+      // 30 copies of a screenshot all landed on the oldest copy's tier instead of
+      // the age pyramid. Reading a fixed snapshot gives each occurrence its own
+      // age tier on a cold store, which is the pre-#4532 behaviour.
       const recorded = recordedEmittedPosition(b64, sourceMedia);
       const pos = Math.min((recorded ?? initialPosition(newestFirstIndex, 0)) + Math.max(0, bias), TERMINAL_POS);
       const result = await processAt(b64, pos, sourceMedia, encode, validate);
@@ -182,7 +192,6 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
         size = result.data.length;
       }
       entries[i] = { target, sourceB64: b64, sourceMedia, pos: result.pos, size, done: result.pos >= TERMINAL_POS };
-      recordEmittedPosition(b64, sourceMedia, result.pos);
     }
   };
   await Promise.all(Array.from({ length: workerCount }, () => worker().catch(err => {
@@ -224,7 +233,16 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
     entry.size = newSize;
     entry.pos = result.pos;
     entry.done = result.pos >= TERMINAL_POS;
-    recordEmittedPosition(entry.sourceB64, entry.sourceMedia, result.pos);
+  }
+
+  // #4532: commit the positions these images actually went out at, now that the
+  // first pass and the aggregate demotion loop have both settled. Written here
+  // rather than inline so every read above saw one consistent pre-request
+  // snapshot. `recordEmittedPosition` keeps the deeper of the stored and the new
+  // position, so a repeated image converges on the most-demoted tier it was ever
+  // emitted at and never moves back up.
+  for (const entry of entries) {
+    if (entry) recordEmittedPosition(entry.sourceB64, entry.sourceMedia, entry.pos);
   }
 
   // Terminal overflow (050 audit round 1, blocker 3): with no downstream guard, drop
