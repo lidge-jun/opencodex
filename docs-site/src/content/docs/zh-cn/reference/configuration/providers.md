@@ -146,6 +146,8 @@ selector，而不是分配一个新名称。
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
 
+对于使用多密钥池的转换后 Responses 请求，每次路由到提供商的调用，其初始恢复和用于完成响应的后续请求共同使用最多 `N - 1` 次 API 密钥轮换额度，其中 `N` 固定为首次发送前的密钥池大小。冷却期结束或随后扩大密钥池都不会补充此额度。其他发送预算可能让重试更早停止。轮换被拒绝时，仍会根据最后一个 429 记录失败密钥的冷却期，但不会选择替代密钥，响应继续按现有错误处理方式处理。
+
 API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/reference/configuration/server/#claude-code) 下配置。
 
 ## 提供者诊断出站安全性

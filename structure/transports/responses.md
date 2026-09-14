@@ -113,13 +113,7 @@ within their route; neither route falls through to the other. See
 
 ### Pre-dispatch API-key pool pick
 
-Key-auth routes with a configured `apiKeyPoolStrategy` and two or more pool entries pick a
-warm key before the first send (`selectProactiveApiKeyTransport` in
-`src/providers/key-failover.ts`). The pick is inert unless that strategy is set and the
-committed key is already cooling or missing from the pool: a healthy committed key, including
-a manual selection, is left alone and the common path returns null without a config write.
-`forgetApiKeyRotationCursor` drops the process-local round-robin cursor when the operator
-edits the pool, so a later pick cannot second-guess that choice.
+Key-auth routes with a configured `apiKeyPoolStrategy` and two or more pool entries pick a warm key before the first send (`selectProactiveApiKeyTransport` in `src/providers/key-failover.ts`). The pick is inert unless that strategy is set and the committed key is already cooling or missing from the pool: a healthy committed key, including a manual selection, is left alone and the common path returns null without a config write. `forgetApiKeyRotationCursor` drops the process-local round-robin cursor when the operator edits the pool, so a later pick cannot second-guess that choice.
 
 On the shared Responses path the assignment lands in `src/server/responses/core.ts`
 immediately before `resolveProviderTransport`. `route.provider` is copied into
@@ -141,6 +135,11 @@ are not at risk on a stored row, because the config schema requires both.
 
 Reactive 429 rotation (`rotateProviderTransportOn429`) remains the recovery path after a
 send has already earned a throttle.
+
+### Bounded API-key 429 rotation
+
+Each generic `handleResponsesInner` invocation in `src/server/responses/core.ts` captures `max(0, initial apiKeyPool.length - 1)` before its first send and shares that failover count with its terminal continuations. Cooldown expiry and later pool growth do not refill it. This is a failover count, not a distinct-key guarantee or a new combo-wide budget; existing shared physical-send admission remains authoritative. Before cancelling a superseded response or choosing another key, the path checks both limits. On refusal, `src/providers/key-failover.ts` accepts `allowRotation: false` to record the proven failed key's cooldown through the existing selection-identity fence, without selecting, persisting or announcing an unattempted replacement. The original failure stays available to normal response handling, including an already-started streaming continuation. `tests/server/server-key-failover-e2e.test.ts` covers expiry, shared continuation limits and earlier send-budget exhaustion; `tests/adapters/key-failover.test.ts` verifies health-only recording, unchanged disk bytes and manual-selection ownership.
+
 
 ### Routed service-tier capability
 

@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
-import { clearKeyCooldowns, rotateKeyOn429 } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { startServer } from "../../src/server";
@@ -43,6 +43,98 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test.each(["exhausted", "continuation", "transient", "budget-exhausted"] as const)(
+    "429 rotation stays request-bounded after every earlier cooldown expires (%s)",
+    async mode => {
+      const originalFetch = globalThis.fetch;
+      const endpoint = "https://key429-fixture.invalid/v1/chat/completions";
+      const expectedSends = mode === "exhausted" ? 2 : mode === "budget-exhausted" ? 4 : 3;
+      const seen: string[] = [];
+      const cancelled: number[] = [];
+      let now = Date.now();
+      let restoreClock: (() => void) | undefined;
+      let server: ReturnType<typeof startServer> | undefined;
+      const config = {
+        port: 0, hostname: "127.0.0.1", defaultProvider: "key429fixture",
+        providers: { key429fixture: {
+          adapter: "openai-chat", baseUrl: "https://key429-fixture.invalid/v1", authMode: "key",
+          apiKey: "synthetic-key-a", apiKeyPool: [
+            { id: "a", key: "synthetic-key-a" }, { id: "b", key: "synthetic-key-b" },
+            ...(mode === "budget-exhausted" ? [{ id: "c", key: "synthetic-key-c" }] : []),
+          ],
+          ...(mode === "continuation" ? { terminalContinuationGuard: true } : {}),
+          ...(mode === "transient" || mode === "budget-exhausted" ? { transientRetryOn5xx: { enabled: true, attempts: 3 } } : {}),
+        } },
+      } as OcxConfig;
+      try {
+        saveConfig(config);
+        server = startServer(0);
+        const clock = spyOn(Date, "now").mockImplementation(() => now);
+        restoreClock = () => clock.mockRestore();
+        globalThis.fetch = (async (input, init) => {
+          const url = input instanceof Request ? input.url : String(input);
+          if (url !== endpoint) throw new Error("unexpected outbound request in key-rotation fixture");
+          seen.push(new Headers(init?.headers).get("authorization") ?? "");
+          // The old loop must terminate deterministically instead of waiting for a test timeout.
+          if (seen.length > 6) throw new Error("key-rotation fixture send ceiling exceeded");
+          const send = seen.length;
+          // Retry-After: 0 means a 1ms cooldown. Every subsequent response arrives after it.
+          now += 1_000;
+          if (mode === "continuation" && send === 2) {
+            return Response.json({ id: "chatcmpl-plan", object: "chat.completion",
+              choices: [{ index: 0, message: { role: "assistant", content: "I will edit the file now." }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+            });
+          }
+          const status = (mode === "transient" && send === 1) || (mode === "budget-exhausted" && send < 3) ? 503 : 429;
+          const text = JSON.stringify({ error: { message: `key429-final-${send}`, type: "rate_limit_error" } });
+          const bytes = new TextEncoder().encode(text);
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) { controller.enqueue(bytes); controller.close(); },
+            cancel() { cancelled.push(send); },
+          });
+          return new Response(body, { status, headers: {
+            "content-type": "application/json", "retry-after": "0",
+          } });
+        }) as typeof fetch;
+        const result = await originalFetch(new URL("/v1/responses", server.url), {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "key429fixture/test", stream: false,
+            input: mode === "continuation" ? "Edit the file using the tool." : "hello",
+            ...(mode === "continuation" ? { tools: [{ type: "function", name: "edit_file",
+              description: "Synthetic edit tool; never executed", parameters: { type: "object", properties: {} },
+            }] } : {}),
+          }),
+        });
+        const text = await result.text();
+        expect(seen).toHaveLength(expectedSends);
+        expect(seen).toEqual(mode === "budget-exhausted"
+          ? ["Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
+          : mode === "transient"
+          ? ["Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
+          : mode === "continuation"
+            ? ["Bearer synthetic-key-a", "Bearer synthetic-key-b", "Bearer synthetic-key-b"]
+            : ["Bearer synthetic-key-a", "Bearer synthetic-key-b"]);
+        // Exhausted initial rotation must not cancel the final error it returns to the caller.
+        if (mode !== "continuation") {
+          expect(result.status).toBe(429);
+          expect(result.headers.get("retry-after")).toBe("0");
+          expect(text).toContain(`key429-final-${expectedSends}`);
+          expect(cancelled).not.toContain(expectedSends);
+        } else {
+          // A continuation error is represented inside the already-started Responses result.
+          expect(text).toContain("key429-final-3");
+        }
+        expect(cancelled).toContain(mode === "budget-exhausted" ? 3 : mode === "transient" ? 2 : 1);
+        expect(getKeyCooldownUntil("key429fixture", "b", now)).toBe(now + 1);
+      } finally {
+        globalThis.fetch = originalFetch;
+        restoreClock?.();
+        await server?.stop(true);
+      }
+    }, 15_000,
+  );
+
   test("physical key selection rejects disabled, removed, and changed-auth providers", () => {
     const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", authMode: "key", apiKey: "synthetic-first" } as const;
     const config = { providers: { current: { ...provider } } } as unknown as OcxConfig;

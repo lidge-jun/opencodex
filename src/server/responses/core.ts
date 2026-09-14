@@ -7644,6 +7644,34 @@ async function handleResponsesInner(
     : 300_000;
   activeAdapter = adapter;
 
+  // Bound 429 rotations independently of cooldown expiry. Capture the pool before the first
+  // send; a later provider refresh cannot enlarge this invocation's allowance. The initial
+  // recovery and terminal continuations share it; it is a failover count, not a distinct-key set.
+  const maxKeyPoolFailovers = Math.max(0, (route.provider.apiKeyPool?.length ?? 0) - 1);
+  let keyPoolFailovers = 0;
+  const keyPool429RetryAllowed = (continuation: boolean): boolean => {
+    if (keyPoolFailovers >= maxKeyPoolFailovers) return false;
+    // Adapter-owned sends retain their existing base-only admission (for example Kiro).
+    if (activeAdapter.fetchResponse) {
+      return !adapterSendBudget
+        || adapterSendBudget.remainingBaseSends(adapterSendBudget.policy.baseSendAllowance) > 0;
+    }
+    const policy = transientRetryPolicyFor(route.provider);
+    // Reset-only transports do not opt into the shared transient policy; the rotation cap
+    // still bounds them without granting a new retry policy or changing their reset limit.
+    if (!policy) return true;
+    if (!Number.isInteger(policy.attempts) || policy.attempts <= 0) return false;
+    if (remainingTransientSendBudget(policy.attempts) > 0) return true;
+    // Continuations currently draw base sends only. The initial recovery can use the existing
+    // auth-recovery reserve; checking this decision does not consume a permit or add allowance.
+    if (continuation || !isRequestExecutionBudget(sendBudget)) return false;
+    return sendBudget.reserveDispatch({
+      sendClass: "auth-recovery",
+      targetKey: `${route.providerName}|${route.modelId}|key-429`,
+      countedExternally: true,
+    }).allowed;
+  };
+
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // auth headers, generated compat headers). Same-target 429 replays reuse it verbatim; the
   // builder runs again only after a key/account/adapter rotation, an oauth refresh, or an
@@ -8093,8 +8121,10 @@ async function handleResponsesInner(
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
           promptCacheKey: parsed.options.promptCacheKey,
+          allowRotation: keyPool429RetryAllowed(false),
         });
         if (!rotated) break;
+        keyPoolFailovers += 1;
         // Release the failed response's socket before retrying; unread bodies otherwise linger
         // until runtime cleanup (one per rotated key under a rate-limit storm).
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -8516,6 +8546,7 @@ async function handleResponsesInner(
         response.status === 429
         && rateLimitPolicy !== null
         && rateLimitRetries < rateLimitPolicy.attempts
+        && !sendBudgetExhausted()
       ) {
         rateLimitRetries += 1;
         // Release unread body + heartbeat-fed wait via the shared same-target helper.
@@ -8562,8 +8593,10 @@ async function handleResponsesInner(
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
           promptCacheKey: nextParsed.options.promptCacheKey,
+          allowRotation: keyPool429RetryAllowed(true),
         });
         if (rotated) {
+          keyPoolFailovers += 1;
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           route.provider = rotated;
           invalidateSameTargetRequest();

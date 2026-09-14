@@ -224,6 +224,8 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
+For translated Responses requests using a multi-key pool, each routed provider invocation shares a maximum of `N - 1` API-key rotations between its initial recovery and terminal continuations, where `N` is the pool size before the first send. Cooldown expiry or later pool growth does not replenish this allowance. Other send budgets may stop retries sooner. Once rotation is refused, the last 429 still records the failed key's cooldown, but no replacement key is selected and the response follows the existing error handling.
+
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
 served the first request. Changing the selected key, its reference or resolved value, authentication
 mode, or base URL during search or provider pacing ends the turn with a bridge error before another

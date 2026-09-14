@@ -146,6 +146,8 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 레거시 불리언입니다. 더 새로운 필드가 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 로컬 실행 정책입니다. 기본값은 `off`입니다. `codex-sandbox`는 현재 `off`처럼 실패를 닫습니다. |
 
+여러 키가 있는 풀을 사용하는 변환된 Responses 요청에서는 라우팅된 프로바이더 호출마다 최초 복구와 응답 완료를 위한 후속 요청이 최대 `N - 1`회의 API 키 회전 한도를 공유하며, `N`은 첫 전송 전의 풀 크기로 고정합니다. 쿨다운이 만료되거나 이후 풀이 커져도 이 한도는 충전되지 않습니다. 다른 전송 예산에 따라 재시도가 더 일찍 멈출 수 있습니다. 회전이 거부되면 마지막 429에 따른 실패 키의 쿨다운은 기록하지만 대체 키를 선택하지 않으며, 응답은 기존 오류 처리 방식으로 마무리합니다.
+
 API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/reference/configuration/server/#claude-code)에서 설정합니다.
 
 ## 공급자 진단용 외부 요청 안전성

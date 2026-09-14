@@ -116,6 +116,8 @@ ocx models provider openrouter on
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 舊版布林值，僅在較新欄位未設定時等同於 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本機執行政策。`off` 為預設；`codex-sandbox` 目前像 `off` 般 fail closed。 |
 
+對於使用多金鑰集區的轉換後 Responses 要求，每次路由至提供者的呼叫，其初始復原和用於完成回應的後續要求共同使用最多 `N - 1` 次 API 金鑰輪替額度，其中 `N` 固定為首次傳送前的金鑰池大小。冷卻期結束或之後擴大金鑰池都不會補充此額度。其他傳送預算可能讓重試更早停止。輪替遭拒時，仍會根據最後一個 429 記錄失敗金鑰的冷卻期，但不會選取替代金鑰，回應繼續依現有錯誤處理方式處理。
+
 API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用由 `ocx login` 填入的憑證存放；訂閱支援的 Claude Code 啟動行為在 [`claudeCode.authMode`](/zh-tw/reference/configuration/server/#claude-code) 下設定。
 
 ## 供應商診斷對外安全
