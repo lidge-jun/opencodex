@@ -49,11 +49,11 @@ function codexNativeMutationRefusal(operation: "write" | "delete", structuredEdi
 const NATIVE_LOCAL_EXEC_DISABLED =
   "Re-issue this operation NOW through the catalog shell tool (`shell_command` / `exec_command`, or the listed `mcp_opencodex-responses_*` display alias) with the host-shell-safe equivalent: POSIX (`cat`, `head`, `ls`, `rg`, `grep`) or Windows PowerShell (`Get-Content`, `Get-ChildItem`, `Select-String`); use `apply_patch` for file edits. Do NOT narrate this redirect, do NOT comment on tool availability, and do NOT re-announce the task — just make the bridge call.";
 
-export function rejectReadExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectReadExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array {
   if (execMsg.message.case !== "readArgs") throw new Error("invalid read exec");
   const path = resolve(execMsg.message.value.path);
   return execBytes(execMsg, "readResult", create(ReadResultSchema, {
-    result: { case: "error", value: create(ReadErrorSchema, { path, error: NATIVE_LOCAL_EXEC_DISABLED }) },
+    result: { case: "error", value: create(ReadErrorSchema, { path, error: hint ?? NATIVE_LOCAL_EXEC_DISABLED }) },
   }));
 }
 
@@ -98,13 +98,13 @@ export function rejectWriteExecForApplyPatch(execMsg: ExecServerMessage, structu
   }));
 }
 
-export function rejectWriteExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectWriteExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array {
   if (execMsg.message.case !== "writeArgs") throw new Error("invalid write exec");
   const path = resolve(execMsg.message.value.path);
   return execBytes(execMsg, "writeResult", create(WriteResultSchema, {
     result: {
       case: "rejected",
-      value: create(WriteRejectedSchema, { path, reason: `${NATIVE_LOCAL_EXEC_DISABLED} No file was changed.` }),
+      value: create(WriteRejectedSchema, { path, reason: `${hint ?? NATIVE_LOCAL_EXEC_DISABLED} No file was changed.` }),
     },
   }));
 }
@@ -147,13 +147,13 @@ export function rejectDeleteExecForApplyPatch(execMsg: ExecServerMessage, struct
   }));
 }
 
-export function rejectDeleteExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectDeleteExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array {
   if (execMsg.message.case !== "deleteArgs") throw new Error("invalid delete exec");
   const path = resolve(execMsg.message.value.path);
   return execBytes(execMsg, "deleteResult", create(DeleteResultSchema, {
     result: {
       case: "rejected",
-      value: create(DeleteRejectedSchema, { path, reason: `${NATIVE_LOCAL_EXEC_DISABLED} No file was changed.` }),
+      value: create(DeleteRejectedSchema, { path, reason: `${hint ?? NATIVE_LOCAL_EXEC_DISABLED} No file was changed.` }),
     },
   }));
 }
@@ -188,11 +188,11 @@ export function deleteExec(execMsg: ExecServerMessage): Uint8Array {
   }
 }
 
-export function rejectLsExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
+export function rejectLsExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array {
   if (execMsg.message.case !== "lsArgs") throw new Error("invalid ls exec");
   const path = resolve(execMsg.message.value.path);
   return execBytes(execMsg, "lsResult", create(LsResultSchema, {
-    result: { case: "error", value: create(LsErrorSchema, { path, error: NATIVE_LOCAL_EXEC_DISABLED }) },
+    result: { case: "error", value: create(LsErrorSchema, { path, error: hint ?? NATIVE_LOCAL_EXEC_DISABLED }) },
   }));
 }
 
@@ -256,8 +256,8 @@ function grepError(execMsg: ExecServerMessage, error: string): Uint8Array {
   }));
 }
 
-export function rejectGrepExecForPolicy(execMsg: ExecServerMessage): Uint8Array {
-  return grepError(execMsg, NATIVE_LOCAL_EXEC_DISABLED);
+export function rejectGrepExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array {
+  return grepError(execMsg, hint ?? NATIVE_LOCAL_EXEC_DISABLED);
 }
 
 export function grepExec(execMsg: ExecServerMessage): Uint8Array {
