@@ -518,3 +518,30 @@ The history read API reports a median effective token estimate and interval samp
 Live bindings obey the existing cache-affinity release policy: with `pool.cacheAffinity`, threshold crossing alone retains a healthy account. Manual preference, scoped health and shared-cursor guards remain authoritative. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
 
 The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic and Anthropic parsers reject reset-first. The dashboard offers it only for Codex; API, CLI and translated guides preserve the same contract.
+
+## Bound-thread rebind destination
+
+A quota-strategy re-evaluation may move a LIVE thread binding only to an account that has genuine
+quota headroom and is also strictly cooler than the bound account. Both bars are load-bearing.
+Without the headroom bar, "strictly cooler" has no floor, so a pool whose every member sits in the
+80-100% band hands a long conversation from account to account on consecutive turns; Codex prompt
+caches are account-isolated, so each hop restarts from a cold prefix and a 7k-token turn becomes a
+150k-token one (#4546). Without the strictly-cooler bar, `hasCodexQuotaHeadroom` — which answers
+true for unknown usage, correctly for an unbound pick — would trade a warm prefix for an unmeasured
+account. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so the second bar excludes an unobserved destination
+without a special case.
+
+Movement is therefore bounded by the number of accounts rather than the number of turns. The rule
+narrows a preference and never a refusal: a 429/402 with no success since, a failover streak, pause,
+cooldown, lost generation and an unusable account all still release the binding before this rule is
+consulted, and they run in `resolveCodexAccountForThreadDetailed` ahead of it. A known score of 100
+with no recorded refusal is deliberately not a release path on its own — stickiness until the
+account actually refuses is intended — but it does surrender the binding as soon as a sibling with
+headroom exists. Unbound assignment is untouched and still takes the coolest eligible account,
+because a fresh request has no warm prefix to lose. `pool.cacheAffinity` remains the stronger
+opt-in, raising the bar from the threshold to genuine exhaustion.
+
+The rule is written twice on purpose — the live path in `reevaluateAffinityQuota` and the
+side-effect-free `previewReusableAffinityAccount` that subagent fallback reads — and the suite
+asserts the two answer identically. A preview that disagreed would hand fallback a different
+account than the request actually uses.

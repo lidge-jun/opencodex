@@ -12,8 +12,18 @@ same thing: the pool tells the operator one story and does another.
 ## Write scope
 
 Permitted: `src/codex/routing.ts`, the account-pool / session-affinity code, a new
-`src/codex/routing-adoption.ts` leaf, `src/codex/autostart-health.ts` wiring, their tests,
-the docs-site configuration reference, and this unit.
+`src/codex/routing-adoption.ts` leaf, `src/codex/native-profile-processes.ts`,
+`src/codex/autostart-health.ts` wiring, their tests, the docs-site configuration reference,
+`structure/providers/openai-tiers.md`, and this unit.
+
+`structure/providers/openai-tiers.md` is not optional: `structure/manifest.json` lists it as a
+doc for `src/codex/`, and `structure/AGENTS.md` makes changing an owned source area oblige the
+same change to update its doc. `bun run structure:check` is wired into the suite by
+`tests/ci-workflows/structure-ssot.test.ts`, so ownership here is enforced, not advisory.
+
+Tests EXTEND existing subsystem files rather than adding new ones. A new test file would also
+require entries in `scripts/test-layout/layout.json` and
+`tests/fixtures/test-layout-expected.json`, and `tests/test-layout.test.ts` enforces that.
 
 Excluded, owned by concurrent lanes: `src/providers/devin*`, `src/providers/antigravity*`,
 `src/server/responses/*`, `src/codex/catalog/*`, `src/adapters/cursor/*`, `gui/`.
@@ -34,3 +44,10 @@ request states that posture in its Verification section rather than implying a l
 
 Implementation is delegated to subagents on `devin/swe-2` and `xai/grok-4.6` at a 2:3 ratio,
 each with a disjoint write scope so two writers never hold the same file.
+
+## Review record
+
+An independent reviewer audited this roadmap before implementation and returned FAIL with three
+blocking findings, all folded in: the planned Codex-client process set could not see a CLI process
+at all, `adopted` was not sound as written, and the write scope omitted the `structure/` doc that
+owns `src/codex/`. The `010` diagnosis was confirmed correct on every point.

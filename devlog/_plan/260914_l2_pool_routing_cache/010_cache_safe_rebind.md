@@ -36,6 +36,11 @@ Consequences of the new rule, which are what the regression test pins:
 - Release paths are untouched. `hasUnrecoveredCodexQuotaRefusal` (429/402) still outranks every
   affinity preference, `shouldFailover` still applies, and an exhausted or unusable account still
   loses the binding. The rule narrows a *preference*, never a refusal.
+- One correction from review: a known score of 100 with **no** recorded refusal is not by itself a
+  release path today, and this change does not make it one. Such a thread stays while its account is
+  still selectable, and surrenders the binding as soon as a sibling with headroom exists. Stickiness
+  until the account actually refuses is intended, so the regression test asserts that and not the
+  stronger claim.
 
 ## Where it goes
 
@@ -59,5 +64,10 @@ Next to the existing pool-rotation tests in `tests/codex-integration/`. Three ca
 
 1. All accounts over the threshold: the bound thread's account is unchanged across repeated
    resolves — the ping-pong case, which fails before the fix.
+   The scores must be UNEQUAL (95 / 90 / 97). Equal scores would not move even before the fix, so an
+   equal-score fixture would pass for the wrong reason and prove nothing.
 2. One account below the threshold: the bound thread moves to it once, then stays.
 3. Preview agrees with resolve in both situations.
+
+`pickLowerUsageAccount` itself must not change: it is shared with `applyQuotaAutoSwitch` and the
+unbound selection path, so the new bar belongs at the two bound-thread call sites only.
