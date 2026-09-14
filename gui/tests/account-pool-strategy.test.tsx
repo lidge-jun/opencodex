@@ -265,7 +265,7 @@ describe("AccountPoolStrategyControls", () => {
   });
 
   test("AccountPoolStrategyControls renders threshold badge reflecting effective strategy", () => {
-    const renderControls = (strategy: "quota" | "fill-first" | "round-robin", threshold?: number) => renderToStaticMarkup(
+    const renderControls = (strategy: "quota" | "fill-first" | "round-robin" | "reset-first", threshold?: number) => renderToStaticMarkup(
       <LanguageProvider>
         <AccountPoolStrategyControls
           strategy={strategy}
@@ -280,12 +280,16 @@ describe("AccountPoolStrategyControls", () => {
 
     // Quota with 80% threshold
     expect(renderControls("quota", 80)).toContain("switch at 80%");
+    // Reset-first with 80% threshold
+    expect(renderControls("reset-first", 80)).toContain("switch at 80%");
     // Fill-first with 80% threshold
     expect(renderControls("fill-first", 80)).toContain("drain at 80%");
     // Round-robin with threshold configured
     expect(renderControls("round-robin", 80)).toContain("threshold not used");
     // Quota with threshold = 0 (proactive switching off)
     expect(renderControls("quota", 0)).toContain("proactive switching off");
+    // Reset-first with threshold = 0
+    expect(renderControls("reset-first", 0)).toContain("proactive switching off");
     // Undefined threshold renders no badge
     expect(renderControls("quota", undefined)).not.toContain("account-pool-threshold-badge");
   });
@@ -333,6 +337,21 @@ describe("AccountPoolStrategyControls", () => {
       </LanguageProvider>,
     );
     expect(markupOk).not.toContain("switch threshold (80%)");
+
+    // Regression: when round-robin strategy is active (threshold is undefined), no warning appears even for accounts exceeding quota
+    const markupRoundRobin = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountExceeding}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={undefined}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupRoundRobin).not.toContain("switch threshold");
   });
 });
 

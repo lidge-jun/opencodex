@@ -600,7 +600,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           accountModeState={accountModeState}
           switchingId={switchingId}
           orderBusy={priorityUpdatingId !== null}
-          threshold={autoSwitchThreshold}
+          threshold={poolStrategy === "round-robin" ? undefined : autoSwitchThreshold}
           onCancel={() => setConfirm(null)}
           onConfirm={() => { void setActive(confirm.id === "__main__" ? "__main__" : confirm.id); }}
         />
