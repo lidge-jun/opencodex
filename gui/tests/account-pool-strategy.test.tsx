@@ -280,16 +280,14 @@ describe("AccountPoolStrategyControls", () => {
 
     // Quota with 80% threshold
     expect(renderControls("quota", 80)).toContain("switch at 80%");
-    // Reset-first with 80% threshold
-    expect(renderControls("reset-first", 80)).toContain("switch at 80%");
+    // Reset-first suppresses generic switch badge
+    expect(renderControls("reset-first", 80)).not.toContain("account-pool-threshold-badge");
     // Fill-first with 80% threshold
     expect(renderControls("fill-first", 80)).toContain("drain at 80%");
     // Round-robin with threshold configured
     expect(renderControls("round-robin", 80)).toContain("threshold not used");
     // Quota with threshold = 0 (proactive switching off)
     expect(renderControls("quota", 0)).toContain("proactive switching off");
-    // Reset-first with threshold = 0
-    expect(renderControls("reset-first", 0)).toContain("proactive switching off");
     // Undefined threshold renders no badge
     expect(renderControls("quota", undefined)).not.toContain("account-pool-threshold-badge");
   });
@@ -338,8 +336,8 @@ describe("AccountPoolStrategyControls", () => {
     );
     expect(markupOk).not.toContain("switch threshold (80%)");
 
-    // Regression: when round-robin strategy is active (threshold is undefined), no warning appears even for accounts exceeding quota
-    const markupRoundRobin = renderToStaticMarkup(
+    // Regression: when round-robin strategy or unresolved strategy is active (threshold is undefined), no warning appears even for accounts exceeding quota
+    const markupUndefined = renderToStaticMarkup(
       <LanguageProvider>
         <CodexAccountSwitchModal
           confirm={accountExceeding}
@@ -351,7 +349,7 @@ describe("AccountPoolStrategyControls", () => {
         />
       </LanguageProvider>,
     );
-    expect(markupRoundRobin).not.toContain("switch threshold");
+    expect(markupUndefined).not.toContain("switch threshold");
   });
 });
 
