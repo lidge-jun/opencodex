@@ -19,6 +19,7 @@ import {
   cooldownErrorResponse,
   headersForCodexAuthContext,
   materializeCodexUpstreamAuth,
+  materializeCodexUpstreamAuthAsync,
   CodexMainSubstitutionUnavailableError,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
@@ -1666,6 +1667,32 @@ describe("Codex auth context", () => {
     expect(headers.get("chatgpt-account-id")).toBe("stored_main_acc");
     // Unrelated forwarded headers still ride along.
     expect(headers.get("openai-beta")).toBe("responses=experimental");
+  });
+
+  test.each([
+    ["absent", undefined, null],
+    ["present", "stored_main_acc", "stored_main_acc"],
+  ])("async stored Direct substitution owns account identity when %s", async (_label, accountId, expectedAccountId) => {
+    const storedCredential = liveJwt();
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      tokens: { access_token: storedCredential, account_id: accountId },
+    }));
+    const inbound = new Headers({
+      authorization: "Bearer ocx_data_localsecret",
+      "chatgpt-account-id": "caller-account",
+      "openai-beta": "responses=experimental",
+    });
+
+    const headers = await materializeCodexUpstreamAuthAsync(
+      inbound,
+      { kind: "main", accountId: null },
+      { substituteMainCredential: true },
+    );
+
+    expect(headers.get("authorization")).toBe(`Bearer ${storedCredential}`);
+    expect(headers.get("chatgpt-account-id")).toBe(expectedAccountId);
+    expect(headers.get("openai-beta")).toBe("responses=experimental");
+    expect(inbound.get("chatgpt-account-id")).toBe("caller-account");
   });
 
   test("substitution fails closed when no usable main credential exists (#1686)", () => {
