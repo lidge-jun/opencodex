@@ -372,8 +372,12 @@ eligible accounts, taking the highest order tier that still has quota headroom a
 `accountPoolStrategy` to choose inside it. Pause, cooldown, and reauthentication are unaffected.
 Changes apply from the **next unbound request**, not only from newly started sessions: preemption moves
 an unbound request up as soon as a higher order regains headroom. Threads already bound to an account
-normally keep it until that account is drained; a reauthentication failure, a quota cooldown, or a
-transient-failure streak releases the binding before that. Any accepted write also releases a manual
+normally keep it until that account is drained; a reauthentication failure or a quota cooldown still
+releases the binding immediately. A transient-failure streak (5xx and other non-quota failures
+reaching `upstreamFailoverThreshold`, default 3) no longer deletes a live binding: the request is
+served by another account while the binding is kept, and the task returns to its own account as soon
+as that account serves again. If the account is still failing after 10 minutes the binding is
+released normally. This hold is independent of `pool.cacheAffinity`. Any accepted write also releases a manual
 "use this account now" pin, on whichever account held it, including a write that stores the
 order an account already had — this is the only way to clear a pin while keeping the account
 that is currently selected. (Clearing the active account through the management API releases a

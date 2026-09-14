@@ -264,8 +264,11 @@ doğrulama etkilenmez. Değişiklikler yalnızca yeni başlatılan oturumlardan 
 **bir sonraki bağımsız istekten** itibaren geçerlidir: önceliklendirme daha
 yüksek bir sıra pay kazandığı anda bağımsız bir isteği yukarı taşır. Bir hesaba
 zaten bağlı olan iş parçacıkları normalde o hesap boşalana kadar onu tutar; bir
-yeniden kimlik doğrulama hatası, bir kota soğuma süresi veya bir geçici arıza
-serisi bundan önce bağlamayı serbest bırakır. Kabul edilen herhangi bir yazma,
+yeniden kimlik doğrulama hatası veya bir kota soğuma süresi bağlamayı hâlâ
+bundan önce serbest bırakır. Geçici arıza serisi (5xx ve diğer kota dışı arızaların
+`upstreamFailoverThreshold`'a, varsayılan 3, ulaşması) canlı bağlamayı silmez:
+istek başka bir hesapta sunulur ve görev, kendi hesabı yeniden hizmet verince
+oraya döner; hesap 10 dakika sonra hâlâ arızalıysa bağlama normal şekilde serbest kalır. Kabul edilen herhangi bir yazma,
 hangi hesap tutarsa tutsun manuel bir "bu hesabı şimdi kullan" sabitlemesini de
 serbest bırakır, bir hesabın zaten sahip olduğu sırayı saklayan bir yazma dahil
 — bu, geçerli olarak seçilen hesabı tutarken bir sabitlemeyi temizlemenin tek
