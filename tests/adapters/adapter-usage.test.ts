@@ -416,6 +416,25 @@ describe("openai-chat tool history repair", () => {
     expect(body.messages[1]?.content).toBe("A\nB\n[ocx: repeated 3 times in source output]\n");
   });
 
+  test("collapses complete cycles while preserving a trailing partial cycle", async () => {
+    const adapter = createOpenAIChatAdapter(provider);
+    const request = await adapter.buildRequest({
+      modelId: "deepseek-v4",
+      context: {
+        messages: [
+          { role: "user", content: "start", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: "A\nB\nA\nB\nA\nB\nA" }], model: "deepseek-v4", timestamp: 1 },
+          { role: "user", content: "continue", timestamp: 2 },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as { messages: Array<{ content: string }> };
+
+    expect(body.messages[1]?.content).toBe("A\nB\n[ocx: repeated 3 times in source output]\nA");
+  });
+
   test("preserves ordinary assistant output when replaying it upstream", async () => {
     const adapter = createOpenAIChatAdapter(provider);
     const text = "Checking the adapter state.\nChecking the adapter state.";

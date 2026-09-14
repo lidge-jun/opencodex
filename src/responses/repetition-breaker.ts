@@ -33,12 +33,15 @@ function collapseWholeMessageCycle(lines: string[]): string[] {
   if (lines.length > MAX_CYCLE_LINES) return lines;
   const maxPeriod = Math.min(MAX_CYCLE_PERIOD, Math.floor(lines.length / MIN_REPETITIONS));
   for (let period = 1; period <= maxPeriod; period += 1) {
-    if (lines.length % period !== 0) continue;
-    const count = lines.length / period;
+    const count = Math.floor(lines.length / period);
     const block = lines.slice(0, period);
     if (block.every(line => line.trim().length === 0)) continue;
-    if (lines.every((line, index) => line === block[index % period])) {
-      return [...block, marker(count)];
+    const repeatedLength = count * period;
+    if (
+      lines.slice(0, repeatedLength).every((line, index) => line === block[index % period])
+      && lines.slice(repeatedLength).every((line, index) => line === block[index])
+    ) {
+      return [...block, marker(count), ...lines.slice(repeatedLength)];
     }
   }
   return lines;
