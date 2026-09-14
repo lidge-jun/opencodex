@@ -716,14 +716,12 @@ async function modelsForCredential(
   const existing = accountModelsFlights.get(flightKey);
   if (existing) return existing;
 
-  // Joining an in-flight request costs nothing upstream, so the allowance is spent only where a
-  // NEW upstream request would be opened. The locally selected runtime version is exempt: it has
-  // one stable key, and the legitimate refresh must survive an untrusted caller spending the rest.
-  if (
-    !credential.accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)
-    && clientVersion !== trustedClientVersion
-    && !admitVersionMiss(credential, clientVersion, now)
-  ) {
+  // Bound concurrency per account before opening another upstream request.
+  let liveForAccount = 0;
+  for (const key of accountModelsFlights.keys()) {
+    if (accountIdOfCacheKey(key) === credential.accountId) liveForAccount += 1;
+  }
+  if (liveForAccount >= MODEL_ROSTER_FLIGHTS_PER_ACCOUNT_MAX) {
     return {
       credentialIdentity: credential.credentialIdentity,
       clientVersion,
@@ -732,13 +730,13 @@ async function modelsForCredential(
       confirmed: false,
     };
   }
-
-  // Bound concurrency per account before opening another upstream request.
-  let liveForAccount = 0;
-  for (const key of accountModelsFlights.keys()) {
-    if (accountIdOfCacheKey(key) === credential.accountId) liveForAccount += 1;
-  }
-  if (liveForAccount >= MODEL_ROSTER_FLIGHTS_PER_ACCOUNT_MAX) {
+  // Cache hits, joined flights and capacity refusals start no upstream request. Charge only
+  // after capacity admission; the locally selected runtime version remains exempt.
+  if (
+    !credential.accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)
+    && clientVersion !== trustedClientVersion
+    && !admitVersionMiss(credential, clientVersion, now)
+  ) {
     return {
       credentialIdentity: credential.credentialIdentity,
       clientVersion,
