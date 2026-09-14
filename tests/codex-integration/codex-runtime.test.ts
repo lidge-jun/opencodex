@@ -1284,7 +1284,12 @@ describe("installed Codex discovery and deferred version probes", () => {
     const localAppData = "C:\\Users\\test\\AppData\\Local";
     const root = join(localAppData, "OpenAI", "Codex", "bin");
     const installed = join(root, "app", "codex.exe");
-    const pathDir = "C:\\on-path";
+    // A colon-free PATH entry. pathCandidates splits PATH on node's delimiter,
+    // which is ":" on the POSIX runners this suite also runs on, so a drive
+    // letter here splits into two directories that match no candidate at all —
+    // every PATH candidate then fails and the installed runtime wins, which is
+    // the opposite of what this test is for.
+    const pathDir = "/opt/on-path";
     const pathCommand = join(pathDir, "codex.exe");
     const result = resolveCodexRuntime({
       configDir: tempConfigDir(),
