@@ -34,3 +34,26 @@ wp3 lands the reason at the decision point and the record, because that is what
 makes the wp2 and wp3 rules auditable in the field rather than only in tests. The
 dashboard rendering and the amplification metric (sends per logical request) belong
 with wp4, where the send budget gives them a denominator that means something.
+
+## Outcome
+
+Closed. `resolveCodexAccountForThreadDetailed` now returns a `CodexAffinityDecision` on every
+selection path, the pool auth context carries it, and `logCtx.affinity` / `logCtx.affinityReason`
+are assigned in `core.ts` (`849f3c9ccf`). A release recorded by the outcome path -- a 429
+clearing the pin -- is held per thread, bounded at 4096 entries, and consumed by that thread's
+next resolve.
+
+Two audit rounds changed the shape, and both corrections are worth keeping:
+
+The reason was being synthesized at the call site instead of read from the guard that actually
+refused the account. It now comes from `codexAccountBlockReason`, and a release survives a
+resolve that finds no account at all (`b8d90ba3a8`, closing #4598).
+
+`appendUsageEntry` builds the persisted entry from an explicit field whitelist, so the affinity
+fields the writer set were dropped silently by the normalizer and the whole feature was a no-op
+end to end. `ab6fd697c1` adds them to the whitelist and surfaces the decision in the route
+explanation. The general lesson for anything downstream of the usage log: a field the writer
+sets but the normalizer does not name does not exist.
+
+What wp3 deliberately did not do: render the reason in the dashboard, and count sends per
+logical request. Both wait for wp4's budget to give them a denominator.

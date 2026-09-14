@@ -72,6 +72,46 @@ export interface TransientSendBudget {
 export function createTransientSendBudget(): TransientSendBudget {
   return { used: 0 };
 }
+
+/**
+ * Refusal raised when a logical request has no send left (#4546, REQ-B04/B05).
+ *
+ * It is deliberately a distinct type rather than a generic `Error`: every call site that
+ * catches a helper rejection today launders it into HTTP 502 `upstream_error`, which would
+ * report a proxy-side budget decision as an upstream fault and hide the real 401/429 the
+ * request already had. Callers must recognise this and return the structured local error
+ * instead. It is a backstop, not the policy -- a call site that still holds a reusable
+ * upstream response is supposed to check the remainder BEFORE it cancels that body.
+ */
+export class SendBudgetExhaustedError extends Error {
+  readonly code = "request_send_budget_exhausted";
+  constructor(label?: string) {
+    super(label
+      ? `request send budget exhausted before dispatch (${label})`
+      : "request send budget exhausted before dispatch");
+    this.name = "SendBudgetExhaustedError";
+  }
+}
+
+/**
+ * Configuration refusal for an attempts value that is not a send count.
+ *
+ * `undefined` means "use the policy default" and `0` means "refuse". A negative, fractional,
+ * NaN or infinite value is a programming or configuration error, and silently substituting the
+ * default for it is how a broken budget turns back into three free sends.
+ */
+export class InvalidSendBudgetError extends Error {
+  constructor(value: unknown) {
+    super(`invalid upstream send budget: ${String(value)}`);
+    this.name = "InvalidSendBudgetError";
+  }
+}
+
+function normalizeSendAttempts(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || value < 0) throw new InvalidSendBudgetError(value);
+  return value;
+}
 const TRANSIENT_RETRY_BASE_DELAY_MS = 400;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 5_000;
 // A failed attempt slower than this is the "slow 502" incident shape (191s observed on
@@ -371,7 +411,11 @@ export async function fetchWithResetRetry(
   opts: ResetRetryOptions = {},
   firstRecovery?: UpstreamSendRecovery,
 ): Promise<Response> {
-  const attempts = Math.max(1, opts.attempts ?? RESET_RETRY_MAX_ATTEMPTS);
+  const attempts = normalizeSendAttempts(opts.attempts, RESET_RETRY_MAX_ATTEMPTS);
+  // Zero is zero. The old Math.max(1, ...) floor meant an exhausted budget still bought one
+  // more send on every recovery leg, which is most of what made a bounded per-layer retry
+  // compose into an unbounded per-request count.
+  if (attempts === 0) throw new SendBudgetExhaustedError(opts.label);
   let lastError: unknown;
   let sawReset = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -417,7 +461,7 @@ export async function fetchWithTransientRetry(
   doFetch: ReplayableFetch,
   opts: TransientRetryOptions = {},
 ): Promise<Response> {
-  const budget = Math.max(1, opts.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS);
+  const budget = normalizeSendAttempts(opts.attempts, TRANSIENT_RETRY_MAX_ATTEMPTS);
   const slowAttemptMs = opts.slowAttemptMs ?? TRANSIENT_RETRY_SLOW_ATTEMPT_MS;
   const transientStatuses: number[] = [];
   // `attempts` is ONE total-send budget shared with the inner reset layer, not a per-layer
@@ -434,13 +478,15 @@ export async function fetchWithTransientRetry(
     sent += 1;
     return doFetch(recovery);
   };
-  // Floor of 1 keeps the inner call legal once the budget is spent; the loop condition, not a
-  // zero-attempt inner call, is what actually stops the retries.
-  const remaining = () => Math.max(1, budget - sent);
+  // No floor. A spent budget hands the inner helper 0, which refuses rather than buying one
+  // more send -- the loop condition alone was never enough, because every later recovery leg
+  // called this helper again and the floor funded each of them.
+  const remaining = () => Math.max(0, budget - sent);
   // Reported in `finally` rather than at each exit: this function returns from five places
   // and throws from one, and a caller sharing the budget across request legs must be told the
   // real count on every one of them.
   try {
+  if (budget === 0) throw new SendBudgetExhaustedError(opts.label);
   let attemptStart = Date.now();
   let res = await fetchWithResetRetry(countedFetch, { ...opts, attempts: remaining() });
   for (let attempt = 0; sent < budget; attempt++) {
@@ -470,6 +516,8 @@ export async function fetchWithTransientRetry(
     } catch (err) {
       // Keep the prior 5xx evidence attached: the origin already responded, so
       // this rejection is not pre-connection and must not classify as neutral.
+      // A budget refusal is not upstream evidence of anything and must stay recognisable.
+      if (err instanceof SendBudgetExhaustedError) throw err;
       throw new UpstreamRetryEvidenceError(transientStatuses, err);
     }
   }

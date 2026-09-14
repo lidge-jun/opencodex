@@ -224,9 +224,15 @@ import {
   prepareSameTarget429Wait,
   sleepWithAbort,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
-  createTransientSendBudget,
+  SendBudgetExhaustedError,
   type TransientSendBudget,
 } from "../../lib/upstream-retry";
+import {
+  createRequestExecutionBudget,
+  isRequestExecutionBudget,
+  type SendClass,
+  type SingleUseDispatchPermit,
+} from "../../lib/request-execution-budget";
 import {
   ForwardAdmissionCredentialError,
   hasForwardableCodexBearer,
@@ -1289,6 +1295,8 @@ interface CodexPoolAccountRetryArgs {
     translatorBudget: TranslatorBudget;
     turnAdmissionLease?: AdmissionLease;
     resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
+    /** The logical request's execution budget: the account move is its fourth send. */
+    sendBudget?: TransientSendBudget;
   };
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
@@ -1483,6 +1491,27 @@ async function retryCodexPoolOnAlternateAccount(
     recordUnmovedTransientOutcome();
     return { kind: "no-alternate" };
   }
+  // An account move is the guarded profile's fourth send and draws the single shared
+  // final-recovery reserve. Nothing bounded it per request before: `excludeAccountId` excludes
+  // only the account that just failed, and the caller's recovery loop can return here after the
+  // alternate fails too, so one request could walk the pool an account at a time. The permit is
+  // consumed immediately before the physical send, so a resolution that finds no alternate
+  // costs nothing.
+  const executionBudget = isRequestExecutionBudget(args.options.sendBudget)
+    ? args.options.sendBudget
+    : undefined;
+  let accountMovePermit: SingleUseDispatchPermit | undefined;
+  if (!retryAuthCtx && executionBudget) {
+    const decision = executionBudget.reserveDispatch({
+      sendClass: "account-failover",
+      targetKey: `${route.providerName}|${route.modelId}|alternate-account`,
+    });
+    if (!decision.allowed) {
+      recordUnmovedTransientOutcome();
+      return { kind: "no-alternate" };
+    }
+    accountMovePermit = decision.permit;
+  }
   try {
     retryAuthCtx ??= await resolveCodexAuthContext(
         callerAuthHeaders,
@@ -1621,6 +1650,10 @@ async function retryCodexPoolOnAlternateAccount(
   let upstreamResponse: Response;
   try {
     while (true) {
+      // The same-account gated-model 400 ladder below keeps its own `maxRetrySends` bound and
+      // does not take the reserve again; only the move itself does.
+      accountMovePermit?.use();
+      accountMovePermit = undefined;
       noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
       try {
         upstreamResponse = await fetchWithHeaderTimeout(
@@ -3458,7 +3491,7 @@ export async function handleResponses(
       translatorBudget,
       // Created once at genuine ingress; a combo child arrives with the parent's holder already
       // in options and must not start a fresh allowance.
-      sendBudget: options.sendBudget ?? createTransientSendBudget(),
+      sendBudget: options.sendBudget ?? createRequestExecutionBudget(),
     });
     return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
   } catch (error) {
@@ -4989,10 +5022,43 @@ async function handleResponsesInner(
   // fresh default of 3. It is now a holder carried on options, so a combo child inherits the
   // parent's spend instead of starting over per target -- both halves of the measured
   // amplification in #4546.
-  const sendBudget = options.sendBudget ?? createTransientSendBudget();
+  const sendBudget = options.sendBudget ?? createRequestExecutionBudget();
   const noteTransientSends = (used: number): void => { sendBudget.used += Math.max(0, used); };
+  // No floor. Math.max(1, ...) meant an exhausted request still funded one send on every
+  // recovery leg, so a bounded per-leg allowance never became a bounded per-request one.
   const remainingTransientSendBudget = (budget: number): number =>
-    Math.max(1, budget - sendBudget.used);
+    isRequestExecutionBudget(sendBudget)
+      ? sendBudget.remainingBaseSends(budget)
+      : Math.max(0, budget - sendBudget.used);
+  const sendBudgetExhausted = (): boolean =>
+    remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS) === 0;
+  /**
+   * How many sends a recovery leg may make, and the permit that authorises the last one.
+   *
+   * The base allowance is spent first. Once it is gone a recovery class may still draw the
+   * single shared final-recovery reserve -- which is what keeps the validated sanitized rebuild
+   * after a 5xx streak alive at four total sends -- but an account move and a rebuild cannot
+   * each take one. `countedExternally` is set because these legs run through the retry helper,
+   * which reports the same send again through `onSendsConsumed`.
+   */
+  const recoverySendAllowance = (
+    cap: number,
+    sendClass: SendClass,
+    targetKey: string,
+  ): { attempts: number; permit?: SingleUseDispatchPermit } => {
+    const base = remainingTransientSendBudget(cap);
+    if (base > 0) return { attempts: base };
+    if (!isRequestExecutionBudget(sendBudget)) return { attempts: 0 };
+    const decision = sendBudget.reserveDispatch({ sendClass, targetKey, countedExternally: true });
+    return decision.allowed ? { attempts: 1, permit: decision.permit } : { attempts: 0 };
+  };
+  /**
+   * Both classes share the one reserve, so this only changes what the decision is called --
+   * but a recovery event that says "repair" when a credential refresh drove it is the kind of
+   * mislabelled evidence #4592 existed to stop.
+   */
+  const recoveryClassFor = (recovery: AttemptRecoveryKind): SendClass =>
+    /401|429|oauth|rate-limit|key/.test(recovery) ? "auth-recovery" : "repair";
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     let hostAdmissionLease = pendingHostAdmissionLease;
@@ -5466,6 +5532,15 @@ async function handleResponsesInner(
         releaseCodexAuthContextProbeLease(authCtx);
         return clientCancelledResponse();
       }
+      // A budget refusal is a proxy decision, not an upstream fault. Reporting it as
+      // 502 upstream_error would blame the provider for a limit this process applied, and
+      // would record a fake reachability failure against the account's health.
+      if (err instanceof SendBudgetExhaustedError) {
+        releaseUpstreamHostAdmission(hostAdmissionLease);
+        hostAdmissionLease = null;
+        releaseCodexAuthContextProbeLease(authCtx);
+        return formatErrorResponse(429, "request_send_budget_exhausted", err.message);
+      }
       const localRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
         now: Date.now(), accountSelector: route.codexAccountNamespace,
       });
@@ -5597,8 +5672,17 @@ async function handleResponsesInner(
       const rebuiltBodyRefusal = refuseOversizedOutboundBody(request);
       if (rebuiltBodyRefusal) return { failed: rebuiltBodyRefusal };
       try {
+        // The base allowance is spent first; once it is gone this leg may still draw the one
+        // shared final-recovery reserve, which is what keeps a validated sanitized rebuild
+        // after a 5xx streak alive at four total sends instead of dying at three.
+        const allowance = recoverySendAllowance(
+          TRANSIENT_RETRY_MAX_ATTEMPTS,
+          recoveryClassFor(recovery),
+          `${route.providerName}|${route.modelId}|${recovery}`,
+        );
         return await fetchWithTransientRetry(
           innerRecovery => {
+            allowance.permit?.use();
             noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, innerRecovery ?? recovery);
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
@@ -5616,7 +5700,7 @@ async function handleResponsesInner(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: allowance.attempts, onSendsConsumed: noteTransientSends },
         );
       } catch (err) {
         return { failed: transportFailureResponse(err) };
@@ -5739,6 +5823,10 @@ async function handleResponsesInner(
       && isOAuth401ReplayProvider
       && sentOAuthSnapshot
       && !oauth401ReplayAttempted
+      // Refused here, before the 401 body is cancelled: once it is gone the request can only
+      // answer with a synthetic 502, which would report a proxy budget decision as an upstream
+      // fault and throw away the credential evidence the client needs.
+      && !sendBudgetExhausted()
     ) {
       oauth401ReplayAttempted = true;
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -5889,6 +5977,10 @@ async function handleResponsesInner(
       upstreamResponse.status === 429
       && rateLimitPolicy !== null
       && rateLimitRetries < rateLimitPolicy.attempts
+      // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
+      // body, so a refusal discovered after the wait can no longer return the real rate-limit
+      // answer and would surface a synthetic 502 instead.
+      && !sendBudgetExhausted()
     ) {
       rateLimitRetries += 1;
       // Release unread body + deliberate wait via the shared same-target helper.
@@ -7653,7 +7745,13 @@ async function handleResponsesInner(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
           ...(transientPolicy
-            ? { attempts: transientPolicy.attempts, onSendsConsumed: noteTransientSends }
+            // Draws the remainder, not the raw policy. A combo child inherits the parent's
+            // holder but used to take a fresh full allowance on its own first send, so the
+            // shared counter was inherited without ever being read as a limit.
+            ? {
+              attempts: remainingTransientSendBudget(transientPolicy.attempts),
+              onSendsConsumed: noteTransientSends,
+            }
             : {}),
         },
       );
@@ -7762,8 +7860,20 @@ async function handleResponsesInner(
           const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
             ? fetchWithTransientRetry
             : fetchWithResetRetry;
+          // Same rule as the passthrough rebuild: spend the base allowance first, then the one
+          // shared final-recovery reserve, so a recovery that follows a spent streak still gets
+          // its single send instead of dying at three.
+          const refetchAllowance = refetchTransientPolicy
+            ? recoverySendAllowance(
+              refetchTransientPolicy.attempts,
+              recoveryClassFor(recovery),
+              `${route.providerName}|${route.modelId}|${recovery}`,
+            )
+            : undefined;
           return await refetchWithPolicy(
-            recoveryKind => fetchWithHeaderTimeout(retryRequest.url,
+            recoveryKind => {
+              refetchAllowance?.permit?.use();
+              return fetchWithHeaderTimeout(retryRequest.url,
               applyUpstreamRecoveryInit({
                 method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
               }, recoveryKind), upstream.signal, connectMs, parsed.stream,
@@ -7771,13 +7881,14 @@ async function handleResponsesInner(
               dispatchOverride: oauthDispatch(retryRequest),
                 providerName: route.providerName,
                 modelId: route.modelId,
-              })),
+              }));
+            },
             {
               abortSignal: upstream.signal,
               label: safeHostLabel(retryRequest.url),
-              ...(refetchTransientPolicy
+              ...(refetchAllowance
                 ? {
-                  attempts: remainingTransientSendBudget(refetchTransientPolicy.attempts),
+                  attempts: refetchAllowance.attempts,
                   onSendsConsumed: noteTransientSends,
                 }
                 : {}),
@@ -7803,6 +7914,7 @@ async function handleResponsesInner(
         && isOAuth401ReplayProvider
         && sentOAuthSnapshot
         && !oauth401ReplayAttempted
+        && !sendBudgetExhausted()
       ) {
         oauth401ReplayAttempted = true;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -7897,6 +8009,7 @@ async function handleResponsesInner(
         upstreamResponse.status === 429
         && rateLimitPolicy !== null
         && rateLimitRetries < rateLimitPolicy.attempts
+        && !sendBudgetExhausted()
       ) {
         rateLimitRetries += 1;
         // Release unread body + deliberate wait via the shared same-target helper.
