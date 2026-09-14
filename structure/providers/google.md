@@ -47,3 +47,27 @@ mismatched, and standalone results become marked text instead of unpaired functi
 Representable data-URL images remain sibling `inline_data` parts in either case.
 
 > Decision record: [ADR-0058](../decisions/ADR-0058-google-tool-result-adjacency-repair.md)
+## Structured output on generateContent
+
+A caller's Responses `text.format` reaches the Gemini wire as
+`generationConfig.responseMimeType: "application/json"` plus, for `json_schema`,
+`generationConfig.responseJsonSchema` carrying the schema unchanged.
+`responseJsonSchema` takes ordinary JSON Schema with lowercase type names, which is
+the shape `options.textFormat.schema` already holds; `responseSchema` takes Gemini's
+uppercase typed `Schema` form and is omitted when `responseJsonSchema` is used. The
+response type is unchanged — the model returns text containing conforming JSON — so
+response parsing is untouched.
+
+The schema is carried verbatim. `sanitizeGeminiToolParameters` narrows a schema to
+the function-declaration subset and must never be applied to a caller-authored output
+schema. `compileGenerationConfig` in `google-wire-compiler.ts` is a whitelist, so
+both keys are listed there as well; setting them in the adapter alone would drop them
+before the wire.
+
+Three cases refuse explicitly rather than dropping the constraint silently:
+cloud-code-assist, which opencodex does not implement or verify for this field
+(including Claude models served through that envelope — this is not a claim about
+what the upstream can do); an image-capable model, whose `responseModalities`
+configuration contradicts JSON-constrained text; and a `json_schema` format carrying
+no schema, which would otherwise downgrade to bare JSON mode. An image-capable model
+with no structured-output request keeps its existing `responseModalities` behavior.

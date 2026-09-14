@@ -5,6 +5,9 @@
  * Same translate-and-replay pattern as Claude Messages: the produced body must pass
  * responsesRequestSchema so routing/OAuth/pool/sidecars are inherited unchanged.
  */
+import { chatImageUrlFromPart } from "./image-parts";
+import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
+
 export class ChatCompletionsRequestError extends Error {}
 
 type Rec = Record<string, unknown>;
@@ -25,7 +28,12 @@ export function assertChatCompletionsRoutingBody(raw: unknown): asserts raw is C
   }
 }
 
-const OUTPUT_CONFIG_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+// "none" is the runtime's disable sentinel, not an unknown value: src/reasoning-effort.ts
+// accepts it and maps it to "omit the reasoning parameter", and the Pi client export maps
+// Pi's "off" thinking level onto it (src/clients/config-export.ts). Dropping it here let a
+// provider default re-enable thinking the caller had explicitly turned off — and for the
+// Anthropic families that think by default, omission is not the same as disabled.
+const OUTPUT_CONFIG_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const OUTPUT_CONFIG_SUMMARIES = new Set(["auto", "concise", "detailed", "none"]);
 
 function contentToText(content: unknown): string {
@@ -45,38 +53,9 @@ function contentToText(content: unknown): string {
   return parts.join("\n");
 }
 
-function imageUrlFromPart(part: Rec): string | null {
-  if (part.type === "image_url") {
-    const imageUrl = part.image_url;
-    if (typeof imageUrl === "string" && imageUrl.length > 0) return imageUrl;
-    if (isRec(imageUrl) && typeof imageUrl.url === "string" && imageUrl.url.length > 0) return imageUrl.url;
-    return null;
-  }
-  // Agent clients whose native wire shape is not OpenAI's still send images over
-  // Chat Completions: Pi/MCP-style parts carry {type:"image", data, mimeType}
-  // (Aside read_file tool results), Anthropic-shaped clients carry a source
-  // object. Dropping either silently blinds a vision model, so normalize both
-  // to the URL/data-URI form the Responses pipeline already understands.
-  if (part.type === "image") {
-    const data = part.data;
-    if (typeof data === "string" && data.length > 0) {
-      if (data.startsWith("data:")) return data;
-      const media = typeof part.mimeType === "string" && part.mimeType.length > 0 ? part.mimeType
-        : typeof part.mediaType === "string" && part.mediaType.length > 0 ? part.mediaType
-        : "image/png";
-      return "data:" + media + ";base64," + data;
-    }
-    const source = part.source;
-    if (isRec(source)) {
-      if (source.type === "base64" && typeof source.data === "string" && source.data.length > 0) {
-        const media = typeof source.media_type === "string" && source.media_type.length > 0 ? source.media_type : "image/png";
-        return "data:" + media + ";base64," + source.data;
-      }
-      if (source.type === "url" && typeof source.url === "string" && source.url.length > 0) return source.url;
-    }
-  }
-  return null;
-}
+// Recognition moved to src/chat/image-parts.ts so the native fast path's
+// route-eligibility predicate and this translator cannot drift apart again.
+const imageUrlFromPart = chatImageUrlFromPart;
 
 function videoUrlFromPart(part: Rec): string | null {
   if (part.type !== "video_url") return null;
@@ -116,6 +95,31 @@ function userContentToBlocks(content: unknown): Rec[] {
     if (videoUrl) blocks.push({ type: "input_video", video_url: videoUrl });
   }
   return blocks;
+}
+
+/**
+ * The assistant's prior thinking, as plaintext, from either Chat spelling.
+ *
+ * The outbound direction already reconstructs these for providers listed in
+ * `preserveReasoningContentModels` (src/adapters/openai-chat.ts), so a client
+ * replaying a turn sends them back. Dropping them here made the round trip lossy and
+ * left interleaved-thinking providers seeing a bare continuation.
+ *
+ * Only representable plaintext is read. No signature, encrypted payload or
+ * provider-issued item id is reconstructed — see the reasoning item built below.
+ */
+function assistantReasoningText(msg: Rec): string | undefined {
+  if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) {
+    return msg.reasoning_content;
+  }
+  if (Array.isArray(msg.reasoning_details)) {
+    const segments: string[] = [];
+    for (const raw of msg.reasoning_details) {
+      if (isRec(raw) && typeof raw.text === "string" && raw.text.length > 0) segments.push(raw.text);
+    }
+    if (segments.length > 0) return segments.join("");
+  }
+  return undefined;
 }
 
 function assistantContentToBlocks(content: unknown): Rec[] {
@@ -274,6 +278,13 @@ function resolveReasoningSummary(raw: Rec): string | undefined {
  */
 export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   assertChatCompletionsRoutingBody(raw);
+  // Only the translated path reaches this function. Native Chat can retain its
+  // provider-specific file/audio blocks; projecting them here would discard them.
+  const unsupportedMedia = untranslatedChatInputMedia(raw);
+  if (unsupportedMedia) {
+    throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
+  }
+
 
   const systemParts: string[] = [];
   const input: Rec[] = [];
@@ -295,9 +306,28 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
         break;
       }
       case "assistant": {
+        // A reasoning item precedes the assistant message it belongs to: the
+        // Responses assistant item schema admits only output content blocks, so there
+        // is no attachment point on the message itself, and the parser buffers a
+        // reasoning item and prepends it to the NEXT assistant message. Emitting it
+        // here keeps that adjacency intact.
+        const reasoningText = assistantReasoningText(msg);
+        if (reasoningText !== undefined) {
+          input.push({ type: "reasoning", content: [{ type: "reasoning_text", text: reasoningText }] });
+        }
         const blocks = assistantContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "assistant", content: blocks });
         if (msg.tool_calls !== undefined) toolCallsToItems(msg.tool_calls, input, knownNameByCallId);
+        break;
+      }
+      case "function": {
+        // Native eligibility diverts legacy image results too, but this translator
+        // has no legacy function_call/name pairing. Never silently discard them.
+        if (Array.isArray(msg.content) && msg.content.some(part => isRec(part) && imageUrlFromPart(part))) {
+          throw new ChatCompletionsRequestError(
+            "Legacy function-result image translation is not implemented. Use tool_calls and role:tool with tool_call_id.",
+          );
+        }
         break;
       }
       case "tool": {
@@ -342,6 +372,13 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   if (typeof maxTokens === "number") body.max_output_tokens = maxTokens;
   if (typeof raw.temperature === "number") body.temperature = raw.temperature;
   if (typeof raw.top_p === "number") body.top_p = raw.top_p;
+  // responsesRequestSchema accepts both, parser.ts reads them into
+  // options.presencePenalty/frequencyPenalty, and the openai-chat adapter writes them
+  // back to the wire. Only this first link was missing, so a Chat caller's penalties
+  // never reached a provider that supports them. Per-model noPenaltyModels opt-outs
+  // still apply at the adapter.
+  if (typeof raw.presence_penalty === "number") body.presence_penalty = raw.presence_penalty;
+  if (typeof raw.frequency_penalty === "number") body.frequency_penalty = raw.frequency_penalty;
   if (raw.stop !== undefined) body.stop = raw.stop;
   if (typeof raw.user === "string") body.user = raw.user;
   if (typeof raw.parallel_tool_calls === "boolean") body.parallel_tool_calls = raw.parallel_tool_calls;

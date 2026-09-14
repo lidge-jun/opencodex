@@ -1285,13 +1285,29 @@ function stripUnsupportedForwardParams(body: unknown): unknown {
   return rest;
 }
 
-/** Drop client identity metadata only at the canonical Codex destination, not public gateways.
- * Claude translation still owns local session/cache identity; never mutate its replay body.
+/** Sampling controls the canonical ChatGPT backend rejects; other forward gateways accept them. */
+const CANONICAL_FORWARD_UNSUPPORTED_SAMPLING = ["temperature", "top_p", "stop", "user"] as const;
+
+/**
+ * Remove sampling controls only the canonical ChatGPT backend rejects.
+ *
+ * A translated Chat turn used to lose these at the Chat ingress for every provider on
+ * the `openai-responses` adapter, which silently discarded caller intent on generic
+ * key gateways that accept them. Deciding at the ingress was also unsound for combo
+ * and policy routes, whose concrete child is chosen later — so the decision belongs
+ * here, on the provider that actually receives the body.
+ *
+ * Returns a copy and never mutates, so `parsed._rawBody` stays caller-owned, and
+ * no-ops when the body carries none of these keys.
  */
-function stripCanonicalForwardUser(body: unknown): unknown {
-  if (!isPlainObject(body) || !Object.hasOwn(body, "user")) return body;
-  const { user: _user, ...rest } = body;
-  return rest;
+export function stripCanonicalForwardSamplingParams(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  if (!CANONICAL_FORWARD_UNSUPPORTED_SAMPLING.some(key => Object.prototype.hasOwnProperty.call(body, key))) {
+    return body;
+  }
+  const next: Record<string, unknown> = { ...body };
+  for (const key of CANONICAL_FORWARD_UNSUPPORTED_SAMPLING) delete next[key];
+  return next;
 }
 
 /** Return the lossless text represented by one system message, or null when it is multimodal. */
@@ -2263,9 +2279,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Only the canonical ChatGPT backend rejects the retired field; a self-hosted or
         // third-party forward gateway may still accept it, so this must not be widened.
         if (isCanonicalOpenAiForwardProvider(provider)) {
+          outBody = stripCanonicalForwardSamplingParams(outBody);
           outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
           outBody = stripCanonicalForwardPromptCacheOptions(outBody);
-          outBody = stripCanonicalForwardUser(outBody);
           outBody = normalizeCanonicalForwardPromptEnvelope(outBody);
           outBody = normalizeCanonicalForwardContinuationEnvelope(outBody);
         }

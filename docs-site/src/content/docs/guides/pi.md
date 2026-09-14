@@ -129,6 +129,32 @@ through, translate it (wire aliases), clamp it to the configured ladder, emulate
 entirely (e.g. `noReasoningModels`). The boolean only controls whether Pi offers the control at
 all.
 
+## Attachment and request compatibility
+
+:::note[Pending development behavior]
+The provider-parity changes described here are on the development PR stack; an older installed
+release may still have the previous conversion behavior.
+:::
+
+OpenCodex normalizes Pi/MCP and Anthropic-shaped user images before choosing the native Chat
+or translated route. Images returned by tools use a translated user-message carrier after the
+paired tool results; ordinary user images and text-only tool results can keep the native path.
+Use modern `tool_calls` and `role: "tool"` with `tool_call_id`: legacy `function`-result image
+translation is rejected instead of silently discarding the result.
+
+An explicit reasoning effort of `none` survives Chat conversion. Output limits and sampling
+controls are preserved for generic API-key Responses targets; the canonical ChatGPT target
+still applies its own restrictions. This does not make all providers' controls equivalent.
+
+**Audio and files need a native input wire that supports them.** OpenCodex does not yet have
+a lossless audio/file carrier for translated requests. When Chat requires projection, or a
+Responses request targets a translated adapter, recognized audio/file attachments return an
+explicit error rather than succeeding without the attachment. File-ID-only images have the
+same restriction because translated adapters cannot resolve those IDs. Convert the attachment
+to text first, or use a native wire and model that support it. Native Chat and raw Responses
+(including Azure) retain their existing behavior; this is not a promise of every model's
+upstream media support. Video conversion limits remain adapter-specific.
+
 ## Schema status
 
 :::note[Unverified against a real install]

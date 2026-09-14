@@ -541,3 +541,58 @@ describe("provider default reasoning effort (#2494)", () => {
     expect(b.thinking).toBeUndefined();
   });
 });
+
+/**
+ * Audit F7 (2026-09-14) at the FINAL WIRE, not the projection.
+ *
+ * The Chat inbound allowlist used to drop `reasoning_effort: "none"`, so a Pi user who
+ * turned thinking off produced a request with no effort at all. That is not neutral
+ * here: for a model carrying a provider default of "high", omission lets the default
+ * win and thinking is re-enabled. Asserting the projected Responses body carries
+ * `effort: "none"` does not prove that, because the conflict only resolves inside this
+ * adapter. These drive the Chat body all the way to the Anthropic wire.
+ */
+describe("F7 an explicit disable beats a provider default at the Anthropic wire", () => {
+  const model = "claude-sonnet-5";
+  const defaultingProvider = {
+    adapter: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    apiKey: "sk-x",
+    authMode: "apiKey",
+    modelDefaultReasoningEfforts: { [model]: "high" },
+  } as unknown as OcxProviderConfig;
+
+  async function wireFromChat(raw: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const request = parseRequest(chatCompletionsToResponsesBody({
+      model,
+      messages: [{ role: "user", content: "hello" }],
+      ...raw,
+    }));
+    const { body } = await createAnthropicAdapter(defaultingProvider).buildRequest(request);
+    return JSON.parse(typeof body === "string" ? body : JSON.stringify(body)) as Record<string, unknown>;
+  }
+
+  test("reasoning_effort none over Chat disables thinking on the wire", async () => {
+    const wire = await wireFromChat({ reasoning_effort: "none" });
+    // Before the fix this was the provider default, reached via adaptive/enabled.
+    expect(wire.thinking).toEqual({ type: "disabled" });
+  });
+
+  test("the nested reasoning.effort spelling behaves identically", async () => {
+    expect((await wireFromChat({ reasoning: { effort: "none" } })).thinking).toEqual({ type: "disabled" });
+  });
+
+  test("omitting an effort still lets the provider default apply", async () => {
+    // The contrast that makes the assertion above meaningful: absence is NOT disable.
+    const wire = await wireFromChat({});
+    expect(wire.thinking).toBeDefined();
+    expect((wire.thinking as { type?: string }).type).not.toBe("disabled");
+  });
+
+  test("the same disable through the Responses ingress agrees", async () => {
+    const request = parseRequest({ model, input: "hello", reasoning: { effort: "none" } });
+    const { body } = await createAnthropicAdapter(defaultingProvider).buildRequest(request);
+    const wire = JSON.parse(typeof body === "string" ? body : JSON.stringify(body)) as Record<string, unknown>;
+    expect(wire.thinking).toEqual({ type: "disabled" });
+  });
+});

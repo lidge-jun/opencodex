@@ -69,3 +69,19 @@ positive value overwrites an earlier one.
 Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
 `tokenUsage` on any event, which is why Kiro usage stays estimated; `meteringEvent` is currently
 ignored because a credit is not a token count.
+## Remote image references
+
+Kiro's wire inlines base64 bytes only, so a remote `https` image reference cannot be
+sent. It used to be dropped with neither bytes nor any marker, so the payload and the
+evidence that an attachment existed both disappeared.
+
+`countKiroUninlinableImages` reports how many parts `parseDataUrlImage` could not
+inline, and the payload builder appends a bounded marker to that turn's text. The
+marker is appended before `rawGroupText` is computed, because adjacency grouping
+rebuilds a turn's content from its collected texts and would otherwise discard it.
+
+No fetch is introduced: resolving the reference server-side would add an outbound
+request on a request path. The marker carries a count and no URL, because a remote
+image URL can carry a signed token.
+
+Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.

@@ -152,4 +152,29 @@ The merged `devin` provider uses this resolver for every account, whichever logi
 path minted the credential. Omitted effort preserves an explicit
 variant; unrelated model families retain their existing suffix precedence.
 
+
+## Untranslated input media
+
+`src/responses/input-media.ts` inspects actual content blocks and typed tool-output arrays
+without parsing text or function arguments, copying attachment payloads, resolving file IDs,
+or fetching URLs. Audio, files/documents and file-ID-only images have no lossless normalized
+carrier. The scanner returns only an input-kind name, never client content.
+
+`src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
+wire selection. A translated `buildRequest` refuses these inputs through the existing 400
+error path; `runTurn` emits one nonretryable `unsupported_input_modality` error without
+starting its underlying transport. `localTerminal` declines a success shortcut for such a
+request, letting the guarded builder return the error instead. The original raw body stays
+unchanged, including when another final adapter is selected after a failed attempt.
+
+The effective Responses wire, including both Azure aliases, is excluded: it forwards the
+original body and leaves native media acceptance to its upstream. This exception does not
+claim that every Responses model supports every attachment. Native Chat also keeps its
+existing wire; only an actual Chat-to-Responses projection rejects audio/file blocks before
+losing them. Legacy function-result images fail explicitly because that projection does not
+implement legacy call/result pairing. Modern tool-image carriers are unchanged.
+
+`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, error events and
+raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
+translation boundary and verifies that rejection sends no upstream request.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
