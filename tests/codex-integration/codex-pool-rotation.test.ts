@@ -1250,6 +1250,125 @@ describe("selection order across rotation strategies", () => {
     expect(resolveCodexAccountForThread(threadId, config, later)).toBe("a");
   });
 
+  // #4546: under quota strategy with no cacheAffinity, a live binding may only
+  // move to an account that has genuine headroom AND is strictly cooler. These
+  // cases share the bind-then-re-eval harness with the cache-affinity tests
+  // above; they pin the narrowed preference, not a pin.
+  test("a bound thread does not ping-pong among over-threshold accounts", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "cache-safe-death-spiral";
+    // Bind the thread while "a" is the natural quota pick, which is how a real conversation
+    // acquires its affinity in the first place.
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    // Every account is now in the 80–100% band, and the scores are unequal on
+    // purpose: before the fix, each of these resolves handed the thread to
+    // whichever account was one point cooler, discarding the account-isolated
+    // prompt cache. Equal scores would not move even before the fix, so the
+    // case would pass for the wrong reason.
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 90);
+    updateAccountQuota("c", 97);
+
+    const now = Date.now();
+    for (const later of [
+      now,
+      now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1,
+      now + 2 * CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 2,
+    ]) {
+      // Two copies of the same rule live in this file; a preview that disagreed with the
+      // final answer would hand subagent fallback a different account than the request uses.
+      expect(previewCodexAccountForRequest(threadId, config, later)).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, later)).toBe("a");
+    }
+  });
+
+  test("a bound thread still moves once onto an account with genuine headroom", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "cache-safe-real-improvement";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    // "a" crossed the threshold; "b" still has headroom. The fix narrowed the
+    // replacement rule, it did not pin the thread.
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 5);
+    updateAccountQuota("c", 50);
+
+    const movedAt = Date.now();
+    expect(previewCodexAccountForRequest(threadId, config, movedAt)).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, movedAt)).toBe("b");
+
+    // "b" is under the threshold, so a later re-eval has nothing to move toward.
+    const later = movedAt + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(previewCodexAccountForRequest(threadId, config, later)).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, later)).toBe("b");
+  });
+
+  test("a 429 still releases a binding the preference rule would have kept", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "cache-safe-429-release";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 50);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    // Same all-hot band as the ping-pong case: the preference rule has no legal
+    // destination, so without the refusal the thread would stay on "a". The 429
+    // is the stronger signal and must still win. Resolve at the refusal instant
+    // so "a" is still in its default cooldown and is not a selectable destination;
+    // "b" is then the only remaining account that is both selectable and
+    // unambiguously coolest.
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 90);
+    updateAccountQuota("c", 97);
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, "a", 429, { now });
+    expect(previewCodexAccountForRequest(threadId, config, now)).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, now)).toBe("b");
+  });
+
+  test("a fully spent bound account still moves to a sibling with headroom", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "cache-safe-exhausted-with-headroom";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    // 100% is exhaustion, not a pin. With cacheAffinity off, a 100 score without a
+    // 429/402 does not drop the binding by itself — stickiness-until-refusal is
+    // intended — but a sibling with genuine headroom is a real improvement and
+    // must still be taken. (An all-hot pool would keep the thread on "a".)
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 5);
+    updateAccountQuota("c", 50);
+    const later = Date.now() + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(previewCodexAccountForRequest(threadId, config, later)).toBe("b");
+    expect(resolveCodexAccountForThread(threadId, config, later)).toBe("b");
+  });
+
     test("the pool moves, then a manual pick wins the next unbound dispatch", () => {
       const config = makeThreeAccountConfig({
         accountPoolStrategy: "round-robin",
