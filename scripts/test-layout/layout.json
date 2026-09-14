@@ -1137,7 +1137,6 @@
     "request-log-estimate-cap.test.ts": "usage",
     "request-log.test.ts": "usage",
     "request-pacing.test.ts": "usage",
-    "request-spend-instrumentation.test.ts": "server",
     "reserve-auth-context.test.ts": "codex-integration",
     "reserve-availability.test.ts": "codex-integration",
     "reserve-catalog-lifecycle.test.ts": "codex-integration",
@@ -1447,7 +1446,8 @@
     "main-device-reauth-ui.test.ts": "gui",
     "adapter-input-media-guard.test.ts": "adapters",
     "chat-media-translation.test.ts": "responses",
-    "execution-budget-permits.test.ts": "lib"
+    "execution-budget-permits.test.ts": "lib",
+    "spend-instrumentation-log.test.ts": "server"
   },
   "migrated": [
     "adapters",
