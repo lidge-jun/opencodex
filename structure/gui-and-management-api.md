@@ -454,6 +454,36 @@ estimated` split exists for, and why coverage is reported alongside totals. The 
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
+A row also carries what its logical request cost upstream. `logicalRequestId` names the turn
+that a retry leg, a repair refetch and a combo child all belong to, and `spend` aggregates their
+physical sends: `sends` totals every attempt on the row, `settled` counts the sends whose attempt
+reached a terminal status, and `unresolved` holds the rest — an attempt abandoned in flight, or a
+budget charge no attempt row accounted for. Unresolved spend is never folded into settled, because
+an unexplained send is the quantity the record exists to expose. `reserved` and `policyVersion`
+report the request execution budget's final state, and `moveReasons` names every pool-binding move
+that discarded a warmed prompt-cache prefix. `/api/usage` totals these as `sends`,
+`settledSends`, `unresolvedSends` and `spendRequests`; per-attempt `sendCount` remains the
+accounting source, and `attemptCount` is the smaller number because retry layers re-send inside
+one attempt.
+
+Cache detail is qualified by provenance rather than read as a measurement. `cacheProvenance` is
+`observed`, `synthesized` or `unknown`: strict-client normalization emits zero-default
+token-detail objects on every bridged wire, so a `cached_tokens: 0` recovered from a parsed wire
+is a wire-compatibility artifact, and a row with no cache fields measured nothing at all. Only
+observed input tokens reach the `cacheHitRate` denominator, reported alongside it as
+`cacheObservedInputTokens`, and the summary counts the three provenances separately. A row
+written before the field existed is reconstructed from its own shape, so historical rows keep
+their previous reading. `/api/logs` marks a non-observed detail with `cache_detail_missing` on
+the cost estimate rather than pricing the turn as a measured uncached send.
+
+A pool selection that produced no account reaches no auth context, so its cause is recorded on
+the request that failed for it: reasons are held per (thread, model lane) and consumed by that
+lane alone, because a thread holds one binding per lane and a thread-keyed reason lets one lane
+report a cause that fired on another. The failing row carries `affinity: "cleared"`, its reason
+and `errorCode: "codex_no_account"`; no synthetic row is emitted, since `/api/usage` counts one
+row as one request. Affinity now reaches disk with the rest of the row — the field-by-field
+projection in `addRequestLog` did not name it, so a move survived only until the next restart.
+
 Usage aggregation does not infer confirmed model identity merely from a requested selector.
 Model rows with saved unchanged
 default-provider route evidence carry `hasUnresolvedRequestedModel`: their tokens stay under
