@@ -357,17 +357,22 @@ export interface ResetRetryOptions {
   label?: string;
   /** Total upstream sends allowed, including the first one. Not a per-layer retry count. */
   attempts?: number;
+  /**
+   * Reports how many upstream sends this call actually consumed, so a caller that spans
+   * several legs of one request (initial send, then a 429/account-recovery refetch) can
+   * keep them on ONE budget instead of handing each leg a fresh one.
+   *
+   * It lives on the RESET options, not on the transient ones, because every leg that falls
+   * back to reset-only retry -- the non-policy adapter initial send, and every
+   * `rebuildAndRefetch` recovery kind whose provider has no transient policy -- was not merely
+   * uncounted but UNCOUNTABLE: the callback existed on a type those call sites never reach.
+   */
+  onSendsConsumed?: (sends: number) => void;
 }
 
 export interface TransientRetryOptions extends ResetRetryOptions {
   /** Test seam: per-attempt slow budget override (defaults to TRANSIENT_RETRY_SLOW_ATTEMPT_MS). */
   slowAttemptMs?: number;
-  /**
-   * Reports how many upstream sends this call actually consumed, so a caller that spans
-   * several legs of one request (initial send, then a 429/account-recovery refetch) can
-   * keep them on ONE budget instead of handing each leg a fresh one.
-   */
-  onSendsConsumed?: (sends: number) => void;
   /**
    * How long this caller can wait on an honoured `Retry-After`, defaulting to
    * {@link RETRY_AFTER_CEILING_MS}. It is a deadline, never a clamp: an instruction inside it
@@ -455,6 +460,10 @@ export async function fetchWithResetRetry(
   let sawReset = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
+    // Reported before the await, one physical send at a time: a send that rejects has still
+    // been made, and this helper leaves through four exits (return, reset give-up, non-reset
+    // rethrow, abort), so a per-send report is the only shape that is correct on all of them.
+    opts.onSendsConsumed?.(1);
     try {
       return await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
     } catch (err) {
@@ -517,13 +526,22 @@ export async function fetchWithTransientRetry(
   // more send -- the loop condition alone was never enough, because every later recovery leg
   // called this helper again and the floor funded each of them.
   const remaining = () => Math.max(0, budget - sent);
+  // The inner reset layer now has its own `onSendsConsumed`, and these are the same physical
+  // sends `countedFetch` already counts. Forwarding the reporter down the `remaining()` path
+  // would report each of them twice, which is how a four-send cap becomes a two-send cap. One
+  // send is counted once, by the outermost layer that owns the budget.
+  const innerResetOptions = (): ResetRetryOptions => ({
+    ...opts,
+    attempts: remaining(),
+    onSendsConsumed: undefined,
+  });
   // Reported in `finally` rather than at each exit: this function returns from five places
   // and throws from one, and a caller sharing the budget across request legs must be told the
   // real count on every one of them.
   try {
   if (budget === 0) throw new SendBudgetExhaustedError(opts.label);
   let attemptStart = Date.now();
-  let res = await fetchWithResetRetry(countedFetch, { ...opts, attempts: remaining() });
+  let res = await fetchWithResetRetry(countedFetch, innerResetOptions());
   for (let attempt = 0; sent < budget; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
@@ -561,7 +579,7 @@ export async function fetchWithTransientRetry(
     attemptStart = Date.now();
     transientStatuses.push(res.status);
     try {
-      res = await fetchWithResetRetry(countedFetch, { ...opts, attempts: remaining() }, "transient-5xx");
+      res = await fetchWithResetRetry(countedFetch, innerResetOptions(), "transient-5xx");
     } catch (err) {
       // Keep the prior 5xx evidence attached: the origin already responded, so
       // this rejection is not pre-connection and must not classify as neutral.

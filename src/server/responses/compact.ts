@@ -682,6 +682,13 @@ export async function handleResponsesCompact(
   // Combo-resolved targets skip native compact so failover can advance through the
   // combo target list when the picked model returns 429/5xx — the routed path below
   // dispatches through handleResponses → handleComboResponses with full failover.
+  //
+  // One holder for the WHOLE logical compact, declared above the native branch because the
+  // routed fallback below is not a different request: a native attempt that 404s, or a quota
+  // failure that hands off, continues here. The routed turn used to call handleResponses with
+  // no budget at all, so `handleResponsesInner` minted a fresh four after the native attempt
+  // had already spent some of the first one.
+  const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();
   if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider) && !accountGatedCompactWireModel && !route.combo) {
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
@@ -774,9 +781,6 @@ export async function handleResponsesCompact(
     // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
     const compactBody = sanitizeReasoningInputContent(compactBodyRaw) as typeof compactBodyRaw;
     const compactUrl = `${base}/responses/compact`;
-    // One holder for this logical compact, inherited by the handoff child so a second model
-    // does not start over with a fresh four.
-    const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();
     const compactTargetKey = `${route.providerName}|${route.modelId}|compact`;
     const actualCompactHostKey = upstreamHostHealthKey(
       route.providerName,
@@ -1223,7 +1227,10 @@ export async function handleResponsesCompact(
     body: JSON.stringify(internalBody),
   });
   linkRequestSessionLane(req, internalReq);
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, ...(admission ? { admission } : {}) });
+  // The routed compaction turn is a handoff inside the same logical request, so it draws the
+  // REMAINDER. Minting here is what let a native attempt spend three sends and the routed
+  // fallback spend four more.
+  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, ...(admission ? { admission } : {}) });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
   if (response.headers.get("content-type")?.includes("text/event-stream")) {

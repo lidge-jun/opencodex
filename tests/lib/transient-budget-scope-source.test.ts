@@ -84,3 +84,75 @@ describe("transient send budget stays request-scoped", () => {
     expect(retry).toContain("class SendBudgetExhaustedError extends Error");
   });
 });
+
+/**
+ * The dispatch paths that were not merely uncounted but UNCOUNTABLE (#4546).
+ *
+ * Three holes survived the earlier slices, and each is invisible at runtime until a real account
+ * pool is hot: `fetchWithResetRetry` had no reporting seam at all, so every leg without a
+ * transient policy sent off the books; the compact endpoint's routed fallback called
+ * `handleResponses` with no budget, so a native attempt's spend was forgotten the moment it fell
+ * through; and the credential hops enforced their own per-roster caps against a counter that knew
+ * nothing about the rest of the request. The wiring is what these assert -- the arithmetic is
+ * pinned in `request-execution-budget.test.ts`.
+ */
+describe("every dispatch path reports into the shared budget", () => {
+  test("the reset-only helper counts its own physical sends", () => {
+    const retry = source("lib/upstream-retry.ts");
+    // The seam moved onto ResetRetryOptions. On TransientRetryOptions it could not be reached by
+    // the non-policy adapter send or by any rebuildAndRefetch leg with a null transient policy.
+    const resetOptions = retry.slice(
+      retry.indexOf("export interface ResetRetryOptions {"),
+      retry.indexOf("export interface TransientRetryOptions"),
+    );
+    expect(resetOptions).toContain("onSendsConsumed?: (sends: number) => void;");
+    // One report per physical send, before the await, so a rejected send still counts.
+    expect(retry).toContain("opts.onSendsConsumed?.(1);");
+    // ...and the transient layer, which already counts the same sends through countedFetch,
+    // suppresses the inner reporter. Forwarding it would count every inner send twice.
+    expect(retry).toContain("onSendsConsumed: undefined,");
+    expect(retry).not.toContain("fetchWithResetRetry(countedFetch, { ...opts, attempts: remaining() })");
+  });
+
+  test("compact holds ONE budget for the native attempt, the handoff child and the routed turn", () => {
+    const compact = source("server/responses/compact.ts");
+    // Declared once, at function scope. Inside the native branch it was out of reach of the
+    // routed fallback below, which is reached by a 404 native compact and by a quota failure.
+    expect(compact.match(/const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();/g))
+      .toHaveLength(1);
+    // The routed compaction turn inherits it instead of letting handleResponsesInner mint a
+    // fresh four.
+    expect(compact).toContain("turnAdmissionLease, sendBudget,");
+    // The handoff child already inherited; both paths must keep doing so.
+    expect(compact).toContain("{ ...options, sendBudget }");
+  });
+
+  test("credential hops keep their roster cap AND reserve from the shared budget", () => {
+    const core = source("server/responses/core.ts");
+    // Four hop sites: the native passthrough 429, the shared sidecar hook's generic and
+    // Anthropic arms, and the runTurn preflight 429.
+    expect(core.match(/reserveCredentialHop(/g)).toHaveLength(4);
+    // The per-roster caps are NOT replaced. The effective allowance is the intersection, so
+    // removing either half is a behaviour change that has to be argued for.
+    expect(core).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
+    expect(core).toContain("genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
+    expect(core).toContain("anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST");
+    // A refused hop hands the reservation back rather than spending a send it never made.
+    expect(core.match(/hop.permit?.release();/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
+    // The passthrough hop's replay spends the hop's own reservation; a second one would be
+    // refused as final-recovery-spent and would answer 502 instead of the real 429.
+    expect(core).toContain("pendingHopPermit = hop.permit;");
+  });
+
+  test("the gated-model 400 ladder cannot outrun the request's total", () => {
+    const core = source("server/responses/core.ts");
+    // The ladder keeps its own bound; the shared total is the other half of the minimum.
+    expect(core).toContain("Math.min(retrySameConfirmedAccount ? 7 : 1, sharedSendsLeft)");
+    expect(core).toContain("executionBudget.policy.maxTotalModelSends - executionBudget.used");
+    // Every rung past the first reserves its own send, so the ladder is visible to later legs
+    // instead of spending the request's allowance invisibly.
+    expect(core).toContain("targetKey: ladderTargetKey,");
+    // The regressed shape: a flat seven-rung ladder that no request-level bound could see.
+    expect(core).not.toContain("const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;");
+  });
+});

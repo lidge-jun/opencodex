@@ -960,6 +960,7 @@
   "repo-hygiene.test.ts": "ci-workflows",
   "request-decompress.test.ts": "usage",
   "request-evidence.test.ts": "usage",
+  "request-execution-budget.test.ts": "lib",
   "request-history-index.test.ts": "usage",
   "request-log-conversation.test.ts": "usage",
   "request-log-estimate-cap.test.ts": "usage",
