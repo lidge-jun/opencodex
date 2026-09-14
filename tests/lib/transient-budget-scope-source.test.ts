@@ -29,15 +29,24 @@ describe("transient send budget stays request-scoped", () => {
     expect(core.match(/let transientSendsUsed = 0;/g)).toHaveLength(1);
     expect(core.match(/const remainingTransientSendBudget = \(budget: number\): number =>/g)).toHaveLength(1);
 
-    // Initial send, 429/rotation refetch, and terminal-guard continuation: three legs, three
-    // reports into the same counter.
-    expect(core.match(/onSendsConsumed: noteTransientSends/g)).toHaveLength(3);
+    // Seven legs report into the same counter: the adapter initial send, the 429/rotation
+    // refetch, the terminal-guard continuation, and the four Codex passthrough sends (initial,
+    // rebuild refetch, OAuth 401 replay, rate-limit 429 replay). The passthrough four were added
+    // for #4546: the owner used to be declared BELOW that branch, which put it in the temporal
+    // dead zone there, so each of those legs silently took the helper's fresh default of 3.
+    expect(core.match(/onSendsConsumed: noteTransientSends/g)).toHaveLength(7);
 
-    // The refetch and continuation legs must ask for the REMAINDER. Only the initial send may
+    // Every leg except the adapter initial send must ask for the REMAINDER. Only that one may
     // pass a policy value directly, because nothing has been spent yet.
-    expect(core.match(/attempts: remainingTransientSendBudget\(/g)).toHaveLength(2);
+    expect(core.match(/attempts: remainingTransientSendBudget\(/g)).toHaveLength(6);
     expect(core).toContain("attempts: remainingTransientSendBudget(refetchTransientPolicy.attempts)");
     expect(core).toContain("attempts: remainingTransientSendBudget(continuationTransientPolicy.attempts)");
+    // The passthrough legs have no adapter policy to draw from, so they name the helper's own
+    // ceiling rather than re-spelling the number.
+    expect(core).toContain("attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS)");
+    // The trap that would make the passthrough wiring a silent no-op: transientRetryPolicyFor
+    // returns null for Codex forward auth, so gating these sites on it would restore a fresh 3.
+    expect(core).not.toContain("transientPolicy ? { attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS)");
 
     // The regressed shape: a leg handing itself a fresh full budget.
     expect(core).not.toContain("attempts: continuationTransientPolicy.attempts }");
