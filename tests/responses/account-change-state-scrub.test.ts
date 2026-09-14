@@ -72,7 +72,7 @@ describe("Codex pool account-change conversation-state scrub", () => {
     expect(logCtx.conversationStateScrub).toBeUndefined();
   });
 
-  test("a serving-account change drops continuation and encrypted reasoning while keeping the readable user message", () => {
+  test("a serving-account change drops the continuation id while keeping the readable user message", () => {
     rememberConversationStateIssuer(BINDING_KEY, "account-a");
     const body = turnBody("hello from the user");
     const parsed = { previousResponseId: "resp_account_a" as string | undefined };
@@ -90,7 +90,9 @@ describe("Codex pool account-change conversation-state scrub", () => {
       expect(body.previous_response_id).toBeUndefined();
       expect(parsed.previousResponseId).toBeUndefined();
       expect(parsed._stripReasoningEncryptedContent).toBe(true);
-      expect((body.input[1] as { encrypted_content?: string }).encrypted_content).toBeUndefined();
+      // Encrypted reasoning is #2247's job and keeps its established shape, so this layer must
+      // leave it exactly as it found it. What this layer owns is the continuation id.
+      expect((body.input[1] as { encrypted_content?: string }).encrypted_content).toBe(ENCRYPTED);
       expect(JSON.stringify(body.input[0])).toContain("hello from the user");
       expect(logCtx.conversationStateScrub).toBe("account-change");
       expect(warn).toHaveBeenCalledWith(
@@ -114,7 +116,9 @@ describe("Codex pool account-change conversation-state scrub", () => {
         logCtx,
       })).toBe(true);
       expect(body.previous_response_id).toBeUndefined();
-      expect((body.input[1] as { encrypted_content?: string }).encrypted_content).toBeUndefined();
+      // Encrypted reasoning is #2247's job and keeps its established shape, so this layer must
+      // leave it exactly as it found it. What this layer owns is the continuation id.
+      expect((body.input[1] as { encrypted_content?: string }).encrypted_content).toBe(ENCRYPTED);
       expect(JSON.stringify(body.input[0])).toContain("compact me later");
       expect(body.input.some((item) => item && (item as { type?: string }).type === "compaction_trigger")).toBe(true);
       expect(logCtx.conversationStateScrub).toBe("account-change");
@@ -137,7 +141,7 @@ describe("Codex pool account-change conversation-state scrub", () => {
     expect(logCtx.conversationStateScrub).toBe("account-change");
   });
 
-  test("canPortConversationState refuses continuation ids and encrypted reasoning", () => {
+  test("canPortConversationState refuses continuation ids, provider ids and encrypted reasoning", () => {
     expect(canPortConversationState({})).toEqual({ portable: true });
     expect(canPortConversationState({ previousResponseId: "resp_1" })).toEqual({
       portable: false,

@@ -10,17 +10,12 @@
  * The issuer association lives next to thread affinity in `src/codex/routing.ts`.
  */
 
-import { sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import {
   peekConversationStateIssuer,
   rememberConversationStateIssuer,
 } from "../../codex/routing";
 import type { OcxParsedRequest } from "../../types";
-import {
-  OMITTED_ENCRYPTED_CONTENT_TEXT,
-  stripAgentMessageCiphertextInPlace,
-} from "./encrypted-payload";
 import type { RequestLogContext } from "../request-log";
 
 export type ConversationStateScrubReason = "account-change";
@@ -149,40 +144,6 @@ export function collectConversationStateCarriers(body: unknown): ConversationSta
   };
 }
 
-function stripEncryptedContentPartsInPlace(input: unknown): number {
-  if (!Array.isArray(input)) return 0;
-  let stripped = 0;
-  for (const item of input) {
-    if (!item || typeof item !== "object") continue;
-    const record = item as Record<string, unknown>;
-    if (typeof record.encrypted_content === "string" && record.encrypted_content.length > 0) {
-      delete record.encrypted_content;
-      stripped += 1;
-    }
-    for (const key of ["content", "output"]) {
-      const parts = record[key];
-      if (!Array.isArray(parts)) continue;
-      for (let index = 0; index < parts.length; index += 1) {
-        const part = parts[index];
-        if (!part || typeof part !== "object") continue;
-        const partRecord = part as Record<string, unknown>;
-        if (partRecord.type === "encrypted_content" && typeof partRecord.encrypted_content === "string") {
-          parts[index] = { type: "input_text", text: OMITTED_ENCRYPTED_CONTENT_TEXT };
-          stripped += 1;
-        }
-      }
-    }
-    if (typeof record.file_id === "string") {
-      delete record.file_id;
-      stripped += 1;
-    }
-    if (Array.isArray(record.file_ids) && record.file_ids.length > 0) {
-      delete record.file_ids;
-      stripped += 1;
-    }
-  }
-  return stripped;
-}
 
 /**
  * Drop account-bound continuation from a request body in place. Readable user
@@ -200,18 +161,13 @@ export function scrubUnportableConversationStateInPlace(body: unknown): boolean 
     delete record.conversation;
     changed = true;
   }
-  const sanitized = sanitizeReasoningInputContent(record, { stripEncryptedContent: true });
-  if (sanitized && typeof sanitized === "object" && !Array.isArray(sanitized)) {
-    const nextInput = (sanitized as { input?: unknown }).input;
-    if (nextInput !== undefined && nextInput !== record.input) {
-      record.input = nextInput;
-      changed = true;
-    } else if (sanitized !== record) {
-      changed = true;
-    }
-  }
-  if (stripAgentMessageCiphertextInPlace(record.input) > 0) changed = true;
-  if (stripEncryptedContentPartsInPlace(record.input) > 0) changed = true;
+  // Encrypted reasoning and compaction ciphertext are deliberately NOT touched here. #2247
+  // already strips them when a pooled thread moves accounts, and in a specific shape: the
+  // reasoning item keeps its readable summary with an emptied content array, and the compaction
+  // item becomes an operator-readable note. Stripping again from this side produced a different
+  // shape and broke that contract for no gain. What #2247 does not cover, and what this function
+  // owns, is the continuation state naming server-side objects the new account cannot read:
+  // `previous_response_id` and a provider-side conversation id.
   return changed;
 }
 
