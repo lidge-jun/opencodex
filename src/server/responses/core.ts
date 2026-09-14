@@ -5147,6 +5147,16 @@ async function handleResponsesInner(
    * status, `Retry-After`, quota body -- because return-the-last-answer is the exhaustion
    * contract this unit settled on.
    */
+  /**
+   * A credential rotation inside ONE provider's roster is "auth-recovery", not
+   * "account-failover". The distinction is load-bearing: "account-failover" sets
+   * `isAlternateTarget` unconditionally, so under `maxAlternateTargetSends: 1` the first
+   * rotation would refuse every later one AND consume the single slot a genuine cross-pool
+   * move needs -- a roster whose first two accounts are both 429'd would return the 429
+   * while a free third account sat unused. The roster cap bounds how far rotation walks;
+   * the shared total bounds how many sends the request makes. Reserve "account-failover"
+   * for a real move between pools.
+   */
   const reserveCredentialHop = (
     sendClass: SendClass,
     targetKey: string,
@@ -6057,7 +6067,7 @@ async function handleResponsesInner(
       // other. A refused hop leaves the real 429 -- body, Retry-After and any quota evidence
       // -- exactly as upstream sent it.
       const hop = reserveCredentialHop(
-        "account-failover",
+        "auth-recovery",
         `${route.providerName}|${route.modelId}|oauth-account-429`,
         true,
       );
@@ -7126,7 +7136,7 @@ async function handleResponsesInner(
       // web-search/image loop and never reaches `onSendsConsumed`, so this reservation is the
       // charge; a refusal returns null and the caller keeps the real 429 it already has.
       const hop = reserveCredentialHop(
-        "account-failover",
+        "auth-recovery",
         `${route.providerName}|${route.modelId}|sidecar-oauth-429`,
       );
       if (!hop.allowed) return null;
@@ -7162,7 +7172,7 @@ async function handleResponsesInner(
       // Same intersection for the Anthropic roster: its own per-request bound still applies,
       // and the shared budget decides whether this request may spend another send at all.
       const hop = reserveCredentialHop(
-        "account-failover",
+        "auth-recovery",
         `${route.providerName}|${route.modelId}|sidecar-anthropic-429`,
       );
       if (!hop.allowed) return null;
@@ -7529,7 +7539,7 @@ async function handleResponsesInner(
       // this reservation is the charge. Refusing returns false, which leaves the preflight 429
       // to reach the client exactly as the adapter produced it.
       const hop = reserveCredentialHop(
-        "account-failover",
+        "auth-recovery",
         `${route.providerName}|${route.modelId}|runturn-oauth-429`,
       );
       if (!hop.allowed) return false;

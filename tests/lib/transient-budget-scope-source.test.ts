@@ -118,7 +118,7 @@ describe("every dispatch path reports into the shared budget", () => {
     const compact = source("server/responses/compact.ts");
     // Declared once, at function scope. Inside the native branch it was out of reach of the
     // routed fallback below, which is reached by a 404 native compact and by a quota failure.
-    expect(compact.match(/const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();/g))
+    expect(compact.match(/const sendBudget: RequestExecutionBudget = options\.sendBudget \?\? createRequestExecutionBudget\(\);/g))
       .toHaveLength(1);
     // The routed compaction turn inherits it instead of letting handleResponsesInner mint a
     // fresh four.
@@ -131,14 +131,14 @@ describe("every dispatch path reports into the shared budget", () => {
     const core = source("server/responses/core.ts");
     // Four hop sites: the native passthrough 429, the shared sidecar hook's generic and
     // Anthropic arms, and the runTurn preflight 429.
-    expect(core.match(/reserveCredentialHop(/g)).toHaveLength(4);
+    expect(core.match(/reserveCredentialHop\(/g)).toHaveLength(4);
     // The per-roster caps are NOT replaced. The effective allowance is the intersection, so
     // removing either half is a behaviour change that has to be argued for.
     expect(core).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
     expect(core).toContain("genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
     expect(core).toContain("anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST");
     // A refused hop hands the reservation back rather than spending a send it never made.
-    expect(core.match(/hop.permit?.release();/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
+    expect(core.match(/hop\.permit\?\.release\(\);/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
     // The passthrough hop's replay spends the hop's own reservation; a second one would be
     // refused as final-recovery-spent and would answer 502 instead of the real 429.
     expect(core).toContain("pendingHopPermit = hop.permit;");

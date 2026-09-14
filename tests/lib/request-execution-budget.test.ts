@@ -126,27 +126,54 @@ describe("atomic dispatch permits", () => {
 });
 
 describe("layer caps intersect the shared budget", () => {
-  test("a second credential hop is refused while total allowance remains", () => {
-    const budget = createRequestExecutionBudget(CODEX_TEXT_GUARDED_BUDGET_POLICY);
-    const initial = budget.reserveDispatch({ sendClass: "initial", targetKey: "acct-1" });
+  test("a roster credential hop walks within the shared total; a cross-pool move does not", () => {
+    // The two classes answer different questions and must not be conflated. A credential
+    // rotation inside ONE provider's roster is "auth-recovery": its own roster cap decides how
+    // far it walks, and the shared total decides how many sends the request may make. A move
+    // between pools is "account-failover", which is bounded to a single alternate target so a
+    // request cannot shop the whole estate.
+    const roster = createRequestExecutionBudget(CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    const initial = roster.reserveDispatch({ sendClass: "initial", targetKey: "acct-1" });
     if (!initial.allowed) throw new Error("unreachable");
     initial.permit.use();
 
-    const firstHop = budget.reserveDispatch({ sendClass: "account-failover", targetKey: "acct-2" });
+    const firstHop = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: "acct-2" });
     expect(firstHop.allowed).toBe(true);
     if (!firstHop.allowed) throw new Error("unreachable");
     firstHop.permit.use();
 
-    // GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST would allow a second and a third hop. The shared
-    // budget still has two of four sends left. The effective allowance is the intersection, and
-    // the cross-account bounds are what refuse here: one target transition and one alternate
-    // send per request, whichever is reached first.
-    const secondHop = budget.reserveDispatch({ sendClass: "account-failover", targetKey: "acct-3" });
-    expect(secondHop.allowed).toBe(false);
-    if (secondHop.allowed) throw new Error("unreachable");
-    expect(secondHop.reason).toBe("target-transition-exhausted");
-    expect(budget.used).toBe(2);
-    expect(budget.used).toBeLessThan(CODEX_TEXT_GUARDED_BUDGET_POLICY.maxTotalModelSends);
+    // The second hop is what a roster of three 429'd accounts needs. Classifying it as a
+    // cross-account move would refuse it here and strand a free third account.
+    const secondHop = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: "acct-3" });
+    expect(secondHop.allowed).toBe(true);
+    if (!secondHop.allowed) throw new Error("unreachable");
+    secondHop.permit.use();
+    expect(roster.used).toBe(3);
+
+    // The shared total is the real bound: the fourth send is the reserve, and a fifth is gone.
+    const fourth = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: "acct-4" });
+    expect(fourth.allowed).toBe(true);
+    if (!fourth.allowed) throw new Error("unreachable");
+    fourth.permit.use();
+    const fifth = roster.reserveDispatch({ sendClass: "auth-recovery", targetKey: "acct-5" });
+    expect(fifth.allowed).toBe(false);
+    expect(roster.used).toBe(CODEX_TEXT_GUARDED_BUDGET_POLICY.maxTotalModelSends);
+
+    // A genuine cross-pool move keeps its one-transition bound with total allowance to spare.
+    const pool = createRequestExecutionBudget(CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    const first = pool.reserveDispatch({ sendClass: "initial", targetKey: "pool-a" });
+    if (!first.allowed) throw new Error("unreachable");
+    first.permit.use();
+    const move = pool.reserveDispatch({ sendClass: "account-failover", targetKey: "pool-b" });
+    expect(move.allowed).toBe(true);
+    if (!move.allowed) throw new Error("unreachable");
+    move.permit.use();
+    const secondMove = pool.reserveDispatch({ sendClass: "account-failover", targetKey: "pool-c" });
+    expect(secondMove.allowed).toBe(false);
+    if (secondMove.allowed) throw new Error("unreachable");
+    expect(secondMove.reason).toBe("target-transition-exhausted");
+    expect(pool.used).toBe(2);
+    expect(pool.used).toBeLessThan(CODEX_TEXT_GUARDED_BUDGET_POLICY.maxTotalModelSends);
   });
 
   test("a same-target replay stops at the base allowance instead of taking the reserve", () => {
