@@ -215,3 +215,55 @@ test("a rejected cancellation retains the flow and can be retried", async () => 
   expect(captured!.state.phase).toBe("succeeded");
   expect(completed).toBe(1);
 });
+
+test.each([
+  ["identity_mismatch", "identity_mismatch"],
+  ["unknown_failure", "request_failed"],
+])("a failed cancellation terminal clears the flow and normalizes %s", async (code, expectedCode) => {
+  let deleteAttempts = 0;
+  let completed = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/codex-auth/main/reauth-device") && init?.method === "POST") {
+        return Response.json({ flowId: "f1", status: "pending" });
+      }
+      if (init?.method === "DELETE") {
+        deleteAttempts += 1;
+        return Response.json({ flowId: "f1", status: "failed", code });
+      }
+      return Response.json({ flowId: "f1", status: "pending", verificationUrl: DEVICE_URL, deviceCode: DEVICE_CODE });
+    },
+  });
+  let captured: ReturnType<typeof useMainDeviceReauth> | null = null;
+  const Probe = () => {
+    const value = useMainDeviceReauth("", () => { completed += 1; });
+    useEffect(() => { captured = value; });
+    return null;
+  };
+  const { createRoot } = await import("react-dom/client");
+  const { createElement } = await import("react");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(createElement(Probe));
+  });
+  await act(async () => {
+    void captured!.start();
+    const deadline = Date.now() + 2000;
+    while (captured!.state.phase !== "pending" && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  });
+  expect(captured!.state.phase).toBe("pending");
+
+  await act(async () => { await captured!.cancel(); });
+  expect(captured!.state).toEqual({ phase: "failed", code: expectedCode });
+  expect(completed).toBe(0);
+  expect(deleteAttempts).toBe(1);
+
+  // A terminal failure releases ownership instead of retaining a stale retry.
+  await act(async () => { await captured!.cancel(); });
+  expect(captured!.state.phase).toBe("idle");
+  expect(deleteAttempts).toBe(1);
+});

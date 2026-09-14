@@ -92,11 +92,13 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
       const res = await fetch(`${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       const dto = await res.json().catch(() => ({})) as FlowDto;
-      if (dto.status !== "cancelled" && dto.status !== "succeeded") {
+      if (dto.status !== "cancelled" && dto.status !== "succeeded" && dto.status !== "failed") {
         throw new Error();
       }
       flowRef.current = null;
-      setState({ phase: dto.status });
+      setState(dto.status === "failed"
+        ? { phase: "failed", code: failureCode(dto.code) }
+        : { phase: dto.status });
       if (dto.status === "succeeded") onCompleted();
     } catch {
       // Keep ownership of the flow so the operator can retry cancellation.
