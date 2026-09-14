@@ -223,6 +223,7 @@ import {
   isTransientUpstreamStatus,
   prepareSameTarget429Wait,
   sleepWithAbort,
+  TRANSIENT_RETRY_MAX_ATTEMPTS,
 } from "../../lib/upstream-retry";
 import {
   ForwardAdmissionCredentialError,
@@ -4971,6 +4972,16 @@ async function handleResponsesInner(
     routedMuseToolNameAliases = builtRequest.convertedMuseToolNameAliases ?? new Map();
   };
 
+  // One request-scoped transient-retry budget owner, declared ABOVE the passthrough branch so
+  // that branch shares it too. It used to sit below, which put it in the temporal dead zone for
+  // the passthrough sends and left each recovery leg taking the helper's fresh default of 3 --
+  // the source of the measured amplification in #4546. A per-leg budget lets a request that
+  // recovers several times multiply upstream load.
+  let transientSendsUsed = 0;
+  const noteTransientSends = (used: number): void => { transientSendsUsed += Math.max(0, used); };
+  const remainingTransientSendBudget = (budget: number): number =>
+    Math.max(1, budget - transientSendsUsed);
+
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     let hostAdmissionLease = pendingHostAdmissionLease;
     pendingHostAdmissionLease = null;
@@ -5513,7 +5524,7 @@ async function handleResponsesInner(
             // retry wrapper replaces — proves the host was reached (#914 review).
             .then(adoptObservedResponse);
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
       );
     } catch (err) {
       return transportFailureResponse(err);
@@ -5593,7 +5604,7 @@ async function handleResponsesInner(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
         );
       } catch (err) {
         return { failed: transportFailureResponse(err) };
@@ -5813,7 +5824,7 @@ async function handleResponsesInner(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -5910,7 +5921,7 @@ async function handleResponsesInner(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -7551,13 +7562,6 @@ async function handleResponsesInner(
     notifyResponseComplete(json);
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
-  // One request-scoped transient-retry budget owner, declared here so BOTH the initial send
-  // and the later recovery refetches (429, key/account rotation, OAuth replay) share it. A
-  // per-leg budget would let a request that recovers several times multiply upstream load.
-  let transientSendsUsed = 0;
-  const noteTransientSends = (used: number): void => { transientSendsUsed += Math.max(0, used); };
-  const remainingTransientSendBudget = (budget: number): number =>
-    Math.max(1, budget - transientSendsUsed);
   try {
     initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     refreshRequestToolAliases(initialRequest);

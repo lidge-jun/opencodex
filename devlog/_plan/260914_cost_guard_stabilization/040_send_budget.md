@@ -118,6 +118,23 @@ Out of scope and worth stating: a client that re-sends on its own is not bounded
 any of this. That needs a logical-request identity shared with the client.
 
 Verification is hosted CI only, as for the rest of this unit. The regression that
+## Step 0 status
+
+Landed. The owner turned out to live in `handleResponsesInner`, not the `handleResponses`
+wrapper, and the four passthrough sends sit inside the same outer try -- so the declaration was
+in the temporal dead zone for them and a reference-only change would have thrown at runtime.
+The fix hoists the three bindings above the passthrough branch and wires all four sends with
+`attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS)` and `onSendsConsumed`.
+
+The trap an audit round caught before it was written: do NOT copy the adapter's
+`transientRetryPolicyFor(...) ? ... : {}` gate onto these sites. That function returns null for
+Codex forward auth, so the copy would have made the whole change a silent no-op.
+
+Consequence to expect in the logs: an initial 401 now spends one of the three, so a later 5xx
+streak on the refresh leg gets two rather than a fresh three. Combo stays at 12 until the budget
+rides `HandleResponsesOptions`, because each child runs its own `handleResponsesInner`.
+
+Verification is hosted CI only, as for the rest of this unit. The regression that
 matters is a table test: for each failure shape (5xx streak, 401-then-5xx, combo
 fan-out), assert the exact number of upstream sends, because the defect is a count.
 That is observable today on the Codex, passthrough and combo paths --

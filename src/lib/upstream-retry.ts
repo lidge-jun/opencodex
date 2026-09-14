@@ -55,7 +55,8 @@ const RESET_RETRY_BASE_DELAY_MS = 150;
 const RESET_RETRY_MAX_DELAY_MS = 1_000;
 
 // Transient-5xx status retry layer (pre-stream only; devlog/_plan/260716_claudecode_hardening/010).
-const TRANSIENT_RETRY_MAX_ATTEMPTS = 3; // 1 initial + 2 retries
+/** Total sends one transient-retry helper call may make: 1 initial + 2 retries. */
+export const TRANSIENT_RETRY_MAX_ATTEMPTS = 3;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 400;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 5_000;
 // A failed attempt slower than this is the "slow 502" incident shape (191s observed on
