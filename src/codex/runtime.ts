@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
@@ -10,6 +10,7 @@ export type CodexRuntimeSource =
   | "environment"
   | "configured"
   | "shim"
+  | "installed"
   | "path"
   | "fallback";
 
@@ -74,6 +75,27 @@ export interface ResolveCodexRuntimeDeps {
    * newerAvailable discovery). Use for hot UI/status paths.
    */
   discoverAlternatives?: boolean;
+  /**
+   * When false, select a spawnable candidate without running `codex --version`.
+   * The prompt probe needs a command it can spawn, not a version, and paying
+   * ~1s of blocking exec per candidate on a UI path is what made it report an
+   * absent candidate instead of the Windows Codex App install (issue 4458).
+   */
+  probeVersion?: boolean;
+  /**
+   * Directory listing used by Windows App-root discovery. Injected so tests can
+   * exercise the LOCALAPPDATA OpenAI/Codex/bin layout without a real Windows
+   * filesystem. Must be listed in resolveCacheKey's injection guard: an injected
+   * listing that leaked into the process memo would pin every later test in this
+   * file to a fake install.
+   */
+  readdirSync?: (path: string) => string[];
+  /**
+   * Stat used to order Windows App version directories by mtime. Same injection
+   * contract as readdirSync: a test-supplied impl must not populate the process
+   * memo.
+   */
+  statSync?: (path: string) => { mtimeMs: number; isDirectory(): boolean };
 }
 
 export interface PersistedCodexRuntimeState {
@@ -88,6 +110,16 @@ const PERSIST_FILE = "codex-runtime.json";
 const CLAMP_PERSIST_FILE = "codex-runtime-clamp.json";
 /** Probe rejection for an absolute candidate whose file is gone. Matched when retiring a dead pin (#4035). */
 const PATH_MISSING_REASON = "path does not exist";
+
+/**
+ * Probe rejection when the selected command cannot even be spawned. Distinct
+ * from PATH_MISSING_REASON (the absolute path was gone before spawn) and from
+ * the generic `failed --version (...)` string (the binary ran and failed).
+ * Exported because the prompt probe classifies this as program-not-found, so a
+ * PATH fallback that is simply not installed must not look like an execution
+ * failure (issue 4458).
+ */
+export const CODEX_PROGRAM_NOT_FOUND_REASON = "program not found (ENOENT)";
 
 function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
   const clone = (current: unknown): unknown => {
@@ -111,6 +143,7 @@ function isCodexRuntimeSource(value: unknown): value is CodexRuntimeSource {
   return value === "environment"
     || value === "configured"
     || value === "shim"
+    || value === "installed"
     || value === "path"
     || value === "fallback";
 }
@@ -313,7 +346,7 @@ export function clearPersistedCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): 
 function probeVersion(
   command: string,
   deps: ResolveCodexRuntimeDeps,
-): { ok: true; version: string } | { ok: false; reason: string } {
+): { ok: true; version: string | null } | { ok: false; reason: string } {
   const platform = deps.platform ?? process.platform;
   if (command.includes("/") || command.includes("\\") || /^[A-Za-z]:/.test(command)) {
     const exists = deps.existsSync ?? existsSync;
@@ -322,6 +355,11 @@ function probeVersion(
       return { ok: false, reason: "not a spawnable Codex launcher on this platform" };
     }
   }
+  // The prompt probe needs a spawnable candidate, not a version. Running
+  // `codex --version` here is ~1s of blocking exec per candidate; on the
+  // dashboard probe that cost made Windows report Codex as missing even when
+  // the App install was sitting under LOCALAPPDATA/OpenAI/Codex/bin (issue 4458).
+  if (deps.probeVersion === false) return { ok: true, version: null };
   const execFile = deps.execFileSync ?? (execFileSync as unknown as RuntimeExecFile);
   // Sandbox the probe's CODEX_HOME: a real Codex CLI creates state (tmp/, logs) under
   // CODEX_HOME even for `--version`, and the probe inherits the caller's env — so a
@@ -350,6 +388,9 @@ function probeVersion(
     return { ok: true, version };
   } catch (error) {
     if (!probeHome) return { ok: false, reason: "probe sandbox unavailable" };
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { ok: false, reason: CODEX_PROGRAM_NOT_FOUND_REASON };
+    }
     const message = error instanceof Error ? error.message : String(error);
     const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
     return { ok: false, reason: `failed --version (${redacted})` };
@@ -399,6 +440,53 @@ function pathCandidates(deps: ResolveCodexRuntimeDeps): string[] {
     }
   }
   return [...new Set(out)];
+}
+
+/**
+ * Codex installs that PATH does not necessarily expose.
+ *
+ * The Windows Codex App writes codex.exe under
+ * LOCALAPPDATA/OpenAI/Codex/bin/<changing-version>/, which never appears on
+ * the service process PATH. The prompt probe used to hardcode four POSIX
+ * paths and miss that layout, then report an absent candidate (issue 4458).
+ * POSIX keeps those four paths so an install that resolved before this source
+ * existed still resolves.
+ */
+function installedCodexCandidates(deps: ResolveCodexRuntimeDeps): string[] {
+  const platform = deps.platform ?? process.platform;
+  const env = deps.env ?? process.env;
+  if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    if (!localAppData) return [];
+    const root = join(localAppData, "OpenAI", "Codex", "bin");
+    const readDir = deps.readdirSync ?? ((path: string) => readdirSync(path));
+    const stat = deps.statSync ?? ((path: string) => statSync(path));
+    try {
+      const names = readDir(root);
+      const dirs: Array<{ name: string; directory: string; mtimeMs: number }> = [];
+      for (const name of names) {
+        const directory = join(root, name);
+        try {
+          const st = stat(directory);
+          if (!st.isDirectory()) continue;
+          dirs.push({ name, directory, mtimeMs: st.mtimeMs });
+        } catch {
+          continue;
+        }
+      }
+      dirs.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
+      return dirs.map(entry => join(entry.directory, "codex.exe"));
+    } catch {
+      return [];
+    }
+  }
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
+  return [
+    join(home, ".codex", "packages", "standalone", "current", "bin", "codex"),
+    join(home, ".local", "bin", "codex"),
+    "/usr/local/bin/codex",
+    "/opt/homebrew/bin/codex",
+  ];
 }
 
 interface RankedCandidate {
@@ -497,6 +585,20 @@ let resolveCacheEpoch = 0;
 let resolveCache: ResolveCacheMemo | null = null;
 
 /**
+ * Memo for probeVersion === false resolves. Kept separate from resolveCache
+ * because peekCodexRuntimeProcessCache is read by convergence and the bundled
+ * catalog as "what runtime are we on". Publishing a null version there would
+ * be read as "unknown version" and become process authority (issue 4458).
+ */
+interface DeferredResolveCacheMemo {
+  readonly key: string;
+  readonly at: number;
+  readonly value: DeepReadonly<ResolveCodexRuntimeResult>;
+}
+
+let deferredResolveCache: DeferredResolveCacheMemo | null = null;
+
+/**
  * Bumped whenever persisted runtime state is replaced or process authority is cleared.
  *
  * Consumers that memoize anything derived from `codex-runtime.json` — entitlement's client
@@ -522,6 +624,7 @@ function publishResolveCache(key: string, at: number, value: ResolveCodexRuntime
 function clearResolveCache(): void {
   resolveCacheEpoch += 1;
   resolveCache = null;
+  deferredResolveCache = null;
 }
 
 /** Clear process-local runtime authority without resolving a replacement. */
@@ -558,7 +661,15 @@ function persistedRuntimeCacheStamp(deps: ResolveCodexRuntimeDeps): string {
 
 function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
   // Only memoize uninjected process-env resolves (settings/status hot paths).
-  if (deps.execFileSync || deps.existsSync || deps.readFileSync || deps.configDir || deps.now) {
+  if (
+    deps.execFileSync
+    || deps.existsSync
+    || deps.readFileSync
+    || deps.readdirSync
+    || deps.statSync
+    || deps.configDir
+    || deps.now
+  ) {
     return null;
   }
   const env = deps.env ?? process.env;
@@ -567,6 +678,10 @@ function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
     path: env.PATH ?? "",
     platform: deps.platform ?? process.platform,
     discover: deps.discoverAlternatives !== false,
+    probeVersion: deps.probeVersion !== false,
+    localAppData: env.LOCALAPPDATA?.trim() ?? "",
+    homeDir: env.HOME?.trim() ?? "",
+    userProfile: env.USERPROFILE?.trim() ?? "",
     home: process.env.OPENCODEX_HOME ?? "",
     persisted: persistedRuntimeCacheStamp(deps),
   });
@@ -577,6 +692,27 @@ function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
  */
 export function resolveCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): ResolveCodexRuntimeResult {
   const cacheKey = resolveCacheKey(deps);
+  // A deferred selection has no validated version and must not publish into
+  // runtime authority. peekCodexRuntimeProcessCache would otherwise report
+  // "available" with version null, which catalog/convergence read as unknown.
+  if (deps.probeVersion === false) {
+    if (cacheKey
+      && deferredResolveCache
+      && deferredResolveCache.key === cacheKey
+      && Date.now() - deferredResolveCache.at < RESOLVE_CACHE_MS) {
+      return cloneAndDeepFreeze(deferredResolveCache.value);
+    }
+
+    const deferred = resolveCodexRuntimeUncached(deps);
+    if (!cacheKey) return cloneAndDeepFreeze(deferred);
+    deferredResolveCache = {
+      key: cacheKey,
+      at: Date.now(),
+      value: cloneAndDeepFreeze(deferred),
+    };
+    return cloneAndDeepFreeze(deferredResolveCache.value);
+  }
+
   if (cacheKey && resolveCache && resolveCache.key === cacheKey && Date.now() - resolveCache.at < RESOLVE_CACHE_MS) {
     return cloneAndDeepFreeze(resolveCache.value);
   }
@@ -623,6 +759,9 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
   for (const command of pathCandidates(deps)) {
     ordered.push({ command, source: "path" });
   }
+  for (const command of installedCodexCandidates(deps)) {
+    ordered.push({ command, source: "installed" });
+  }
   ordered.push({ command: "codex", source: "fallback" });
 
   const seen = new Set<string>();
@@ -644,7 +783,7 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
     };
   }
 
-  // Prefer first valid in priority order (environment → configured → shim → path → fallback).
+  // Prefer first valid in priority order (environment → configured → shim → path → installed → fallback).
   let selected = valid[0]!;
   let replacedConfigured: ResolveCodexRuntimeResult["replacedConfigured"];
 

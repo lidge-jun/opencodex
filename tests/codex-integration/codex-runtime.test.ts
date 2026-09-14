@@ -21,6 +21,7 @@ import { join, dirname } from "node:path";
 import {
   clearCodexRuntimeResolveCache,
   compareCodexVersions,
+  CODEX_PROGRAM_NOT_FOUND_REASON,
   displayCodexRuntimePath,
   effortClampAppliesToRuntime,
   liveRemovedEfforts,
@@ -1162,4 +1163,163 @@ describe("dead configured pin recovery (#4035)", () => {
     expect(loadPersistedCodexRuntime({ configDir })?.command).toBe(live);
   });
 
+});
+
+describe("installed Codex discovery and deferred version probes", () => {
+  test("discovers the newest Windows Codex App install from an injected listing", () => {
+    const localAppData = "C:\\Users\\test\\AppData\\Local";
+    const root = join(localAppData, "OpenAI", "Codex", "bin");
+    const older = join(root, "older", "codex.exe");
+    const newer = join(root, "newer", "codex.exe");
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { LOCALAPPDATA: localAppData, PATH: NO_CODEX_PATH },
+      platform: "win32",
+      existsSync: path => path === older || path === newer,
+      readdirSync: path => path === root ? ["older", "newer"] : [],
+      statSync: path => {
+        if (path === join(root, "older")) return { mtimeMs: 1_000, isDirectory: () => true };
+        if (path === join(root, "newer")) return { mtimeMs: 2_000, isDirectory: () => true };
+        return { mtimeMs: 0, isDirectory: () => false };
+      },
+      execFileSync: file => {
+        expect(String(file)).toBe(newer);
+        return "codex-cli 0.154.0-alpha.6.2";
+      },
+      discoverAlternatives: false,
+    });
+    expect(result.runtime.command).toBe(newer);
+    expect(result.runtime.source).toBe("installed");
+    expect(result.runtime.version).toBe("0.154.0-alpha.6.2");
+  });
+
+  test("orders equal-mtime Windows App directories by name", () => {
+    const localAppData = "C:\\Users\\test\\AppData\\Local";
+    const root = join(localAppData, "OpenAI", "Codex", "bin");
+    const alpha = join(root, "alpha", "codex.exe");
+    const zeta = join(root, "zeta", "codex.exe");
+    const probed: string[] = [];
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { LOCALAPPDATA: localAppData, PATH: NO_CODEX_PATH },
+      platform: "win32",
+      existsSync: path => path === alpha || path === zeta,
+      readdirSync: path => path === root ? ["zeta", "alpha"] : [],
+      statSync: path => {
+        if (path === join(root, "alpha") || path === join(root, "zeta")) {
+          return { mtimeMs: 1_000, isDirectory: () => true };
+        }
+        return { mtimeMs: 0, isDirectory: () => false };
+      },
+      execFileSync: file => {
+        probed.push(String(file));
+        return "codex-cli 0.154.0-alpha.6.2";
+      },
+    });
+    expect(result.runtime.command).toBe(alpha);
+    expect(result.runtime.source).toBe("installed");
+    expect(probed.slice(0, 2)).toEqual([alpha, zeta]);
+  });
+
+  test("can select a runtime without synchronously probing its version", () => {
+    let probeCalls = 0;
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { CODEX_CLI_PATH: "C:\\codex\\codex.exe", PATH: "" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync: () => {
+        probeCalls += 1;
+        return "codex-cli 0.154.0";
+      },
+      probeVersion: false,
+    });
+    expect(result.runtime.command).toBe("C:\\codex\\codex.exe");
+    expect(result.runtime.version).toBeNull();
+    expect(probeCalls).toBe(0);
+  });
+
+  test("a deferred resolve does not publish a null version into process authority", () => {
+    const deps = { env: { PATH: "" }, discoverAlternatives: false as const };
+    resetCodexRuntimeResolveCacheForTests();
+    try {
+      setCodexRuntimeResolveCacheForTests({
+        runtime: { command: "validated-codex", version: "0.154.0", source: "path" },
+        failures: [],
+      }, deps);
+      const before = peekCodexRuntimeProcessCache();
+      expect(before.kind).toBe("available");
+
+      const selected = resolveCodexRuntime({ ...deps, probeVersion: false });
+      expect(selected.runtime.version).toBeNull();
+      expect(peekCodexRuntimeProcessCache()).toEqual(before);
+
+      resetCodexRuntimeResolveCacheForTests();
+      resolveCodexRuntime({ ...deps, probeVersion: false });
+      const peeked = peekCodexRuntimeProcessCache();
+      expect(peeked.kind === "available" && peeked.value.runtime.version === null).toBe(false);
+    } finally {
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
+
+  test("classifies a missing-program ENOENT distinctly from a generic version-probe failure", () => {
+    const error = Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { CODEX_CLI_PATH: "C:\\missing-bin\\codex.exe", PATH: "" },
+      platform: "win32",
+      existsSync: () => true,
+      execFileSync: () => {
+        throw error;
+      },
+    });
+    expect(result.failures.some(item => item.reason === CODEX_PROGRAM_NOT_FOUND_REASON)).toBe(true);
+    expect(result.failures.some(item => item.reason.includes("failed --version"))).toBe(false);
+  });
+
+  test("PATH still outranks an installed candidate when both are valid", () => {
+    const localAppData = "C:\\Users\\test\\AppData\\Local";
+    const root = join(localAppData, "OpenAI", "Codex", "bin");
+    const installed = join(root, "app", "codex.exe");
+    const pathDir = "C:\\on-path";
+    const pathCommand = join(pathDir, "codex.exe");
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { LOCALAPPDATA: localAppData, PATH: pathDir },
+      platform: "win32",
+      existsSync: path => path === pathCommand || path === installed,
+      readdirSync: path => path === root ? ["app"] : [],
+      statSync: path => path === join(root, "app")
+        ? { mtimeMs: 2_000, isDirectory: () => true }
+        : { mtimeMs: 0, isDirectory: () => false },
+      execFileSync: file => {
+        const text = String(file);
+        if (text === pathCommand || text === installed) return "codex-cli 0.154.0";
+        throw new Error(`unexpected probe: ${text}`);
+      },
+      discoverAlternatives: false,
+    });
+    expect(result.runtime.command).toBe(pathCommand);
+    expect(result.runtime.source).toBe("path");
+  });
+
+  test("restores the established Unix Codex install locations", () => {
+    const home = "/home/test";
+    const installed = join(home, ".codex", "packages", "standalone", "current", "bin", "codex");
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { HOME: home, PATH: NO_CODEX_PATH },
+      platform: "linux",
+      existsSync: path => String(path) === installed,
+      execFileSync: file => {
+        expect(String(file)).toBe(installed);
+        return "codex-cli 0.154.0-alpha.6.2";
+      },
+      discoverAlternatives: false,
+    });
+    expect(result.runtime.command).toBe(installed);
+    expect(result.runtime.source).toBe("installed");
+    expect(result.runtime.version).toBe("0.154.0-alpha.6.2");
+  });
 });
