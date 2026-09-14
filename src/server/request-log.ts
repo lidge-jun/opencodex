@@ -175,6 +175,11 @@ export interface RequestLogContext {
   affinity?: CodexAffinityMove;
   /** Why the binding was kept, moved, or released (#4546). */
   affinityReason?: CodexAffinityReason;
+  /**
+   * Set when this request dropped account-bound continuation because the serving
+   * Codex pool account was not the issuer. Never an account identifier.
+   */
+  conversationStateScrub?: "account-change";
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
@@ -252,6 +257,11 @@ export interface RequestLogEntry {
   affinity?: CodexAffinityMove;
   /** Why that decision was made (#4546): a move is the expensive event, so it names its cause. */
   affinityReason?: CodexAffinityReason;
+  /**
+   * Set when this request dropped account-bound continuation after a Codex pool
+   * account change. Never an account identifier.
+   */
+  conversationStateScrub?: "account-change";
   /** Where the upstream terminal/failure was observed. */
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   /**
@@ -385,6 +395,9 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...(entry.conversationStateScrub === "account-change"
+      ? { conversationStateScrub: "account-change" }
+      : {}),
   };
 }
 
@@ -530,6 +543,9 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...failureDiagnostics,
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
       ...(entry.claudeCompatibility ? { claudeCompatibility: entry.claudeCompatibility } : {}),
+      ...(entry.conversationStateScrub === "account-change"
+        ? { conversationStateScrub: "account-change" }
+        : {}),
     });
   } catch {
     /* request logging must never fail a user request */
@@ -1311,6 +1327,9 @@ export function addFinalRequestLog(
     ...(loggedUsage || cacheProvenance !== "unknown" ? { cacheProvenance } : {}),
     ...(logCtx.affinity ? { affinity: logCtx.affinity } : {}),
     ...(logCtx.affinityReason ? { affinityReason: logCtx.affinityReason } : {}),
+    ...(logCtx.conversationStateScrub === "account-change"
+      ? { conversationStateScrub: "account-change" }
+      : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),

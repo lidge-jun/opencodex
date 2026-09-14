@@ -417,6 +417,11 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace, stripAgentMessageCiphertextInPlace } from "./encrypted-payload";
+import {
+  applyAccountChangeConversationStateScrub,
+  conversationStateBindingFromAuth,
+  rememberServingConversationStateIssuer,
+} from "./account-change-state";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, storedPoolReplayDispatchNotifier, type ProviderFetchOptions } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import {
@@ -1630,6 +1635,24 @@ async function retryCodexPoolOnAlternateAccount(
     codexAuthContext: retryAuthCtx,
     forwardHeaders: retryHeaders,
   });
+  {
+    const binding = conversationStateBindingFromAuth(
+      retryAuthCtx,
+      firstAuthCtx.kind === "pool" || firstAuthCtx.kind === "main-pool"
+        ? firstAuthCtx.affinityKey
+        : undefined,
+    );
+    if (binding) {
+      applyAccountChangeConversationStateScrub({
+        body: parsed._rawBody,
+        parsed,
+        bindingKey: binding.bindingKey,
+        servingAccountId: binding.accountId,
+        priorAccountId: firstAuthCtx.accountId,
+        logCtx,
+      });
+    }
+  }
   const request = await retryAdapter.buildRequest(parsed, {
     headers: retryHeaders,
     translatorBudget: options.translatorBudget,
@@ -4548,6 +4571,18 @@ async function handleResponsesInner(
     logCtx.affinity = authCtx.affinityDecision.move;
     logCtx.affinityReason = authCtx.affinityDecision.reason;
   }
+  {
+    const binding = conversationStateBindingFromAuth(authCtx, poolAffinityKey);
+    if (binding) {
+      applyAccountChangeConversationStateScrub({
+        body: parsed._rawBody,
+        parsed,
+        bindingKey: binding.bindingKey,
+        servingAccountId: binding.accountId,
+        logCtx,
+      });
+    }
+  }
   // Seed an account-derived scope before final adapter binding. Cursor never treats it as
   // authoritative: bindRouteReasoningReplayScope replaces it with the exact route owner or a
   // per-request fail-closed sentinel after the final provider and credential are known.
@@ -5260,6 +5295,7 @@ async function handleResponsesInner(
   // message, and leave Codex fataling on a missing compaction item (#422).
   const commitReasoningReplayServingRoute = (outboundHeaders?: HeadersInit): void => {
     commitReasoningReplayServingIdentity(parsed._reasoningReplayScope);
+    rememberServingConversationStateIssuer(authCtx, poolAffinityKey);
     // History has no model namespace. Record the account that actually accepted this
     // final attempt, after refresh/failover, rather than guessing from mutable affinity.
     // Recording is relay state. With the feature off there is no relay, so building an owner

@@ -338,6 +338,18 @@ const LEGACY_THREAD_AFFINITY_SCOPE = "legacy" as const;
 const threadAccountMap = new Map<string, Map<ThreadAffinityScope, ThreadAffinityEntry>>();
 let threadAffinityEntryTotal = 0;
 
+/**
+ * Which pool account minted the conversation's carried OpenAI state
+ * (`previous_response_id`, encrypted reasoning, provider conversation/file ids).
+ * Keyed by the same affinity key as {@link threadAccountMap}, bounded the same
+ * way, and process-local — raw account ids never reach a log.
+ */
+type ConversationStateIssuerEntry = {
+  accountId: string;
+  lastUsedAt: number;
+};
+const conversationStateIssuerMap = new Map<string, ConversationStateIssuerEntry>();
+
 function isModelDetourAffinityScope(scope: ThreadAffinityScope): scope is ModelDetourAffinityScope {
   return scope.startsWith("model-detour:");
 }
@@ -438,6 +450,11 @@ export function clearThreadAccountMap(): void {
   // A refresh cooldown is per-account runtime state learned alongside these bindings. Leaving it
   // behind here keeps an account out of selection after the roster it belonged to is gone.
   clearAllCodexPoolRefreshFailures();
+  conversationStateIssuerMap.clear();
+}
+
+export function clearConversationStateIssuerMap(): void {
+  conversationStateIssuerMap.clear();
 }
 
 export function clearThreadAccountMapForAccount(
@@ -453,6 +470,55 @@ export function clearThreadAccountMapForAccount(
     }
     if (affinities.size === 0) threadAccountMap.delete(threadId);
   }
+}
+
+function pruneConversationStateIssuers(now: number): void {
+  for (const [key, entry] of conversationStateIssuerMap) {
+    if (now - entry.lastUsedAt > CODEX_THREAD_AFFINITY_IDLE_TTL_MS) {
+      conversationStateIssuerMap.delete(key);
+    }
+  }
+  while (conversationStateIssuerMap.size > CODEX_THREAD_AFFINITY_MAX_ENTRIES) {
+    let oldestKey: string | null = null;
+    let oldestAt = Number.POSITIVE_INFINITY;
+    for (const [key, entry] of conversationStateIssuerMap) {
+      if (entry.lastUsedAt < oldestAt) {
+        oldestAt = entry.lastUsedAt;
+        oldestKey = key;
+      }
+    }
+    if (!oldestKey) break;
+    conversationStateIssuerMap.delete(oldestKey);
+  }
+}
+
+/**
+ * Record the pool account that just issued carried conversation state for this
+ * binding key. In-memory only; the id is never written to a request log.
+ */
+export function rememberConversationStateIssuer(
+  bindingKey: string,
+  accountId: string,
+  now = Date.now(),
+): void {
+  if (!bindingKey.trim() || !accountId.trim()) return;
+  if (!admissibleAffinityComponent(bindingKey) || !admissibleAffinityComponent(accountId)) return;
+  pruneConversationStateIssuers(now);
+  conversationStateIssuerMap.set(bindingKey, { accountId, lastUsedAt: now });
+  pruneConversationStateIssuers(now);
+}
+
+/** Last account that minted carried state for this binding, if still in the TTL window. */
+export function peekConversationStateIssuer(
+  bindingKey: string,
+  now = Date.now(),
+): string | undefined {
+  if (!bindingKey.trim() || !admissibleAffinityComponent(bindingKey)) return undefined;
+  pruneConversationStateIssuers(now);
+  const entry = conversationStateIssuerMap.get(bindingKey);
+  if (!entry) return undefined;
+  entry.lastUsedAt = now;
+  return entry.accountId;
 }
 
 /**

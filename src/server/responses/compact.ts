@@ -51,6 +51,7 @@ import {
   materializeCodexUpstreamAuthAsync,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  codexPoolAffinityKey,
   codexProbeLeaseId,
   codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
@@ -67,6 +68,11 @@ import {
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
+import {
+  applyAccountChangeConversationStateScrub,
+  conversationStateBindingFromAuth,
+  rememberServingConversationStateIssuer,
+} from "./account-change-state";
 import {
   TokenRefreshError,
   forceRefreshCodexPoolToken,
@@ -780,6 +786,23 @@ export async function handleResponsesCompact(
     // buildRequest, but the compact endpoint forwards directly. Apply the same sanitizer here
     // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
     const compactBody = sanitizeReasoningInputContent(compactBodyRaw) as typeof compactBodyRaw;
+    {
+      const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
+      if (binding) {
+        applyAccountChangeConversationStateScrub({
+          body: raw,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+          logCtx,
+        });
+        applyAccountChangeConversationStateScrub({
+          body: compactBody,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+          logCtx,
+        });
+      }
+    }
     const compactUrl = `${base}/responses/compact`;
     const compactTargetKey = `${route.providerName}|${route.modelId}|compact`;
     const actualCompactHostKey = upstreamHostHealthKey(
@@ -1100,6 +1123,30 @@ export async function handleResponsesCompact(
         await upstream.body?.cancel().catch(() => undefined);
         outcomeCtx = alternate.authCtx;
         logCtx.accountLogLabel = codexAuthContextLogLabel(alternate.authCtx, config);
+        {
+          const binding = conversationStateBindingFromAuth(
+            alternate.authCtx,
+            (authCtx.kind === "pool" || authCtx.kind === "main-pool")
+              ? authCtx.affinityKey
+              : codexPoolAffinityKey(req.headers),
+          );
+          if (binding) {
+            applyAccountChangeConversationStateScrub({
+              body: raw,
+              bindingKey: binding.bindingKey,
+              servingAccountId: binding.accountId,
+              priorAccountId: authCtx.accountId,
+              logCtx,
+            });
+            applyAccountChangeConversationStateScrub({
+              body: compactBody,
+              bindingKey: binding.bindingKey,
+              servingAccountId: binding.accountId,
+              priorAccountId: authCtx.accountId,
+              logCtx,
+            });
+          }
+        }
         try {
           upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx);
         } catch (err) {
@@ -1167,6 +1214,7 @@ export async function handleResponsesCompact(
     if (buffered.ok) {
       inspectResponseLogJson(logCtx, await buffered.clone().text());
       forgetCompactHandoffRoute(req);
+      rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
     } else if (quotaFailure && !storedPool401ReplayAttempted) {
       const fallbackModel = compactHandoffRoute(req, raw.model);
       if (fallbackModel && !req.signal.aborted) {

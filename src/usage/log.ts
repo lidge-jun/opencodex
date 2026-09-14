@@ -320,6 +320,11 @@ export interface PersistedUsageEntry {
   affinity?: CodexAffinityMove;
   affinityReason?: CodexAffinityReason;
   /**
+   * Set when this request dropped account-bound continuation after a Codex pool
+   * account change. Never an account identifier.
+   */
+  conversationStateScrub?: "account-change";
+  /**
    * Bounded route-decision trace (RI-01): why this provider/model/account was
    * selected. Additive field; old rows without it parse unchanged. Never
    * contains prompts, credentials, or hidden reasoning.
@@ -392,6 +397,9 @@ const KNOWN_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["affinity
   "healthy", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
   "unusable", "paused", "plan_excluded", "cooldown", "quota_avoided", "generation",
   "expired", "model_lane",
+]);
+const KNOWN_CONVERSATION_STATE_SCRUBS = new Set<NonNullable<PersistedUsageEntry["conversationStateScrub"]>>([
+  "account-change",
 ]);
 
 export function isKnownAffinityMove(value: unknown): value is NonNullable<PersistedUsageEntry["affinity"]> {
@@ -752,6 +760,10 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const affinityReason = affinity !== undefined && isKnownAffinityReason(entry.affinityReason)
     ? entry.affinityReason
     : undefined;
+  const conversationStateScrub = typeof entry.conversationStateScrub === "string"
+    && KNOWN_CONVERSATION_STATE_SCRUBS.has(entry.conversationStateScrub)
+    ? entry.conversationStateScrub
+    : undefined;
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
@@ -830,6 +842,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(terminalSource ? { terminalSource } : {}),
     ...(affinity ? { affinity } : {}),
     ...(affinityReason ? { affinityReason } : {}),
+    ...(conversationStateScrub ? { conversationStateScrub } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
