@@ -5,7 +5,7 @@ Responses body-reader limits and lifetime handling follow the
 
 How opencodex measures request and stream bytes without allocating copies solely to count
 them. These contracts are shared by request parsing, SSE rewriting, the provider adapters and
-the translator budget, which is why so many documents link here rather than restating them. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314).
+the translator budget, which is why so many documents link here rather than restating them. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314). Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
 ## Request-copy accounting
 

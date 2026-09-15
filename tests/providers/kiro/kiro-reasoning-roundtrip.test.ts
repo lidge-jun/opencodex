@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { buildKiroPayload } from "../../../src/adapters/kiro/payload";
+import { kiroNativeEffortField } from "../../../src/adapters/kiro/reasoning";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../../src/bridge";
 import { parseRequest } from "../../../src/responses/parser";
 import { decodeReasoningEnvelope } from "../../../src/responses/reasoning-envelope";
 import type { AdapterEvent } from "../../../src/types";
+import type { OcxProviderConfig } from "../../../src/types";
+import { createKiroAdapter as createKiroAdapterProduction } from "../../../src/adapters/kiro";
+import { encodeMessage } from "../../../src/lib/eventstream-decoder";
 import { createTranslatorBudget } from "../../../src/lib/translator-budget";
+import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 
 const BLOB = "LktUUn5+ZXlKbGJtTnllWEIwYVc5dVVtVm5hVzl1SWpvaQ==";
 
@@ -133,5 +139,164 @@ describe("kiro redacted-reasoning round-trip (bridge → parse)", () => {
 
     const assistant = reparse(items).context.messages.find(m => m.role === "assistant");
     expect((assistant as { kiroRedactedReasoning?: string }).kiroRedactedReasoning).toBe(BLOB);
+  });
+});
+
+// The blob has two possible homes on a replayed `assistantResponseMessage`, and the wire validates
+// the SHAPE of each: `signature` takes the emitted string verbatim, while `redactedContent` is a
+// base64 member. The ".KTR~~…" value the GPT-5.6 family returns is not base64, which is why
+// replaying it as `redactedContent` — what the proxy did before the field was measured — came back
+// as REQUEST_BODY_INVALID. Which field a blob arrived on therefore has to survive the whole
+// round-trip, not just the parse.
+describe("kiro reasoning blob — the wire field it replays on", () => {
+  const SIGNATURE = ".KTR~~eyJlbmNyeXB0aW9uUmVnaW9uIjoidXMtZWFzdC0xIiwic2xvdHMiOltdfQ==";
+
+  interface HistoryEntry {
+    assistantResponseMessage?: { reasoningContent?: unknown };
+  }
+
+  /** Round-trip one blob the way Codex does — bridge, history replay, then the next Kiro body. */
+  function replayedReasoningContent(blob: string): unknown {
+    const response = buildResponseJSON([
+      { type: "text_delta", text: "the answer" },
+      { type: "kiro_redacted_reasoning", data: blob },
+      { type: "done", usage: { inputTokens: 1, outputTokens: 2 }, endTurn: true },
+    ], "kiro/gpt-5.6-luna");
+    const items = (response.output as Record<string, unknown>[]).map(({ status: _status, ...item }) => item);
+    // Kiro requires the request to end with a user turn, so the replayed turn is followed by one.
+    const parsed = parseRequest({
+      model: "kiro/gpt-5.6-luna",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+        ...items,
+        { type: "message", role: "user", content: [{ type: "input_text", text: "again" }] },
+      ],
+    });
+    const { payload } = buildKiroPayload(parsed, undefined, "disabled", "ide");
+    const history = (payload.conversationState as { history?: HistoryEntry[] }).history ?? [];
+    return history.find(entry => entry.assistantResponseMessage?.reasoningContent)
+      ?.assistantResponseMessage?.reasoningContent;
+  }
+
+  test("a signature blob is replayed verbatim on `signature`", () => {
+    expect(replayedReasoningContent(`signature:${SIGNATURE}`)).toEqual({ signature: SIGNATURE });
+  });
+
+  test("an untagged blob keeps the base64 `redactedContent` shape", () => {
+    expect(replayedReasoningContent(BLOB)).toEqual({ redactedContent: BLOB });
+  });
+
+  test("the tag never reaches the wire as part of the blob", () => {
+    const replayed = replayedReasoningContent(`signature:${SIGNATURE}`) as { signature?: string };
+    expect(replayed.signature).toBe(SIGNATURE);
+    expect(JSON.stringify(replayed)).not.toContain("signature:");
+  });
+});
+
+// The parse side is where the tag is minted, so it is pinned here rather than in
+// tests/providers/kiro/kiro-stream.test.ts: that file sits at its file-size-ratchet cap
+// (tests/fixtures/file-size-baseline.json), and a baselined file may not grow by one line.
+// An event carrying only the signature still has to emit the blob — the GPT-5.6 family can finish
+// a turn with the encrypted blob and no assistant text at all.
+describe("kiro reasoning blob — the stream records the field it arrived on", () => {
+  const provider = {
+    adapter: "kiro",
+    baseUrl: "https://runtime.us-east-1.kiro.dev",
+    authMode: "oauth",
+    apiKey: "tok-123",
+  } as unknown as OcxProviderConfig;
+  const enc = new TextEncoder();
+  const signatureFrame = (obj: unknown) => encodeMessage(
+    { ":message-type": "event", ":event-type": "reasoningContentEvent" },
+    enc.encode(JSON.stringify(obj)),
+  );
+
+  function streamOf(...frames: Uint8Array[]): ReadableStream<Uint8Array> {
+    let i = 0;
+    return new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (i < frames.length) c.enqueue(frames[i++]);
+        else c.close();
+      },
+    });
+  }
+
+  async function parse(frame: Uint8Array): Promise<AdapterEvent[]> {
+    const adapter = withTestTranslatorBudget(createKiroAdapterProduction(provider));
+    const out: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(new Response(streamOf(frame)))) out.push(event);
+    return out;
+  }
+
+  test("a signature blob is tagged with the field it must be replayed on", async () => {
+    // Every capture of the GPT-5.6 family put the blob on `signature` and left `text` as a "..."
+    // placeholder. That value starts with ".KTR~~", which is NOT base64, so replaying it as
+    // `redactedContent` — what the proxy used to send — is rejected as REQUEST_BODY_INVALID. A
+    // `redactedContent` event stays untagged; the untagged shape is covered above.
+    const signature = ".KTR~~eyJ2IjoxfQ==";
+    expect(await parse(signatureFrame({ signature, text: "..." }))).toEqual([
+      { type: "reasoning_raw_delta", text: "..." },
+      { type: "kiro_redacted_reasoning", data: `signature:${signature}` },
+      expect.objectContaining({ type: "done" }),
+    ]);
+  });
+
+  test("a signature-only event still yields the tagged blob", async () => {
+    // No assistant text means no terminal either: the blob is the whole turn, which is why the tag
+    // must not be conditioned on `text`.
+    expect((await parse(signatureFrame({ signature: ".KTR~~only" })))[0]).toEqual(
+      { type: "kiro_redacted_reasoning", data: "signature:.KTR~~only" },
+    );
+  });
+});
+
+// The request side of the same story. luna and terra used to fall through to the emulated
+// <thinking_mode> block, a strictly weaker signal: on one fixed hard prompt that channel landed
+// between the model's native medium and high (21,202 / 28,302 chars) and never reached native max
+// (48,594), while the native ladder itself ran 5,130 -> 48,594 from low to max. The whole GPT-5.6
+// family shares the field name, but luna/terra keep xhigh emulated until verified.
+describe("kiro native reasoning effort — the GPT-5.6 family", () => {
+  function wireBody(modelId: string, effort = "max"): Record<string, unknown> {
+    const parsed = {
+      modelId,
+      stream: true,
+      options: { reasoning: effort, maxOutputTokens: 1000 },
+      context: { messages: [{ role: "user", content: "solve" }] },
+    } as unknown as Parameters<typeof buildKiroPayload>[0];
+    return buildKiroPayload(parsed, undefined, "disabled", "ide").payload;
+  }
+
+  test("luna and terra send the native reasoning field instead of thinking tags", () => {
+    for (const modelId of ["gpt-5.6-luna", "gpt-5.6-terra"]) {
+      for (const effort of ["low", "medium", "high", "max"]) {
+        const body = wireBody(modelId, effort);
+        expect(body.additionalModelRequestFields).toEqual({ reasoning: { effort } });
+        // Native effort replaces the emulated thinking-tag prompt entirely.
+        const current = (body.conversationState as {
+          currentMessage: { userInputMessage: { content: string } };
+        }).currentMessage.userInputMessage.content;
+        expect(current).toBe("solve");
+      }
+    }
+  });
+
+  test("luna and terra keep unverified xhigh on the emulated path", () => {
+    for (const modelId of ["gpt-5.6-luna", "gpt-5.6-terra"]) {
+      const body = wireBody(modelId, "xhigh");
+      expect(body.additionalModelRequestFields).toBeUndefined();
+      const current = (body.conversationState as {
+        currentMessage: { userInputMessage: { content: string } };
+      }).currentMessage.userInputMessage.content;
+      expect(current).toContain("<thinking_mode>enabled</thinking_mode>");
+      expect(current).toContain("<max_thinking_length>900</max_thinking_length>");
+      expect(kiroNativeEffortField(modelId, "future-effort")).toBeUndefined();
+    }
+  });
+
+  test("existing Sol and Opus native xhigh fields stay unchanged", () => {
+    expect(wireBody("gpt-5.6-sol", "xhigh").additionalModelRequestFields)
+      .toEqual({ reasoning: { effort: "xhigh" } });
+    expect(wireBody("claude-opus-5", "xhigh").additionalModelRequestFields)
+      .toEqual({ output_config: { effort: "xhigh" } });
   });
 });

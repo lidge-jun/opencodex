@@ -19,6 +19,7 @@ import { noteKiroTransientThrottle } from "../kiro-retry";
 import { KiroThinkingParser } from "../kiro-thinking";
 import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "../kiro-truncation";
 import { isValidKiroConversationId } from "../kiro-wire";
+import { tagKiroReasoningBlob } from "./reasoning";
 import { estimateKiroTokens, kiroUpstreamContextWindow } from "./usage";
 
 // Stream parsing (shared by parseStream + parseResponse)
@@ -633,8 +634,13 @@ async function* parseKiroAttemptEvents(
           if (ev.data) {
             yield* emitRetained(stage({ type: "reasoning_raw_delta", text: ev.data }));
           }
-          if (ev.redactedContent) {
-            yield* emitRetained(stage({ type: "kiro_redacted_reasoning", data: ev.redactedContent }));
+          // The blob is replayed on the field it arrived on, so remember that field here — this is
+          // the only place that still knows it. See kiro/reasoning.ts for why the distinction is
+          // load-bearing rather than cosmetic.
+          if (ev.signature) {
+            yield* emitRetained(stage({ type: "kiro_redacted_reasoning", data: tagKiroReasoningBlob("signature", ev.signature) }));
+          } else if (ev.redactedContent) {
+            yield* emitRetained(stage({ type: "kiro_redacted_reasoning", data: tagKiroReasoningBlob("redactedContent", ev.redactedContent) }));
           }
           break;
         case "context_usage":

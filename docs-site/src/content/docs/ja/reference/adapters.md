@@ -154,10 +154,12 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 
 ### Reasoning effort
 
-`gpt-5.6-sol` と `claude-opus-5` はネイティブ effort をサポートし、リクエストフィールド名が異なります。
-`low` / `medium` / `high` / `xhigh` / `max` は、前者では
-`additionalModelRequestFields.reasoning.effort`、後者では `output_config.effort` として送信されます。
-
+GPT-5.6 系は `additionalModelRequestFields.reasoning.effort`、`claude-opus-5` は
+`additionalModelRequestFields.output_config.effort` を使用します。`gpt-5.6-luna` と
+`gpt-5.6-terra` では、検証済みの `low`、`medium`、`high`、`max` だけをネイティブフィールドで送信します。
+両モデルの `xhigh` は未検証のため、従来の上限付き thinking 指示によるエミュレーションを維持します。
+`gpt-5.6-sol` と `claude-opus-5` の既存のネイティブ段階（`low`、`medium`、`high`、`xhigh`、`max`）は変更しません。
+その他の Kiro モデルはエミュレーションを使用し、effort の選択肢だけではネイティブ対応を意味しません。
 
 ## `cursor`
 

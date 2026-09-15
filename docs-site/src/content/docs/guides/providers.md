@@ -64,6 +64,18 @@ Shipped v1 configs migrate automatically to marker 2 and one option-aware row. T
 is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
 
+## Anthropic image input
+
+The built-in Claude model seeds advertise text and image input for both `anthropic` (OAuth) and
+`anthropic-apikey`, consistent with [Anthropic's model overview](https://platform.claude.com/docs/en/models/overview).
+Explicit per-model input-modality overrides remain authoritative; unknown models are not assumed
+image-capable. This applies across integrations wherever the client's configuration supports image
+capability metadata: OpenClaw exports a declared `input` array, and Kimi Code exports
+`capabilities: ["image_in"]` only for image-capable models. OpenClaw omits `input` when no supported
+modalities are declared; Kimi omits `capabilities` for unknown or text-only models. Clients without
+a supported capability field keep their existing configuration shape. After updating opencodex,
+regenerate or refresh the client configuration managed by opencodex to receive the updated metadata.
+
 ## Auth modes
 
 Provider configs accept three `authMode` values (`key` is the default). The built-in registry also

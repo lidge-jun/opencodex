@@ -133,6 +133,29 @@ describe("hermes", () => {
 });
 
 describe("openclaw", () => {
+  test("declares image input only from catalog capabilities", () => {
+    const doc = buildClientConfig("openclaw", ctx()) as OpenclawGeneratedConfig;
+    const models = doc.models.providers[OPENCODE_PROVIDER_ID]!.models;
+    expect(models.find(model => model.id === "anthropic/claude-opus-4-8")).toHaveProperty("input", ["text", "image"]);
+    expect(models.find(model => model.id === "gpt-5.5")).toHaveProperty("input", ["text"]);
+    expect(models.find(model => model.id === "local/no-window")).not.toHaveProperty("input");
+  });
+
+  test("filters unsupported modalities without inventing image input", () => {
+    const doc = buildClientConfig("openclaw", {
+      ...ctx(),
+      models: [
+        { namespaced: "p/mixed", provider: "p", id: "mixed", inputModalities: ["text", "image", "image", "audio", "video", "pdf"] },
+        { namespaced: "p/unknown", provider: "p", id: "unknown", inputModalities: [] },
+        { namespaced: "p/foreign", provider: "p", id: "foreign", inputModalities: ["pdf"] },
+      ],
+    }) as OpenclawGeneratedConfig;
+    const models = doc.models.providers[OPENCODE_PROVIDER_ID]!.models;
+    expect(models.find(model => model.id === "p/mixed")?.input).toEqual(["text", "image", "audio", "video"]);
+    expect(models.find(model => model.id === "p/unknown")).not.toHaveProperty("input");
+    expect(models.find(model => model.id === "p/foreign")).not.toHaveProperty("input");
+  });
+
   test("merges with the bundled catalog and omits a window it cannot assert", () => {
     const doc = buildClientConfig("openclaw", ctx()) as OpenclawGeneratedConfig;
     expect(doc.models.mode).toBe("merge");
@@ -252,9 +275,15 @@ describe("kimi", () => {
     expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
   });
 
-  test("never emits capabilities it cannot assert", () => {
-    const { text } = buildClientConfigText("kimi", ctx());
-    expect(text).not.toContain("capabilities");
+  test("declares image_in only for catalog-backed image models", () => {
+    const doc = buildClientConfig("kimi", ctx()) as KimiGeneratedConfig;
+    expect(doc.models[`${OPENCODE_PROVIDER_ID}/anthropic/claude-opus-4-8`])
+      .toHaveProperty("capabilities", ["image_in"]);
+    expect(doc.models[`${OPENCODE_PROVIDER_ID}/gpt-5.5`]).not.toHaveProperty("capabilities");
+    const unknown = buildClientConfig("kimi", {
+      ...ctx(), models: [{ namespaced: "local/unknown", provider: "local", id: "unknown", contextWindow: 32_000 }],
+    }) as KimiGeneratedConfig;
+    expect(unknown.models[`${OPENCODE_PROVIDER_ID}/local/unknown`]).not.toHaveProperty("capabilities");
   });
 
   test("KIMI_CODE_HOME wins over the default", () => {

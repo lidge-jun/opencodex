@@ -121,11 +121,10 @@ describe("kimi", () => {
     expect(doc.providers[OPENCODE_PROVIDER_ID]!.type).toBe("openai");
   });
 
-  test("never asserts capabilities it cannot know", () => {
+  test("asserts image input only when the catalog declares it", () => {
     const doc = buildClientConfig("kimi", ctx()) as KimiGeneratedConfig;
-    for (const model of Object.values(doc.models)) {
-      expect(model).not.toHaveProperty("capabilities");
-    }
+    expect(doc.models[kimiModelAlias("anthropic/claude-opus-4-8")]?.capabilities).toEqual(["image_in"]);
+    expect(doc.models[kimiModelAlias("gpt-5.5")]).not.toHaveProperty("capabilities");
   });
 
   test("its document round-trips through the TOML parser", () => {
