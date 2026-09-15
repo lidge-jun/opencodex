@@ -441,3 +441,37 @@
 .codex-main-hard-lock-dialog .modal-desc { text-wrap: pretty; }
 :lang(ko) .codex-main-hard-lock-copy .card-sub,
 :lang(ko) .codex-main-hard-lock-dialog .modal-desc { word-break: keep-all; }
+
+/* Account-card ⋯ actions share the dashboard's compact popover language instead of
+   reading as a wide floating toolbar. This selector intentionally outranks the later
+   single-class rule in styles.css without moving layout ownership back inline. */
+.codex-account-more .codex-account-more-body {
+  box-sizing: border-box;
+  z-index: var(--z-popover);
+  min-width: min(16rem, calc(100vw - 2rem));
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: 10px 12px;
+  gap: 6px;
+  justify-content: flex-start;
+  background: var(--raised);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 24px rgb(0 0 0 / 0.14);
+}
+
+/* Layout ownership lives here too. The type-qualified selectors outrank the legacy
+   single-class declarations later in styles.css, so the disclosure stays out of card flow
+   even after styles.css is refreshed from upstream. */
+details.codex-account-more {
+  position: relative;
+  display: inline-block;
+}
+
+details.codex-account-more > .codex-account-more-body {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex-basis: auto;
+}
