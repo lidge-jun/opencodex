@@ -67,8 +67,36 @@ describe("SSE payload rewrite composition", () => {
     expect(replaceSseDataPayload(block, '{"text":"changed"}')).toBe(
       ["event: update", 'data: {"text":"changed"}', "database: unchanged"].join(newline),
     );
+   expect(sseDataPayload("data")).toBe("");
+   expect(sseDataPayload("database")).toBeNull();
+ });
+
+  test("sseDataPayload handles complex multiline, colonless data, and boundary cases", () => {
+    // No data lines
+    expect(sseDataPayload("")).toBeNull();
+    expect(sseDataPayload("event: ping\nid: 123\n\n")).toBeNull();
+    expect(sseDataPayload("data-field: ignore\ndatabase: ignore")).toBeNull();
+
+    // Single colonless data
     expect(sseDataPayload("data")).toBe("");
-    expect(sseDataPayload("database")).toBeNull();
+    expect(sseDataPayload("data\n")).toBe("");
+    expect(sseDataPayload("data\r\n")).toBe("");
+
+    // Single data with colon
+    expect(sseDataPayload("data:")).toBe("");
+    expect(sseDataPayload("data: ")).toBe("");
+    expect(sseDataPayload("data:hello")).toBe("hello");
+    expect(sseDataPayload("data: hello world")).toBe("hello world");
+    expect(sseDataPayload("data:  spaced  ")).toBe(" spaced  ");
+
+    // Multiline data concatenation
+    expect(sseDataPayload("data: line1\ndata: line2")).toBe("line1\nline2");
+    expect(sseDataPayload("data: line1\r\ndata: line2\r\n")).toBe("line1\nline2");
+    expect(sseDataPayload("data\ndata: line1\ndata\ndata: line2")).toBe("\nline1\n\nline2");
+    expect(sseDataPayload("event: message\r\ndata: first\r\nid: 1\r\ndata: second\r\n: comment")).toBe("first\nsecond");
+
+    // Trailing without newline
+    expect(sseDataPayload("event: ping\ndata: chunk")).toBe("chunk");
   });
 
   test("encodes only delivered blocks and counts coalesced input in linear space", async () => {
