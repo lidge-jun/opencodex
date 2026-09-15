@@ -17,7 +17,14 @@
  * and the combo intersection they feed.
  */
 import { describe, expect, test } from "bun:test";
-import { applyProviderConfigHints, deriveComboCatalogModel, gatherRoutedModels } from "../../src/codex/catalog";
+import {
+  applyProviderConfigHints,
+  deriveComboCatalogModel,
+  gatherRoutedModels,
+  nativeContextLimits,
+  nativeOpenAiContextWindow,
+  nativeOpenAiMaxInputTokens,
+} from "../../src/codex/catalog";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
@@ -203,6 +210,40 @@ describe("custom-model combo capability alignment (#4689)", () => {
       inputModalities: ["text", "image"],
       reasoningEfforts: ["low", "high"],
       codexToolMode: "shell",
+    });
+  });
+
+  test("a sparse custom native row retains native limits in an ordinary combo", async () => {
+    const slug = "gpt-5.6-luna";
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      customModels: [{ id: "sparse-native-row", provider: "openai", modelId: slug }],
+      combos: {
+        luna_failover: {
+          strategy: "failover",
+          targets: [{ provider: "openai", model: slug }],
+        },
+      },
+    };
+    const limits = nativeContextLimits(config);
+    const expectedContext = nativeOpenAiContextWindow(slug, limits);
+    const expectedMaxInput = nativeOpenAiMaxInputTokens(slug, limits);
+
+    const models = await gatherRoutedModels(config);
+    expect(models.find(model => (
+      model.provider === "combo" && model.id === "luna_failover"
+    ))).toMatchObject({
+      contextWindow: expectedContext,
+      maxInputTokens: expectedMaxInput,
+      inputModalities: ["text", "image"],
     });
   });
 });
