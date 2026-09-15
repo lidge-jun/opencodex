@@ -55,4 +55,4 @@ Cline uses the existing file-integration page, tabs, status badge and rollback d
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Native-main reauthentication cancellation follows the [GUI state contract](gui-and-management-api.md#dashboard-surfaces): failed requests remain retryable, while confirmed failed flows release ownership and show the existing normalized failure state.
+Native-main reauthentication separates polling lifetime from flow ownership: a non-2xx GET stops polling, while a concurrent retryable DELETE failure preserves or restores the last pending/committing device state for Cancel retry without a second login POST. Trusted terminal results release ownership.

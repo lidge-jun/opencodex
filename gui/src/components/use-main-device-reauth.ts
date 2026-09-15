@@ -37,6 +37,8 @@ export type MainDeviceReauthState =
   | { phase: "cancelled" }
   | { phase: "failed"; code: MainDeviceReauthFailureCode };
 
+type CancellableState = Extract<MainDeviceReauthState, { phase: "pending" | "committing" }>;
+
 type FlowDto = {
   flowId?: unknown;
   status?: unknown;
@@ -73,6 +75,7 @@ function humanCode(value: unknown): string {
 export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
   const [state, setState] = useState<MainDeviceReauthState>({ phase: "idle" });
   const flowRef = useRef<string | null>(null);
+  const lastCancellableStateRef = useRef<CancellableState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const unmountedRef = useRef(false);
 
@@ -113,15 +116,22 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
     } catch {
       if (unmountedRef.current || flowRef.current !== flowId) return;
       // Retain ownership and polling so retries and device-login completion remain observable.
-      setState(current => (current.phase === "pending" || current.phase === "committing") && current.flowId === flowId
-        ? { ...current, cancelFailed: true }
-        : current);
+      setState(current => {
+        if (unmountedRef.current || flowRef.current !== flowId) return current;
+        // A concurrent polling HTTP error can hide the still-owned flow behind
+        // failed. Restore its last device details and phase so Cancel stays usable.
+        const active = current.phase === "pending" || current.phase === "committing"
+          ? current
+          : lastCancellableStateRef.current;
+        return active?.flowId === flowId ? { ...active, cancelFailed: true } : current;
+      });
     }
   }, [apiBase, onCompleted, stopPolling]);
 
   const start = useCallback(async () => {
     stopPolling();
     flowRef.current = null;
+    lastCancellableStateRef.current = null;
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     const isCurrent = () => !ctrl.signal.aborted && !unmountedRef.current && abortRef.current === ctrl;
@@ -160,18 +170,24 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
         const dto = await res.json().catch(() => ({})) as FlowDto;
         if (!isCurrent() || flowRef.current !== flowId) return;
         if (!res.ok) {
-          setState({ phase: "failed", code: failureCode(dto.code) });
+          // A failed cancellation still owns the server flow. A racing HTTP
+          // polling failure must not replace its retry control with Re-login.
+          setState(current => (current.phase === "pending" || current.phase === "committing")
+            && current.flowId === flowId && current.cancelFailed
+            ? current
+            : { phase: "failed", code: failureCode(dto.code) });
           return;
         }
         lastUrl = allowedVerificationUrl(dto.verificationUrl) || lastUrl;
         lastCode = humanCode(dto.deviceCode) || lastCode;
         if (dto.status === "pending" || dto.status === "committing") {
-          const pendingState: MainDeviceReauthState = {
+          const pendingState: CancellableState = {
             phase: dto.status,
             flowId,
             verificationUrl: lastUrl,
             deviceCode: lastCode,
           };
+          lastCancellableStateRef.current = pendingState;
           setState(current => (current.phase === "pending" || current.phase === "committing")
             && current.flowId === flowId && current.cancelFailed
             ? { ...pendingState, cancelFailed: true }

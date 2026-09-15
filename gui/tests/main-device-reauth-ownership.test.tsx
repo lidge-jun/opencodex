@@ -2,6 +2,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, createElement, StrictMode, useEffect } from "react";
 import type { Root } from "react-dom/client";
+import { LanguageProvider } from "../src/i18n/provider";
+import { CodexAccountPoolMainCard } from "../src/components/codex-account-pool-main-card";
+import type { CodexAccountEntry } from "../src/components/codex-account-pool-types";
 import { useMainDeviceReauth } from "../src/components/use-main-device-reauth";
 
 type Hook = ReturnType<typeof useMainDeviceReauth>;
@@ -42,7 +45,7 @@ function request(method: string, url: string) {
 }
 type Request = ReturnType<typeof request>;
 
-const globalKeys = ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT", "fetch", "setTimeout"] as const;
+const globalKeys = ["window", "document", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "fetch", "setTimeout"] as const;
 let descriptors: Map<string, PropertyDescriptor | undefined>;
 let win: Window;
 let host: HTMLElement;
@@ -72,6 +75,7 @@ beforeEach(() => {
     window: { configurable: true, value: win },
     document: { configurable: true, value: win.document },
     navigator: { configurable: true, value: win.navigator },
+    localStorage: { configurable: true, value: win.localStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
     fetch: {
       configurable: true,
@@ -112,7 +116,7 @@ afterEach(async () => {
   }
 });
 
-async function mount(strict = false) {
+async function mount(strict = false, showCard = false) {
   const { createRoot } = await import("react-dom/client");
   function Probe() {
     const value = useMainDeviceReauth("", () => { completed += 1; });
@@ -121,7 +125,31 @@ async function mount(strict = false) {
       setups += 1;
       return () => { cleanups += 1; };
     }, []);
-    return null;
+    if (!showCard) return null;
+    return createElement(LanguageProvider, null, createElement(CodexAccountPoolMainCard, {
+      t: key => key,
+      main: { id: "__main__", isMain: true, needsReauth: true } as CodexAccountEntry,
+      isMainActive: false,
+      accountModeState: null,
+      threshold: 80,
+      switchActionLabel: "Switch",
+      onSwitch: () => {},
+      onTogglePause: () => {},
+      pauseUpdatingId: null,
+      pauseBusy: false,
+      onPriorityChange: () => {},
+      priorityUpdatingId: null,
+      switchingId: null,
+      onOpenReset: () => {},
+      mainReauth: {
+        ...value,
+        cancel: () => {
+          const task = value.cancel();
+          tasks.push(task);
+          return task;
+        },
+      },
+    }));
   }
   await act(async () => {
     root = createRoot(host);
@@ -275,3 +303,57 @@ test("two successful cancellation replies complete the same flow only once", asy
   expect(hook.state.phase).toBe("succeeded");
   expect(completed).toBe(1);
 });
+
+for (const phase of ["pending", "committing"] as const) {
+  for (const failure of ["network", "http", "nonterminal"] as const) {
+    test.each(["poll-first", "cancel-first"] as const)(`raced polling HTTP error keeps ${phase} cancellation ${failure} retryable in the card (%s)`, async order => {
+      await mount(false, true);
+      await beginFlow("A");
+      if (phase === "committing") {
+        await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+        await reply(take("GET", "A"), { status: "committing" });
+      }
+      await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+      const poll = take("GET", "A");
+      const cancelButton = () => Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
+        .find(button => button.textContent === "codexAuth.mainReauthCancel");
+      expect(cancelButton()).toBeDefined();
+      await act(async () => { cancelButton()!.click(); });
+      const cancellation = take("DELETE", "A");
+
+      const failCancellation = () => act(async () => {
+        if (failure === "network") cancellation.response.reject(new Error("transient cancellation failure"));
+        else if (failure === "http") cancellation.reply({ code: "unavailable" }, 503);
+        else cancellation.reply({ status: "pending" });
+      });
+      // Neither arrival order may hide a still-owned flow's cancellation retry.
+      if (order === "poll-first") {
+        await reply(poll, { code: "unavailable" }, 503);
+        await failCancellation();
+      } else {
+        await failCancellation();
+        await reply(poll, { code: "unavailable" }, 503);
+      }
+      expect(hook.state).toEqual({
+        phase, flowId: "A", verificationUrl: "https://auth.openai.com/codex/device",
+        deviceCode: "ABCD-1234", cancelFailed: true,
+      });
+      expect(host.querySelector('.codex-main-reauth-pending [role="status"]')?.textContent)
+        .toBe("codexAuth.mainReauthFailed");
+      expect(host.textContent).toContain("ABCD-1234");
+      expect(host.textContent).toContain("https://auth.openai.com/codex/device");
+      expect(host.textContent).not.toContain("codexAuth.mainReauthDevice");
+      expect(cancelButton()?.disabled).toBe(false);
+
+      // Retry through the actual card control, without restarting the flow.
+      await act(async () => { cancelButton()!.click(); });
+      await reply(take("DELETE", "A"), { status: "cancelled" });
+      expect(hook.state.phase).toBe("cancelled");
+      expect(cancelButton()).toBeUndefined();
+      expect(host.textContent).toContain("codexAuth.mainReauthDevice");
+      expect(requests.filter(pending => pending.method === "POST")).toHaveLength(1);
+      expect(requests.filter(pending => pending.method === "DELETE")).toHaveLength(2);
+      expect(completed).toBe(0);
+    });
+  }
+}

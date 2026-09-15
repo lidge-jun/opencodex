@@ -150,4 +150,4 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
-Native-main reauthentication cancellation follows the [GUI state contract](gui-and-management-api.md#dashboard-surfaces): failed requests remain retryable, while confirmed failed flows release ownership and show the existing normalized failure state.
+Native-main reauthentication retains the same flow and its Cancel retry after a retryable DELETE failure races with a GET HTTP failure in either order; a trusted terminal result releases ownership.
