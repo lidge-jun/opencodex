@@ -77,3 +77,22 @@ the generation check and the pinned-account guard in
 4. A 429 on the bound account still releases the binding immediately, unchanged.
 5. A late transient failure from an account the thread already left does not touch
    the current binding.
+
+## R07 outcome: expiry is permission to re-decide, not a recovery
+
+The rule above bounded the hold correctly and then threw away its own evidence. On expiry the
+entry was deleted whole -- `transientDetourAccountId` with it -- and the thread re-picked cold,
+so an account that had been serving the conversation happily for ten minutes got no more
+consideration than any other. A timer running out restores the right to re-decide; it is not
+itself a reason to prefer a stranger.
+
+A still-healthy detour is now promoted to the binding, recorded as `rebound` with reason
+`transient_hold_expired`. Promotion is refused when the release reason is generation
+invalidation or a quota refusal: those are hard invalidations, and a detour that merely looks
+healthy must not rescue them.
+
+What this still does not do: a soft-avoided account receives no traffic at all, so the
+two-consecutive-success clearing rule can only be met through the "held" fallback, which hands
+the failing account back to every pinned thread at once. A half-open probe lease -- one thread
+probes, the rest keep detouring -- is the missing piece and needs a lease keyed on the health
+domain rather than the quota cooldown domain the existing one uses.

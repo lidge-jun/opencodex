@@ -71,15 +71,35 @@ support them.
 
 > Decision record: [ADR-0084](../decisions/ADR-0084-public-provider-contract.md)
 
-Pool affinity preserves the existing `x-codex-parent-thread-id` supplied by ordinary Codex clients.
-The parent id is trimmed and bounded under the same 512-byte component limit as the Desktop
-fallback. When Codex Desktop omits it or sends an unusable value, the complete bounded `session-id`
-plus `thread-id` pair is mapped to an opaque HMAC under a random process-local key. Missing or
-oversized components remain unbound, raw identifiers and durable hashes are never stored, and
+Pool affinity keys every Codex V2 thread as itself. A request carrying `thread-id` maps to an
+opaque `app:HMAC(session-id ?? x-codex-parent-thread-id, thread-id)` under a random process-local
+key, so a root is keyed exactly as before while each child holds an independent binding instead of
+collapsing onto the raw parent id shared by all its siblings. A request naming only
+`x-codex-parent-thread-id` rides that parent's own lane as `app:HMAC(parent, parent)`: one parent
+id still maps to exactly one lane, and no caller-supplied identifier reaches Pool state. Which
+requests bind at all is unchanged -- a bare `thread-id` with neither a session nor a parent has no
+family anchor and stays unbound. Components are trimmed and bounded at 512 bytes, missing or
+oversized values stay unbound, raw identifiers and durable hashes are never stored, and
 account-qualified selectors skip both lookup and mutation. Selection, subagent fallback preview,
 and terminal outcome accounting carry the same key so route planning cannot preview one account
 and authenticate another. A transient-failure streak does not delete the live binding that
 actually selected the account; the request is served by another account while the binding is kept.
+
+`src/codex/lineage.ts` owns that derivation and records the family relation behind it: each
+thread's own conversation key, its immediate parent's thread id, and the transitive root, so a
+grandchild resolves to the same root as its parent. Records are held per authenticated scope (an
+HMAC of the caller's Authorization under the same process-local key), and bounded in both
+dimensions -- idle TTL and an LRU cap on records per scope, and an LRU cap on scopes.
+
+First placement is the only routing decision that consults lineage. A thread that has never bound
+starts on the account CURRENTLY serving its parent, which includes a live transient detour rather
+than the parent's stale home, then on a compatible sibling's current serving account, then on
+ordinary cold placement. An ineligible or dead family account contributes nothing, because a stale
+home is worse than no hint. The child then holds an ordinary binding of its own: a later move of
+the parent does not drag it, and the hint does not move the shared active-account cursor. The same
+module exposes the root lookup other layers use for cost attribution and a lineage-backed
+worker/interactive answer; admission's header-only classification is unchanged and does not yet
+read it.
 
 > Decision record: [ADR-0085](../decisions/ADR-0085-public-provider-contract.md)
 
@@ -323,7 +343,7 @@ The historical v1 backup is never overwritten. Restoring the v2 backup intention
 shipped v1 shape; the next startup re-migrates to the same marker-2 bytes.
 
 A pre-existing snapshot that differs from the current config is classified before anything is written
-(`src/config.ts` `classifyOpenAiTierBackup`): a snapshot that parses as a valid pre-migration (v1)
+(`src/config/openai-tier-backup.ts` `classifyOpenAiTierBackup`, re-exported through the `src/config.ts` facade): a snapshot that parses as a valid pre-migration (v1)
 config is a user-intentional rollback point and is copied to a unique
 `config.json.pre-openai-tiers-v1-rollback.<timestamp>.bak` path before startup retries the v2
 migration backup; a snapshot that is unparseable or already tier-v2 is stale and is replaced with a
@@ -448,9 +468,9 @@ Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.
 
 ## Automatic pool plan exclusions
 
-`src/codex/routing.ts` applies optional `codexPool.excludedPlans` to both candidate selection and existing active/affined accounts. An all-excluded pool returns no automatic candidate, including preview and configured-account fallback. Native main remains exempt and unknown plans remain eligible. Explicit account-qualified routes retain pause, credential and entitlement checks while bypassing only this automatic policy.
+`src/codex/routing/selection.ts` applies optional `codexPool.excludedPlans` to both candidate selection and existing active/affined accounts. An all-excluded pool returns no automatic candidate, including preview and configured-account fallback. Native main remains exempt and unknown plans remain eligible. Explicit account-qualified routes retain pause, credential and entitlement checks while bypassing only this automatic policy.
 
-`src/codex/auth-api.ts` projects `selectionExcludedReason: "plan_excluded"` and `selectionExcludedPlan` from the routing config, even when a newer display-only WHAM plan could not be persisted. The dashboard and account CLI show the policy reason separately from credential health; renewal clears the derived fields. The automatic next-session action and badge are omitted for excluded rows.
+`src/codex/auth-api/account-list.ts` projects `selectionExcludedReason: "plan_excluded"` and `selectionExcludedPlan` from the routing config, even when a newer display-only WHAM plan could not be persisted. The dashboard and account CLI show the policy reason separately from credential health; renewal clears the derived fields. The automatic next-session action and badge are omitted for excluded rows.
 ## Paginated history writer boundary
 `src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
@@ -515,7 +535,7 @@ The history read API reports a median effective token estimate and interval samp
 
 ## Reset-first account ordering
 
-`src/codex/routing.ts` supports Codex-only `accountPoolStrategy: "reset-first"`. For new shared-quota assignments it chooses the earliest future short/weekly reset after existing eligibility, priority and usage-threshold filtering; ties and absent/elapsed deadlines use the existing usage order. Seconds and milliseconds are normalized with `resetAtToMs`. Threshold zero disables usage filtering while retaining reset ordering. Monthly deadlines do not order this strategy.
+`src/codex/routing/selection.ts` supports Codex-only `accountPoolStrategy: "reset-first"`. For new shared-quota assignments it chooses the earliest future short/weekly reset after existing eligibility, priority and usage-threshold filtering; ties and absent/elapsed deadlines use the existing usage order. Seconds and milliseconds are normalized with `resetAtToMs`. Threshold zero disables usage filtering while retaining reset ordering. Monthly deadlines do not order this strategy.
 
 Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on by default, so threshold crossing alone retains a healthy account. A bound thread that does leave may move only onto an account with genuine quota headroom and strictly lower usage. Manual preference, scoped health and shared-cursor guards remain authoritative. Set the flag false to restore threshold rebinding of bound tasks. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
 

@@ -20,7 +20,7 @@ function persisted(id: string, overrides: Partial<OcxProviderConfig> = {}): OcxP
   return { adapter: entry.adapter, baseUrl: entry.baseUrl, ...overrides };
 }
 
-/** Mirrors detachedClone in src/codex/catalog/provider-fetch.ts. */
+/** Mirrors detachedClone in src/codex/catalog/gather-capture.ts. */
 function detachedClone<T>(value: T): T {
   if (Array.isArray(value)) return value.map(item => detachedClone(item)) as T;
   if (value && typeof value === "object") {

@@ -1539,6 +1539,55 @@ describe("selection order across rotation strategies", () => {
       .toMatchObject({ move: "rebound", reason: "quota_refusal" });
   });
 
+  test("a release names the guard that fired, not a quota fallback (#4598)", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "paused-release-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    // The operator paused the bound account. That is why the binding goes, and a quota fallback
+    // here would name a cause routing never used.
+    config.pausedCodexAccountIds = ["a"];
+    const moved = resolveCodexAccountForThreadDetailed(threadId, config, start);
+    expect(moved.status).toBe("selected");
+    expect(moved.affinity).toMatchObject({ move: "rebound", reason: "paused" });
+  });
+
+  test("a release survives a resolve that produced no account (#4598)", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "no-account-release-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    // Everything is paused, so the binding is released and nothing takes it. A no-account result
+    // reaches no auth context and therefore no usage entry, so the reason has to survive.
+    config.pausedCodexAccountIds = ["a", "b", "c"];
+    const none = resolveCodexAccountForThreadDetailed(threadId, config, start);
+    expect(none.status).toBe("none");
+    expect(none.affinity).toMatchObject({ move: "cleared", reason: "paused" });
+
+    // The pool recovers. The rebind is still attributable to the pause rather than reported as a
+    // fresh healthy bind that erases why this conversation left its account.
+    config.pausedCodexAccountIds = ["a"];
+    const recovered = resolveCodexAccountForThreadDetailed(threadId, config, start);
+    expect(recovered.status).toBe("selected");
+    expect(recovered.affinity).toMatchObject({ move: "rebound", reason: "paused" });
+  });
+
   test("a transient block with nowhere to detour keeps the binding", () => {
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "quota",
