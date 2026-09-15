@@ -97,6 +97,27 @@ describe("SSE payload rewrite composition", () => {
 
     // Trailing without newline
     expect(sseDataPayload("event: ping\ndata: chunk")).toBe("chunk");
+
+    // Comments only
+    expect(sseDataPayload(": comment\n: another")).toBeNull();
+
+    // Preserves UTF-8 multi-byte / emoji safely
+    expect(sseDataPayload("data: 中文😀测试")).toBe("中文😀测试");
+    expect(sseDataPayload("data: 🚀✨\ndata: 🌍")).toBe("🚀✨\n🌍");
+
+    // Tab after colon (ASCII 9) must be preserved
+    expect(sseDataPayload("data:\thello")).toBe("\thello");
+
+    // Consecutive empty data lines
+    expect(sseDataPayload("data:\ndata:\ndata:")).toBe("\n\n");
+    expect(sseDataPayload("data\ndata\ndata")).toBe("\n\n");
+
+    // Trailing solitary CR
+    expect(sseDataPayload("data: chunk\r")).toBe("chunk");
+
+    // Distinguishes near-prefix non-data fields
+    expect(sseDataPayload("data-entry: 1\ndatabase: 2")).toBeNull();
+    expect(sseDataPayload("date: today")).toBeNull();
   });
 
   test("encodes only delivered blocks and counts coalesced input in linear space", async () => {

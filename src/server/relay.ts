@@ -22,6 +22,7 @@ import {
 } from "./request-log";
 import {
   BoundedSseFrameBuffer,
+  EMPTY_BYTES,
   joinSseFrameBytes,
   MAX_CLIENT_SSE_FRAME_BYTES,
 } from "./sse-frame-buffer";
@@ -199,7 +200,7 @@ export function createSseTerminalOutputBoundary(
   const processFrames = (
     frames: ReturnType<BoundedSseFrameBuffer["feed"]>,
   ): Uint8Array => {
-    if (disposed || terminal || frames.length === 0) return new Uint8Array(0);
+    if (disposed || terminal || frames.length === 0) return EMPTY_BYTES;
     const output: Uint8Array[] = [];
     let responsesTerminal = false;
     for (const frame of frames) {
@@ -258,13 +259,13 @@ export function createSseTerminalOutputBoundary(
 
   return {
     feed(chunk) {
-      if (disposed || terminal) return new Uint8Array(0);
+      if (disposed || terminal) return EMPTY_BYTES;
       return processFrames(framer.feed(chunk));
     },
     finish() {
-      if (disposed || terminal) return new Uint8Array(0);
+      if (disposed || terminal) return EMPTY_BYTES;
       const tail = framer.finish();
-      if (tail.byteLength === 0) return new Uint8Array(0);
+      if (tail.byteLength === 0) return EMPTY_BYTES;
       // EOF may cut off the final SSE block before its blank-line delimiter.
       // Feed it through the exact same parser/rewrite/terminal path as a
       // complete frame, using a synthetic delimiter so the client receives a
@@ -355,11 +356,11 @@ export function relaySseWithFailedTail(
             return;
           }
           const result = relayChunk(controller, value);
-          if (result !== "buffered") return;
-        }
-      } catch (err) {
-        let partial: Uint8Array = new Uint8Array(0);
-        let tailTerminal = false;
+        if (result !== "buffered") return;
+      }
+    } catch (err) {
+      let partial: Uint8Array = EMPTY_BYTES;
+      let tailTerminal = false;
         try {
           partial = terminalBoundary.finish();
           tailTerminal = terminalBoundary.terminalSeen();
@@ -943,8 +944,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let reported = false;
   let sawTerminal = false;
   let disposed = false;
-  let delimiterTail: Uint8Array = new Uint8Array(0);
-  let candidate: Uint8Array = new Uint8Array(0);
+  let delimiterTail: Uint8Array = EMPTY_BYTES;
+  let candidate: Uint8Array = EMPTY_BYTES;
   let candidateBytes = 0;
   let discardingOversizedFrame = false;
   const reportFirstOutput = createFirstOutputReporter(handlers.onFirstOutput);
@@ -957,8 +958,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let firstResponseId: string | undefined;
 
   const clearFrameState = (): void => {
-    delimiterTail = new Uint8Array(0);
-    candidate = new Uint8Array(0);
+    delimiterTail = EMPTY_BYTES;
+    candidate = EMPTY_BYTES;
     candidateBytes = 0;
     discardingOversizedFrame = false;
   };
@@ -995,9 +996,9 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   };
 
   const takeCandidate = (): Uint8Array => {
-    if (candidateBytes === 0) return new Uint8Array(0);
+    if (candidateBytes === 0) return EMPTY_BYTES;
     const frame = candidate.slice(0, candidateBytes);
-    candidate = new Uint8Array(0);
+    candidate = EMPTY_BYTES;
     candidateBytes = 0;
     return frame;
   };
@@ -1010,7 +1011,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       Math.min(nextBytes, MAX_INSPECTION_SSE_FRAME_BYTES),
     );
     if (nextBytes > MAX_INSPECTION_SSE_FRAME_BYTES) {
-      candidate = new Uint8Array(0);
+      candidate = EMPTY_BYTES;
       candidateBytes = 0;
       discardingOversizedFrame = true;
       inspectionCounters.frameCapOverflows += 1;
@@ -1173,7 +1174,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 
   const scanChunk = (chunk: Uint8Array): void => {
     const previousTail = delimiterTail;
-    delimiterTail = new Uint8Array(0);
+    delimiterTail = EMPTY_BYTES;
     const tailLength = previousTail.byteLength;
     const totalLength = tailLength + chunk.byteLength;
     const byteAt = (index: number): number => index < tailLength
@@ -1219,7 +1220,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       if (disposed) return;
       try {
         retainCandidateSlice(delimiterTail);
-        delimiterTail = new Uint8Array(0);
+        delimiterTail = EMPTY_BYTES;
         if (!discardingOversizedFrame && candidateBytes > 0 && !reported) {
           const sourceBytes = candidateBytes;
           const decoded = decoder!.decode(takeCandidate());
