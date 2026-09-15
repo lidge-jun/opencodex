@@ -28,6 +28,7 @@ import {
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
+import { nativeOpenAiAutoCompactTokenLimit } from "../../src/codex/catalog/metadata";
 import type { CatalogModel, OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const OPENCODE_GO_NATIVE = "glm-5.3-flash";
@@ -236,6 +237,7 @@ describe("custom-model combo capability alignment (#4689)", () => {
     const limits = nativeContextLimits(config);
     const expectedContext = nativeOpenAiContextWindow(slug, limits);
     const expectedMaxInput = nativeOpenAiMaxInputTokens(slug, limits);
+    const expectedAutoCompact = nativeOpenAiAutoCompactTokenLimit(slug, limits);
 
     const models = await gatherRoutedModels(config);
     expect(models.find(model => (
@@ -243,6 +245,7 @@ describe("custom-model combo capability alignment (#4689)", () => {
     ))).toMatchObject({
       contextWindow: expectedContext,
       maxInputTokens: expectedMaxInput,
+      autoCompactTokenLimit: expectedAutoCompact,
       inputModalities: ["text", "image"],
     });
   });
