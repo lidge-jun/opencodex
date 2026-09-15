@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import {
   BoundedSseFrameBuffer,
+  EMPTY_BYTES,
+  joinSseFrameBytes,
   MAX_CLIENT_SSE_FRAME_BYTES,
   SseFrameCountLimitError,
   SseFrameTooLargeError,
@@ -265,5 +267,14 @@ describe("client-facing SSE frame bounds", () => {
     expect(sendCalls).toBe(1);
     expect(sourceCancelled).toBe(true);
     expect(ws.data.cancel).toBeUndefined();
+  });
+
+  test("reusable EMPTY_BYTES constant is returned for zero-length frame buffer operations", () => {
+    expect(EMPTY_BYTES.byteLength).toBe(0);
+    expect(joinSseFrameBytes([])).toBe(EMPTY_BYTES);
+    expect(joinSseFrameBytes([new Uint8Array(0), new Uint8Array(0)])).toBe(EMPTY_BYTES);
+    const buffer = new BoundedSseFrameBuffer(1024);
+    expect(buffer.finish()).toBe(EMPTY_BYTES);
+    expect(buffer.finish()).toBe(EMPTY_BYTES);
   });
 });
