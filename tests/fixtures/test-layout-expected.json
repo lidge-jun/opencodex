@@ -1,4 +1,5 @@
 {
+  "responses-core-modules.test.ts": "responses",
   "chat-responses-control-integration.test.ts": "responses",
   "coding-agent-tool-result-images.test.ts": "adapters",
   "hub-usage.test.ts": "server",

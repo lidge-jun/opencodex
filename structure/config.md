@@ -7,6 +7,8 @@ Connected-client catalog diagnostics use the [terminal rendering contract](runti
 
 Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
 
+Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
+
 ## Config surface
 
 ### OpenCodex home and live process state

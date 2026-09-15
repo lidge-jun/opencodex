@@ -7,6 +7,7 @@ import { appendDefaultCodexAccountNamespace, codexAccountPickerEnabled } from ".
 import { catalogRefreshIsPending, normalizeCatalogDisposition } from "../catalog-refresh-status";
 import { checkAccountIdCollision } from "../auth-collision";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
+import { clearCodexPoolRefreshFailure } from "../pool-refresh-backoff";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { emailMaskingEnabled, projectEmail } from "../../lib/privacy";
 import { codexWarmupFailureReason, isCodexWarmupProvisioningFailure, warmCodexAccount } from "../warmup";
@@ -365,6 +366,13 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 // A successful reauthentication replaces the credential generation. Do not let a
                 // failed optional WHAM probe make the replacement inherit quota from the old record.
                 if (reauth) clearAccountQuota(accountId);
+                // The refresh cooldown is learned about a CREDENTIAL, not about an account, and it
+                // is keyed by account id alone. A replacement generation therefore inherits the
+                // dead one's 15-60s quarantine: selection keeps excluding an account that was just
+                // authenticated, and with a healthy sibling the thread detours and loses its warm
+                // cache and continuation. A successful save is the proof the old failures were
+                // about a credential that no longer exists.
+                clearCodexPoolRefreshFailure(accountId);
                 if (warmup.validatedAt !== undefined) markCodexAccountValidated(accountId, warmup.validatedAt, generation);
                 clearAccountNeedsReauth(accountId);
                 if (quota) setAccountQuotaFromParsed(accountId, quota);

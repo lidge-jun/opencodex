@@ -39,7 +39,22 @@ import {
 } from "./state/spill-queue";
 
 const MAX_STORED_RESPONSES = 1_000;
-const RESPONSE_TTL_MS = 60 * 60 * 1_000;
+/**
+ * Retention for locally replayed continuation state.
+ *
+ * A Codex client chained by `previous_response_id` sends ONLY the new turn and expects this
+ * process to hold everything before it, so this constant is the practical memory span of every
+ * conversation that does not go to the canonical ChatGPT backend. At the original one hour, a
+ * session resumed after lunch expanded to nothing and the delta — one user line — was all the
+ * provider ever saw, which reads to the operator as the model losing the conversation.
+ *
+ * A day is safe to hold because retention is no longer what bounds this store: the resident cap
+ * (MAX_STORED_RESPONSE_BYTES), the spill ceiling (MAX_SPILLED_RESPONSE_BYTES) and the entry count
+ * all evict oldest-first, and every turn re-stores the whole chain under a fresh id, so the live
+ * conversation is the last thing any of those three caps would drop. Raising the TTL therefore
+ * moves eviction from the clock to those budgets rather than growing the ceiling.
+ */
+export const RESPONSE_TTL_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_DEBOUNCE_MS = 2_000;
 /** Snapshot size below which the debounce stays at its base value. */
 const SNAPSHOT_DEBOUNCE_SCALE_FROM_BYTES = 1 * 1024 * 1024;
@@ -1253,7 +1268,7 @@ export function rememberResponseState(
   // `force` bypasses only the store:false skip: Codex sends `store:false` on every non-Azure
   // HTTP request (and WS inherits it), yet its WS turns still chain with previous_response_id.
   // The passthrough branch records with force so those chains can be expanded locally; the
-  // store stays in-memory with a 1h TTL, so this is a proxy-internal continuation cache, not
+  // store stays in-memory under RESPONSE_TTL_MS, so this is a proxy-internal continuation cache, not
   // real server-side response storage.
   if (request.store === false && !opts?.force) return;
   if (typeof response.id !== "string" || !Array.isArray(response.output)) return;

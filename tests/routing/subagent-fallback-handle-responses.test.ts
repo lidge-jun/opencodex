@@ -1583,7 +1583,7 @@ describe("native fallback account preview", () => {
    */
   test("both fallback preview sites pass the model-eligible account set (#2509)", async () => {
     const source = await Bun.file(
-      fileURLToPath(new URL("../../src/server/responses/core.ts", import.meta.url)),
+      fileURLToPath(new URL("../../src/server/responses/request-prepare.ts", import.meta.url)),
     ).text();
 
     const previews = source.match(/subagentFallbackAccountPreview = \([^)]*\)/g) ?? [];

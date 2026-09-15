@@ -110,6 +110,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // Baseten says models outside its reasoning table do not support reasoning. Keep
     // unknown/new live slugs conservative until an official-docs registry refresh proves it.
     reasoningEfforts: [],
+    // `text.verbosity` is an OpenAI Responses parameter. Baseten documents its Model
+    // APIs as Chat Completions compatible, so there is nothing on that wire for it to
+    // become, and a routed row must not inherit the Codex template's verbosity picker
+    // (#4630: Codex sent `text: { verbosity: "low" }` and the turn 400'd before any
+    // model output). Provider-wide rather than per-model because this catalog is live-
+    // discovered: a slug that arrives tomorrow supports it no more than the seeded ones.
+    supportsVerbosity: false,
     modelReasoningEfforts: BASETEN_MODEL_REASONING_EFFORTS,
     modelReasoningEffortMap: BASETEN_MODEL_REASONING_EFFORT_MAP,
     modelDefaultReasoningEfforts: BASETEN_MODEL_DEFAULT_REASONING_EFFORTS,

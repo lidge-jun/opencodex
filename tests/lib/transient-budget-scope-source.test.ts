@@ -1,5 +1,6 @@
+import { readResponsesCoreSource } from "../helpers/responses-core-source";
   test("the gated-model 400 ladder is charged, and keeps its own bound", () => {
-    const core = source("server/responses/core.ts");
+    const core = readResponsesCoreSource();
     // Every rung reserves and charges, so the ladder is visible to later legs instead of
     // spending the request's allowance invisibly -- that part was the real defect.
     expect(core).toContain("targetKey: ladderTargetKey,");
@@ -39,7 +40,7 @@ const source = (relative: string): string =>
  */
 describe("transient send budget stays request-scoped", () => {
   test("every transient-retry call site draws from the shared counter", () => {
-    const core = source("server/responses/core.ts");
+    const core = readResponsesCoreSource();
 
     // One holder per LOGICAL request, read before any leg can send and inherited by combo
     // children through the options spread rather than recreated per child turn.
@@ -146,7 +147,7 @@ describe("every dispatch path reports into the shared budget", () => {
   });
 
   test("credential hops keep their roster cap AND reserve from the shared budget", () => {
-    const core = source("server/responses/core.ts");
+    const core = readResponsesCoreSource();
     // Six hop sites: the native passthrough 429, the shared sidecar hook's generic and
     // Anthropic arms, the runTurn preflight 429, the adapter recovery loop, and the
     // continuation loop. The last two were the arms that actually iterate the roster, so
@@ -165,7 +166,7 @@ describe("every dispatch path reports into the shared budget", () => {
   });
 
   test("the gated-model 400 ladder is charged, and keeps its own bound", () => {
-    const core = source("server/responses/core.ts");
+    const core = readResponsesCoreSource();
     // Every rung reserves and charges, so the ladder is visible to later legs instead of
     // spending the request's allowance invisibly -- that was the real defect.
     expect(core).toContain("targetKey: ladderTargetKey,");
