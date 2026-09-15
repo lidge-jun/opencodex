@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mapReasoningEffort } from "../../src/reasoning-effort";
-import { NoEnabledOpenAiProviderError, routeCompactionModel, routeModel } from "../../src/router";
+import { NoEnabledOpenAiProviderError, knownModelIdsForProvider, routeCompactionModel, routeModel } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 describe("routeModel registry effort defaults", () => {
@@ -770,5 +770,14 @@ describe("routeCompactionModel (#2901)", () => {
       },
     };
     expect(() => routeCompactionModel(openAiDefaultDisabled, "gpt-5.6-sol")).toThrow(NoEnabledOpenAiProviderError);
+  });
+test("knownModelIdsForProvider retrieves static registry models and hint maps via cached maps", () => {
+    const provConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.nvidia.com/v1",
+      apiKey: "test-key",
+    };
+    const knownIds = knownModelIdsForProvider("nvidia", provConfig as any);
+    expect(knownIds).toContain("moonshotai/kimi-k2.6");
   });
 });
