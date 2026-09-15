@@ -13,6 +13,8 @@ import { readFileSync } from "node:fs";
  * Source-oracle reads go through tests/helpers/repo-root.ts (INV-TESTS-01).
  */
 import {
+  EXEMPT_DATA_PATHS,
+  EXEMPT_I18N_PATHS,
   GENERATED_PATHS,
   THRESHOLD,
   countLines,
@@ -36,7 +38,7 @@ import { repoPath, repoRoot } from "../helpers/repo-root";
  * SHRANK already covers updateBaseline (lower, drop missing, never raise,
  * seed only when asked).
  */
-const emptyBaseline = (): Baseline => ({ generated: [], files: {} });
+const emptyBaseline = (): Baseline => ({ generated: [], exempt: { data: [], i18n: [] }, files: {} });
 
 const linesOf = (count: number): string => {
   const rows = Array.from({ length: count }, (_, i) => `line ${i}`);
@@ -74,7 +76,11 @@ describe("file-size ratchet: caps", () => {
     // Grandfathered files may stay oversized, but they may not grow. Equality is
     // UNCHANGED, not SHRANK; a test that only checked isOffender() would not notice
     // if equality started reporting GREW.
-    const baseline: Baseline = { generated: [], files: { "src/config.ts": 4707 } };
+    const baseline: Baseline = {
+      generated: [],
+      exempt: { data: [], i18n: [] },
+      files: { "src/config.ts": 4707 },
+    };
     const grew = evaluate([{ path: "src/config.ts", lines: 4708 }], baseline);
     const same = evaluate([{ path: "src/config.ts", lines: 4707 }], baseline);
 
@@ -91,6 +97,7 @@ describe("file-size ratchet: caps", () => {
     // shrunken former godfile so the facade cannot grow back.
     const baseline: Baseline = {
       generated: [],
+      exempt: { data: [], i18n: [] },
       files: { "src/keep.ts": 2100, "src/gone.ts": 2500, "src/small.ts": 800 },
     };
     const current: FileSize[] = [
@@ -117,43 +124,94 @@ describe("file-size ratchet: caps", () => {
     // A later --update must never raise. If it did, ratchet:update would launder GREW.
     const notRaised = updateBaseline(
       [{ path: "src/keep.ts", lines: 3000 }],
-      { generated: [], files: { "src/keep.ts": 2099 } },
+      { generated: [], exempt: { data: [], i18n: [] }, files: { "src/keep.ts": 2099 } },
       false,
     );
     expect(notRaised.files["src/keep.ts"]).toBe(2099);
 
-    // seed=true is the first-commit path only (baseline file missing). Exempt
-    // generated paths stay out of files even at 9000 lines. Under-threshold files
-    // stay out so the 2,000 cap remains the policy for new modules.
+    // seed=true is the first-commit path only (baseline file missing). Generated
+    // and policy-exempt paths stay out of files even at 9000 lines.
+    // Under-threshold files stay out so the 2,000 cap remains the policy for new modules.
     const seeded = updateBaseline(
       [
         { path: "src/old.ts", lines: 2500 },
         { path: "src/fresh.ts", lines: 1800 },
+        { path: "src/adapters/cursor/gen/agent_pb.ts", lines: 9000 },
         { path: "gui/src/i18n/en.ts", lines: 9000 },
       ],
-      { generated: ["gui/src/i18n/en.ts"], files: {} },
+      {
+        generated: ["src/adapters/cursor/gen/agent_pb.ts"],
+        exempt: { data: [], i18n: ["gui/src/i18n/en.ts"] },
+        files: {},
+      },
       true,
     );
     expect(seeded.files).toEqual({ "src/old.ts": 2500 });
   });
 
-  test("GENERATED: baseline.generated 경로는 커져도 통과", () => {
+  test("GENERATED/EXEMPT: 이유가 분리된 정확한 경로만 커져도 통과", () => {
     // Exact paths only. A sibling under cursor/gen/ that is not in generated[] is a
     // new oversized file, even though a glob would have exempted the whole directory.
-    const path = "src/adapters/cursor/gen/agent_pb.ts";
+    const generatedPath = "src/adapters/cursor/gen/agent_pb.ts";
+    const exemptPath = "gui/src/i18n/en.ts";
     const baseline: Baseline = {
-      generated: [path],
-      files: { [path]: 100 },
+      generated: [generatedPath],
+      exempt: { data: [], i18n: [exemptPath] },
+      files: { [generatedPath]: 100, [exemptPath]: 100 },
     };
-    const rows = evaluate([{ path, lines: 99_999 }], baseline);
-    expect(rows).toEqual([{ path, lines: 99_999, verdict: "GENERATED" }]);
+    const rows = evaluate([
+      { path: generatedPath, lines: 99_999 },
+      { path: exemptPath, lines: 99_999 },
+    ], baseline);
+    expect(rows).toEqual([
+      { path: generatedPath, lines: 99_999, verdict: "GENERATED" },
+      { path: exemptPath, lines: 99_999, verdict: "EXEMPT" },
+    ]);
     expect(rows.filter(isOffender)).toEqual([]);
 
     const globWouldHaveCaught = evaluate(
       [{ path: "src/adapters/cursor/gen/hand-written.ts", lines: 2500 }],
-      { generated: [path], files: {} },
+      { generated: [generatedPath], exempt: { data: [], i18n: [] }, files: {} },
     );
     expect(globWouldHaveCaught[0]?.verdict).toBe("NEW_OVERSIZED");
+  });
+
+  test("legacy baseline: 기존 generated 목록을 이유별 분류로 무손실 이관한다", () => {
+    const legacyGenerated = [
+      "src/generated/unknown.ts",
+      "scripts/model-metadata.source.json",
+      ...GENERATED_PATHS,
+      ...EXEMPT_I18N_PATHS,
+      "docs-site/src/data/frontier-benchmarks.json",
+    ];
+    const migrated = loadBaseline(JSON.stringify({
+      generated: legacyGenerated,
+      files: { "src/keep.ts": 2200 },
+    }));
+
+    expect(migrated.generated).toEqual(["src/generated/unknown.ts", ...GENERATED_PATHS]);
+    expect(migrated.exempt.data).toEqual([...EXEMPT_DATA_PATHS]);
+    expect(migrated.exempt.i18n).toEqual([...EXEMPT_I18N_PATHS]);
+    expect(migrated.files).toEqual({ "src/keep.ts": 2200 });
+
+    const rows = evaluate(
+      legacyGenerated.map((path) => ({ path, lines: 99_999 })),
+      migrated,
+    );
+    expect(rows.filter(isOffender)).toEqual([]);
+    expect(rows.filter((row) => row.verdict === "GENERATED").map((row) => row.path)).toEqual([
+      "src/generated/unknown.ts",
+      ...GENERATED_PATHS,
+    ]);
+    expect(rows.filter((row) => row.verdict === "EXEMPT").map((row) => row.path).sort()).toEqual(
+      [...EXEMPT_DATA_PATHS, ...EXEMPT_I18N_PATHS].sort(),
+    );
+
+    expect(updateBaseline([{ path: "src/keep.ts", lines: 2100 }], migrated, false)).toEqual({
+      generated: ["src/generated/unknown.ts", ...GENERATED_PATHS],
+      exempt: { data: [...EXEMPT_DATA_PATHS], i18n: [...EXEMPT_I18N_PATHS] },
+      files: { "src/keep.ts": 2100 },
+    });
   });
 });
 
@@ -197,6 +255,8 @@ describe("file-size ratchet: repository", () => {
       readFileSync(repoPath("tests/fixtures/file-size-baseline.json"), "utf8"),
     );
     expect(baseline.generated).toEqual([...GENERATED_PATHS]);
+    expect(baseline.exempt.data).toEqual([...EXEMPT_DATA_PATHS]);
+    expect(baseline.exempt.i18n).toEqual([...EXEMPT_I18N_PATHS]);
 
     const scanned = scanRepo(repoRoot());
     expect(scanned.length).toBeGreaterThan(0);
@@ -205,8 +265,11 @@ describe("file-size ratchet: repository", () => {
 
     const rows = evaluate(scanned, baseline);
     expect(rows.filter(isOffender)).toEqual([]);
-    expect(
-      rows.filter((row) => row.verdict === "GENERATED").map((row) => row.path).sort(),
-    ).toEqual([...GENERATED_PATHS].slice().sort());
+    expect(rows.filter((row) => row.verdict === "GENERATED").map((row) => row.path).sort()).toEqual(
+      [...GENERATED_PATHS].slice().sort(),
+    );
+    expect(rows.filter((row) => row.verdict === "EXEMPT").map((row) => row.path).sort()).toEqual(
+      [...EXEMPT_DATA_PATHS, ...EXEMPT_I18N_PATHS].sort(),
+    );
   });
 });
