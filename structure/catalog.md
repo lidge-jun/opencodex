@@ -143,6 +143,8 @@ removal markers. These presentation operations do not grant routing or account e
 
 ## Startup readiness
 
+When the desktop app is explicitly restarted to reload synchronized state, [process membership](runtime.md#codex-desktop-process-membership) is determined from its installation path; catalog model selectors do not identify restart targets.
+
 Each `startServer` invocation owns a private, one-shot readiness gate created before the listener
 binds. `handleStart` supplies its gate and transitions it only after the shared catalog sync and
 best-effort Claude Code roster reconciliation have both settled. The catalog sync remains the

@@ -278,6 +278,8 @@ preview has closed that stable patch line.
 
 ## Cross-platform CI
 
+The [desktop membership contract](../runtime.md#codex-desktop-process-membership) has adapter regression coverage on every host and real PowerShell prefilter regression coverage with synthetic CIM rows on Windows in `tests/clients/desktop-app-restart.test.ts`. A skipped Windows lane does not exercise that native filter; uid-dependent POSIX cases in `tests/clients/desktop-app-restart-posix.test.ts` are skipped on Windows.
+
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. Linux runs
 the suite in four shards with a separate `gates` job, and macOS runs it in two shards. Windows
 runs the full suite in six shards only on manual `workflow_dispatch` with `lane=all` (or an

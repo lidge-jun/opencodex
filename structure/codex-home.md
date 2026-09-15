@@ -232,6 +232,8 @@ to snapshot persistence instead of relying on the progress argument alone.
 
 ## Codex-home diagnostics
 
+Desktop executable membership uses the [discovered installation root](runtime.md#codex-desktop-process-membership), independently of the Codex state directory resolved here.
+
 Some Codex-home conditions are reported rather than repaired, because repairing them would overwrite
 a deliberate user choice:
 

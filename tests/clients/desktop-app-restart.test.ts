@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
+import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 
 /**
@@ -26,6 +28,53 @@ function withTrustedExes<T>(run: () => T): T {
 }
 
 interface Call { file: string; args: string[] }
+
+describe.skipIf(process.platform !== "win32")("Windows membership through the real PowerShell prefilter", () => {
+  for (const [label, root, executable] of [
+    ["forward-slash images under a backslash root", INSTALL, INSTALL.replaceAll("\\", "/") + "/ChatGPT.exe"],
+    ["backslash images under a forward-slash root", INSTALL.replaceAll("\\", "/"), INSTALL + "\\ChatGPT.exe"],
+  ] as const) {
+    test(label, () => {
+      const sibling = executable.replace(/([\\/])ChatGPT\.exe$/, "-evil$1ChatGPT.exe");
+      const psLiteral = (value: string) => "'" + value.replaceAll("'", "''") + "'";
+      const fixture = [
+        // These functions shadow the CIM cmdlets: the generated list-only script
+        // sees synthetic rows and never enumerates or controls real processes.
+        "function Get-CimInstance {",
+        "  param([string]$ClassName, [string]$Filter)",
+        "  if ($ClassName -cne 'Win32_Process' -or $Filter -cne \"Name='ChatGPT.exe'\") { throw 'Unexpected fixture query' }",
+        "  @(",
+        `    [pscustomobject]@{ ProcessId = 1000; ParentProcessId = 900; CreationDate = [datetime]'2026-09-15T00:00:00Z'; ExecutablePath = ${psLiteral(executable)} }`,
+        `    [pscustomobject]@{ ProcessId = 2000; ParentProcessId = 900; CreationDate = [datetime]'2026-09-15T00:00:00Z'; ExecutablePath = ${psLiteral(sibling)} }`,
+        "  )",
+        "}",
+        "function Invoke-CimMethod {",
+        "  param($InputObject, [string]$MethodName)",
+        "  if ($MethodName -cne 'GetOwner' -or $InputObject.ProcessId -notin @(1000, 2000)) { throw 'Unexpected fixture owner query' }",
+        "  [pscustomobject]@{ ReturnValue = 0; Domain = ''; User = ([Security.Principal.WindowsIdentity]::GetCurrent()).Name }",
+        "}",
+      ].join("\n");
+      let rawListing = "";
+      const listed = withTrustedExes(() => windowsDesktopAppAdapter.listProcesses((file, args) => {
+        expect(file).toBe(PS);
+        expect(args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+        const script = args[3]!;
+        rawListing = execFileSync(file, [...args.slice(0, 3), fixture + "\n" + script], {
+          encoding: "utf8",
+          timeout: 10_000,
+          windowsHide: true,
+        });
+        return rawListing;
+      }, { id: AUMID.replace("!App", ""), root, relaunch: AUMID }));
+      // The real prefilter admits both lexical prefixes despite mixed slashes.
+      // The shared JS boundary check then removes the similarly named sibling.
+      expect(rawListing.trim().split(/\r?\n/).map(line => Number(line.split(" ")[0]))).toEqual([1000, 2000]);
+      expect(listed?.map(entry => ({ pid: entry.pid, executable: entry.executable }))).toEqual([
+        { pid: 1000, executable },
+      ]);
+    }, 15_000);
+  }
+});
 
 /** Scripted exec seam: discovery, then process list, then whatever the branch does. */
 /**
@@ -140,6 +189,34 @@ describe("Codex desktop app restart (#2292)", () => {
     const launch = calls.find(c => c.args.join(" ").includes("Start-Process"));
     expect(launch?.args.join(" ")).toContain(AUMID);
   });
+
+
+  for (const [label, root, executable, isMember] of [
+    ["forward-slash executable under backslash root", INSTALL, INSTALL.replaceAll("\\", "/") + "/ChatGPT.exe", true],
+    ["backslash executable under forward-slash root", INSTALL.replaceAll("\\", "/"), INSTALL + "\\ChatGPT.exe", true],
+    ["forward-slash sibling outside backslash root", INSTALL, INSTALL.replaceAll("\\", "/") + "-evil/ChatGPT.exe", false],
+    ["backslash sibling outside forward-slash root", INSTALL.replaceAll("\\", "/"), INSTALL + "-evil\\ChatGPT.exe", false],
+  ] as const) {
+    test(label, () => {
+      const calls: Call[] = [];
+      const result = withTrustedExes(() => restartCodexDesktopApp(scriptedIo({
+        discovery: [AUMID.replace("!App", ""), root, AUMID].join("\n"),
+        processes: `1000 900 T0 ${executable}`,
+        calls,
+        aliveFor: (_pid, poll) => poll <= 2,
+      })));
+      if (isMember) {
+        expect(result).toEqual({ attempted: true, stopped: [1000], surviving: [], relaunch: "started" });
+        expect(calls.some(c => c.args.join(" ").includes("CloseMainWindow"))).toBe(true);
+      } else {
+        expect(result.reason).toBe("no_targets");
+        expect(result.attempted).toBe(false);
+        expect(calls.some(c => c.args.join(" ").includes("CloseMainWindow"))).toBe(false);
+        expect(calls.some(c => c.args.join(" ").includes("Start-Process"))).toBe(false);
+      }
+      expect(calls.some(c => c.file === TASKKILL)).toBe(false);
+    });
+  }
 
   test("forces only after the graceful window elapses", () => {
     const calls: Call[] = [];

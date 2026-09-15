@@ -24,6 +24,16 @@ Catalog-derived reasoning-level diagnostics are escaped only at the human-output
 
 When hub management ingress is enabled, `src/cli/dispatch.ts` opens the dashboard on the literal IPv4 loopback address and configured ingress port, matching the listener in `src/server/index.ts`. Other dashboard address selection is unchanged.
 
+## Codex desktop process membership
+
+`src/codex/desktop-app/windows.ts` discovers the installed package and limits process ownership to the current Windows user.
+Its PowerShell prefilter normalizes both the install root and candidate executable from `/` to `\` before a case-insensitive prefix comparison.
+The adapter then folds both slash forms onto the host separator before calling `isUnderRoot()` in `src/codex/desktop-app/types.ts`.
+That shared lexical boundary check rejects sibling prefixes such as `OpenAI.Codex-evil`; Windows path folding stays in the Windows adapter, so a POSIX backslash remains a filename character.
+The prefilter is only an optimization, not final process-membership authority.
+`tests/clients/desktop-app-restart.test.ts` covers both mixed-slash directions through the adapter and runs the real PowerShell filter against synthetic CIM rows on Windows.
+`tests/clients/desktop-app-restart-posix.test.ts` keeps the POSIX separator contract covered; uid-dependent macOS/Linux cases skip on Windows.
+
 ## Entrypoints
 
 | Path | Responsibility |

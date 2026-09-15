@@ -241,7 +241,7 @@ unvalidated Bun builds is unchanged (`src/lib/bun-stream-caps.ts`).
 sidebar entry: it is entered from the dashboard's startup-state row, which links there whether the
 current state needs remediation or merely reports how routing is protected. Its warning state is derived from active
 Codex routing plus the actual service and launcher-shim installation state; the
-`codexAutoStart` preference alone is never presented as proof of restart protection. The page shows
+`codexAutoStart` preference alone is never presented as proof of restart protection. Desktop restart target selection follows the [runtime membership contract](runtime.md#codex-desktop-process-membership); finding an installed app does not establish background-service protection. The page shows
 copyable repair commands (`ocx service repair` for an installed service or `ocx service install` when none is registered, `ocx codex-shim install`, and `ocx restore`). On
 Windows it can also install an owned, per-user system tray. The resident tray owns only its icon,
 home-scoped singleton, and HKCU Run registration; fixed proxy actions delegate to the CLI so drain,
@@ -458,7 +458,7 @@ estimated` split exists for, and why coverage is reported alongside totals. The 
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
-A row also carries what its logical request cost upstream. `logicalRequestId` names the turn
+A row also records the upstream cost of its logical request. `logicalRequestId` names the turn
 that a retry leg, a repair refetch and a combo child all belong to, and `spend` aggregates their
 physical sends: `sends` totals every attempt on the row, `settled` counts the sends whose attempt
 reached a terminal status, and `unresolved` holds the rest — an attempt abandoned in flight, or a

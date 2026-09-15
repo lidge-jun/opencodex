@@ -431,6 +431,8 @@ Pool mode needs stable public names and a store that survives concurrent refresh
 
 ## Sidecars, management, and UI
 
+The desktop restart adapter uses [Windows process ownership and installation membership](../runtime.md#codex-desktop-process-membership), independently of Pool/Direct credential selection.
+
 HTTP/SSE, Responses WebSocket, compact, images, search, and vision resolve the same account mode.
 There is one mode-aware `openai` forward sidecar candidate; `openai-apikey` is not a ChatGPT-forward
 sidecar candidate and cannot hide a failed Codex credential with separately billed API usage.

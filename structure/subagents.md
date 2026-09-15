@@ -265,6 +265,8 @@ cause delegation. The TOML edit owns only marker-tagged values, preserves existi
 user-owned `[agents]` defaults rather than overwriting them, and rejects ambiguous table shapes
 without changing the file.
 
+An explicit desktop restart to load those defaults follows the [runtime membership checks](runtime.md#codex-desktop-process-membership); selecting a delegation model does not authorize additional restart targets.
+
 V2 proxy guidance uses `<opencodex_subagent_guidance>` for both built-in metadata and
 custom `injectionPrompt` bodies. The built-in text reports the resolved preferred model,
 effort, roster and fallback chain without prescribing delegation, spawn overrides or

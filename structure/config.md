@@ -74,6 +74,8 @@ management API. Retirement does not migrate user-selected model ids or erase usa
 
 ## Config injection
 
+An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
+
 `src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
 keeps its native provider id, which decides whether existing thread history still resolves.
 
