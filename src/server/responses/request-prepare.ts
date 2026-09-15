@@ -101,7 +101,7 @@ import {
   isCodexReserveHelperUnsupported,
   CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE,
 } from "../../codex/loopback-target";
-import { checkInputAdmission } from "./input-admission";
+import { checkComboTargetInputAdmission, checkInputAdmission } from "./input-admission";
 import { nativeContextLimits } from "../../codex/catalog";
 import { streamingContextOverflowResponse } from "./context-overflow";
 import {
@@ -860,7 +860,9 @@ export async function prepareResponsesRequest(
   // refusing the turn that shrinks the context would deadlock the client against the very
   // limit this gate reports — it would be told to compact and then denied the compaction.
   if (parsed._compactionRequest !== true) {
-    const inputAdmission = checkInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config));
+    const inputAdmission = options.comboAttempt
+      ? checkComboTargetInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config))
+      : checkInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config));
     if (!inputAdmission.admitted) {
       // #1524: this is a LOCAL preflight refusal, not an upstream verdict. A policy or combo
       // fallback must be able to skip this candidate and try one whose context window fits,
@@ -873,13 +875,14 @@ export async function prepareResponsesRequest(
           translatorBudget,
         );
       }
-      return formatErrorResponse(
-        413,
-        "input_admission_refused",
-        `Estimated input (~${inputAdmission.estimatedTokens} tokens) is far past the context window `
+      const admissionMessage = inputAdmission.requiredOutputHeadroom !== undefined
+        ? `Estimated input (~${inputAdmission.estimatedTokens} tokens) plus ${inputAdmission.requiredOutputHeadroom} `
+          + `tokens of requested output headroom cannot fit the context window of ${parsed.modelId} `
+          + `(${inputAdmission.ceiling} tokens).`
+        : `Estimated input (~${inputAdmission.estimatedTokens} tokens) is far past the context window `
           + `of ${parsed.modelId} (${inputAdmission.ceiling} tokens). Start a new session or choose a `
-          + `model with a larger context window.`,
-      );
+          + `model with a larger context window.`;
+      return formatErrorResponse(413, "input_admission_refused", admissionMessage);
     }
   }
   const preAuthHostKey = preAuthUpstreamHostCircuitKey(route, config);

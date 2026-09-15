@@ -10,7 +10,8 @@
  * catches the pathological case and stays out of the way otherwise. Every uncertainty
  * resolves toward admitting.
  */
-import { nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, type NativeContextLimitsInput } from "../../codex/catalog/metadata";
+import { nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiMaxOutputTokens, type NativeContextLimitsInput } from "../../codex/catalog/metadata";
+import { getModelMetadata } from "../../generated/model-metadata";
 import { estimateTokens } from "../../lib/token-estimate";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { modelRecordValue } from "../../reasoning-effort";
@@ -54,6 +55,8 @@ export interface InputAdmissionResult {
   estimatedTokens: number;
   /** Resolved ceiling, or null when nothing could be resolved (=> always admitted). */
   ceiling: number | null;
+  /** Output space deliberately reserved by combo preflight; absent on the loose direct gate. */
+  requiredOutputHeadroom?: number;
 }
 
 function positive(value: unknown): number | null {
@@ -166,13 +169,85 @@ export function resolveInputCeiling(
   const native = canonicalNativeBare
     ? positive(nativeOpenAiContextWindow(modelId, nativeLimits))
     : null;
+  // Some supported native slugs (notably Spark) are present in the generated capability
+  // bundle but absent from the narrower pinned-native override table. Falling through to null
+  // made input admission completely blind for exactly those models. The generated bundle is
+  // static in-tree metadata, not a live catalog read, and both OpenAI/OpenAI-Codex publish the
+  // same 128k Spark context window. Operator/provider caps may only narrow it.
+  const generatedNative = canonicalNativeBare
+    ? positive(getModelMetadata("openai-codex", modelId)?.contextWindow)
+      ?? positive(getModelMetadata("openai", modelId)?.contextWindow)
+    : null;
+  const nativeCap = typeof nativeContextCap === "number"
+    ? positive(nativeContextCap)
+    : positive(nativeContextCap?.cap);
+  const generatedNarrowed = generatedNative === null
+    ? null
+    : Math.min(generatedNative, configured ?? generatedNative, nativeCap ?? generatedNative);
   const nativeMaxInput = canonicalNativeBare ? positive(nativeOpenAiMaxInputTokens(modelId, nativeLimits)) : null;
 
-  const window = canonicalNativeBare ? native : configured;
+  const window = canonicalNativeBare ? (native ?? generatedNarrowed) : configured;
   // modelMaxInputTokens is an input-only cap, so it can only tighten the window.
   const configuredMaxInput = positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
   const limits = [window, configuredMaxInput, nativeMaxInput].filter((v): v is number => v !== null);
   return limits.length === 0 ? null : Math.min(...limits);
+}
+
+
+/**
+ * Resolve the largest output the concrete target can produce. This is used only to avoid
+ * reserving MORE than the target itself can ever emit when a combo child carries a larger
+ * client-side max_output_tokens. Unknown stays unknown rather than inventing a capability.
+ */
+export function resolveOutputCeiling(
+  provider: OcxProviderConfig,
+  providerName: string,
+  modelId: string,
+): number | null {
+  const configured = positive(modelRecordValue(provider.modelMaxOutputTokens, modelId))
+    ?? positive(provider.defaultMaxOutputTokens);
+  const canonicalNativeBare = providerName === OPENAI_CODEX_PROVIDER_ID
+    && isCanonicalOpenAiForwardProvider(provider)
+    && !modelId.includes("/");
+  const native = canonicalNativeBare ? positive(nativeOpenAiMaxOutputTokens(modelId)) : null;
+  const limits = [configured, native].filter((v): v is number => v !== null);
+  return limits.length === 0 ? null : Math.min(...limits);
+}
+
+/**
+ * Combo-only context admission. A fallback must be able to satisfy the caller's declared
+ * output allowance inside its OWN context window; otherwise it can return HTTP 200, emit some
+ * text, and terminate with finish_reason=length. At that point replaying on the next target is
+ * unsafe because client-visible output may already have committed.
+ *
+ * Direct/single-target requests keep the deliberately loose 2.5x pathological-input gate.
+ * This stricter rule applies only to synthetic combo children, where skipping one known-small
+ * target is safe and the ladder can continue before any upstream bytes are emitted. Unknown
+ * context remains fail-open. If the client omitted max_output_tokens, behavior is unchanged.
+ */
+export function checkComboTargetInputAdmission(
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+  providerName: string,
+  modelId: string,
+  nativeContextCap?: NativeContextLimitsInput,
+): InputAdmissionResult {
+  const ceiling = resolveInputCeiling(provider, providerName, modelId, nativeContextCap);
+  const requestedOutput = positive(parsed.options.maxOutputTokens);
+  if (ceiling === null || requestedOutput === null) {
+    return checkInputAdmission(parsed, provider, providerName, modelId, nativeContextCap);
+  }
+  const targetOutput = resolveOutputCeiling(provider, providerName, modelId);
+  const requiredOutputHeadroom = targetOutput === null
+    ? requestedOutput
+    : Math.min(requestedOutput, targetOutput);
+  const estimatedTokens = estimateInputTokens(parsed, modelId);
+  return {
+    admitted: estimatedTokens + requiredOutputHeadroom <= ceiling,
+    estimatedTokens,
+    ceiling,
+    requiredOutputHeadroom,
+  };
 }
 
 /**

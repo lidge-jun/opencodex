@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   ADMISSION_TOLERANCE,
+  checkComboTargetInputAdmission,
   checkInputAdmission,
   estimateInputTokens,
   resolveInputCeiling,
+  resolveOutputCeiling,
 } from "../../src/server/responses/input-admission";
 import { modelRecordValue } from "../../src/reasoning-effort";
 import type { OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
@@ -255,5 +257,54 @@ describe("checkInputAdmission", () => {
       for (const [name, fn] of originals) fs[name] = fn;
     }
     expect(calls).toBe(0);
+  });
+});
+
+
+describe("combo target input admission", () => {
+  const capped: OcxProviderConfig = {
+    adapter: "openai-chat",
+    baseUrl: "https://example.test/v1",
+    modelContextWindows: { m: 128_000 },
+    modelMaxOutputTokens: { m: 32_000 },
+  };
+
+  const withMaxOutput = (inputTokens: number, maxOutputTokens = 64_000): OcxParsedRequest => ({
+    ...request([userText(asciiTokens(inputTokens))]),
+    modelId: "m",
+    options: { maxOutputTokens },
+  });
+
+  test("skips a known-small fallback before it can truncate after output", () => {
+    const result = checkComboTargetInputAdmission(withMaxOutput(100_000), capped, "custom", "m");
+    expect(result.admitted).toBe(false);
+    expect(result.ceiling).toBe(128_000);
+    expect(result.requiredOutputHeadroom).toBe(32_000);
+  });
+
+  test("keeps a target when input plus its own output ceiling fits", () => {
+    const result = checkComboTargetInputAdmission(withMaxOutput(90_000), capped, "custom", "m");
+    expect(result.admitted).toBe(true);
+    expect(result.requiredOutputHeadroom).toBe(32_000);
+  });
+
+  test("unknown context remains fail-open", () => {
+    const unknown: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
+    const result = checkComboTargetInputAdmission(withMaxOutput(2_000_000), unknown, "custom", "m");
+    expect(result.admitted).toBe(true);
+    expect(result.ceiling).toBeNull();
+  });
+
+  test("no explicit output allowance preserves the loose direct admission contract", () => {
+    const parsed = request([userText(asciiTokens(150_000))]);
+    parsed.modelId = "m";
+    const result = checkComboTargetInputAdmission(parsed, capped, "custom", "m");
+    expect(result.admitted).toBe(true); // 150k is still inside the existing 2.5x pathological gate.
+    expect(result.requiredOutputHeadroom).toBeUndefined();
+  });
+
+  test("canonical Spark resolves its measured 128k window and 32k output ceiling", () => {
+    expect(resolveInputCeiling(CANONICAL_NATIVE, "openai", "gpt-5.3-codex-spark")).toBe(128_000);
+    expect(resolveOutputCeiling(CANONICAL_NATIVE, "openai", "gpt-5.3-codex-spark")).toBe(32_000);
   });
 });

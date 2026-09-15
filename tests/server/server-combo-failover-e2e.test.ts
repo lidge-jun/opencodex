@@ -1,3 +1,4 @@
+import { registerComboContextHeadroomCases } from "../helpers/combo-context-headroom-cases";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
@@ -2118,26 +2119,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(await exhausted.text()).not.toContain("sk-a-should-redact");
   });
 
-  test("provider-specific prompt-too-long 400 hops to a larger-context combo target", async () => {
-    let backupHits = 0;
-    const capped = serve(() => Response.json({ error: {
-      message: "Prompt 346030 > 262144 maximum context length",
-      type: "invalid_request_prompt_too_long",
-      code: "5059",
-      raw_status_code: 400,
-    } }, { status: 400 }));
-    const backup = serve(() => {
-      backupHits += 1;
-      return chatSuccess("larger context backup", "m2");
-    });
-    const response = await post(comboConfig({
-      a: provider("openai-chat", baseUrl(capped), "key-a"),
-      b: provider("openai-chat", baseUrl(backup), "key-b"),
-    }));
-    expect(response.status).toBe(200);
-    expect(backupHits).toBe(1);
-    expect(await response.text()).toContain("larger context backup");
-  });
+  registerComboContextHeadroomCases({ serve, baseUrl, chatSuccess, provider, comboConfig, post });
 
   test("429 Retry-After 120 keeps A cooling at 60 seconds and restores it at 120", async () => {
     const t0 = Date.parse("2026-07-18T00:00:00.000Z");

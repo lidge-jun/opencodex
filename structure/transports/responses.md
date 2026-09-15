@@ -693,3 +693,5 @@ What must not happen is a ladder that charges and then returns through a path th
 nor releases. That is not a lost send; it is a send the request never made, spending an allowance a
 later recovery in the same request then cannot have. `tests/lib/execution-budget-permits.test.ts`
 pins both ladder shapes against exactly that.
+
+For combo children, `src/server/responses/request-prepare.ts` applies the input-plus-output-headroom admission in `src/server/responses/input-admission.ts` before credential or upstream dispatch. The direct-request gate and compaction exemption remain unchanged.
