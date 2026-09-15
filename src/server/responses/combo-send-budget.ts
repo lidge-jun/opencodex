@@ -1,4 +1,4 @@
-import { CODEX_TEXT_GUARDED_BUDGET_POLICY, createRequestExecutionBudget, type RequestExecutionBudget, type RequestExecutionBudgetPolicy } from "../../lib/request-execution-budget";
+import { CODEX_TEXT_GUARDED_BUDGET_POLICY, type RequestExecutionBudget, type RequestExecutionBudgetPolicy } from "../../lib/request-execution-budget";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -37,10 +37,9 @@ export function comboExecutionBudgetPolicy(declaredTargets: number): RequestExec
 /**
  * A budget scope that keeps its own recovery ledgers but spends the SAME request-wide counter.
  *
- * `used` is redefined as an accessor onto the parent because the factory reads it back off this
- * object -- `remainingBaseSends` and the total check both do -- so a copied number would let a
- * combo target run its ladder against a stale total, which is precisely the per-layer counting
- * this work exists to remove. The reserve, alternate-target and transition ledgers stay
+ * The factory shares both charged sends and pending external reports. Forwarding `used` alone
+ * cannot share reservation checks held in the factory closure, and would let each target
+ * refill its allowance. The reserve, alternate-target and transition ledgers stay
  * per-scope on purpose: a combo target's account failover is its own recovery decision, while
  * the request total still bounds every target together.
  */
@@ -48,14 +47,7 @@ export function deriveSendBudgetScope(
   parent: RequestExecutionBudget,
   policy: RequestExecutionBudgetPolicy,
 ): RequestExecutionBudget {
-  const scope = createRequestExecutionBudget(policy, parent.logicalRequestId);
-  Object.defineProperty(scope, "used", {
-    get: () => parent.used,
-    set: (value: number) => { parent.used = value; },
-    enumerable: true,
-    configurable: true,
-  });
-  return scope;
+  return parent.deriveScope(policy);
 }
 
 /**

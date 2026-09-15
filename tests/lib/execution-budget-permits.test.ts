@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { comboExecutionBudgetPolicy, comboTargetSendBudget, deriveSendBudgetScope } from "../../src/server/responses/combo-send-budget";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
@@ -122,6 +123,68 @@ describe("atomic dispatch permits", () => {
     // The send physically happened. A refund here would hand the request a free one back.
     leg.permit.release();
     expect(budget.used).toBe(1);
+  });
+});
+
+describe("combo scopes share reservation accounting", () => {
+  test("a child sees the last send reserved by its parent before dispatch", () => {
+    const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const child = deriveSendBudgetScope(parent, ONE_SEND_LEFT);
+    const reserved = parent.reserveDispatch({ sendClass: "initial", targetKey: "parent" });
+    expect(reserved.allowed).toBe(true);
+    expect(child.remainingBaseSends(5)).toBe(0);
+    expect(child.reserveDispatch({ sendClass: "initial", targetKey: "child" }).allowed).toBe(false);
+  });
+
+  test("child release refunds the shared booking and external reports settle it once", () => {
+    const parent = createRequestExecutionBudget();
+    const child = deriveSendBudgetScope(parent, parent.policy);
+    const first = child.reserveDispatch({ sendClass: "initial", targetKey: "child", countedExternally: true });
+    if (!first.allowed) throw new Error("expected first permit");
+    expect(parent.used).toBe(1);
+    first.permit.release();
+    expect(parent.used).toBe(0);
+    const sent = child.reserveDispatch({ sendClass: "initial", targetKey: "child", countedExternally: true });
+    if (!sent.allowed) throw new Error("expected second permit");
+    parent.used += 1;
+    expect(child.used).toBe(1);
+    sent.permit.release();
+    expect(parent.used).toBe(1);
+    child.used += 1;
+    expect(parent.used).toBe(2);
+  });
+
+  test("three failed targets cannot each refill the request-wide ladder", () => {
+    const parent = createRequestExecutionBudget();
+    const combo = deriveSendBudgetScope(parent, comboExecutionBudgetPolicy(3));
+    let sends = 0;
+    for (let target = 0; target < 3; target++) {
+      const scope = comboTargetSendBudget(combo, 2 - target);
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const decision = scope.reserveDispatch({ sendClass: attempt === 0 ? "initial" : "auth-recovery", targetKey: `target-${target}` });
+        if (!decision.allowed) break;
+        expect(decision.permit.use()).toBe(true);
+        sends++;
+      }
+    }
+    expect(sends).toBe(combo.policy.maxTotalModelSends);
+    expect(parent.used).toBe(sends);
+    expect(combo.remainingBaseSends(100)).toBe(0);
+  });
+
+  test("target transition ledgers remain local to each scope", () => {
+    const parent = createRequestExecutionBudget(comboExecutionBudgetPolicy(4));
+    for (const name of ["a", "b"]) {
+      const child = deriveSendBudgetScope(parent, parent.policy);
+      for (const key of [name, `${name}-alternate`]) {
+        const decision = child.reserveDispatch({ sendClass: "auth-recovery", targetKey: key });
+        expect(decision.allowed).toBe(true);
+        if (decision.allowed) decision.permit.use();
+      }
+      expect(child.targetTransitions).toBe(1);
+    }
+    expect(parent.targetTransitions).toBe(0);
+    expect(parent.used).toBe(4);
   });
 });
 

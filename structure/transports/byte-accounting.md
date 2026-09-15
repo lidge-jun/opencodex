@@ -2,7 +2,7 @@
 
 How opencodex measures request and stream bytes without allocating copies solely to count
 them. These contracts are shared by request parsing, SSE rewriting, the provider adapters and
-the translator budget, which is why so many documents link here rather than restating them. Generic Responses API-key failover follows the [bounded rotation contract](responses.md#bounded-api-key-429-rotation).
+the translator budget, which is why so many documents link here rather than restating them. Generic Responses API-key failover follows the [bounded rotation contract](responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local.
 
 ## Request-copy accounting
 

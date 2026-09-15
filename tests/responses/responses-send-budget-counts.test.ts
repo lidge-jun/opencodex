@@ -120,7 +120,7 @@ describe("upstream sends per logical request", () => {
     expect(sendCounts(logCtx)).toEqual([3]);
   });
 
-  test("a three-target combo fan-out gives every declared target a send and totals six", async () => {
+  test("a three-target 5xx combo reaches every target within five base sends", async () => {
     const upstream = alwaysFailing(502, "upstream busy");
     const logCtx: RequestLogContext = { model: "", provider: "" };
 
@@ -133,10 +133,8 @@ describe("upstream sends per logical request", () => {
     // the later targets to zero. The first target runs its own ladder, each later target draws
     // what is left, and the clamp holds back one send for every target still declared, so the
     // last target is still reached.
-    // Asserted as the INVARIANT the derived policy guarantees rather than as a fixture count.
-    // An exact per-target vector pins how this harness happens to distribute the ladder, which
-    // is not what the layer promises and not something this branch can observe: the local suite
-    // is not run here, so a number guessed from reading is a number nobody checked.
+    // Count physical sends through the adapter; unit-only shared-counter assertions are not
+    // enough to show that retries and later targets consume the same reservation ledger.
     const bearers = upstream.authorizations;
     // Every declared target is still reached. Starving the last target is the failure mode that
     // sharing one counter WITHOUT a per-target policy produces.
@@ -147,15 +145,10 @@ describe("upstream sends per logical request", () => {
     // Bounded by the derived total: the first target's ladder, one send per further declared
     // target, and the single shared final-recovery reserve. The measured regression in #4546 was
     // twelve, four per target, because each child drew a fresh full allowance.
-    // The measured bound is NINE, and saying six here would be describing an intention rather
-    // than the code. #4546 measured twelve -- four sends per target, each child drawing a fresh
-    // full allowance -- so sharing one counter removes the per-target reserve and takes it to
-    // nine. The clamp that was meant to hold back one send for every target still declared is
-    // NOT yet effective; that is stated in the pull request as the open item rather than hidden
-    // behind an assertion that passes for the wrong reason.
-    expect(bearers.length).toBeLessThanOrEqual(9);
-    expect(bearers.length).toBeLessThan(12);
-    expect(bearers.length).toBeGreaterThanOrEqual(3);
+    // A plain 5xx streak has no qualifying final recovery, so it uses only the five base
+    // sends. The sixth is reserved for an explicitly admitted recovery, covered by permits.
+    expect(bearers).toHaveLength(5);
+    expect(totalSends(logCtx)).toBe(5);
   });
 
   // REMOVED: "a 401 before the 5xx streak spends one of the same three sends".

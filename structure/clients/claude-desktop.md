@@ -1,7 +1,7 @@
 # Claude Desktop Integration
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Generic Responses API-key failover follows the [bounded rotation contract](../transports/responses.md#bounded-api-key-429-rotation).
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Generic Responses API-key failover follows the [bounded rotation contract](../transports/responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](../transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local.
 
 Codex-native model discovery follows the [shared retirement policy](../catalog.md#shared-catalog).
 That projection does not migrate existing user-selected Desktop configuration or usage history.
