@@ -1,3 +1,4 @@
+import { providerRelativeSendPathConfigError } from "../config/schema/leaf-validators";
 import { modelCapabilitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { initialModelSelection } from "../providers/initial-model-selection";
@@ -7,7 +8,6 @@ import {
   codexAutoStartEnabled,
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
-  providerRelativeSendPathConfigError,
   providerWebSearchBridgeConfigError,
   requestPacingConfigError,
   retryOn429PolicyConfigError,
