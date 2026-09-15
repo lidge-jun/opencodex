@@ -140,6 +140,8 @@ Authorization: Bearer <admin-token>
 
 如果某行超过现有解析器的大小限制，`GET /api/usage` 和 `GET /api/keys` 会保留可读取行的汇总，并在响应级别添加 `usageIncomplete: true` 和 `usageIncompleteReason: "oversized_rows"`。缓存和增量追加会保留该诊断，即使结果为空或没有筛选匹配；重建时会重新计算。不会缩短供应商、模型或 API 密钥标识来容纳该行。没有此标记不代表所有记录均有效。它与 `historyTruncated`、`entriesTruncated` 及 token 测量覆盖率相互独立。
 
+API 密钥的 `accountLogLabel` 生成方式、重试时的密钥选择与用量记录，以及扁平 `attempts` 的汇总规则，以[英文用量归属规范](/reference/management-api/#api-key-usage-attribution)为准。不要重复累加组合的父级总量，也不要推断未报告的用量或历史无标签记录。订阅配额是单独观测的数据。
+
 `models`、`providers` 和 `days[].models` 中的记录也带有 `cacheHitRate`：它表示由提供方提示缓存提供的输入 token 比例，并限制在 `[0, 1]` 范围内。当提供方未报告缓存遥测数据或该记录没有输入 token 时，其值为 `null`，绝不会是 `0`，因为“没有缓存数据”与“实际命中率为 0%”是不同的事实，将两者显示为相同结果的图表会产生误导。
 
 :::caution

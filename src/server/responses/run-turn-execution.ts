@@ -12,7 +12,7 @@ import {
   adapterNeedsForcedContinuation,
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
-import { sealRequestAttemptIdentity, noteAttemptSend, recordAttemptCredentialSource } from "../request-log";
+import { sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
 import { waitForProviderRequestSlot, RequestPacingQueueOverloadError } from "../../providers/request-pacing";
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
@@ -65,6 +65,8 @@ export async function executeResponsesRunTurn(
     | "applyFailoverSnapshot"
     | "resolveSelectionAdapter"
     | "adapter"
+    | "noteRoutedAttemptSend"
+    | "bindKeyUsageFromBridge"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   responseEffects: Pick<
@@ -140,7 +142,7 @@ export async function executeResponsesRunTurn(
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         await refreshRunTurnSelection();
-        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery);
+        transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
         const runTurnProviderFetch = providerFetch(
           route.provider,
           options.codexWsRuntimeIdentity,
@@ -349,11 +351,7 @@ export async function executeResponsesRunTurn(
           onUsage: usage => {
             // Raw adapter usage, pre wire-normalization: the bridged SSE now always carries
             // zero-default detail objects, so provenance must come from here (cache_detail_missing).
-            logCtx.usageFromBridge = true;
-            if (usage) {
-              logCtx.usage = usage;
-              if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
-            }
+            transportState.bindKeyUsageFromBridge(usage);
           },
           onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
             commitReasoningReplayServingRoute();
@@ -420,11 +418,7 @@ export async function executeResponsesRunTurn(
       ...(routedCompaction ? { compaction: true } : {}),
       onProviderState: state => { providerState = state; },
       onUsage: usage => {
-        logCtx.usageFromBridge = true;
-        if (usage) {
-          logCtx.usage = usage;
-          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
-        }
+        transportState.bindKeyUsageFromBridge(usage);
       },
     });
     if (!routedCompaction) {

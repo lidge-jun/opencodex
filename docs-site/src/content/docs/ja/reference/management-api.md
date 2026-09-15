@@ -136,6 +136,8 @@ Authorization: Bearer <admin-token>
 
 行が既存のパーサーのサイズ上限を超えた場合、`GET /api/usage` と `GET /api/keys` は読み取れる行の集計を維持し、応答全体に `usageIncomplete: true` と `usageIncompleteReason: "oversized_rows"` を追加します。この診断はキャッシュや増分追記後も維持され、結果が空または一致なしでも返されます。再構築時には再計算されます。プロバイダー、モデル、API キーの識別子は短縮しません。フラグがないことは全行が有効だった証明にはなりません。`historyTruncated`、`entriesTruncated`、トークン測定カバレッジとは別の情報です。
 
+API キーの `accountLogLabel` の導出、再試行時のキー選択と使用量、フラットな `attempts` の集計規則は、[英語版の使用量帰属の仕様](/reference/management-api/#api-key-usage-attribution)を参照してください。コンボの親合計は重ねて加算せず、未報告の使用量や過去のラベルなし記録を推定しません。サブスクリプションのクォータは別の観測値です。
+
 `models`、`providers`、および `days[].models` の各行にも `cacheHitRate` が含まれます。これは、プロバイダーのプロンプト キャッシュから供給された入力トークンの割合で、`[0, 1]` の範囲に制限されます。プロバイダーがキャッシュ テレメトリを報告しなかった場合、または行に入力トークンがない場合は、`0` ではなく `null` になります。「キャッシュ データなし」と「実際のヒット率 0%」は異なる事実であり、それらを同じように描画するチャートは誤解を招くためです。
 
 :::caution

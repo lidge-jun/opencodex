@@ -339,3 +339,5 @@ prose the model reads beside them. Vendor tool execution stays disabled on both
 adapters, and Qoder's explicit refusal of original images is unchanged.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.

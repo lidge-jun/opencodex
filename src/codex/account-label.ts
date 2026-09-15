@@ -1,17 +1,19 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { CodexAccount, OcxConfig } from "../types";
 import type { CodexAuthContext } from "./auth-context";
+import type { ProviderApiKeySelection } from "../types/provider";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 
 export const CODEX_ACCOUNT_LOG_LABEL_RE = /^p[a-f0-9]{6}$/;
 
 /**
- * Account log labels come in two families (#2699):
+ * Account log labels come in three families:
  *
  * - `p<hex6>` (plus the literal `main`) — a Codex pool account.
  * - `o<hex6>` — a non-Codex OAuth provider account (xai, cursor, and siblings).
+ * - `k<hex32>` — a request-owned API-key selection, scoped to provider and reference.
  *
- * Both are sha256-derived digests, never an email and never a raw provider account id. That is
+ * Labels never contain an email, raw key/reference, or raw provider account id. That is
  * a privacy requirement, not a formatting preference: these labels are written to the usage log
  * and served over the management API.
  *
@@ -20,7 +22,16 @@ export const CODEX_ACCOUNT_LOG_LABEL_RE = /^p[a-f0-9]{6}$/;
  * accepted cost of keeping the existing `p` format byte-compatible.
  */
 export const OAUTH_ACCOUNT_LOG_LABEL_RE = /^o[a-f0-9]{6}$/;
-export const ACCOUNT_LOG_LABEL_RE = /^(?:main|[po][a-f0-9]{6})$/;
+export const KEY_ACCOUNT_LOG_LABEL_RE = /^k[a-f0-9]{32}$/;
+export const ACCOUNT_LOG_LABEL_RE = /^(?:main|[po][a-f0-9]{6}|k[a-f0-9]{32})$/;
+
+/** Digest the request-owned configured selection, never serialize its key/reference. */
+export function apiKeyAccountLogLabel(provider: string, selection: ProviderApiKeySelection | undefined): `k${string}` | undefined {
+  if (!selection || typeof selection.reference !== "string" || !selection.reference.length) return undefined;
+  return `k${createHash("sha256").update(JSON.stringify([
+    "ocx-key-account-v1", provider, selection.entryId ?? null, selection.reference,
+  ])).digest("hex").slice(0, 32)}`;
+}
 
 export function oauthAccountLogLabel(accountId: string, provider = ""): string {
   return `o${createHash("sha256").update(`${provider}\0${accountId}`).digest("hex").slice(0, 6)}`;

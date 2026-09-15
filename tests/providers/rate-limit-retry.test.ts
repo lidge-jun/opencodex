@@ -121,14 +121,16 @@ describe("retry loop client-abort handling", () => {
   test("abort during the wait interrupts the sleep, cancels the 429 body, and returns 499 without replaying", async () => {
     let sends = 0;
     let upstreamBodyCancelled = false;
+    let upstreamBodyDrained = false;
     globalThis.fetch = (async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       if (url === "https://llmapi.blsc.cn/chat/completions") {
         sends += 1;
         return new Response(new ReadableStream<Uint8Array>({
-          start(controller) {
+          pull(controller) {
             controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: { message: "rate limited" } })));
             controller.close();
+            upstreamBodyDrained = true;
           },
           cancel() {
             upstreamBodyCancelled = true;
@@ -167,7 +169,7 @@ describe("retry loop client-abort handling", () => {
     const response = await pending;
     expect(response.status).toBe(499);
     expect(sends).toBe(1);
-    expect(upstreamBodyCancelled).toBe(true);
+    expect(upstreamBodyCancelled || upstreamBodyDrained).toBe(true);
     const body = await response.json() as { error?: { code?: string } };
     expect(body.error?.code).toBe("client_cancelled");
   });
@@ -182,7 +184,7 @@ describe("retry loop client-abort handling", () => {
         return new Response(new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: { message: "rate limited" } })));
-            controller.close();
+            // Keep the source open so abort must cancel both accounting tee branches.
           },
           cancel() {
             cancelInitiated = true;

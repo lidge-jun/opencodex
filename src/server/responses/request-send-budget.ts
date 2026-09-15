@@ -52,7 +52,7 @@ export function createResponsesSendBudget(
   /**
    * Records an adapter's OWN inner retries against this attempt.
    *
-   * Ordinal 1 is the send each call site already recorded through `noteAttemptSend`, so only
+   * Ordinal 1 is the send each call site already recorded through `noteRoutedAttemptSend`, so only
    * the extra physical sends are added here and an adapter that does not retry internally
    * leaves its log byte-for-byte as it was. Kiro reaches roughly eighteen sends per call and
    * Cursor re-sends a whole turn, and both reported one; a count that cannot be observed

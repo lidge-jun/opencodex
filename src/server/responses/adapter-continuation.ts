@@ -10,7 +10,6 @@ import type { AdapterRequest } from "../../adapters/base";
 import {
   recordAdapterReasoning,
   recordAdapterTier,
-  noteAttemptSend,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
@@ -78,12 +77,13 @@ export function createAdapterContinuations(
     | "genericFailoverAccountId"
     | "genericFailovers"
     | "applyFailoverSnapshot"
+    | "noteRoutedAttemptSend"
+    | "noteAdapterPhysicalSend"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   sendBudgetState: Pick<
     ResponsesSendBudget,
     | "adapterSendBudget"
-    | "noteAdapterPhysicalSend"
     | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "reserveCredentialHop"
@@ -111,7 +111,6 @@ export function createAdapterContinuations(
   const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs } = adapterExchange;
   const {
     adapterSendBudget,
-    noteAdapterPhysicalSend,
     remainingTransientSendBudget,
     noteTransientSends,
     reserveCredentialHop,
@@ -182,15 +181,16 @@ export function createAdapterContinuations(
       const replayKind: AttemptRecoveryKind | undefined = recoveryKind;
       try {
         if (transportState.activeAdapter.fetchResponse) {
-          noteAttemptSend(logCtx.activeAttempt, continuationEstimate, replayKind);
+          transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
           await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
           return await transportState.activeAdapter.fetchResponse(builtContinuationRequest, {
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
               sendBudget: adapterSendBudget,
-            onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
+            onPhysicalSend: send => transportState.noteAdapterPhysicalSend(continuationEstimate, send),
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              pacingSlotAcquired: true,
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
               providerName: route.providerName,
               modelId: nextParsed.modelId,
@@ -205,7 +205,7 @@ export function createAdapterContinuations(
           : fetchWithResetRetry;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
-            noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind);
+            transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
               applyUpstreamRecoveryInit({

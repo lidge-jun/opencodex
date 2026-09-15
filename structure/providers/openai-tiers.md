@@ -567,3 +567,5 @@ Two call sites need the rule — the live path in `reevaluateAffinityQuota` and 
 `previewReusableAffinityAccount` that subagent fallback reads — and they share one helper rather
 than restating it, because the suite asserts the two answer identically and a preview that
 disagreed would hand fallback a different account than the request actually uses.
+
+Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
