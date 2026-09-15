@@ -329,6 +329,14 @@ for (const phase of ["pending", "committing"] as const) {
       // Neither arrival order may hide a still-owned flow's cancellation retry.
       if (order === "poll-first") {
         await reply(poll, { code: "unavailable" }, 503);
+        // DELETE is still unresolved: do not offer a replacement POST in this window.
+        expect(hook.state).toEqual({
+          phase, flowId: "A", verificationUrl: "https://auth.openai.com/codex/device",
+          deviceCode: "ABCD-1234",
+        });
+        expect(cancelButton()?.disabled).toBe(false);
+        expect(host.textContent).not.toContain("codexAuth.mainReauthDevice");
+        expect(requests.filter(pending => pending.method === "POST")).toHaveLength(1);
         await failCancellation();
       } else {
         await failCancellation();

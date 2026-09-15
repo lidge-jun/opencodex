@@ -75,6 +75,7 @@ function humanCode(value: unknown): string {
 export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
   const [state, setState] = useState<MainDeviceReauthState>({ phase: "idle" });
   const flowRef = useRef<string | null>(null);
+  const cancellationRequestedFlowRef = useRef<string | null>(null);
   const lastCancellableStateRef = useRef<CancellableState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const unmountedRef = useRef(false);
@@ -91,6 +92,7 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
       setState({ phase: "idle" });
       return;
     }
+    cancellationRequestedFlowRef.current = flowId;
     try {
       const res = await fetch(`${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`, { method: "DELETE" });
       const dto = await res.json().catch(() => ({})) as FlowDto;
@@ -131,6 +133,7 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
   const start = useCallback(async () => {
     stopPolling();
     flowRef.current = null;
+    cancellationRequestedFlowRef.current = null;
     lastCancellableStateRef.current = null;
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -170,12 +173,16 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
         const dto = await res.json().catch(() => ({})) as FlowDto;
         if (!isCurrent() || flowRef.current !== flowId) return;
         if (!res.ok) {
-          // A failed cancellation still owns the server flow. A racing HTTP
-          // polling failure must not replace its retry control with Re-login.
-          setState(current => (current.phase === "pending" || current.phase === "committing")
-            && current.flowId === flowId && current.cancelFailed
-            ? current
-            : { phase: "failed", code: failureCode(dto.code) });
+          // Ownership continues from the Cancel click, including while DELETE
+          // is unresolved. Never offer a replacement POST during that window.
+          const cancellationRequested = cancellationRequestedFlowRef.current === flowId;
+          setState(current => {
+            if (!isCurrent() || flowRef.current !== flowId) return current;
+            return (current.phase === "pending" || current.phase === "committing")
+              && current.flowId === flowId && (cancellationRequested || current.cancelFailed)
+              ? current
+              : { phase: "failed", code: failureCode(dto.code) };
+          });
           return;
         }
         lastUrl = allowedVerificationUrl(dto.verificationUrl) || lastUrl;
