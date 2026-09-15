@@ -112,12 +112,13 @@ describe("server 429 key failover (end-to-end)", () => {
     }, 15_000,
   );
 
-  test.each(["exhausted", "continuation", "transient", "budget-exhausted", "unpooled"] as const)(
+  test.each(["exhausted", "continuation", "transient", "budget-exhausted", "recovery-success", "unpooled"] as const)(
     "429 rotation stays request-bounded after every earlier cooldown expires (%s)",
     async mode => {
       const originalFetch = globalThis.fetch;
       const endpoint = "https://key429-fixture.invalid/v1/chat/completions";
-      const expectedSends = mode === "exhausted" ? 2 : mode === "budget-exhausted" ? 4 : 3;
+      const usesFinalReserve = mode === "budget-exhausted" || mode === "recovery-success";
+      const expectedSends = mode === "exhausted" ? 2 : usesFinalReserve ? 4 : 3;
       const seen: string[] = [];
       const cancelled: number[] = [];
       let now = Date.now();
@@ -129,10 +130,10 @@ describe("server 429 key failover (end-to-end)", () => {
           adapter: "openai-chat", baseUrl: "https://key429-fixture.invalid/v1", authMode: "key",
           apiKey: mode === "unpooled" ? "synthetic-key-outside" : "synthetic-key-a", apiKeyPool: [
             { id: "a", key: "synthetic-key-a" }, { id: "b", key: "synthetic-key-b" },
-            ...(mode === "budget-exhausted" ? [{ id: "c", key: "synthetic-key-c" }] : []),
+            ...(usesFinalReserve ? [{ id: "c", key: "synthetic-key-c" }] : []),
           ],
           ...(mode === "continuation" ? { terminalContinuationGuard: true } : {}),
-          ...(mode === "transient" || mode === "budget-exhausted" ? { transientRetryOn5xx: { enabled: true, attempts: 3 } } : {}),
+          ...(mode === "transient" || usesFinalReserve ? { transientRetryOn5xx: { enabled: true, attempts: 3 } } : {}),
         } },
       } as OcxConfig;
       try {
@@ -149,13 +150,19 @@ describe("server 429 key failover (end-to-end)", () => {
           const send = seen.length;
           // Retry-After: 0 means a 1ms cooldown. Every subsequent response arrives after it.
           now += 1_000;
+          if (mode === "recovery-success" && send === 4) {
+            return Response.json({ id: "chatcmpl-final-recovery", object: "chat.completion",
+              choices: [{ index: 0, message: { role: "assistant", content: "recovered-with-final-send" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+            });
+          }
           if (mode === "continuation" && send === 2) {
             return Response.json({ id: "chatcmpl-plan", object: "chat.completion",
               choices: [{ index: 0, message: { role: "assistant", content: "I will edit the file now." }, finish_reason: "stop" }],
               usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
             });
           }
-          const status = (mode === "transient" && send === 1) || (mode === "budget-exhausted" && send < 3) ? 503 : 429;
+          const status = (mode === "transient" && send === 1) || (usesFinalReserve && send < 3) ? 503 : 429;
           const text = JSON.stringify({ error: { message: `key429-final-${send}`, type: "rate_limit_error" } });
           const bytes = new TextEncoder().encode(text);
           const body = new ReadableStream<Uint8Array>({
@@ -179,7 +186,7 @@ describe("server 429 key failover (end-to-end)", () => {
         expect(seen).toHaveLength(expectedSends);
         expect(seen).toEqual(mode === "unpooled"
           ? ["Bearer synthetic-key-outside", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
-          : mode === "budget-exhausted"
+          : usesFinalReserve
           ? ["Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
           : mode === "transient"
           ? ["Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
@@ -187,7 +194,11 @@ describe("server 429 key failover (end-to-end)", () => {
             ? ["Bearer synthetic-key-a", "Bearer synthetic-key-b", "Bearer synthetic-key-b"]
             : ["Bearer synthetic-key-a", "Bearer synthetic-key-b"]);
         // Exhausted initial rotation must not cancel the final error it returns to the caller.
-        if (mode !== "continuation") {
+        if (mode === "recovery-success") {
+          // The admission probe must not spend the reserve before the real B dispatch.
+          expect(result.status).toBe(200);
+          expect(text).toContain("recovered-with-final-send");
+        } else if (mode !== "continuation") {
           expect(result.status).toBe(429);
           expect(result.headers.get("retry-after")).toBe("0");
           expect(text).toContain(`key429-final-${expectedSends}`);
@@ -196,8 +207,8 @@ describe("server 429 key failover (end-to-end)", () => {
           // A continuation error is represented inside the already-started Responses result.
           expect(text).toContain("key429-final-3");
         }
-        expect(cancelled).toContain(mode === "budget-exhausted" ? 3 : mode === "transient" ? 2 : 1);
-        expect(getKeyCooldownUntil("key429fixture", "b", now)).toBe(now + 1);
+        expect(cancelled).toContain(usesFinalReserve ? 3 : mode === "transient" ? 2 : 1);
+        expect(getKeyCooldownUntil("key429fixture", "b", now)).toBe(mode === "recovery-success" ? null : now + 1);
       } finally {
         globalThis.fetch = originalFetch;
         restoreClock?.();

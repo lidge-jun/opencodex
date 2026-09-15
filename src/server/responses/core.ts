@@ -8107,14 +8107,17 @@ async function handleResponsesInner(
     if (!policy) return true;
     if (!Number.isInteger(policy.attempts) || policy.attempts <= 0) return false;
     if (remainingTransientSendBudget(policy.attempts) > 0) return true;
-    // Continuations currently draw base sends only. The initial recovery can use the existing
-    // auth-recovery reserve; checking this decision does not consume a permit or add allowance.
+    // Continuations currently draw base sends only. Probe the initial recovery reserve,
+    // then release its unused reservation: rebuildAndRefetch owns the actual send permit.
     if (continuation || !isRequestExecutionBudget(sendBudget)) return false;
-    return sendBudget.reserveDispatch({
+    const decision = sendBudget.reserveDispatch({
       sendClass: "auth-recovery",
       targetKey: `${route.providerName}|${route.modelId}|key-429`,
       countedExternally: true,
-    }).allowed;
+    });
+    if (!decision.allowed) return false;
+    decision.permit.release();
+    return true;
   };
 
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
