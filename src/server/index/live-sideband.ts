@@ -12,9 +12,34 @@ import {
 } from "../ws-bridge";
 import type { Server, ServerWebSocket } from "bun";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "../live";
+import { RESPONSE_TTL_MS } from "../../responses/state";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
+/**
+ * 0 means Bun never closes an idle socket, and this one value covers every socket kind the
+ * server accepts — the live sideband relay, where a quiet call is normal, and the Responses data
+ * plane, where quiet means the client is simply between turns.
+ *
+ * It is coupled to `RESPONSE_TTL_MS` whether or not anyone says so, which is why it is said here.
+ * A codex-rs client caches its `WebsocketSession` across turns and chains `previous_response_id`
+ * onto it; it only clears `last_request`/`last_response_rx` when it finds the connection closed.
+ * So a socket that outlives retention is a client that keeps referencing continuation state this
+ * process has already evicted. Two settings can hold that line and only these two:
+ *
+ * - a FINITE idle timeout below `MAX_WEBSOCKET_IDLE_TIMEOUT_SECONDS`, which closes the socket
+ *   first and lets the client reset its own chain, or
+ * - this 0, which obliges the proxy to fail closed on the expired reference instead —
+ *   `server/responses/request-prepare.ts` returns `previous_response_not_found`, the error
+ *   codex-rs recognizes on a WebSocket turn and answers by replaying its full input.
+ *
+ * What must never happen is neither: an immortal socket plus a destination that silently accepts
+ * the orphaned delta. `tests/responses/ws-endpoint.test.ts` holds exactly that pair together.
+ * Raising the timeout off 0 is still worth doing for its own reasons (a dead peer holds a socket
+ * forever today), and Bun caps the value at 255 seconds, well inside the bound below.
+ */
 export const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
+/** Ceiling a finite websocket idle timeout must stay under, in seconds. See above. */
+export const MAX_WEBSOCKET_IDLE_TIMEOUT_SECONDS = Math.floor(RESPONSE_TTL_MS / 1_000);
 
 const LIVE_SIDEBAND_PENDING_MAX = 32;
 const LIVE_SIDEBAND_PENDING_BYTES_MAX = 1024 * 1024;

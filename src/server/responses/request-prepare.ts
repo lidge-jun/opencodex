@@ -96,6 +96,7 @@ import { slugsEquivalent } from "../../providers/slug-codec";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { hasUnmappedRoutedCustomToolOutput } from "../../responses/custom-tool-compat";
+import { PROVIDER_OWNED_CONTINUATION_WIRES, resolvedAdapterWire } from "../../responses/continuation-ownership";
 import {
   isCodexReserveHelperUnsupported,
   CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE,
@@ -799,12 +800,23 @@ export async function prepareResponsesRequest(
 
   if (hasUnexpandedPreviousResponse) {
     const continuationProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
-    // Stateless destinations cannot resolve the omitted prefix. Stateful destinations may,
-    // but a lowered custom result still needs its call to recover the original wire type.
-    // Native function/custom continuations without lowering keep their upstream-owned state.
-    if (continuationProvider.adapter === "openai-responses"
-      && (continuationProvider.statelessResponses === true
-        || hasUnmappedRoutedCustomToolOutput(parsed._rawBody, continuationProvider.supportsResponsesCustomTools))) {
+    // Can the DESTINATION see the history this process failed to restore? Only the native
+    // Responses passthrough can: it forwards previous_response_id to a backend that stored the
+    // chain. Every translated wire rebuilds the conversation from this request's input alone —
+    // including the three that look stateful, for the reasons recorded in
+    // responses/continuation-ownership.ts — so a replay miss there is not a degraded turn. It is
+    // the entire conversation deleted, with one user line left in its place and nothing in the
+    // response saying so. Refuse before auth or upstream I/O and let the client resend.
+    const continuationWire = resolvedAdapterWire(continuationProvider.adapter);
+    const upstreamOwnsOmittedHistory = continuationWire === "openai-responses"
+      // Stateless destinations cannot resolve the omitted prefix. Stateful destinations may,
+      // but a lowered custom result still needs its call to recover the original wire type.
+      // Native function/custom continuations without lowering keep their upstream-owned state.
+      ? !(continuationProvider.statelessResponses === true
+        || hasUnmappedRoutedCustomToolOutput(parsed._rawBody, continuationProvider.supportsResponsesCustomTools))
+      // An unknown adapter is left to the resolution error it already raises below.
+      : continuationWire === undefined || PROVIDER_OWNED_CONTINUATION_WIRES.has(continuationWire);
+    if (!upstreamOwnsOmittedHistory) {
       return formatErrorResponse(
         400,
         "previous_response_not_found",

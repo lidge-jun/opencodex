@@ -331,7 +331,20 @@ no new destination-based migration. The existing stateless pass sets `store: fal
 stored continuation parameters, and repairs orphan calls/results without claiming execution
 success. A local replay-cache hit supplies history; a miss cannot reconstruct it, so callers
 receive `previous_response_not_found` before upstream dispatch and must resend complete history
-without `previous_response_id`. Routed custom-tool lowering requires the same recovery when a delta
+without `previous_response_id`. That refusal is not specific to the stateless flag: it covers every
+destination that cannot see the prefix this process failed to restore, which is every destination
+except the native Responses passthrough. The passthrough forwards the id and keeps its
+upstream-owned state. `PROVIDER_OWNED_CONTINUATION_WIRES` in
+`src/responses/continuation-ownership.ts` is deliberately empty and records why the three
+candidates do not qualify: devin re-sends the whole conversation each turn, cursor reads its
+`checkpointRef` out of the same expired store and otherwise falls back to `full-replay`, and kiro
+rebuilds `conversationState.history` from the turns it was handed. A missed expansion on any of
+them would forward the current turn alone under a normal 200 — the whole conversation replaced by
+one line, with nothing in the response saying so. This also replaces kiro's former
+`invalid_request_error`, which told the client to start a new session and therefore skipped the
+recovery Codex performs on `previous_response_not_found`. Retention is the other half: local
+continuation state is held for `RESPONSE_TTL_MS` (24 hours), long enough that an ordinary idle gap
+resumes by expansion rather than by asking the client to replay. Routed custom-tool lowering requires the same recovery when a delta
 custom result has no local call, because its original wire type cannot be established and guessing it
 would send an unmatched result upstream. The check resolves the selected wire protocol and the
 request's own tool declarations after final route selection, so stateful destinations keep their

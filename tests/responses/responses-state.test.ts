@@ -2173,7 +2173,7 @@ describe("Responses previous_response_id state", () => {
     const realNow = Date.now;
     setResponseStateByteCapForTests(1_024);
     try {
-      Date.now = () => realNow() - 2 * 60 * 60 * 1_000;
+      Date.now = () => realNow() - 25 * 60 * 60 * 1_000;
       rememberLarge("resp_ttl_spill", "t".repeat(8_000));
       const ttlFile = spillFileNames(home)[0]!;
       Date.now = realNow;
@@ -2775,8 +2775,8 @@ describe("Responses previous_response_id state", () => {
     try {
       const realNow = Date.now;
       try {
-        // Store an old heavy entry, then advance time past the 1h TTL.
-        Date.now = () => realNow() - 2 * 60 * 60 * 1_000;
+        // Store an old heavy entry, then advance time past the 24h RESPONSE_TTL_MS.
+        Date.now = () => realNow() - 25 * 60 * 60 * 1_000;
         const oldBody = { model: "cursor/grok-4.5", input: "o".repeat(6_000), store: false };
         const oldJson = buildResponseJSON([{ type: "text_delta", text: "ok" }, { type: "done" }], "cursor/grok-4.5");
         rememberResponseState(oldBody, oldJson, { cursor: { conversationId: "conv_old" } }, { force: true });
@@ -3228,12 +3228,12 @@ describe("Responses previous_response_id state", () => {
     await flushResponseState();
     clearResponseStateMemoryForTests();
 
-    // Rewrite the snapshot with an expired createdAt (2h ago > 1h TTL).
+    // Rewrite the snapshot with a createdAt past the 24h RESPONSE_TTL_MS.
     const path = join(home, "responses-state.json");
     const snapshot = JSON.parse(readFileSync(path, "utf-8")) as {
       states: [string, { createdAt: number }][];
     };
-    for (const [, state] of snapshot.states) state.createdAt = Date.now() - 2 * 60 * 60 * 1_000;
+    for (const [, state] of snapshot.states) state.createdAt = Date.now() - 25 * 60 * 60 * 1_000;
     writeFileSync(path, JSON.stringify(snapshot));
 
     const second = {

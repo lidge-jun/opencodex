@@ -639,14 +639,6 @@ export async function prepareResponsesTransport(
     );
   }
 
-  if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
-    return formatErrorResponse(
-      400,
-      "invalid_request_error",
-      "Kiro continuation state is missing; start a new session instead of reusing this previous_response_id.",
-    );
-  }
-
   return {
     isOAuth401ReplayProvider,
     get sentOAuthSnapshot(): OAuthAccessSnapshot | undefined {

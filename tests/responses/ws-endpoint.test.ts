@@ -10,6 +10,11 @@ import {
   sendResponseToWebSocket,
   type WsData,
 } from "../../src/server/ws-bridge";
+import {
+  MAX_WEBSOCKET_IDLE_TIMEOUT_SECONDS,
+  WEBSOCKET_IDLE_TIMEOUT_SECONDS,
+} from "../../src/server/index/live-sideband";
+import { RESPONSE_TTL_MS } from "../../src/responses/state";
 import type { ServerWebSocket } from "bun";
 
 function mockWs(sendResult = 1): { ws: ServerWebSocket<WsData>; sent: string[] } {
@@ -54,6 +59,25 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(source).toContain("idleTimeout: WEBSOCKET_IDLE_TIMEOUT_SECONDS,");
     expect(source).toContain("finalizeLog(httpStatusForRequestLogTerminal(status, logCtx), {");
     expect(source).toContain("if (!logged) finalizeLog(turnAbort.signal.aborted ? 499 : response.status);");
+  });
+
+  test("an immortal websocket is paired with a proxy that fails closed on expired continuation state", () => {
+    // codex-rs reuses its cached WebsocketSession across turns and chains previous_response_id
+    // onto it, clearing that chain only when it finds the socket closed. So one of two things
+    // must be true, and this test refuses the third case where neither is.
+    const idleTimeout = WEBSOCKET_IDLE_TIMEOUT_SECONDS;
+    if (idleTimeout > 0) {
+      expect(idleTimeout).toBeLessThan(MAX_WEBSOCKET_IDLE_TIMEOUT_SECONDS);
+      return;
+    }
+    // The socket never closes on its own, so the refusal has to come from the request path.
+    const gate = readFileSync(
+      new URL("../../src/server/responses/request-prepare.ts", import.meta.url),
+      "utf8",
+    );
+    expect(gate).toContain("hasUnexpandedPreviousResponse");
+    expect(gate).toContain("previous_response_not_found");
+    expect(MAX_WEBSOCKET_IDLE_TIMEOUT_SECONDS).toBe(Math.floor(RESPONSE_TTL_MS / 1_000));
   });
 
   test("generate=false warmup completes locally without upstream and forces full next request", () => {
