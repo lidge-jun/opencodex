@@ -66,6 +66,11 @@ ordinary retained provider rows still receive the existing mock-tier policy. A p
 marker alone never grants this exemption. Both gather entry points, retained sync, management
 convergence and direct Codex model discovery use the same producer. The legacy runtime effort
 union clamp remains separate; it is not a per-model or per-client-version grammar oracle.
+Before combo derivation, an explicit custom-model context, modality, reasoning, or
+tool-mode declaration overlays the matching provider member in the private combo input map. This
+keeps a combo's advertised intersection aligned with the final custom row without changing the
+provider-native row or inventing capabilities for other models. Public custom-row materialization
+and routed-slug deduplication remain the final catalog owner's responsibility.
 Codex's native `ultra` mode is preserved and is not a literal API wire promise.
 When account selectors are enabled, the sync path may also observe exact, visible, API-supported
 OpenAI-family ids from Codex's user-owned catalog/cache. Only rows with native catalog provenance

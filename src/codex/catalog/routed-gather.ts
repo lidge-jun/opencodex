@@ -359,6 +359,42 @@ async function gatherRoutedModelsUncached(
     .filter(shouldExposeRoutedModel);
   const memberByKey = new Map(all.map(model => [`${model.provider}/${model.id}`, model]));
   // [Decision Log]
+  // - 목적과 의도: combo derivation must see the same explicit custom-model capabilities that the
+  //   final Models inventory publishes. Previously customModels were materialized only after this
+  //   map had already derived every combo, so one row could say image while its combo said text.
+  // - 기존 구현 및 제약 조건: provider/discovery rows remain the inheritance source, and custom
+  //   rows must not globally invent capabilities for the provider-native model id.
+  // - 검토한 주요 대안: move the full custom-row materializer ahead of combos, or overlay only the
+  //   explicit custom fields onto this private derivation map.
+  // - 선택한 방식: overlay the explicit fields here; the existing final materializer stays the
+  //   single owner of public custom-row construction and deduplication.
+  // - 다른 대안 대신 이 방식을 선택한 이유: moving the large materializer would reorder public
+  //   catalog production and warning behavior, while this map is already private to combo input.
+  // - 장점, 단점 및 영향: custom context/modality/reasoning/tool-mode declarations now constrain
+  //   their combos without widening unrelated rows; inherited fields still come from the same row.
+  for (const custom of config.customModels ?? []) {
+    const key = `${custom.provider}/${custom.modelId}`;
+    const inherited = memberByKey.get(key) ?? {
+      provider: custom.provider,
+      id: custom.modelId,
+      owned_by: custom.provider,
+    };
+    memberByKey.set(key, {
+      ...inherited,
+      catalogKind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
+      ...(typeof custom.contextWindow === "number" && custom.contextWindow > 0
+        ? { contextWindow: custom.contextWindow }
+        : {}),
+      ...(Array.isArray(custom.inputModalities)
+        ? { inputModalities: [...custom.inputModalities] }
+        : {}),
+      ...(Array.isArray(custom.reasoningEfforts)
+        ? { reasoningEfforts: [...custom.reasoningEfforts] }
+        : {}),
+      ...(custom.codexToolMode !== undefined ? { codexToolMode: custom.codexToolMode } : {}),
+    });
+  }
+  // [Decision Log]
   // - 목적과 의도: 콤보 타겟에 native OpenAI(Codex login) 모델이 포함될 때 카탈로그에서
   //   누락되는 버그(issue #268)를 수정. "openai" provider는 forward-auth(Codex login
   //   passthrough)이므로 fetchProviderModels가 항상 []를 반환하고, native slugs는

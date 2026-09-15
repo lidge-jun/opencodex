@@ -1164,6 +1164,63 @@ describe("combo catalog capability intersection", () => {
     }
   }, 15_000);
 
+  test("combo derivation uses an explicit custom-model image declaration (#4689)", async () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "custom-upstream",
+      providers: {
+        "custom-upstream": {
+          adapter: "openai-chat",
+          baseUrl: "https://custom.example/v1",
+          liveModels: false,
+          models: ["manually-added-image-model"],
+          modelContextWindows: { "manually-added-image-model": 256_000 },
+        },
+        "known-image": {
+          adapter: "openai-chat",
+          baseUrl: "https://image.example/v1",
+          liveModels: false,
+          models: ["image-model"],
+          modelContextWindows: { "image-model": 128_000 },
+          modelInputModalities: { "image-model": ["text", "image"] },
+          modelReasoningEfforts: { "image-model": ["low", "high"] },
+          codexToolMode: "shell",
+        },
+      },
+      customModels: [{
+        id: "custom-image-row",
+        provider: "custom-upstream",
+        modelId: "manually-added-image-model",
+        contextWindow: 96_000,
+        inputModalities: ["text", "image"],
+        reasoningEfforts: ["low", "high"],
+        codexToolMode: "shell",
+      }],
+      combos: {
+        image_failover: {
+          strategy: "failover",
+          targets: [
+            { provider: "custom-upstream", model: "manually-added-image-model" },
+            { provider: "known-image", model: "image-model" },
+          ],
+        },
+      },
+    };
+
+    const models = await gatherRoutedModels(config);
+    expect(models.find(model => (
+      model.provider === "custom-upstream" && model.id === "manually-added-image-model"
+    ))?.inputModalities).toEqual(["text", "image"]);
+    expect(models.find(model => (
+      model.provider === "combo" && model.id === "image_failover"
+    ))).toMatchObject({
+      contextWindow: 96_000,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "high"],
+      codexToolMode: "shell",
+    });
+  });
+
   test("native aliases use native capability fallbacks when discovery returns only an id", async () => {
     const config: OcxConfig = {
       port: 10100,
