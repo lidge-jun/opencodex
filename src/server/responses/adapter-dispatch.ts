@@ -29,6 +29,7 @@ import {
 } from "../../providers/key-failover";
 import {
   fetchWithTransientRetry,
+  TRANSIENT_RETRY_MAX_ATTEMPTS,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
   SendBudgetExhaustedError,
@@ -127,6 +128,9 @@ export async function prepareAdapterExchange(
     | "recoveryClassFor"
     | "sendBudgetExhausted"
     | "reserveCredentialHop"
+    | "pendingHopPermit"
+    | "keyPoolFailovers"
+    | "keyPool429RetryAllowed"
   >,
 ) {
   const { options, config, logCtx, req } = requestContext;
@@ -171,6 +175,7 @@ export async function prepareAdapterExchange(
     ? Math.floor(config.stallTimeoutSec * 1000)
     : 300_000;
   transportState.activeAdapter = transportState.adapter;
+  const keyPool429RetryAllowed = () => sendBudgetState.keyPool429RetryAllowed(!!transportState.activeAdapter.fetchResponse);
 
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // auth headers, generated compat headers). Same-target 429 replays reuse it verbatim; the
@@ -315,15 +320,9 @@ export async function prepareAdapterExchange(
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
-          ...(transientPolicy
-            // Draws the remainder, not the raw policy. A combo child inherits the parent's
-            // holder but used to take a fresh full allowance on its own first send, so the
-            // shared counter was inherited without ever being read as a limit.
-            ? {
-              attempts: remainingTransientSendBudget(transientPolicy.attempts),
-              onSendsConsumed: noteTransientSends,
-            }
-            : {}),
+          // Count both retry policies; reset-only still hops immediately on HTTP 5xx.
+          attempts: remainingTransientSendBudget(transientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS),
+          onSendsConsumed: noteTransientSends,
         },
       );
     }
@@ -448,13 +447,11 @@ export async function prepareAdapterExchange(
           // Same rule as the passthrough rebuild: spend the base allowance first, then the one
           // shared final-recovery reserve, so a recovery that follows a spent streak still gets
           // its single send instead of dying at three.
-          const refetchAllowance = refetchTransientPolicy
-            ? recoverySendAllowance(
-              refetchTransientPolicy.attempts,
-              recoveryClassFor(recovery),
-              `${route.providerName}|${route.modelId}|${recovery}`,
-            )
-            : undefined;
+          const refetchAllowance = recoverySendAllowance(
+            refetchTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS,
+            recoveryClassFor(recovery),
+            `${route.providerName}|${route.modelId}|${recovery}`,
+          );
           try {
             return await refetchWithPolicy(
               recoveryKind => {
@@ -644,8 +641,10 @@ export async function prepareAdapterExchange(
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
           promptCacheKey: parsed.options.promptCacheKey,
+          allowRotation: keyPool429RetryAllowed(),
         });
         if (!rotated) break;
+        sendBudgetState.keyPoolFailovers += 1;
         // Release the failed response's socket before retrying; unread bodies otherwise linger
         // until runtime cleanup (one per rotated key under a rate-limit storm).
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -725,6 +724,7 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
+          !transportState.activeAdapter.fetchResponse,
         );
         if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOn429(
@@ -755,22 +755,22 @@ export async function prepareAdapterExchange(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-          // Confirm at the dispatch boundary, not here: a rebuild can fail while shaping the
-          // request and return `{ failed }` without reaching the wire, and a permit confirmed
-          // before that would hold the charge for a send that never happened.
-          const result = await rebuildAndRefetch("oauth-account-429", () => { hop.permit?.use(); });
-          if ("failed" in result) {
-            // A no-op if the boundary was reached; a refund if the rebuild died before it.
+          // Retry helpers settle the externally counted hop themselves. Adapter-owned
+          // sends confirm only after pacing, preserving the release-on-rebuild-failure fix.
+          sendBudgetState.pendingHopPermit = transportState.activeAdapter.fetchResponse ? undefined : hop.permit;
+          try {
+            const result = await rebuildAndRefetch("oauth-account-429",
+              transportState.activeAdapter.fetchResponse ? () => { hop.permit?.use(); } : undefined);
+            if ("failed" in result) return result.failed;
+            upstreamResponse = result;
+          } finally {
+            sendBudgetState.pendingHopPermit = undefined;
+            // Idempotent: refund only an unused reservation, never a dispatched send.
             hop.permit?.release();
-            return result.failed;
           }
-          upstreamResponse = result;
         } catch {
-          // A throw before the send — snapshot fetch, credential application, adapter
-          // resolution — must hand the reservation back. Without this the ladder charges the
-          // request for a send it never made, and a later recovery in the same request is
-          // refused on an allowance nothing spent. release() is idempotent and a no-op once
-          // used, so a throw from the rebuild keeps its charge.
+          // Snapshot, credential and adapter-resolution failures may precede dispatch.
+          // Both adapter and retry-helper paths must refund an unused reservation.
           hop.permit?.release();
           break;
         }
@@ -954,6 +954,7 @@ export async function prepareAdapterExchange(
 
   return {
     upstream,
+    keyPool429RetryAllowed,
     cleanupUpstreamAbort,
     connectMs,
     stallTimeoutMs,

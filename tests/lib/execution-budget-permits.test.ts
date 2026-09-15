@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { comboExecutionBudgetPolicy, comboTargetSendBudget, deriveSendBudgetScope } from "../../src/server/responses/combo-send-budget";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
@@ -126,6 +127,136 @@ describe("atomic dispatch permits", () => {
   });
 });
 
+describe("combo scopes share reservation accounting", () => {
+  test("a prepaid compact handoff survives an intermediate scope without a second charge", () => {
+    const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const hop = parent.reserveDispatch({ sendClass: "initial", targetKey: "handoff", countedExternally: true });
+    if (!hop.allowed) throw new Error("expected hop");
+    const handoff = deriveSendBudgetScope(parent, ONE_SEND_LEFT, hop.permit);
+    const combo = deriveSendBudgetScope(handoff, ONE_SEND_LEFT);
+    expect(combo.remainingBaseSends(3)).toBe(1);
+    const first = combo.reserveDispatch({ sendClass: "initial", targetKey: "combo", countedExternally: true });
+    expect(first.allowed).toBe(true);
+    if (!first.allowed) throw new Error("prepaid send lost");
+    first.permit.use(); parent.used += 1;
+    expect(parent.used).toBe(1);
+    expect(handoff.reserveDispatch({ sendClass: "initial", targetKey: "duplicate" }).allowed).toBe(false);
+  });
+
+  test("a combo handoff keeps its prepaid recovery and cannot enlarge the compact ceiling", () => {
+    const parent = createRequestExecutionBudget(); parent.used = 3;
+    const hop = parent.reserveDispatch({ sendClass: "account-failover", targetKey: "handoff", countedExternally: true });
+    if (!hop.allowed) throw new Error("expected recovery");
+    const handoff = deriveSendBudgetScope(parent, { ...parent.policy, baseSendAllowance: 4, finalRecoveryAllowance: 0 }, hop.permit);
+    const combo = deriveSendBudgetScope(handoff, comboExecutionBudgetPolicy(3));
+    expect(combo.policy.maxTotalModelSends).toBe(4);
+    const booked = combo.reserveDispatch({ sendClass: "initial", targetKey: "first", countedExternally: true });
+    if (!booked.allowed) throw new Error("lost prepaid recovery");
+    const target = comboTargetSendBudget(combo, 2, booked.permit);
+    expect(target.remainingBaseSends(3)).toBe(1);
+    const physical = target.reserveDispatch({ sendClass: "transient", targetKey: "first" });
+    expect(physical.allowed).toBe(true);
+    expect(parent.used).toBe(4);
+    expect(combo.reserveDispatch({ sendClass: "combo-failover", targetKey: "second" }).allowed).toBe(false);
+  });
+
+  test("a child sees the last send reserved by its parent before dispatch", () => {
+    const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const child = deriveSendBudgetScope(parent, ONE_SEND_LEFT);
+    const reserved = parent.reserveDispatch({ sendClass: "initial", targetKey: "parent" });
+    expect(reserved.allowed).toBe(true);
+    expect(child.remainingBaseSends(5)).toBe(0);
+    expect(child.reserveDispatch({ sendClass: "initial", targetKey: "child" }).allowed).toBe(false);
+  });
+
+  test("child release refunds the shared booking and external reports settle it once", () => {
+    const parent = createRequestExecutionBudget();
+    const child = deriveSendBudgetScope(parent, parent.policy);
+    const first = child.reserveDispatch({ sendClass: "initial", targetKey: "child", countedExternally: true });
+    if (!first.allowed) throw new Error("expected first permit");
+    expect(parent.used).toBe(1);
+    first.permit.release();
+    expect(parent.used).toBe(0);
+    const sent = child.reserveDispatch({ sendClass: "initial", targetKey: "child", countedExternally: true });
+    if (!sent.allowed) throw new Error("expected second permit");
+    parent.used += 1;
+    expect(child.used).toBe(1);
+    sent.permit.release();
+    expect(parent.used).toBe(1);
+    child.used += 1;
+    expect(parent.used).toBe(2);
+  });
+
+  test("three failed targets cannot each refill the request-wide ladder", () => {
+    const parent = createRequestExecutionBudget();
+    const combo = deriveSendBudgetScope(parent, comboExecutionBudgetPolicy(3));
+    let sends = 0;
+    const byTarget: number[] = [];
+    for (let target = 0; target < 3; target++) {
+      const scope = comboTargetSendBudget(combo, 2 - target);
+      const before = sends;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const decision = scope.reserveDispatch({ sendClass: attempt === 0 ? "initial" : "auth-recovery", targetKey: `target-${target}` });
+        if (!decision.allowed) break;
+        expect(decision.permit.use()).toBe(true);
+        sends++;
+      }
+      byTarget.push(sends - before);
+    }
+    expect(byTarget).toEqual([4, 1, 1]);
+    expect(sends).toBe(combo.policy.maxTotalModelSends);
+    expect(parent.used).toBe(sends);
+    expect(combo.remainingBaseSends(100)).toBe(0);
+  });
+
+  test("target transition ledgers remain local to each scope", () => {
+    const parent = createRequestExecutionBudget(comboExecutionBudgetPolicy(4));
+    for (const name of ["a", "b"]) {
+      const child = deriveSendBudgetScope(parent, parent.policy);
+      for (const key of [name, `${name}-alternate`]) {
+        const decision = child.reserveDispatch({ sendClass: "auth-recovery", targetKey: key });
+        expect(decision.allowed).toBe(true);
+        if (decision.allowed) decision.permit.use();
+      }
+      expect(child.targetTransitions).toBe(1);
+    }
+    expect(parent.targetTransitions).toBe(0);
+    expect(parent.used).toBe(4);
+  });
+
+  test("two external reporters cannot adopt the same prepaid hop", () => {
+    const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const hop = parent.reserveDispatch({ sendClass: "initial", targetKey: "combo", countedExternally: true });
+    if (!hop.allowed) throw new Error("expected hop");
+    hop.permit.use();
+    const first = deriveSendBudgetScope(parent, ONE_SEND_LEFT, hop.permit);
+    const second = deriveSendBudgetScope(parent, ONE_SEND_LEFT, hop.permit);
+    expect(first.reserveDispatch({ sendClass: "transient", targetKey: "a", countedExternally: true }).allowed).toBe(true);
+    expect(second.reserveDispatch({ sendClass: "transient", targetKey: "b", countedExternally: true }).allowed).toBe(false);
+    parent.used += 1;
+    expect(parent.used).toBe(1);
+  });
+
+  test("an adapter adopts its exact prepaid hop once and can return it before dispatch", () => {
+    const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const hop = parent.reserveDispatch({ sendClass: "initial", targetKey: "combo", countedExternally: true });
+    if (!hop.allowed) throw new Error("expected hop");
+    hop.permit.use();
+    const child = deriveSendBudgetScope(parent, ONE_SEND_LEFT, hop.permit);
+    expect(child.remainingBaseSends(3)).toBe(1);
+    const first = child.reserveDispatch({ sendClass: "initial", targetKey: "adapter" });
+    if (!first.allowed) throw new Error("expected prepaid initial send");
+    expect(parent.used).toBe(1);
+    first.permit.release();
+    expect(child.remainingBaseSends(3)).toBe(1);
+    const retry = child.reserveDispatch({ sendClass: "initial", targetKey: "adapter" });
+    if (!retry.allowed) throw new Error("expected returned booking");
+    expect(retry.permit.use()).toBe(true);
+    expect(parent.used).toBe(1);
+    expect(child.reserveDispatch({ sendClass: "transient", targetKey: "adapter" }).allowed).toBe(false);
+  });
+});
+
 describe("layer caps intersect the shared budget", () => {
   test("a roster credential hop walks within the shared total; a cross-pool move does not", () => {
     // The two classes answer different questions and must not be conflated. A credential
@@ -249,8 +380,18 @@ describe("generic-OAuth hop reservations are handed back when no send happens", 
       "adapter-recovery-oauth-429",
       "attemptOpaqueBlobRecovery",
     );
-    expect(block).toContain('rebuildAndRefetch("oauth-account-429", () => { hop.permit?.use(); })');
-    expect(block).toMatch(/if \("failed" in result\) \{[^}]*hop\.permit\?\.release\(\)/);
+    // The confirm callback is adapter-owned: when the adapter carries its own fetchResponse the
+    // dispatch boundary lives inside it, so the callback is handed down; otherwise the reservation
+    // is parked in pendingHopPermit for the retry helper to settle. Match the shape rather than an
+    // exact source substring, because an exact multi-line substring breaks on any reformatting in
+    // this block without the behaviour having changed.
+    expect(block).toMatch(/rebuildAndRefetch\(\s*"oauth-account-429",[\s\S]{0,240}?hop\.permit\?\.use\(\)/);
+    expect(block).toMatch(/pendingHopPermit = [^;]*fetchResponse \? undefined : hop\.permit/);
+    // The refund moved out of the failed arm and into a finally, so one idempotent release now
+    // covers the failed return, the success path and a throw. Assert that shape rather than a
+    // per-branch release that no longer exists.
+    expect(block).toMatch(/if \("failed" in result\) return result\.failed;/);
+    expect(block).toMatch(/finally \{[^}]*hop\.permit\?\.release\(\)/);
     expect(block).toMatch(refundsOnThrow);
   });
 

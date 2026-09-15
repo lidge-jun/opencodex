@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
@@ -95,6 +95,29 @@ describe("hasKeyPoolFailover", () => {
 });
 
 describe("rotateKeyOn429", () => {
+  test.each([false, true])("health-only 429 preserves selection ownership and disk bytes (superseded=%s)", superseded => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const routed = routedProviderConfig("p", config.providers.p);
+    if (superseded) {
+      expect(setActiveProviderApiKey(config, "p", "k2")).toBe(true);
+      expect(setActiveProviderApiKey(config, "p", "k1")).toBe(true);
+    }
+    const before = readFileSync(getConfigPath(), "utf8");
+    const events: unknown[] = [];
+    const unsubscribe = subscribeAccountSelections(event => { events.push(event); });
+    const now = 10_000;
+    try {
+      expect(rotateProviderTransportOn429(config, "p", routed, {
+        allowRotation: false, attemptedKey: routed.apiKey, retryAfter: "2", now,
+      })).toBeNull();
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+      expect(loadConfig().providers.p.apiKey).toBe("key-alpha-000111222333");
+      expect(events).toEqual([]);
+      expect(getKeyCooldownUntil("p", "k1", now)).toBe(superseded ? null : now + 2_000);
+      expect(getKeyCooldownUntil("p", "k2", now)).toBeNull();
+    } finally { unsubscribe(); }
+  });
+
   test("an old attempt cannot overwrite a newer manual key selection or its ABA revision", () => {
     const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
     const routed = routedProviderConfig("p", config.providers.p);

@@ -74,7 +74,7 @@ export async function executeResponsesSidecars(
     | "notifyResponseComplete"
     | "cancelResponseCompletion"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "reserveCredentialHop">,
+  sendBudgetState: Pick<ResponsesSendBudget, "reserveCredentialHop" | "keyPoolFailovers" | "maxKeyPoolFailovers">,
 ) {
   const { config, options, logCtx } = requestContext;
   const {
@@ -159,8 +159,10 @@ export async function executeResponsesSidecars(
       now: Date.now(),
       attemptedKey: route.provider.apiKey,
       promptCacheKey: parsed.options.promptCacheKey,
+      allowRotation: sendBudgetState.keyPoolFailovers < sendBudgetState.maxKeyPoolFailovers,
     });
     if (rotated) {
+      sendBudgetState.keyPoolFailovers += 1;
       route.provider = rotated;
     } else if (
       // A POSITIVE gate, not an early return. An early `return null` here made every later arm

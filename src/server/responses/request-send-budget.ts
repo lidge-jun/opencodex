@@ -1,4 +1,6 @@
 import type { ResponsesRequestContext } from "./core-options";
+import type { PreparedResponsesRequest } from "./request-prepare";
+import { transientRetryPolicyFor } from "../../providers/key-failover";
 import { createRequestExecutionBudget, isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import { chargeWorkflowSends, workflowSendCeilingReached } from "../../lib/workflow-budget";
 import { workflowRefusalResponse } from "../workflow-refusal";
@@ -10,8 +12,16 @@ import type { SingleUseDispatchPermit, SendClass } from "../../lib/request-execu
 /** Owns the shared request send counter and recovery permits. */
 export function createResponsesSendBudget(
   requestContext: Pick<ResponsesRequestContext, "options" | "req" | "logCtx">,
+  requestState: Pick<PreparedResponsesRequest, "route">,
 ) {
   const { options, req, logCtx } = requestContext;
+  const { route } = requestState;
+  // Capture before sidecar dispatch; every phase shares this rotation count.
+  const initialKeyPool = route.provider.apiKeyPool ?? [];
+  const initialKeyReference = route.provider._apiKeyAttempt?.reference ?? route.provider.apiKey;
+  const initialKeyIsPooled = initialKeyPool.some(entry => entry.key === initialKeyReference);
+  const maxKeyPoolFailovers = Math.max(0, initialKeyPool.length - (initialKeyIsPooled ? 1 : 0));
+  let keyPoolFailovers = 0;
 
 
   // One transient-retry budget for the whole LOGICAL request, read ABOVE the passthrough branch
@@ -142,7 +152,29 @@ export function createResponsesSendBudget(
   const recoveryClassFor = (recovery: AttemptRecoveryKind): SendClass =>
     /401|429|oauth|rate-limit|key/.test(recovery) ? "auth-recovery" : "repair";
 
+  const keyPool429RetryAllowed = (adapterOwnsSends: boolean): boolean => {
+    if (keyPoolFailovers >= maxKeyPoolFailovers) return false;
+    if (adapterOwnsSends) return !adapterSendBudget
+      || adapterSendBudget.remainingBaseSends(adapterSendBudget.policy.baseSendAllowance) > 0;
+    const policy = transientRetryPolicyFor(route.provider);
+    const attempts = policy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+    if (!Number.isInteger(attempts) || attempts <= 0) return false;
+    if (remainingTransientSendBudget(attempts) > 0) return true;
+    if (!isRequestExecutionBudget(sendBudget)) return false;
+    const decision = sendBudget.reserveDispatch({
+      sendClass: "auth-recovery", targetKey: `${route.providerName}|${route.modelId}|key-429`,
+      countedExternally: true,
+    });
+    if (!decision.allowed) return false;
+    decision.permit.release();
+    return true;
+  };
+
   return {
+    maxKeyPoolFailovers,
+    get keyPoolFailovers() { return keyPoolFailovers; },
+    set keyPoolFailovers(value: number) { keyPoolFailovers = value; },
+    keyPool429RetryAllowed,
     workflowRootId,
     noteTransientSends,
     remainingTransientSendBudget,

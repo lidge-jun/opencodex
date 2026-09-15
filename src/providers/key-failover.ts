@@ -363,6 +363,7 @@ function rotateKeyAfterFailure(
   now = Date.now(),
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
+  allowRotation = true,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
@@ -381,6 +382,10 @@ function rotateKeyAfterFailure(
     const failedEntry = attemptedSelection?.entryId
       ? pool.find(entry => entry.id === attemptedSelection.entryId && entry.key === failedKey)
       : pool.find(entry => entry.key === failedKey);
+
+    // A spent request still records the failed key, but must not select or persist an
+    // unattempted replacement. Keep the fresh identity check and the changed:false path.
+    if (!allowRotation) return { changed: false, value: { failedId: failedEntry?.id } };
 
     if (freshProvider.apiKey !== failedKey) {
       const activeEntry = pool.find(entry => entry.key === freshProvider.apiKey);
@@ -410,6 +415,7 @@ function rotateKeyAfterFailure(
   }, attemptedSelection);
   if (outcome.status === "unavailable") return null;
   if (outcome.status === "superseded") {
+    if (!allowRotation) return null;
     // A newer manual selection (including A→B→A) owns subsequent dispatch. Reusing the
     // same failed key here would loop forever; preserve its original failure instead.
     return outcome.provider.apiKey !== failedKey ? structuredClone(outcome.provider) : null;
@@ -425,6 +431,7 @@ function rotateKeyAfterFailure(
     keyCooldowns.set(cooldownKey(providerName, outcome.value.failedId), { cooldownUntil: now + cooldownMs });
     sweepExpiredOnWrite(now);
   }
+  if (!allowRotation) return null;
   if ("exhaustedCount" in outcome.value) {
     console.warn(`[key-failover] ${providerName}: all ${outcome.value.exhaustedCount} keys in cooldown after ${failureStatus}; returning the upstream status to the client`);
     return null;
@@ -448,8 +455,9 @@ export function rotateKeyOn429(
   now = Date.now(),
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
+  allowRotation = true,
 ): OcxProviderConfig | null {
-  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection);
+  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection, allowRotation);
 }
 
 /**
@@ -486,6 +494,8 @@ interface RotateProviderTransportOptions {
   attemptedKey?: string;
   attemptedSelection?: ProviderApiKeySelection;
   promptCacheKey?: string;
+  /** False records a proven 429 cooldown without changing the selected key or returning a retry. */
+  allowRotation?: boolean;
 }
 
 /**
@@ -507,6 +517,7 @@ export function rotateProviderTransportOn429(
     options.now,
     options.attemptedKey,
     options.attemptedSelection ?? routedProvider._apiKeyAttempt,
+    options.allowRotation,
   );
   if (!rotated) return null;
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
@@ -517,7 +528,7 @@ export function rotateProviderTransportOn401(
   config: OcxConfig,
   providerName: string,
   routedProvider: OcxProviderTransport,
-  options: Omit<RotateProviderTransportOptions, "retryAfter"> = {},
+  options: Omit<RotateProviderTransportOptions, "retryAfter" | "allowRotation"> = {},
 ): OcxProviderTransport | null {
   const rotated = rotateKeyOn401(config, providerName, options.now, options.attemptedKey,
     options.attemptedSelection ?? routedProvider._apiKeyAttempt);

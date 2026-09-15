@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
-import { clearKeyCooldowns, rotateKeyOn429 } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { startServer } from "../../src/server";
@@ -15,6 +15,8 @@ import { resetProviderRequestPacingForTest, setProviderRequestPacingRuntimeForTe
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../src/providers/api-key-selection";
 import { routedProviderConfig } from "../../src/router";
 import type { OcxProviderTransport } from "../../src/providers/xai-transport";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -43,6 +45,257 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test.each([false, true])("OAuth hops charge each reset-only refetch once (third succeeds: %s)", async succeeds => {
+    const originalFetch = globalThis.fetch;
+    const authorizations: string[] = [];
+    let server: ReturnType<typeof startServer> | undefined;
+    clearGenericFailoverHealth();
+    try {
+      for (let i = 0; i < 3; i++) {
+        await saveCredential("nous", { access: `synthetic-oauth-${i}`, refresh: `synthetic-refresh-${i}`,
+          expires: Date.now() + 3_600_000, accountId: `fixture-account-${i}` }, { addAccount: true });
+      }
+      await setActiveAccount("nous", getAccountSet("nous")!.accounts[0]!.id);
+      saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "nous", providers: { nous: {
+        adapter: "openai-chat", authMode: "oauth", baseUrl: "https://oauth-refetch.invalid/v1", models: ["test"],
+      } } } as OcxConfig);
+      server = startServer(0);
+      globalThis.fetch = (async (_input, init) => {
+        authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (succeeds && authorizations.length === 3) return Response.json({ id: "third-account", object: "chat.completion",
+          choices: [{ index: 0, message: { role: "assistant", content: "third account works" }, finish_reason: "stop" }] });
+        return Response.json({ error: { message: `oauth-quota-${authorizations.length}`, type: "rate_limit_error" } },
+          { status: 429, headers: { "retry-after": "30" } });
+      }) as typeof fetch;
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "nous/test", stream: false, input: "hello" }),
+      });
+      const text = await response.text();
+      expect(authorizations).toEqual(["Bearer synthetic-oauth-0", "Bearer synthetic-oauth-1", "Bearer synthetic-oauth-2"]);
+      expect(response.status).toBe(succeeds ? 200 : 429);
+      expect(text).toContain(succeeds ? "third account works" : "oauth-quota-3");
+    } finally {
+      globalThis.fetch = originalFetch;
+      await server?.stop(true);
+      clearGenericFailoverHealth();
+    }
+  });
+
+  test.each(["429", "5xx", "reset"] as const)("reset-only combo key rotations preserve later targets (%s)", async mode => {
+    const originalFetch = globalThis.fetch;
+    const counts = [0, 0, 0];
+    const targets = counts.map((_, index) => ({ provider: `reset-key-t${index}`, model: "test" }));
+    const providers = Object.fromEntries(targets.map(({ provider }) => [provider, {
+      adapter: "openai-chat", authMode: "key", baseUrl: `https://${provider}.invalid/v1`,
+      apiKey: `synthetic-${provider}-0`,
+      apiKeyPool: Array.from({ length: 6 }, (_, key) => ({ id: `k${key}`, key: `synthetic-${provider}-${key}` })),
+    }]));
+    const config = { port: 0, hostname: "127.0.0.1", defaultProvider: targets[0]!.provider,
+      providers, combos: { fan: { strategy: "failover", targets } },
+    } as OcxConfig;
+    let server: ReturnType<typeof startServer> | undefined;
+    try {
+      saveConfig(config);
+      server = startServer(0);
+      globalThis.fetch = (async (input) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const index = targets.findIndex(target => url.hostname === `${target.provider}.invalid`);
+        if (index < 0) throw new Error("unexpected reset-only combo fixture request");
+        counts[index]!++;
+        if (counts.reduce((a, b) => a + b, 0) > 18) throw new Error("fixture send ceiling exceeded");
+        if (mode === "reset" && (index !== 0 || counts[index]! > 1)) {
+          throw Object.assign(new Error("socket reset fixture"), { code: "ECONNRESET" });
+        }
+        return Response.json({ error: { message: "key quota exhausted", type: "rate_limit_error" } },
+          { status: mode === "5xx" ? 502 : 429, headers: { "retry-after": "0" } });
+      }) as typeof fetch;
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(10_000),
+        body: JSON.stringify({ model: "combo/fan", input: "hello", stream: false }),
+      });
+      await response.text();
+      expect(response.ok).toBe(false);
+      expect(counts).toEqual(mode === "5xx" ? [1, 1, 1] : mode === "reset" ? [3, 2, 1] : [4, 1, 1]);
+      expect(counts.reduce((a, b) => a + b, 0)).toBe(mode === "5xx" ? 3 : 6);
+    } finally { globalThis.fetch = originalFetch; await server?.stop(true); }
+  }, 15_000);
+
+  test.each(["web-search", "image"] as const)(
+    "%s bridge bounds rotations after short cooldowns expire",
+    async bridge => {
+      const originalFetch = globalThis.fetch;
+      const endpoint = "https://sidecar-key429-fixture.invalid/v1/chat/completions";
+      const seen: Array<{ authorization: string | null; tools: string[] }> = [];
+      let now = Date.now();
+      let restoreClock: (() => void) | undefined;
+      let server: ReturnType<typeof startServer> | undefined;
+      const config = {
+        port: 0, hostname: "127.0.0.1", defaultProvider: "sidecar429",
+        providers: {
+          sidecar429: {
+            adapter: "openai-chat", authMode: "key", baseUrl: "https://sidecar-key429-fixture.invalid/v1",
+            apiKey: "synthetic-sidecar-a", apiKeyPool: [
+              { id: "a", key: "synthetic-sidecar-a" }, { id: "b", key: "synthetic-sidecar-b" },
+            ],
+          },
+          // Arms image planning without OAuth or an actual image-service request.
+          ...(bridge === "image" ? { xai: {
+            adapter: "openai-chat", authMode: "key", baseUrl: "https://image-plan-fixture.invalid/v1",
+            apiKey: "synthetic-image-plan-token",
+          } } : {}),
+        },
+        ...(bridge === "web-search"
+          ? { webSearchSidecar: { enabled: true, backend: "exa", exaApiKey: "synthetic-exa-plan-token" } }
+          : { images: { bridgeEnabled: true } }),
+      } as OcxConfig;
+      try {
+        saveConfig(config);
+        server = startServer(0);
+        const clock = spyOn(Date, "now").mockImplementation(() => now);
+        restoreClock = () => clock.mockRestore();
+        globalThis.fetch = (async (input, init) => {
+          const url = input instanceof Request ? input.url : String(input);
+          if (url !== endpoint) throw new Error("unexpected outbound request in sidecar 429 fixture");
+          const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }> };
+          seen.push({ authorization: new Headers(init?.headers).get("authorization"),
+            tools: (body.tools ?? []).map(tool => tool.function?.name ?? ""),
+          });
+          // A broken rotation loop is bounded by six mocked sends, never by an infinite wait.
+          if (seen.length >= 6) throw new Error("sidecar 429 fixture send ceiling exceeded");
+          now += 1_000;
+          return Response.json({ error: { message: `sidecar429-final-${seen.length}`, type: "rate_limit_error" } },
+            { status: 429, headers: { "retry-after": "0" } });
+        }) as typeof fetch;
+        const response = await originalFetch(new URL("/v1/responses", server.url), {
+          method: "POST", headers: { "content-type": "application/json" },
+          signal: AbortSignal.timeout(10_000),
+          body: JSON.stringify({ model: "sidecar429/test", input: "Use the provided tool.", stream: true,
+            tools: [{ type: bridge === "web-search" ? "web_search" : "image_generation" }],
+          }),
+        });
+        const text = await response.text();
+        expect(seen.map(call => call.authorization)).toEqual(["Bearer synthetic-sidecar-a", "Bearer synthetic-sidecar-b"]);
+        // Verifies bridge activation rather than accidentally exercising the generic 429 loop.
+        for (const call of seen) expect(call.tools).toContain(bridge === "web-search" ? "web_search" : "image_gen");
+        expect(response.status).toBe(429);
+        expect(text).toContain("Provider error 429");
+        expect(text).toContain("sidecar429-final-2");
+        expect(getKeyCooldownUntil("sidecar429", "b", now)).toBe(now + 1);
+      } finally {
+        globalThis.fetch = originalFetch;
+        restoreClock?.();
+        await server?.stop(true);
+      }
+    }, 15_000,
+  );
+
+  test.each(["exhausted", "continuation", "transient", "budget-exhausted", "recovery-success", "unpooled"] as const)(
+    "429 rotation stays request-bounded after every earlier cooldown expires (%s)",
+    async mode => {
+      const originalFetch = globalThis.fetch;
+      const endpoint = "https://key429-fixture.invalid/v1/chat/completions";
+      const usesFinalReserve = mode === "budget-exhausted" || mode === "recovery-success";
+      const expectedSends = mode === "exhausted" ? 2 : usesFinalReserve ? 4 : 3;
+      const seen: string[] = [];
+      const cancelled: number[] = [];
+      let now = Date.now();
+      let restoreClock: (() => void) | undefined;
+      let server: ReturnType<typeof startServer> | undefined;
+      const config = {
+        port: 0, hostname: "127.0.0.1", defaultProvider: "key429fixture",
+        providers: { key429fixture: {
+          adapter: "openai-chat", baseUrl: "https://key429-fixture.invalid/v1", authMode: "key",
+          apiKey: mode === "unpooled" ? "synthetic-key-outside" : "synthetic-key-a", apiKeyPool: [
+            { id: "a", key: "synthetic-key-a" }, { id: "b", key: "synthetic-key-b" },
+            ...(usesFinalReserve ? [{ id: "c", key: "synthetic-key-c" }] : []),
+          ],
+          ...(mode === "continuation" ? { terminalContinuationGuard: true } : {}),
+          ...(mode === "transient" || usesFinalReserve ? { transientRetryOn5xx: { enabled: true, attempts: 3 } } : {}),
+        } },
+      } as OcxConfig;
+      try {
+        saveConfig(config);
+        server = startServer(0);
+        const clock = spyOn(Date, "now").mockImplementation(() => now);
+        restoreClock = () => clock.mockRestore();
+        globalThis.fetch = (async (input, init) => {
+          const url = input instanceof Request ? input.url : String(input);
+          if (url !== endpoint) throw new Error("unexpected outbound request in key-rotation fixture");
+          seen.push(new Headers(init?.headers).get("authorization") ?? "");
+          // The old loop must terminate deterministically instead of waiting for a test timeout.
+          if (seen.length > 6) throw new Error("key-rotation fixture send ceiling exceeded");
+          const send = seen.length;
+          // Retry-After: 0 means a 1ms cooldown. Every subsequent response arrives after it.
+          now += 1_000;
+          if (mode === "recovery-success" && send === 4) {
+            return Response.json({ id: "chatcmpl-final-recovery", object: "chat.completion",
+              choices: [{ index: 0, message: { role: "assistant", content: "recovered-with-final-send" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+            });
+          }
+          if (mode === "continuation" && send === 2) {
+            return Response.json({ id: "chatcmpl-plan", object: "chat.completion",
+              choices: [{ index: 0, message: { role: "assistant", content: "I will edit the file now." }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+            });
+          }
+          const status = (mode === "transient" && send === 1) || (usesFinalReserve && send < 3) ? 503 : 429;
+          const text = JSON.stringify({ error: { message: `key429-final-${send}`, type: "rate_limit_error" } });
+          const bytes = new TextEncoder().encode(text);
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) { controller.enqueue(bytes); controller.close(); },
+            cancel() { cancelled.push(send); },
+          });
+          return new Response(body, { status, headers: {
+            "content-type": "application/json", "retry-after": "0",
+          } });
+        }) as typeof fetch;
+        const result = await originalFetch(new URL("/v1/responses", server.url), {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "key429fixture/test", stream: false,
+            input: mode === "continuation" ? "Edit the file using the tool." : "hello",
+            ...(mode === "continuation" ? { tools: [{ type: "function", name: "edit_file",
+              description: "Synthetic edit tool; never executed", parameters: { type: "object", properties: {} },
+            }] } : {}),
+          }),
+        });
+        const text = await result.text();
+        expect(seen).toHaveLength(expectedSends);
+        expect(seen).toEqual(mode === "unpooled"
+          ? ["Bearer synthetic-key-outside", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
+          : usesFinalReserve
+          ? ["Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
+          : mode === "transient"
+          ? ["Bearer synthetic-key-a", "Bearer synthetic-key-a", "Bearer synthetic-key-b"]
+          : mode === "continuation"
+            ? ["Bearer synthetic-key-a", "Bearer synthetic-key-b", "Bearer synthetic-key-b"]
+            : ["Bearer synthetic-key-a", "Bearer synthetic-key-b"]);
+        // Exhausted initial rotation must not cancel the final error it returns to the caller.
+        if (mode === "recovery-success") {
+          // The admission probe must not spend the reserve before the real B dispatch.
+          expect(result.status).toBe(200);
+          expect(text).toContain("recovered-with-final-send");
+        } else if (mode !== "continuation") {
+          expect(result.status).toBe(429);
+          expect(result.headers.get("retry-after")).toBe("0");
+          expect(text).toContain(`key429-final-${expectedSends}`);
+          expect(cancelled).not.toContain(expectedSends);
+        } else {
+          // A continuation error is represented inside the already-started Responses result.
+          expect(text).toContain("key429-final-3");
+        }
+        expect(cancelled).toContain(usesFinalReserve ? 3 : mode === "transient" ? 2 : 1);
+        expect(getKeyCooldownUntil("key429fixture", "b", now)).toBe(mode === "recovery-success" ? null : now + 1);
+      } finally {
+        globalThis.fetch = originalFetch;
+        restoreClock?.();
+        await server?.stop(true);
+      }
+    }, 15_000,
+  );
+
   test("physical key selection rejects disabled, removed, and changed-auth providers", () => {
     const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", authMode: "key", apiKey: "synthetic-first" } as const;
     const config = { providers: { current: { ...provider } } } as unknown as OcxConfig;

@@ -111,7 +111,7 @@ async function handleResponsesInner(
       requestState,
       sidecarState,
     );
-    const sendBudgetState = createResponsesSendBudget(requestContext);
+    const sendBudgetState = createResponsesSendBudget(requestContext, requestState);
     if (sendBudgetState instanceof Response) return sendBudgetState;
     if ("passthrough" in transportState.adapter && transportState.adapter.passthrough && !sidecarState.routedCompaction) {
       return await executePassthroughResponse(
