@@ -356,11 +356,11 @@ export function relaySseWithFailedTail(
             return;
           }
           const result = relayChunk(controller, value);
-        if (result !== "buffered") return;
-      }
-    } catch (err) {
-      let partial: Uint8Array = EMPTY_BYTES;
-      let tailTerminal = false;
+          if (result !== "buffered") return;
+        }
+      } catch (err) {
+        let partial: Uint8Array = EMPTY_BYTES;
+        let tailTerminal = false;
         try {
           partial = terminalBoundary.finish();
           tailTerminal = terminalBoundary.terminalSeen();
