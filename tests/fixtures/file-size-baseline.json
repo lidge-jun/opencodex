@@ -1,18 +1,24 @@
 {
   "generated": [
-    "scripts/model-metadata.source.json",
-    "src/adapters/cursor/gen/agent_pb.ts",
-    "gui/src/i18n/de.ts",
-    "gui/src/i18n/en.ts",
-    "gui/src/i18n/fr.ts",
-    "gui/src/i18n/ja.ts",
-    "gui/src/i18n/ko.ts",
-    "gui/src/i18n/ru.ts",
-    "gui/src/i18n/tr.ts",
-    "gui/src/i18n/zh.ts",
-    "gui/src/i18n/zh-TW.ts",
-    "docs-site/src/data/frontier-benchmarks.json"
+    "src/adapters/cursor/gen/agent_pb.ts"
   ],
+  "exempt": {
+    "data": [
+      "docs-site/src/data/frontier-benchmarks.json",
+      "scripts/model-metadata.source.json"
+    ],
+    "i18n": [
+      "gui/src/i18n/de.ts",
+      "gui/src/i18n/en.ts",
+      "gui/src/i18n/fr.ts",
+      "gui/src/i18n/ja.ts",
+      "gui/src/i18n/ko.ts",
+      "gui/src/i18n/ru.ts",
+      "gui/src/i18n/tr.ts",
+      "gui/src/i18n/zh.ts",
+      "gui/src/i18n/zh-TW.ts"
+    ]
+  },
   "files": {
     ".github/scripts/issue-quality.test.cjs": 2143,
     "gui/src/pages/Models.tsx": 2792,

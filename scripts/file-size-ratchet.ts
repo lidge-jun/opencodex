@@ -29,8 +29,17 @@ export const EXCLUDED_PREFIXES = [
 export const EXCLUDED_EXACT = new Set(["bun.lock", "gui/dist"]);
 
 export const GENERATED_PATHS = [
-  "scripts/model-metadata.source.json",
   "src/adapters/cursor/gen/agent_pb.ts",
+] as const;
+
+// These are hand-maintained catalogues whose growth is intentionally governed
+// outside the source-module ratchet. Keep the policy reason distinct from code generation.
+export const EXEMPT_DATA_PATHS = [
+  "docs-site/src/data/frontier-benchmarks.json",
+  "scripts/model-metadata.source.json",
+] as const;
+
+export const EXEMPT_I18N_PATHS = [
   "gui/src/i18n/de.ts",
   "gui/src/i18n/en.ts",
   "gui/src/i18n/fr.ts",
@@ -40,7 +49,6 @@ export const GENERATED_PATHS = [
   "gui/src/i18n/tr.ts",
   "gui/src/i18n/zh.ts",
   "gui/src/i18n/zh-TW.ts",
-  "docs-site/src/data/frontier-benchmarks.json",
 ] as const;
 
 export type Verdict =
@@ -48,11 +56,16 @@ export type Verdict =
   | "GREW"
   | "SHRANK"
   | "GENERATED"
+  | "EXEMPT"
   | "UNCHANGED"
   | "NEW_OK";
 
 export type Baseline = {
   generated: string[];
+  exempt: {
+    data: string[];
+    i18n: string[];
+  };
   files: Record<string, number>;
 };
 
@@ -77,8 +90,10 @@ export function isScannedPath(path: string): boolean {
 
 export function evaluate(files: FileSize[], baseline: Baseline): Evaluation[] {
   const generated = new Set(baseline.generated);
+  const exempt = new Set([...baseline.exempt.data, ...baseline.exempt.i18n]);
   return files.map((file) => {
     if (generated.has(file.path)) return { ...file, verdict: "GENERATED" };
+    if (exempt.has(file.path)) return { ...file, verdict: "EXEMPT" };
     const cap = baseline.files[file.path];
     if (cap === undefined) {
       return { ...file, verdict: file.lines >= THRESHOLD ? "NEW_OVERSIZED" : "NEW_OK" };
@@ -115,7 +130,7 @@ export function scanRepo(repoRoot: string): FileSize[] {
 }
 
 export function loadBaseline(text: string): Baseline {
-  const parsed = JSON.parse(text) as Baseline;
+  const parsed = JSON.parse(text) as Partial<Baseline>;
   if (
     !parsed
     || typeof parsed !== "object"
@@ -126,7 +141,28 @@ export function loadBaseline(text: string): Baseline {
   ) {
     throw new Error("invalid file-size baseline");
   }
-  return parsed;
+  if (parsed.exempt === undefined) {
+    const legacy = new Set(parsed.generated);
+    const data = new Set<string>(EXEMPT_DATA_PATHS);
+    const i18n = new Set<string>(EXEMPT_I18N_PATHS);
+    return {
+      generated: parsed.generated.filter((path) => !data.has(path) && !i18n.has(path)),
+      exempt: {
+        data: EXEMPT_DATA_PATHS.filter((path) => legacy.has(path)),
+        i18n: EXEMPT_I18N_PATHS.filter((path) => legacy.has(path)),
+      },
+      files: parsed.files as Record<string, number>,
+    };
+  }
+  if (
+    typeof parsed.exempt !== "object"
+    || parsed.exempt === null
+    || !Array.isArray(parsed.exempt.data)
+    || !Array.isArray(parsed.exempt.i18n)
+  ) {
+    throw new Error("invalid file-size baseline");
+  }
+  return parsed as Baseline;
 }
 
 function sortRecord(input: Record<string, number>): Record<string, number> {
@@ -144,13 +180,24 @@ export function updateBaseline(current: FileSize[], baseline: Baseline, seed: bo
     files[path] = Math.min(cap, lines);
   }
   if (seed) {
-    const generated = new Set(baseline.generated);
+    const exempt = new Set([
+      ...baseline.generated,
+      ...baseline.exempt.data,
+      ...baseline.exempt.i18n,
+    ]);
     for (const [path, lines] of now) {
-      if (generated.has(path) || lines < THRESHOLD || files[path] !== undefined) continue;
+      if (exempt.has(path) || lines < THRESHOLD || files[path] !== undefined) continue;
       files[path] = lines;
     }
   }
-  return { generated: [...baseline.generated], files: sortRecord(files) };
+  return {
+    generated: [...baseline.generated],
+    exempt: {
+      data: [...baseline.exempt.data],
+      i18n: [...baseline.exempt.i18n],
+    },
+    files: sortRecord(files),
+  };
 }
 
 export function formatOffenders(rows: Evaluation[]): string {
@@ -166,7 +213,11 @@ if (import.meta.main) {
   const existed = existsSync(baselinePath);
   const baseline: Baseline = existed
     ? loadBaseline(readFileSync(baselinePath, "utf8"))
-    : { generated: [...GENERATED_PATHS], files: {} };
+    : {
+        generated: [...GENERATED_PATHS],
+        exempt: { data: [...EXEMPT_DATA_PATHS], i18n: [...EXEMPT_I18N_PATHS] },
+        files: {},
+      };
   const current = scanRepo(repoRoot);
   if (process.argv.includes("--update")) {
     const next = updateBaseline(current, baseline, !existed);
