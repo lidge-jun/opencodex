@@ -223,7 +223,22 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthStatus, setOauthStatus] = useState<Record<string, import("./providers-shared").OAuthStatus>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
-  const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
+  const [workspaceSelected, setWorkspaceSelectedState] = useState<string | null>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_workspace_selected_provider");
+      return saved && saved.trim() ? saved.trim() : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const setWorkspaceSelected = useCallback((name: string | null) => {
+    setWorkspaceSelectedState(name);
+    try {
+      if (name) localStorage.setItem("ocx_workspace_selected_provider", name);
+      else localStorage.removeItem("ocx_workspace_selected_provider");
+    } catch { /* localStorage unavailable */ }
+  }, []);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
@@ -235,6 +250,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthTosPending, setOauthTosPending] = useState<
     { provider: string; addAccount: boolean; accountId?: string } | null
   >(null);
+  const [antigravityChoicePending, setAntigravityChoicePending] = useState<{ addAccount: boolean } | null>(null);
   /** Bumped after OAuth login so ProviderDetails switches to the Accounts tab. */
   const [accountsFocus, setAccountsFocus] = useState<{ token: number; provider: string | null }>({
     token: 0,
@@ -284,7 +300,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setAddIntent(null);
     setWorkspaceSelected(provider);
     setAccountsFocus(previous => ({ token: previous.token + 1, provider }));
-  }, []);
+  }, [setWorkspaceSelected]);
   // Providers hash sync is owned by App (passive replaceHash / deliberate navigateHash).
 
   // Warm the Add Provider catalog cache while the page is open so opening the
@@ -483,11 +499,31 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    */
   const requestLoginOAuth = (provider: string, addAccount = false, accountId?: string) => {
     if (busy === provider) return;
+    if (provider === "google-antigravity" && !accountId) {
+      setAntigravityChoicePending({ addAccount });
+      return;
+    }
     if (oauthTosRisk(provider)) {
       setOauthTosPending({ provider, addAccount, ...(accountId ? { accountId } : {}) });
       return;
     }
     void loginOAuth(provider, addAccount, accountId);
+  };
+
+  const onContinueAntigravityOAuth = () => {
+    const addAccount = antigravityChoicePending?.addAccount ?? false;
+    setAntigravityChoicePending(null);
+    if (oauthTosRisk("google-antigravity")) {
+      setOauthTosPending({ provider: "google-antigravity", addAccount });
+      return;
+    }
+    void loginOAuth("google-antigravity", addAccount);
+  };
+
+  const onAntigravityImportSuccess = () => {
+    setAntigravityChoicePending(null);
+    void fetchOauth();
+    bumpModelsRefresh();
   };
 
   if (!config) {
@@ -728,6 +764,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           setOauthTosPending(null);
           void loginOAuth(pending.provider, pending.addAccount, pending.accountId);
         }}
+        antigravityChoicePending={antigravityChoicePending}
+        onCancelAntigravityChoice={() => setAntigravityChoicePending(null)}
+        onContinueAntigravityOAuth={onContinueAntigravityOAuth}
+        onAntigravityImportSuccess={onAntigravityImportSuccess}
       />
     </>
   );
