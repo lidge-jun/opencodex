@@ -25,6 +25,7 @@ import {
   hasKeyPoolFailover,
   rotateProviderTransportOn401,
   rateLimitRetryDelayMs,
+  readQuotaResetAt,
   rotateProviderTransportOn429,
 } from "../../providers/key-failover";
 import {
@@ -675,11 +676,16 @@ export async function prepareAdapterExchange(
       // SAME request once per remaining key. OAuth/forward providers and single-key pools
       // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
       while (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
+        // A quota exhaustion is dated in the BODY, not in `Retry-After` — OpenRouter
+        // sends no header for it (#4024). Read a bounded prefix before the socket is
+        // released below; a failed or slow read just leaves the header path in charge.
+        const quotaResetAt = await readQuotaResetAt(upstreamResponse);
         const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: upstreamResponse.headers.get("retry-after"),
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
           promptCacheKey: parsed.options.promptCacheKey,
+          quotaResetAt,
         });
         if (!rotated) break;
         // Release the failed response's socket before retrying; unread bodies otherwise linger

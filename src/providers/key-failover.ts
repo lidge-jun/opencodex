@@ -30,6 +30,83 @@ const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
 
 /**
+ * Cap for a cooldown the upstream itself dated, as opposed to one we inferred.
+ *
+ * `MAX_COOLDOWN_MS` is deliberately short because an undated 429 is a guess: ten
+ * minutes bounds how long a transient limit can park a working key. A free-tier
+ * quota is not a guess — OpenRouter replies `Weekly/Monthly Limit Exhausted ...
+ * will reset at <date>`, and until that date the key cannot serve anything. Held
+ * for ten minutes instead, it comes back, takes a 429, and rotates again, every
+ * ten minutes for the rest of the week (#4024).
+ *
+ * 32 days rather than unbounded. The wording this parses is
+ * `Weekly/Monthly Limit Exhausted`, so the cap has to clear a monthly window —
+ * 31 days plus a day of slack for timezone and month length. An earlier 8-day
+ * cap looked generous against the weekly case in the issue and silently clamped
+ * every monthly reset to ~23 days early, which puts the key back into exactly
+ * the 429 loop this exists to stop. Caught by the cap's own test.
+ *
+ * Bounded at all because the date is upstream-controlled input: a malformed or
+ * hostile `reset at 2999-01-01` must not park a working key past any horizon an
+ * operator would think to look at.
+ */
+const MAX_QUOTA_COOLDOWN_MS = 32 * 24 * 60 * 60_000;
+
+/**
+ * Read a bounded prefix of a 429 body and pull the upstream's declared reset instant.
+ *
+ * Clones first: the caller still cancels the original body to release the socket,
+ * and a rotation storm must not be gated on reading N full error payloads. Any
+ * failure — no body, already consumed, slow, malformed — returns undefined and
+ * leaves the `Retry-After` path exactly as it was.
+ */
+export async function readQuotaResetAt(response: Response, now = Date.now()): Promise<number | undefined> {
+  try {
+    if (!response.body) return undefined;
+    const text = await response.clone().text();
+    return parseQuotaResetAt(text, now);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Reset instant an upstream declared in a 429 *body*, in epoch ms.
+ *
+ * Only the body carries this: OpenRouter sends no `Retry-After` for a quota
+ * exhaustion, so the header path (`parseRetryAfterMs`) sees nothing and falls
+ * back to `DEFAULT_COOLDOWN_MS`. Returns undefined for anything it cannot read
+ * as a date, so an unparsable body keeps today's behaviour exactly.
+ */
+export function parseQuotaResetAt(body: string | null | undefined, now = Date.now()): number | undefined {
+  const text = body?.slice(0, 4_096);
+  if (!text) return undefined;
+  // `will reset at 2026-09-09 03:30:06` / `... at 2026-09-09T03:30:06Z` / `resets at <date>`
+  const match = /reset[s]?\s+at\s+([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?)/i.exec(text);
+  if (!match) return undefined;
+  // Pin a bare `YYYY-MM-DD hh:mm:ss` to UTC explicitly.
+  //
+  // ECMA-262 says a date-TIME form with no offset is LOCAL time, and Node follows
+  // that: `Date.parse("2026-09-09 03:30:06")` differs from the UTC reading by the
+  // host offset (7h on a PDT box, measured). Bun currently returns the UTC value
+  // for the same string, so on this runtime the normalisation is a no-op today —
+  // which is exactly why it is written out rather than relied upon. If Bun ever
+  // conforms, an un-normalised parse would silently shift every park-until by the
+  // operator's offset, and the early direction resumes the 429 loop.
+  //
+  // A consequence worth knowing: no Bun test can observe this branch being
+  // removed. The explicit-zone case below is the part the suite can pin.
+  const raw = match[1].includes("T") || /(?:Z|[+-][0-9]{2}:?[0-9]{2})$/.test(match[1])
+    ? match[1]
+    : `${match[1].replace(" ", "T")}Z`;
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return undefined;
+  // Already past, or beyond the cap: not usable as a park-until instant.
+  if (at <= now) return undefined;
+  return Math.min(at, now + MAX_QUOTA_COOLDOWN_MS);
+}
+
+/**
  * Default same-target 429 retry policy used when a provider opts in via a bare
  * `retryOn429: {}` (presence = opt-in with these defaults).
  */
@@ -370,6 +447,7 @@ function rotateKeyAfterFailure(
   now = Date.now(),
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
+  quotaResetAt?: number,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
@@ -428,7 +506,12 @@ function rotateKeyAfterFailure(
     // full cap instead of the 429 default so a dead key is not re-tried once a minute.
     const cooldownMs = failureStatus === 401
       ? MAX_COOLDOWN_MS
-      : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
+      // A reset instant the upstream dated outranks both the header and the
+      // default: it is the only one of the three that knows when the quota
+      // actually returns (#4024).
+      : quotaResetAt !== undefined
+        ? Math.max(quotaResetAt - now, 1)
+        : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
     keyCooldowns.set(cooldownKey(providerName, outcome.value.failedId), { cooldownUntil: now + cooldownMs });
     sweepExpiredOnWrite(now);
   }
@@ -455,8 +538,9 @@ export function rotateKeyOn429(
   now = Date.now(),
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
+  quotaResetAt?: number,
 ): OcxProviderConfig | null {
-  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection);
+  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection, quotaResetAt);
 }
 
 /**
@@ -489,6 +573,8 @@ export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
 
 interface RotateProviderTransportOptions {
   retryAfter?: string | null;
+  /** Epoch ms from `parseQuotaResetAt`, when the upstream dated the reset in its body. */
+  quotaResetAt?: number;
   now?: number;
   attemptedKey?: string;
   attemptedSelection?: ProviderApiKeySelection;
@@ -514,6 +600,7 @@ export function rotateProviderTransportOn429(
     options.now,
     options.attemptedKey,
     options.attemptedSelection ?? routedProvider._apiKeyAttempt,
+    options.quotaResetAt,
   );
   if (!rotated) return null;
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
