@@ -925,12 +925,32 @@ async function poolSetting(
     if (response.status !== 200) return apiError(response.json, `failed to read ${label}`, response.status);
     const strategy = response.json[transport.strategyKey];
     const sticky = response.json[transport.stickyKey];
+    const autoSwitchThreshold = typeof response.json.autoSwitchThreshold === "number"
+      ? response.json.autoSwitchThreshold
+      : undefined;
     if (wantsJson) {
       // Pool-neutral key names: the two routes spell the same two settings differently, and a
       // `--json` consumer should not have to branch on which pool answered.
-      console.log(JSON.stringify({ ok: true, provider: name, strategy, stickyLimit: sticky }, null, 2));
+      const payload: Record<string, unknown> = { ok: true, provider: name, strategy, stickyLimit: sticky };
+      if (autoSwitchThreshold !== undefined) {
+        payload.autoSwitchThreshold = autoSwitchThreshold;
+      }
+      console.log(JSON.stringify(payload, null, 2));
     } else {
-      console.log(`${name}: ${label} is ${String(field === "strategy" ? strategy : sticky)}`);
+      if (field === "strategy" && autoSwitchThreshold !== undefined) {
+        const thresholdSummary = strategy === "round-robin"
+          ? "threshold not used"
+          : autoSwitchThreshold > 0
+          ? (strategy === "fill-first"
+              ? `drain at ${autoSwitchThreshold}%`
+              : strategy === "reset-first"
+              ? `nearest reset below ${autoSwitchThreshold}%`
+              : `switch at ${autoSwitchThreshold}%`)
+          : "proactive switching off";
+        console.log(`${name}: ${label} is ${String(strategy)} (${thresholdSummary})`);
+      } else {
+        console.log(`${name}: ${label} is ${String(field === "strategy" ? strategy : sticky)}`);
+      }
     }
     return 0;
   }

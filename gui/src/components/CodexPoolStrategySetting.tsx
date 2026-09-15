@@ -13,16 +13,22 @@ import {
 import AccountPoolStrategyControls from "./AccountPoolStrategyControls";
 import type { CodexAccountLoadObserver } from "../hooks/useCodexAccountPool";
 
+/**
+ * Extract normalized strategy, sticky limit, and optional autoSwitchThreshold from an active-response payload.
+ */
 function strategyFieldsFromActive(value: unknown): {
   strategy: AccountPoolStrategy;
   stickyLimit: number;
+  threshold?: number;
 } | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
-  if (!("accountPoolStrategy" in row) && !("accountPoolStickyLimit" in row)) return null;
+  if (!("accountPoolStrategy" in row) && !("accountPoolStickyLimit" in row) && !("autoSwitchThreshold" in row)) return null;
+  const threshold = typeof row.autoSwitchThreshold === "number" ? row.autoSwitchThreshold : undefined;
   return {
     strategy: normalizeAccountPoolStrategy(row.accountPoolStrategy),
     stickyLimit: normalizeAccountPoolStickyLimit(row.accountPoolStickyLimit),
+    threshold,
   };
 }
 
@@ -36,17 +42,20 @@ export default function CodexPoolStrategySetting({
   subscribeLoadObserver,
   readLastActive,
   onStrategyResolved,
+  threshold: propThreshold,
 }: {
   apiBase: string;
   subscribeLoadObserver?: (observer: CodexAccountLoadObserver) => () => void;
   readLastActive?: () => unknown;
   onStrategyResolved?: (strategy: AccountPoolStrategy) => void;
+  threshold?: number;
 }) {
   const t = useT();
   // Seed defaults immediately — never gate the control chrome on a network round-trip.
   const [strategy, setStrategy] = useState<AccountPoolStrategy>(DEFAULT_ACCOUNT_POOL_STRATEGY);
   const [stickyLimit, setStickyLimit] = useState(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT);
   const [stickyDraft, setStickyDraft] = useState(String(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT));
+  const [serverThreshold, setServerThreshold] = useState<number | undefined>(undefined);
   const [hydrated, setHydrated] = useState(false);
   const hydratedRef = useRef(false);
   const [saving, setSaving] = useState(false);
@@ -60,9 +69,13 @@ export default function CodexPoolStrategySetting({
   const applyServer = useCallback((json: {
     accountPoolStrategy?: unknown;
     accountPoolStickyLimit?: unknown;
+    autoSwitchThreshold?: unknown;
   }) => {
     const nextStrategy = normalizeAccountPoolStrategy(json.accountPoolStrategy);
     const nextSticky = normalizeAccountPoolStickyLimit(json.accountPoolStickyLimit);
+    if (typeof json.autoSwitchThreshold === "number") {
+      setServerThreshold(json.autoSwitchThreshold);
+    }
     setStrategy(nextStrategy);
     onStrategyResolved?.(nextStrategy);
     setStickyLimit(nextSticky);
@@ -79,6 +92,7 @@ export default function CodexPoolStrategySetting({
     applyServer({
       accountPoolStrategy: fields.strategy,
       accountPoolStickyLimit: fields.stickyLimit,
+      autoSwitchThreshold: fields.threshold,
     });
   }, [applyServer]);
 
@@ -89,6 +103,7 @@ export default function CodexPoolStrategySetting({
       const payload = await res.json() as {
         accountPoolStrategy?: unknown;
         accountPoolStickyLimit?: unknown;
+        autoSwitchThreshold?: unknown;
       };
       // A save started while this GET was in flight — retry once after it settles.
       if (savingRef.current) {
@@ -215,6 +230,7 @@ export default function CodexPoolStrategySetting({
         <AccountPoolStrategyControls
           codex
           strategy={strategy}
+          threshold={propThreshold !== undefined ? propThreshold : serverThreshold}
           stickyDraft={stickyDraft}
           disabled={controlsDisabled}
           strategySelectId="codex-pool-strategy"

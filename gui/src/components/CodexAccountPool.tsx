@@ -546,6 +546,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         subscribeLoadObserver={controller.subscribeLoadObserver}
         readLastActive={controller.readLastActive}
         onStrategyResolved={setPoolStrategy}
+        threshold={autoSwitch.threshold}
       />
 
       <CodexAuthAdvancedSettings
@@ -599,6 +600,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           accountModeState={accountModeState}
           switchingId={switchingId}
           orderBusy={priorityUpdatingId !== null}
+          threshold={poolStrategy && poolStrategy !== "round-robin" ? autoSwitchThreshold : undefined}
           onCancel={() => setConfirm(null)}
           onConfirm={() => { void setActive(confirm.id === "__main__" ? "__main__" : confirm.id); }}
         />

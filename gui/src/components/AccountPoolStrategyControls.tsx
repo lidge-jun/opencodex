@@ -24,6 +24,7 @@ const STRATEGY_HINT_KEYS = {
 export interface AccountPoolStrategyControlsProps {
   strategy: AccountPoolStrategy;
   codex?: boolean;
+  threshold?: number;
   stickyDraft: string;
   disabled?: boolean;
   strategySelectId?: string;
@@ -45,6 +46,7 @@ export interface AccountPoolStrategyControlsProps {
 export default function AccountPoolStrategyControls({
   strategy,
   codex = false,
+  threshold,
   stickyDraft,
   disabled = false,
   strategySelectId = "account-pool-strategy",
@@ -58,6 +60,23 @@ export default function AccountPoolStrategyControls({
     value,
     label: t(STRATEGY_LABEL_KEYS[value]),
   }));
+
+  const thresholdSummary = (() => {
+    if (threshold === undefined) return null;
+    if (strategy === "round-robin") {
+      return t("accountPool.thresholdNotUsed");
+    }
+    if (threshold > 0) {
+      if (strategy === "fill-first") {
+        return t("accountPool.drainAtThreshold", { threshold: String(threshold) });
+      }
+      if (strategy === "reset-first") {
+        return t("accountPool.resetBelowThreshold", { threshold: String(threshold) });
+      }
+      return t("accountPool.switchAtThreshold", { threshold: String(threshold) });
+    }
+    return t("accountPool.proactiveSwitchingOff");
+  })();
 
   return (
     <div className="account-pool-strategy-controls">
@@ -86,6 +105,11 @@ export default function AccountPoolStrategyControls({
             label={t("accountPool.strategy")}
             onChange={(next) => onStrategyChange(next as AccountPoolStrategy)}
           />
+          {thresholdSummary && (
+            <span className="badge badge-muted account-pool-threshold-badge" data-testid="account-pool-threshold-summary">
+              {thresholdSummary}
+            </span>
+          )}
         </div>
       </div>
       {strategy === "round-robin" && (
