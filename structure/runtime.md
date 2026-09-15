@@ -430,3 +430,11 @@ Translated audio/file admission follows the [final-adapter input contract](adapt
 The combo may advance to its next eligible unattempted target before output commitment. It records no target/provider cooldown for these request-local mismatches and does not silently drop reasoning controls or raise `none` to a supported rung. Cancellation, origin/cyber-policy rejection, non-replayable post-send errors and the existing streaming commit boundary stay authoritative. Other invalid requests remain terminal.
 
 Regression coverage: `tests/responses/responses-forward-prompt-envelope.test.ts`, `tests/routing/router-combo-failover-classification.test.ts`, and `tests/server/server-combo-failover-e2e.test.ts`.
+
+## Explicit SOCKS5 CLI selection
+
+`src/cli/start-args.ts` parses `ocx start --socks5 [host:port]` and the mutually
+exclusive `--socks5-off`. The start owner persists only an explicitly requested
+change; the off flag refuses to erase a non-SOCKS proxy. Invalid-address errors
+never echo user-supplied credentials, and status messages redact proxy URLs.
+The parser regression cases live in `tests/cli/start-args.test.ts`.

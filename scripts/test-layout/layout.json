@@ -167,6 +167,8 @@
     }
   },
   "explicit": {
+    "socks5-fetch.test.ts": "lib",
+    "start-args.test.ts": "cli",
     "responses-core-modules.test.ts": "responses",
     "chat-responses-control-integration.test.ts": "responses",
     "coding-agent-tool-result-images.test.ts": "adapters",

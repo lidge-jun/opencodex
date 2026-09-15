@@ -1,3 +1,4 @@
+import { configureSocks5Fetch } from "../lib/proxy-env";
 import { join } from "node:path";
 import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./subagent-models";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION } from "./multi-agent-surface";
@@ -123,6 +124,7 @@ export function applyProxyEnvWith(
   let proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
   if (!proxy) {
     if (rawProxy !== undefined) warnProxyConfigDiscardOnce("proxy");
+    configureSocks5Fetch();
     return;
   }
   if (proxy.trim().toLowerCase() === "auto") {
@@ -151,8 +153,18 @@ export function applyProxyEnvWith(
     }
   }
   if (proxy) {
-  if (!process.env.HTTP_PROXY?.trim() && !process.env.http_proxy?.trim()) process.env.HTTP_PROXY = proxy;
-  if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
+    if (/^socks/i.test(proxy.trim()) && !/^socks5h?:\/\//i.test(proxy.trim())) {
+      throw new Error("Only SOCKS5 proxy URLs are supported; use socks5://host:port");
+    }
+    if (/^socks5h?:\/\//i.test(proxy.trim())) {
+      for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"] as const) {
+        delete process.env[key];
+      }
+      process.env.ALL_PROXY = proxy;
+    } else {
+      if (!process.env.HTTP_PROXY?.trim() && !process.env.http_proxy?.trim()) process.env.HTTP_PROXY = proxy;
+      if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
+    }
   }
   const existing = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
   const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
@@ -184,5 +196,6 @@ export function applyProxyEnvWith(
     }
   }
   process.env.NO_PROXY = entries.join(",");
+  configureSocks5Fetch();
 }
 
