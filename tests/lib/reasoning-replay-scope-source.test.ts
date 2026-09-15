@@ -29,7 +29,12 @@ describe("reasoning replay scope propagation", () => {
   });
 
   test("bridge, adapter, and cache contain no process-wide fallback", () => {
-    const bridge = source("bridge.ts");
+    // src/bridge.ts is a facade now. The two declarations this pins moved into different
+    // leaves -- one into the SSE path, one into the JSON builder -- so reading the facade
+    // alone matches nothing and toHaveLength(2) fails on null. Read both leaves and keep
+    // the count at 2, which is what the invariant has always been: each bridge entry point
+    // binds the caller scope holder and neither falls back to a process-wide scope.
+    const bridge = `${source("bridge/sse.ts")}\n${source("bridge/response-json.ts")}`;
     const adapter = source("adapters/openai-chat/messages.ts");
     const cache = source("responses/reasoning-replay-cache.ts");
     expect(bridge.match(/const replayCacheScope = options\?\.replayCacheScope;/g)).toHaveLength(2);
