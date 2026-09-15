@@ -336,6 +336,8 @@ The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images
 real image blocks rather than flattening them to the text `[image]`, and orders image
 blocks chronologically — history before current — so attachment order matches the
 prose the model reads beside them. Vendor tool execution stays disabled on both
-adapters, and Qoder's explicit refusal of original images is unchanged.
+adapters. CodeBuddy refuses full-width-bar DSML scaffolding that appears in its text or
+reasoning stream instead of promoting vendor text into client execution authority. Qoder's
+explicit refusal of original images is unchanged.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.

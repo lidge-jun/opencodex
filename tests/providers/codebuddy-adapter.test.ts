@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { buildArgs, buildChildEnv, createCodeBuddyAdapter, type SpawnFn } from "../../src/adapters/codebuddy/adapter";
+import { guardCodeBuddyScaffolding } from "../../src/adapters/codebuddy/scaffold-guard";
 import { CODEBUDDY_CN_PROFILE, CODEBUDDY_GLOBAL_PROFILE, clearCodeBuddyBinaryCache } from "../../src/adapters/codebuddy/profiles";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
@@ -219,6 +220,181 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe("Hello");
     expect(events.at(-1)).toMatchObject({ type: "done", usage: { inputTokens: 7, outputTokens: 2, totalTokens: 9 } });
     expect(child.written.join("")).toContain('"text":"hello"');
+  });
+
+  test("refuses full-width DSML tool markup instead of forwarding or executing it", async () => {
+    const leaked = "I'll inspect it.\n<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name=\"functions.exec\">"
+      + "secret-command</｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>";
+    const stdout = [
+      enc.encode(`${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: leaked }] },
+      })}\n`),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(stdout) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+      killGraceMs: 20,
+    });
+
+    const events = await run(adapter, parsed());
+    expect(events.filter(event => event.type === "text_delta"))
+      .toEqual([{ type: "text_delta", text: "I'll inspect it.\n" }]);
+    expect(events.some(event => event.type === "done")).toBe(false);
+    const terminal = events.at(-1);
+    expect(terminal).toMatchObject({
+      type: "error",
+      code: "vendor_scaffold_detected",
+      retryable: false,
+      status: 502,
+    });
+    if (terminal?.type !== "error") throw new Error("expected fail-closed terminal");
+    expect(terminal.message).not.toContain("secret-command");
+    expect(terminal.message).not.toContain("DSML");
+  });
+
+  test("detects a DSML marker split across streamed text deltas", async () => {
+    const frame = (text: string) => `${JSON.stringify({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+    })}\n`;
+    const stdout = [
+      enc.encode(frame("Safe prefix. <｜｜DS")),
+      enc.encode(frame("ML｜｜ invoke name=\"functions.exec\">private-body")),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(stdout) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+      killGraceMs: 20,
+    });
+
+    const events = await run(adapter, parsed());
+    const text = events
+      .filter(event => event.type === "text_delta")
+      .map(event => event.type === "text_delta" ? event.text : "")
+      .join("");
+    expect(text).toBe("Safe prefix. ");
+    expect(text).not.toContain("private-body");
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "vendor_scaffold_detected" });
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("refuses DSML tool markup from the reasoning channel", async () => {
+    const stdout = [
+      enc.encode(`${JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: {
+            type: "thinking_delta",
+            thinking: "Safe thought. <｜｜DSML｜｜ invoke name=\"functions.exec\">private-body",
+          },
+        },
+      })}\n`),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(stdout) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+      killGraceMs: 20,
+    });
+
+    const events = await run(adapter, parsed());
+    expect(events.filter(event => event.type === "thinking_delta"))
+      .toEqual([{ type: "thinking_delta", thinking: "Safe thought. " }]);
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "vendor_scaffold_detected",
+      retryable: false,
+    });
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("flushes harmless text and reasoning tails in their arrival order", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "<" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "<" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("moves a replaced pending tail to its new arrival position", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "<" });
+    // The old thinking tail is consumed into harmless output and a NEW possible marker tail is
+    // withheld. That new tail arrived after the text tail and must therefore flush after it.
+    guarded({ type: "thinking_delta", thinking: "safe<" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "<" },
+      { type: "thinking_delta", thinking: "safe" },
+      { type: "thinking_delta", thinking: "<" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("queues later clean events behind an older pending tail", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "Hello" });
+    expect(events).toEqual([]);
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "Hello" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("keeps an existing pending slot when its channel receives an empty delta", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "Hello" });
+    guarded({ type: "thinking_delta", thinking: "" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "Hello" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("releases a continued pending tail at its first position without moving later bytes", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<｜" });
+    guarded({ type: "text_delta", text: "middle" });
+    guarded({ type: "thinking_delta", thinking: "safe" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<｜" },
+      { type: "text_delta", text: "middle" },
+      { type: "thinking_delta", thinking: "safe" },
+      { type: "done", stopReason: "stop" },
+    ]);
   });
 
   test("region isolation: the global adapter never spawns with the CN environment", async () => {
