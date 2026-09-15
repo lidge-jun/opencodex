@@ -3,8 +3,12 @@ import { useT } from "../i18n/shared";
 import { IconAlert } from "../icons";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
-import { maxQuotaUtilisation } from "./QuotaBars";
+import { computeCodexUsageScore } from "../codex-quota-utils";
 
+/**
+ * Modal dialog confirming manual switch to a specific Codex pool account.
+ * Displays a warning when the target account meets or exceeds the auto-switch threshold.
+ */
 export function CodexAccountSwitchModal({
   confirm,
   mainEmail,
@@ -42,7 +46,8 @@ export function CodexAccountSwitchModal({
     onCancel();
   }, [onCancel]);
 
-  const exceedsThreshold = threshold !== undefined && threshold > 0 && maxQuotaUtilisation(confirm.quota) >= threshold;
+  const usageScore = computeCodexUsageScore(confirm.quota, confirm.plan);
+  const exceedsThreshold = threshold !== undefined && threshold > 0 && usageScore !== null && usageScore >= threshold;
 
   return (
     <dialog

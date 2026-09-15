@@ -2000,6 +2000,7 @@ export const tr: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "Strateji kaydedilemedi.",
   "accountPool.switchAtThreshold": "%{threshold} düzeyinde geçiş",
   "accountPool.drainAtThreshold": "%{threshold} düzeyinde boşaltma",
+  "accountPool.resetBelowThreshold": "%{threshold} altında en yakın sıfırlama",
   "accountPool.thresholdNotUsed": "eşik kullanılmıyor",
   "accountPool.proactiveSwitchingOff": "proaktif geçiş kapalı",
 

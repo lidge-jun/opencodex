@@ -2054,6 +2054,7 @@ export const en = {
   "accountPool.strategyUpdateFailed": "Rotation strategy could not be saved.",
   "accountPool.switchAtThreshold": "switch at {threshold}%",
   "accountPool.drainAtThreshold": "drain at {threshold}%",
+  "accountPool.resetBelowThreshold": "nearest reset below {threshold}%",
   "accountPool.thresholdNotUsed": "threshold not used",
   "accountPool.proactiveSwitchingOff": "proactive switching off",
 

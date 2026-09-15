@@ -1981,6 +1981,7 @@ export const ru: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "Не удалось сохранить стратегию ротации.",
   "accountPool.switchAtThreshold": "переключение при {threshold}%",
   "accountPool.drainAtThreshold": "исчерпание при {threshold}%",
+  "accountPool.resetBelowThreshold": "ближайший сброс ниже {threshold}%",
   "accountPool.thresholdNotUsed": "порог не используется",
   "accountPool.proactiveSwitchingOff": "упреждающее переключение выкл.",
 
