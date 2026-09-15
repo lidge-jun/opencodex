@@ -185,6 +185,30 @@ async function beginFlow(flowId: string) {
   expect(hook.state).toMatchObject({ phase: "pending", flowId });
 }
 
+for (const method of ["POST", "GET", "DELETE"] as const) {
+  test(`non-2xx ${method} success-shaped JSON remains an HTTP failure`, async () => {
+    await mount();
+    if (method === "POST") {
+      await invoke(() => hook.start());
+      await reply(take("POST"), { flowId: "A", status: "succeeded", code: "flow_in_progress" }, 409);
+      expect(hook.state).toEqual({ phase: "failed", code: "flow_in_progress" });
+      expect(requests.filter(pending => pending.method === "GET")).toHaveLength(0);
+    } else {
+      await beginFlow("A");
+      if (method === "GET") {
+        await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+        await reply(take("GET", "A"), { status: "succeeded", code: "publication_failed" }, 503);
+        expect(hook.state).toEqual({ phase: "failed", code: "publication_failed" });
+      } else {
+        await invoke(() => hook.cancel());
+        await reply(take("DELETE", "A"), { status: "succeeded" }, 503);
+        expect(hook.state).toMatchObject({ phase: "pending", flowId: "A", cancelFailed: true });
+      }
+    }
+    expect(completed).toBe(0);
+  });
+}
+
 for (const late of ["succeeded", "failed", "unknown_flow", "network"] as const) {
   test(`late DELETE ${late} for A cannot disturb restarted flow B`, async () => {
     await mount();

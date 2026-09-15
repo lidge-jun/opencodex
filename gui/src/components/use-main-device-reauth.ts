@@ -94,6 +94,8 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
     }
     cancellationRequestedFlowRef.current = flowId;
     try {
+      // Error JSON identifies an expired flow; status is checked before applying its DTO.
+      // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check
       const res = await fetch(`${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`, { method: "DELETE" });
       const dto = await res.json().catch(() => ({})) as FlowDto;
       if (unmountedRef.current || flowRef.current !== flowId) return;
@@ -139,9 +141,11 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
     abortRef.current = ctrl;
     const isCurrent = () => !ctrl.signal.aborted && !unmountedRef.current && abortRef.current === ctrl;
     setState({ phase: "starting" });
-    let flowId: string;
+    let startedFlowId: string;
     try {
       // Empty body by contract: the route rejects any request keys with 400.
+      // Error JSON supplies the normalized failure code; !res.ok never starts a flow.
+      // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check
       const res = await fetch(`${apiBase}/api/codex-auth/main/reauth-device`, { method: "POST", signal: ctrl.signal });
       const dto = await res.json().catch(() => ({})) as FlowDto;
       if (!isCurrent()) return;
@@ -153,11 +157,13 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
         setState({ phase: "failed", code: "request_failed" });
         return;
       }
-      flowId = dto.flowId;
+      startedFlowId = dto.flowId;
     } catch {
       if (isCurrent()) setState({ phase: "failed", code: "request_failed" });
       return;
     }
+    // Polling and queued updaters capture the accepted identity, not the mutable parse slot.
+    const flowId = startedFlowId;
     flowRef.current = flowId;
     let lastUrl = "";
     let lastCode = "";
@@ -166,6 +172,8 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
     while (isCurrent()) {
       if (flowRef.current !== flowId) return;
       try {
+        // Non-2xx JSON is consumed for its failure code, never as a successful status.
+        // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check
         const res = await fetch(
           `${apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`,
           { signal: AbortSignal.any([ctrl.signal, AbortSignal.timeout(POLL_TICK_TIMEOUT_MS)]) },
