@@ -348,8 +348,18 @@ describe("generic-OAuth hop reservations are handed back when no send happens", 
       "adapter-recovery-oauth-429",
       "attemptOpaqueBlobRecovery",
     );
-    expect(block).toContain('rebuildAndRefetch("oauth-account-429", () => { hop.permit?.use(); })');
-    expect(block).toMatch(/if \("failed" in result\) \{[^}]*hop\.permit\?\.release\(\)/);
+    // The confirm callback is adapter-owned: when the adapter carries its own fetchResponse the
+    // dispatch boundary lives inside it, so the callback is handed down; otherwise the reservation
+    // is parked in pendingHopPermit for the retry helper to settle. Match the shape rather than an
+    // exact source substring, because an exact multi-line substring breaks on any reformatting in
+    // this block without the behaviour having changed.
+    expect(block).toMatch(/rebuildAndRefetch\(\s*"oauth-account-429",[\s\S]{0,240}?hop\.permit\?\.use\(\)/);
+    expect(block).toMatch(/pendingHopPermit = [^;]*fetchResponse \? undefined : hop\.permit/);
+    // The refund moved out of the failed arm and into a finally, so one idempotent release now
+    // covers the failed return, the success path and a throw. Assert that shape rather than a
+    // per-branch release that no longer exists.
+    expect(block).toMatch(/if \("failed" in result\) return result\.failed;/);
+    expect(block).toMatch(/finally \{[^}]*hop\.permit\?\.release\(\)/);
     expect(block).toMatch(refundsOnThrow);
   });
 
