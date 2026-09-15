@@ -12,6 +12,15 @@ import { isPlainObject } from "./internal";
  * destinations, a present non-array `content` field is omitted. Otherwise non-empty array content
  * is blanked unless raw reasoning preservation is enabled; removing an `ocxr1:` envelope selects
  * the same blanking path when non-array omission is not active.
+ *
+ * A reasoning item that arrives with no `summary` key at all also gets an empty one. The field is
+ * required on a reasoning input item by the Responses API — a missing one is refused with
+ * `Missing required parameter: 'input[N].summary'` before inference — while
+ * responsesRequestSchema marks it optional, so such an item passes every local gate and fails only
+ * on the wire. This is not gated on the destination, because it reshapes nothing a canonical
+ * backend issued: every reasoning item Codex and this proxy emit already carries `summary`, so an
+ * item missing the key came from a translated ingress (`/v1/chat/completions`, `/v1/messages`) or
+ * a third-party client, and injecting the empty array is the whole shape it was missing.
  */
 export function sanitizeReasoningInputContent(
   body: unknown,
@@ -36,6 +45,7 @@ export function sanitizeReasoningInputContent(
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
     const hasOutputStatus = Object.prototype.hasOwnProperty.call(rec, "status");
     const hasEncryptedContent = Object.prototype.hasOwnProperty.call(rec, "encrypted_content");
+    const missingSummary = !Object.prototype.hasOwnProperty.call(rec, "summary");
     const stripEncryptedContent = hasOcxEnvelope
       || (opts?.stripEncryptedContent === true && hasEncryptedContent);
     // Codex serializes an absent reasoning content channel as `"content": null`. The field is
@@ -59,11 +69,12 @@ export function sanitizeReasoningInputContent(
     const blankContent = !dropNullContentChannel
       && !opts?.preserveRawReasoningContent
       && (hasRawContent || hasOcxEnvelope);
-    if (!blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel) {
+    if (!blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel && !missingSummary) {
       return item;
     }
     changed = true;
     const next: Record<string, unknown> = { ...rec };
+    if (missingSummary) next.summary = [];
     if (dropNullContentChannel) delete next.content;
     if (stripOutputStatus) delete next.status;
     if (stripEncryptedContent) delete next.encrypted_content;
