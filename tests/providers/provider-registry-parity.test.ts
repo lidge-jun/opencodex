@@ -752,6 +752,27 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["anthropic-apikey"].modelContextWindows).toEqual(anthropicOauth?.modelContextWindows);
   });
 
+  test("Anthropic providers seed image input while preserving explicit model overrides", () => {
+    for (const id of ["anthropic", "anthropic-apikey"]) {
+      const entry = PROVIDER_REGISTRY.find(entry => entry.id === id)!;
+      const seed = providerConfigSeed(entry);
+      expect(entry.models!.length).toBeGreaterThan(0);
+      for (const model of entry.models!) {
+        expect(seed.modelInputModalities?.[model]).toEqual(["text", "image"]);
+      }
+
+      const provider: OcxProviderConfig = {
+        adapter: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        modelInputModalities: { "claude-sonnet-5": ["text"] },
+      };
+      enrichProviderFromRegistry(id, provider);
+      expect(provider.modelInputModalities?.["claude-sonnet-5"]).toEqual(["text"]);
+      expect(provider.modelInputModalities?.["claude-fable-5-1"]).toEqual(["text", "image"]);
+      expect(provider.modelInputModalities?.["unknown-model"]).toBeUndefined();
+    }
+  });
+
   test("Anthropic providers advertise an effort ladder for every model on both auth flows", () => {
     const anthropicOauth = PROVIDER_REGISTRY.find(entry => entry.id === "anthropic");
     const apiKey = KEY_LOGIN_PROVIDERS["anthropic-apikey"];

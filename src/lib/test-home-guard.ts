@@ -20,7 +20,7 @@
  *    how this incident happened.
  */
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 
 const GUARD_ENV = "OCX_TEST_HOME_GUARD";
@@ -150,5 +150,89 @@ export function assertNotRealCodexHomeUnderTest(dir: string): void {
   throw new Error(
     `refusing to write the real Codex home (${PROTECTED_CODEX_HOME}) from a test process. `
     + "Point CODEX_HOME at a temp directory for this test before writing native auth.json.",
+  );
+}
+
+/**
+ * The trees a removal must never reach, and the reason each one is named.
+ *
+ * The writer guard above cannot help here. `rmSync` is plain `node:fs`: it calls no writer of
+ * ours, so no assertion of ours runs, and by the time anything could observe the damage the
+ * directory is already gone. On 2026-09-15 that is exactly what happened — a test resolved the
+ * process-global config directory and removed it, taking every OAuth login, the Codex account
+ * store, the service tokens and a 372MB usage ledger with it.
+ */
+const PROTECTED_TREES: ReadonlyArray<{ path: string; lexical: string; label: string }> = [
+  { path: PROTECTED_HOME, lexical: resolve(join(REAL_HOME, ".opencodex")), label: "the real OpenCodex home" },
+  { path: PROTECTED_CODEX_HOME, lexical: resolve(join(REAL_HOME, ".codex")), label: "the real Codex home" },
+  {
+    path: PROTECTED_LAUNCH_AGENTS,
+    lexical: resolve(join(REAL_HOME, "Library", "LaunchAgents")),
+    label: "the real LaunchAgents directory",
+  },
+];
+const PROTECTED_REAL_HOME = canonicalize(REAL_HOME);
+const LEXICAL_REAL_HOME = resolve(REAL_HOME);
+
+/** Canonical paths whose removal is refused. Exported so the guard's tests cannot drift off them. */
+export function protectedRemovalTreesForTests(): readonly string[] {
+  return [PROTECTED_REAL_HOME, ...PROTECTED_TREES.map(tree => tree.path)];
+}
+
+/** Whether `child` sits strictly below `parent`, both already canonicalized. */
+function isInside(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * Why removing `target` is refused, or `null` when it is not a protected location.
+ *
+ * Three relations are refused, not one. Equality alone would still permit
+ * `rmSync(getConfigPath())` against a live `config.json`, and it would permit
+ * `rmSync(homedir())`, which takes the protected tree with it. So a target is refused when it
+ * IS a protected tree, when it sits INSIDE one, or when it is an ANCESTOR of one.
+ *
+ * Canonicalization is what makes a symlink useless as a bypass: a temp path that merely points
+ * at the real home resolves to the real home before any comparison happens.
+ */
+export function protectedRemovalReason(target: string): string | null {
+  // Both spellings are judged, not just the canonical one. Canonicalization is what defeats a
+  // symlink alias, but it also resolves the target away: if `~/.opencodex` is itself a link,
+  // the literal path a caller passed is the thing that gets unlinked, and only the lexical
+  // form still names it. Upstream Codex makes the same distinction in its writable-root
+  // handling, keeping logical and resolved forms side by side rather than collapsing to one.
+  for (const candidate of [canonicalize(target), resolve(target)]) {
+    if (candidate === PROTECTED_REAL_HOME || candidate === LEXICAL_REAL_HOME) {
+      return `the real home directory (${PROTECTED_REAL_HOME})`;
+    }
+    for (const tree of PROTECTED_TREES) {
+      for (const protectedPath of [tree.path, tree.lexical]) {
+        if (candidate === protectedPath) return `${tree.label} (${protectedPath})`;
+        if (isInside(protectedPath, candidate)) return `a path inside ${tree.label} (${protectedPath})`;
+        if (isInside(candidate, protectedPath)) return `an ancestor of ${tree.label} (${protectedPath})`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Throw before a removal that would reach a protected tree.
+ *
+ * Deliberately NOT gated on {@link isTestHomeGuardArmed}. Arming happens in `tests/preload.ts`,
+ * which Bun loads from the `bunfig.toml` it finds in the CURRENT WORKING DIRECTORY — so a run
+ * started outside the repository arms nothing, leaves OPENCODEX_HOME unset, and resolves the
+ * developer's real home. That unarmed run is precisely the one that caused the incident, so the
+ * refusal has to hold without it. Nothing in production calls this; the callers are test
+ * helpers, where the only cost of an unconditional check is a path comparison.
+ */
+export function assertRemovalOutsideProtectedTrees(target: string): void {
+  const reason = protectedRemovalReason(target);
+  if (reason === null) return;
+  throw new Error(
+    `refusing to remove ${reason} from a test process: "${target}" resolves there. `
+    + "Create the directory this test owns with createTempHome() from tests/helpers/temp-home "
+    + "and remove that handle instead (see devlog 260730_codex_rs_upstream_v2_live_handoff/070).",
   );
 }

@@ -245,7 +245,7 @@ export async function cmdNativeMainAccount(args: string[], deps: AccountDeps): P
     }
     if (noWait) {
       printStatus({ flowId: startFlowId, ...pending });
-      console.log("follow up: ocx account main reauth status --flow " + startFlowId);
+      if (!wantsJson) console.log("follow up: ocx account main reauth status --flow " + startFlowId);
       return 0;
     }
     // Blocking wait bounded by the service flow expiry (15-minute grant + margin).
