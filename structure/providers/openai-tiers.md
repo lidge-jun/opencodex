@@ -140,6 +140,10 @@ A confirmed manual reset-credit consumption may immediately reconcile that accou
 eligible pre-existing ordinary reset-derived cooldown after a complete, non-exhausted usage
 observation started after the reset. Paused or reauthentication-required accounts and
 cooldowns held by another in-flight probe remain excluded; their cooldowns are retained.
+Confirmation requires a readable answer. Every reset-credit read, including the consume
+response on both the manual and background paths, goes through the shared bounded-body
+reader, so an upstream answer past that bound is unconfirmed rather than buffered whole.
+An unconfirmed manual consume leaves its operation ambiguous and reconciles nothing.
 Recovery owns the specific cooldown and authenticates
 main and added Pool accounts through their respective credential contracts. Main usage
 publication keeps the latest successfully published observation authoritative. Pool recovery
