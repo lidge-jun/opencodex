@@ -232,14 +232,19 @@ hand-edited `config.json` must accept and reject the same provider shapes.
 
 ## Provider relative send paths
 
-`src/config/schema/leaf-validators.ts` owns `providerRelativeSendPathConfigError` for the schema loader;
-`src/server/auth-cors.ts` imports the same leaf directly for management validation. Both `responsesPath` and `chatCompletionsPath`
+`src/config/provider-relative-send-path.ts` owns the initialization-independent
+`providerRelativeSendPathConfigError` check. The schema leaf re-exports it for compatibility;
+`src/server/auth-cors.ts` imports the pure module directly, so this validator adds no
+runtime dependency on config-schema initialization.
+Both `responsesPath` and `chatCompletionsPath`
 must be strings beginning with `/`, without a scheme, query or fragment; omission is allowed.
 Provider registration/replacement rejects invalid values before DNS, persistence or catalog
 refresh. Editor PATCH checks also validate retained paths when they revalidate a merged provider;
 pacing-only and other existing validation bypasses are unchanged. No send-path PATCH setter is added.
 `tests/server/management-provider-validation.test.ts` covers rejection without live/disk mutation
 and valid-path persistence/reload through the actual management handler.
+`tests/server/provider-send-path-import.test.ts` loads the management boundary before the
+config facade in a fresh process, so an earlier schema import cannot mask an initialization cycle.
 
 ## Restore
 

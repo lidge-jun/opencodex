@@ -1,4 +1,4 @@
-import { providerRelativeSendPathConfigError } from "../config/schema/leaf-validators";
+import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { modelCapabilitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { initialModelSelection } from "../providers/initial-model-selection";

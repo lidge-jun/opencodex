@@ -1,6 +1,6 @@
 # Adapter Registry Authority
 
-Management provider-validation calls use the [shared relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
 
 Request-local adapter bindings are separate from registry authority in the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
