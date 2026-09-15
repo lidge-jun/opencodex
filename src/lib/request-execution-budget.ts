@@ -109,8 +109,8 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly logicalRequestId: string;
   readonly policyVersion: string;
   readonly policy: RequestExecutionBudgetPolicy;
-  /** Share charged/pending sends while keeping recovery and target ledgers local. */
-  deriveScope(policy: RequestExecutionBudgetPolicy): RequestExecutionBudget;
+  /** Share charged/pending sends; an exact prepaid hop may fund the child's initial send. */
+  deriveScope(policy: RequestExecutionBudgetPolicy, prepaid?: SingleUseDispatchPermit): RequestExecutionBudget;
   reserveDispatch(intent: DispatchIntent): DispatchDecision;
   /**
    * Sends still available from the base allowance, capped by a layer's own maximum.
@@ -135,6 +135,8 @@ const RESERVE_FUNDED_CLASSES: ReadonlySet<SendClass> = new Set<SendClass>([
 ]);
 
 let logicalRequestSeq = 0;
+interface SharedSendLedger { spent: number; pendingExternalSends: Set<object>; }
+const permitBookings = new WeakMap<SingleUseDispatchPermit, { ledger: SharedSendLedger; ticket: object }>();
 
 export function createRequestExecutionBudget(
   policy: RequestExecutionBudgetPolicy = CODEX_TEXT_GUARDED_BUDGET_POLICY,
@@ -142,13 +144,14 @@ export function createRequestExecutionBudget(
 ): RequestExecutionBudget {
   return createBudgetScope(policy,
     logicalRequestId ?? `lr-${Date.now().toString(36)}-${(logicalRequestSeq += 1).toString(36)}`,
-    { spent: 0, pendingExternalSends: 0 });
+    { spent: 0, pendingExternalSends: new Set() });
 }
 
 function createBudgetScope(
   policy: RequestExecutionBudgetPolicy,
   logicalRequestId: string,
-  ledger: { spent: number; pendingExternalSends: number },
+  ledger: SharedSendLedger,
+  prepaidBooking?: object,
 ): RequestExecutionBudget {
   // Reservations whose physical send is reported by a retry helper rather than by the permit.
   // They are already charged; the reporter's first send settles one instead of charging again.
@@ -168,25 +171,38 @@ function createBudgetScope(
         ledger.spent = Math.max(0, next);
         return;
       }
-      const settled = Math.min(delta, ledger.pendingExternalSends);
-      ledger.pendingExternalSends -= settled;
+      const settled = Math.min(delta, ledger.pendingExternalSends.size);
+      for (let i = 0; i < settled; i++) {
+        const ticket = ledger.pendingExternalSends.values().next().value;
+        if (ticket) ledger.pendingExternalSends.delete(ticket);
+      }
       ledger.spent += delta - settled;
     },
     logicalRequestId,
     policyVersion: REQUEST_BUDGET_POLICY_VERSION,
     policy,
-    deriveScope: (scopePolicy) => createBudgetScope(scopePolicy, logicalRequestId, ledger),
+    deriveScope(scopePolicy, prepaid) {
+      const booking = prepaid && permitBookings.get(prepaid);
+      return createBudgetScope(scopePolicy, logicalRequestId, ledger,
+        booking?.ledger === ledger ? booking.ticket : undefined);
+    },
     get reserveSpent() { return reserveSpent; },
     get alternateTargetSends() { return alternateTargetSends; },
     get targetTransitions() { return targetTransitions; },
     get lastTargetKey() { return lastTargetKey; },
     remainingBaseSends(cap: number): number {
       const capped = Number.isFinite(cap) ? Math.trunc(cap) : 0;
-      return Math.max(0, Math.min(capped, policy.baseSendAllowance - ledger.spent));
+      const prepaid = prepaidBooking && ledger.pendingExternalSends.has(prepaidBooking) ? 1 : 0;
+      return Math.max(0, Math.min(capped, policy.baseSendAllowance - ledger.spent + prepaid));
     },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
-      if (ledger.spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
+      // Inner adapters call even their first physical attempt "transient". The explicit hop
+      // permit identifies the prepaid send; the recovery class does not identify its owner.
+      const inherited = prepaidBooking
+        && ledger.pendingExternalSends.has(prepaidBooking) ? prepaidBooking : undefined;
+      const spentBeforeSend = ledger.spent - (inherited ? 1 : 0);
+      if (spentBeforeSend >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
 
       const changesTarget = lastTargetKey !== undefined && lastTargetKey !== intent.targetKey;
       const isAlternateTarget = changesTarget || intent.sendClass === "account-failover"
@@ -201,7 +217,7 @@ function createBudgetScope(
       // The base allowance is spent first. Only once it is gone does a recovery class reach
       // for the single shared reserve -- an account move and a validated rebuild cannot each
       // take one.
-      const drawsReserve = policy.baseSendAllowance - ledger.spent <= 0;
+      const drawsReserve = policy.baseSendAllowance - spentBeforeSend <= 0;
       if (drawsReserve) {
         if (!RESERVE_FUNDED_CLASSES.has(intent.sendClass)) {
           return { allowed: false, reason: "base-allowance-exhausted" };
@@ -216,17 +232,19 @@ function createBudgetScope(
       // one remaining send admitted two physical sends, which is the per-request multiplication
       // this budget exists to stop. Everything is booked now; `release()` is the way back.
       const previousTargetKey = lastTargetKey;
-      ledger.spent += 1;
-      if (intent.countedExternally === true) ledger.pendingExternalSends += 1;
+      const ticket = {};
+      if (inherited) {
+        prepaidBooking = undefined;
+        ledger.pendingExternalSends.delete(inherited);
+      } else ledger.spent += 1;
+      if (intent.countedExternally === true) ledger.pendingExternalSends.add(ticket);
       if (drawsReserve) reserveSpent = true;
       if (isAlternateTarget) alternateTargetSends += 1;
       if (changesTarget) targetTransitions += 1;
       lastTargetKey = intent.targetKey;
 
       let settled: "open" | "used" | "released" = "open";
-      return {
-        allowed: true,
-        permit: {
+      const permit: SingleUseDispatchPermit = {
           sendClass: intent.sendClass,
           use(): boolean {
             if (settled !== "open") return false;
@@ -239,17 +257,21 @@ function createBudgetScope(
             // An externally counted reservation the reporter already settled paid for a send
             // that physically happened. Refunding it would hand the request a free send back.
             if (intent.countedExternally === true) {
-              if (ledger.pendingExternalSends === 0) return;
-              ledger.pendingExternalSends -= 1;
+              if (!ledger.pendingExternalSends.has(ticket)) return;
+              ledger.pendingExternalSends.delete(ticket);
             }
-            ledger.spent -= 1;
+            if (inherited) {
+              ledger.pendingExternalSends.add(inherited);
+              prepaidBooking = inherited;
+            } else ledger.spent -= 1;
             if (drawsReserve) reserveSpent = false;
             if (isAlternateTarget) alternateTargetSends -= 1;
             if (changesTarget) targetTransitions -= 1;
             lastTargetKey = previousTargetKey;
           },
-        },
       };
+      if (intent.countedExternally === true) permitBookings.set(permit, { ledger, ticket });
+      return { allowed: true, permit };
     },
   };
   return budget;

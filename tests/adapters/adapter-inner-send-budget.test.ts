@@ -6,6 +6,7 @@ import type { CursorRunRequest, CursorServerMessage } from "../../src/adapters/c
 import type { CursorTransport } from "../../src/adapters/cursor/transport";
 import { createRequestExecutionBudget, type RequestExecutionBudgetPolicy } from "../../src/lib/request-execution-budget";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { comboExecutionBudgetPolicy, comboTargetSendBudget } from "../../src/server/responses/combo-send-budget";
 
 /**
  * Adapters that retry INSIDE one adapter call are the layer a per-request cap cannot see from
@@ -52,6 +53,23 @@ function alwaysResets(): { calls: number } {
 }
 
 describe("Kiro inner retries and the request send budget", () => {
+  test("combo hop bookings fund actual Kiro sends once and leave every target reachable", async () => {
+    const upstream = alwaysResets();
+    const combo = createRequestExecutionBudget(comboExecutionBudgetPolicy(3));
+    const counts: number[] = [];
+    for (let target = 0; target < 3; target++) {
+      const hop = combo.reserveDispatch({ sendClass: target === 0 ? "initial" : "combo-failover", targetKey: `target-${target}`, countedExternally: true });
+      if (!hop.allowed) throw new Error(`target ${target} was starved`);
+      hop.permit.use();
+      const child = comboTargetSendBudget(combo, 2 - target, hop.permit);
+      const before = upstream.calls;
+      await expect(fetchKiroWithRetry(kiroRequest, { timeoutMs: 5_000, sendBudget: child })).rejects.toBeDefined();
+      counts.push(upstream.calls - before);
+    }
+    expect(counts).toEqual([3, 2, 1]);
+    expect(combo.used).toBe(upstream.calls);
+    expect(upstream.calls).toBe(6);
+  });
   test("a context without a budget keeps the adapter's own reset ladder", async () => {
     const upstream = alwaysResets();
     const observed: Array<{ ordinal: number; recovery?: string }> = [];

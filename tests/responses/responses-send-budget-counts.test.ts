@@ -120,7 +120,7 @@ describe("upstream sends per logical request", () => {
     expect(sendCounts(logCtx)).toEqual([3]);
   });
 
-  test("a three-target 5xx combo reaches every target within five base sends", async () => {
+  test("a three-target 5xx combo reaches every target within six physical sends", async () => {
     const upstream = alwaysFailing(502, "upstream busy");
     const logCtx: RequestLogContext = { model: "", provider: "" };
 
@@ -145,10 +145,10 @@ describe("upstream sends per logical request", () => {
     // Bounded by the derived total: the first target's ladder, one send per further declared
     // target, and the single shared final-recovery reserve. The measured regression in #4546 was
     // twelve, four per target, because each child drew a fresh full allowance.
-    // A plain 5xx streak has no qualifying final recovery, so it uses only the five base
-    // sends. The sixth is reserved for an explicitly admitted recovery, covered by permits.
-    expect(bearers).toHaveLength(5);
-    expect(totalSends(logCtx)).toBe(5);
+    // The final combo hop can use the shared recovery allowance. A prepaid hop must settle
+    // against its first physical send rather than shrinking the next target's ladder twice.
+    expect(bearers).toHaveLength(6);
+    expect(totalSends(logCtx)).toBe(6);
   });
 
   // REMOVED: "a 401 before the 5xx streak spends one of the same three sends".

@@ -3247,7 +3247,7 @@ export async function handleComboResponses(
       break;
     }
     const targetSendBudget = comboSendScope
-      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
+      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched, hopDecision?.allowed ? hopDecision.permit : undefined)
       : options.sendBudget;
     comboTargetsDispatched += 1;
     const childLog: RequestLogContext = {

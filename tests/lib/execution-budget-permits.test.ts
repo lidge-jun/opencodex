@@ -158,15 +158,19 @@ describe("combo scopes share reservation accounting", () => {
     const parent = createRequestExecutionBudget();
     const combo = deriveSendBudgetScope(parent, comboExecutionBudgetPolicy(3));
     let sends = 0;
+    const byTarget: number[] = [];
     for (let target = 0; target < 3; target++) {
       const scope = comboTargetSendBudget(combo, 2 - target);
+      const before = sends;
       for (let attempt = 0; attempt < 8; attempt++) {
         const decision = scope.reserveDispatch({ sendClass: attempt === 0 ? "initial" : "auth-recovery", targetKey: `target-${target}` });
         if (!decision.allowed) break;
         expect(decision.permit.use()).toBe(true);
         sends++;
       }
+      byTarget.push(sends - before);
     }
+    expect(byTarget).toEqual([4, 1, 1]);
     expect(sends).toBe(combo.policy.maxTotalModelSends);
     expect(parent.used).toBe(sends);
     expect(combo.remainingBaseSends(100)).toBe(0);
@@ -185,6 +189,38 @@ describe("combo scopes share reservation accounting", () => {
     }
     expect(parent.targetTransitions).toBe(0);
     expect(parent.used).toBe(4);
+  });
+
+  test("two external reporters cannot adopt the same prepaid hop", () => {
+    const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const hop = parent.reserveDispatch({ sendClass: "initial", targetKey: "combo", countedExternally: true });
+    if (!hop.allowed) throw new Error("expected hop");
+    hop.permit.use();
+    const first = deriveSendBudgetScope(parent, ONE_SEND_LEFT, hop.permit);
+    const second = deriveSendBudgetScope(parent, ONE_SEND_LEFT, hop.permit);
+    expect(first.reserveDispatch({ sendClass: "transient", targetKey: "a", countedExternally: true }).allowed).toBe(true);
+    expect(second.reserveDispatch({ sendClass: "transient", targetKey: "b", countedExternally: true }).allowed).toBe(false);
+    parent.used += 1;
+    expect(parent.used).toBe(1);
+  });
+
+  test("an adapter adopts its exact prepaid hop once and can return it before dispatch", () => {
+    const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const hop = parent.reserveDispatch({ sendClass: "initial", targetKey: "combo", countedExternally: true });
+    if (!hop.allowed) throw new Error("expected hop");
+    hop.permit.use();
+    const child = deriveSendBudgetScope(parent, ONE_SEND_LEFT, hop.permit);
+    expect(child.remainingBaseSends(3)).toBe(1);
+    const first = child.reserveDispatch({ sendClass: "initial", targetKey: "adapter" });
+    if (!first.allowed) throw new Error("expected prepaid initial send");
+    expect(parent.used).toBe(1);
+    first.permit.release();
+    expect(child.remainingBaseSends(3)).toBe(1);
+    const retry = child.reserveDispatch({ sendClass: "initial", targetKey: "adapter" });
+    if (!retry.allowed) throw new Error("expected returned booking");
+    expect(retry.permit.use()).toBe(true);
+    expect(parent.used).toBe(1);
+    expect(child.reserveDispatch({ sendClass: "transient", targetKey: "adapter" }).allowed).toBe(false);
   });
 });
 

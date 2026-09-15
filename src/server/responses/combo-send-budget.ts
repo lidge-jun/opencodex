@@ -1,4 +1,4 @@
-import { CODEX_TEXT_GUARDED_BUDGET_POLICY, type RequestExecutionBudget, type RequestExecutionBudgetPolicy } from "../../lib/request-execution-budget";
+import { CODEX_TEXT_GUARDED_BUDGET_POLICY, type RequestExecutionBudget, type RequestExecutionBudgetPolicy, type SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -46,8 +46,9 @@ export function comboExecutionBudgetPolicy(declaredTargets: number): RequestExec
 export function deriveSendBudgetScope(
   parent: RequestExecutionBudget,
   policy: RequestExecutionBudgetPolicy,
+  prepaid?: SingleUseDispatchPermit,
 ): RequestExecutionBudget {
-  return parent.deriveScope(policy);
+  return parent.deriveScope(policy, prepaid);
 }
 
 /**
@@ -62,17 +63,18 @@ export function deriveSendBudgetScope(
 export function comboTargetSendBudget(
   comboScope: RequestExecutionBudget,
   targetsDeclaredAfterThisOne: number,
+  prepaid?: SingleUseDispatchPermit,
 ): RequestExecutionBudget {
   const policy = comboScope.policy;
   const heldForLaterTargets = Math.max(0, targetsDeclaredAfterThisOne);
   const ceiling = Math.max(1, policy.maxTotalModelSends - heldForLaterTargets);
   return deriveSendBudgetScope(comboScope, {
-    maxTotalModelSends: policy.maxTotalModelSends,
-    baseSendAllowance: Math.min(ceiling, comboScope.used + COMBO_TARGET_BASE_SENDS),
+    maxTotalModelSends: ceiling,
+    baseSendAllowance: Math.min(ceiling, comboScope.used - (prepaid ? 1 : 0) + COMBO_TARGET_BASE_SENDS),
     finalRecoveryAllowance: policy.finalRecoveryAllowance,
     // Within one target the account-move shape is unchanged: three same-account sends plus one
     // alternate is the recovery live traffic depends on, and a combo does not widen it.
     maxAlternateTargetSends: CODEX_TEXT_GUARDED_BUDGET_POLICY.maxAlternateTargetSends,
     maxTargetTransitions: CODEX_TEXT_GUARDED_BUDGET_POLICY.maxTargetTransitions,
-  });
+  }, prepaid);
 }
