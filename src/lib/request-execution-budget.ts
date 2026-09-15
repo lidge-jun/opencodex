@@ -72,17 +72,28 @@ export interface DispatchIntent {
   readonly replaySafe?: boolean;
   /**
    * True when the physical send is already reported through another counter -- the retry
-   * helpers' `onSendsConsumed` hook. The permit then books the reserve, alternate-target and
-   * transition ledgers but leaves `used` to that reporter, because charging both is how a
-   * four-send cap silently becomes a two-send cap.
+   * helpers' `onSendsConsumed` hook. The send is still booked at reservation time, because an
+   * advisory reservation cannot stop a concurrent leg; what changes is that the booking is
+   * PENDING, and the first send the external reporter names settles it instead of adding a
+   * second charge. Charging both is how a four-send cap silently becomes a two-send cap.
    */
   readonly countedExternally?: boolean;
 }
 
 export interface SingleUseDispatchPermit {
   readonly sendClass: SendClass;
-  /** Consume exactly once. A second call returns false and charges nothing. */
+  /**
+   * Confirm the dispatch this permit already paid for. The reservation is the charge, so this
+   * charges nothing; it is how a leg proves it is the one that sent. A second call returns
+   * false, which is what keeps a retry thunk from sending twice on one permit.
+   */
   use(): boolean;
+  /**
+   * Hand back a reservation that never dispatched -- a credential move that found no alternate,
+   * a rebuild abandoned before the send. Idempotent, and a no-op once the permit was used or
+   * once an external send reporter already settled it.
+   */
+  release(): void;
 }
 
 export type DispatchDecision =
@@ -103,6 +114,9 @@ export interface RequestExecutionBudget extends TransientSendBudget {
    * Sends still available from the base allowance, capped by a layer's own maximum.
    * Returns 0 when the allowance is gone -- it never floors to 1, because a floor of 1 is
    * what let every recovery leg send one more time forever.
+   *
+   * A reserved-but-unconfirmed send is spent for this purpose. The alternative -- counting only
+   * confirmed sends -- is what let two legs read the same remainder and both dispatch.
    */
   remainingBaseSends(cap: number): number;
   readonly reserveSpent: boolean;
@@ -124,13 +138,30 @@ export function createRequestExecutionBudget(
   policy: RequestExecutionBudgetPolicy = CODEX_TEXT_GUARDED_BUDGET_POLICY,
   logicalRequestId?: string,
 ): RequestExecutionBudget {
+  let spent = 0;
+  // Reservations whose physical send is reported by a retry helper rather than by the permit.
+  // They are already charged; the reporter's first send settles one instead of charging again.
+  let pendingExternalSends = 0;
   let reserveSpent = false;
   let alternateTargetSends = 0;
   let targetTransitions = 0;
   let lastTargetKey: string | undefined;
 
   const budget: RequestExecutionBudget = {
-    used: 0,
+    get used(): number { return spent; },
+    set used(next: number) {
+      // The retry helpers report their real send count by assigning through this field. A
+      // reservation taken with `countedExternally` has already booked one of those sends, so
+      // the report settles the pending booking first and only the surplus is charged.
+      const delta = next - spent;
+      if (delta <= 0) {
+        spent = Math.max(0, next);
+        return;
+      }
+      const settled = Math.min(delta, pendingExternalSends);
+      pendingExternalSends -= settled;
+      spent += delta - settled;
+    },
     logicalRequestId: logicalRequestId ?? `lr-${Date.now().toString(36)}-${(logicalRequestSeq += 1).toString(36)}`,
     policyVersion: REQUEST_BUDGET_POLICY_VERSION,
     policy,
@@ -140,11 +171,11 @@ export function createRequestExecutionBudget(
     get lastTargetKey() { return lastTargetKey; },
     remainingBaseSends(cap: number): number {
       const capped = Number.isFinite(cap) ? Math.trunc(cap) : 0;
-      return Math.max(0, Math.min(capped, policy.baseSendAllowance - budget.used));
+      return Math.max(0, Math.min(capped, policy.baseSendAllowance - spent));
     },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
-      if (budget.used >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
+      if (spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
 
       const changesTarget = lastTargetKey !== undefined && lastTargetKey !== intent.targetKey;
       const isAlternateTarget = changesTarget || intent.sendClass === "account-failover"
@@ -159,7 +190,7 @@ export function createRequestExecutionBudget(
       // The base allowance is spent first. Only once it is gone does a recovery class reach
       // for the single shared reserve -- an account move and a validated rebuild cannot each
       // take one.
-      const drawsReserve = budget.remainingBaseSends(policy.baseSendAllowance) === 0;
+      const drawsReserve = policy.baseSendAllowance - spent <= 0;
       if (drawsReserve) {
         if (!RESERVE_FUNDED_CLASSES.has(intent.sendClass)) {
           return { allowed: false, reason: "base-allowance-exhausted" };
@@ -169,29 +200,47 @@ export function createRequestExecutionBudget(
         }
       }
 
-      let consumed = false;
+      // THE RESERVATION IS THE CHARGE. Deciding here and charging in `use()` left a window in
+      // which two legs read the same remainder, both received a permit, and both dispatched:
+      // one remaining send admitted two physical sends, which is the per-request multiplication
+      // this budget exists to stop. Everything is booked now; `release()` is the way back.
+      const previousTargetKey = lastTargetKey;
+      spent += 1;
+      if (intent.countedExternally === true) pendingExternalSends += 1;
+      if (drawsReserve) reserveSpent = true;
+      if (isAlternateTarget) alternateTargetSends += 1;
+      if (changesTarget) targetTransitions += 1;
+      lastTargetKey = intent.targetKey;
+
+      let settled: "open" | "used" | "released" = "open";
       return {
         allowed: true,
         permit: {
           sendClass: intent.sendClass,
           use(): boolean {
-            if (consumed) return false;
-            consumed = true;
-            // Charged here, immediately before the physical send, rather than reported after
-            // the helper returns: a counter that is only reconciled afterwards cannot stop two
-            // concurrent legs that both read the same remainder.
-            if (intent.countedExternally !== true) budget.used += 1;
-            if (drawsReserve) reserveSpent = true;
-            if (isAlternateTarget) alternateTargetSends += 1;
-            if (changesTarget) targetTransitions += 1;
-            lastTargetKey = intent.targetKey;
+            if (settled !== "open") return false;
+            settled = "used";
             return true;
+          },
+          release(): void {
+            if (settled !== "open") return;
+            settled = "released";
+            // An externally counted reservation the reporter already settled paid for a send
+            // that physically happened. Refunding it would hand the request a free send back.
+            if (intent.countedExternally === true) {
+              if (pendingExternalSends === 0) return;
+              pendingExternalSends -= 1;
+            }
+            spent -= 1;
+            if (drawsReserve) reserveSpent = false;
+            if (isAlternateTarget) alternateTargetSends -= 1;
+            if (changesTarget) targetTransitions -= 1;
+            lastTargetKey = previousTargetKey;
           },
         },
       };
     },
   };
-  if (lastTargetKey === undefined) lastTargetKey = undefined;
   return budget;
 }
 

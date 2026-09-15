@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   fetchWithResetRetry,
+  fetchWithTransientRetry,
   isConnectionResetError,
   prepareSameTarget429Wait,
   releaseResponseBodyBestEffort,
@@ -263,15 +264,103 @@ describe("retryBackoffDelayMs", () => {
     })).toBe(30_000);
   });
 
-  test("an honoured Retry-After is still ceilinged so it cannot park a request (#4546)", () => {
+  test("an honoured Retry-After is preserved in full, never shortened (#4546)", () => {
     const headers = new Headers({ "Retry-After": "3600" });
+    // The instruction is the provider's statement of when it will serve again. Clamping it
+    // to a local ceiling produced a send the upstream already said it would refuse; whether
+    // the request can wait that long is the caller's deadline decision, not a shorter delay.
     expect(retryBackoffDelayMs(0, {
       baseDelayMs: 250,
       maxDelayMs: 5_000,
       headers,
       retryAfterIsLowerBound: true,
       retryAfterCeilingMs: 60_000,
-    })).toBe(60_000);
+    })).toBe(3_600_000);
+  });
+
+  test("an instruction past the wait deadline ends with the upstream answer intact (#4546)", async () => {
+    silenceWarn();
+    const upstream = new Response("overloaded", {
+      status: 503,
+      headers: { "Retry-After": "3600" },
+    });
+    const { calls, doFetch } = mockDoFetch([upstream]);
+    const res = await fetchWithTransientRetry(doFetch);
+    // No early retry: one send, and the caller gets the real 503 with its Retry-After
+    // rather than a second refusal the provider already announced.
+    expect(calls.length).toBe(1);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("3600");
+  });
+
+  test("an instruction inside the wait deadline is still honoured before retrying (#4546)", async () => {
+    silenceWarn();
+    const limited = new Response("overloaded", {
+      status: 503,
+      headers: { "Retry-After": "1" },
+    });
+    const ok = new Response("fine", { status: 200 });
+    const { calls, doFetch } = mockDoFetch([limited, ok]);
+    const started = Date.now();
+    const res = await fetchWithTransientRetry(doFetch);
+    expect(res.status).toBe(200);
+    expect(calls.length).toBe(2);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  });
+
+  test("a caller deadline shorter than the default is not slept past (#4546)", async () => {
+    silenceWarn();
+    const limited = new Response("overloaded", {
+      status: 503,
+      headers: { "Retry-After": "1" },
+    });
+    const ok = new Response("fine", { status: 200 });
+    const { calls, doFetch } = mockDoFetch([limited, ok]);
+    const started = Date.now();
+    // The caller can wait 500ms; the upstream asked for 1s. Reading the module default
+    // instead of this deadline parked the request for the full second -- the 30s-budget /
+    // 45s-instruction shape, scaled down so the test does not have to sleep it.
+    const res = await fetchWithTransientRetry(doFetch, { retryAfterCeilingMs: 500 });
+    expect(calls.length).toBe(1);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("1");
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  test("an instruction exactly at the caller deadline is honoured, not refused (#4546)", async () => {
+    silenceWarn();
+    const limited = new Response("overloaded", {
+      status: 503,
+      headers: { "Retry-After": "1" },
+    });
+    const ok = new Response("fine", { status: 200 });
+    const { calls, doFetch } = mockDoFetch([limited, ok]);
+    const started = Date.now();
+    // Equality is inside the budget: the deadline is what the caller CAN wait, so a wait of
+    // exactly that length is affordable and the retry happens after it.
+    const res = await fetchWithTransientRetry(doFetch, { retryAfterCeilingMs: 1_000 });
+    expect(res.status).toBe(200);
+    expect(calls.length).toBe(2);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  });
+
+  test("a caller deadline longer than the default waits instead of ending early (#4546)", async () => {
+    silenceWarn();
+    const limited = new Response("overloaded", {
+      status: 503,
+      headers: { "Retry-After": "90" },
+    });
+    const { calls, doFetch } = mockDoFetch([limited, new Response("fine", { status: 200 })]);
+    const ac = new AbortController();
+    // 90s is past the module default but inside this caller's 120s deadline, so the call must
+    // be waiting -- not returning the 503 the default ceiling used to hand back immediately.
+    // Aborting mid-wait is how the test observes the wait without sitting through it.
+    setTimeout(() => ac.abort(new DOMException("deadline probe", "AbortError")), 20);
+    await expect(fetchWithTransientRetry(doFetch, {
+      retryAfterCeilingMs: 120_000,
+      abortSignal: ac.signal,
+    })).rejects.toThrow("deadline probe");
+    expect(calls.length).toBe(1);
   });
 
   test("opting in never shortens a wait below the local backoff (#4546)", () => {

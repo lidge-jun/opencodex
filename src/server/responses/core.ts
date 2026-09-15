@@ -1,4 +1,5 @@
 import { capturePoolQuotaWriter } from "../../codex/account-store";
+import { CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON } from "../../codex/pool-refresh-backoff";
 import type { Server } from "bun";
 import { recordContextSessionOwner } from "../../codex/context-owner";
 import { contextRelayActivated } from "../../codex/context-compat";
@@ -172,6 +173,7 @@ import {
   createCodexReserveDispatchGuard,
   unwrapUpstreamRetryEvidenceError,
   codexPoolAffinityKey,
+  previewCodexPoolLineage,
   CodexAccountCooldownError,
   CodexAuthContextError,
   CodexMainProfileDrainingError,
@@ -211,6 +213,7 @@ import {
 } from "../../codex/routing";
 import {
   TokenRefreshError,
+  isTerminalCodexPoolRefreshFailure,
   forceRefreshCodexPoolToken,
   readCodexAccountRecord,
 } from "../../codex/account-store";
@@ -230,6 +233,9 @@ import {
 import {
   createRequestExecutionBudget,
   isRequestExecutionBudget,
+  CODEX_TEXT_GUARDED_BUDGET_POLICY,
+  type RequestExecutionBudget,
+  type RequestExecutionBudgetPolicy,
   type SendClass,
   type SingleUseDispatchPermit,
 } from "../../lib/request-execution-budget";
@@ -237,6 +243,7 @@ import {
   chargeWorkflowSends,
   workflowSendCeilingReached,
 } from "../../lib/workflow-budget";
+import { workflowRefusalResponse } from "../workflow-refusal";
 import {
   ForwardAdmissionCredentialError,
   hasForwardableCodexBearer,
@@ -346,6 +353,7 @@ import {
   recordAttemptCredentialSource,
   usageFromResponsesPayload,
   type RequestLogContext,
+  markLocalRequestLogRefusal,
 } from "../request-log";
 import {
   conversationIdFromResponsesRequest,
@@ -410,6 +418,11 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace, stripAgentMessageCiphertextInPlace } from "./encrypted-payload";
+import {
+  applyAccountChangeConversationStateScrub,
+  conversationStateBindingFromAuth,
+  rememberServingConversationStateIssuer,
+} from "./account-change-state";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, storedPoolReplayDispatchNotifier, type ProviderFetchOptions } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import {
@@ -1540,6 +1553,8 @@ async function retryCodexPoolOnAlternateAccount(
       && !(error instanceof CodexAccountCooldownError)
       && !(error instanceof CodexMainProfileDrainingError);
     if (unexpectedRetryError) {
+      // The reservation is the charge now, so an abandoned move has to hand its send back.
+      accountMovePermit?.release();
       await firstResponse.body?.cancel().catch(() => undefined);
       releaseCodexAuthContextProbeLease(firstAuthCtx);
       throw error;
@@ -1566,6 +1581,8 @@ async function retryCodexPoolOnAlternateAccount(
         writerGeneration: firstAuthCtx.writerGeneration,
       });
     }
+    // No usable alternate was resolved, so the reserved move never becomes a send.
+    accountMovePermit?.release();
     recordUnmovedTransientOutcome();
     return { kind: "no-alternate" };
   }
@@ -1619,6 +1636,24 @@ async function retryCodexPoolOnAlternateAccount(
     codexAuthContext: retryAuthCtx,
     forwardHeaders: retryHeaders,
   });
+  {
+    const binding = conversationStateBindingFromAuth(
+      retryAuthCtx,
+      firstAuthCtx.kind === "pool" || firstAuthCtx.kind === "main-pool"
+        ? firstAuthCtx.affinityKey
+        : undefined,
+    );
+    if (binding) {
+      applyAccountChangeConversationStateScrub({
+        body: parsed._rawBody,
+        parsed,
+        bindingKey: binding.bindingKey,
+        servingAccountId: binding.accountId,
+        priorAccountId: firstAuthCtx.accountId,
+        logCtx,
+      });
+    }
+  }
   const request = await retryAdapter.buildRequest(parsed, {
     headers: retryHeaders,
     translatorBudget: options.translatorBudget,
@@ -1651,6 +1686,26 @@ async function retryCodexPoolOnAlternateAccount(
   // seven additional same-account sends (eight total including the original), re-checking the
   // exact allow-listed body and fresh entitlement before every later send. Alternate-account and
   // quota recovery retain their historical one-send bound.
+  //
+  // Two different bounds, and the effective one is the smaller. `maxRetrySends` answers "how
+  // many times is it worth re-asking THIS account for a model its roster still grants"; the
+  // shared budget answers "how many times may this LOGICAL REQUEST reach upstream in total,
+  // across every layer that can re-send". A ladder of eight layered on sends the request had
+  // already made is exactly the per-request multiplication #4546 is about, so the ladder is
+  // capped at what the request has left. The floor of one keeps the single retry this function
+  // was called to make -- the move already paid for itself with its own permit -- and each rung
+  // past the first reserves its own send below, so a refusal stops the ladder with the last
+  // upstream answer intact.
+  // The ladder replays to the SAME account, so it must reserve under the same target key the
+  // other legs use. Folding the account id in made every rung read as a target change, which
+  // spent the one cross-account slot a real move needs on a same-account replay.
+  const ladderTargetKey = `${route.providerName}|${route.modelId}`;
+  // The ladder keeps its OWN bound rather than drawing on what the request has left. Clamping it
+  // to the shared total looked right and broke a working, pinned path: #2097 fixes this recovery
+  // at eight same-account dispatches (tests/server/server-auth.test.ts), and a request that has
+  // already spent sends would silently stop short of it. Reconciling an eight-send same-account
+  // ladder with a four-send request total is a policy decision, not a clamp to add in passing.
+  // What this diff does fix is that the rungs are now CHARGED instead of free.
   const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;
   let retrySendCount = 0;
   let upstreamResponse: Response;
@@ -1723,6 +1778,24 @@ async function retryCodexPoolOnAlternateAccount(
         throw error;
       }
       if (!entitledCodexAccountIdsForModel(refreshed, route.modelId)?.has(retryAuthCtx.accountId)) break;
+      // The next rung is another physical send of this logical request: a same-account,
+      // same-target replay, charged as an ordinary transient send rather than as a move.
+      // Reserved here, immediately before looping back, so a refusal stops the ladder with the
+      // last upstream 400 intact instead of spending a send it cannot make.
+      // Every rung is CHARGED, and a refusal does not end the ladder. That asymmetry is
+      // deliberate and it is the one place the shared cap yields. This is a same-account,
+      // same-target replay of a model-gating 400 whose own bound is eight dispatches, pinned by
+      // #2097; letting a spent request budget cut it to four would break a recovery that works
+      // today, which is precisely the mistake 040_send_budget.md warns a flat ceiling makes.
+      // The request total still governs everything that changes target or credential.
+      if (executionBudget) {
+        const rung = executionBudget.reserveDispatch({
+          sendClass: "transient",
+          targetKey: ladderTargetKey,
+        });
+        if (rung.allowed) rung.permit.use();
+        chargeWorkflowSends(args.options.workflowRootId, 1);
+      }
       await upstreamResponse.body?.cancel().catch(() => undefined);
     }
   } finally {
@@ -2259,6 +2332,75 @@ type ResponsesAuthResolution =
   | { ok: false; response: Response };
 
 /**
+ * The caller credential the final Codex auth resolution will be given, as far as the ROUTE
+ * decides it: a route change that may cross a credential domain drops the raw caller credential,
+ * and a trusted Claude-main handoff replaces it.
+ *
+ * Shared with the lineage preview in `handleResponsesInner`, which has to read a conversation's
+ * family under the same authenticated scope the resolution will record it under -- that scope is
+ * an HMAC of exactly this Authorization header. Two copies of this rule would put preview and
+ * final auth in different scopes the first time one of them changed.
+ */
+function codexRouteCredentialDomainHeaders(
+  req: Request,
+  route: RouteResult,
+  options: HandleResponsesOptions,
+  credentialDomainWasRewritten: boolean,
+): Headers {
+  const trustedClaudeMainForFinalRoute = options.stripClaudeMainAuthForNoncanonicalForward === true
+    && isCanonicalOpenAiForwardProvider(route.provider)
+    ? options.trustedClaudeMainAuth : undefined;
+  if (trustedClaudeMainForFinalRoute) {
+    const claudeMainHeaders = new Headers(req.headers);
+    claudeMainHeaders.set("authorization", trustedClaudeMainForFinalRoute.authorization);
+    if (trustedClaudeMainForFinalRoute.chatgptAccountId) {
+      claudeMainHeaders.set("chatgpt-account-id", trustedClaudeMainForFinalRoute.chatgptAccountId);
+    } else {
+      claudeMainHeaders.delete("chatgpt-account-id");
+    }
+    return claudeMainHeaders;
+  }
+  // Route-changing recursion retains typed admission, never an unscoped raw
+  // caller credential. Bearer admission is substituted or stripped below.
+  const routeMayChangeCredentialDomain = options.comboAttempt === true
+    || route.routeKind === "policy"
+    || credentialDomainWasRewritten;
+  if (routeMayChangeCredentialDomain && options.admission?.source !== "bearer") {
+    const scoped = new Headers(req.headers);
+    scoped.delete("authorization");
+    scoped.delete("chatgpt-account-id");
+    return scoped;
+  }
+  return req.headers;
+}
+
+/**
+ * Does this route substitute OUR stored main credential, and does the caller own the credential
+ * this request will authenticate with?
+ *
+ * Both answers are needed twice: by the resolution below, and by the lineage preview, which must
+ * not follow a Pool family binding for a request whose credential never enters Pool state. One
+ * implementation, because two copies of this predicate disagreeing is the divergence the preview
+ * gate exists to prevent. The reasoning behind the substitution test itself is at its use site
+ * below (#1686, #2132).
+ */
+function codexRouteCredentialOwnership(
+  authInputHeaders: Headers,
+  config: OcxConfig,
+  route: RouteResult,
+  options: HandleResponsesOptions,
+): { substituteMainCredential: boolean; requestScopedMainCredential: boolean } {
+  const substituteMainCredential = options.admission?.source === "bearer"
+    && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
+  return {
+    substituteMainCredential,
+    requestScopedMainCredential: route.codexAccountMode !== undefined
+      && !substituteMainCredential
+      && hasForwardableCodexBearer(authInputHeaders, config),
+  };
+}
+
+/**
  * Resolve Codex auth for a route. On unusable contexts, releases any probe lease
  * before returning the 401 (nothing reaches upstream).
  */
@@ -2270,30 +2412,12 @@ async function resolveResponsesCodexAuth(
   credentialDomainWasRewritten = false,
 ): Promise<ResponsesAuthResolution> {
   try {
-    const routeMayChangeCredentialDomain = options.comboAttempt === true
-      || route.routeKind === "policy"
-      || credentialDomainWasRewritten;
-    const trustedClaudeMainForFinalRoute = options.stripClaudeMainAuthForNoncanonicalForward === true
-      && isCanonicalOpenAiForwardProvider(route.provider)
-      ? options.trustedClaudeMainAuth : undefined;
-    let authInputHeaders = req.headers;
-    // Route-changing recursion retains typed admission, never an unscoped raw
-    // caller credential. Bearer admission is substituted or stripped below.
-    if (routeMayChangeCredentialDomain && options.admission?.source !== "bearer"
-      && !trustedClaudeMainForFinalRoute) {
-      authInputHeaders = new Headers(req.headers);
-      authInputHeaders.delete("authorization");
-      authInputHeaders.delete("chatgpt-account-id");
-    }
-    if (trustedClaudeMainForFinalRoute) {
-      authInputHeaders = new Headers(authInputHeaders);
-      authInputHeaders.set("authorization", trustedClaudeMainForFinalRoute.authorization);
-      if (trustedClaudeMainForFinalRoute.chatgptAccountId) {
-        authInputHeaders.set("chatgpt-account-id", trustedClaudeMainForFinalRoute.chatgptAccountId);
-      } else {
-        authInputHeaders.delete("chatgpt-account-id");
-      }
-    }
+    let authInputHeaders = codexRouteCredentialDomainHeaders(
+      req,
+      route,
+      options,
+      credentialDomainWasRewritten,
+    );
     // A caller-auth transport that is not canonical OpenAI (keyless Cursor) consumes the
     // caller's Authorization as its own upstream token. Keep that contract only for a clean
     // single bearer with NO ChatGPT-domain marker. A bearer marked for the ChatGPT domain —
@@ -2357,12 +2481,13 @@ async function resolveResponsesCodexAuth(
     // bug; the transport is the authority, because the transport is what actually carries the
     // header. A key-authenticated routed provider is still not canonical-forward, so #2132's
     // no-ChatGPT-login install keeps working.
-    const substituteMainCredential = options.admission?.source === "bearer"
-      && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
+    const { substituteMainCredential, requestScopedMainCredential } = codexRouteCredentialOwnership(
+      authInputHeaders,
+      config,
+      route,
+      options,
+    );
     const stripAuthorization = options.admission?.source === "bearer" && !substituteMainCredential;
-    const requestScopedMainCredential = route.codexAccountMode !== undefined
-      && !substituteMainCredential
-      && hasForwardableCodexBearer(authInputHeaders, config);
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
       validateForwardAdmissionCredential(authInputHeaders, config);
     }
@@ -2476,7 +2601,11 @@ async function resolveResponsesCodexAuth(
  * defect this path exists to fix (#2887).
  */
 function isTerminalPoolRefreshFailure(error: unknown): boolean {
-  return error instanceof TokenRefreshError && (error.reason === "revoked" || error.reason === "expired");
+  // Delegated so "terminal" has ONE definition. A missing record or a missing refresh-grant
+  // fingerprint is permanent -- retrying cannot conjure a credential -- and used to be a bare
+  // Error, which fell through to the retryable 503 and told the operator to keep retrying a
+  // request that could never succeed.
+  return isTerminalCodexPoolRefreshFailure(error);
 }
 
 /**
@@ -2509,7 +2638,12 @@ export function poolCredentialRefreshIncompleteResponse(args: {
   authCtx: CodexAuthContext;
   config: Pick<OcxConfig, "codexAccounts">;
   accountSelector?: string;
+  logCtx?: RequestLogContext;
 }): Response {
+  // The wire contract below is unchanged on purpose, so the record has to carry the origin
+  // instead. Without it an operator reads this sentence under a field named "Upstream reason"
+  // and goes looking at the provider's status page for a refusal that never left this process.
+  if (args.logCtx) markLocalRequestLogRefusal(args.logCtx, CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON);
   const label = args.accountSelector ?? codexAuthContextLogLabel(args.authCtx, args.config);
   const account = label ? `Codex pool account ${label}` : "the selected Codex pool account";
   const response = formatErrorResponse(
@@ -2529,6 +2663,7 @@ export function poolCredentialRefreshIncompleteResponse(args: {
  * which must retire the account, from a transient failure, which must not.
  */
 async function refreshPoolForwardAuth(args: {
+  logCtx?: RequestLogContext;
   req: Request;
   config: OcxConfig;
   route: RouteResult;
@@ -2601,6 +2736,7 @@ async function refreshPoolForwardAuth(args: {
         authCtx,
         config,
         accountSelector: route.codexAccountNamespace,
+        logCtx: args.logCtx,
       }),
     };
   }
@@ -2876,6 +3012,91 @@ async function applyFinalRouteRequestNormalization(args: {
 
 
 
+/**
+ * Sends one combo target may run on its own before the ladder moves on. A target is a whole
+ * request as far as its own provider is concerned, so this is the guarded profile's base
+ * allowance rather than a separate number to keep in sync.
+ */
+const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSendAllowance;
+
+/**
+ * A combo's execution policy is DECLARED by the combo, not inherited from the single-target
+ * profile.
+ *
+ * `maxTargetTransitions: 1` and `maxAlternateTargetSends: 1` describe an account move, and
+ * applying them to a combo would refuse the second hop of a three-target combo -- which is why
+ * combo was left off `reserveDispatch` when the per-request split landed. The transitions a
+ * combo may make are exactly the targets it declares minus the one it starts on. What stays
+ * capped is the TOTAL: the first target's full ladder, one send for every further declared
+ * target, and the one shared final-recovery reserve. A one-target combo reduces to the guarded
+ * profile exactly, and a three-target combo whose every target fails hard reaches upstream six
+ * times instead of the twelve #4546 measured.
+ */
+function comboExecutionBudgetPolicy(declaredTargets: number): RequestExecutionBudgetPolicy {
+  const targets = Math.max(1, Math.trunc(declaredTargets));
+  const hops = targets - 1;
+  const reserve = CODEX_TEXT_GUARDED_BUDGET_POLICY.finalRecoveryAllowance;
+  const total = COMBO_TARGET_BASE_SENDS + hops + reserve;
+  return {
+    maxTotalModelSends: total,
+    baseSendAllowance: total - reserve,
+    finalRecoveryAllowance: reserve,
+    maxAlternateTargetSends: Math.max(1, hops),
+    maxTargetTransitions: Math.max(1, hops),
+  };
+}
+
+/**
+ * A budget scope that keeps its own recovery ledgers but spends the SAME request-wide counter.
+ *
+ * `used` is redefined as an accessor onto the parent because the factory reads it back off this
+ * object -- `remainingBaseSends` and the total check both do -- so a copied number would let a
+ * combo target run its ladder against a stale total, which is precisely the per-layer counting
+ * this work exists to remove. The reserve, alternate-target and transition ledgers stay
+ * per-scope on purpose: a combo target's account failover is its own recovery decision, while
+ * the request total still bounds every target together.
+ */
+function deriveSendBudgetScope(
+  parent: RequestExecutionBudget,
+  policy: RequestExecutionBudgetPolicy,
+): RequestExecutionBudget {
+  const scope = createRequestExecutionBudget(policy, parent.logicalRequestId);
+  Object.defineProperty(scope, "used", {
+    get: () => parent.used,
+    set: (value: number) => { parent.used = value; },
+    enumerable: true,
+    configurable: true,
+  });
+  return scope;
+}
+
+/**
+ * The ladder one combo target may run, expressed as an allowance on the request-wide counter.
+ *
+ * `used + COMBO_TARGET_BASE_SENDS` gives this target its own ladder from wherever the request
+ * already stands, and the clamp holds back one send for each target still declared after it: a
+ * first target that 5xx-streaks must not eat the send the last declared target is entitled to.
+ * That guarantee is the difference between a per-target policy and a shared pool the first
+ * target drains.
+ */
+function comboTargetSendBudget(
+  comboScope: RequestExecutionBudget,
+  targetsDeclaredAfterThisOne: number,
+): RequestExecutionBudget {
+  const policy = comboScope.policy;
+  const heldForLaterTargets = Math.max(0, targetsDeclaredAfterThisOne);
+  const ceiling = Math.max(1, policy.maxTotalModelSends - heldForLaterTargets);
+  return deriveSendBudgetScope(comboScope, {
+    maxTotalModelSends: policy.maxTotalModelSends,
+    baseSendAllowance: Math.min(ceiling, comboScope.used + COMBO_TARGET_BASE_SENDS),
+    finalRecoveryAllowance: policy.finalRecoveryAllowance,
+    // Within one target the account-move shape is unchanged: three same-account sends plus one
+    // alternate is the recovery live traffic depends on, and a combo does not widen it.
+    maxAlternateTargetSends: CODEX_TEXT_GUARDED_BUDGET_POLICY.maxAlternateTargetSends,
+    maxTargetTransitions: CODEX_TEXT_GUARDED_BUDGET_POLICY.maxTargetTransitions,
+  });
+}
+
 export async function handleComboResponses(
   req: Request,
   rawBody: unknown,
@@ -2897,6 +3118,14 @@ export async function handleComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
+  // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
+  // counter with the holder that arrived on options -- a combo child already inherited that
+  // counter, but nothing read it as a limit across targets -- while its transition and
+  // alternate-target ledgers come from the target list rather than from the single-target
+  // account-move profile (#4546).
+  const comboSendScope = isRequestExecutionBudget(options.sendBudget)
+    ? deriveSendBudgetScope(options.sendBudget, comboExecutionBudgetPolicy(combo.targets.length))
+    : undefined;
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
@@ -3070,12 +3299,42 @@ export async function handleComboResponses(
   logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
 
   let lastFailure: Response | null = null;
+  // Dispatched targets, not attempted picks: it indexes the declared target list so the clamp
+  // below can tell how many targets are still entitled to a send.
+  let comboTargetsDispatched = 0;
+  // The child log behind `lastFailure`. The natural end of the ladder adopts it inside the
+  // no-more-targets branch; a budget refusal ends the ladder one iteration later, where that
+  // iteration's own `childLog` is already out of scope.
+  let lastFailedChildLog: RequestLogContext | undefined;
   // The exhausted-combo mapping below runs outside the loop, where `failure.upstreamCode`
   // is gone, so carry the loop's own classification decision instead of re-deriving a
   // weaker one from the status alone (#4149).
   let lastFailureClassifiesOverflow = false;
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    const firstComboTarget = comboTargetsDispatched === 0;
+    // The first target seeds the ledger's target identity and charges nothing; every later one
+    // is a real transition, refused once the declared hops, the alternate-target ledger or the
+    // request total are spent. `countedExternally` is required: the child charges its own
+    // physical sends, and charging here as well would halve the cap without saying so.
+    const hopDecision = comboSendScope?.reserveDispatch({
+      sendClass: firstComboTarget ? "initial" : "combo-failover",
+      targetKey: `${pick.target.provider}/${pick.target.model}`,
+      countedExternally: true,
+    });
+    if (hopDecision && hopDecision.allowed) hopDecision.permit.use();
+    else if (hopDecision && !firstComboTarget) {
+      // Out of budget is not this target's failure. The established exhaustion contract is to
+      // return the last real upstream answer with its status, headers and any quota body
+      // intact rather than to mint a synthetic error, and a later target only exists because
+      // an earlier one already recorded one.
+      if (lastFailedChildLog) adoptFailedChildLog(lastFailedChildLog);
+      break;
+    }
+    const targetSendBudget = comboSendScope
+      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
+      : options.sendBudget;
+    comboTargetsDispatched += 1;
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
@@ -3159,6 +3418,9 @@ export async function handleComboResponses(
         );
       response = await handleResponses(childRequest, config, childLog, {
         ...options,
+        // After the spread: the child must run on THIS target's ladder, not on the holder the
+        // parent arrived with.
+        sendBudget: targetSendBudget,
         comboAttempt: true,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
@@ -3280,6 +3542,7 @@ export async function handleComboResponses(
     (logCtx.attempts ??= []).push(attempt);
     attemptRetained = true;
     lastFailure = failure.response;
+    lastFailedChildLog = childLog;
     const failureDecision = comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     });
@@ -3858,6 +4121,33 @@ async function handleResponsesInner(
   let subagentQuotaFailureModel = parsed.modelId;
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
   const poolAffinityKey = codexPoolAffinityKey(req.headers) ?? null;
+  // Preview has to see the same lineage resolve does. Without it, a child's first turn is
+  // previewed as a cold pick and resolved onto the family account, and the subagent fallback
+  // then decides model eligibility against an account the request will never use.
+  //
+  // "The same" means both halves of the question the final resolution asks. The Authorization
+  // it will be given, because the lineage scope is an HMAC of exactly that header; and its own
+  // Pool-state predicate, because a fixed account selector and a request-owned credential
+  // deliberately create no affinity at all -- previewing a family binding for one of those would
+  // hand model fallback an account this request can never authenticate as. Read-only: the record
+  // is written by the resolution that binds, never by a preview that may own no Pool state.
+  const previewAuthHeaders = codexRouteCredentialDomainHeaders(
+    req,
+    route,
+    options,
+    credentialDomainWasRewritten,
+  );
+  const poolLineage = previewCodexPoolLineage(previewAuthHeaders, options.codexAuthPolicy ?? config, {
+    accountId: route.codexAccountId,
+    modelId: route.modelId,
+    admission: options.admission,
+    requestScopedMainCredential: codexRouteCredentialOwnership(
+      previewAuthHeaders,
+      config,
+      route,
+      options,
+    ).requestScopedMainCredential,
+  });
 
   try {
     if (
@@ -3896,6 +4186,7 @@ async function handleResponsesInner(
       codexQuotaScopeForModel(modelId),
       { ...previewSelectionOptions, modelEligibleAccountIds },
       modelId,
+      poolLineage,
     );
     const previewAccountId = route.codexAccountId ?? subagentFallbackAccountPreview(
       route.modelId,
@@ -4041,6 +4332,7 @@ async function handleResponsesInner(
                 codexQuotaScopeForModel(modelId),
                 { ...recoverySelectionOptions, modelEligibleAccountIds },
                 modelId,
+                poolLineage,
               );
               const recoveryPreviewAccountId = subagentFallbackAccountPreview(
                 parsed.modelId,
@@ -4279,6 +4571,18 @@ async function handleResponsesInner(
   if (authCtx.kind === "pool" && authCtx.affinityDecision) {
     logCtx.affinity = authCtx.affinityDecision.move;
     logCtx.affinityReason = authCtx.affinityDecision.reason;
+  }
+  {
+    const binding = conversationStateBindingFromAuth(authCtx, poolAffinityKey);
+    if (binding) {
+      applyAccountChangeConversationStateScrub({
+        body: parsed._rawBody,
+        parsed,
+        bindingKey: binding.bindingKey,
+        servingAccountId: binding.accountId,
+        logCtx,
+      });
+    }
   }
   // Seed an account-derived scope before final adapter binding. Cursor never treats it as
   // authoritative: bindRouteReasoningReplayScope replaces it with the exact route owner or a
@@ -4992,6 +5296,7 @@ async function handleResponsesInner(
   // message, and leave Codex fataling on a missing compaction item (#422).
   const commitReasoningReplayServingRoute = (outboundHeaders?: HeadersInit): void => {
     commitReasoningReplayServingIdentity(parsed._reasoningReplayScope);
+    rememberServingConversationStateIssuer(authCtx, poolAffinityKey);
     // History has no model namespace. Record the account that actually accepted this
     // final attempt, after refresh/failover, rather than guessing from mutable affinity.
     // Recording is relay state. With the feature off there is no relay, so building an owner
@@ -5051,11 +5356,9 @@ async function handleResponsesInner(
   // laundering this ceiling exists to stop. The client is told the task needs a new grant
   // rather than being given a synthetic upstream error.
   if (workflowSendCeilingReached(workflowRootId)) {
-    return formatErrorResponse(
-      429,
-      "workflow_budget_exhausted",
-      "This task has used its whole send budget, so no further upstream request was made. Requests already in flight settle as they finish.",
-    );
+    // A log context exists here, unlike at HTTP admission, so the row this request writes is
+    // marked synthetic rather than reading as a request that vanished with zero sends.
+    return workflowRefusalResponse("workflow-sends-exhausted", logCtx, undefined, workflowRootId);
   }
   // No floor. Math.max(1, ...) meant an exhausted request still funded one send on every
   // recovery leg, so a bounded per-leg allowance never became a bounded per-request one.
@@ -5067,8 +5370,32 @@ async function handleResponsesInner(
   // typed as the narrow holder so a caller that predates this can still pass one, so narrow it
   // once here rather than asserting at each adapter call site.
   const adapterSendBudget = isRequestExecutionBudget(sendBudget) ? sendBudget : undefined;
+  /**
+   * Records an adapter's OWN inner retries against this attempt.
+   *
+   * Ordinal 1 is the send each call site already recorded through `noteAttemptSend`, so only
+   * the extra physical sends are added here and an adapter that does not retry internally
+   * leaves its log byte-for-byte as it was. Kiro reaches roughly eighteen sends per call and
+   * Cursor re-sends a whole turn, and both reported one; a count that cannot be observed
+   * cannot be pinned by a regression, which is why the instrumentation precedes the cap.
+   */
+  const noteAdapterPhysicalSend = (
+    inputTokens: number | undefined,
+    send: { ordinal: number; recovery?: AttemptRecoveryKind },
+  ): void => {
+    if (send.ordinal <= 1) return;
+    noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
+  };
   const sendBudgetExhausted = (): boolean =>
     remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS) === 0;
+  /**
+   * A credential hop reserves the send its own replay will make, and that replay is a recovery
+   * leg. The leg must SPEND the hop's reservation instead of taking a second one: the
+   * final-recovery reserve is single, so a rebuild that reserved on top of a hop would be
+   * refused and the request would answer with a synthetic 502 in place of the real 429 the hop
+   * was recovering from.
+   */
+  let pendingHopPermit: SingleUseDispatchPermit | undefined;
   /**
    * How many sends a recovery leg may make, and the permit that authorises the last one.
    *
@@ -5085,9 +5412,48 @@ async function handleResponsesInner(
   ): { attempts: number; permit?: SingleUseDispatchPermit } => {
     const base = remainingTransientSendBudget(cap);
     if (base > 0) return { attempts: base };
+    if (pendingHopPermit) {
+      const hopPermit = pendingHopPermit;
+      pendingHopPermit = undefined;
+      return { attempts: 1, permit: hopPermit };
+    }
     if (!isRequestExecutionBudget(sendBudget)) return { attempts: 0 };
     const decision = sendBudget.reserveDispatch({ sendClass, targetKey, countedExternally: true });
     return decision.allowed ? { attempts: 1, permit: decision.permit } : { attempts: 0 };
+  };
+  /**
+   * One credential hop of this logical request, admitted by the INTERSECTION of two bounds.
+   *
+   * `GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST` and `ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST`
+   * stay exactly as they are: they bound rotation within one credential roster. What neither
+   * can see is everything else this request already sent, so three hops layered on a spent
+   * budget still reached upstream three more times. A hop now happens only when its own layer
+   * cap AND the shared budget both permit it, and the smaller of the two wins.
+   *
+   * `countedExternally` is for the hops whose replay goes out through the retry helper, which
+   * reports the same physical send through `onSendsConsumed`; the others are charged here and
+   * nowhere else. A refusal is not an error: the caller keeps the real upstream response --
+   * status, `Retry-After`, quota body -- because return-the-last-answer is the exhaustion
+   * contract this unit settled on.
+   */
+  /**
+   * A credential rotation inside ONE provider's roster is "auth-recovery", not
+   * "account-failover". The distinction is load-bearing: "account-failover" sets
+   * `isAlternateTarget` unconditionally, so under `maxAlternateTargetSends: 1` the first
+   * rotation would refuse every later one AND consume the single slot a genuine cross-pool
+   * move needs -- a roster whose first two accounts are both 429'd would return the 429
+   * while a free third account sat unused. The roster cap bounds how far rotation walks;
+   * the shared total bounds how many sends the request makes. Reserve "account-failover"
+   * for a real move between pools.
+   */
+  const reserveCredentialHop = (
+    sendClass: SendClass,
+    targetKey: string,
+    countedExternally = false,
+  ): { allowed: boolean; permit?: SingleUseDispatchPermit } => {
+    if (!isRequestExecutionBudget(sendBudget)) return { allowed: true };
+    const decision = sendBudget.reserveDispatch({ sendClass, targetKey, countedExternally });
+    return decision.allowed ? { allowed: true, permit: decision.permit } : { allowed: false };
   };
   /**
    * Both classes share the one reserve, so this only changes what the decision is called --
@@ -5708,15 +6074,16 @@ async function handleResponsesInner(
       recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, retryAdapter.name);
       const rebuiltBodyRefusal = refuseOversizedOutboundBody(request);
       if (rebuiltBodyRefusal) return { failed: rebuiltBodyRefusal };
+      // The base allowance is spent first; once it is gone this leg may still draw the one
+      // shared final-recovery reserve, which is what keeps a validated sanitized rebuild
+      // after a 5xx streak alive at four total sends instead of dying at three. Reserved
+      // outside the try so the finally can hand it back if the leg never reached its send.
+      const allowance = recoverySendAllowance(
+        TRANSIENT_RETRY_MAX_ATTEMPTS,
+        recoveryClassFor(recovery),
+        `${route.providerName}|${route.modelId}|${recovery}`,
+      );
       try {
-        // The base allowance is spent first; once it is gone this leg may still draw the one
-        // shared final-recovery reserve, which is what keeps a validated sanitized rebuild
-        // after a 5xx streak alive at four total sends instead of dying at three.
-        const allowance = recoverySendAllowance(
-          TRANSIENT_RETRY_MAX_ATTEMPTS,
-          recoveryClassFor(recovery),
-          `${route.providerName}|${route.modelId}|${recovery}`,
-        );
         return await fetchWithTransientRetry(
           innerRecovery => {
             // Gated on the return, not fire-and-forget: a consumed permit means this leg
@@ -5746,6 +6113,9 @@ async function handleResponsesInner(
       } catch (err) {
         return { failed: transportFailureResponse(err) };
       } finally {
+        // A no-op once the permit was used or once onSendsConsumed settled it; it only refunds
+        // a reservation whose send never happened.
+        allowance.permit?.release();
         request.releaseBodyObservation?.();
       }
     };
@@ -5763,7 +6133,7 @@ async function handleResponsesInner(
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
       const poolReplay = poolAuthCtx
-        ? await refreshPoolForwardAuth({ req, config, route, authCtx: poolAuthCtx, substituteMainCredential, options })
+        ? await refreshPoolForwardAuth({ req, config, route, authCtx: poolAuthCtx, substituteMainCredential, options, logCtx })
         : undefined;
       const replay = poolReplay
         ?? await refreshNativeMainForwardAuth({ req, config, route, authCtx, substituteMainCredential, options });
@@ -5982,29 +6352,45 @@ async function handleResponsesInner(
       && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
-      const nextAccountId = rotateGenericOAuthAccountOn429(
-        config, route.providerName, genericFailoverAccountId,
-        upstreamResponse.headers.get("retry-after"),
+      // The roster cap above is one half of the bound; the request's shared budget is the
+      // other. A refused hop leaves the real 429 -- body, Retry-After and any quota evidence
+      // -- exactly as upstream sent it.
+      const hop = reserveCredentialHop(
+        "auth-recovery",
+        `${route.providerName}|${route.modelId}|oauth-account-429`,
+        true,
       );
-      let snapshot: OAuthAccessSnapshot | undefined;
-      if (nextAccountId) {
-        try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }
-        catch { /* Keep the original 429 body readable when the next credential is unavailable. */ }
-      }
-      if (snapshot && await applyFailoverSnapshot(snapshot)) {
-        genericFailovers += 1;
-        route.provider = resolveProviderTransport(
-          route.providerName, route.provider, parsed.options.promptCacheKey, sentOAuthSnapshot?.apiBaseUrl,
+      if (hop.allowed) {
+        const nextAccountId = rotateGenericOAuthAccountOn429(
+          config, route.providerName, genericFailoverAccountId,
+          upstreamResponse.headers.get("retry-after"),
         );
-        bindRouteReasoningReplayScope({
-          parsed, providerName: route.providerName, provider: route.provider,
-          adapterName: "openai-responses", oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
-        });
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
-        const result = await rebuildAndRefetch("oauth-account-429");
-        if ("failed" in result) return result.failed;
-        upstreamResponse = result;
-        continue passthroughRecovery;
+        let snapshot: OAuthAccessSnapshot | undefined;
+        if (nextAccountId) {
+          try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }
+          catch { /* Keep the original 429 body readable when the next credential is unavailable. */ }
+        }
+        if (snapshot && await applyFailoverSnapshot(snapshot)) {
+          genericFailovers += 1;
+          route.provider = resolveProviderTransport(
+            route.providerName, route.provider, parsed.options.promptCacheKey, sentOAuthSnapshot?.apiBaseUrl,
+          );
+          bindRouteReasoningReplayScope({
+            parsed, providerName: route.providerName, provider: route.provider,
+            adapterName: "openai-responses", oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
+          });
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          // The replay IS this hop's send, so the rebuild spends the reservation instead of
+          // asking for one of its own.
+          pendingHopPermit = hop.permit;
+          const result = await rebuildAndRefetch("oauth-account-429");
+          pendingHopPermit = undefined;
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+          continue passthroughRecovery;
+        }
+        // No credential moved, so the reservation costs nothing.
+        hop.permit?.release();
       }
     }
 
@@ -7046,20 +7432,36 @@ async function handleResponsesInner(
       && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
+      // Intersection with the request's shared budget. The sidecar replay is dispatched by the
+      // web-search/image loop and never reaches `onSendsConsumed`, so this reservation is the
+      // charge; a refusal returns null and the caller keeps the real 429 it already has.
+      const hop = reserveCredentialHop(
+        "auth-recovery",
+        `${route.providerName}|${route.modelId}|sidecar-oauth-429`,
+      );
+      if (!hop.allowed) return null;
       const nextAccountId = rotateGenericOAuthAccountOn429(
         config,
         route.providerName,
         genericFailoverAccountId,
         retryAfter,
       );
-      if (!nextAccountId) return null;
+      if (!nextAccountId) {
+        hop.permit?.release();
+        return null;
+      }
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         genericFailovers += 1;
-        if (!await applyFailoverSnapshot(snapshot)) return null;
+        if (!await applyFailoverSnapshot(snapshot)) {
+          hop.permit?.release();
+          return null;
+        }
       } catch {
+        hop.permit?.release();
         return null;
       }
+      hop.permit?.use();
     } else if (
       // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
       // web-search or image-bridge turn was terminal even with the pool fully enabled -- while
@@ -7067,6 +7469,13 @@ async function handleResponsesInner(
       anthropicPoolAccountId
       && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
     ) {
+      // Same intersection for the Anthropic roster: its own per-request bound still applies,
+      // and the shared budget decides whether this request may spend another send at all.
+      const hop = reserveCredentialHop(
+        "auth-recovery",
+        `${route.providerName}|${route.modelId}|sidecar-anthropic-429`,
+      );
+      if (!hop.allowed) return null;
       const nextAccountId = rotateAnthropicAccountOn429(
         config,
         anthropicPoolAccountId,
@@ -7075,7 +7484,10 @@ async function handleResponsesInner(
         Date.now(),
         responseHeaders,
       );
-      if (!nextAccountId) return null;
+      if (!nextAccountId) {
+        hop.permit?.release();
+        return null;
+      }
       try {
         // Deliberately NOT applyFailoverSnapshot: that helper exists to pair per-account routing
         // metadata (Copilot origin, Antigravity project, Kiro context) with its bearer. Anthropic
@@ -7089,8 +7501,10 @@ async function handleResponsesInner(
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
       } catch {
+        hop.permit?.release();
         return null;
       }
+      hop.permit?.use();
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
       // credential. The 429 is terminal for this sidecar turn.
@@ -7383,6 +7797,9 @@ async function handleResponsesInner(
             abortSignal: runTurnAbort.signal,
             translatorBudget,
             providerFetch: runTurnProviderFetch,
+            // The only way the request budget reaches a transport the adapter owns. Without it
+            // a Cursor turn's inner ladder was three physical sends the cap read as one.
+            ...(adapterSendBudget ? { sendBudget: adapterSendBudget } : {}),
           },
           targetQueue.push,
         );
@@ -7419,17 +7836,33 @@ async function handleResponsesInner(
         || genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
         || !isGenericOAuthFailoverEnabled(config, route.providerName)
       ) return false;
+      // Intersection with the request's shared budget: the roster bound above answers "may this
+      // credential set rotate again", this answers "may this request send again at all". The
+      // replayed turn is dispatched by runTurnAttempt and never reaches `onSendsConsumed`, so
+      // this reservation is the charge. Refusing returns false, which leaves the preflight 429
+      // to reach the client exactly as the adapter produced it.
+      const hop = reserveCredentialHop(
+        "auth-recovery",
+        `${route.providerName}|${route.modelId}|runturn-oauth-429`,
+      );
+      if (!hop.allowed) return false;
       const nextAccountId = rotateGenericOAuthAccountOn429(
         config,
         route.providerName,
         genericFailoverAccountId,
         null,
       );
-      if (!nextAccountId) return false;
+      if (!nextAccountId) {
+        hop.permit?.release();
+        return false;
+      }
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         genericFailovers += 1;
-        if (!await applyFailoverSnapshot(snapshot)) return false;
+        if (!await applyFailoverSnapshot(snapshot)) {
+          hop.permit?.release();
+          return false;
+        }
         // A Cursor conversation/checkpoint is credential-scoped. The failed attempt emitted no
         // client-visible bytes, so replay is safe, but carrying its account identity into the next
         // account would not be. Let the rotated adapter derive a fresh identity and conversation.
@@ -7446,7 +7879,10 @@ async function handleResponsesInner(
           inboundWire,
         );
         const rotatedAdapter = resolveSelectionAdapter(rotatedProvider, config.cacheRetention);
-        if (!rotatedAdapter.runTurn) return false;
+        if (!rotatedAdapter.runTurn) {
+          hop.permit?.release();
+          return false;
+        }
         runTurnAdapter = rotatedAdapter;
         bindRouteReasoningReplayScope({
           parsed,
@@ -7459,8 +7895,11 @@ async function handleResponsesInner(
         });
         sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, rotatedAdapter.name, logCtx.accountLogLabel);
         recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, rotatedAdapter.name);
+        // The caller replays the turn on this rotation, so the reservation is now confirmed.
+        hop.permit?.use();
         return true;
       } catch {
+        hop.permit?.release();
         return false;
       }
     };
@@ -7784,6 +8223,7 @@ async function handleResponsesInner(
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
         sendBudget: adapterSendBudget,
+        onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
         stream: parsed.stream,
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtInitialRequest),
@@ -7919,6 +8359,7 @@ async function handleResponsesInner(
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
             sendBudget: adapterSendBudget,
+              onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(retryRequest),
@@ -7947,32 +8388,38 @@ async function handleResponsesInner(
               `${route.providerName}|${route.modelId}|${recovery}`,
             )
             : undefined;
-          return await refetchWithPolicy(
-            recoveryKind => {
-              if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
-                throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
-              }
-              return fetchWithHeaderTimeout(retryRequest.url,
-              applyUpstreamRecoveryInit({
-                method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-              }, recoveryKind), upstream.signal, connectMs, parsed.stream,
-              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(retryRequest),
-                providerName: route.providerName,
-                modelId: route.modelId,
-              }));
-            },
-            {
-              abortSignal: upstream.signal,
-              label: safeHostLabel(retryRequest.url),
-              ...(refetchAllowance
-                ? {
-                  attempts: refetchAllowance.attempts,
-                  onSendsConsumed: noteTransientSends,
+          try {
+            return await refetchWithPolicy(
+              recoveryKind => {
+                if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
+                  throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
                 }
-                : {}),
-            },
-          );
+                return fetchWithHeaderTimeout(retryRequest.url,
+                  applyUpstreamRecoveryInit({
+                    method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
+                  }, recoveryKind), upstream.signal, connectMs, parsed.stream,
+                  providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                    dispatchOverride: oauthDispatch(retryRequest),
+                    providerName: route.providerName,
+                    modelId: route.modelId,
+                  }));
+              },
+              {
+                abortSignal: upstream.signal,
+                label: safeHostLabel(retryRequest.url),
+                ...(refetchAllowance
+                  ? {
+                    attempts: refetchAllowance.attempts,
+                    onSendsConsumed: noteTransientSends,
+                  }
+                  : {}),
+              },
+            );
+          } finally {
+            // Refunds only a reservation whose send never happened -- an abort settled before
+            // the thunk ran. A used or externally settled permit ignores this.
+            refetchAllowance?.permit?.release();
+          }
         } finally {
           retryRequest.releaseBodyObservation?.();
         }
@@ -8203,13 +8650,25 @@ async function handleResponsesInner(
         && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
+        // Intersection with the shared request budget. This arm re-sends through
+        // rebuildAndRefetch, so the roster cap alone would let one request walk the roster on
+        // an allowance the rest of the request cannot see. A refusal ends the ladder with the
+        // real 429 already in hand, which is the decided exhaustion contract.
+        const hop = reserveCredentialHop(
+          "auth-recovery",
+          `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
+        );
+        if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOn429(
           config,
           route.providerName,
           genericFailoverAccountId,
           upstreamResponse.headers.get("retry-after"),
         );
-        if (!nextAccountId) break;
+        if (!nextAccountId) {
+          hop.permit?.release();
+          break;
+        }
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         try {
           // The FULL snapshot, not just the bearer: Antigravity pairs an account-matched
@@ -8217,7 +8676,10 @@ async function handleResponsesInner(
           // would mix one account's credential with another's routing data.
           const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
             genericFailovers += 1;
-          if (!await applyFailoverSnapshot(snapshot)) break;
+          if (!await applyFailoverSnapshot(snapshot)) {
+            hop.permit?.release();
+            break;
+          }
           invalidateSameTargetRequest();
           activeAdapter = resolveSelectionAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
@@ -8479,6 +8941,7 @@ async function handleResponsesInner(
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
               sendBudget: adapterSendBudget,
+            onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
@@ -8675,12 +9138,22 @@ async function handleResponsesInner(
         && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
-        const nextAccountId = rotateGenericOAuthAccountOn429(
-          config,
-          route.providerName,
-          genericFailoverAccountId,
-          response.headers.get("retry-after"),
+        // Intersection with the shared request budget. The continuation loop re-sends the
+        // turn, so without this the per-request bound could be re-armed simply by reaching a
+        // different loop -- which is the divergence the comment above already warns about.
+        const hop = reserveCredentialHop(
+          "auth-recovery",
+          `${route.providerName}|${route.modelId}|continuation-oauth-429`,
         );
+        const nextAccountId = hop.allowed
+          ? rotateGenericOAuthAccountOn429(
+            config,
+            route.providerName,
+            genericFailoverAccountId,
+            response.headers.get("retry-after"),
+          )
+          : null;
+        if (!nextAccountId) hop.permit?.release();
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           try {
@@ -8690,7 +9163,9 @@ async function handleResponsesInner(
             // routing data.
             const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
                 genericFailovers += 1;
-            if (await applyFailoverSnapshot(snapshot, nextParsed)) {
+            const applied = await applyFailoverSnapshot(snapshot, nextParsed);
+            if (!applied) hop.permit?.release();
+            if (applied) {
               invalidateSameTargetRequest();
               activeAdapter = resolveSelectionAdapter(
                 resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),

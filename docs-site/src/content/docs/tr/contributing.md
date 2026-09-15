@@ -186,7 +186,7 @@ sahipliği `.github/CODEOWNERS` dosyasında bildirilmiştir.
 ## Kataloğa sağlayıcı ekleme
 
 Tüm sağlayıcı seçicileri ve tohumları kurallı kayıt defterinden
-(`src/providers/registry.ts`) türetilir:
+(`src/providers/registry/entries-extended.ts`) türetilir:
 
 ```ts
 {

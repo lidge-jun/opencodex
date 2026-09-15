@@ -192,6 +192,17 @@ including the compaction turn the proxy itself drives. With `store: false`, requ
 strips ids from every input item, including compact-wire items, matching codex-rs
 (`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
 
+Codex pool account changes are a separate portability question from destination serving identity.
+`src/codex/routing.ts` remembers, in process memory and keyed like thread affinity, which pool
+account minted a conversation's carried state (`previous_response_id`, encrypted reasoning, and
+provider conversation or file ids). `src/server/responses/account-change-state.ts` applies that
+record on `/v1/responses` and `/v1/responses/compact`, including same-request alternate-account
+retries and the compact routed fallback: when the serving account differs, the proxy drops the
+continuation id and strips encrypted reasoning with the existing helpers before dispatch, keeps
+readable user text, and records `conversationStateScrub: "account-change"` on the request log
+without account identifiers. Once the new account issues its own state, later turns carry it
+normally. `canPortConversationState` is local until `src/routing/identity-domains.ts` lands.
+
 > Decision record: [ADR-0039](../decisions/ADR-0039-responses-http-sse.md)
 
 ### Mixed-wire provider defaults
