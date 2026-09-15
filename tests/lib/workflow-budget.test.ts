@@ -471,7 +471,14 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     // at all, and the fix first reached only one of nine. Exposing the header was likewise
     // pointless until the refusal was CORS-wrapped, because without an allow-origin a browser
     // cannot read an exposed header either.
-    const source = await Bun.file(repoPath("src/server/index.ts")).text();
+    // src/server/index.ts is a facade now. The runAdmittedHttpTurn call sites live in the
+    // serve-options leaf while withCors(workflowRefusalResponse( stayed in the composition
+    // root, so read both. Reading the facade alone would find no call site and the
+    // "more than one surface" assertion would pass on an empty match array.
+    const source = [
+      await Bun.file(repoPath("src/server/index.ts")).text(),
+      await Bun.file(repoPath("src/server/index/serve-options.ts")).text(),
+    ].join("\n");
     const callSites = source.match(/return runAdmittedHttpTurn\(/g) ?? [];
     const threaded = source.match(/, \{ requestId, start, logCtx \}\);/g) ?? [];
     expect(callSites.length).toBeGreaterThan(1);

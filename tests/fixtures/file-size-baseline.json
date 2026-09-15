@@ -24,7 +24,7 @@
     "src/codex/catalog/provider-fetch.ts": 54,
     "src/config.ts": 460,
     "src/providers/registry.ts": 232,
-    "src/server/index.ts": 3400,
+    "src/server/index.ts": 893,
     "src/server/responses/core.ts": 210,
     "tests/ci-workflows/ci-workflows.test.ts": 5628,
     "tests/cli/cli-account.test.ts": 2313,

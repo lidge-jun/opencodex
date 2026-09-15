@@ -37,9 +37,20 @@ function sseStream(frames: string[], onCancel?: () => void): ReadableStream<Uint
 
 describe("WS endpoint re-framer (120/132)", () => {
   test("server config declares explicit websocket idle timeout policy", () => {
-    const source = readFileSync(new URL("../../src/server/index.ts", import.meta.url), "utf8");
+    // src/server/index.ts is a facade now. The idle-timeout constant moved to the
+    // live-sideband leaf, the handler body to the websocket-handler leaf, and the wiring
+    // stayed in serve-options, so read all four. The one assertion whose SHAPE changed is
+    // the handler block: it used to be an inline "websocket: {" object and is now a factory
+    // call, so it is pinned in its new form. The invariant is unchanged -- the serve options
+    // declare an explicit websocket idle timeout rather than inheriting a default.
+    const source = [
+      "src/server/index.ts",
+      "src/server/index/live-sideband.ts",
+      "src/server/index/serve-options.ts",
+      "src/server/index/websocket-handler.ts",
+    ].map(rel => readFileSync(new URL("../../" + rel, import.meta.url), "utf8")).join("\n");
     expect(source).toContain("const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;");
-    expect(source).toContain("websocket: {");
+    expect(source).toContain("websocket: createWebsocketHandler(ctx),");
     expect(source).toContain("idleTimeout: WEBSOCKET_IDLE_TIMEOUT_SECONDS,");
     expect(source).toContain("finalizeLog(httpStatusForRequestLogTerminal(status, logCtx), {");
     expect(source).toContain("if (!logged) finalizeLog(turnAbort.signal.aborted ? 499 : response.status);");
