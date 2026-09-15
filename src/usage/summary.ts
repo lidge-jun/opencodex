@@ -3,7 +3,13 @@ import { canonicalAntigravityUsageModel } from "../providers/antigravity-models"
 import { usageDisplayTotalTokens } from "./totals";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
-import { isCodexUsageAccountLogLabel, type PersistedUsageEntry, type UsageStatus } from "./log";
+import {
+  classifyCacheTelemetryProvenance,
+  isCodexUsageAccountLogLabel,
+  type CacheTelemetryProvenance,
+  type PersistedUsageEntry,
+  type UsageStatus,
+} from "./log";
 import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, serviceTierContext, type ServiceTierContext } from "./cost";
 
 /**
@@ -45,6 +51,28 @@ export interface UsageSummaryTotals {
   unpricedRequests: number;
   /** Requests whose usage itself is missing/unsupported, so no cost can be computed. */
   unmeteredRequests: number;
+  /**
+   * Physical upstream sends aggregated per logical request (#4546, devlog 040 slice D): attempts
+   * and combo children summed on the row, then summed over rows. `attemptCount` answers how many
+   * attempts were recorded, which is a smaller number — retry layers re-send inside one attempt.
+   *
+   * These are optional because the management read-failure fallback emits a zeroed summary of its
+   * own; absence means "not computed", never zero.
+   */
+  sends?: number;
+  /** Sends whose attempt reached a terminal status. */
+  settledSends?: number;
+  /** Sends charged with no terminal outcome behind them. Never folded into `settledSends`. */
+  unresolvedSends?: number;
+  /** Rows that carried a spend record, i.e. logical requests with send accounting. */
+  spendRequests?: number;
+  /** Input tokens whose row carried OBSERVED cache detail; the only honest hit-rate denominator. */
+  cacheObservedInputTokens?: number;
+  cacheObservedRequests?: number;
+  /** Rows whose cache detail is a wire-compatibility zero: present, and proof of nothing. */
+  cacheSynthesizedRequests?: number;
+  /** Rows with no cache detail at all. Not a miss, and not a zero. */
+  cacheUnknownRequests?: number;
 }
 
 export interface UsageDay {
@@ -71,6 +99,8 @@ export interface UsageDayModel {
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
   cacheHitRate?: number | null;
+  /** Denominator behind `cacheHitRate`: input tokens whose cache detail was observed. */
+  cacheObservedInputTokens?: number;
   estimatedCostUsd?: number;
 }
 
@@ -92,6 +122,8 @@ export interface UsageModel {
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
   cacheHitRate?: number | null;
+  /** Denominator behind `cacheHitRate`; below `inputTokens` whenever some rows never measured cache. */
+  cacheObservedInputTokens?: number;
   priceCoverageRatio?: number;
   pricedRequests?: number;
   unpricedRequests?: number;
@@ -113,6 +145,8 @@ export interface UsageProvider {
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
   cacheHitRate?: number | null;
+  /** Denominator behind `cacheHitRate`; below `inputTokens` whenever some rows never measured cache. */
+  cacheObservedInputTokens?: number;
   priceCoverageRatio?: number;
   pricedRequests?: number;
   unpricedRequests?: number;
@@ -203,13 +237,34 @@ export function cacheTokensFromUsage(usage?: PersistedUsageEntry["usage"]): {
   return { read, creation, hasCacheTelemetry };
 }
 
+/**
+ * Cache tokens plus the provenance that says whether they may be averaged.
+ *
+ * A persisted `cacheProvenance` wins; a row written before the field existed is reconstructed
+ * from its own shape, which reproduces the previous reading exactly (telemetry present is
+ * observed, absent is unknown) so historical rows do not change meaning. Only `observed` reaches
+ * a hit-rate denominator: a synthesized zero was emitted for wire compatibility and an unknown
+ * was never measured, and averaging either as a zero is how a cold pool reports a warm cache.
+ */
+export function cacheObservationFromUsage(
+  usage: PersistedUsageEntry["usage"],
+  provenance: CacheTelemetryProvenance | undefined,
+): { read: number | undefined; creation: number | undefined; provenance: CacheTelemetryProvenance } {
+  const { read, creation, hasCacheTelemetry } = cacheTokensFromUsage(usage);
+  // A row cannot have observed what it does not carry, so a stored label never opens the
+  // denominator for a record with no cache fields in it.
+  if (!usage || !hasCacheTelemetry) return { read, creation, provenance: "unknown" };
+  return { read, creation, provenance: provenance ?? classifyCacheTelemetryProvenance(usage) };
+}
+
 export function calculateCacheHitRate(
   cacheObserved: boolean,
-  inputTokens: number,
+  /** Observed input tokens only. Passing the row's whole input total averages unknowns as zeros. */
+  observedInputTokens: number,
   cacheReadTokens: number,
 ): number | null {
-  if (!cacheObserved || inputTokens <= 0) return null;
-  return Math.max(0, Math.min(1, cacheReadTokens / inputTokens));
+  if (!cacheObserved || observedInputTokens <= 0) return null;
+  return Math.max(0, Math.min(1, cacheReadTokens / observedInputTokens));
 }
 
 export function computeEntryCost(entry: PersistedUsageEntry): EntryCostInfo {
@@ -340,6 +395,14 @@ function blankTotals(): UsageSummaryTotals {
     pricedRequests: 0,
     unpricedRequests: 0,
     unmeteredRequests: 0,
+    sends: 0,
+    settledSends: 0,
+    unresolvedSends: 0,
+    spendRequests: 0,
+    cacheObservedInputTokens: 0,
+    cacheObservedRequests: 0,
+    cacheSynthesizedRequests: 0,
+    cacheUnknownRequests: 0,
   };
 }
 
@@ -357,6 +420,8 @@ interface UsageAttribution {
   usageStatus: UsageStatus;
   usage?: PersistedUsageEntry["usage"];
   totalTokens?: number;
+  /** Attempt provenance when the row has one, else the entry's; never assumed observed. */
+  cacheProvenance?: CacheTelemetryProvenance;
 }
 
 
@@ -400,18 +465,26 @@ function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
+      ...(entry.cacheProvenance ? { cacheProvenance: entry.cacheProvenance } : {}),
     }];
   }
-  return entry.attempts.map(attempt => ({
-    requestId: entry.requestId,
-    provider: attempt.provider,
-    ...usageModelIdentity(attempt.provider, attempt.model),
-    ...(isUnresolvedRequestedModel(entry, attempt) ? { hasUnresolvedRequestedModel: true as const } : {}),
-    ...(attempt.accountLogLabel ? { accountLogLabel: attempt.accountLogLabel } : {}),
-    usageStatus: attempt.usageStatus,
-    ...(attempt.usage ? { usage: attempt.usage } : {}),
-    ...(attempt.totalTokens !== undefined ? { totalTokens: attempt.totalTokens } : {}),
-  }));
+  return entry.attempts.map(attempt => {
+    // An attempt's own provenance wins; the row's is the fallback for a child written before
+    // attempt-level provenance existed. A child carrying no cache fields still resolves to
+    // unknown in cacheObservationFromUsage, so it cannot inherit a sibling's observation.
+    const cacheProvenance = attempt.cacheProvenance ?? entry.cacheProvenance;
+    return {
+      requestId: entry.requestId,
+      provider: attempt.provider,
+      ...usageModelIdentity(attempt.provider, attempt.model),
+      ...(isUnresolvedRequestedModel(entry, attempt) ? { hasUnresolvedRequestedModel: true as const } : {}),
+      ...(attempt.accountLogLabel ? { accountLogLabel: attempt.accountLogLabel } : {}),
+      usageStatus: attempt.usageStatus,
+      ...(attempt.usage ? { usage: attempt.usage } : {}),
+      ...(attempt.totalTokens !== undefined ? { totalTokens: attempt.totalTokens } : {}),
+      ...(cacheProvenance ? { cacheProvenance } : {}),
+    };
+  });
 }
 
 function projectedComboUsage(
@@ -497,6 +570,43 @@ function addTokens(
   totals.totalTokens += usageDisplayTotalTokens(entry.usage, entry.totalTokens) ?? 0;
 }
 
+/**
+ * Fold one row's send accounting into the window totals.
+ *
+ * The row already aggregated its attempts and combo children, so this is a sum over logical
+ * requests. Rows written before the spend record existed contribute nothing rather than a zero:
+ * a request whose sends were never counted is not a request that sent nothing.
+ */
+function addSpendTotals(
+  totals: UsageSummaryTotals,
+  entry: Pick<PersistedUsageEntry, "spend">,
+): void {
+  const spend = entry.spend;
+  if (!spend) return;
+  totals.sends = (totals.sends ?? 0) + spend.sends;
+  totals.settledSends = (totals.settledSends ?? 0) + spend.settled;
+  totals.unresolvedSends = (totals.unresolvedSends ?? 0) + spend.unresolved;
+  totals.spendRequests = (totals.spendRequests ?? 0) + 1;
+}
+
+/** Keep the three cache provenances countable, and let only observed input tokens be averaged. */
+function addCacheProvenanceTotals(
+  totals: UsageSummaryTotals,
+  entry: Pick<PersistedUsageEntry, "usage" | "cacheProvenance">,
+): void {
+  const { provenance } = cacheObservationFromUsage(entry.usage, entry.cacheProvenance);
+  if (provenance === "observed") {
+    totals.cacheObservedRequests = (totals.cacheObservedRequests ?? 0) + 1;
+    totals.cacheObservedInputTokens = (totals.cacheObservedInputTokens ?? 0) + (entry.usage?.inputTokens ?? 0);
+    return;
+  }
+  if (provenance === "synthesized") {
+    totals.cacheSynthesizedRequests = (totals.cacheSynthesizedRequests ?? 0) + 1;
+    return;
+  }
+  totals.cacheUnknownRequests = (totals.cacheUnknownRequests ?? 0) + 1;
+}
+
 function finalizeCoverage(totals: UsageSummaryTotals): void {
   totals.coverageRatio = totals.requests === 0 ? 0 : totals.measuredRequests / totals.requests;
 }
@@ -558,6 +668,8 @@ interface UsageModelAccumulator {
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
   cacheObserved: boolean;
+  /** Input tokens from attributions with OBSERVED cache detail; the hit-rate denominator. */
+  cacheObservedInputTokens: number;
   estimatedCostUsd?: number;
   requestCounts: UsageRequestCounts;
   requestFacts?: Map<number, number>;
@@ -700,6 +812,20 @@ function mergeTotals(target: UsageSummaryTotals, source: UsageSummaryTotals): vo
   target.pricedRequests += source.pricedRequests;
   target.unpricedRequests += source.unpricedRequests;
   target.unmeteredRequests += source.unmeteredRequests;
+  target.sends = mergeOptionalTotal(target.sends, source.sends);
+  target.settledSends = mergeOptionalTotal(target.settledSends, source.settledSends);
+  target.unresolvedSends = mergeOptionalTotal(target.unresolvedSends, source.unresolvedSends);
+  target.spendRequests = mergeOptionalTotal(target.spendRequests, source.spendRequests);
+  target.cacheObservedInputTokens = mergeOptionalTotal(target.cacheObservedInputTokens, source.cacheObservedInputTokens);
+  target.cacheObservedRequests = mergeOptionalTotal(target.cacheObservedRequests, source.cacheObservedRequests);
+  target.cacheSynthesizedRequests = mergeOptionalTotal(target.cacheSynthesizedRequests, source.cacheSynthesizedRequests);
+  target.cacheUnknownRequests = mergeOptionalTotal(target.cacheUnknownRequests, source.cacheUnknownRequests);
+}
+
+/** Sum an optional total. Absent on one side means "not computed there", so it contributes nothing. */
+function mergeOptionalTotal(target: number | undefined, source: number | undefined): number | undefined {
+  if (target === undefined && source === undefined) return undefined;
+  return (target ?? 0) + (source ?? 0);
 }
 
 function blankModelAccumulator(
@@ -722,6 +848,7 @@ function blankModelAccumulator(
     cacheReadInputTokens: 0,
     cacheCreationInputTokens: 0,
     cacheObserved: false,
+    cacheObservedInputTokens: 0,
     requestCounts: blankRequestCounts(),
     ...(mode === "exact" ? { requestFacts: new Map() } : {}),
   };
@@ -749,6 +876,7 @@ function mergeModelAccumulator(target: UsageModelAccumulator, source: UsageModel
   target.cacheReadInputTokens += source.cacheReadInputTokens;
   target.cacheCreationInputTokens += source.cacheCreationInputTokens;
   target.cacheObserved ||= source.cacheObserved;
+  target.cacheObservedInputTokens += source.cacheObservedInputTokens;
   if (source.estimatedCostUsd !== undefined) {
     target.estimatedCostUsd = (target.estimatedCostUsd ?? 0) + source.estimatedCostUsd;
   }
@@ -853,9 +981,17 @@ function projectedEntryForFilter(
     return filterMatchesAttribution(filter, attempt.provider, identity.model);
   });
   if (attempts.length === 0) return null;
-  const { usage: _parentUsage, totalTokens: _parentTotalTokens, ...withoutParentUsage } = entry;
+  const { usage: _parentUsage, totalTokens: _parentTotalTokens, spend: parentSpend, ...withoutParentUsage } = entry;
   return {
-    entry: { ...withoutParentUsage, attempts, ...projectedComboUsage(attempts) },
+    entry: {
+      ...withoutParentUsage,
+      // The spend record counts the whole logical request. A projection that dropped a combo
+      // child no longer describes it, so the record is dropped with the child rather than
+      // reporting a full-request send count against a partial row.
+      ...(parentSpend && attempts.length === entry.attempts.length ? { spend: parentSpend } : {}),
+      attempts,
+      ...projectedComboUsage(attempts),
+    },
     comboOverlap: entry.attempts.length > 1,
   };
 }
@@ -915,7 +1051,8 @@ function buildDayModels(
     outputTokens: model.outputTokens,
     cacheReadInputTokens: model.cacheReadInputTokens,
     cacheCreationInputTokens: model.cacheCreationInputTokens,
-    cacheHitRate: calculateCacheHitRate(model.cacheObserved, model.inputTokens, model.cacheReadInputTokens),
+    cacheHitRate: calculateCacheHitRate(model.cacheObserved, model.cacheObservedInputTokens, model.cacheReadInputTokens),
+    cacheObservedInputTokens: model.cacheObservedInputTokens,
     ...(model.estimatedCostUsd !== undefined ? { estimatedCostUsd: model.estimatedCostUsd } : {}),
   }));
 }
@@ -947,7 +1084,8 @@ function buildUsageModels(
       cachedInputTokens: model.cacheReadInputTokens,
       cacheReadInputTokens: model.cacheReadInputTokens,
       cacheCreationInputTokens: model.cacheCreationInputTokens,
-      cacheHitRate: calculateCacheHitRate(model.cacheObserved, model.inputTokens, model.cacheReadInputTokens),
+      cacheHitRate: calculateCacheHitRate(model.cacheObserved, model.cacheObservedInputTokens, model.cacheReadInputTokens),
+      cacheObservedInputTokens: model.cacheObservedInputTokens,
       priceCoverageRatio: requests > 0 ? counts.pricedRequests / requests : 0,
       pricedRequests: counts.pricedRequests,
       unpricedRequests: counts.unpricedRequests,
@@ -985,7 +1123,8 @@ function buildUsageProviders(
         cachedInputTokens: provider.cacheReadInputTokens,
         cacheReadInputTokens: provider.cacheReadInputTokens,
         cacheCreationInputTokens: provider.cacheCreationInputTokens,
-        cacheHitRate: calculateCacheHitRate(provider.cacheObserved, provider.inputTokens, provider.cacheReadInputTokens),
+        cacheHitRate: calculateCacheHitRate(provider.cacheObserved, provider.cacheObservedInputTokens, provider.cacheReadInputTokens),
+        cacheObservedInputTokens: provider.cacheObservedInputTokens,
         priceCoverageRatio: requests > 0 ? counts.pricedRequests / requests : 0,
         pricedRequests: counts.pricedRequests,
         unpricedRequests: counts.unpricedRequests,
@@ -1159,8 +1298,17 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     if (attribution.usage) {
       breakdown.inputTokens += attribution.usage.inputTokens;
       breakdown.outputTokens += attribution.usage.outputTokens;
-      const { read, creation, hasCacheTelemetry } = cacheTokensFromUsage(attribution.usage);
-      breakdown.cacheObserved ||= hasCacheTelemetry;
+      const { read, creation, provenance } = cacheObservationFromUsage(
+        attribution.usage,
+        attribution.cacheProvenance,
+      );
+      // Only an observation opens the denominator. A synthesized zero and an unreported detail
+      // both contribute their tokens to inputTokens and nothing to the cache average, which is
+      // the difference between "no cache reads measured" and "no cache reads happened".
+      if (provenance === "observed") {
+        breakdown.cacheObserved = true;
+        breakdown.cacheObservedInputTokens += attribution.usage.inputTokens;
+      }
       if (typeof read === "number") breakdown.cacheReadInputTokens += read;
       if (typeof creation === "number") breakdown.cacheCreationInputTokens += creation;
       breakdown.summaryTotalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
@@ -1313,6 +1461,8 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     bumpStatus(partition.totals, entry.usageStatus);
     partition.totals.attemptCount += entry.attempts?.length ?? 1;
     addTokens(partition.totals, entry);
+    addSpendTotals(partition.totals, entry);
+    addCacheProvenanceTotals(partition.totals, entry);
     addEstimatedCost(partition.totals, entry, costInfo);
 
     const requestKey = this.mode === "exact" ? this.requestKey(entry.requestId) : null;
