@@ -66,6 +66,24 @@ function tokenCount(eventType: string, obj: Record<string, unknown>, key: string
   return value;
 }
 
+/**
+ * A cache counter Kiro did not report, kept as unknown rather than zero (#4546).
+ *
+ * `OcxUsage` omits cache fields it has no reading for, and `cacheHitRate` is null when
+ * unobserved -- the convention everywhere except here. Coercing an absent counter to 0 makes
+ * "the provider said nothing" indistinguishable from "nothing was cached", which is the
+ * difference between a routing change that preserved the prompt cache and one that destroyed
+ * it. A malformed value is still a malformed event; only absence is unknown.
+ */
+function optionalTokenCount(
+  eventType: string,
+  obj: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  if (obj[key] === undefined) return undefined;
+  return tokenCount(eventType, obj, key, true);
+}
+
 function parseTokenUsage(eventType: string, value: unknown): OcxUsage | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -73,19 +91,20 @@ function parseTokenUsage(eventType: string, value: unknown): OcxUsage | undefine
   }
   const usage = value as Record<string, unknown>;
   const uncached = tokenCount(eventType, usage, "uncachedInputTokens", true);
-  const cacheRead = tokenCount(eventType, usage, "cacheReadInputTokens", false);
-  const cacheWrite = tokenCount(eventType, usage, "cacheWriteInputTokens", false);
+  const cacheRead = optionalTokenCount(eventType, usage, "cacheReadInputTokens");
+  const cacheWrite = optionalTokenCount(eventType, usage, "cacheWriteInputTokens");
   const outputTokens = tokenCount(eventType, usage, "outputTokens", true);
   const totalTokens = tokenCount(eventType, usage, "totalTokens", true);
-  const inputTokens = uncached + cacheRead + cacheWrite;
+  // An unreported counter contributes nothing to the total, which is a different statement
+  // from claiming it was measured as zero.
+  const inputTokens = uncached + (cacheRead ?? 0) + (cacheWrite ?? 0);
   if (!Number.isSafeInteger(inputTokens)) return malformed(eventType, "input token usage overflowed");
   return {
     inputTokens,
     outputTokens,
     totalTokens,
-    cachedInputTokens: cacheRead,
-    cacheReadInputTokens: cacheRead,
-    cacheCreationInputTokens: cacheWrite,
+    ...(cacheRead !== undefined ? { cachedInputTokens: cacheRead, cacheReadInputTokens: cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheCreationInputTokens: cacheWrite } : {}),
   };
 }
 

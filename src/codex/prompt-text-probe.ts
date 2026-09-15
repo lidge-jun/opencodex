@@ -19,8 +19,15 @@
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { codexExecInvocation } from "./exec-invocation";
 import { resolveCodexHomeDir } from "./home";
+import {
+  CODEX_PROGRAM_NOT_FOUND_REASON,
+  displayCodexRuntimePath,
+  resolveCodexRuntime,
+  type CodexRuntimeSource,
+  type ResolveCodexRuntimeResult,
+} from "./runtime";
 
 /**
  * Layer id -> the tag Codex actually renders it under.
@@ -79,26 +86,48 @@ export interface LayerText {
   sourcePath?: string;
 }
 
+/**
+ * Why a probe failed, as a stable token the caller can branch on. The prose
+ * `detail` string is kept for display, but matching on it was never a contract:
+ * a caller that needs "is Codex installed at all" versus "Codex rejected the
+ * command" cannot get that from a sentence.
+ */
+export type PromptProbeFailureKind =
+  | "program-not-found"
+  | "command-unsupported"
+  | "execution-failed"
+  | "output-invalid";
+
+export interface PromptProbeFailure {
+  kind: PromptProbeFailureKind;
+  /** The command line that was attempted or resolved, for display. */
+  command: string;
+  /**
+   * A short fixed phrase plus the command - never captured process output.
+   * Codex stderr can carry the user's config path, model name, or environment
+   * details, and this response is served over the management API, so raw
+   * process output does not belong in it.
+   */
+  detail: string;
+}
+
 export interface PromptTextProbe {
   ok: boolean;
   /** The Codex home the probe reported on. */
   codexHome: string;
   layers: Record<string, LayerText>;
+  /** The runtime the probe resolved and tried, when resolution produced one. */
+  runtime?: { command: string; source: CodexRuntimeSource };
+  /** Stable failure classification; `detail` remains the display string. */
+  failure?: PromptProbeFailure;
   detail?: string;
-}
-
-function resolveCodexBinary(): string | null {
-  const candidates = [
-    join(homedir(), ".codex/packages/standalone/current/bin/codex"),
-    join(homedir(), ".local/bin/codex"),
-    "/usr/local/bin/codex",
-    "/opt/homebrew/bin/codex",
-  ];
-  return candidates.find(path => existsSync(path)) ?? null;
 }
 
 /** 8 MiB is far above any real prompt and far below anything that hurts the server. */
 const MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+/** stderr is captured only to classify the failure, never to echo back. */
+const MAX_PROBE_STDERR_BYTES = 64 * 1024;
 
 interface ProbeCommand {
   binary: string;
@@ -111,7 +140,7 @@ interface ProbeCommand {
 interface PromptProbeFlight {
   key: string;
   controller: AbortController;
-  result: Promise<string | null>;
+  result: Promise<PromptProbeExecutionResult | null>;
   closed: Promise<void>;
   waiters: number;
   joinable: boolean;
@@ -120,17 +149,27 @@ interface PromptProbeFlight {
 }
 
 interface PromptProbeExecution {
-  result: Promise<string | null>;
+  result: Promise<PromptProbeExecutionResult | null>;
   closed: Promise<void>;
+}
+
+/**
+ * The process outcome travels with its classification so a shared flight hands
+ * every joined caller the same `failure`, not just the same null.
+ */
+interface PromptProbeExecutionResult {
+  raw: string | null;
+  failure: PromptProbeFailure | null;
 }
 
 type SharedPromptProbeOutcome =
   | { kind: "output"; raw: string }
-  | { kind: "failed" }
+  | { kind: "failed"; failure?: PromptProbeFailure }
   | { kind: "busy" };
 
 let activePromptProbe: PromptProbeFlight | null = null;
 let probeCommandForTests: { binary: string; args: string[] } | null = null;
+let probeRuntimeForTests: { command: string; source: CodexRuntimeSource } | null | undefined;
 let probeSpawnAttemptsForTests = 0;
 let probeCloseBarrierForTests: Promise<void> | null = null;
 
@@ -144,8 +183,69 @@ function commandKey(command: ProbeCommand): string {
   ]);
 }
 
-function completedExecution(value: string | null): PromptProbeExecution {
+function completedExecution(value: PromptProbeExecutionResult | null): PromptProbeExecution {
   return { result: Promise.resolve(value), closed: Promise.resolve() };
+}
+
+/**
+ * The command line as it may be shown to a caller.
+ *
+ * Redacted, because this response is served over the management API and a
+ * resolved Codex path is a user path: the Windows Codex App lives under the
+ * profile directory, so echoing the raw command would put the account name in
+ * a diagnostic. `displayCodexRuntimePath` is the same helper the runtime log
+ * line and doctor output already use, so the probe reports a path in the form
+ * the rest of the product reports it.
+ */
+function commandDescription(command: ProbeCommand): string {
+  return [displayCodexRuntimePath(command.binary), ...command.args].join(" ");
+}
+
+function probeFailure(
+  command: ProbeCommand,
+  kind: PromptProbeFailureKind,
+  detail: string,
+): PromptProbeFailure {
+  return { kind, command: commandDescription(command), detail };
+}
+
+/**
+ * A non-zero exit whose stderr reports an unknown subcommand means the resolved
+ * binary is a Codex too old (or too new) for `debug prompt-input` - a different
+ * remedy than "the process died". The stderr text itself is used only for this
+ * check; it never enters the response.
+ */
+function classifyProcessFailure(command: ProbeCommand, code: number | null, stderr: string): PromptProbeFailure {
+  const lower = stderr.toLowerCase();
+  const unsupported =
+    (/unrecognized|unknown|unexpected|invalid/.test(lower) && /subcommand|command|argument|option/.test(lower))
+    || /usage:/.test(lower);
+  const kind: PromptProbeFailureKind = unsupported ? "command-unsupported" : "execution-failed";
+  const phrase = unsupported
+    ? "codex does not support this probe command"
+    : `codex probe exited with code ${code ?? "unknown"}`;
+  return probeFailure(command, kind, `${phrase}: ${commandDescription(command)}`);
+}
+
+/**
+ * The resolver reports why each candidate lost. A candidate that is simply not
+ * there (issue 4458's repeated "path does not exist" on Windows) is a
+ * program-not-found; a candidate that exists but could not be probed is an
+ * execution problem on an installed program.
+ */
+function classifyRuntimeFailure(result: ResolveCodexRuntimeResult): PromptProbeFailure {
+  const isNotFound = (reason: string) =>
+    reason === CODEX_PROGRAM_NOT_FOUND_REASON || /does not exist|not found|ENOENT/i.test(reason);
+  const representative = result.failures.find(item => !isNotFound(item.reason))
+    ?? result.failures[0];
+  const kind: PromptProbeFailureKind = !representative || isNotFound(representative.reason)
+    ? "program-not-found"
+    : "execution-failed";
+  // Same redaction obligation as commandDescription: a rejected candidate is a
+  // real filesystem path, and every one of them is reported to the caller.
+  const command = displayCodexRuntimePath(representative?.command ?? result.runtime.command);
+  const phrase = kind === "program-not-found" ? "codex program not found" : "codex runtime could not be probed";
+  return { kind, command, detail: `${phrase}: ${command}` };
 }
 
 function runProbe(
@@ -153,15 +253,15 @@ function runProbe(
   signal: AbortSignal,
   onStopping: () => void,
 ): PromptProbeExecution {
-  if (signal.aborted) return completedExecution(null);
-  let resolveResult!: (value: string | null) => void;
+  if (signal.aborted) return completedExecution({ raw: null, failure: null });
+  let resolveResult!: (value: PromptProbeExecutionResult | null) => void;
   let resolveClosed!: () => void;
-  const result = new Promise<string | null>(resolve => { resolveResult = resolve; });
+  const result = new Promise<PromptProbeExecutionResult | null>(resolve => { resolveResult = resolve; });
   const closed = new Promise<void>(resolve => { resolveClosed = resolve; });
   let resultSettled = false;
   let closeSettled = false;
 
-  const finishResult = (value: string | null) => {
+  const finishResult = (value: PromptProbeExecutionResult | null) => {
     if (resultSettled) return;
     resultSettled = true;
     resolveResult(value);
@@ -179,22 +279,39 @@ function runProbe(
     let child: ReturnType<typeof spawn>;
     try {
       if (probeCommandForTests) probeSpawnAttemptsForTests += 1;
-      child = spawn(command.binary, command.args, {
+      // Route through the shared invocation helper: on Windows a resolved
+      // `codex.cmd` cannot be spawned directly and must go through cmd.exe,
+      // which `commandInvocation` does with correct metacharacter escaping.
+      const invocation = codexExecInvocation(command.binary, command.args, process.platform);
+      child = spawn(invocation.file, invocation.args, {
         cwd: command.cwd,
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        ...invocation.options,
       });
-    } catch {
-      finishResult(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      finishResult({
+        raw: null,
+        failure: probeFailure(
+          command,
+          /ENOENT|not found/i.test(message) ? "program-not-found" : "execution-failed",
+          `codex probe could not start: ${commandDescription(command)}`,
+        ),
+      });
       finishClosed();
       return { result, closed };
     }
     const chunks: Buffer[] = [];
+    const errorChunks: Buffer[] = [];
     let size = 0;
+    let errorSize = 0;
     let settled = false;
     let stopping = false;
+    let stoppingFailure: PromptProbeFailure | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const finish = (value: string | null) => {
+    const finish = (value: PromptProbeExecutionResult) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
@@ -205,9 +322,16 @@ function runProbe(
 
     // Keep the flight admitted until `close`: kill() only requests termination
     // and does not prove the exact child has released its process and stdio.
-    const terminate = () => {
+    const terminate = (
+      failure = probeFailure(
+        command,
+        "execution-failed",
+        `codex probe was terminated: ${commandDescription(command)}`,
+      ),
+    ) => {
       if (settled || stopping) return;
       stopping = true;
+      stoppingFailure = failure;
       onStopping();
       if (timer) clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
@@ -215,7 +339,7 @@ function runProbe(
       // The caller is bounded even if OS termination later fails. Admission is
       // retained separately by `closed`, and later probes fail soft while this
       // exact child remains unproven terminal.
-      finishResult(null);
+      finishResult({ raw: null, failure });
       if (child.exitCode !== null || child.signalCode !== null) return;
       try {
         child.kill("SIGKILL");
@@ -233,18 +357,50 @@ function runProbe(
       if (size > MAX_PROBE_OUTPUT_BYTES) { terminate(); return; }
       chunks.push(chunk);
     });
-    child.on("error", () => {
+    child.stderr?.on("data", (chunk: Buffer) => {
+      errorSize += chunk.length;
+      if (errorSize <= MAX_PROBE_STDERR_BYTES) errorChunks.push(chunk);
+    });
+    child.on("error", error => {
       // No PID means spawn itself failed, so there is no live child to drain.
       if (child.pid === undefined) {
-        finish(null);
+        const message = error instanceof Error ? error.message : String(error);
+        finish({
+          raw: null,
+          failure: probeFailure(
+            command,
+            /ENOENT|not found/i.test(message) ? "program-not-found" : "execution-failed",
+            `codex probe could not start: ${commandDescription(command)}`,
+          ),
+        });
       }
-      else terminate();
+      else terminate(probeFailure(
+        command,
+        "execution-failed",
+        `codex probe process error: ${commandDescription(command)}`,
+      ));
     });
     child.on("close", code => {
       // Decode once, at the end: `String(chunk)` per chunk corrupts any UTF-8
       // character that straddles a chunk boundary.
       const recordClose = () => {
-        finish(!stopping && code === 0 ? Buffer.concat(chunks).toString("utf8") : null);
+        if (stopping) {
+          finish({
+            raw: null,
+            failure: stoppingFailure ?? probeFailure(
+              command,
+              "execution-failed",
+              `codex probe was terminated: ${commandDescription(command)}`,
+            ),
+          });
+        } else if (code === 0) {
+          finish({ raw: Buffer.concat(chunks).toString("utf8"), failure: null });
+        } else {
+          finish({
+            raw: null,
+            failure: classifyProcessFailure(command, code, Buffer.concat(errorChunks).toString("utf8")),
+          });
+        }
       };
       const barrier = probeCloseBarrierForTests;
       if (barrier) void barrier.then(recordClose, recordClose);
@@ -253,7 +409,14 @@ function runProbe(
     // Close the race between the pre-spawn check and listener registration.
     if (signal.aborted) terminate();
   } catch {
-    finishResult(null);
+    finishResult({
+      raw: null,
+      failure: probeFailure(
+        command,
+        "execution-failed",
+        `codex probe failed: ${commandDescription(command)}`,
+      ),
+    });
     finishClosed();
   }
   return { result, closed };
@@ -296,19 +459,26 @@ async function runSharedPromptProbe(
   if (signal?.aborted) return { kind: "failed" };
   const active = activePromptProbe;
   if (!active) {
-    const raw = await waitForPromptProbeFlight(startPromptProbeFlight(command), signal);
-    return raw === null ? { kind: "failed" } : { kind: "output", raw };
+    const result = await waitForPromptProbeFlight(startPromptProbeFlight(command), signal);
+    if (!result) return { kind: "failed" };
+    if (result.failure) return { kind: "failed", failure: result.failure };
+    return result.raw === null ? { kind: "failed" } : { kind: "output", raw: result.raw };
   }
   if (active.key === key && active.joinable && !active.controller.signal.aborted) {
-    const raw = await waitForPromptProbeFlight(active, signal);
-    return raw === null ? { kind: "failed" } : { kind: "output", raw };
+    const result = await waitForPromptProbeFlight(active, signal);
+    if (!result) return { kind: "failed" };
+    if (result.failure) return { kind: "failed", failure: result.failure };
+    return result.raw === null ? { kind: "failed" } : { kind: "output", raw: result.raw };
   }
   // A different or terminating flight still owns the sole process slot. Never
   // wait unboundedly for an unproven close and never launch beside it.
   return { kind: "busy" };
 }
 
-async function waitForPromptProbeFlight(flight: PromptProbeFlight, signal?: AbortSignal): Promise<string | null> {
+async function waitForPromptProbeFlight(
+  flight: PromptProbeFlight,
+  signal?: AbortSignal,
+): Promise<PromptProbeExecutionResult | null> {
   if (signal?.aborted) {
     if (flight.waiters === 0 && !flight.settled) flight.controller.abort();
     return null;
@@ -317,7 +487,7 @@ async function waitForPromptProbeFlight(flight: PromptProbeFlight, signal?: Abor
   let onAbort: (() => void) | undefined;
   try {
     if (!signal) return await flight.result;
-    const aborted = new Promise<null>(resolve => {
+    const aborted = new Promise<PromptProbeExecutionResult | null>(resolve => {
       onAbort = () => resolve(null);
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) onAbort();
@@ -390,9 +560,51 @@ export async function probePromptText(
   if (signal?.aborted) {
     return { ok: false, codexHome, layers: {}, detail: "prompt probe cancelled" };
   }
-  const binary = probeCommandForTests?.binary ?? resolveCodexBinary();
+  // Resolve through the shared runtime resolver, not a private path list: the
+  // old four-path POSIX check could never match the Codex App's Windows install
+  // under %LOCALAPPDATA%\OpenAI\Codex\bin\<version>, so the probe reported
+  // "not found" on machines where Codex was plainly installed (issue 4458).
+  //
+  // Both flags are deliberate. This runs on a request path: discoverAlternatives
+  // would walk the whole PATH just to fill a newerAvailable diagnostic the probe
+  // never shows, and probeVersion would pay a blocking `--version` exec per
+  // candidate. The probe needs a command it can spawn; the version is irrelevant.
+  const resolved = probeCommandForTests || probeRuntimeForTests !== undefined
+    ? null
+    : resolveCodexRuntime({ discoverAlternatives: false, probeVersion: false });
+  const runtime: { command: string; source: CodexRuntimeSource } | undefined =
+    probeRuntimeForTests !== undefined
+      ? probeRuntimeForTests ?? undefined
+      : resolved && resolved.runtime.source !== "fallback"
+        ? { command: resolved.runtime.command, source: resolved.runtime.source }
+        : undefined;
+  // A `fallback` result is the resolver saying "nothing concrete was found" -
+  // its command is the bare word "codex", not a located binary. Reporting it as
+  // resolved would just relabel the same not-found as a spawn failure.
+  const binary = probeCommandForTests?.binary ?? runtime?.command ?? null;
+  // The response travels over the management API, so the reported runtime is
+  // redacted while `binary` keeps the real path the spawn needs. On Windows the
+  // Codex App install sits under the user's profile directory, so the raw
+  // command carries the account name.
+  const reportedRuntime = runtime
+    ? { command: displayCodexRuntimePath(runtime.command), source: runtime.source }
+    : undefined;
   if (!binary) {
-    return { ok: false, codexHome, layers: {}, detail: "codex binary not found" };
+    const failure = resolved
+      ? classifyRuntimeFailure(resolved)
+      : probeFailure(
+          { binary: "codex", args: ["debug", "prompt-input"], cwd: codexHome, timeoutMs, promptStateFingerprint },
+          "program-not-found",
+          "codex program not found: codex debug prompt-input",
+        );
+    return {
+      ok: false,
+      codexHome,
+      layers: {},
+      ...(reportedRuntime ? { runtime: reportedRuntime } : {}),
+      failure,
+      detail: "codex binary not found",
+    };
   }
   const command: ProbeCommand = {
     binary,
@@ -407,6 +619,8 @@ export async function probePromptText(
       ok: false,
       codexHome,
       layers: {},
+      ...(reportedRuntime ? { runtime: reportedRuntime } : {}),
+      ...(outcome.kind === "failed" && outcome.failure ? { failure: outcome.failure } : {}),
       detail: signal?.aborted
         ? "prompt probe cancelled"
         : outcome.kind === "busy"
@@ -419,7 +633,18 @@ export async function probePromptText(
   if (sections.size === 0) {
     // Zero sections from a zero-exit probe means the output did not parse, which
     // is a failed read - not fifteen layers that each chose to send nothing.
-    return { ok: false, codexHome, layers: {}, detail: "prompt output could not be parsed" };
+    return {
+      ok: false,
+      codexHome,
+      layers: {},
+      ...(reportedRuntime ? { runtime: reportedRuntime } : {}),
+      failure: probeFailure(
+        command,
+        "output-invalid",
+        `codex prompt output could not be parsed: ${commandDescription(command)}`,
+      ),
+      detail: "prompt output could not be parsed",
+    };
   }
   const layers: Record<string, LayerText> = {};
   for (const [layerId, tag] of Object.entries(LAYER_SECTION_TAGS)) {
@@ -453,12 +678,19 @@ export async function probePromptText(
   for (const id of UNMAPPED_LAYER_IDS) {
     layers[id] ??= { text: null, reason: "not-exposed", bytes: 0 };
   }
-  return { ok: true, codexHome, layers };
+  return { ok: true, codexHome, layers, ...(reportedRuntime ? { runtime: reportedRuntime } : {}) };
 }
 
 /** Test-only command seam; production always resolves the installed Codex binary. */
 export function setPromptTextProbeCommandForTests(command: { binary: string; args: string[] } | null): void {
   probeCommandForTests = command ? { binary: command.binary, args: [...command.args] } : null;
+}
+
+/** Test-only runtime seam: stands in for the shared resolver's answer. */
+export function setPromptTextProbeRuntimeForTests(
+  runtime: { command: string; source: CodexRuntimeSource } | null | undefined,
+): void {
+  probeRuntimeForTests = runtime;
 }
 
 /** Test-only process-start counter for proving admission without timing guesses. */
@@ -484,6 +716,7 @@ export async function resetPromptTextProbeForTests(): Promise<void> {
   }
   if (activePromptProbe === active) activePromptProbe = null;
   probeCommandForTests = null;
+  probeRuntimeForTests = undefined;
   probeSpawnAttemptsForTests = 0;
   probeCloseBarrierForTests = null;
 }

@@ -151,6 +151,11 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
       return jsonResponse({
         requestId,
         routeDecision: trace,
+        // The account decision belongs in the why-this-route answer: a rebound with its cause is
+        // the difference between "the pool moved this conversation" and "this is a new session".
+        affinity: entry.affinity
+          ? { move: entry.affinity, reason: entry.affinityReason ?? null }
+          : null,
         attemptSequence: entry.attempts ?? [],
         outcome: {
           status: entry.status,

@@ -7,6 +7,8 @@ Connected-client catalog diagnostics use the [terminal rendering contract](runti
 
 Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
 
+Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
+
 ## Config surface
 
 ### OpenCodex home and live process state
@@ -46,7 +48,7 @@ must not replace it with a local temp-and-rename shortcut.
 
 > Decision record: [ADR-0016](decisions/ADR-0016-config-surface.md)
 
-`src/types.ts` is the shape and `src/config.ts` is the loader; neither is reproduced here. What
+`src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What
 matters for maintainers is which groups exist and who resolves them:
 
 | Group | Keys | Resolution rule |
@@ -59,12 +61,12 @@ matters for maintainers is which groups exist and who resolves them:
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
 | Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`gui-and-management-api.md`](gui-and-management-api.md). |
 
-Env values are resolved through `src/config.ts`, so a config value naming an env var never persists
+Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists
 the secret itself.
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
-`claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config.ts` salvage already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
+`claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config/salvage.ts` already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
 
 The former `showCodexSparkQuota` key is inert passthrough data when loading an old config.
 It is absent from the typed settings contract and cannot re-enable Spark quota through the
@@ -307,4 +309,4 @@ The text-only consumer reads exact inputModalities declarations before legacy hi
 
 ## Catalog auto-refresh
 
-`catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
+`catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
