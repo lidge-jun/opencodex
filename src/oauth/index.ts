@@ -44,6 +44,7 @@ import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
+import { openaiModelsUrl } from "../adapters/openai-models-url";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
@@ -1228,7 +1229,7 @@ export function buildModelsRequest(
     return { url: discoveryUrl(`${base}/v1/models?limit=1000`), headers };
   }
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  return { url: discoveryUrl(`${effectiveProvider.baseUrl}/models`), headers };
+  return { url: discoveryUrl(openaiModelsUrl(effectiveProvider.baseUrl)), headers };
 }
 
 /**

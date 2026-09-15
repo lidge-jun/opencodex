@@ -1002,6 +1002,7 @@
     "openai-chat-tool-result-images.test.ts": "adapters/openai",
     "openai-chat-url.test.ts": "adapters/openai",
     "openai-chat-video-part.test.ts": "adapters/openai",
+    "openai-models-url.test.ts": "adapters/openai",
     "openai-provider-option-e2e.test.ts": "adapters/openai",
     "openai-provider-option-migration.test.ts": "adapters/openai",
     "openai-provider-option-startup.test.ts": "adapters/openai",
