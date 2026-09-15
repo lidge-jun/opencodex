@@ -129,4 +129,3 @@ CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index-
 ## 마이그레이션
 
 `routingProfiles`는 선택적 추가 설정입니다. 기존 설정 파일과 이전 `usage.jsonl` 행은 그대로 읽힙니다. 인덱스는 일회용이며 삭제 시 다음 쿼리에서 `usage.jsonl`로 자동 재구축됩니다. 자동 튜닝은 없습니다.
-

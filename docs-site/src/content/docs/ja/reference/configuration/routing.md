@@ -131,4 +131,3 @@ CLI: `ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs inde
 ## 移行
 
 `routingProfiles` は任意の追加設定です。既存の設定ファイルと古い `usage.jsonl` 行はそのまま読み込めます。インデックスは使い捨てで、削除すると次回クエリ時に `usage.jsonl` から自動再構築されます。自動チューニングは行われません。
-

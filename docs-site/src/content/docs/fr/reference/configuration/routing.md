@@ -174,4 +174,3 @@ CLI : `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index
 
 `routingProfiles` est facultatif et uniquement additif : les fichiers de configuration existants continuent de se charger sans modification. Les anciennes lignes de `usage.jsonl` dépourvues de `routeDecision` continuent d’être analysées sans modification. L’index d’historique peut être supprimé : la suppression de `routing-history.sqlite` déclenche sa reconstruction automatique à partir de `usage.jsonl` lors de la requête suivante ; `ocx logs
 rebuild-index` force cette reconstruction. Ce système n’ajuste automatiquement ni les poids, ni les budgets, ni les ensembles de candidats.
-

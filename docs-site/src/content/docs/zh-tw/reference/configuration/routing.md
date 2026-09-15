@@ -169,4 +169,3 @@ CLI：`ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs ind
 ## 遷移
 
 `routingProfiles` 為可選且附加式：既有設定檔載入不變。舊 `usage.jsonl` 列（無 `routeDecision`）解析不變。歷史索引可拋棄——刪除 `routing-history.sqlite` 會在下一次查詢時從 `usage.jsonl` 自動重建；`ocx logs rebuild-index` 強制執行一次。此系統中沒有任何東西會自動調校權重、預算或候選集。
-

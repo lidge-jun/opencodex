@@ -317,5 +317,3 @@ değişmeden ayrıştırılır. Geçmiş dizini tek kullanımlıktır -
 otomatik bir yeniden oluşturmayı tetikler; `ocx logs rebuild-index` bunu zorlar.
 Bu sistemdeki hiçbir şey ağırlıkları, bütçeleri veya aday kümelerini otomatik
 olarak ayarlamaz.
-
-

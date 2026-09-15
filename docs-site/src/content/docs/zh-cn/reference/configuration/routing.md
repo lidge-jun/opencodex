@@ -139,4 +139,3 @@ CLI：`ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs ind
 ## 迁移
 
 `routingProfiles` 是可选的增量配置：现有配置文件与旧 `usage.jsonl` 行均可原样加载。索引是一次性的——删除后会在下次查询时从 `usage.jsonl` 自动重建。系统不会自动调优。
-

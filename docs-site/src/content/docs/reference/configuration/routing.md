@@ -271,4 +271,3 @@ The history index is disposable - deleting `routing-history.sqlite` triggers
 an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
 rebuild-index` forces one. Nothing in this system auto-tunes weights,
 budgets, or candidate sets.
-
