@@ -256,6 +256,8 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 자격증명, 쿼리, 프래그먼트, 리다이렉트, 크기를 넘는 응답, 잘못된 카탈로그는 로컬에 쓰기 전에
 거절합니다. 인증은 선택이며 환경변수 이름(`--auth-env`)으로만 읽고 argv로는 받지 않습니다.
 
+`HTTP_PROXY` 또는 `http_proxy`가 적용되고 `NO_PROXY` 또는 `no_proxy`에 일치하는 우회 항목이 없으면 루프백 HTTP 요청은 인증 헤더를 붙이거나 요청을 보내기 전에 거부됩니다. `ALL_PROXY`/`all_proxy` 또는 `HTTPS_PROXY`/`https_proxy`만 설정한 경우에는 이 HTTP 제한에 해당하지 않으며, HTTPS 카탈로그 취득은 계속 허용됩니다. 거부 메시지에는 프록시 주소나 인증 토큰이 포함되지 않습니다. 값이 비어 있지 않은 `http_proxy`와 `no_proxy`는 각각 `HTTP_PROXY`와 `NO_PROXY`보다 우선합니다. Bun과 호환되는 우회 규칙에는 호스트 이름, 일치하는 `host:port`, `[::1]`처럼 대괄호로 감싼 IPv6 주소 또는 `*`를 사용하고, URL·경로·`*.` 접두사는 사용하지 마세요.
+
 카탈로그와 캐시는 공유 Codex 카탈로그 잠금 아래에서 쓰고, 실패하면 직전까지 정상이던 파일을
 그대로 둡니다. 바이트가 같으면 mtime까지 건드리지 않는 no-op입니다. `--restart-codex`,
 `--restart-app-server-only`, 폐기 예정 별칭 `--restart-desktop-app`은 실제로 쓴 뒤에만

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, readFileSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, readFileSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ConfigMutationLockError,
@@ -655,8 +655,41 @@ function isRefreshLockStale(path: string): boolean {
     const parsed = JSON.parse(readFileSync(path, "utf-8")) as { acquiredAt?: unknown };
     return typeof parsed.acquiredAt !== "number" || Date.now() - parsed.acquiredAt > REFRESH_LOCK_STALE_MS;
   } catch {
-    return true;
+    // The owner creates the file and writes its metadata in two steps, so a live lock is
+    // briefly unreadable. Age the file itself instead of calling that window stale, which
+    // let a waiter delete a lock whose owner was still inside its critical section.
+    try {
+      return Date.now() - statSync(path).mtimeMs > REFRESH_LOCK_STALE_MS;
+    } catch {
+      return false;
+    }
   }
+}
+
+function releaseCodexRefreshFileLock(path: string, fd: number): void {
+  let owned: { dev: bigint; ino: bigint } | null = null;
+  try {
+    const info = fstatSync(fd, { bigint: true });
+    if (info.dev >= 0n && info.ino > 0n) owned = { dev: info.dev, ino: info.ino };
+  } catch { /* Unknown descriptor identity never authorizes unlink. */ }
+  try {
+    withConfigMutationLockSync(() => {
+      let current: { dev: bigint; ino: bigint } | null = null;
+      try {
+        const info = statSync(path, { bigint: true });
+        if (info.dev >= 0n && info.ino > 0n) current = { dev: info.dev, ino: info.ino };
+      } catch { /* Keep the lock and the callback outcome when the path probe fails. */ }
+      if (owned && current && current.dev === owned.dev && current.ino === owned.ino) {
+        try { unlinkSync(path); } catch (err) {
+          if (errCode(err) !== "ENOENT") throw err;
+        }
+      }
+    });
+  } catch (err) {
+    // Keep the descriptor alive through comparison/unlink so its inode cannot be recycled.
+    // Unavailable coordination leaves the path without masking the completed refresh.
+    if (!(err instanceof ConfigMutationLockError)) throw err;
+  } finally { closeSync(fd); }
 }
 
 export async function withCodexRefreshFileLock<T>(lockKey: string, signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
@@ -670,33 +703,45 @@ export async function withCodexRefreshFileLock<T>(lockKey: string, signal: Abort
   while (fd == null) {
     if (signal.aborted) throw signal.reason;
     try {
-      fd = openSync(path, "wx", 0o600);
-      writeFileSync(fd, JSON.stringify({ acquiredAt: Date.now(), pid: process.pid }) + "\n");
-      break;
-    } catch (err) {
-      if (errCode(err) !== "EEXIST") throw err;
-      if (isRefreshLockStale(path)) {
+      // Serialize only metadata operations, never the async refresh callback. Cooperating
+      // contenders cannot reclaim a successor between stale observation and path mutation.
+      withConfigMutationLockSync(() => {
         try {
-          unlinkSync(path);
-        } catch (unlinkErr) {
-          if (errCode(unlinkErr) !== "ENOENT") throw unlinkErr;
+          fd = openSync(path, "wx", 0o600);
+          writeFileSync(fd, JSON.stringify({ acquiredAt: Date.now(), pid: process.pid }) + "\n");
+        } catch (err) {
+          if (fd != null) {
+            const failedFd = fd;
+            fd = null;
+            try { releaseCodexRefreshFileLock(path, failedFd); } catch { /* Preserve write failure. */ }
+            throw err;
+          }
+          if (errCode(err) !== "EEXIST") throw err;
+          if (isRefreshLockStale(path)) {
+            try { unlinkSync(path); } catch (unlinkErr) {
+              if (errCode(unlinkErr) !== "ENOENT") throw unlinkErr;
+            }
+          }
         }
-        continue;
+      });
+    } catch (err) {
+      // A failed SQLite commit can follow successful file creation; it still owns an fd.
+      if (fd != null) {
+        const failedFd = fd;
+        fd = null;
+        try { releaseCodexRefreshFileLock(path, failedFd); } catch { /* Preserve admission failure. */ }
       }
-      if (Date.now() >= deadline) throw new CodexCredentialRefreshLockTimeoutError();
-      await sleep(REFRESH_LOCK_POLL_MS, signal);
+      if (!(err instanceof ConfigMutationLockError)) throw err;
     }
+    if (fd != null) break;
+    if (Date.now() >= deadline) throw new CodexCredentialRefreshLockTimeoutError();
+    await sleep(REFRESH_LOCK_POLL_MS, signal);
   }
 
   try {
     return await fn();
   } finally {
-    if (fd != null) closeSync(fd);
-    try {
-      unlinkSync(path);
-    } catch (err) {
-      if (errCode(err) !== "ENOENT") throw err;
-    }
+    releaseCodexRefreshFileLock(path, fd);
   }
 }
 

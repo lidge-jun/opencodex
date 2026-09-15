@@ -1,13 +1,19 @@
 # Config Surface
 
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
+
+Configuration consumers retain the [refresh-lock ownership boundary](catalog.md#accounts-namespaces-and-pool-rotation); failing to establish a usable matching lock identity does not authorize deleting its path or replacing the refresh callback outcome with a path-probe error. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
 
 Connected-client catalog diagnostics use the [terminal rendering contract](runtime.md#cli-readiness-diagnostics) on the first connection and on every `ocx sync` refresh; stored catalog values are unchanged.
 
 Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
 
 Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
+
+The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
 ## Config surface
 
@@ -73,6 +79,8 @@ It is absent from the typed settings contract and cannot re-enable Spark quota t
 management API. Retirement does not migrate user-selected model ids or erase usage history.
 
 ## Config injection
+
+An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
 
 `src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
 keeps its native provider id, which decides whether existing thread history still resolves.
@@ -166,8 +174,10 @@ discovery or catalog/cache replacement. Deterministic config and ownership refus
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
 Exactly one conversation-history refusal scopes the relabel unit instead of vetoing the apply
 transition, and only because it is permanent. Codex allocates paginated rollout ordinals inside
-its own writer, so `history_paginated_requires_native_writer` is not retryable: the transition
-writes config, profile, and `model_catalog_json`, the relabel job is skipped without spawning
+its own writer, so `history_paginated_requires_native_writer` is not retryable: when the admitted
+candidate preserves any existing provider table, the transition writes config, profile,
+and `model_catalog_json`.
+On successful apply, the relabel job is skipped without spawning
 its Worker, and the reason travels in the human message and in the structured
 `historyPreflightFailureReason` field *alongside* `success: true`. Every other reason — an
 unreadable state database, a rollout whose identity changed, a preflight that could not run —
@@ -175,12 +185,14 @@ describes a store that may be relabelable on the next attempt, so those keep the
 and the compensating rollback. Recording them as a stand-down would mark the transition
 converged and suppress the relabel permanently.
 
-Standing the relabel down changes what the routing form may retire. Rows this home tagged
-`opencodex` resolve only through a `[model_providers.opencodex]` table; the loopback form
-normally retires that table precisely because the relabel migrates those rows back to `openai`
-in the same pass. With the relabel stood down, a table the home already published survives the
-write, so those conversations keep a provider id that exists. Paginated rollout bytes and thread
-rows are never modified in this state.
+Rows this home tagged `opencodex` resolve through a `[model_providers.opencodex]` table.
+Apply retains that existing definition before building the candidate witness, even when
+history preflight passes. The root-override form still selects the built-in provider for new
+conversations. Background history work is not atomic with config publication, so its future
+success cannot authorize retiring the old definition first. If native pagination begins after
+artifact commit or while the worker starts, the old references still resolve and any worker
+failure is reported. Paginated rollout bytes and thread rows remain untouched. Explicit
+restore and removal retain their separate guards below.
 
 Treating the refusal as a veto is what made every current Codex home unusable: paginated
 rollouts refuse unconditionally, so `model_catalog_json` never reached config.toml and both the

@@ -29,16 +29,16 @@ const SHELL_BASENAME = "chatgpt.exe";
 const POWERSHELL_PROBE_OPTIONS = { timeout: PROBE_TIMEOUT_MS, windowsHide: true } as const;
 
 /**
- * isUnderRoot prefixes with the host path.sep and is case-sensitive. Windows
+ * isUnderRoot checks a lexical path boundary and is case-sensitive. Windows
  * membership is case-insensitive, and this file is executed by Unix CI against
- * backslash paths, so both sides are folded onto the host separator first.
+ * mixed slash paths, so both slash forms are folded onto the host separator first.
  * The boundary itself — sibling `OpenAI.Codex-evil` must not match root
  * `OpenAI.Codex` — is still isUnderRoot's, which is why the PowerShell
  * StartsWith is only a cheap pre-filter.
  */
 function toHostMembershipPath(windowsPath: string): string {
   const lowered = windowsPath.toLowerCase();
-  return sep === "\\" ? lowered : lowered.replaceAll("\\", "/");
+  return lowered.replace(/[\\/]/g, sep);
 }
 
 function isMemberExecutable(executable: string, root: string): boolean {
@@ -91,10 +91,10 @@ function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): De
   const literal = install.root.replace(/'/g, "''");
   const script = [
     "$ErrorActionPreference='SilentlyContinue'",
-    `$root = '${literal}'`,
+    `$root = '${literal}'.Replace('/', '\\')`,
     "$me = ([Security.Principal.WindowsIdentity]::GetCurrent()).Name",
     "Get-CimInstance Win32_Process -Filter \"Name='ChatGPT.exe'\" |",
-    "  Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, 'OrdinalIgnoreCase') } |",
+    "  Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Replace('/', '\\').StartsWith($root, 'OrdinalIgnoreCase') } |",
     "  ForEach-Object {",
     "    $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner",
     "    if ($o -and $o.ReturnValue -eq 0 -and $o.User) {",

@@ -170,6 +170,8 @@ redirections, les réponses trop volumineuses et les catalogues invalides sont r
 écriture locale. L'authentification est facultative et lue uniquement par référence à une variable
 d'environnement (`--auth-env`), jamais depuis argv.
 
+Les requêtes HTTP en loopback sont refusées avant l’ajout des en-têtes d’authentification ou tout envoi si `HTTP_PROXY` ou `http_proxy` s’applique sans exception correspondante dans `NO_PROXY` ou `no_proxy`. `ALL_PROXY`/`all_proxy` et les paramètres limités à `HTTPS_PROXY`/`https_proxy` ne déclenchent pas cette restriction HTTP ; l’acquisition de catalogues en HTTPS reste autorisée. Le message de refus ne contient ni l’adresse du proxy ni le jeton d’authentification. Les valeurs non vides de `http_proxy` et `no_proxy` ont priorité sur `HTTP_PROXY` et `NO_PROXY`, respectivement. Pour des exceptions compatibles avec Bun, utilisez des noms d’hôte, des entrées `host:port` correspondantes, des adresses IPv6 entre crochets comme `[::1]`, ou `*`, sans URL, chemin ni préfixe `*.`.
+
 Le catalogue et le cache sont écrits sous le verrou de catalogue Codex partagé ; un échec préserve
 les derniers fichiers valides connus. Des octets identiques constituent une non-opération qui
 préserve les mtimes. `--restart-codex`, `--restart-app-server-only` et l'alias déprécié

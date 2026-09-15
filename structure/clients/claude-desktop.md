@@ -17,6 +17,8 @@ The hub-side CLI dashboard uses the [management ingress address](../runtime.md#h
 
 Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
 
+The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
+
 ## Connected Claude Desktop profiles
 
 The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership); general status hands its resolved command to this check instead of probing the version twice.
