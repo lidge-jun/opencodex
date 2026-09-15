@@ -1504,6 +1504,7 @@ export const ko: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "로테이션 전략을 저장하지 못했습니다.",
   "accountPool.switchAtThreshold": "{threshold}%에서 전환",
   "accountPool.drainAtThreshold": "{threshold}%에서 소진",
+  "accountPool.resetBelowThreshold": "{threshold}% 미만에서 가장 빠른 초기화 선택",
   "accountPool.thresholdNotUsed": "임계값 미사용",
   "accountPool.proactiveSwitchingOff": "사전 전환 꺼짐",
 

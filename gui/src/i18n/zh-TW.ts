@@ -1536,6 +1536,7 @@ export const zhTW: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "無法儲存輪換策略。",
   "accountPool.switchAtThreshold": "達到 {threshold}% 切換",
   "accountPool.drainAtThreshold": "達到 {threshold}% 停止新任務分配",
+  "accountPool.resetBelowThreshold": "低於 {threshold}% 選取最近重置",
   "accountPool.thresholdNotUsed": "不使用閾值",
   "accountPool.proactiveSwitchingOff": "主動切換已關閉",
   "accountPool.quotaWindow": "配額統計區間",

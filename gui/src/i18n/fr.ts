@@ -1986,6 +1986,7 @@ export const fr: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "Impossible d’enregistrer la stratégie de rotation.",
   "accountPool.switchAtThreshold": "bascule à {threshold}%",
   "accountPool.drainAtThreshold": "épuisement à {threshold}%",
+  "accountPool.resetBelowThreshold": "prochaine réinitialisation sous {threshold}%",
   "accountPool.thresholdNotUsed": "seuil non utilisé",
   "accountPool.proactiveSwitchingOff": "bascule proactive désactivée",
   "accountPool.quotaWindow": "Fenêtre de quota",

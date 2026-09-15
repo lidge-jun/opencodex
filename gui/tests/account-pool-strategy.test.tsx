@@ -280,8 +280,8 @@ describe("AccountPoolStrategyControls", () => {
 
     // Quota with 80% threshold
     expect(renderControls("quota", 80)).toContain("switch at 80%");
-    // Reset-first suppresses generic switch badge
-    expect(renderControls("reset-first", 80)).not.toContain("account-pool-threshold-badge");
+    // Reset-first shows reset-first specific threshold badge
+    expect(renderControls("reset-first", 80)).toContain("nearest reset below 80%");
     // Fill-first with 80% threshold
     expect(renderControls("fill-first", 80)).toContain("drain at 80%");
     // Round-robin with threshold configured
@@ -335,6 +335,26 @@ describe("AccountPoolStrategyControls", () => {
       </LanguageProvider>,
     );
     expect(markupOk).not.toContain("switch threshold (80%)");
+
+    // Account with 30-day only plan (free/go) ignores weekly window
+    const accountFreePlan = {
+      ...accountExceeding,
+      plan: "free",
+      quota: { fiveHourPercent: 50, weeklyPercent: 95, monthlyPercent: 40 },
+    };
+    const markupFreePlan = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountFreePlan}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={80}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupFreePlan).not.toContain("switch threshold (80%)");
 
     // Regression: when round-robin strategy or unresolved strategy is active (threshold is undefined), no warning appears even for accounts exceeding quota
     const markupUndefined = renderToStaticMarkup(
