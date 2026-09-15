@@ -796,14 +796,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // body, URL or credential.
       const requestedTextFormat = parsed.options.textFormat;
       if (requestedTextFormat) {
-        if (provider.googleMode === "cloud-code-assist") {
-          // Not implemented or verified by opencodex for the Cloud Code Assist envelope,
-          // including Claude models served through it. This is not a claim that the
-          // upstream cannot do it — silence would return unconstrained prose as success,
-          // which is the failure this fix exists to remove.
+        if (provider.googleMode === "cloud-code-assist" && !parsed.modelId.startsWith("gemini-")) {
+          // Not implemented by opencodex for non-Gemini models (including Claude)
+          // served through the Cloud Code Assist envelope. This is not a claim that
+          // the upstream cannot do it — silence would return unconstrained prose as success,
+          // which is the failure this refusal exists to prevent.
           throw new Error(
-            "google cloud-code-assist structured output is not implemented by opencodex — "
-            + "remove response_format or route this model through AI Studio or Vertex",
+            "google cloud-code-assist structured output is not implemented by opencodex for non-Gemini models — "
+            + "remove response_format or route this model through a direct provider",
           );
         }
         if (isImageCapableModel(parsed.modelId)) {
