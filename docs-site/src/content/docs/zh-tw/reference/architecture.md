@@ -23,7 +23,8 @@ src/
 ├── vision/             # vision sidecar (describe + plan)
 ├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
-├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
+├── bridge.ts           # facade over bridge/
+├── bridge/             # AdapterEvent stream → Responses SSE (sse.ts) / JSON (response-json.ts)
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
 │   ├── parser.ts       # Responses request → OcxParsedRequest
@@ -34,24 +35,26 @@ src/
 └── index.ts            # public entry
 ```
 
-原先的三個大型入口檔案現在是相容性 facade：`codex/catalog.ts` 匯出 7 個
-`codex/catalog/*.ts` 模組，`server/management-api.ts` 分派到 9 個
-`server/management/*.ts` 模組，而 `server/responses.ts` 匯出 5 個
-`server/responses/*.ts` 模組。
+原先的大型入口檔案現在是相容性 facade：`codex/catalog.ts` 匯出
+`codex/catalog/*.ts` 模組，`server/management-api.ts` 分派到
+`server/management/*.ts` 模組，`server/responses.ts` 匯出 `server/responses/*.ts`
+模組，而 `bridge.ts` 重新匯出 `bridge/*.ts` 模組。facade 只是穩定的匯入路徑，而不是實作：
+下面每一步都指向真正擁有程式碼的模組，Responses 面的完整歸屬清單見
+`structure/transports/responses.md`。
 
 ## 請求流程
 
-`server/index.ts` 負責 HTTP 邊界，並把 Responses data plane 交給 `server/responses.ts` facade
+`server/index/serve-options.ts` 負責 HTTP 邊界，並把 Responses data plane 交給 `server/responses.ts` facade
 及其 `server/responses/*.ts` 模組：
 
-1. `server/index.ts` 應用 CORS 和 API 認證，在 drain 期間拒絕新請求，並記錄請求生命週期
+1. `server/index/serve-options.ts` 應用 CORS 和 API 認證，在 drain 期間拒絕新請求，並記錄請求生命週期
    metadata。它提供 `GET /v1/models`、`POST /v1/responses`、
    `POST /v1/responses/compact`、`POST /v1/images/generations` / `POST /v1/images/edits`
    （供 Codex 內建 `image_gen` 工具使用——由 `server/images.ts` 中繼到 OpenAI 繫上遊）、
    `POST /v1/live` / `POST /v1/realtime/calls`（ChatGPT / Codex App 語音與 OpenAI Realtime
    建連，由 `server/live.ts` 中繼）、`/v1/live/{callId}` 旁路 WebSocket，
    以及 `/v1/responses` 上可選的 WebSocket upgrade。
-2. `server/responses/core.ts` 解壓並解析 JSON；如果本機記住了對應輸入，則展開
+2. `server/responses/request-prepare.ts` 解壓並解析 JSON；如果本機記住了對應輸入，則展開
    `previous_response_id`，隨後呼叫 `responses/parser.ts`。
 3. `router.ts` 解析 bare id 或 `provider/model` id。server 隨後確定 Codex account affinity，
    必要時重新整理 provider OAuth，並把選中的 credential 應用到 route。
@@ -62,7 +65,7 @@ src/
    則建置、取得並解析上游請求。
 6. 路由模型請求託管的 `web_search` 工具時，`web-search/` 會暴露一個合成函式，經 ChatGPT
    sidecar 執行真實搜尋，把結果送回路由模型，並在設定的迴圈上限內重複。
-7. `bridge.ts` 生成 Responses SSE 或 JSON。`server/request-log.ts` 與 `usage/` 在不改變回應的
+7. `bridge/sse.ts` / `bridge/response-json.ts` 生成 Responses SSE 或 JSON。`server/request-log.ts` 與 `usage/` 在不改變回應的
    前提下收集終止狀態、延遲、provider/model 標籤和盡力估算的 token usage。
 
 ## 解析器
@@ -85,7 +88,7 @@ src/
 
 ## 橋接器
 
-`bridge.ts` 把 adapter 的內部 `AdapterEvent` 流轉換回 Codex 能理解的 Responses SSE：
+`bridge/sse.ts` 把 adapter 的內部 `AdapterEvent` 流轉換回 Codex 能理解的 Responses SSE：
 
 | AdapterEvent | 發出的 Responses SSE |
 | --- | --- |
@@ -129,7 +132,7 @@ thread affinity 位於 `codex/` 下，不會出現在管理 API 回應中。請�
 
 ## 傳輸與 compaction
 
-`server/index.ts` 預設在 `/v1/responses` 上提供 HTTP/SSE。當 `websockets` 為 `false` 而 Codex
+`server/index/serve-options.ts` 預設在 `/v1/responses` 上提供 HTTP/SSE。當 `websockets` 為 `false` 而 Codex
 嘗試 Responses WebSocket upgrade 時，opencodex 會回傳 `426 upgrade_required`，Codex 隨後在該
 session 中回退到 HTTP。設定 `"websockets": true` 後，同一 endpoint 會接受 upgrade 並使用
 WebSocket bridge。
@@ -144,7 +147,7 @@ WebSocket bridge。
 
 Codex context compaction 同樣適用於路由模型。`server/responses/compact.ts` 處理
 `POST /v1/responses/compact`，執行一次內部路由 summarization turn 並回傳壓縮後的歷史；
-`responses/parser.ts` 與 `bridge.ts` 則處理 remote compaction v2 的 `compaction_trigger` turn，
+`responses/parser.ts` 與 `bridge/sse.ts` 則處理 remote compaction v2 的 `compaction_trigger` turn，
 準確發出一個合成的 `compaction` 輸出 item。
 
 ## 快取與目錄

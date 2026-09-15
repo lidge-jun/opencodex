@@ -160,7 +160,7 @@ du dépôt et des chemins sensibles du point de vue de la sécurité est déclar
 
 ## Ajout d'un fournisseur au catalogue
 
-Tous les sélecteurs de fournisseurs et les graines proviennent du registre canonique (`src/providers/registry.ts`) :
+Tous les sélecteurs de fournisseurs et les graines proviennent du registre canonique (`src/providers/registry/entries-extended.ts`) :
 
 ```ts
 {

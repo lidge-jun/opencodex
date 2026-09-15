@@ -16,9 +16,28 @@ const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
+// Reads back what a TOML consumer would see for a top-level string key. A Windows path
+// is stored with escaped separators, so the raw file text never contains the unescaped path.
+function readRootTomlString(toml: string, key: string): string | undefined {
+  const value = Bun.TOML.parse(toml)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+test("catalog readback requires a root string rather than a nested namesake", () => {
+  const key = "model_catalog_json";
+  const catalog = String.raw`C:\Codex\catalog.json`;
+  expect(readRootTomlString(`${key} = ${JSON.stringify(catalog)}\n[profile]\n${key} = "nested"\n`, key)).toBe(catalog);
+  expect(readRootTomlString(`[profile]\n${key} = ${JSON.stringify(catalog)}\n`, key)).toBeUndefined();
+  expect(readRootTomlString(`[[profiles]]\n${key} = ${JSON.stringify(catalog)}\n`, key)).toBeUndefined();
+});
+
 // Full injectCodexConfig runs in a subprocess with isolated CODEX_HOME/OPENCODEX_HOME so
 // module-level path constants bind to the temp dirs (same pattern as codex-journal.test.ts).
-function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { stdout: string; status: number } {
+function runInject(
+  codexHome: string,
+  ocxHome: string,
+  configJson = "{}",
+): { stdout: string; stderr: string; status: number } {
   const script = `
     const { injectCodexConfig } = require("./src/codex/inject");
     injectCodexConfig(10100, JSON.parse(process.env.TEST_OCX_CONFIG)).then(r => {
@@ -31,7 +50,11 @@ function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { std
     encoding: "utf8",
     timeout: SPAWN_BUDGET_MS - 5_000,
   });
-  return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
+  return {
+    stdout: result.stdout?.trim() ?? "",
+    stderr: result.stderr?.trim() ?? "",
+    status: result.status ?? 1,
+  };
 }
 
 function runRestore(codexHome: string, ocxHome: string, asyncRestore = false): { stdout: string; status: number } {
@@ -108,6 +131,15 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.defaultEntries).toBe(1);
     expect(result.result.success).toBe(false);
     expect(result.result.message).toContain("history_paginated_requires_native_writer");
+    // #4718: the refusal also has to be legible without reading the message. `ocx stop`
+    // decides whether an obligation was discharged from this envelope, and every artifact
+    // comes back "skipped" here — the same shape an ownership refusal and a desired-state
+    // skip produce. Without the structured reason the caller could only match prose, and
+    // the stop misread this as a generic teardown failure and aborted the update.
+    expect(result.result.historyPreflightRefusal).toBe("history_paginated_requires_native_writer");
+    expect(result.result.artifacts.config.state).toBe("skipped");
+    expect(result.result.artifacts.catalog.state).toBe("skipped");
+    expect(result.result.artifacts.history.state).toBe("skipped");
     expect(result.preserved).toBe(true);
   });
 
@@ -163,6 +195,102 @@ describe("injectCodexConfig integration (Design B)", () => {
     });
   });
 
+  test.each([
+    ["before-preflight", false, false],
+    ["after-preflight", false, false],
+    ["after-config", false, false],
+    ["after-artifacts", false, false],
+    ["after-config", true, false],
+    ["after-config", false, true],
+  ] as const)("late pagination preserves an existing provider (%s, coordinated=%s, authless=%s)", (stage, coordinated, authless) => {
+    const original = 'model_provider="opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\nrequires_openai_auth=true\n';
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    writeFileSync(configPath, original);
+    if (!coordinated) writeFileSync(profilePath, "# original profile\n");
+    if (coordinated) {
+      writeFileSync(configPath, 'model="test"\n');
+      const seed = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+      expect(seed.status).toBe(0);
+      expect(JSON.parse(seed.stdout).success).toBe(true);
+    }
+    const journalPath = join(codexHome, "opencodex-journal.json");
+    const before = [configPath, profilePath, journalPath].map(path => existsSync(path) ? readFileSync(path, "utf8") : null);
+    const script = `
+      const {Database}=require("bun:sqlite");
+      const {join}=require("node:path");
+      const {injectCodexConfig,setBeforeHistoryArtifactCommitForTests,setHistoryArtifactStageForTests}=require("./src/codex/inject");
+      const migrate=()=>{
+        const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+        db.run("INSERT INTO threads VALUES (\'fixture\',\'opencodex\',\'paginated\')");
+        db.close();
+      };
+      let kind;
+      setBeforeHistoryArtifactCommitForTests(value=>{kind=value;if(${JSON.stringify(stage)}==="before-preflight")migrate();});
+      setHistoryArtifactStageForTests(value=>{if(value===${JSON.stringify(stage)})migrate();});
+      const readState=${coordinated ? 'require("./src/codex/transition-state").readCodexTransitionState' : "()=>null"};
+      const before=readState();
+      const result=await injectCodexConfig(10100,{codexDesktopAuthless:${authless}});
+      console.log(JSON.stringify({kind,result,before,after:readState()}));
+    `;
+    const child=spawnSync(process.execPath,["--eval",script],{cwd:repoRoot,env:{...process.env,CODEX_HOME:codexHome,OPENCODEX_HOME:ocxHome},encoding:"utf8",timeout:SPAWN_BUDGET_MS-5000});
+    expect(child.status, child.stderr).toBe(0);
+    const value = JSON.parse(child.stdout);
+    expect(value.kind, child.stdout).toBe(coordinated ? "coordinated" : "legacy-uncoordinated");
+    expect(value.result).toMatchObject({success:true,historyPreflightFailureReason:"history_paginated_requires_native_writer"});
+    const config = Bun.TOML.parse(readFileSync(configPath,"utf8")) as any;
+    expect(config.model_provider).toBe(authless ? "opencodex" : undefined);
+    expect(config.model_providers.opencodex.base_url).toBe("http://127.0.0.1:10100/v1");
+    expect(readFileSync(profilePath,"utf8")).not.toBe(before[1]);
+    if (coordinated) expect(value.after).not.toEqual(value.before);
+    const db = new Database(join(codexHome, "state_5.sqlite"), { readonly: true });
+    try {
+      expect(db.query("SELECT model_provider FROM threads").get()).toEqual({model_provider:"opencodex"});
+    } finally { db.close(); }
+  });
+
+  test.each([false, true])("pagination after artifact commit keeps the existing provider (coordinated=%s)", coordinated => {
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, coordinated ? 'model="test"\n' : DESIGN_B_BLOCK + "\n");
+    if (coordinated) {
+      const seed = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+      expect(seed.status, seed.stderr).toBe(0);
+      expect(JSON.parse(seed.stdout).success).toBe(true);
+    } else {
+      writeFileSync(configPath, 'model_provider="opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\n');
+      writeFileSync(join(codexHome, "opencodex.config.toml"), "# legacy profile\n");
+    }
+    const script = `
+      const {Database}=require("bun:sqlite");
+      const {join}=require("node:path");
+      const {injectCodexConfig,setHistoryArtifactStageForTests}=require("./src/codex/inject");
+      let migrated=false;
+      setHistoryArtifactStageForTests(stage=>{
+        if(stage!=="before-history-worker") return;
+        const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+        db.run("INSERT INTO threads VALUES ('fixture','opencodex','paginated')");
+        db.close();migrated=true;
+      });
+      const result=await injectCodexConfig(10100,{});
+      console.log(JSON.stringify({migrated,result}));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const value = JSON.parse(child.stdout);
+    expect(value.migrated).toBe(true);
+    const parsed = Bun.TOML.parse(readFileSync(configPath, "utf8")) as any;
+    expect(parsed.model_providers?.opencodex?.base_url).toBe("http://127.0.0.1:10100/v1");
+    expect(value.result.success).toBe(true);
+    const db = new Database(join(codexHome, "state_5.sqlite"), { readonly: true });
+    try { expect(db.query("SELECT model_provider FROM threads").get()).toEqual({ model_provider: "opencodex" }); }
+    finally { db.close(); }
+  });
+
   for (const stage of ["before-preflight", "after-preflight", "after-config", "after-artifacts"]) {
   test.each([false,true])(`a store that migrates mid-transaction retires the relabel unit and keeps the config (${stage}, legacy=%s)`,(legacy)=>{
     const original=legacy ? DESIGN_B_BLOCK+"\n" : 'model="test"\n';
@@ -192,7 +320,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     const value=JSON.parse(child.stdout);
     expect(value.kind).toBe(legacy?"legacy-uncoordinated":"coordinated");
     // A migration observed at ANY point in the transaction stands the relabel unit down and
-    // says so. It never rolls the config back: the config half writes no history, and
+    // says so. With no prior provider table to retire, it need not roll the config back:
     // rolling it back is what left every paginated home with no OpenCodex models at all.
     expect(value.result).toMatchObject({success:true,historyPreflightFailureReason:"history_paginated_requires_native_writer"});
     expect(value.result.message).toContain("left to Codex's native writer");
@@ -438,7 +566,10 @@ describe("injectCodexConfig integration (Design B)", () => {
     });
     const written = readFileSync(configPath, "utf8");
     expect(written).toContain("model_catalog_json");
-    expect(written).toContain(catalogPath);
+    // What the picker reads is the decoded TOML value, not the raw file text. A Windows path
+    // is written as a basic string with escaped separators, so asserting on the raw text
+    // compared an unescaped path against escaped bytes and failed on Windows only.
+    expect(readRootTomlString(written, "model_catalog_json")).toBe(catalogPath);
     expect(readFileSync(rollout, "utf8")).toBe(bytes);
   });
 
@@ -515,11 +646,11 @@ describe("injectCodexConfig integration (Design B)", () => {
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(config).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
     expect(config).toContain("# Auto-injected by opencodex");
-    expect(config).not.toContain("[model_providers.opencodex]");
+    expect(config).toContain("[model_providers.opencodex]");
     expect(config).not.toContain('model_provider = "opencodex"');
     expect(config).toContain('model = "gpt-5.5"');
-    // Exactly the Design B markers survive (routing + realtime sideband) — no accumulation.
-    expect(config.match(/Auto-injected by opencodex/g)?.length).toBe(2);
+    // Routing, realtime sideband and the retained compatibility provider each have one marker.
+    expect(config.match(/Auto-injected by opencodex/g)?.length).toBe(3);
     expect(config).toContain(DESIGN_B_BLOCK);
   });
 
@@ -1243,9 +1374,10 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(runInject(codexHome, ocxHome).status).toBe(0);
     const back = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(back).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
-    expect(back).not.toContain("[model_providers.opencodex]");
+    expect(back).toContain("[model_providers.opencodex]");
+    expect(back).toContain("requires_openai_auth = true");
     expect(back).not.toContain('model_provider = "opencodex"');
-    expect(back.match(/Auto-injected by opencodex/g)?.length).toBe(2);
+    expect(back.match(/Auto-injected by opencodex/g)?.length).toBe(3);
     expect(back).toContain(DESIGN_B_BLOCK);
 
     expect(runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true })).status).toBe(0);
@@ -1273,7 +1405,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(runInject(codexHome, ocxHome).status).toBe(0);
     const designB = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(designB).toContain(DESIGN_B_BLOCK);
-    expect(designB).not.toContain("[model_providers.opencodex]");
+    expect(designB).toContain("[model_providers.opencodex]");
     expect(designB).not.toContain('model_provider = "opencodex"');
     // Disabling leaves exactly one root override, not the table form's copy plus a new one.
     expect(designB.match(/openai_base_url/g)?.length).toBe(1);

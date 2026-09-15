@@ -403,6 +403,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 }
               }
             },
+            // Cursor's retry ladder re-sends the WHOLE turn, so each attempt is a physical send
+            // the enclosing request pays for. A meta without a budget -- every adapter unit test,
+            // and any caller predating this -- keeps the adapter's own three attempts (#4546).
+            incoming.sendBudget ? { sendBudget: incoming.sendBudget } : {},
           );
         };
 

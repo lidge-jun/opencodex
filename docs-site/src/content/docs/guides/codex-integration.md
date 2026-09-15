@@ -364,12 +364,20 @@ If a canonical ChatGPT forward continuation references expired or missing local 
 opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
 WebSocket client recognizes this error and can reconnect with its full retained context,
 including completed tool calls and their results, within its normal stream retry budget. An
-idle task therefore does not need a new task solely because the proxy's one-hour cache expired.
-The cache remains bounded; this does not extend retention or recover history the client no
-longer has. HTTP clients must handle the error explicitly and resend their full context without
-`previous_response_id`. Retrying only the same ID cannot recover missing state.
+idle task therefore does not need a new task solely because the proxy's replay cache expired.
+Replayed continuation state is retained for 24 hours and stays bounded by its existing memory,
+disk, and entry ceilings; this does not recover history the client no longer has. HTTP clients
+must handle the error explicitly and resend their full context without `previous_response_id`.
+Retrying only the same ID cannot recover missing state.
 
-The same recovery signal applies to routed Responses providers configured with
+The same recovery signal applies to every routed destination, because only the native Responses
+passthrough can answer a turn whose history this proxy lost — it forwards `previous_response_id`
+to a backend that stored the chain. Every other wire rebuilds the conversation from each request's
+own input, so a missed expansion there would otherwise send the current turn alone and silently
+lose the conversation. That includes the three that look stateful: Devin re-sends the whole
+conversation every turn, Cursor's checkpoint reference lives in the same expired store and falls
+back to full replay without it, and Kiro rebuilds its conversation history from the turns it was
+handed. It also applies to routed Responses providers configured with
 `statelessResponses: true`, and to routed requests where a custom tool was lowered to a function
 but a delta result has no local call to establish its original type. Full replay preserves the
 call, result, and reasoning together; opencodex does not guess the result type or drop it.
@@ -799,6 +807,8 @@ Catalog sync makes the selected sub-agent models available to Codex; see [Codex 
 
 When a ChatGPT account is added or reauthenticated, OpenCodex normally verifies it before saving with a small streaming request to the Codex Responses backend. It waits for `response.completed`, defaults to `gpt-5.6-luna`, and retries with `gpt-5.5` on HTTP 400 or HTTP 404. Public errors contain fixed failure categories rather than raw upstream response bodies.
 
+An HTTP 429 from an attempted warmup is reported as `codex_warmup_rate_limited`. Retry after the temporary restriction clears or the usage limit resets; signing in again does not reset these limits. A failed attempted warmup does not add a new account or replace existing credentials. This differs from quota-confirmed deferred registration below, which can save a restricted account without a model request. HTTP 401/403 failures retain the authentication guidance.
+
 If the new OAuth credential's authenticated usage lookup confirms an exhausted 5-hour, weekly, or monthly quota, the account is saved without this model request and shows **Validation pending**. It cannot serve pool requests, even after a restart or token refresh. Once quota recovers, **Refresh quotas** finishes validation: a fresh, complete usage reading with headroom permits one small model request, and only a completed response enables the account. Failed or incomplete readings and failed validation preserve the restriction. Passive account polling does not trigger deferred validation. Unknown usage during initial registration retains the normal warmup gate.
 
 `ocx account refresh openai` and `ocx account list openai --quota --refresh` only read usage. Model validation spends quota and requires a human dashboard session: open `ocx gui` and click **Refresh quotas** after recovery. For a headless host, access its dashboard from your browser; an admin token alone does not authorize validation. Validation can complete while an account is paused without resuming or selecting it. Model authorization failures remain visible until successful validation or reauthentication clears them.
@@ -866,6 +876,8 @@ When a routed preferred model may receive V2 work from a native ChatGPT parent, 
 ## Paginated history safety refusal
 
 When an affected history store supports paginated records, a provider transition may return `history_paginated_requires_native_writer`. That reason no longer refuses the Codex configuration, the reference profile, or the model catalog. `ocx sync` and `ocx start` still write those files and set `model_catalog_json`, so the Codex model picker keeps showing every OpenCodex-routed model. Only this one reason stands the conversation-history relabel down, because Codex allocates paginated rollout ordinals in its own writer and no retry changes that. Any other history preflight reason — an unreadable state database, a rollout whose identity changed, or a preflight that could not run — still refuses the whole transition and rolls it back, because those may succeed on a later attempt. OpenCodex never modifies paginated rollout files or thread rows in this state. Existing conversations keep whatever provider they are already tagged with and are not migrated; new conversations route through the proxy normally. When the relabel stands down, a `[model_providers.opencodex]` table that the home already had is kept rather than retired, even in the root-override (loopback) form, so conversations whose rows are tagged `opencodex` keep a provider id that still exists. This includes legacy rows in a migration-capable store. The CLI prints `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`.
+
+When returning to the root-override form, OpenCodex retains an existing `[model_providers.opencodex]` definition before committing the configuration, even if history preflight currently passes. This keeps older `opencodex` conversations resolvable if Codex migrates history after that commit or while the background worker starts. New conversations still use the selected root provider; explicit restore keeps its separate removal guards.
 
 `ocx restore` and Codex config removal still refuse on `history_paginated_requires_native_writer`. Stripping the `[model_providers.opencodex]` definition while thread rows still reference it would make those conversations unresolvable, and the restore path has no way to keep a compatibility provider table. A home that is already paginated cannot currently be uninstalled through the product; that is known open work rather than intended behaviour.
 

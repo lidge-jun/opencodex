@@ -1,6 +1,6 @@
 import type { OcxProviderConfig } from "../types";
 import { deriveKeyLoginMap, enrichProviderFromRegistry, type DerivedKeyLoginProvider } from "../providers/derive";
-import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
+import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 
 /**
  * API-key "login" providers: not OAuth — the flow opens the provider's dashboard so the user can
@@ -117,7 +117,7 @@ export async function validateApiKey(
       providerName,
       configuredProvider,
       provider.baseUrl,
-      `${provider.baseUrl}/models`,
+      providerModelsUrl(provider.baseUrl),
     );
     const res = await fetch(modelsUrl, {
       headers: { Authorization: `Bearer ${key}` },

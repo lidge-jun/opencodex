@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../../src/update/stop-contract.mjs";
+import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../../src/update/stop-decision.mjs";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
@@ -38,6 +38,17 @@ describe("stop failure classification (#3008)", () => {
       .map(match => Number(match[1]));
     expect(cliCodes).not.toContain(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
     expect(dispatchCodes).not.toContain(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
+
+    // #4718 adds a second code, and it has to be distinct from the first as well as from
+    // everything else. Reusing 79 would tell a caller "teardown ran, only history metadata
+    // is outstanding" about a stop that restored nothing, and that caller discharges the
+    // receipt on the strength of it.
+    expect(STOP_HISTORY_DEFERRED_EXIT_CODE).toBe(80);
+    expect(STOP_HISTORY_DEFERRED_EXIT_CODE).not.toBe(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
+    expect(STOP_HISTORY_DEFERRED_EXIT_CODE).toBeGreaterThan(78);
+    expect(STOP_HISTORY_DEFERRED_EXIT_CODE).toBeLessThan(128);
+    expect(cliCodes).not.toContain(STOP_HISTORY_DEFERRED_EXIT_CODE);
+    expect(dispatchCodes).not.toContain(STOP_HISTORY_DEFERRED_EXIT_CODE);
   });
 
   test("the shared contract is plain ESM so the Node launcher can import it", () => {
@@ -45,6 +56,7 @@ describe("stop failure classification (#3008)", () => {
     // places is how the two ends drift.
     const contract = read("src/update/stop-contract.mjs");
     expect(contract).toContain("export const STOP_HISTORY_INCOMPLETE_EXIT_CODE");
+    expect(contract).toContain("export const STOP_HISTORY_DEFERRED_EXIT_CODE");
     expect(read("bin/ocx.mjs")).toContain("stop-contract.mjs");
     expect(read("src/update/index.ts")).toContain("stop-contract.mjs");
   });
@@ -229,6 +241,63 @@ describe("stop failure classification (#3008)", () => {
       .toEqual({ proceed: false, reason: "proxy-unknown" });
   });
 
+  /**
+   * #4718: the same abort, from the opposite direction.
+   *
+   * A paginated Codex history store makes the shared teardown refuse before it changes
+   * anything, so `ocx stop` restores nothing and keeps its receipt. Under #3008 that came
+   * out as exit 1 and a surviving obligation, which reads identically to a proxy that
+   * refused to die — so the update aborted with the service already stopped and the old
+   * package still installed, exactly the shape #3008 was opened about.
+   *
+   * The receipt genuinely IS outstanding here, so the fix cannot be "ignore the receipt".
+   * It is the child saying which obligations it deliberately kept, and that claim only
+   * buys past the teardown gate — never past runtime records or a proxy that might live.
+   */
+  test("a history-deferred stop proceeds past its own receipt and nothing else", () => {
+    const dead = { hasRuntimeState: false, liveness: "dead" } as const;
+
+    // The reported case: receipt outstanding because the stop chose to keep it.
+    expect(decidePostStopUpdate({ status: STOP_HISTORY_DEFERRED_EXIT_CODE, teardownOutstanding: true, ...dead }))
+      .toEqual({ proceed: true, reason: "history-deferred" });
+    // And with no receipt at all, which is the same decision for the same reason.
+    expect(decidePostStopUpdate({ status: STOP_HISTORY_DEFERRED_EXIT_CODE, ...dead }))
+      .toEqual({ proceed: true, reason: "history-deferred" });
+
+    // It is a distinct reason, not a second spelling of history-only: the two mean
+    // different things about whether the obligation was discharged.
+    expect(decidePostStopUpdate({ status: STOP_HISTORY_INCOMPLETE_EXIT_CODE, teardownOutstanding: true, ...dead }))
+      .toEqual({ proceed: false, reason: "teardown-outstanding" });
+
+    // Every other gate still stands. Replacing package files under a server that may be
+    // live is the danger this function exists to prevent, and a history refusal is
+    // evidence about history — it says nothing about whether the proxy is gone.
+    expect(decidePostStopUpdate({ status: STOP_HISTORY_DEFERRED_EXIT_CODE, hasRuntimeState: true, liveness: "dead" }))
+      .toEqual({ proceed: false, reason: "runtime-state" });
+    expect(decidePostStopUpdate({ status: STOP_HISTORY_DEFERRED_EXIT_CODE, hasRuntimeState: false, liveness: "live" }))
+      .toEqual({ proceed: false, reason: "proxy-live" });
+    expect(decidePostStopUpdate({ status: STOP_HISTORY_DEFERRED_EXIT_CODE, hasRuntimeState: false, liveness: "unknown" }))
+      .toEqual({ proceed: false, reason: "proxy-unknown" });
+
+    // And no neighbouring status inherits the exemption.
+    for (const status of [1, 2, 4, 64, 78, 81, 130, null]) {
+      expect(decidePostStopUpdate({ status, teardownOutstanding: true, ...dead }))
+        .toEqual({ proceed: false, reason: "stop-failed" });
+    }
+  });
+
+  test("both updater lanes report the deferred teardown as its own outcome", () => {
+    // The reported #4718 path is the npm launcher. A lane that proceeded without saying
+    // the teardown is still owed would leave the operator believing the restore happened.
+    for (const lane of ["src/update/index.ts", "bin/ocx.mjs"]) {
+      const source = read(lane);
+      expect(source).toContain('decision.reason === "history-deferred"');
+      // Not folded into the manifest warning: that one says history metadata is
+      // incomplete, which implies config and catalog already came back.
+      expect(source).toMatch(/restored nothing/);
+    }
+  });
+
   test("both updater lanes call the shared decision", () => {
     // The reported path is a dashboard npm update through the plain-Node launcher. Fixing
     // only the Bun updater would leave that lane broken while every focused test went
@@ -246,8 +315,13 @@ describe("stop failure classification (#3008)", () => {
     // Ordinary failure wins: it is the stronger signal.
     expect(cli).toMatch(/if \(stopFailed\) process\.exitCode = 1;\s*\n\s*else if \(historyOnlyFailure\) process\.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;/);
     // The code is set rather than exited inline so the dispatcher still receives the
-    // return value and decides what happens next.
-    expect(cli).toMatch(/process\.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;\s*\n\s*return !stopFailed;/);
+    // return value and decides what happens next. The deferred code (#4718) sits between
+    // them and obeys the same rule, so the function still ends by returning.
+    expect(cli).toMatch(/process\.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;[\s\S]*?\n\s*return !stopFailed;\n\}/);
+    // The deferred code never outranks an ordinary failure, and it is only reachable when
+    // this run can still prove the obligations left behind are the ones it chose to keep.
+    expect(cli).toMatch(/else if \(historyDeferredNonces\) \{/);
+    expect(cli).toMatch(/pendingTeardownsAreExactly\(historyDeferredNonces\)\s*\n?\s*\? STOP_HISTORY_DEFERRED_EXIT_CODE\s*\n?\s*: 1;/);
     // Config and catalog failures are real teardown failures: a client reads those.
     expect(cli).toMatch(/artifacts\.config\.state === "failed" \|\| artifacts\.catalog\.state === "failed"/);
   });

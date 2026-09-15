@@ -391,6 +391,10 @@
         "reason": "no doc names this file; it is the legacy adapter bridge entry and its behavior is described under the adapter registry without a path reference"
       },
       {
+        "path": "src/bridge/",
+        "reason": "no doc names this directory; it holds the leaves moved out of the src/bridge.ts facade and inherits the same adapter-registry description the facade has"
+      },
+      {
         "path": "src/quota/",
         "reason": "no doc names a path here; quota evidence is described in providers/openai-tiers.md in prose only"
       },
@@ -417,7 +421,10 @@
         "reason": "no test constrains routed slug shape; the ten files that mention provider/model consume slugs rather than enforcing the form"
       }
     ],
-    "oversizeDocs": [],
+    "oversizeDocs": [
+      "gui-and-management-api.md",
+      "transports/responses.md"
+    ],
     "staleRefs": []
   }
 }

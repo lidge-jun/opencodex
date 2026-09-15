@@ -315,6 +315,8 @@ ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
 
+`ocx account main reauth --device --no-wait --json`은 성공 시 stdout에 JSON 객체 하나만 출력하며, 사람이 읽는 `follow up:` 안내 줄은 출력하지 않습니다. 반환된 `flowId`를 `ocx account main reauth status --flow <id> --json`에 지정하면 진행 상태를 확인할 수 있습니다.
+
 각 변경 명령은 실행 중인 프록시가 반환한 정규화된 유효 `CODEX_HOME`을 표시합니다. 이 경로는
 호출자의 `CODEX_HOME`과 다를 수 있으며, JSON을 지원하는 명령은 같은 값을
 `effectiveCodexHome`으로 반환합니다.
