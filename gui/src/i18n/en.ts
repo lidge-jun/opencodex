@@ -68,6 +68,7 @@ export const en = {
   "nav.models": "Models",
   "nav.combos": "Combos",
   "nav.subagents": "Subagents",
+  "nav.skills": "Skills",
   "nav.logs": "Logs & Debug",
   "nav.usage": "Usage",
   "common.github": "GitHub",

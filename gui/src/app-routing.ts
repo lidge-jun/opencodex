@@ -8,6 +8,7 @@ export type Page =
   | "providers"
   | "models"
   | "subagents"
+  | "skills"
   | "logs"
   | "usage"
   | "storage"
@@ -21,6 +22,7 @@ export const VALID_PAGES = new Set<Page>([
   "providers",
   "models",
   "subagents",
+  "skills",
   "logs",
   "usage",
   "storage",
@@ -107,11 +109,23 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/cline",
 ] as const;
 
+export const SKILLS_TAB_HASHES = [
+  "skills/marketplace",
+  "skills/registry",
+  "skills/matrix",
+  "skills/agents",
+  "skills/nodes",
+  "skills/drift",
+  "skills/reviews",
+  "skills/audit",
+] as const;
+
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
     || (page === "models" && (MODELS_TAB_HASHES as readonly string[]).includes(rawHash))
+    || (page === "skills" && (SKILLS_TAB_HASHES as readonly string[]).includes(rawHash))
     || (page === "dashboard"
       && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))
     || (page === "integrations"

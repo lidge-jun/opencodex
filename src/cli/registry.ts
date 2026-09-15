@@ -60,6 +60,22 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "skill",
+    aliases: ["skills"],
+    usage: "ocx skill <command> [options]",
+    summary: "Universal Agent Skill Control Plane (Pao-hubPro × SkillsGate).",
+    details: [
+      "Manage agent skills across local agents (Codex, Claude Code, OpenCode) and remote nodes.",
+      "Supports discover, import, static scanning, policy evaluation, approvals, dry-run deployment, verification, drift detection, and rollback.",
+    ],
+  },
+  {
+    name: "skills",
+    aliases: [],
+    usage: "ocx skills <command> [options]",
+    summary: "Alias of ocx skill.",
+  },
+  {
     name: "service",
     usage: "ocx service [install|repair|restart|start|stop|status|uninstall|remove]",
     summary: "Run as a background service.",

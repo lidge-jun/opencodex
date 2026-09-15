@@ -317,6 +317,15 @@
       ]
     },
     {
+      "path": "skill-control.md",
+      "tier": 5,
+      "title": "Universal Agent Skill Control Plane",
+      "scope": "Universal skill registry, visual marketplace, static scanning, cross-agent deployment, remote sync, and drift governance.",
+      "documents": [
+        "src/skills/"
+      ]
+    },
+    {
       "path": "clients/integrations.md",
       "tier": 5,
       "title": "Client Integrations",

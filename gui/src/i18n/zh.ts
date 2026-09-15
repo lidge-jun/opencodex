@@ -66,6 +66,7 @@ export const zh: Record<TKey, string> = {
   "nav.models": "模型",
   "nav.combos": "组合",
   "nav.subagents": "子代理",
+  "nav.skills": "技能",
 
   // routing intelligence
   "routing.title": "路由智能 (beta)",

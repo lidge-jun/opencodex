@@ -67,6 +67,7 @@ export const tr: Record<TKey, string> = {
   "nav.models": "Modeller",
   "nav.combos": "Kombolar",
   "nav.subagents": "Alt Ajanlar",
+  "nav.skills": "Yetenekler",
   "nav.logs": "Günlükler & Hata Ayıklama",
   "nav.usage": "Kullanım",
   "common.github": "GitHub",

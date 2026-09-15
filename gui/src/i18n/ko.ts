@@ -66,6 +66,7 @@ export const ko: Record<TKey, string> = {
   "nav.models": "모델",
   "nav.combos": "콤보",
   "nav.subagents": "서브에이전트",
+  "nav.skills": "스킬",
 
   // routing intelligence
   "routing.title": "라우팅 인텔리전스 (beta)",

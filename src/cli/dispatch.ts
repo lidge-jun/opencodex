@@ -899,6 +899,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleZcodeCommand } = await import("./integrations");
     return await handleZcodeCommand(deps.args.slice(1));
   },
+  skill: async deps => {
+    const { runSkill } = await import("./skill");
+    return await runSkill(deps.args.slice(1));
+  },
   help: async () => {
     printUsage();
     return 0;

@@ -65,6 +65,7 @@ export const fr: Record<TKey, string> = {
   "nav.models": "Modèles",
   "nav.combos": "Combinaisons",
   "nav.subagents": "Sous-agents",
+  "nav.skills": "Compétences",
   "nav.logs": "Journaux et débogage",
   "nav.usage": "Utilisation",
   "common.github": "GitHub",

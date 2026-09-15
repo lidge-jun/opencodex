@@ -59,6 +59,7 @@ export const zhTW: Record<TKey, string> = {
   "nav.models": "模型",
   "nav.combos": "組合",
   "nav.subagents": "子代理",
+  "nav.skills": "技能",
   "nav.logs": "日誌與除錯",
   "nav.usage": "用量",
   "common.github": "GitHub",
