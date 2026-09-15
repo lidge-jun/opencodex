@@ -439,6 +439,16 @@ status, so an unexpected management response cannot add raw upstream material.
 An opt-in shadow-call rewrite persists the bounded, redacted original helper model as
 `shadowCallRewrittenFrom`, so helper traffic remains identifiable after restart without storing
 request content or inferring a helper subtype from timing.
+Streaming request execution records bounded, attempt-isolated `streamTimeline` milestones
+(`upstreamDispatchMs`, `upstreamHeadersMs`, `upstreamFirstByteMs`, `upstreamFirstSemanticOutputMs`,
+`downstreamFirstWriteMs`, `upstreamEndMs`, `downstreamEndMs`) and closed-enum failure attribution
+(`failureSide`: `upstream | relay | downstream | client | local`, `failureStage`: `pre_dispatch | upstream_wait_headers | upstream_read | relay_transform | downstream_write | client_cancel | terminal_delivery`).
+Timeline recording is strictly content-gated: `upstreamFirstSemanticOutputMs` requires actual
+non-empty text or reasoning output deltas rather than pre-populated context state. Inspected stream
+provenance (`inspectedSource`: `upstream` vs `relay`) explicitly isolates bridge/adapter translation
+failures (such as buffer or schema limits) into `relay` / `relay_transform` attribution rather than
+misclassifying them as upstream failures. Diagnostic `transportPhase` and `terminalSource` fields are
+strictly validated, sanitized of credential shapes, and preserved across process restarts.
 `src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
 grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
 The management route scans the ledger from its beginning in fixed 1 MiB chunks on a
@@ -632,3 +642,18 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
 
 The raw provider editor round-trips `autoReviewModel` and `autoReviewModelOverrides` through editor-owned DTO fields. POST/PATCH/PUT share validation; PUT copies schema-normalized values into the persisted and live candidate before adoption. Canonical `openai` rejects these fields, including clear forms. Field-masked writes (PATCH, editor PUT, reload) pin every registry-seed key and ignore operator overlays the seed never defines, most commonly `selectedModels`; POST keeps the exact-key comparison. Canonical `openai` still rejects `allowPrivateNetwork`, which must not short-circuit destination DNS checks on the ChatGPT forward row. Existing authentication, origin checks and stale-baseline protection still govern the writes. See [reviewer projection](catalog.md#provider-scoped-approval-reviewer).
+
+### Stream timeline ownership after module extraction
+
+The HTTP contexts in `src/server/index/serve-options.ts` and WebSocket context in
+`src/server/index/websocket-handler.ts` seed the request origin. Combo children in
+`src/server/responses/core-combo.ts` inherit it, and the passthrough inspection
+options in `src/server/responses/passthrough-delivery.ts` retain it. Neither
+compatibility facade recreates those execution paths.
+
+`normalizeStreamDiagnostics` is shared by direct log ingress, persisted usage and
+restart projection, so a safe relay diagnostic cannot disappear only after restart.
+Request-relative and attempt-relative milestones keep separate origins; zero is a
+valid origin. The existing spend, affinity, cache-provenance, Claude compatibility
+and Codex WebSocket stage fields retain their own independent validators.
+Regression coverage is in `tests/usage/request-log.test.ts`.

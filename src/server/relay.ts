@@ -16,6 +16,7 @@ import {
   httpStatusForRequestLogTerminal,
   inspectResponseLogJson,
   inspectResponseLogSsePayloadParsed,
+  noteStreamTimelineEvent,
   recordFirstOutput,
   type RequestLogContext,
   type RequestLogEntry,
@@ -648,6 +649,7 @@ export function trackSseForRequestLog(
   onCancel: () => void,
   logCtx?: RequestLogContext,
   onFirstOutput?: () => void,
+  inspectedSource?: "upstream" | "relay",
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let terminalReported = false;
@@ -664,6 +666,7 @@ export function trackSseForRequestLog(
     onTerminal: reportTerminal,
     logCtx,
     onFirstOutput,
+    inspectedSource,
   });
 
   return new ReadableStream<Uint8Array>({
@@ -708,7 +711,9 @@ export function responseWithDeferredRequestLog(
   start: number,
   logCtx: RequestLogContext,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
+  inspectedSource?: "upstream" | "relay",
 ): Response {
+  if (logCtx.requestStartedAt === undefined) logCtx.requestStartedAt = start;
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (isUsageDebugEnabled() && !logCtx.usageDebugContentType && contentType) {
     logCtx.usageDebugContentType = contentType;
@@ -770,6 +775,7 @@ export function responseWithDeferredRequestLog(
     },
     logCtx,
     () => recordFirstOutput(logCtx, start),
+    inspectedSource,
   );
   return new Response(body, {
     status: response.status,
@@ -902,6 +908,11 @@ export type SseInspectorHandlers = {
    * between `response.created` and `response.completed`.
    */
   pinCompletedResponseIdToFirstSeen?: boolean;
+  /**
+   * Provenance of the stream being inspected.
+   * Raw upstream SSE defaults to "upstream"; adapter or bridge produced SSE uses "relay".
+   */
+  inspectedSource?: "upstream" | "relay";
 };
 
 type CompletedOutputItem = { item: unknown; sourceBytes: number };
@@ -1084,6 +1095,9 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       try { handlers.onParsedPayload(parsed); } catch { /* inspection must never throw into the pump */ }
     }
     reportFirstOutput.parsed(parsed);
+    if (handlers.logCtx && firstOutputFromParsed(parsed)) {
+      noteStreamTimelineEvent(handlers.logCtx, "upstreamFirstSemanticOutputMs");
+    }
     const status = terminalStatusFromParsed(parsed);
     const policyTerminal = status === "failed"
       && isPolicyRewriteType(parsed)
@@ -1093,8 +1107,15 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       try {
         reported = true;
         if (handlers.logCtx) {
+          const source = handlers.inspectedSource ?? "upstream";
           handlers.logCtx.transportPhase = "terminal_sse";
-          handlers.logCtx.terminalSource = "upstream";
+          handlers.logCtx.terminalSource = source;
+          if (status === "failed") {
+            handlers.logCtx.failureSide = handlers.logCtx.failureSide
+              ?? (source === "relay" ? "relay" : "upstream");
+            handlers.logCtx.failureStage = handlers.logCtx.failureStage
+              ?? (source === "relay" ? "relay_transform" : "terminal_delivery");
+          }
         }
         handlers.onTerminal(status, policyTerminal ? 400 : undefined);
       } finally {
@@ -1221,7 +1242,11 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 
   return {
     feed(chunk) {
-      if (!disposed) scanChunk(chunk);
+      if (disposed) return;
+      if (chunk.byteLength > 0 && handlers.logCtx) {
+        noteStreamTimelineEvent(handlers.logCtx, "upstreamFirstByteMs");
+      }
+      scanChunk(chunk);
     },
     finish() {
       if (disposed) return;
@@ -1247,6 +1272,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 export type InspectionDrainBounds = { ms: number; bytes: number };
 
 export type InspectionConsumerOptions = {
+  requestStartedAt?: number;
   clientGoneSignal?: AbortSignal;
   drainBounds?: Partial<InspectionDrainBounds>;
   upstream?: AbortController;
@@ -1416,6 +1442,9 @@ export function consumeForInspection(
   onFirstOutput?: () => void,
   options?: InspectionConsumerOptions,
 ): void {
+  if (logCtx && options?.requestStartedAt !== undefined && logCtx.requestStartedAt === undefined) {
+    logCtx.requestStartedAt = options.requestStartedAt;
+  }
   const reader = body.getReader();
   let bareUpstreamError: string | undefined;
   const inspector = (options?.inspectorFactory ?? createSseInspector)({
@@ -1439,7 +1468,12 @@ export function consumeForInspection(
     onCancel,
     onCleanEof: () => {
       if (!inspector.reported()) {
-        if (logCtx) logCtx.terminalSource = "synthetic";
+        if (logCtx) {
+          logCtx.transportPhase = "mid_stream";
+          logCtx.terminalSource = "synthetic";
+          logCtx.failureSide = "upstream";
+          logCtx.failureStage = "upstream_read";
+        }
         if (bareUpstreamError !== undefined) {
           onTerminal("failed", httpStatusForRequestLogTerminal("failed", logCtx));
         } else {
@@ -1455,6 +1489,8 @@ export function consumeForInspection(
         if (logCtx) {
           logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
+          logCtx.failureSide = "upstream";
+          logCtx.failureStage = "upstream_read";
           // A truncated 200 body must not meter as a success the client never
           // received; the router's equivalent turn carries 502 + streamAborted
           // (codex-router #139).
@@ -1475,6 +1511,9 @@ export function consumeForResponseLogMetadata(
   onFirstOutput?: () => void,
   options?: InspectionConsumerOptions,
 ): void {
+  if (options?.requestStartedAt !== undefined && logCtx.requestStartedAt === undefined) {
+    logCtx.requestStartedAt = options.requestStartedAt;
+  }
   const reader = body.getReader();
   // No onTerminal → the inspector's `reported` gate stays permanently false,
   // reproducing this consumer's unconditional logCtx inspection.

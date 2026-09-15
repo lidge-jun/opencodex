@@ -1194,7 +1194,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "unknown",
           provider: "unknown",
           ...admissionFields(admission),
@@ -1230,7 +1230,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "image_gen",
           provider: "unknown",
           ...admissionFields(admission),
@@ -1287,7 +1287,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "context_history",
           provider: "unknown",
           ...admissionFields(admission),
@@ -1313,7 +1313,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "web_search",
           provider: "unknown",
           ...admissionFields(admission),
@@ -1337,7 +1337,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "unknown",
           provider: "unknown",
           ...admissionFields(admission),
@@ -1411,7 +1411,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "unknown",
           provider: "unknown",
           ...admissionFields(admission),
@@ -1440,7 +1440,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "unknown",
           provider: "unknown",
           ...admissionFields(admission),
@@ -1466,7 +1466,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = { model: TRANSCRIPTION_MODEL, provider: "unknown", ...admissionFields(admission) };
+        const logCtx: RequestLogContext = { requestStartedAt: start, model: TRANSCRIPTION_MODEL, provider: "unknown", ...admissionFields(admission) };
         return runAdmittedHttpTurn(req, policy, async lease => {
           const response = await handleAudioTranscriptions(req, config, logCtx, admission, lease);
           addFinalRequestLog(requestId, start, logCtx, response.status);
@@ -1494,7 +1494,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "gpt-live",
           provider: "unknown",
           ...admissionFields(admission),
@@ -1541,7 +1541,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = {
+        const logCtx: RequestLogContext = { requestStartedAt: start,
           model: "gpt-live",
           provider: "unknown",
           ...admissionFields(admission),

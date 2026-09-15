@@ -27,14 +27,13 @@ import {
   isKnownAffinityReason,
   isKnownCacheTelemetryProvenance,
   isKnownInboundProtocol,
-  isKnownTerminalSource,
-  isKnownTransportPhase,
   isKnownUsageSurface,
   isCodexUsageAccountLogLabel,
   isLogicalRequestId,
   isValidReasoningWireValue,
   normalizeClaudeCompatibilityUsageLog,
   normalizeRequestSpend,
+  normalizeStreamDiagnostics,
   readRecentUsageEntries,
   usageForFinalLog,
   usageStatusForFinalLog,
@@ -42,9 +41,14 @@ import {
   type AttemptRecoveryKind,
   type CacheTelemetryProvenance,
   type PersistedRequestSpend,
+  type FailureSide,
+  type FailureStage,
   type PersistedUsageAttempt,
   type PersistedUsageEntry,
   type PersistedClaudeCompatibilityLog,
+  type StreamTimeline,
+  type TerminalSource,
+  type TransportPhase,
   type UsageStatus,
 } from "../usage/log";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
@@ -89,6 +93,8 @@ export interface RequestLogContext {
    * first one loses the more expensive half of the story.
    */
   affinityMoveReasons?: CodexAffinityReason[];
+  /** Internal request start timestamp in wall-clock ms. */
+  requestStartedAt?: number;
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
   firstOutputMs?: number;
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
@@ -180,8 +186,11 @@ export interface RequestLogContext {
    * Codex pool account was not the issuer. Never an account identifier.
    */
   conversationStateScrub?: "account-change";
-  transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
-  terminalSource?: "upstream" | "synthetic";
+  transportPhase?: TransportPhase;
+  terminalSource?: TerminalSource;
+  streamTimeline?: StreamTimeline;
+  failureSide?: FailureSide;
+  failureStage?: FailureStage;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
   /** Opt-in shadow evidence, normalized again at the logging boundary. */
@@ -263,13 +272,16 @@ export interface RequestLogEntry {
    */
   conversationStateScrub?: "account-change";
   /** Where the upstream terminal/failure was observed. */
-  transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
+  transportPhase?: TransportPhase;
   /**
    * Whether the HTTP status and message originated upstream or were synthesized by this
    * proxy. Covers SSE tails and pre-stream JSON refusals. Management surfaces this so a
    * local refusal cannot be presented as an upstream reason.
    */
-  terminalSource?: "upstream" | "synthetic";
+  terminalSource?: TerminalSource;
+  streamTimeline?: StreamTimeline;
+  failureSide?: FailureSide;
+  failureStage?: FailureStage;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
   /** Closed Claude protocol codes; no request or header values. */
@@ -391,8 +403,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       ? { cacheProvenance: entry.cacheProvenance }
       : {}),
     ...persistedAffinityFields(entry),
-    ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
-    ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
+    ...normalizeStreamDiagnostics(entry),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(entry.conversationStateScrub === "account-change"
@@ -469,12 +480,31 @@ export function addRequestLog(entry: RequestLogEntry) {
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
-  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom && entry.claudeCompatibility === undefined
-    ? entry
-    : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
-  if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
+  const diagnostics = normalizeStreamDiagnostics(entry);
+  const attempts = entry.attempts?.map(attempt => {
+    const normalized = { ...attempt };
+    const attemptDiagnostics = normalizeStreamDiagnostics(attempt);
+    if (!attemptDiagnostics.streamTimeline) delete normalized.streamTimeline;
+    if (!attemptDiagnostics.failureSide) delete normalized.failureSide;
+    if (!attemptDiagnostics.failureStage) delete normalized.failureStage;
+    if (!attemptDiagnostics.transportPhase) delete normalized.transportPhase;
+    if (!attemptDiagnostics.terminalSource) delete normalized.terminalSource;
+    return { ...normalized, ...attemptDiagnostics };
+  });
+  const retained: RequestLogEntry = {
+    ...entry,
+    ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
+    ...(attempts ? { attempts } : {}),
+    ...diagnostics,
+  };
+  if (!shadowCallRewrittenFrom) delete retained.shadowCallRewrittenFrom;
+  if (!diagnostics.streamTimeline) delete retained.streamTimeline;
+  if (!diagnostics.failureSide) delete retained.failureSide;
+  if (!diagnostics.failureStage) delete retained.failureStage;
+  if (!diagnostics.transportPhase) delete retained.transportPhase;
+  if (!diagnostics.terminalSource) delete retained.terminalSource;
   if (claudeCompatibility) retained.claudeCompatibility = claudeCompatibility;
-  else if (retained !== entry) delete retained.claudeCompatibility;
+  else delete retained.claudeCompatibility;
   entry = retained;
   retainRequestLogEntry(entry);
   try {
@@ -538,9 +568,8 @@ export function addRequestLog(entry: RequestLogEntry) {
         ? { cacheProvenance: entry.cacheProvenance }
         : {}),
       ...persistedAffinityFields(entry),
-      ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
-      ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
       ...failureDiagnostics,
+      ...diagnostics,
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
       ...(entry.claudeCompatibility ? { claudeCompatibility: entry.claudeCompatibility } : {}),
       ...(entry.conversationStateScrub === "account-change"
@@ -573,6 +602,30 @@ export function recordFirstOutput(
   if (logCtx.activeAttempt && logCtx.activeAttempt.firstOutputMs === undefined) {
     const attemptStartedAt = logCtx.activeAttemptStartedAt ?? requestStartedAt;
     logCtx.activeAttempt.firstOutputMs = Math.max(0, now - attemptStartedAt);
+  }
+}
+
+export function noteStreamTimelineEvent(
+  logCtx: RequestLogContext | undefined,
+  event: keyof StreamTimeline,
+  requestStartedAt?: number,
+  now = Date.now(),
+): void {
+  if (!logCtx) return;
+  if (requestStartedAt !== undefined && logCtx.requestStartedAt === undefined) {
+    logCtx.requestStartedAt = requestStartedAt;
+  }
+  if (!logCtx.streamTimeline) logCtx.streamTimeline = {};
+  const origin = requestStartedAt ?? logCtx.requestStartedAt ?? logCtx.activeAttemptStartedAt;
+  if (origin !== undefined && logCtx.streamTimeline[event] === undefined) {
+    logCtx.streamTimeline[event] = Math.max(0, now - origin);
+  }
+  if (logCtx.activeAttempt) {
+    if (!logCtx.activeAttempt.streamTimeline) logCtx.activeAttempt.streamTimeline = {};
+    const attemptOrigin = logCtx.activeAttemptStartedAt ?? requestStartedAt ?? logCtx.requestStartedAt;
+    if (attemptOrigin !== undefined && logCtx.activeAttempt.streamTimeline[event] === undefined) {
+      logCtx.activeAttempt.streamTimeline[event] = Math.max(0, now - attemptOrigin);
+    }
   }
 }
 
@@ -1215,6 +1268,7 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
+  if (logCtx.requestStartedAt === undefined) logCtx.requestStartedAt = start;
   // Mid-stream web-search aborts used to emit response.failed and land as 502/upstream_server_error.
   // Prefer the client-close classification whenever the captured reason says so.
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
@@ -1243,6 +1297,13 @@ export function addFinalRequestLog(
     // semantic code on both so detailed attempt telemetry cannot regress to a generic status code.
     if (errorCode) logCtx.activeAttempt.errorCode = errorCode;
     else delete logCtx.activeAttempt.errorCode;
+    if (logCtx.streamTimeline && !logCtx.activeAttempt.streamTimeline) {
+      logCtx.activeAttempt.streamTimeline = { ...logCtx.streamTimeline };
+    }
+    if (logCtx.failureSide) logCtx.activeAttempt.failureSide = logCtx.failureSide;
+    if (logCtx.failureStage) logCtx.activeAttempt.failureStage = logCtx.failureStage;
+    if (logCtx.transportPhase) logCtx.activeAttempt.transportPhase = logCtx.transportPhase;
+    if (logCtx.terminalSource) logCtx.activeAttempt.terminalSource = logCtx.terminalSource;
   }
   const existing = finalizedUsage(
     logCtx.providerAdapter ?? logCtx.provider,
@@ -1332,6 +1393,9 @@ export function addFinalRequestLog(
       : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
+    ...(logCtx.streamTimeline ? { streamTimeline: logCtx.streamTimeline } : {}),
+    ...(logCtx.failureSide ? { failureSide: logCtx.failureSide } : {}),
+    ...(logCtx.failureStage ? { failureStage: logCtx.failureStage } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
   });
