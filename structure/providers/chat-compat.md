@@ -1,5 +1,8 @@
 # Chat Provider Compatibility
 
+Requests translated onto the Responses adapter follow its
+[client User-Agent forwarding contract](../transports/responses.md#client-user-agent-forwarding).
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 

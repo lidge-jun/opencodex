@@ -41,9 +41,11 @@ import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuation
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 
-// Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
-// Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
+// Caller headers retained through auth materialization and internal request bridges.
+// Forward executors relay this set; an explicit provider User-Agent takes precedence.
 export const FORWARD_HEADERS = [
+  // Keep client identity through auth materialization and internal HTTP/WS bridges.
+  "user-agent",
   "authorization",
   "chatgpt-account-id",
   "openai-beta",
@@ -195,6 +197,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         }
         if (mayForwardCallerCredentials) {
           for (const h of FORWARD_HEADERS) {
+            // User-Agent uses the provider-first fallback shared with API-key mode below.
+            if (h === "user-agent") continue;
             const v = incoming?.headers.get(h);
             if (v) {
               if (h === CODEX_RESPONSES_LITE_HEADER) {
@@ -220,6 +224,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         }
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         if (provider.headers) Object.assign(headers, provider.headers);
+      }
+
+      // Some Responses providers select Codex compatibility by User-Agent. Preserve the
+      // caller identity unless the provider explicitly overrides it, regardless of casing.
+      const callerUserAgent = incoming.headers.get("user-agent");
+      if (callerUserAgent !== null && !Object.keys(headers).some(name => name.toLowerCase() === "user-agent")) {
+        headers["User-Agent"] = callerUserAgent;
       }
 
       const forward = provider.authMode === "forward";

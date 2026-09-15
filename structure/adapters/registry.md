@@ -1,5 +1,8 @@
 # Adapter Registry Authority
 
+Responses-derived adapters inherit the
+[client User-Agent forwarding contract](../transports/responses.md#client-user-agent-forwarding).
+
 Request-local adapter bindings are separate from registry authority in the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

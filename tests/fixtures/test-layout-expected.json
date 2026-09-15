@@ -1028,6 +1028,7 @@
   "responses-tool-search-repair.test.ts": "responses",
   "responses-undeclared-tool-guard.test.ts": "responses",
   "responses-usage-passthrough.test.ts": "responses",
+  "responses-user-agent.test.ts": "responses",
   "restore-completes-shared-teardown.test.ts": "cli",
   "retry-after-429.test.ts": "server",
   "route-decision-trace.test.ts": "server",

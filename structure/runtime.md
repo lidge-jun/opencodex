@@ -1,5 +1,8 @@
 # Runtime
 
+Responses adapters and auxiliary executors follow the
+[client User-Agent forwarding contract](transports/responses.md#client-user-agent-forwarding).
+
 Responses admission and finalization are composed through the
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

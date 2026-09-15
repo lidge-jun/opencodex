@@ -1,5 +1,8 @@
 # Inbound Compatibility Surfaces
 
+Internal request bridges retain User-Agent for the
+[Responses client identity contract](../transports/responses.md#client-user-agent-forwarding).
+
 Compatibility callers retain the public Responses ingress described by the
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

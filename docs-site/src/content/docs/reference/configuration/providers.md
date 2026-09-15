@@ -33,6 +33,17 @@ Bearer authentication; this does not change the inference URL or imply different
 quota consumption between adapters. Existing BigModel CN monitor selection remains
 separate. Full request URLs such as `/api/v1/responses` are not provider base URLs.
 
+## Responses client identity
+
+For `openai-responses` providers, OpenCodex preserves the incoming client's `User-Agent`
+in both API-key and forward modes. This lets upstream services select client-specific
+compatibility handling instead of seeing the Bun runtime's default identity.
+
+An explicit `User-Agent` in the provider's `headers` takes precedence, regardless of
+header-name casing. Responses-based search and vision helpers use the same precedence.
+When the incoming request has no User-Agent and no override is configured, OpenCodex
+does not invent a Codex identity; the transport keeps its normal default behavior.
+
 ## Provider-related top-level fields
 
 | Field | Type | Default | Meaning |

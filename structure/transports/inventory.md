@@ -1,5 +1,8 @@
 # Transport Inventory
 
+Responses and its auxiliary HTTP sends follow the
+[client User-Agent forwarding contract](responses.md#client-user-agent-forwarding).
+
 The existing Responses transport is divided by responsibility in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 

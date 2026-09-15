@@ -15,6 +15,20 @@ Retired Codex Spark has no model-specific tool or Responses Lite override; gener
 namespace scrubbing remain shared compatibility behavior. Codex quota/reset evidence follows the
 [shared/Reserve policy](../providers/openai-tiers.md#public-provider-contract), including suppression of retired model-derived evidence before shared recovery.
 
+### Client User-Agent forwarding
+
+`src/adapters/openai-responses/passthrough.ts` includes `user-agent` in the shared
+forward-header allowlist so auth materialization and internal HTTP/WebSocket bridges
+retain caller identity. The Responses adapter uses that identity in both API-key and
+forward modes only when the provider has no explicit User-Agent header, matched
+case-insensitively. A caller with no User-Agent does not acquire a fabricated Codex identity.
+Credential selection and the other allowlisted fields keep their existing precedence.
+
+The Responses-based search and vision executors apply the same provider-first User-Agent
+precedence when merging the shared allowlist. `tests/responses/responses-user-agent.test.ts`
+covers adapter modes, internal WebSocket header selection, absent UA, mixed-case overrides,
+and the headers received over real loopback HTTP by Responses and sidecar upstreams.
+
 ### Credential-bearing HTTP redirects
 
 Credential/body-bearing HTTP sends use `redirect: "manual"` at the final executor boundary,

@@ -1,5 +1,9 @@
 # Docs And Release
 
+The provider configuration reference documents the
+[Responses User-Agent contract](../transports/responses.md#client-user-agent-forwarding),
+with regression coverage registered in the Responses test domain.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 

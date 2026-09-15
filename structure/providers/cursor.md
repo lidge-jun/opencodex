@@ -1,5 +1,8 @@
 # Cursor Provider
 
+The [client User-Agent forwarding contract](../transports/responses.md#client-user-agent-forwarding)
+belongs to Responses-based sends; Cursor's direct transport retains its own identity policy.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 

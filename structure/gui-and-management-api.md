@@ -1,5 +1,8 @@
 # GUI And Management API
 
+Configured provider headers take precedence over caller identity under the
+[Responses User-Agent contract](transports/responses.md#client-user-agent-forwarding).
+
 The shared server request path follows the Responses
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

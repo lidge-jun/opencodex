@@ -1,5 +1,8 @@
 # Byte Accounting
 
+Adapter request headers follow the [client User-Agent forwarding contract](responses.md#client-user-agent-forwarding);
+this header-only policy does not allocate or reserialize request bodies.
+
 Responses body-reader limits and lifetime handling follow the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 

@@ -70,6 +70,8 @@ export async function describeImage(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (forwardProvider.headers) Object.assign(headers, forwardProvider.headers);
   for (const h of FORWARD_HEADERS) {
+    // Explicit provider identity wins over the caller's fallback, including mixed casing.
+    if (h === "user-agent" && Object.keys(headers).some(name => name.toLowerCase() === h)) continue;
     const v = selectedForwardHeaders.get(h);
     if (v) headers[h] = v;
   }

@@ -1,5 +1,8 @@
 # Overview
 
+Responses and its search/vision helpers preserve client identity according to the
+[User-Agent forwarding contract](transports/responses.md#client-user-agent-forwarding).
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
