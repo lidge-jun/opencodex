@@ -96,4 +96,3 @@ describe("Command Code client config", () => {
     expect(spec.loopbackOnly).toBe(true);
   });
 });
-
