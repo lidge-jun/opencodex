@@ -132,12 +132,28 @@ test("unchecked remember box clears any stale remembered token", async () => {
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const password = form.elements.namedItem("password") as HTMLInputElement;
+  const remember = form.elements.namedItem("remember") as HTMLInputElement;
 
+  expect(remember.checked).toBe(true); // pre-checked because a stored value exists
+  remember.checked = false;
   password.value = "fresh-token";
   form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
 
   expect(await pending).toBe("fresh-token");
   expect(localStorage.getItem("opencodex.remembered-admin-token")).toBeNull();
+});
+
+test("remember checkbox has a form control name for consistency", async () => {
+  const pending = promptForAdminToken(async () => "accepted");
+  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+  const form = dialog.querySelector<HTMLFormElement>("form")!;
+  const remember = form.elements.namedItem("remember") as HTMLInputElement;
+  const password = form.elements.namedItem("password") as HTMLInputElement;
+
+  expect(remember.name).toBe("remember");
+  password.value = "x";
+  form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
+  await pending;
 });
 
 test("uses the active UI locale instead of re-detecting browser storage", async () => {
