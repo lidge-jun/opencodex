@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { assertRemovalOutsideProtectedTrees } from "../../src/lib/test-home-guard";
 
 const TRANSIENT_REMOVE_CODES = new Set(["EPERM", "EBUSY", "ENOTEMPTY"]);
 const REMOVE_ATTEMPTS = 50;
@@ -9,11 +10,20 @@ type RemoveTreeWithRetryOptions = Readonly<{
   sleep?: (milliseconds: number) => void;
 }>;
 
-/** Retry only Windows filesystem-release races; preserve every other cleanup failure. */
+/**
+ * Retry only Windows filesystem-release races; preserve every other cleanup failure.
+ *
+ * The refusal comes FIRST, before the injected `remove` can run, because this helper is the
+ * one removal path the whole suite shares: a fixture that resolves the process-global config
+ * directory and hands it here would otherwise delete the developer's real home on any run that
+ * never pinned OPENCODEX_HOME. The check is a path comparison against three canonical trees,
+ * so it costs nothing for the temp directories every caller actually passes.
+ */
 export function removeTreeWithRetry(
   path: string,
   options: RemoveTreeWithRetryOptions = {},
 ): void {
+  assertRemovalOutsideProtectedTrees(path);
   const remove = options.remove ?? (target => rmSync(target, { recursive: true, force: true }));
   const sleep = options.sleep ?? Bun.sleepSync;
 

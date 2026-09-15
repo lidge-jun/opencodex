@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, readFileSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, readFileSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ConfigMutationLockError,
@@ -16,6 +16,14 @@ import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch
 import { isValidCodexAccountId } from "./account-id";
 import type { PoolQuotaWriter } from "./quota-types";
 import { CODEX_REFRESH_FLIGHT_CEILING_MS } from "./quota-recovery-timing";
+
+import {
+  CodexPoolRefreshCooldownError,
+  clearCodexPoolRefreshFailure,
+  codexPoolRefreshFence,
+  isCodexPoolRefreshCooling,
+  noteCodexPoolRefreshFailure,
+} from "./pool-refresh-backoff";
 
 type LegacyCodexAccountStore = Record<string, CodexAccountCredentials>;
 type CodexAccountStore = Record<string, CodexAccountCredentialRecord>;
@@ -480,6 +488,17 @@ export class TokenRefreshError extends Error {
   }
 }
 
+/**
+ * The stored record or its refresh-grant fingerprint is gone. Retrying cannot
+ * conjure a missing credential, so callers must treat this as terminal.
+ */
+export class CodexCredentialUnavailableError extends Error {
+  constructor(message = "Codex account credential is unavailable; reauthenticate the account.") {
+    super(message);
+    this.name = "CodexCredentialUnavailableError";
+  }
+}
+
 export class CodexCredentialGenerationConflictError extends Error {
   constructor(message = "Codex account changed during refresh") {
     super(message);
@@ -512,6 +531,30 @@ export class CodexCredentialRefreshStaleError extends Error {
     super("Codex credential refresh owner became stale");
     this.name = "CodexCredentialRefreshStaleError";
   }
+}
+
+/**
+ * Terminal means the grant itself is dead, or there is no grant to refresh.
+ * Token-endpoint 5xx (`unknown`) and a generation CAS loss stay transient
+ * because those genuinely may clear (#2887).
+ */
+export function isTerminalCodexPoolRefreshFailure(error: unknown): boolean {
+  return (error instanceof TokenRefreshError && (error.reason === "revoked" || error.reason === "expired"))
+    || error instanceof CodexCredentialUnavailableError;
+}
+
+function isOperationalCodexPoolRefreshFailure(error: unknown): boolean {
+  if (error instanceof CodexPoolRefreshCooldownError) return true;
+  if (error instanceof CodexCredentialRefreshBusyError) return true;
+  if (error instanceof CodexCredentialRefreshStaleError) return true;
+  if (error instanceof CodexCredentialRefreshLockTimeoutError) return true;
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
+function classifyCodexPoolRefreshFailureReason(error: unknown): string {
+  if (error instanceof TokenRefreshError) return error.reason;
+  if (error instanceof CodexCredentialGenerationConflictError) return "generation_conflict";
+  return "network";
 }
 
 /** Credential writers share the config mutation coordinator; contention is transient, not reauth. */
@@ -612,8 +655,41 @@ function isRefreshLockStale(path: string): boolean {
     const parsed = JSON.parse(readFileSync(path, "utf-8")) as { acquiredAt?: unknown };
     return typeof parsed.acquiredAt !== "number" || Date.now() - parsed.acquiredAt > REFRESH_LOCK_STALE_MS;
   } catch {
-    return true;
+    // The owner creates the file and writes its metadata in two steps, so a live lock is
+    // briefly unreadable. Age the file itself instead of calling that window stale, which
+    // let a waiter delete a lock whose owner was still inside its critical section.
+    try {
+      return Date.now() - statSync(path).mtimeMs > REFRESH_LOCK_STALE_MS;
+    } catch {
+      return false;
+    }
   }
+}
+
+function releaseCodexRefreshFileLock(path: string, fd: number): void {
+  let owned: { dev: bigint; ino: bigint } | null = null;
+  try {
+    const info = fstatSync(fd, { bigint: true });
+    if (info.dev >= 0n && info.ino > 0n) owned = { dev: info.dev, ino: info.ino };
+  } catch { /* Unknown descriptor identity never authorizes unlink. */ }
+  try {
+    withConfigMutationLockSync(() => {
+      let current: { dev: bigint; ino: bigint } | null = null;
+      try {
+        const info = statSync(path, { bigint: true });
+        if (info.dev >= 0n && info.ino > 0n) current = { dev: info.dev, ino: info.ino };
+      } catch { /* Keep the lock and the callback outcome when the path probe fails. */ }
+      if (owned && current && current.dev === owned.dev && current.ino === owned.ino) {
+        try { unlinkSync(path); } catch (err) {
+          if (errCode(err) !== "ENOENT") throw err;
+        }
+      }
+    });
+  } catch (err) {
+    // Keep the descriptor alive through comparison/unlink so its inode cannot be recycled.
+    // Unavailable coordination leaves the path without masking the completed refresh.
+    if (!(err instanceof ConfigMutationLockError)) throw err;
+  } finally { closeSync(fd); }
 }
 
 export async function withCodexRefreshFileLock<T>(lockKey: string, signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
@@ -627,33 +703,45 @@ export async function withCodexRefreshFileLock<T>(lockKey: string, signal: Abort
   while (fd == null) {
     if (signal.aborted) throw signal.reason;
     try {
-      fd = openSync(path, "wx", 0o600);
-      writeFileSync(fd, JSON.stringify({ acquiredAt: Date.now(), pid: process.pid }) + "\n");
-      break;
-    } catch (err) {
-      if (errCode(err) !== "EEXIST") throw err;
-      if (isRefreshLockStale(path)) {
+      // Serialize only metadata operations, never the async refresh callback. Cooperating
+      // contenders cannot reclaim a successor between stale observation and path mutation.
+      withConfigMutationLockSync(() => {
         try {
-          unlinkSync(path);
-        } catch (unlinkErr) {
-          if (errCode(unlinkErr) !== "ENOENT") throw unlinkErr;
+          fd = openSync(path, "wx", 0o600);
+          writeFileSync(fd, JSON.stringify({ acquiredAt: Date.now(), pid: process.pid }) + "\n");
+        } catch (err) {
+          if (fd != null) {
+            const failedFd = fd;
+            fd = null;
+            try { releaseCodexRefreshFileLock(path, failedFd); } catch { /* Preserve write failure. */ }
+            throw err;
+          }
+          if (errCode(err) !== "EEXIST") throw err;
+          if (isRefreshLockStale(path)) {
+            try { unlinkSync(path); } catch (unlinkErr) {
+              if (errCode(unlinkErr) !== "ENOENT") throw unlinkErr;
+            }
+          }
         }
-        continue;
+      });
+    } catch (err) {
+      // A failed SQLite commit can follow successful file creation; it still owns an fd.
+      if (fd != null) {
+        const failedFd = fd;
+        fd = null;
+        try { releaseCodexRefreshFileLock(path, failedFd); } catch { /* Preserve admission failure. */ }
       }
-      if (Date.now() >= deadline) throw new CodexCredentialRefreshLockTimeoutError();
-      await sleep(REFRESH_LOCK_POLL_MS, signal);
+      if (!(err instanceof ConfigMutationLockError)) throw err;
     }
+    if (fd != null) break;
+    if (Date.now() >= deadline) throw new CodexCredentialRefreshLockTimeoutError();
+    await sleep(REFRESH_LOCK_POLL_MS, signal);
   }
 
   try {
     return await fn();
   } finally {
-    if (fd != null) closeSync(fd);
-    try {
-      unlinkSync(path);
-    } catch (err) {
-      if (errCode(err) !== "ENOENT") throw err;
-    }
+    releaseCodexRefreshFileLock(path, fd);
   }
 }
 
@@ -797,6 +885,11 @@ export async function forceRefreshCodexPoolToken(
     settle({ kind: "failed", error: options.signal.reason });
     throw options.signal.reason;
   }
+  if (isCodexPoolRefreshCooling(id)) {
+    const error = new CodexPoolRefreshCooldownError();
+    settle({ kind: "failed", error });
+    throw error;
+  }
   const completion = resolveCodexToken(
     id,
     { rejectedGeneration: options.rejectedGeneration, rejectedAccessToken: options.rejectedAccessToken },
@@ -804,14 +897,28 @@ export async function forceRefreshCodexPoolToken(
     // the credential, not for whoever happened to be waiting.
     undefined,
   );
+  // Captured before the flight settles, spent only if it fails. A reauthentication that lands
+  // while this is in the air replaces the grant and clears its failures; this fence is how the
+  // late failure knows it is talking about a credential that no longer exists.
+  const refreshFence = codexPoolRefreshFence(id);
   completion.then(
-    resolved => settle({
-      kind: "resolved",
-      provenance: classify(resolved),
-      generation: resolved.generation,
-      rotated: resolved.accessToken !== options.rejectedAccessToken,
-    }),
-    error => settle({ kind: "failed", error }),
+    resolved => {
+      clearCodexPoolRefreshFailure(id);
+      settle({
+        kind: "resolved",
+        provenance: classify(resolved),
+        generation: resolved.generation,
+        rotated: resolved.accessToken !== options.rejectedAccessToken,
+      });
+    },
+    error => {
+      if (isTerminalCodexPoolRefreshFailure(error) || isOperationalCodexPoolRefreshFailure(error)) {
+        if (isTerminalCodexPoolRefreshFailure(error)) clearCodexPoolRefreshFailure(id);
+      } else {
+        noteCodexPoolRefreshFailure(id, classifyCodexPoolRefreshFailureReason(error), undefined, refreshFence);
+      }
+      settle({ kind: "failed", error });
+    },
   );
   const result = await awaitOwnCancellation(completion, options.signal);
   const provenance = classify(result);
@@ -851,9 +958,9 @@ async function resolveCodexToken(
   if (callerSignal?.aborted) throw callerSignal.reason;
   const record = readCodexAccountRecord(id);
   const cred = record?.deletedAt == null ? record?.credential : undefined;
-  if (!record || !cred) throw new Error("Codex account credential is unavailable; reauthenticate the account.");
+  if (!record || !cred) throw new CodexCredentialUnavailableError();
   const refreshGrantFingerprint = recordGrantFingerprint(record);
-  if (!refreshGrantFingerprint) throw new Error("Codex account credential is unavailable; reauthenticate the account.");
+  if (!refreshGrantFingerprint) throw new CodexCredentialUnavailableError();
 
   // The freshness shortcut is exactly what makes a 401 on a time-valid token
   // unrecoverable, so a forced caller skips it — but only while the stored credential
@@ -1075,9 +1182,20 @@ async function resolveCodexToken(
       let errDesc: string;
       let errCodeExact: string | undefined;
       try {
-        const parsed = JSON.parse(errText) as { error?: string; error_description?: string };
-        errCodeExact = typeof parsed.error === "string" ? parsed.error.trim() : undefined;
-        errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ") || `HTTP ${res.status}`;
+        const parsed = JSON.parse(errText) as {
+          error?: string | { code?: string; message?: string };
+          error_description?: string;
+        };
+        if (typeof parsed.error === "string") {
+          errCodeExact = parsed.error.trim();
+          errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ");
+        } else if (parsed.error && typeof parsed.error === "object") {
+          errCodeExact = typeof parsed.error.code === "string" ? parsed.error.code.trim() : undefined;
+          errDesc = [parsed.error.code, parsed.error.message, parsed.error_description].filter(Boolean).join(": ");
+        } else {
+          errDesc = parsed.error_description || `HTTP ${res.status}`;
+        }
+        if (!errDesc) errDesc = `HTTP ${res.status}`;
       } catch { errDesc = `HTTP ${res.status}`; }
       // `invalid_grant` is the standard OAuth code for a refresh token that is no longer
       // usable, and upstream sends it bare with no description. Without it here the dead
@@ -1088,8 +1206,10 @@ async function resolveCodexToken(
       // `server_error` whose description happens to mention invalid_grant would otherwise
       // retire a healthy account, which is the failure this whole change exists to remove.
       const reason = errCodeExact === "invalid_grant"
+          || errCodeExact === "refresh_token_invalidated"
           || errDesc.includes("invalidated") || errDesc.includes("revoked") ? "revoked" as const
-        : errDesc.includes("expired") ? "expired" as const
+        : errCodeExact === "refresh_token_expired"
+          || errDesc.includes("expired") ? "expired" as const
         : "unknown" as const;
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
     }

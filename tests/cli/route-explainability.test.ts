@@ -120,6 +120,27 @@ describe("route explainability (RI-09)", () => {
     expect(response.status).toBe(404);
   });
 
+  test("the account decision and its cause are part of the route explanation (#4546)", async () => {
+    // An operator asking why a request is on this account should not have to compare account
+    // labels across rows, which is how the original incident had to be diagnosed.
+    appendUsageEntry({
+      ...tracedEntry("explain-affinity"),
+      affinity: "rebound",
+      affinityReason: "quota_refusal",
+    });
+    const response = await apiGet("/api/request-history/explain-affinity/route-decision", config());
+    expect(response.status).toBe(200);
+    const body = await response.json() as { affinity?: { move?: string; reason?: string | null } };
+    expect(body.affinity).toEqual({ move: "rebound", reason: "quota_refusal" });
+  });
+
+  test("a row with no account decision explains with a null affinity block", async () => {
+    appendUsageEntry(tracedEntry("explain-no-affinity"));
+    const response = await apiGet("/api/request-history/explain-no-affinity/route-decision", config());
+    const body = await response.json() as { affinity?: unknown };
+    expect(body.affinity).toBeNull();
+  });
+
   test("pre-trace rows explain with null routeDecision and their attempts", async () => {
     appendUsageEntry({
       requestId: "legacy-row",

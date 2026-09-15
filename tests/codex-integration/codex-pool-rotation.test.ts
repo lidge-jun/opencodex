@@ -32,6 +32,7 @@ import {
   reconcileCodexRoutingHealth,
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
+  resolveCodexAccountForThreadDetailed,
 } from "../../src/codex/routing";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
@@ -1469,6 +1470,151 @@ describe("selection order across rotation strategies", () => {
     // The binding was never surrendered: past the soft-avoid window and the failure window,
     // the thread is home again with its prefix intact. A deleted binding could not do this.
     const recovered = Date.now() + 6 * 60_000;
+    expect(resolveCodexAccountForThread(threadId, config, recovered)).toBe("a");
+  });
+
+  test("preview names the same detour as resolve before any detour is recorded", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "preview-first-detour-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+
+    // Preview FIRST, before any detour exists. Subagent fallback scores this account's usage to
+    // decide whether a model is still reachable, so a preview that named the bound account here
+    // would retire a model over usage the request was never going to touch.
+    const previewed = previewCodexAccountForRequest(threadId, config, start);
+    const served = resolveCodexAccountForThread(threadId, config, start);
+    expect(previewed).toBe(served);
+    expect(served).not.toBe("a");
+  });
+
+  test("every binding decision records what happened and why (#4546)", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "affinity-reason-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+
+    // A thread with no binding yet is a placement, not a move.
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      accountId: "a",
+      affinity: { move: "new_bind", reason: "healthy" },
+    });
+    // Served by its own healthy account.
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      affinity: { move: "reused", reason: "healthy" },
+    });
+
+    // A transient streak sends this request elsewhere while the binding stays put.
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: start });
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start)).toMatchObject({
+      accountId: "b",
+      affinity: { move: "detour", reason: "transient" },
+    });
+
+    // A quota refusal is the account telling this thread it cannot serve, so the binding goes
+    // and the record names which cause fired instead of leaving it to be inferred.
+    recordCodexUpstreamOutcome(config, "a", 429, { now: start });
+    expect(resolveCodexAccountForThreadDetailed(threadId, config, start).affinity)
+      .toMatchObject({ move: "rebound", reason: "quota_refusal" });
+  });
+
+  test("a release names the guard that fired, not a quota fallback (#4598)", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "paused-release-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    // The operator paused the bound account. That is why the binding goes, and a quota fallback
+    // here would name a cause routing never used.
+    config.pausedCodexAccountIds = ["a"];
+    const moved = resolveCodexAccountForThreadDetailed(threadId, config, start);
+    expect(moved.status).toBe("selected");
+    expect(moved.affinity).toMatchObject({ move: "rebound", reason: "paused" });
+  });
+
+  test("a release survives a resolve that produced no account (#4598)", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+    });
+    const threadId = "no-account-release-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    // Everything is paused, so the binding is released and nothing takes it. A no-account result
+    // reaches no auth context and therefore no usage entry, so the reason has to survive.
+    config.pausedCodexAccountIds = ["a", "b", "c"];
+    const none = resolveCodexAccountForThreadDetailed(threadId, config, start);
+    expect(none.status).toBe("none");
+    expect(none.affinity).toMatchObject({ move: "cleared", reason: "paused" });
+
+    // The pool recovers. The rebind is still attributable to the pause rather than reported as a
+    // fresh healthy bind that erases why this conversation left its account.
+    config.pausedCodexAccountIds = ["a"];
+    const recovered = resolveCodexAccountForThreadDetailed(threadId, config, start);
+    expect(recovered.status).toBe("selected");
+    expect(recovered.affinity).toMatchObject({ move: "rebound", reason: "paused" });
+  });
+
+  test("a transient block with nowhere to detour keeps the binding", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "quota",
+      autoSwitchThreshold: 80,
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+    });
+    const threadId = "provider-wide-outage-thread";
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+    const start = Date.now();
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+
+    // A provider-wide 503 hits every account, so every sibling is soft-avoided too and the
+    // detour has nowhere to go. Losing the binding here would rebuild the cold prefix somewhere
+    // else for exactly the failure the hold exists to survive.
+    for (const id of ["a", "b", "c"]) {
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+      recordCodexUpstreamOutcome(config, id, 503, { now: start });
+    }
+    expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+    expect(previewCodexAccountForRequest(threadId, config, start)).toBe("a");
+
+    // Once the outage clears the thread is still on its own warm account, with no rebind.
+    const recovered = start + 6 * 60_000;
     expect(resolveCodexAccountForThread(threadId, config, recovered)).toBe("a");
   });
 

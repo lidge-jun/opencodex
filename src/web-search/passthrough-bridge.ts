@@ -18,10 +18,19 @@
  *
  * Deliberate boundaries of this first slice:
  *   - Streaming SSE turns only. A non-streaming turn stays on the existing path.
- *   - A leg that mixes the search call with any OTHER client tool call fails closed with an
- *     explicit error. Answering both would need the raw mixed-tool continuation contract the
- *     2.47 track deferred (devlog/_plan/260907_track2_protocol/040_hosted_search_disposition.md),
- *     and silently half-doing it would drop the client's own tool call.
+ *   - A leg that mixes the search call with a client-executed tool call ends the turn ON that
+ *     leg: the intercepted searches still run proxy-side so the hosted cell completes, the
+ *     held client calls are released for Codex to run, and the leg's own terminal closes the
+ *     turn. No continuation is sent upstream, because the client's call is unanswered and the
+ *     conversation owes the client a turn, not the gateway. When the leg's terminal already
+ *     ended the turn (response.failed / response.incomplete) the searches are not run at all:
+ *     the opened cells close unanswered and that terminal is relayed, because billing a search
+ *     for a dead turn buys nothing. What is still not fixed: the
+ *     gateway never receives the executed search result -- Codex replays the hosted
+ *     web_search_call cell (query and sources, no result text) on the next turn and the
+ *     gateway's own function_call/function_call_output pair is not reconstructed. Making it
+ *     whole needs the outbound body rewritten before the first leg is dispatched, which lives
+ *     in src/server/responses/core.ts and is out of this module's scope.
  *   - Assistant text is never treated as a search instruction. The bridge intercepts structured
  *     function_call / custom_tool_call items named web_search, not XML-like prose.
  *   - Non-Ollama backends reuse the sidecar executors and those executors' own credentials.
@@ -120,6 +129,11 @@ const MAX_RETAINED_OUTPUT_ITEMS = 500;
 /** Refuse to buffer an unbounded partial SSE event from a misbehaving upstream. */
 const MAX_SSE_BUFFER_CHARS = 8 * 1024 * 1024;
 
+/**
+ * Retained for importers that pinned the first slice's contract: a leg mixing the search with
+ * a client-executed call used to fail with this code. Such legs now end the turn on the leg
+ * instead of failing, so nothing emits it any more.
+ */
 export const WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE = "web_search_bridge_mixed_tools";
 export const WEB_SEARCH_BRIDGE_ERROR_CODE = "web_search_bridge_failed";
 
@@ -426,10 +440,16 @@ async function* readSseBlocks(
   }
 }
 interface LegDecision {
-  kind: "end" | "continue" | "fail";
+  kind: "end" | "endAfterSearch" | "endWithoutSearch" | "continue" | "fail";
   searches: InterceptedSearchCall[];
   message?: string;
   code?: string;
+  /**
+   * Whether an endWithoutSearch leg may hand its withheld client-executed calls back.
+   * Only `response.incomplete` may: the client can still act on that turn. A
+   * `response.failed` terminal must not, for the same reason the fail path drops them.
+   */
+  releaseHeldCalls?: boolean;
 }
 
 /** One client-executed call event held until the leg's fate is known. */
@@ -653,21 +673,40 @@ class BridgeStreamState {
     return blocks;
   }
 
+  /**
+   * Discard the withheld client-executed calls without emitting them. Used when the turn is
+   * ending in a state the client cannot act on, where releasing the call would start work
+   * under a turn that is already over.
+   */
+  dropHeldCalls(): void {
+    this.heldCalls = [];
+  }
+
   /** Decide what the leg's terminal means once the whole leg has been read. */
   decide(remainingLegs: number): LegDecision {
     if (this.searches.length === 0) return { kind: "end", searches: [] };
-    if (this.sawClientExecutedCall) {
-      return {
-        kind: "fail",
-        searches: this.searches,
-        code: WEB_SEARCH_BRIDGE_MIXED_TOOLS_ERROR_CODE,
-        message: "routed provider requested web_search alongside another client tool in one turn; "
-          + "the web-search bridge cannot answer both without dropping the client's call",
-      };
-    }
     const terminalType = this.terminalPayload?.type;
     if (terminalType === "response.failed" || terminalType === "response.incomplete") {
-      return { kind: "end", searches: [] };
+      // The upstream terminal already ended this leg, so running the intercepted searches now
+      // would bill a search for a dead turn. The opened cells are closed unanswered instead.
+      //
+      // The two terminals differ in what happens to a withheld client-executed call, and
+      // lumping them together released one under a failed turn. `response.incomplete` leaves a
+      // turn the client can still act on, so its held call goes back. `response.failed` does
+      // not, and handing Codex a tool call to start executing inside a dead turn is the exact
+      // thing the fail path below refuses to do.
+      return {
+        kind: "endWithoutSearch",
+        searches: this.searches,
+        releaseHeldCalls: terminalType === "response.incomplete",
+      };
+    }
+    if (this.sawClientExecutedCall) {
+      // The client's own call is unanswered, so this leg cannot continue upstream: the
+      // conversation owes the client a turn, not the gateway. The intercepted searches still
+      // run so the hosted cell completes rather than dangling, then the held calls go back to
+      // the client and the leg's own terminal ends the turn.
+      return { kind: "endAfterSearch", searches: this.searches };
     }
     if (remainingLegs <= 0) {
       return {
@@ -984,6 +1023,26 @@ async function* bridgeStreamBlocks(
       return;
     }
 
+    if (decision.kind === "endWithoutSearch") {
+      // The upstream terminal already ended this leg, so billing a search now would pay for a
+      // dead turn. The opened cells still have to close -- an in_progress web_search_call left
+      // under a finished turn is the same dangling "Searching the web" spinner the failure path
+      // above closes for. This also tightens the pre-existing non-mixed failed-leg path, which
+      // used to drop the searches and leave the cell open.
+      for (const call of decision.searches) {
+        yield* emit(state.searchEndFrames(call, [], {
+          text: "",
+          sources: [],
+          error: "the upstream turn ended before the web search could run",
+        }));
+      }
+      // Only an incomplete terminal hands the withheld call back; a failed one drops it.
+      if (decision.releaseHeldCalls) yield* emit(state.flushHeldCalls());
+      else state.dropHeldCalls();
+      yield* emit(state.terminalFrames());
+      return;
+    }
+
     const turns: { call: InterceptedSearchCall; output: string }[] = [];
     for (const call of decision.searches) {
       const queries = parseQueries(call.argumentsText);
@@ -1008,6 +1067,17 @@ async function* bridgeStreamBlocks(
         // tool result rather than as a turn failure, so it can still answer without the search.
         output: outcome.error ? "Web search failed: " + outcome.error : outcome.text,
       });
+    }
+
+    if (decision.kind === "endAfterSearch") {
+      // A mixed leg ends here rather than continuing upstream: the client's own call is
+      // unanswered, so the conversation owes the CLIENT a turn, not the gateway. The searches
+      // completed their hosted cells above; now the held calls go back for Codex to run and
+      // the leg's terminal closes the turn. No continuation is sent and no function_call_output
+      // is fabricated for a call the bridge cannot execute.
+      yield* emit(state.flushHeldCalls());
+      yield* emit(state.terminalFrames());
+      return;
     }
 
     const nextBody = appendBridgeSearchTurn(requestBody, turns);

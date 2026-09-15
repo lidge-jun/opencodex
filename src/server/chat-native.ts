@@ -51,7 +51,9 @@ import { linkAbortSignal } from "./responses";
 import {
   addFinalRequestLog,
   beginRequestAttempt,
-  noteAttemptSend,
+  noteProviderAttemptSend,
+  recordKeyAttemptFailure,
+  recordKeyWireAttemptUsage,
   recordFirstOutput,
   recordAttemptCredentialSource,
   sealRequestAttemptIdentity,
@@ -344,10 +346,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                 const encoding = new Headers(init.headers).get("accept-encoding");
                 if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
                 if (init.signal?.aborted) throw init.signal.reason;
-                noteAttemptSend(attempt, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
-                return ((activeProvider as OcxProviderTransport).fetch ?? execute)(request.url, applyUpstreamRecoveryInit({
+                noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+                const dispatched = await ((activeProvider as OcxProviderTransport).fetch ?? execute)(request.url, applyUpstreamRecoveryInit({
                   ...init, method: request.method, headers, body: request.body,
                 }, transportRecovery));
+                if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
+                return dispatched;
               },
             }),
           );
@@ -509,8 +513,10 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       stallTimeoutSec: config.stallTimeoutSec,
       onFirstOutput: logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined,
       onUsage: usage => {
-        logCtx.usage = usage;
-        attempt.usage = usage;
+        if (!recordKeyWireAttemptUsage(logCtx, usage)) {
+          logCtx.usage = usage;
+          attempt.usage = usage;
+        }
       },
       onTerminal: (status: number, message?: string) => {
         terminalStatus = status;
@@ -600,8 +606,10 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   if (!completion) return fail(502, "upstream response contained no choices", "upstream_error");
   const usage = usageFromChat(completion.usage);
   if (usage) {
-    logCtx.usage = usage;
-    attempt.usage = usage;
+    if (!recordKeyWireAttemptUsage(logCtx, usage)) {
+      logCtx.usage = usage;
+      attempt.usage = usage;
+    }
   }
   if (logIds) recordFirstOutput(logCtx, logIds.start);
   try {

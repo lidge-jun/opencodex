@@ -1,3 +1,4 @@
+import { readResponsesCoreSource } from "../helpers/responses-core-source";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
@@ -279,10 +280,7 @@ describe("#2568 generic OAuth account failover", () => {
  * first place: the main response path grew generic rotation and the two sidecars did not.
  */
 describe("sidecar on429 wiring", () => {
-  const coreSource = readFileSync(
-    repoPath("src", "server", "responses", "core.ts"),
-    "utf8",
-  );
+  const coreSource = readResponsesCoreSource();
 
   test("both sidecar loops receive the SAME hook, so neither can drift key-pool-only", () => {
     const hooks = coreSource.match(/^\s*on429: (\w+),$/gm)?.map(line => line.trim()) ?? [];

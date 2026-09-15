@@ -488,6 +488,47 @@ describe("combo management API", () => {
     });
   });
 
+  test("defaultEffortMode force round-trips sparsely and invalid policy never mutates config", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const forced = await comboApi(config, "PUT", "/api/combos", {
+        id: "forced",
+        combo: { ...VALID_COMBO, defaultEffort: "max", defaultEffortMode: "force" },
+      });
+      expect(forced?.status).toBe(200);
+      expect(await responseJson(forced)).toMatchObject({
+        combo: { defaultEffort: "max", defaultEffortMode: "force" },
+      });
+      expect(config.combos?.forced).toMatchObject({ defaultEffort: "max", defaultEffortMode: "force" });
+
+      const missingDefault = await comboApi(config, "PUT", "/api/combos", {
+        id: "bad", combo: { ...VALID_COMBO, defaultEffortMode: "force" },
+      });
+      expect(missingDefault?.status).toBe(400);
+      expect(config.combos?.bad).toBeUndefined();
+
+      const fallback = await comboApi(config, "PUT", "/api/combos", {
+        id: "forced",
+        combo: { ...VALID_COMBO, defaultEffort: "max", defaultEffortMode: "fallback" },
+      });
+      expect(fallback?.status).toBe(200);
+      expect(config.combos?.forced).not.toHaveProperty("defaultEffortMode");
+
+      const restoreForce = await comboApi(config, "PUT", "/api/combos", {
+        id: "forced",
+        combo: { ...VALID_COMBO, defaultEffort: "max", defaultEffortMode: "force" },
+      });
+      expect(restoreForce?.status).toBe(200);
+      const guiRoundTrip = await comboApi(config, "PUT", "/api/combos", {
+        id: "forced",
+        combo: { ...VALID_COMBO, defaultEffort: "high" },
+      });
+      expect(guiRoundTrip?.status).toBe(200);
+      expect(config.combos?.forced).toMatchObject({ defaultEffort: "high", defaultEffortMode: "force" });
+    });
+  });
+
   test("PUT stores aliases and GET exposes the public model", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

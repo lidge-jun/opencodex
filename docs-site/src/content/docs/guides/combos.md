@@ -83,7 +83,10 @@ The request then follows normal combo selection and failover.
 
 Explicit provider/combo selectors and configured combo aliases take precedence over this recall.
 Failed, incomplete, or cancelled responses do not replace the last successful selection. Recall is
-process-local and bounded to 256 lanes for 30 minutes; it does not store account credentials.
+process-local and bounded to 256 conversations for 30 minutes, and to 1 KiB per remembered model
+name and 64 KiB in total; expired entries are also cleaned up in the background. A response whose
+model name is too large to retain leaves the previous selection untouched rather than clearing it.
+Recall does not store account credentials.
 Without usable conversation identity or valid remembered state, normal compaction routing applies.
 A restart clears the remembered state.
 
@@ -263,10 +266,11 @@ A combo can also advance after an intact HTTP 400 `invalid_request_error` that s
 
 ## Default reasoning effort
 
-`defaultEffort` fills an absent `reasoning.effort` when the combo has a non-null default and the selected target has a known, nonempty supported ladder. If the target supports the configured value, it is retained; otherwise the highest supported rung at or below it is used, or the lowest supported rung when none is lower. Unknown or empty ladders omit the default.
+`defaultEffort` supplies a configured effort when the selected target has a known, nonempty supported ladder. With the default `defaultEffortMode: "fallback"`, an explicit caller effort keeps precedence. `defaultEffortMode: "force"` overrides a valid caller effort with the configured default; it requires a valid, non-null `defaultEffort` and can increase cost and latency. Force mode is an explicit operator choice through combo configuration or management.
 
-The default-injection step preserves existing effort and other reasoning fields. Capability normalization can separately remove unsupported effort/thinking controls as described below. Supported defaults are `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; omit the field or use `null` to disable default injection.
+The target's advertised ladder remains authoritative. An exact supported value is retained; otherwise the highest supported rung at or below it is selected, or the lowest supported rung when none is lower. Unknown or empty ladders never cause default injection. Force mode does not repair malformed caller effort into a valid expensive request. Other reasoning fields, including `reasoning.summary`, are preserved.
 
+`reasoningEffortMode` remains independent of `defaultEffortMode`: explicit empty ladders remove unsupported effort/thinking controls, and adaptive unknown ladders do so as well, as described below. Strict unknown ladders preserve the caller's request without forcing a default. Supported defaults are `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; omit `defaultEffort` or set it to `null` to disable default injection in fallback mode.
 
 ### Mixed-capability groups (`reasoningEffortMode`)
 
@@ -413,7 +417,8 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
 | `cooldownMs` | No | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Integer from 1 to 600000. When set, applies as the per-target cooldown whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. |
 | `waitForCooldownMs` | No | `0` | Integer from 0 to 600000. Maximum time to wait for the earliest eligible cooling target before returning `combo_unavailable`; abort cancels the wait. |
-| `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
+| `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
+| `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |

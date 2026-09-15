@@ -21,7 +21,8 @@ src/
 ├── vision/             # vision sidecar (describe + plan)
 ├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
-├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
+├── bridge.ts           # facade over bridge/
+├── bridge/             # AdapterEvent stream → Responses SSE (sse.ts) / JSON (response-json.ts)
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
 │   ├── parser.ts       # Responses request → OcxParsedRequest
@@ -32,30 +33,33 @@ src/
 └── index.ts            # public entry
 ```
 
-以前の大規模なエントリーファイル 3 つは、現在は互換性 facade です。`codex/catalog.ts` は
-7 個の `codex/catalog/*.ts` モジュールを、`server/management-api.ts` は 9 個の
-`server/management/*.ts` モジュールを、`server/responses.ts` は 5 個の
-`server/responses/*.ts` モジュールを接続します。
+大規模だったエントリーファイルは、現在は互換性 facade です。`codex/catalog.ts` は
+`codex/catalog/*.ts` モジュールを、`server/management-api.ts` は
+`server/management/*.ts` モジュールを、`server/responses.ts` は
+`server/responses/*.ts` モジュールを、`bridge.ts` は `bridge/*.ts` モジュールを接続します。
+facade は安定した import パスであって実装ではありません。以下の各ステップは実際に
+コードを所有するモジュールを示し、Responses 面の完全な所有権一覧は
+`structure/transports/responses.md` にあります。
 
 ## リクエスト処理フロー
 
-HTTP の境界は `server/index.ts` が担い、Responses データプレーンは `server/responses.ts` facade と
+HTTP の境界は `server/index/serve-options.ts` が担い、Responses データプレーンは `server/responses.ts` facade と
 `server/responses/*.ts` モジュールに渡します。
 
-1. `server/index.ts` で CORS と API 認証を確認し、終了待ち状態なら新規リクエストを拒否したのち、リクエストのライフサイクルを記録します。ここで `GET /v1/models`、`POST /v1/responses`、
+1. `server/index/serve-options.ts` で CORS と API 認証を確認し、終了待ち状態なら新規リクエストを拒否したのち、リクエストのライフサイクルを記録します。ここで `GET /v1/models`、`POST /v1/responses`、
    `POST /v1/responses/compact`、`POST /v1/images/generations` / `POST /v1/images/edits`
    （Codex 組み込み `image_gen` ツール用 — `server/images.ts` が OpenAI 系の上流に中継）、
    `POST /v1/live` / `POST /v1/realtime/calls`（ChatGPT / Codex App 音声と OpenAI Realtime
    の call-create、`server/live.ts` が中継）と `/v1/live/{callId}` サイドバンド WebSocket、
    `/v1/responses` のオプション WebSocket アップグレードを提供します。
-2. `server/responses/core.ts` が展開し JSON を読みます。覚えておいた `previous_response_id` 入力があれば展開したのち `responses/parser.ts` に渡します。
+2. `server/responses/request-prepare.ts` が展開し JSON を読みます。覚えておいた `previous_response_id` 入力があれば展開したのち `responses/parser.ts` に渡します。
 3. `router.ts` が通常のモデル id または `provider/model` id を解決します。続いて Codex アカウント affinity を決定し、必要ならプロバイダー OAuth を更新して選択された認証情報を route に適用します。
 4. 本リクエストの前に `vision/` が `noVisionModels` モデル用の画像説明を作ります。安全なサイドカー経路がないときはテキスト専用の上流に画像を送らず取り除きます。
 5. `server/adapter-resolve.ts` がモデル別の wire override を適用し、登録済みアダプターのいずれかを作ります。
    Responses passthrough は元の body を中継し、Cursor は双方向 `runTurn` transport を使い、
    残りの変換型アダプターは上流リクエストを build/fetch/parse します。
 6. ルーティングモデルがホステッド `web_search` を要求すると `web-search/` が合成関数を公開します。実際の検索は ChatGPT サイドカーで実行し、結果をルーティングモデルに戻し、設定された回数の中で繰り返します。
-7. `bridge.ts` が Responses SSE または JSON を作ります。`server/request-log.ts` と `usage/` はレスポンスに触れずに終了ステータス、レイテンシー、プロバイダー/モデル、最善推定トークン使用量を記録します。
+7. `bridge/sse.ts` / `bridge/response-json.ts` が Responses SSE または JSON を作ります。`server/request-log.ts` と `usage/` はレスポンスに触れずに終了ステータス、レイテンシー、プロバイダー/モデル、最善推定トークン使用量を記録します。
 
 ## パーサー
 
@@ -73,7 +77,7 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 
 ## ブリッジ
 
-`bridge.ts` はアダプターの内部 `AdapterEvent` ストリームを Codex が理解する Responses SSE に再変換します:
+`bridge/sse.ts` はアダプターの内部 `AdapterEvent` ストリームを Codex が理解する Responses SSE に再変換します:
 
 | AdapterEvent | Responses SSE emitted |
 | --- | --- |
@@ -95,7 +99,7 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 
 ## 伝送と compaction
 
-`server/index.ts` はデフォルトで `/v1/responses` を HTTP/SSE で提供します。`websockets` が `false` の状態で Codex が Responses WebSocket アップグレードを試みると、opencodex は `426 upgrade_required` を返し、Codex はそのセッションで HTTP にフォールバックします。`"websockets": true` を設定すると同じエンドポイントがアップグレードを受け入れ WebSocket ブリッジを使います。
+`server/index/serve-options.ts` はデフォルトで `/v1/responses` を HTTP/SSE で提供します。`websockets` が `false` の状態で Codex が Responses WebSocket アップグレードを試みると、opencodex は `426 upgrade_required` を返し、Codex はそのセッションで HTTP にフォールバックします。`"websockets": true` を設定すると同じエンドポイントがアップグレードを受け入れ WebSocket ブリッジを使います。
 
 最終送信モデルが `gpt-5.3-codex-spark` の場合、canonical ChatGPT 転送は HTTP ヘッダーと
 ネイティブ WS フレームのメタデータの両方で Responses Lite を明示的に無効にします。
@@ -108,7 +112,7 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 
 Codex コンテキスト compaction はルーティングされたモデルでも動作します。`server/responses/compact.ts` は
 `POST /v1/responses/compact` を内部ルーティング要約ターンとして扱い、圧縮されたヒストリーを返します。
-`responses/parser.ts` と `bridge.ts` は remote compaction v2 の `compaction_trigger` ターンを扱い、合成 `compaction` 出力項目を正確に 1 つ送ります。
+`responses/parser.ts` と `bridge/sse.ts` は remote compaction v2 の `compaction_trigger` ターンを扱い、合成 `compaction` 出力項目を正確に 1 つ送ります。
 
 ## キャッシュとカタログ
 
