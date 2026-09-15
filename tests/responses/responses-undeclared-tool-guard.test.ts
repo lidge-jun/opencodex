@@ -2,7 +2,7 @@
  * #1700: the native Responses passthrough relayed a routed provider's call to a tool the request
  * never declared. Codex has no top-level handler for it, so the turn surfaced as a bare `aborted`
  * with the target file untouched. The bridged paths already fail closed on the same condition
- * (`declaredToolNames`, src/bridge.ts); these pin the passthrough's equivalent.
+ * (`declaredToolNames`, src/bridge/sse.ts); these pin the passthrough's equivalent.
  */
 import { describe, expect, test } from "bun:test";
 import {

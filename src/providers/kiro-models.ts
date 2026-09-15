@@ -47,9 +47,10 @@ export const KIRO_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 const KIRO_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
-// gpt-5.6-sol and claude-opus-5 send these values through Kiro's verified native effort fields
-// (`reasoning.effort` and `output_config.effort` respectively). Other models map them to bounded
-// thinking instructions until their native effort support is verified.
+// The GPT-5.6 family (sol/terra/luna) and claude-opus-5 send these values through Kiro's verified
+// native effort fields (`reasoning.effort` for the GPT-5.6 models, `output_config.effort` for
+// claude-opus-5). Other models map them to bounded thinking instructions until their native
+// effort support is verified.
 export const KIRO_MODEL_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
   KIRO_MODELS.map(id => [id, KIRO_REASONING_EFFORTS]),
 );

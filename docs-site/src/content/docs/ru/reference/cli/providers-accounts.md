@@ -309,6 +309,8 @@ ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
 
+При успехе `ocx account main reauth --device --no-wait --json` выводит в stdout один объект JSON без строки `follow up:`, предназначенной для чтения человеком. Чтобы проверить ход процесса, передайте полученный `flowId` в `ocx account main reauth status --flow <id> --json`.
+
 Каждая изменяющая команда показывает канонический эффективный `CODEX_HOME`, возвращенный
 работающим прокси. Этот путь может отличаться от `CODEX_HOME` вызывающего процесса; команды с
 поддержкой JSON возвращают то же значение в `effectiveCodexHome`.

@@ -522,6 +522,16 @@ function runPackageManagerSelfUpdate(manager) {
         "  After the update: close the Codex app, run 'ocx doctor', then run 'ocx stop' once to retry.",
       );
     }
+    if (decision.reason === "history-deferred") {
+      // The reported #4718 path is this lane. Nothing was restored, so this is a different
+      // sentence from the manifest warning above: an operator told "history metadata is
+      // incomplete" would assume config and catalog already came back.
+      console.warn(
+        "opencodex: WARNING — the shared teardown was refused by the Codex history preflight and restored nothing.\n" +
+        "  Config, catalog, history and provenance were preserved, and the teardown receipt was kept.\n" +
+        "  The proxy is down, so the update continues; close the Codex app and run 'ocx stop' once afterwards to finish the restore.",
+      );
+    }
   }
 
   // npm keeps the existing stage -> verify -> swap -> rollback flow. pnpm owns a

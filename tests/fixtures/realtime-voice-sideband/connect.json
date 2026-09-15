@@ -1,0 +1,30 @@
+{
+  "stage": "connect",
+  "kind": "handshake",
+  "title": "Sideband join reaches the upstream with the client's protocol negotiation intact",
+  "protocol": "frameless-bidi-v3",
+  "note": "The Frameless v3 join is GET /v1/live/{callId} and negotiates through openai-alpha: quicksilver=v2. The client requests no Sec-WebSocket-Protocol, so there is no subprotocol for the proxy to preserve.",
+  "provenance": "Synthetic. Header names taken from the sideband upgrade codex-rs builds in codex-rs/core/src/realtime_conversation.rs; every value is invented for this fixture. No captured session, no account data, no request or response bodies.",
+  "deidentified": true,
+  "callId": "rtc_fixture_connect",
+  "join": {
+    "path": "/v1/live/rtc_fixture_connect",
+    "relayedHeaders": {
+      "openai-alpha": "quicksilver=v2",
+      "x-session-id": "rts_fixture_connect",
+      "session-id": "rts_fixture_connect",
+      "thread-id": "thread_fixture_connect",
+      "originator": "codex_app",
+      "x-oai-attestation": "attestation-fixture-001",
+      "x-codex-turn-metadata": "{\"turn_id\":\"turn_fixture_0001\"}"
+    },
+    "withheldHeaders": {
+      "cookie": "fixture-session=fixture-value",
+      "x-openai-fedramp": "true",
+      "x-forwarded-for": "203.0.113.7"
+    }
+  },
+  "expectUpstream": {
+    "path": "/v1/live/rtc_fixture_connect"
+  }
+}

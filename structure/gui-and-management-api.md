@@ -1,11 +1,14 @@
 # GUI And Management API
 
+The shared server request path follows the Responses
+[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314). Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing). CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
 
 ## Dashboard serving
 
-The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui` starts
+Account refresh actions follow the [credential refresh-lock identity contract](catalog.md#accounts-namespaces-and-pool-rotation): a held unreadable lock is distinct from one this process may release, and path-probe errors preserve the callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction. The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui` starts
 the proxy when needed and opens `http://localhost:<port>`, or `http://127.0.0.1:<management port>` when `hub.managementIngress.enabled` is true — see [the hub management dashboard address](runtime.md#hub-management-dashboard-address).
 
 All ordinary HTTP responses (excluding successful WebSocket upgrades) include `X-Frame-Options: DENY` and
@@ -105,8 +108,8 @@ be treated as implemented:
 
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates to
 `src/server/management-api.ts`, which composes the route modules under `src/server/management/`.
-Codex account routes live in `src/codex/auth-api.ts` because they own the credential store, not
-because they are a different plane. Its raw-byte reads of upstream account and key-exchange responses follow the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
+Codex account routes live in `src/codex/auth-api/routes.ts` because they own the credential store, not
+because they are a different plane. Upstream account response reads and OrcaRouter key exchange follow the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 The registered route set is larger than the areas described below; the code is the route SOT. What
 this document owns is which module holds which area and what invariant that area must not break.
@@ -137,7 +140,8 @@ this document owns is which module holds which area and what invariant that area
 | Grok and Claude integrations | `src/server/management/agent-settings-routes.ts` — `GET /api/grok`, `PUT /api/grok/selection`, `POST /api/grok/apply`, `GET/PUT /api/claude-desktop`, `POST /api/claude-desktop/apply`, `GET /api/claude-desktop/status`, `GET/PUT /api/claude-code`. Apply writes an external app's profile, so its status probe must read the same resolved path it writes (see [`responses.md`](transports/responses.md)). |
 | Grok reset coupons | `src/server/management/grok-coupon-routes.ts` — `GET /api/grok/reset-coupons`, `POST /api/grok/reset-coupons/consume`. The dashboard owner is `gui/src/hooks/useGrokResetCoupons.ts` with `gui/src/components/provider-workspace/GrokResetCoupons.tsx`, wired into the xAI OAuth rows of `ProviderAuthPanel`. Redemption truth is the settled ledger `code`, not the HTTP status: a replayed failure returns 200 with `replayed: true`. See [`providers/xai-grok.md`](providers/xai-grok.md). |
 | Combos | `src/server/management/combo-routes.ts` — `GET/PUT/DELETE /api/combos` own provider combination and failover definitions. |
-| Codex accounts | `src/codex/auth-api.ts` — `GET/POST/DELETE /api/codex-auth/accounts`, `PUT /api/codex-auth/accounts/alias`, `PUT /api/codex-auth/accounts/pause`, `PUT /api/codex-auth/accounts/pause-exhausted`, `POST /api/codex-auth/accounts/clear-cooldown`, `GET/PUT /api/codex-auth/active`, `PUT /api/codex-auth/auto-switch`, `PUT /api/codex-auth/pool-strategy`, `PUT /api/codex-auth/failover`, `GET /api/codex-auth/quota`, `GET /api/codex-auth/reset-credits` with `POST /api/codex-auth/reset-credits/consume`, and the login flow `POST /api/codex-auth/login`, `POST /api/codex-auth/login/code`, `POST /api/codex-auth/login/cancel`, `GET /api/codex-auth/login-status`. Per-account quota activation uses the existing `GET/PUT /api/settings` surface and `src/codex/quota-auto-refresh.ts`, keeping scheduled spending separate from credential/authentication mutation. Account ids are opaque handles and are serialized so the GUI can address an account; emails are masked and tokens are never serialized. New-account config commits add UI-managed selector bindings in the same config save; deletion deliberately retains existing bindings for fail-closed exact routing and re-add stability. Account mutations request catalog convergence only after config durability and expose only the boolean `catalogRefreshPending` completion projection. |
+| Workflow budget | `src/server/management/workflow-budget-routes.ts` — `GET /api/workflow-budget` reads the tracked roots or one root, and `POST /api/workflow-budget/clear` clears exactly one. The clear moves the windowed send ring and the child map and nothing else: `active` belongs to turns still in flight, the spend ledger is a token budget an operator did not ask to forgive, and the lifetime send total survives so a clear cannot launder the record. Both are `deferred-verb` in the route registry — they are owed CLI verbs, and because the ledger is process memory there is no local projection the CLI could read instead. See [`../devlog/_plan/260915_workflow_budget_window/030_wfc_diff_plan.md`](../devlog/_plan/260915_workflow_budget_window/030_wfc_diff_plan.md). |
+| Codex accounts | `src/codex/auth-api/routes.ts` — `GET/POST/DELETE /api/codex-auth/accounts`, `PUT /api/codex-auth/accounts/alias`, `PUT /api/codex-auth/accounts/pause`, `PUT /api/codex-auth/accounts/pause-exhausted`, `POST /api/codex-auth/accounts/clear-cooldown`, `GET/PUT /api/codex-auth/active`, `PUT /api/codex-auth/auto-switch`, `PUT /api/codex-auth/pool-strategy`, `PUT /api/codex-auth/failover`, `GET /api/codex-auth/quota`, `GET /api/codex-auth/reset-credits` with `POST /api/codex-auth/reset-credits/consume`, and the login flow `POST /api/codex-auth/login`, `POST /api/codex-auth/login/code`, `POST /api/codex-auth/login/cancel`, `GET /api/codex-auth/login-status`. Per-account quota activation uses the existing `GET/PUT /api/settings` surface and `src/codex/quota-auto-refresh.ts`, keeping scheduled spending separate from credential/authentication mutation. Account ids are opaque handles and are serialized so the GUI can address an account; emails are masked and tokens are never serialized. New-account config commits add UI-managed selector bindings in the same config save; deletion deliberately retains existing bindings for fail-closed exact routing and re-add stability. Account mutations request catalog convergence only after config durability and expose only the boolean `catalogRefreshPending` completion projection. |
 | Sidebar | `src/server/management/sidebar-routes.ts` — `GET/POST /api/github/star` and `GET /api/update/badge`. Sidebar state is cosmetic; a failed fetch degrades silently. |
 | Logs | `src/server/management/logs-usage-routes.ts` — `GET /api/logs`, `GET /api/claude/inbound-debug`, and `GET /api/debug/injection-logs` join the debug streams described above. |
 
@@ -237,7 +241,7 @@ unvalidated Bun builds is unchanged (`src/lib/bun-stream-caps.ts`).
 sidebar entry: it is entered from the dashboard's startup-state row, which links there whether the
 current state needs remediation or merely reports how routing is protected. Its warning state is derived from active
 Codex routing plus the actual service and launcher-shim installation state; the
-`codexAutoStart` preference alone is never presented as proof of restart protection. The page shows
+`codexAutoStart` preference alone is never presented as proof of restart protection. Desktop restart target selection follows the [runtime membership contract](runtime.md#codex-desktop-process-membership); finding an installed app does not establish background-service protection. The page shows
 copyable repair commands (`ocx service repair` for an installed service or `ocx service install` when none is registered, `ocx codex-shim install`, and `ocx restore`). On
 Windows it can also install an owned, per-user system tray. The resident tray owns only its icon,
 home-scoped singleton, and HKCU Run registration; fixed proxy actions delegate to the CLI so drain,
@@ -363,6 +367,26 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 
 ## Usage accounting
 
+### Upstream key account attribution
+
+API-key attempts in `src/usage/log.ts` carry `accountLogLabel` as `k` plus 32 lowercase
+hex digits. `src/codex/account-label.ts` derives it from the first 128 bits of SHA-256 over
+`JSON.stringify(["ocx-key-account-v1", providerName, entryId ?? null, reference])`.
+`reference` is the configured value captured for the physical send, before environment or
+keychain resolution. The log contains the digest, not raw keys, references, or pool IDs.
+Existing Codex and OAuth label formats remain valid. Replacing a literal or reference changes
+identity; rotating the secret behind the same reference preserves the logical account.
+
+`src/providers/label.ts` stamps only key authentication, including implicit custom-provider
+keys. `src/server/request-log.ts` commits identity at dispatch after queued selection changes,
+retains separate flat records when retries change keys, and isolates each record's raw usage
+from parent combo totals and adapter-loop aggregation. Reported failure usage is retained;
+missing usage and historical identities remain unknown. Native wire snapshots replace only the
+current physical response contribution, preserving prior sends on the same key without counting
+repeated inspections twice. Consumers sum the flat attempts once and keep subscription quota
+observations separate from token or API-equivalent cost totals.
+
+
 `src/server/hub-usage.ts` serves `GET /v1/usage` on hubs for an explicit configured data key. The authenticated key selects the aggregate; query parameters cannot select an API-key identity. Unscoped environment/admin credentials and loopback bypass are not admitted. The response projects only this client's numeric totals, provider/model/day rows and incomplete-history metadata through `src/remote/hub-usage.ts`; accounts, raw records and key IDs are omitted. Unknown fields are stripped at every object boundary and the serialized body is capped at 1 MiB.
 
 Custom usage windows are immutable bounds on the streaming accumulator, applied to each
@@ -454,6 +478,36 @@ estimated` split exists for, and why coverage is reported alongside totals. The 
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
+A row also records the upstream cost of its logical request. `logicalRequestId` names the turn
+that a retry leg, a repair refetch and a combo child all belong to, and `spend` aggregates their
+physical sends: `sends` totals every attempt on the row, `settled` counts the sends whose attempt
+reached a terminal status, and `unresolved` holds the rest — an attempt abandoned in flight, or a
+budget charge no attempt row accounted for. Unresolved spend is never folded into settled, because
+an unexplained send is the quantity the record exists to expose. `reserved` and `policyVersion`
+report the request execution budget's final state, and `moveReasons` names every pool-binding move
+that discarded a warmed prompt-cache prefix. `/api/usage` totals these as `sends`,
+`settledSends`, `unresolvedSends` and `spendRequests`; per-attempt `sendCount` remains the
+accounting source, and `attemptCount` is the smaller number because retry layers re-send inside
+one attempt.
+
+Cache detail is qualified by provenance rather than read as a measurement. `cacheProvenance` is
+`observed`, `synthesized` or `unknown`: strict-client normalization emits zero-default
+token-detail objects on every bridged wire, so a `cached_tokens: 0` recovered from a parsed wire
+is a wire-compatibility artifact, and a row with no cache fields measured nothing at all. Only
+observed input tokens reach the `cacheHitRate` denominator, reported alongside it as
+`cacheObservedInputTokens`, and the summary counts the three provenances separately. A row
+written before the field existed is reconstructed from its own shape, so historical rows keep
+their previous reading. `/api/logs` marks a non-observed detail with `cache_detail_missing` on
+the cost estimate rather than pricing the turn as a measured uncached send.
+
+A pool selection that produced no account reaches no auth context, so its cause is recorded on
+the request that failed for it: reasons are held per (thread, model lane) and consumed by that
+lane alone, because a thread holds one binding per lane and a thread-keyed reason lets one lane
+report a cause that fired on another. The failing row carries `affinity: "cleared"`, its reason
+and `errorCode: "codex_no_account"`; no synthetic row is emitted, since `/api/usage` counts one
+row as one request. Affinity now reaches disk with the rest of the row — the field-by-field
+projection in `addRequestLog` did not name it, so a move survived only until the next restart.
+
 Usage aggregation does not infer confirmed model identity merely from a requested selector.
 Model rows with saved unchanged
 default-provider route evidence carry `hasUnresolvedRequestedModel`: their tokens stay under
@@ -499,7 +553,7 @@ untouched.
 
 ## Z.ai quota destination ownership
 
-`src/providers/quota.ts` uses one exact normalized-base mapping for both Z.ai quota
+`src/providers/quota/vendor-probes-key.ts` uses one exact normalized-base mapping for both Z.ai quota
 eligibility and monitor selection. International root, coding Chat, Anthropic and
 Responses bases use `api.z.ai` with Bearer authentication. Existing BigModel CN root,
 coding Chat and Responses bases use `open.bigmodel.cn` with the raw key. Unsupported
@@ -573,7 +627,7 @@ The provider editor field policy exposes `showThinkingSummary` as a boolean prov
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity. Codex account DTOs and cards expose the routing-plan exclusion separately from credential health; the [plan exclusion contract](providers/openai-tiers.md#automatic-pool-plan-exclusions) also governs CLI projection. Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 

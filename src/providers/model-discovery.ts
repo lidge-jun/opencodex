@@ -23,6 +23,8 @@ import {
 
 const MODEL_DISCOVERY_MAX_FILTER_VALUES = 256;
 const MODEL_DISCOVERY_MAX_FILTER_STRING_LENGTH = 1_024;
+const TRAILING_SLASHES = /\/+$/;
+const TRAILING_MODELS = /\/models$/;
 
 export interface ResolvedProviderModelDiscovery {
   spec?: ProviderModelDiscoverySpec;
@@ -49,6 +51,20 @@ export type ProviderModelItemsResult =
 export type ModelEnvelopeRowsResult =
   | { ok: true; rows: unknown[] }
   | { ok: false; reason: "invalid_shape" | "too_many_models" };
+
+/**
+ * Build the default OpenAI-compatible model-discovery URL from a configured baseUrl.
+ *
+ * `baseUrl` is required on both `OcxProviderConfig` and the persisted-config schema, so a row
+ * without one is not a state configuration loading can produce. It is deliberately not tolerated
+ * here: the old template-literal join silently produced `"undefined/models"`, which is not a usable
+ * fallback either — it only ever survived because a static row returns before the URL is parsed.
+ */
+export function providerModelsUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(TRAILING_SLASHES, "");
+  const withoutEndpoint = trimmed.replace(TRAILING_MODELS, "");
+  return `${withoutEndpoint}/models`;
+}
 
 function positiveIntegerAtMost(value: number | undefined, hardLimit: number): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return hardLimit;
