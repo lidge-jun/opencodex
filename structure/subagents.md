@@ -374,3 +374,5 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.
+
+Combo recall follows the [Responses retention contract](transports/responses.md#responses-httpsse), including model-byte limits, accepted-writer invalidation and shared TTL cleanup.

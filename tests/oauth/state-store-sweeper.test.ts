@@ -189,6 +189,76 @@ describe("state-store sweeper", () => {
     expect(reconcileLiveStateStores()).toEqual({ storesVisited: 1, rowsRemoved: 2 });
   });
 
+  describe("combo recall byte budget", () => {
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "a",
+      providers: { a: { adapter: "openai-chat", baseUrl: "https://a.example/v1" } },
+      combos: { first: { targets: [{ provider: "a", model: "m1" }] } },
+    };
+    const target = { provider: "a", model: "m1" };
+    const remember = (lane: string, model: string) =>
+      rememberComboForLane(lane, "first", target, model, captureConfigGeneration());
+
+    test("rejects oversized ASCII and UTF-8 models and accepts the byte boundary", () => {
+      for (const model of ["x".repeat(1025), "é".repeat(513)]) {
+        remember("lane", model);
+        expect(recallComboForLane(config, "lane", model)).toBeUndefined();
+      }
+      remember("lane", "é".repeat(512));
+      expect(recallComboForLane(config, "lane", "é".repeat(512))).toBe("first");
+    });
+
+    test("new unretainable completion clears prior recall but stale or unowned writers cannot", () => {
+      registerStateStore(STATE_STORE_REGISTRATIONS.find(row => row.name === "combo-session-recall")!);
+      setLiveStateStoreConfig(config);
+      const oldGeneration = captureConfigGeneration();
+      reconcileLiveStateStores();
+      remember("lane", "visible");
+      rememberComboForLane("lane", "first", target, "x".repeat(1025), oldGeneration);
+      expect(recallComboForLane(config, "lane", "visible")).toBe("first");
+      rememberComboForLane("lane", "removed", target, "x".repeat(1025), captureConfigGeneration());
+      expect(recallComboForLane(config, "lane", "visible")).toBe("first");
+      remember("lane", "x".repeat(1025));
+      expect(recallComboForLane(config, "lane", "visible")).toBeUndefined();
+    });
+
+    test("evicts the oldest model at the aggregate limit without double-counting replacements", () => {
+      for (let i = 0; i < 64; i++) remember(`lane-${i}`, `${i}`.padEnd(1024, "x"));
+      remember("lane-63", "63".padEnd(1024, "x"));
+      expect(recallComboForLane(config, "lane-0", "0".padEnd(1024, "x"))).toBe("first");
+      remember("lane-64", "64".padEnd(1024, "x"));
+      expect(recallComboForLane(config, "lane-0", "0".padEnd(1024, "x"))).toBeUndefined();
+      expect(recallComboForLane(config, "lane-1", "1".padEnd(1024, "x"))).toBe("first");
+    });
+
+    test("registered sweeper expires dormant models and releases their budget", () => {
+      registerStateStore(STATE_STORE_REGISTRATIONS.find(row => row.name === "combo-session-recall")!);
+      for (let i = 0; i < 64; i++) remember(`lane-${i}`, `${i}`.padEnd(1024, "x"));
+      expect(sweepExpired(Date.now() + 30 * 60 * 1000)).toEqual({ storesVisited: 1, rowsRemoved: 64 });
+      for (let i = 0; i < 64; i++) remember(`new-${i}`, `${i}`.padEnd(1024, "x"));
+      expect(recallComboForLane(config, "new-0", "0".padEnd(1024, "x"))).toBe("first");
+    });
+
+    test("retains the independent lane-count cap for short model names", () => {
+      for (let i = 0; i < 257; i++) remember(`lane-${i}`, "short");
+      expect(recallComboForLane(config, "lane-0", "short")).toBeUndefined();
+      expect(recallComboForLane(config, "lane-1", "short")).toBe("first");
+    });
+
+    test("whitespace-only models stay no-ops that neither replace a lane nor consume budget", () => {
+      remember("lane", "visible");
+      remember("lane", " ".repeat(1024));
+      remember("lane", " ".repeat(1024));
+      remember("lane", " ".repeat(1025));
+      remember("lane", "\t\n ");
+      expect(recallComboForLane(config, "lane", " ".repeat(1024))).toBeUndefined();
+      expect(recallComboForLane(config, "lane", "visible")).toBe("first");
+      for (let i = 0; i < 63; i++) remember(`lane-${i}`, `${i}`.padEnd(1024, "x"));
+      expect(recallComboForLane(config, "lane-0", "0".padEnd(1024, "x"))).toBe("first");
+      expect(recallComboForLane(config, "lane", "visible")).toBe("first");
+    });
+  });
+
   test("combo recall watermark rejects writers after a partially failed generation", () => {
     registerStateStore(STATE_STORE_REGISTRATIONS.find(row => row.name === "combo-session-recall")!);
     const warning = spyOn(console, "warn").mockImplementation(() => {});

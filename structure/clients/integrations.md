@@ -195,3 +195,5 @@ existing explicit confirmation. The journal endpoint evaluates Undo against the 
 Recovery reads commit history and ownership through strict store methods. Unreadable or malformed
 metadata is uncertainty, never evidence that a transaction did not commit. Pending records validate
 complete ownership, exact Cline paths and result fingerprints before either native file is replaced.
+
+Combo recall follows the [Responses retention contract](../transports/responses.md#responses-httpsse), including model-byte limits, accepted-writer invalidation and shared TTL cleanup.

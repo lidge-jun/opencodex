@@ -430,3 +430,5 @@ Translated audio/file admission follows the [final-adapter input contract](adapt
 The combo may advance to its next eligible unattempted target before output commitment. It records no target/provider cooldown for these request-local mismatches and does not silently drop reasoning controls or raise `none` to a supported rung. Cancellation, origin/cyber-policy rejection, non-replayable post-send errors and the existing streaming commit boundary stay authoritative. Other invalid requests remain terminal.
 
 Regression coverage: `tests/responses/responses-forward-prompt-envelope.test.ts`, `tests/routing/router-combo-failover-classification.test.ts`, and `tests/server/server-combo-failover-e2e.test.ts`.
+
+Combo recall follows the [Responses retention contract](transports/responses.md#responses-httpsse), including model-byte limits, accepted-writer invalidation and shared TTL cleanup.
