@@ -3,8 +3,6 @@ import { join } from "node:path";
 import * as z from "zod/v4";
 import { CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR } from "../codex/account-namespace-match";
 import { redactSecretString } from "../lib/redact";
-import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { getConfigDir } from "./paths";
 import { hasWarnedConfigFallback, markWarnedConfigFallback } from "./warn-memo";
 import { configSchema } from "./schema/config-schema";
 import type { OcxConfig } from "../types";
@@ -239,12 +237,6 @@ export function backupInvalidConfig(configPath: string): string | null {
   try {
     copyFileSync(configPath, backupPath);
     try { chmodSync(backupPath, 0o600); } catch { /* best-effort */ }
-    try {
-      // Legacy/shared homes may intentionally refuse ownership. Preserve recovery anyway.
-      recordOwnedConfigPath(getConfigDir(), backupPath);
-    } catch {
-      console.warn("[config] Recovery backup created, but uninstall ownership registration failed.");
-    }
     return backupPath;
   } catch {
     return null;
