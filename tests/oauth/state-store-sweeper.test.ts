@@ -43,6 +43,7 @@ import {
   clearResponseStateMemoryForTests,
   rememberResponseState,
   responseStateMetrics,
+  RESPONSE_TTL_MS,
 } from "../../src/responses/state";
 import {
   __resetAntigravityReplayCache,
@@ -226,7 +227,9 @@ describe("state-store sweeper", () => {
     for (const name of ["responses-continuation", "antigravity-replay"]) {
       registerStateStore(STATE_STORE_REGISTRATIONS.find(registration => registration.name === name)!);
     }
-    const result = sweepExpired(Date.now() + 60 * 60 * 1_000 + 1);
+    // Past both retentions: the Antigravity replay cache expires after an hour, the responses
+    // continuation store after RESPONSE_TTL_MS. One tick has to clear both rows.
+    const result = sweepExpired(Date.now() + RESPONSE_TTL_MS + 60 * 60 * 1_000);
     expect(result.rowsRemoved).toBe(2);
     expect(responseStateMetrics().count).toBe(0);
     expect(antigravityReplayMetrics().sessions).toBe(0);

@@ -280,6 +280,8 @@ ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
 
+`ocx account main reauth --device --no-wait --json` 成功时只向 stdout 输出一个 JSON 对象，不输出供人阅读的 `follow up:` 提示行。将返回的 `flowId` 传给 `ocx account main reauth status --flow <id> --json` 即可查看进度。
+
 每个变更命令都会显示运行中代理返回的规范化有效 `CODEX_HOME`。该路径可能与调用进程的
 `CODEX_HOME` 不同；支持 JSON 的命令会在 `effectiveCodexHome` 中返回相同的值。
 

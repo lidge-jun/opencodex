@@ -3,6 +3,19 @@
 The opt-in key-auth Responses hosted-search bridge follows the
 [continuation binding contract](../runtime.md#hosted-search-continuation-binding).
 
+## Serving the relay without ChatGPT auth
+
+`POST /v1/alpha/search` relays verbatim through a configured ChatGPT forward provider. When no
+forward candidate exists, an explicitly configured `webSearchSidecar.backend` of `anthropic`,
+`xai`, `gemini`, or `exa` serves the request instead, spending only that backend's own
+credential: `src/web-search/alpha-search.ts` runs the query through that backend's executor and
+answers `{ encrypted_output: null, output, results }`. An unset or `openai` backend and a sidecar
+disabled by `enabled: false` keep the ChatGPT-auth 400. A named backend whose credential is
+missing is refused as well, but the message names that backend and the credential it could not
+find instead of asking for ChatGPT auth, and the request reaches no other backend. A backend that
+fails answers with its own diagnostic. The fallback never runs while a forward candidate exists,
+so the verbatim relay stays the path for a ChatGPT deployment.
+
 ## Standalone Search and exact account selectors
 
 `POST /v1/alpha/search` retains the selected model in its request body. When that value is an

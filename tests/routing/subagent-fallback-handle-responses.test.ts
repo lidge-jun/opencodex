@@ -1583,7 +1583,7 @@ describe("native fallback account preview", () => {
    */
   test("both fallback preview sites pass the model-eligible account set (#2509)", async () => {
     const source = await Bun.file(
-      fileURLToPath(new URL("../../src/server/responses/core.ts", import.meta.url)),
+      fileURLToPath(new URL("../../src/server/responses/request-prepare.ts", import.meta.url)),
     ).text();
 
     const previews = source.match(/subagentFallbackAccountPreview = \([^)]*\)/g) ?? [];
@@ -1595,8 +1595,12 @@ describe("native fallback account preview", () => {
     }
 
     // And both must actually forward it into the preview call, not merely accept it.
+    // The guarantee is that BOTH sites forward the eligible set, which is what recovery lost.
+    // `modelId` is no longer the final argument -- #4546 appends the resolved pool lineage so
+    // preview and final resolution agree on a child's first turn -- so anything after it is
+    // allowed here rather than pinning the argument count.
     const forwarded = source.match(
-      /\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \},\s*modelId,\s*\)/g,
+      /\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \},\s*modelId,[^)]*\)/g,
     ) ?? [];
     expect(forwarded).toHaveLength(2);
   });

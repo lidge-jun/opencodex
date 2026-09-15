@@ -168,7 +168,7 @@ async function completeMockCodexOAuth(options: {
     loggedIn: true,
   } as ReturnType<typeof oauth.getLoginStatus>);
   const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
-  // Mirrors the login-status poll delay in auth-api.ts; other timers are intentionally dropped.
+  // Mirrors the login-status poll delay in login-flow.ts; other timers are intentionally dropped.
   const CODEX_OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
   const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
     callback: (...args: unknown[]) => void,
@@ -4622,7 +4622,7 @@ describe("codex-auth API", () => {
   test("the device poll budget covers the 15-minute grant", async () => {
     // The budget is a loop bound with no observable output, so a regression to
     // the 5-minute browser budget would pass every behavioral test above.
-    const source = await Bun.file(new URL("../../src/codex/auth-api.ts", import.meta.url)).text();
+    const source = await Bun.file(new URL("../../src/codex/auth-api/login-flow.ts", import.meta.url)).text();
     const budget = /const pollAttempts = useDeviceFlow \? (\d+) : (\d+);/.exec(source);
     expect(budget).toBeTruthy();
     // 900s is the grant; the extra margin covers post-grant settlement, so an
@@ -5867,12 +5867,12 @@ describe("codex-auth API", () => {
   });
 
   test("OAuth pool login excludes self from collision check when reauth", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     expect(source).toContain("checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined)");
   });
 
   test("OAuth pool reauth binds ChatGPT identity to the existing pool slot", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     expect(source).toContain("expectedChatgptId");
     expect(source).toContain("expectedEmail");
     expect(source).toContain("Signed-in ChatGPT account does not match this pool account");
@@ -5880,18 +5880,18 @@ describe("codex-auth API", () => {
   });
 
   test("OAuth pool login waits for the current flow to finish, not stale credentials", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     expect(source).toContain("st.done && st.loggedIn");
     expect(source).toContain("Login timed out before OAuth completed.");
   });
 
   test("OAuth pool login stores a privacy log label at the account creation call site", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     expect(source).toContain("withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts)");
   });
 
   test("GET /api/codex-auth/login-status projects transient flow-state emails at response boundaries", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     // #3859 turned the unconditional mask into a policy projection. The guarantee is unchanged:
     // BOTH boundaries redact through the shared helper, and the route resolves the policy from
     // config rather than defaulting to reveal.

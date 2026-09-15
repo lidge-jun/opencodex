@@ -195,6 +195,15 @@ describe("ocx account main", () => {
     expect(output.join(" ")).toContain("auth.openai.com/codex/device");
     expect(output.join(" ")).toContain("--flow flow-1");
 
+    output.length = 0;
+    expect(await cmdAccount(["main", "reauth", "--device", "--no-wait", "--json"], deps)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual({
+      flowId: "flow-1",
+      status: "pending",
+      verificationUrl: "https://auth.openai.com/codex/device",
+      deviceCode: "ABCD-1234",
+    });
+
     expect(await cmdAccount(["main", "reauth", "status", "--flow", "flow-1"], deps)).toBe(0);
     expect(requests.at(-1)).toEqual({ method: "GET", path: "/api/codex-auth/main/reauth-device?flowId=flow-1" });
     expect(output.join(" ")).toContain("succeeded");

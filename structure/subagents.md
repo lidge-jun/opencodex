@@ -1,5 +1,8 @@
 # Subagents And Multi-Agent Surface
 
+Encrypted-task and fallback request handling follow the Responses
+[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
 ## Plaintext V2 agent messages
 
 `src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only
@@ -25,7 +28,7 @@ Codex treats qualified names literally and defaults absent namespaces to functio
 declarations inherit their restored namespace container; the compiler never invents an empty
 encryption marker when the upstream omitted it or returned a nonempty marker.
 
-Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
 
 ## Multi-agent surface mode (3-state)
 
@@ -42,10 +45,10 @@ The override is applied as a final pass in both `buildCatalogEntries` (live `/v1
 ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
 not clobber the forced value.
 
-`getDefaultConfig()` (`src/config.ts`) writes `multiAgentMode: "v1"` explicitly, using the version
+`getDefaultConfig()` (`src/config/proxy-env.ts`) writes `multiAgentMode: "v1"` explicitly, using the version
 constant from `src/config/multi-agent-surface.ts`, so v1 is the install default while a v2
 native-to-routed child task is undeliverable ciphertext. The repair and salvage merges in
-`src/config.ts` pin `multiAgentMode` and `multiAgentSurfaceAdvisoryVersion` to the stored
+`src/config/diagnostics.ts` pin `multiAgentMode` and `multiAgentSurfaceAdvisoryVersion` to the stored
 document, because spreading the defaults underneath would repair an unrelated missing field
 into a surface change its operator never made.
 An absent key still means `"default"`, because selecting base deletes the key — absence cannot be
@@ -68,7 +71,7 @@ v2. An explicit attempt to enable the global flag while the hybrid pin is active
 
 ### What the five-model `spawn_agent` window is, and how V1 differs from V2
 
-`MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5` (mirrored in `src/codex/catalog/sync.ts`) is **not** a
+`MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5` (mirrored in `src/codex/catalog/subagent-roster.ts`) is **not** a
 subagent concurrency limit and **not** an eligibility limit. Upstream uses it in exactly two
 places: the model list rendered into the `spawn_agent` tool description
 (`multi_agents_spec.rs:789`) and the "Available models:" suggestions in an unknown-model error
