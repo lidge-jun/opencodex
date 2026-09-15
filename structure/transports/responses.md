@@ -706,3 +706,5 @@ pins both ladder shapes against exactly that.
 Adapter-owned retries enter the same pending dispatch metadata path as initial key sends.
 The actual dispatch commits their count and recovery label once; unsent pending metadata
 is discarded on process exit and is not usage evidence. See [key attribution](../gui-and-management-api.md#upstream-key-account-attribution).
+Generic refetches record metadata inside each admitted retry callback, retaining the
+transient recovery reason when present and otherwise the outer recovery reason.

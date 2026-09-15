@@ -1020,3 +1020,42 @@ test("chat-native preserves same-key retry, key rotation, usage, and request log
     clearKeyCooldowns("mock");
   }
 });
+
+test.each([false, true])("key refetch retains transient recovery metadata (stream=%s)", async stream => {
+  resetUsageReadCacheForTests();
+  const seen: Array<string | null> = [];
+  upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+    seen.push(req.headers.get("authorization"));
+    if (seen.length < 3) return Response.json({ error: { message: seen.length === 1 ? "rate limited" : "temporarily unavailable" },
+      usage: { prompt_tokens: seen.length, completion_tokens: 0 } }, {
+      status: seen.length === 1 ? 429 : 503, headers: { "retry-after": "0" },
+    });
+    const usage = { prompt_tokens: 10, completion_tokens: 2 };
+    if (stream) return new Response([
+      { id: "chatcmpl-refetch", choices: [{ index: 0, delta: { content: "recovered" }, finish_reason: null }] },
+      { id: "chatcmpl-refetch", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage },
+    ].map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n", {
+      headers: { "content-type": "text/event-stream" },
+    });
+    return Response.json({ id: "chatcmpl-refetch", object: "chat.completion", usage,
+      choices: [{ index: 0, message: { role: "assistant", content: "recovered" }, finish_reason: "stop" }] });
+  } });
+  saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "refetch", providers: { refetch: {
+    adapter: "openai-chat", authMode: "key", allowPrivateNetwork: true, baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+    apiKey: "synthetic-refetch-a", apiKeyPool: [{ id: "a", key: "synthetic-refetch-a" }, { id: "b", key: "synthetic-refetch-b" }],
+    transientRetryOn5xx: { attempts: 3 }, retryOn429: { attempts: 0 },
+  } } } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/responses", server.url), { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "refetch/test", input: "hello", stream }) });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("recovered");
+    expect(seen).toEqual(["Bearer synthetic-refetch-a", "Bearer synthetic-refetch-b", "Bearer synthetic-refetch-b"]);
+    const attempts = readUsageEntries()[0]?.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts?.[0]).toMatchObject({ sendCount: 1, usage: { inputTokens: 1, outputTokens: 0 } });
+    expect(attempts?.[1]).toMatchObject({ sendCount: 2, recoveryKinds: ["key-429", "transient-5xx"],
+      usage: { inputTokens: 12, outputTokens: 2 } });
+  } finally { await server.stop(true); }
+});

@@ -412,10 +412,10 @@ export async function prepareAdapterExchange(
       logCtx.providerAdapter = transportState.activeAdapter.name;
       sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
       recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-      transportState.noteRoutedAttemptSend(retryEstimate, recovery);
       try {
         try {
           if (transportState.activeAdapter.fetchResponse) {
+            transportState.noteRoutedAttemptSend(retryEstimate, recovery);
             await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
             // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
             // an abort, a saturated queue, an expired slot or a removed provider, and none of
@@ -462,6 +462,7 @@ export async function prepareAdapterExchange(
                 if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
                   throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
                 }
+                transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
                 // Same boundary on the helper path: the thunk is what reaches the wire, and it
                 // can be refused above before it does. use() past the first attempt is a no-op.
                 onDispatch?.();
