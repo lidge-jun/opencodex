@@ -193,6 +193,17 @@ including the compaction turn the proxy itself drives. With `store: false`, requ
 strips ids from every input item, including compact-wire items, matching codex-rs
 (`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
 
+Codex pool account changes are a separate portability question from destination serving identity.
+`src/codex/routing.ts` remembers, in process memory and keyed like thread affinity, which pool
+account minted a conversation's carried state (`previous_response_id`, encrypted reasoning, and
+provider conversation or file ids). `src/server/responses/account-change-state.ts` applies that
+record on `/v1/responses` and `/v1/responses/compact`, including same-request alternate-account
+retries and the compact routed fallback: when the serving account differs, the proxy drops the
+continuation id and strips encrypted reasoning with the existing helpers before dispatch, keeps
+readable user text, and records `conversationStateScrub: "account-change"` on the request log
+without account identifiers. Once the new account issues its own state, later turns carry it
+normally. `canPortConversationState` is local until `src/routing/identity-domains.ts` lands.
+
 > Decision record: [ADR-0039](../decisions/ADR-0039-responses-http-sse.md)
 
 ### Mixed-wire provider defaults
@@ -320,7 +331,20 @@ no new destination-based migration. The existing stateless pass sets `store: fal
 stored continuation parameters, and repairs orphan calls/results without claiming execution
 success. A local replay-cache hit supplies history; a miss cannot reconstruct it, so callers
 receive `previous_response_not_found` before upstream dispatch and must resend complete history
-without `previous_response_id`. Routed custom-tool lowering requires the same recovery when a delta
+without `previous_response_id`. That refusal is not specific to the stateless flag: it covers every
+destination that cannot see the prefix this process failed to restore, which is every destination
+except the native Responses passthrough. The passthrough forwards the id and keeps its
+upstream-owned state. `PROVIDER_OWNED_CONTINUATION_WIRES` in
+`src/responses/continuation-ownership.ts` is deliberately empty and records why the three
+candidates do not qualify: devin re-sends the whole conversation each turn, cursor reads its
+`checkpointRef` out of the same expired store and otherwise falls back to `full-replay`, and kiro
+rebuilds `conversationState.history` from the turns it was handed. A missed expansion on any of
+them would forward the current turn alone under a normal 200 — the whole conversation replaced by
+one line, with nothing in the response saying so. This also replaces kiro's former
+`invalid_request_error`, which told the client to start a new session and therefore skipped the
+recovery Codex performs on `previous_response_not_found`. Retention is the other half: local
+continuation state is held for `RESPONSE_TTL_MS` (24 hours), long enough that an ordinary idle gap
+resumes by expansion rather than by asking the client to replay. Routed custom-tool lowering requires the same recovery when a delta
 custom result has no local call, because its original wire type cannot be established and guessing it
 would send an unmatched result upstream. The check resolves the selected wire protocol and the
 request's own tool declarations after final route selection, so stateful destinations keep their
@@ -450,7 +474,7 @@ caller's abort signal, so a `connectTimeoutMs` shorter than 90 seconds cancels
 an already-sent create before the prelude timer fires.
 These are transport-fidelity guarantees, not a provider-billing guarantee.
 
-Every exchange also leaves a content-free stage record (`CodexWsStageRecord`, #4191): create-frame bytes (measured on failure only — the committed-success record keeps it null so the happy path never byte-counts a megabyte replay frame), send completion, numeric close code, elapsed and first-frame durations, frame counters, liveness ping/pong counts, pool reuse, and the OCX/Bun versions. The exchange pins the record on the resolved Response (`markCodexWsStage`, the same marker seam as `markCodexWsResponse`); `handleResponses` adopts it onto the serving attempt, and usage.jsonl persists it per attempt behind a drop-guard normalizer, so hand-edited rows cannot inject strings into the DTO. The record never carries conversation text, headers, close-reason text, or account identifiers, and it is not a fallback-eligibility signal: the no-replay-after-send contract stands regardless of what it says.
+Every exchange also leaves a content-free stage record (`CodexWsStageRecord`, #4191): create-frame bytes (measured on failure only — the committed-success record keeps it null so the happy path never byte-counts a megabyte replay frame), send completion, numeric close code, elapsed and first-frame durations, frame counters, liveness ping/pong counts, pool reuse, and the OCX/Bun versions. The exchange pins the record on the resolved Response (`markCodexWsStage`, the same marker seam as `markCodexWsResponse`); `handleResponses` adopts it onto the serving attempt, and usage.jsonl persists it per attempt behind a drop-guard normalizer, so hand-edited rows cannot inject strings into the DTO. Later snapshots update the same response-local record in place, so an attempt holding the committed reference observes final success or failure counters. Each exchange supplies a complete fresh snapshot; separate responses keep distinct records. On eager-relay cancel-drain expiry, upstream cancellation finalizes the transport snapshot before the cancellation hook writes the usage row; an actual terminal observed within the drain still wins over cancellation. The record never carries conversation text, headers, close-reason text, or account identifiers, and it is not a fallback-eligibility signal: the no-replay-after-send contract stands regardless of what it says.
 
 Eligible complete-input creates can retain a canonical upstream socket within
 one selected account, credential, thread and turn. Model/tier and immutable
@@ -598,3 +622,74 @@ Translated Chat request construction uses the [inline-image budget](streaming-he
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior. Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
+
+## Core module ownership
+
+`src/server/responses/core.ts` is the public ingress and compatibility-export surface.
+The parent `src/server/responses.ts` facade retains its existing imports. Per-request execution
+is composed from the following owners in `src/server/responses/`; none is a generated artifact.
+
+| Owner | Responsibility |
+| --- | --- |
+| `request-prepare.ts` | Body parsing, combo handoff, final route, encrypted-task recovery and initial admission. |
+| `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. |
+| `request-sidecar-auth.ts` | Sidecar credential resolution and vision preprocessing. |
+| `response-effects.ts` | Completion notification, replay publication and live request-tool aliases. |
+| `request-send-budget.ts` | Request-wide send accounting, remaining allowance and the pending recovery permit. |
+| `passthrough-execution.ts` | Native host-lease transfer and the enclosing dispatch/delivery `finally`. |
+| `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
+| `passthrough-delivery.ts` | Native HTTP/SSE/JSON delivery, rewrite/inspection and terminal accounting. |
+| `sidecar-execution.ts` | Image/video versus web-search execution and their shared rotation hook. |
+| `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns. |
+| `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery and the shared continuation retry counter. |
+| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging. |
+
+Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`,
+`core-combo-failure.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,
+`core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
+and small composition contracts. Existing public helper names are re-exported by `core.ts`.
+Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf.
+
+Mutable values are not copied across phases. A phase exposes only the values consumed by later
+phases, with getters/setters over the original local bindings where a retry or callback can
+change them. Consumers receive typed `Pick` views. In particular, adapter replacement, credential
+snapshots, request-tool aliases, cancellation, pending permits and continuation retry counts
+remain live. Owner names are distinct from local decision variables: `admissionState` retains the
+lease while a block-local `admission` holds only the acquisition result.
+
+`handleResponses` creates or inherits the same logical-request send holder. The budget owner
+reads that holder rather than minting a per-phase allowance. Combo recursion is injected through
+`ResponsesDispatchers`: a child re-enters the public handler without a reverse runtime import
+from the combo implementation into `core.ts`. `core-lifetime.ts` owns the shared run-turn response
+marker and translator-budget finalization, so the combo and delivery paths observe one identity.
+
+The outer admission `finally` remains in `core.ts`. Native execution explicitly transfers its
+pending lease to `passthrough-execution.ts`; both owners await response construction before
+cleanup. Stream body ownership, cancellation and post-commit behavior stay in the delivery owners.
+This decomposition changes ownership boundaries, not credential-selection or retry policy.
+
+`tests/responses/responses-core-modules.test.ts` covers the owner inventory, the 1,999-line ceiling,
+acyclic dependencies, recursive dispatch, lease-transfer wiring, capture-name hygiene and live
+send-holder/permit behavior. Cross-owner source assertions read the actual implementations via
+`tests/helpers/responses-core-source.ts`; focused passthrough and subagent assertions read their
+specific delivery/preparation owner. Existing runtime Lab-boundary tests still start at `core.ts`.
+
+## Credential-hop reservations
+
+A credential rotation inside one provider's roster reserves a hop from the request's shared send
+budget before it knows whether a rotation is even possible, because the reservation is the charge:
+`reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
+idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
+
+Two shapes are correct and both are in the tree. Where the ladder dispatches inside its own `try`
+— `adapter-dispatch.ts`, `run-turn-execution.ts` — it confirms with `use()` immediately before the
+send and releases in its `catch`, so one catch covers a pre-dispatch throw and a throw from the
+send alike. Where the replay happens after the loop continues — `adapter-continuation.ts` — it must
+not confirm, because the send has not happened yet; it only releases. The passthrough ladder is a
+third shape: it reserves with `countedExternally: true` and hands the permit to the rebuild through
+`pendingHopPermit`, because there the retry helper reports the same physical send.
+
+What must not happen is a ladder that charges and then returns through a path that neither confirms
+nor releases. That is not a lost send; it is a send the request never made, spending an allowance a
+later recovery in the same request then cannot have. `tests/lib/execution-budget-permits.test.ts`
+pins both ladder shapes against exactly that.

@@ -9,8 +9,15 @@
 # The npm script already uses `bun test ./tests/`; this makes a bare `bun test` behave the same.
 [test]
 root = "tests"
-# Sandboxes HOME/OPENCODEX_HOME/CODEX_HOME and arms the real-home write guard for EVERY
-# invocation, including a bare `bun test <file>` that skips `scripts/test.ts`. A test
-# once overwrote a real user config through that unwrapped path; see
-# devlog/_fin/260730_codex_rs_upstream_v2_live_handoff/070.
+# Sandboxes HOME/OPENCODEX_HOME/CODEX_HOME and arms the real-home write guard for every
+# invocation THAT READS THIS FILE, including a bare `bun test <file>` that skips
+# `scripts/test.ts`. A test once overwrote a real user config through that unwrapped path;
+# see devlog/_fin/260730_codex_rs_upstream_v2_live_handoff/070.
+#
+# That qualifier is load-bearing. Bun resolves bunfig.toml from the CURRENT WORKING
+# DIRECTORY, so `cd /tmp && bun test <repo>/tests/x.test.ts` loads no preload at all: nothing
+# is sandboxed, the guard stays disarmed, and every `getConfigDir()` in that process returns
+# the developer's real `~/.opencodex`. On 2026-09-15 such a run deleted one. A test that needs
+# a config directory pins its own OPENCODEX_HOME instead of trusting this line, and
+# `tests/ci-workflows/test-home-guard.test.ts` enforces that for the destructive case.
 preload = ["./tests/preload.ts"]

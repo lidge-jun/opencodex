@@ -250,6 +250,8 @@ ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
 
+`ocx account main reauth --device --no-wait --json` は成功時に単一の JSON オブジェクトを stdout に出力し、人向けの `follow up:` 行は出力しません。進行状況は、返された `flowId` を `ocx account main reauth status --flow <id> --json` に指定して確認できます。
+
 各変更コマンドは、実行中のプロキシが返す正規化済みの有効な `CODEX_HOME` を表示します。このパスは
 呼び出し元の `CODEX_HOME` と異なる場合があり、JSON 対応コマンドは同じ値を
 `effectiveCodexHome` として返します。

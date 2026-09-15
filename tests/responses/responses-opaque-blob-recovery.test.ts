@@ -617,7 +617,11 @@ describe("opaque blob recovery through /v1/responses", () => {
     const body = await response.json() as { error?: { message?: string } };
     expect(body.error?.message).toBe(FUNCTION_OUTPUT_DECRYPT_MESSAGE);
 
-    expect(outbound).toHaveLength(6);
+    // Three sends spend the request's transient budget, then the sanitized rebuild draws on what
+    // is LEFT of that same budget rather than a fresh allowance, so it sends once and stops.
+    // This used to be 6 (3 + 3), which is the per-leg multiplication #4546 measured.
+    expect(outbound).toHaveLength(4);
+    expect(logCtx.activeAttempt?.sendCount).toBe(4);
     const initialInput = outbound.at(0)?.input as Array<Record<string, unknown>> | undefined;
     const finalInput = outbound.at(-1)?.input as Array<Record<string, unknown>> | undefined;
     expect(initialInput?.at(1)).toEqual(functionOutputReplayInput().at(1));

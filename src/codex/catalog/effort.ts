@@ -39,7 +39,6 @@ import { nativeOpenAiCapabilitySourceSlug, SELF_DESCRIBED_NATIVE_OPENAI_MODELS, 
 import { isReserveCatalogProjection } from "./reserve";
 import { loadBundledCodexCatalog } from "./bundled";
 import type { BundledCatalogDeps, ReadonlyRawCatalog } from "./bundled";
-import { deriveEntry } from "./sync";
 import {
   formatClampLogLines,
   formatRuntimeLogLine,

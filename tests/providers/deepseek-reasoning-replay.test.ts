@@ -38,8 +38,34 @@ describe("sanitizeReasoningInputContent scoping", () => {
       type: "reasoning",
       id: "rs_1",
       content: [],
+      // `reasoningItem` omits `summary`, and the sanitizer now supplies the empty array the
+      // Responses API requires on every reasoning input item.
+      summary: [],
       encrypted_content: "native-blob",
     });
+  });
+
+  // Regression: a reasoning item translated from `/v1/chat/completions` or `/v1/messages` carried
+  // no `summary`, which responsesRequestSchema allows and the upstream does not — the request was
+  // refused with `Missing required parameter: 'input[N].summary'` before inference.
+  test("a summary-less reasoning item gains the required empty summary", () => {
+    const out = inputOf(sanitizeReasoningInputContent({ model: "m", input: [reasoningItem()] }));
+    expect(out[0]!.summary).toEqual([]);
+  });
+
+  test("an existing summary is left exactly as it arrived", () => {
+    const summary = [{ type: "summary_text", text: "chain" }];
+    const out = inputOf(sanitizeReasoningInputContent({ model: "m", input: [reasoningItem({ summary })] }));
+    expect(out[0]!.summary).toEqual(summary);
+  });
+
+  test("a summary-less item is repaired even where content is preserved", () => {
+    const out = inputOf(sanitizeReasoningInputContent(
+      { model: "m", input: [reasoningItem()] },
+      { preserveRawReasoningContent: true },
+    ));
+    expect(out[0]!.summary).toEqual([]);
+    expect(out[0]!.content).toEqual([{ type: "reasoning_text", text: "think step by step" }]);
   });
 
   test("default behavior still blanks reasoning content (ChatGPT backend rule)", () => {

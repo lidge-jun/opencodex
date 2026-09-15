@@ -1,7 +1,10 @@
 # GUI And Management API
 
+The shared server request path follows the Responses
+[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
 
 ## Dashboard serving
 
@@ -105,7 +108,7 @@ be treated as implemented:
 
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates to
 `src/server/management-api.ts`, which composes the route modules under `src/server/management/`.
-Codex account routes live in `src/codex/auth-api.ts` because they own the credential store, not
+Codex account routes live in `src/codex/auth-api/routes.ts` because they own the credential store, not
 because they are a different plane.
 
 The registered route set is larger than the areas described below; the code is the route SOT. What
@@ -137,7 +140,8 @@ this document owns is which module holds which area and what invariant that area
 | Grok and Claude integrations | `src/server/management/agent-settings-routes.ts` — `GET /api/grok`, `PUT /api/grok/selection`, `POST /api/grok/apply`, `GET/PUT /api/claude-desktop`, `POST /api/claude-desktop/apply`, `GET /api/claude-desktop/status`, `GET/PUT /api/claude-code`. Apply writes an external app's profile, so its status probe must read the same resolved path it writes (see [`responses.md`](transports/responses.md)). |
 | Grok reset coupons | `src/server/management/grok-coupon-routes.ts` — `GET /api/grok/reset-coupons`, `POST /api/grok/reset-coupons/consume`. The dashboard owner is `gui/src/hooks/useGrokResetCoupons.ts` with `gui/src/components/provider-workspace/GrokResetCoupons.tsx`, wired into the xAI OAuth rows of `ProviderAuthPanel`. Redemption truth is the settled ledger `code`, not the HTTP status: a replayed failure returns 200 with `replayed: true`. See [`providers/xai-grok.md`](providers/xai-grok.md). |
 | Combos | `src/server/management/combo-routes.ts` — `GET/PUT/DELETE /api/combos` own provider combination and failover definitions. |
-| Codex accounts | `src/codex/auth-api.ts` — `GET/POST/DELETE /api/codex-auth/accounts`, `PUT /api/codex-auth/accounts/alias`, `PUT /api/codex-auth/accounts/pause`, `PUT /api/codex-auth/accounts/pause-exhausted`, `POST /api/codex-auth/accounts/clear-cooldown`, `GET/PUT /api/codex-auth/active`, `PUT /api/codex-auth/auto-switch`, `PUT /api/codex-auth/pool-strategy`, `PUT /api/codex-auth/failover`, `GET /api/codex-auth/quota`, `GET /api/codex-auth/reset-credits` with `POST /api/codex-auth/reset-credits/consume`, and the login flow `POST /api/codex-auth/login`, `POST /api/codex-auth/login/code`, `POST /api/codex-auth/login/cancel`, `GET /api/codex-auth/login-status`. Per-account quota activation uses the existing `GET/PUT /api/settings` surface and `src/codex/quota-auto-refresh.ts`, keeping scheduled spending separate from credential/authentication mutation. Account ids are opaque handles and are serialized so the GUI can address an account; emails are masked and tokens are never serialized. New-account config commits add UI-managed selector bindings in the same config save; deletion deliberately retains existing bindings for fail-closed exact routing and re-add stability. Account mutations request catalog convergence only after config durability and expose only the boolean `catalogRefreshPending` completion projection. |
+| Workflow budget | `src/server/management/workflow-budget-routes.ts` — `GET /api/workflow-budget` reads the tracked roots or one root, and `POST /api/workflow-budget/clear` clears exactly one. The clear moves the windowed send ring and the child map and nothing else: `active` belongs to turns still in flight, the spend ledger is a token budget an operator did not ask to forgive, and the lifetime send total survives so a clear cannot launder the record. Both are `deferred-verb` in the route registry — they are owed CLI verbs, and because the ledger is process memory there is no local projection the CLI could read instead. See [`../devlog/_plan/260915_workflow_budget_window/030_wfc_diff_plan.md`](../devlog/_plan/260915_workflow_budget_window/030_wfc_diff_plan.md). |
+| Codex accounts | `src/codex/auth-api/routes.ts` — `GET/POST/DELETE /api/codex-auth/accounts`, `PUT /api/codex-auth/accounts/alias`, `PUT /api/codex-auth/accounts/pause`, `PUT /api/codex-auth/accounts/pause-exhausted`, `POST /api/codex-auth/accounts/clear-cooldown`, `GET/PUT /api/codex-auth/active`, `PUT /api/codex-auth/auto-switch`, `PUT /api/codex-auth/pool-strategy`, `PUT /api/codex-auth/failover`, `GET /api/codex-auth/quota`, `GET /api/codex-auth/reset-credits` with `POST /api/codex-auth/reset-credits/consume`, and the login flow `POST /api/codex-auth/login`, `POST /api/codex-auth/login/code`, `POST /api/codex-auth/login/cancel`, `GET /api/codex-auth/login-status`. Per-account quota activation uses the existing `GET/PUT /api/settings` surface and `src/codex/quota-auto-refresh.ts`, keeping scheduled spending separate from credential/authentication mutation. Account ids are opaque handles and are serialized so the GUI can address an account; emails are masked and tokens are never serialized. New-account config commits add UI-managed selector bindings in the same config save; deletion deliberately retains existing bindings for fail-closed exact routing and re-add stability. Account mutations request catalog convergence only after config durability and expose only the boolean `catalogRefreshPending` completion projection. |
 | Sidebar | `src/server/management/sidebar-routes.ts` — `GET/POST /api/github/star` and `GET /api/update/badge`. Sidebar state is cosmetic; a failed fetch degrades silently. |
 | Logs | `src/server/management/logs-usage-routes.ts` — `GET /api/logs`, `GET /api/claude/inbound-debug`, and `GET /api/debug/injection-logs` join the debug streams described above. |
 
@@ -454,6 +458,36 @@ estimated` split exists for, and why coverage is reported alongside totals. The 
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
+A row also carries what its logical request cost upstream. `logicalRequestId` names the turn
+that a retry leg, a repair refetch and a combo child all belong to, and `spend` aggregates their
+physical sends: `sends` totals every attempt on the row, `settled` counts the sends whose attempt
+reached a terminal status, and `unresolved` holds the rest — an attempt abandoned in flight, or a
+budget charge no attempt row accounted for. Unresolved spend is never folded into settled, because
+an unexplained send is the quantity the record exists to expose. `reserved` and `policyVersion`
+report the request execution budget's final state, and `moveReasons` names every pool-binding move
+that discarded a warmed prompt-cache prefix. `/api/usage` totals these as `sends`,
+`settledSends`, `unresolvedSends` and `spendRequests`; per-attempt `sendCount` remains the
+accounting source, and `attemptCount` is the smaller number because retry layers re-send inside
+one attempt.
+
+Cache detail is qualified by provenance rather than read as a measurement. `cacheProvenance` is
+`observed`, `synthesized` or `unknown`: strict-client normalization emits zero-default
+token-detail objects on every bridged wire, so a `cached_tokens: 0` recovered from a parsed wire
+is a wire-compatibility artifact, and a row with no cache fields measured nothing at all. Only
+observed input tokens reach the `cacheHitRate` denominator, reported alongside it as
+`cacheObservedInputTokens`, and the summary counts the three provenances separately. A row
+written before the field existed is reconstructed from its own shape, so historical rows keep
+their previous reading. `/api/logs` marks a non-observed detail with `cache_detail_missing` on
+the cost estimate rather than pricing the turn as a measured uncached send.
+
+A pool selection that produced no account reaches no auth context, so its cause is recorded on
+the request that failed for it: reasons are held per (thread, model lane) and consumed by that
+lane alone, because a thread holds one binding per lane and a thread-keyed reason lets one lane
+report a cause that fired on another. The failing row carries `affinity: "cleared"`, its reason
+and `errorCode: "codex_no_account"`; no synthetic row is emitted, since `/api/usage` counts one
+row as one request. Affinity now reaches disk with the rest of the row — the field-by-field
+projection in `addRequestLog` did not name it, so a move survived only until the next restart.
+
 Usage aggregation does not infer confirmed model identity merely from a requested selector.
 Model rows with saved unchanged
 default-provider route evidence carry `hasUnresolvedRequestedModel`: their tokens stay under
@@ -499,7 +533,7 @@ untouched.
 
 ## Z.ai quota destination ownership
 
-`src/providers/quota.ts` uses one exact normalized-base mapping for both Z.ai quota
+`src/providers/quota/vendor-probes-key.ts` uses one exact normalized-base mapping for both Z.ai quota
 eligibility and monitor selection. International root, coding Chat, Anthropic and
 Responses bases use `api.z.ai` with Bearer authentication. Existing BigModel CN root,
 coding Chat and Responses bases use `open.bigmodel.cn` with the raw key. Unsupported
