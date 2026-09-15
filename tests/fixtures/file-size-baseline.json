@@ -19,7 +19,7 @@
     "gui/src/styles.css": 2958,
     "src/adapters/openai-chat.ts": 822,
     "src/adapters/openai-responses.ts": 6,
-    "src/bridge.ts": 2206,
+    "src/bridge.ts": 7,
     "src/codex/auth-api.ts": 43,
     "src/codex/catalog/provider-fetch.ts": 54,
     "src/config.ts": 460,
