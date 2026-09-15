@@ -30,7 +30,7 @@ describe("reasoning replay scope propagation", () => {
 
   test("bridge, adapter, and cache contain no process-wide fallback", () => {
     const bridge = source("bridge.ts");
-    const adapter = source("adapters/openai-chat.ts");
+    const adapter = source("adapters/openai-chat/messages.ts");
     const cache = source("responses/reasoning-replay-cache.ts");
     expect(bridge.match(/const replayCacheScope = options\?\.replayCacheScope;/g)).toHaveLength(2);
     expect(adapter.match(/const replayCacheScope = parsed\._reasoningReplayScope;/g)).toHaveLength(1);

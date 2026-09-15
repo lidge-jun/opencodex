@@ -134,6 +134,8 @@ import {
   type RequestLogEntry,
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
+import { admitWorkflowTurn, type WorkflowLane } from "../lib/workflow-budget";
+import { workflowRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
   filterRequestLogs,
@@ -1289,16 +1291,38 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     req: Request,
     policy: RequestPolicyView,
     work: (lease: ActiveTurnLease) => Promise<Response>,
+    refusalLog?: WorkflowRefusalLog,
   ): Promise<Response> {
     const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
     if (!lease) return serverBusyResponse(req, "active turns", policy);
+    // A fan-out shares the conversation it serves. Without a reserve, a worker burst takes every
+    // slot under its own root and the interactive turn that started it waits behind its own
+    // children. A request that names a parent is treated as that fan-out; a top-level request is
+    // the conversation and may use the reserved slots.
+    const workflowRootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+    const workflowThreadId = req.headers.get("thread-id")?.trim() || undefined;
+    const workflowLane: WorkflowLane = workflowRootId !== undefined
+      && workflowThreadId !== undefined
+      && workflowThreadId !== workflowRootId
+      ? "worker"
+      : "interactive";
+    const workflow = admitWorkflowTurn(workflowRootId, workflowLane, undefined, workflowThreadId);
+    if (workflow && !workflow.admitted) {
+      lease.release();
+      // withCors, because without Access-Control-Allow-Origin the exposed refusal header is
+      // still unreadable to a browser dashboard -- which made exposing it pointless.
+      return withCors(workflowRefusalResponse(workflow.reason, undefined, refusalLog), req, policy);
+    }
+    const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
     let response: Response;
     try {
       response = await work(lease);
     } catch (error) {
+      releaseWorkflow();
       lease.release();
       throw error;
     }
+    releaseWorkflow();
     if (!lease.isTransferred()) {
       lease.release();
     }
@@ -2400,7 +2424,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
-        });
+        }, { requestId, start, logCtx });
       }
 
       if (
@@ -2428,7 +2452,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease);
           addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
-        });
+        }, { requestId, start, logCtx });
       }
 
       if (req.method === "GET" && url.pathname.startsWith("/v1/opencodex/artifacts/")) {
@@ -2486,7 +2510,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
-        });
+        }, { requestId, start, logCtx });
       }
 
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {
@@ -2511,7 +2535,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
-        });
+        }, { requestId, start, logCtx });
       }
 
       if (url.pathname === "/v1/responses" && req.method === "POST") {
@@ -2562,7 +2586,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, policy),
             requestId,
           );
-        });
+        }, { requestId, start, logCtx });
       }
 
       // Anthropic Messages inbound (Claude Code). count_tokens FIRST (longer path).
@@ -2612,7 +2636,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy),
           req,
           policy,
-        ));
+        ), { requestId, start, logCtx });
       }
 
 
@@ -2642,7 +2666,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           await handleChatCompletions(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
           req,
           policy,
-        ));
+        ), { requestId, start, logCtx });
       }
 
       if (url.pathname === "/v1/audio/transcriptions" && req.method === "POST") {
@@ -2660,7 +2684,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const response = await handleAudioTranscriptions(req, config, logCtx, admission, lease);
           addFinalRequestLog(requestId, start, logCtx, response.status);
           return withCors(response, req, policy);
-        });
+        }, { requestId, start, logCtx });
       }
 
       // ChatGPT / Codex App voice (GPT‑Live / Frameless Bidi) + OpenAI Realtime call-create.
@@ -2700,7 +2724,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             response.status === 499 ? { closeReason: "client_cancel" } : undefined,
           );
           return withCors(response, req, policy);
-        });
+        }, { requestId, start, logCtx });
       }
 
       // Voice / Realtime WebSocket relay. Sideband joins: Frameless /v1/live/{callId};

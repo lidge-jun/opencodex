@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/auth-api";
+import { codexPoolAffinityKey } from "../../src/codex/auth-context";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
@@ -605,7 +606,13 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     // reported as expired, which is the behavior the missing handoff produces.
     // The binding lives under the model's quota scope, so resolution must be asked in that
     // same scope; a scopeless read looks in the legacy bucket and finds nothing.
-    expect(resolveCodexAccountForThreadDetailed(THREAD_ID, cfg, Date.now(), "shared")).toMatchObject({
+    // Since #4546 a thread keys as ITSELF through an opaque HMAC, and the parent header is a
+    // first-placement hint rather than the key. A parent-only turn therefore binds under the
+    // derived key, not under the raw parent id this suite used to read back.
+    const affinedKey = codexPoolAffinityKey(
+      new Headers({ "x-codex-parent-thread-id": THREAD_ID }),
+    )!;
+    expect(resolveCodexAccountForThreadDetailed(affinedKey, cfg, Date.now(), "shared")).toMatchObject({
       status: "selected",
       accountId: ACCOUNT_ID,
     });
