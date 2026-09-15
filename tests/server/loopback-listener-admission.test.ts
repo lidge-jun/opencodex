@@ -78,8 +78,12 @@ describe("loopback listener policy view", () => {
       source.slice(countTokensStart, messagesStart),
       source.slice(messagesStart, chatStart),
     ]) {
-      expect(branch).toContain("req,\n          policy,\n        ));");
-      expect(branch).not.toContain("req,\n          config,\n        ));");
+      // The tail stops at the closing paren of withCors on purpose. Pinning the call's own
+      // terminator pinned something this test does not care about: when runAdmittedHttpTurn
+      // gained a fourth argument (#4546) both of these went red while the invariant they
+      // exist for -- policy, never config -- was untouched.
+      expect(branch).toContain("req,\n          policy,\n        )");
+      expect(branch).not.toContain("req,\n          config,\n        )");
     }
   });
 });
@@ -120,8 +124,8 @@ describe("local client inference wires on the loopback listener (#4236)", () => 
     expect(chatStart).toBeGreaterThan(-1);
     const branch = source.slice(chatStart, nextRoute);
     expect(branch).toContain("handleChatCompletions(req, config, logCtx");
-    expect(branch).toContain("req,\n          policy,\n        ));");
-    expect(branch).not.toContain("req,\n          config,\n        ));");
+    expect(branch).toContain("req,\n          policy,\n        )");
+    expect(branch).not.toContain("req,\n          config,\n        )");
   });
 });
 

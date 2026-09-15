@@ -230,10 +230,48 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   an omitted flag preserves the established behavior of a nonempty hand-written selector map.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
+- **A transient hold is probed half-open, never opened all at once.** While a bound account is
+  held for a 5xx streak, one in-flight probe may test it and every other request keeps the
+  remembered detour; the lease carries a deadline and a generation so a late answer from a
+  probe that already lost cannot overwrite a newer binding or failure state. When every
+  candidate is held the caller gets a typed withheld outcome, not a send. Recovery dispatches
+  (retries and probes, never a new request's initial send) sit under a pool-wide ratio ceiling
+  measured over a sliding window (`src/routing/probe-lease.ts`).
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the
   generation it started from still holds; a lost race raises a generation-conflict error rather
   than overwriting the newer credential (`src/codex/account-store.ts`). Callers handle that error;
   they do not assume a silent retry.
+- **Authentication identity, quota domain, and cache domain are tracked separately**
+  (`src/routing/identity-domains.ts`). `classifyCredential` returns all three with provenance:
+  `pool.credentialGroups` supplies operator-declared quota domains, a small built-in table
+  supplies the provider-documented cases (OpenAI limits per organization and project and caches
+  per organization and region, Anthropic cache per workspace, Azure per deployment), and every
+  other answer is `unknown`. `unknown` is a first-class relation result, never silently read as
+  shared or as distinct: `assessQuotaRotation` reports `same-domain` so a quota refusal is not
+  answered by rotating inside the limit that refused, `countQuotaCapacity` counts one known
+  domain once and reports unknown-domain credentials separately, and
+  `canPortConversationState` keeps conversational-state portability a separate question from
+  cache compatibility by refusing any request that carries `previous_response_id`, a
+  provider-side conversation id, uploaded file ids, or encrypted reasoning. The classifier is groundwork that no routing boundary calls yet: it lands with its tests
+  so the consuming layers can be reviewed one at a time. Until one of them wires it, declaring
+  `pool.credentialGroups` changes no routing decision, and the rules above state the contract
+  those consumers must honour rather than behaviour an operator can rely on today.
+- **Proven separation and proven sharing are separate facts** (`src/routing/identity-domains.ts`).
+  Every domain carries `evidence` alongside its provenance: a rule that documents only that two
+  credentials are in different domains never lets an equal key mean "shared". OpenAI's cache rule
+  is the case that forces it — caches are documented as not shared across organizations or
+  processing regions, while changing keys inside one organization is documented as not
+  guaranteeing a hit, so a different org or region relates `distinct` and the same org and region
+  relates `unknown`. OpenAI quota, Anthropic workspace cache, and Azure deployment domains carry
+  the sharing half as well and still relate `shared`.
+- **A declared credential group cannot mean two things** (`src/routing/identity-domains.ts`,
+  `src/config.ts`). `credentialGroupIssues` is the one definition of a valid grouping: unique
+  group ids, a non-empty member list, and each credential in at most one group, with members
+  written `"<provider>:<credential-id>"` because ids are provider-scoped in the auth store. The
+  config write path rejects a declaration that breaks any of those and the load path drops the
+  list with a warning, keeping `pool.kernel` and `pool.cacheAffinity`; `classifyCredential`
+  reports an ambiguous claim on `declaredGroupConflict` and falls back to the documented or
+  unknown answer rather than taking the first matching group.
 
 Warmup issues a bounded request with a fallback model so a cold account reports usability before a
 real turn depends on it (`src/codex/warmup.ts`).
@@ -340,7 +378,7 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 
 ## Provider-scoped approval reviewer
 
-`src/codex/catalog/sync.ts` resolves exact case-preserving provider/model reviewer selectors against the final catalog in both retained sync and `src/codex/convergence.ts`. Valid per-model selection wins over valid provider-wide selection, then the root selector supplies fallback. Native root stamps retain the observed original value and applied selector bound to their slug; removal restores the original only while the applied value is unchanged. The native provenance remains after restoration so an equal provider reviewer cannot trigger legacy reclassification on the next sync. Ambiguous legacy unmarked catalogs retain their existing heuristic cleanup. Provider stamps do not change routing or credentials.
+`src/codex/catalog/auto-review.ts` resolves exact case-preserving provider/model reviewer selectors against the final catalog in both retained sync and `src/codex/convergence.ts`. Valid per-model selection wins over valid provider-wide selection, then the root selector supplies fallback. Native root stamps retain the observed original value and applied selector bound to their slug; removal restores the original only while the applied value is unchanged. The native provenance remains after restoration so an equal provider reviewer cannot trigger legacy reclassification on the next sync. Ambiguous legacy unmarked catalogs retain their existing heuristic cleanup. Provider stamps do not change routing or credentials.
 
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 

@@ -901,6 +901,68 @@ describe("the bridged client stream", () => {
     expect(body).not.toContain("response.failed");
   });
 
+  test("a mixed leg whose upstream terminal FAILED closes the cell and drops the held call", async () => {
+    // Sibling of the incomplete case above, and the reason the two terminals are not one branch.
+    // An incomplete turn is one the client can still act on, so its withheld call goes back. A
+    // failed turn is over, and handing Codex a tool call to start executing inside it is the
+    // exact thing the bridge's failure path refuses to do.
+    const sent: string[] = [];
+    let executes = 0;
+    const clientCall = {
+      type: "function_call",
+      id: "fc_4",
+      call_id: "call_4",
+      name: "exec",
+      arguments: "{}",
+    };
+    const mixedLeg = sseBody(
+      frame("response.output_item.added", { output_index: 0, item: { ...searchCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 0, item: searchCall }),
+      frame("response.output_item.added", { output_index: 1, item: { ...clientCall, arguments: "" } }),
+      frame("response.output_item.done", { output_index: 1, item: clientCall }),
+      frame("response.failed", {
+        response: { id: "resp_1", status: "failed", output: [searchCall, clientCall] },
+      }),
+    );
+
+    const stream = createPassthroughWebSearchBridgeStream({
+      plan,
+      firstLeg: streamFromText(mixedLeg),
+      requestBody: initialBody,
+      send: async (body) => {
+        sent.push(body);
+        return new Response(null, { status: 500 });
+      },
+      execute: async () => {
+        executes += 1;
+        return { text: "unused", sources: [] };
+      },
+    });
+
+    const body = await new Response(stream).text();
+    const events = clientEvents(body);
+
+    // No search is billed and nothing goes back upstream, same as the incomplete case.
+    expect(executes).toBe(0);
+    expect(sent).toEqual([]);
+
+    // The opened hosted cell still closes rather than dangling under a finished turn.
+    const cellDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "web_search_call");
+    expect((cellDone!.item as Record<string, unknown>).status).toBe("failed");
+
+    // The withheld client call is NOT released: no function_call reaches the client.
+    const execDone = events.find(event =>
+      event.type === "response.output_item.done"
+      && (event.item as Record<string, unknown>).type === "function_call");
+    expect(execDone).toBeUndefined();
+    expect(body).not.toContain("call_4");
+
+    // The upstream terminal is relayed as it stood: failed.
+    expect(events.filter(event => event.type === "response.failed")).toHaveLength(1);
+  });
+
   test("already-hosted web_search_call items pass through without a proxy search", async () => {
     let sends = 0;
     let executes = 0;
