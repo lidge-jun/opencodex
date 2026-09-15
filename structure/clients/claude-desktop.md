@@ -1,16 +1,21 @@
 # Claude Desktop Integration
 
+Desktop callers retain their existing ingress through the Responses
+[core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
 Codex-native model discovery follows the [shared retirement policy](../catalog.md#shared-catalog).
 That projection does not migrate existing user-selected Desktop configuration or usage history.
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
 
 Claude-only connections keep their existing non-failing readiness policy; displayed catalog reasons follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics) whether they surface at connect time or on a later refresh.
 
 The hub-side CLI dashboard uses the [management ingress address](../runtime.md#hub-management-dashboard-address); this does not change connected Desktop profile endpoints.
+
+Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
 
 ## Connected Claude Desktop profiles
 
