@@ -139,6 +139,7 @@ for it; see [`AGENTS.md`](AGENTS.md).
 | Source path | Why |
 | --- | --- |
 | `src/bridge.ts` | no doc names this file; it is the legacy adapter bridge entry and its behavior is described under the adapter registry without a path reference |
+| `src/bridge/` | no doc names this directory; it holds the leaves moved out of the src/bridge.ts facade and inherits the same adapter-registry description the facade has |
 | `src/quota/` | no doc names a path here; quota evidence is described in providers/openai-tiers.md in prose only |
 | `src/service-manager-probe.ts` | no doc names this file; service probing is described in ops/service-and-sidecars.md without a path reference |
 | `src/sidecar/` | no doc names a path here; ops/service-and-sidecars.md describes sidecar behavior in prose only |
