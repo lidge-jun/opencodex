@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface OcxTool {
   name: string;
   description: string;
@@ -26,9 +28,116 @@ export interface OcxTool {
  * "<namespace>__<name>" so they survive the chat-completions function-tool format;
  * the proxy maps this back to {namespace, name} on the return trip (Codex routes MCP
  * calls by an explicit `namespace` field, not by parsing the name).
+ *
+ * Strict gateways bound function names (Command Code's AI gateway rejects `name` over
+ * 64 characters — a real case is
+ * "mcp__codex_apps__safety_settings___prepare_parental_control_update", 65). Flattened
+ * names past the bound get a deterministic, reversible bounded alias instead: the
+ * longest prefix that fits plus a 12-hex sha256 digest of the native identity, so the
+ * alias is stable across restarts and the tool bridge maps restore the client's own
+ * {namespace, name} on the return trip. The digest is derived from the identity alone
+ * (never declaration order), and aliases are memoized per native identity.
  */
+const TOOL_NAME_WIRE_LIMIT = 64;
+const BOUNDED_ALIAS_DIGEST_CHARS = 12;
+const BOUNDED_ALIAS_SUFFIX_LENGTH = BOUNDED_ALIAS_DIGEST_CHARS + 1;
+// Safety valve for pathologically dynamic catalogs: past this many claimed wire names the
+// registries reset and identities re-derive. Derivation is a pure digest of the identity,
+// so a reset only changes an alias when a genuine digest collision reorders the claim —
+// never on ordinary restarts or catalog refreshes.
+const BOUNDED_ALIAS_REGISTRY_LIMIT = 8192;
+
+// Every wire name handed out — canonical and bounded alike — is claimed by exactly one
+// native identity. Two-way claiming is what makes the alias safe: a bounded alias can
+// never shadow another tool's plain spelling (or be shadowed by it) and end up
+// authorizing a call against the wrong tool.
+const wireNameOwners = new Map<string, string>();
+const boundedAliasByNative = new Map<string, string>();
+
+/**
+ * Identity key of a native (namespace, name) pair. Doubles as the alias digest input and
+ * the ownership value in the wire-name claim registry.
+ */
+function nativeKeyOf(namespace: string | undefined, name: string): string {
+  return `${namespace ?? ""}\u0000${name}`;
+}
+
+/**
+ * Claim a wire name for a native identity. Returns false when a DIFFERENT identity
+ * already holds the name, so the caller must derive another spelling instead of
+ * shadowing it.
+ */
+function claimWireName(wireName: string, nativeKey: string): boolean {
+  const owner = wireNameOwners.get(wireName);
+  if (owner === undefined) {
+    if (wireNameOwners.size >= BOUNDED_ALIAS_REGISTRY_LIMIT) {
+      wireNameOwners.clear();
+      boundedAliasByNative.clear();
+    }
+    wireNameOwners.set(wireName, nativeKey);
+    return true;
+  }
+  return owner === nativeKey;
+}
+
+/**
+ * Bounded wire alias for one native identity: the longest fitting prefix of the flat
+ * name plus a 12-hex sha256 digest keyed by the identity and the collision attempt.
+ * Memoized per identity; derivation is a pure digest, so aliases survive process
+ * restarts unchanged.
+ */
+function boundedToolWireAlias(nativeKey: string, flat: string): string {
+  const memo = boundedAliasByNative.get(nativeKey);
+  if (memo !== undefined) return memo;
+  for (let attempt = 0; ; attempt += 1) {
+    const digest = createHash("sha256")
+      .update(`${nativeKey}\0${attempt}`)
+      .digest("hex")
+      .slice(0, BOUNDED_ALIAS_DIGEST_CHARS);
+    const candidate =
+      `${flat.slice(0, TOOL_NAME_WIRE_LIMIT - BOUNDED_ALIAS_SUFFIX_LENGTH)}_${digest}`;
+    if (!claimWireName(candidate, nativeKey)) continue;
+    boundedAliasByNative.set(nativeKey, candidate);
+    return candidate;
+  }
+}
+
 export function namespacedToolName(namespace: string | undefined, name: string): string {
-  return namespace ? `${namespace}__${name}` : name;
+  const flat = namespace ? `${namespace}__${name}` : name;
+  const nativeKey = nativeKeyOf(namespace, name);
+  if (flat.length <= TOOL_NAME_WIRE_LIMIT) {
+    // A canonical that collides with an already-allocated bounded alias is re-aliased
+    // instead of shadowing it. In the normal request flow `reserveToolWireNames` ran first,
+    // so this path never triggers and in-limit names keep their plain spelling.
+    if (claimWireName(flat, nativeKey)) return flat;
+    return boundedToolWireAlias(nativeKey, flat);
+  }
+  return boundedToolWireAlias(nativeKey, flat);
+}
+
+/**
+ * Pass-one wire-name reservation for a complete request catalog: every in-limit canonical
+ * name is claimed first, then bounded aliases for over-limit identities are allocated in
+ * stable identity (nativeKey) order. Call once per parsed request before any wire name is
+ * derived; afterwards `namespacedToolName`/`dottedToolName` memo-hits, so the identity→wire
+ * mapping never depends on the order later callers touch the tools in (#4679 review).
+ */
+export function reserveToolWireNames(tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined): void {
+  if (!tools || tools.length === 0) return;
+  const overLimit: { nativeKey: string; flat: string }[] = [];
+  for (const tool of tools) {
+    if (!tool || typeof tool.name !== "string" || tool.name.length === 0) continue;
+    const flat = tool.namespace ? `${tool.namespace}__${tool.name}` : tool.name;
+    if (flat.length <= TOOL_NAME_WIRE_LIMIT) {
+      claimWireName(flat, nativeKeyOf(tool.namespace, tool.name));
+      continue;
+    }
+    overLimit.push({ nativeKey: nativeKeyOf(tool.namespace, tool.name), flat });
+  }
+  overLimit.sort((left, right) => (left.nativeKey < right.nativeKey ? -1 : left.nativeKey > right.nativeKey ? 1 : 0));
+  for (const entry of overLimit) {
+    if (!boundedAliasByNative.has(entry.nativeKey)) boundedToolWireAlias(entry.nativeKey, entry.flat);
+  }
 }
 
 /**
@@ -39,7 +148,15 @@ export function namespacedToolName(namespace: string | undefined, name: string):
  * (mirroring the second entry of `toolChoiceAliases`). See #3402.
  */
 export function dottedToolName(namespace: string | undefined, name: string): string {
-  return namespace ? `${namespace}.${name}` : name;
+  if (!namespace) return name;
+  const canonical = `${namespace}__${name}`;
+  // A bounded alias has no dotted spelling: it is already at the wire limit, so re-spelling
+  // it with a dot would hand the model a name the gateway rejects. The provider only ever
+  // sees — and can only echo — the alias itself.
+  if (canonical.length > TOOL_NAME_WIRE_LIMIT) {
+    return boundedToolWireAlias(nativeKeyOf(namespace, name), canonical);
+  }
+  return `${namespace}.${name}`;
 }
 
 /**
@@ -142,7 +259,10 @@ export function declaresCodeModeExec(declared: ReadonlySet<string> | undefined):
 
 export function toolChoiceAliases(tool: Pick<OcxTool, "namespace" | "name">): string[] {
   const wireName = namespacedToolName(tool.namespace, tool.name);
-  return tool.namespace ? [wireName, dottedToolName(tool.namespace, tool.name)] : [wireName];
+  if (!tool.namespace) return [wireName];
+  // A bounded alias has no distinct dotted spelling, so the two spellings collapse into one.
+  const dotted = dottedToolName(tool.namespace, tool.name);
+  return dotted === wireName ? [wireName] : [wireName, dotted];
 }
 
 function sameToolIdentity(

@@ -11,7 +11,7 @@ import type {
   OcxToolCall,
   OcxReasoningReplayScopeRef,
 } from "../types";
-import { createToolChoiceResolver, namespacedToolName } from "../types";
+import { createToolChoiceResolver, namespacedToolName, reserveToolWireNames } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
@@ -511,6 +511,10 @@ export function parseRequest(
     messages,
     ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
   };
+
+  // Reserve the whole catalog's wire names up front so bounded-alias allocation never
+  // depends on the order later surfaces touch the tools in (#4679 review).
+  reserveToolWireNames(mergedTools);
 
   const options: OcxRequestOptions = {};
   if (data.max_output_tokens !== undefined) options.maxOutputTokens = data.max_output_tokens;
