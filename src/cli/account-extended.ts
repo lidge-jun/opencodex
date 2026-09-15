@@ -941,7 +941,11 @@ async function poolSetting(
         const thresholdSummary = strategy === "round-robin"
           ? "threshold not used"
           : autoSwitchThreshold > 0
-          ? (strategy === "fill-first" ? `drain at ${autoSwitchThreshold}%` : `switch at ${autoSwitchThreshold}%`)
+          ? (strategy === "fill-first"
+              ? `drain at ${autoSwitchThreshold}%`
+              : strategy === "reset-first"
+              ? `nearest reset below ${autoSwitchThreshold}%`
+              : `switch at ${autoSwitchThreshold}%`)
           : "proactive switching off";
         console.log(`${name}: ${label} is ${String(strategy)} (${thresholdSummary})`);
       } else {

@@ -13,6 +13,9 @@ import {
 import AccountPoolStrategyControls from "./AccountPoolStrategyControls";
 import type { CodexAccountLoadObserver } from "../hooks/useCodexAccountPool";
 
+/**
+ * Extract normalized strategy, sticky limit, and optional autoSwitchThreshold from an active-response payload.
+ */
 function strategyFieldsFromActive(value: unknown): {
   strategy: AccountPoolStrategy;
   stickyLimit: number;

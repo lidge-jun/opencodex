@@ -1471,6 +1471,7 @@ export const de: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "Rotationsstrategie konnte nicht gespeichert werden.",
   "accountPool.switchAtThreshold": "Wechsel bei {threshold}%",
   "accountPool.drainAtThreshold": "Entleeren bei {threshold}%",
+  "accountPool.resetBelowThreshold": "nächster Reset unter {threshold}%",
   "accountPool.thresholdNotUsed": "Schwelle nicht verwendet",
   "accountPool.proactiveSwitchingOff": "Proaktiver Wechsel aus",
 
