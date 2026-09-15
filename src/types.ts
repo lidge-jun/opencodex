@@ -4,6 +4,7 @@
 export type { OcxTool, OcxToolChoice } from "./types/tools";
 export {
   CODE_MODE_EXEC_TOOL_NAME,
+  CODE_MODE_HELPER_TOOL_NAMES,
   dottedToolName,
   namespacedToolName,
   normalizeDeclaredToolName,
