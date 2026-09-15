@@ -108,6 +108,11 @@ export type CodexWsStageRecord = Omit<CodexWsFailureStage, "requestBytes"> & {
 const codexWsStageByResponse = new WeakMap<Response, CodexWsStageRecord>();
 
 export function markCodexWsStage(response: Response, record: CodexWsStageRecord): void {
+  const current = codexWsStageByResponse.get(response);
+  if (current) {
+    Object.assign(current, record);
+    return;
+  }
   codexWsStageByResponse.set(response, record);
 }
 

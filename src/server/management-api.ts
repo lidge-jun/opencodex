@@ -144,6 +144,17 @@ async function handleQuotaResetRoutesOnDemand(ctx: ManagementContext): Promise<R
   return handleQuotaResetRoutes(ctx);
 }
 
+/**
+ * Lazy like the Lab and routing-profile handlers, and for the same recorded reason: this file is
+ * mounted for every dashboard request, so a static import would put the workflow-budget ledger
+ * on all of them.
+ */
+async function handleWorkflowBudgetRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/workflow-budget", true)) return null;
+  const { handleWorkflowBudgetRoutes } = await import("./management/workflow-budget-routes");
+  return handleWorkflowBudgetRoutes(ctx);
+}
+
 async function handleGrokCouponRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/grok/reset-coupons", true)) return null;
   const { handleGrokCouponRoutes } = await import("./management/grok-coupon-routes");
@@ -263,6 +274,7 @@ export async function handleManagementAPI(
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
+    ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleGrokCouponRoutesOnDemand(ctx))
     ??     (await handleRoutingAnalyticsRoutes(ctx))
     ??     (await handleRoutingProfileRoutesOnDemand(ctx))

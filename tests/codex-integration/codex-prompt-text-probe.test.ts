@@ -17,8 +17,10 @@ import {
   resetPromptTextProbeForTests,
   setPromptTextProbeCloseBarrierForTests,
   setPromptTextProbeCommandForTests,
+  setPromptTextProbeRuntimeForTests,
 } from "../../src/codex/prompt-text-probe";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { displayCodexRuntimePath } from "../../src/codex/runtime";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 const lifecycleRoots: string[] = [];
@@ -317,5 +319,87 @@ describe("prompt probe process lifecycle", () => {
     });
     expect((await probePromptText(2_000)).ok).toBe(true);
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+  });
+});
+
+describe("runtime resolution and failure classification", () => {
+  test("a runtime the shared resolver finds is spawned, not reported missing", async () => {
+    // Issue 4458: the old four-path POSIX check reported "codex binary not
+    // found" on a Windows machine where the Codex App had installed codex.exe
+    // under %LOCALAPPDATA%. The resolver's answer must reach the spawn.
+    const started = join(root(), "resolved-runtime.txt");
+    setPromptTextProbeRuntimeForTests({ command: process.execPath, source: "installed" });
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(started)}, "1"); process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+
+    const result = await probePromptText(2_000);
+
+    expect(result.ok).toBe(true);
+    expect(result.detail).not.toBe("codex binary not found");
+    // The reported command is redacted the same way every other runtime path in
+    // the product is, because this response is served over the management API.
+    expect(result.runtime).toEqual({
+      command: displayCodexRuntimePath(process.execPath),
+      source: "installed",
+    });
+    expect(existsSync(started)).toBe(true);
+  });
+
+  test("a resolver that finds nothing yields failure.kind program-not-found", async () => {
+    setPromptTextProbeRuntimeForTests(null);
+
+    const result = await probePromptText(2_000);
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toBe("codex binary not found");
+    expect(result.failure?.kind).toBe("program-not-found");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(0);
+  });
+
+  test("unparseable output from a zero-exit run yields output-invalid", async () => {
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", "process.stdout.write(\"this is not probe json\")"],
+    });
+
+    const result = await probePromptText(2_000);
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toBe("prompt output could not be parsed");
+    expect(result.failure?.kind).toBe("output-invalid");
+  });
+
+  test("an unknown-subcommand exit yields command-unsupported without echoing stderr", async () => {
+    // The sentinels are concatenated inside the child so they exist only on
+    // stderr: failure.detail legitimately echoes the attempted command line, so
+    // a marker written literally into argv would make these assertions vacuous.
+    const marker = "stderr-marker-do-not-echo";
+    const source = `process.stderr.write("error: " + "unrecognized" + " subcommand 'prompt-input' " + "stderr-marker-" + "do-not-echo"); process.exit(2);`;
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const result = await probePromptText(2_000);
+
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe("command-unsupported");
+    // stderr classifies the failure; it must never be served back in detail.
+    expect(result.failure?.detail).not.toContain(marker);
+    expect(result.failure?.detail).not.toContain("unrecognized subcommand");
+  });
+
+  test("an ordinary non-zero exit yields execution-failed without echoing stderr", async () => {
+    const marker = "stderr-marker-do-not-echo";
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stderr.write("boom " + "stderr-marker-" + "do-not-echo"); process.exit(1);`],
+    });
+
+    const result = await probePromptText(2_000);
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toBe("codex debug prompt-input failed");
+    expect(result.failure?.kind).toBe("execution-failed");
+    expect(result.failure?.detail).not.toContain(marker);
   });
 });

@@ -364,12 +364,20 @@ If a canonical ChatGPT forward continuation references expired or missing local 
 opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
 WebSocket client recognizes this error and can reconnect with its full retained context,
 including completed tool calls and their results, within its normal stream retry budget. An
-idle task therefore does not need a new task solely because the proxy's one-hour cache expired.
-The cache remains bounded; this does not extend retention or recover history the client no
-longer has. HTTP clients must handle the error explicitly and resend their full context without
-`previous_response_id`. Retrying only the same ID cannot recover missing state.
+idle task therefore does not need a new task solely because the proxy's replay cache expired.
+Replayed continuation state is retained for 24 hours and stays bounded by its existing memory,
+disk, and entry ceilings; this does not recover history the client no longer has. HTTP clients
+must handle the error explicitly and resend their full context without `previous_response_id`.
+Retrying only the same ID cannot recover missing state.
 
-The same recovery signal applies to routed Responses providers configured with
+The same recovery signal applies to every routed destination, because only the native Responses
+passthrough can answer a turn whose history this proxy lost — it forwards `previous_response_id`
+to a backend that stored the chain. Every other wire rebuilds the conversation from each request's
+own input, so a missed expansion there would otherwise send the current turn alone and silently
+lose the conversation. That includes the three that look stateful: Devin re-sends the whole
+conversation every turn, Cursor's checkpoint reference lives in the same expired store and falls
+back to full replay without it, and Kiro rebuilds its conversation history from the turns it was
+handed. It also applies to routed Responses providers configured with
 `statelessResponses: true`, and to routed requests where a custom tool was lowered to a function
 but a delta result has no local call to establish its original type. Full replay preserves the
 call, result, and reasoning together; opencodex does not guess the result type or drop it.

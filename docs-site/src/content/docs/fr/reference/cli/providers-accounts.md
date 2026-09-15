@@ -321,6 +321,8 @@ ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
 
+En cas de succès, `ocx account main reauth --device --no-wait --json` écrit un seul objet JSON sur stdout, sans la ligne destinée à la lecture humaine `follow up:`. Utilisez son `flowId` avec `ocx account main reauth status --flow <id> --json` pour suivre la progression.
+
 Chaque commande de mutation rapporte le `CODEX_HOME` effectif canonique renvoyé par le proxy en cours d'exécution.
 Ce chemin peut différer du `CODEX_HOME` de l'appelant ; les commandes qui prennent en charge JSON exposent le même
 valeur comme `effectiveCodexHome`.
