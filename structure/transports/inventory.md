@@ -11,6 +11,8 @@ changes translated message placement only; endpoint selection and transport stay
 
 Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314).
 
+[Anthropic seed image metadata](../runtime.md#capability-aware-image-admission) supplies missing capability evidence; transport selection and image wire handling remain unchanged.
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport

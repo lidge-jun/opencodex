@@ -408,6 +408,12 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 
 ## Capability-aware image admission
 
+The `anthropic` OAuth and `anthropic-apikey` presets in `src/providers/registry/entries-core.ts`
+declare `modelInputModalities: ["text", "image"]` per model for the nine Claude seeds in
+`src/providers/registry/model-seeds.ts`. Existing enrichment fills missing entries while preserving
+explicit operator overrides; unknown models receive no new declaration. Client eligibility filters
+and Anthropic image wire handling remain unchanged.
+
 `src/vision/plan.ts` prevents raw image bytes from reaching any target whose effective capability is positively known to exclude image input. Evidence from the resolved runtime provider and explicit operator declarations takes precedence, followed by backend-specific/registry/vendor metadata. A proven text-only target is preprocessed through the configured Vision Sidecar; a positively image-capable target receives the image directly. Genuinely unknown custom models retain the existing compatibility path rather than being guessed text-only.
 
 Canonical ChatGPT Codex forwarding uses the generated `openai-codex` capability bundle rather than the public `openai` bundle. This matters when the two backends differ: for example, the vendored metadata records `gpt-5.3-codex-spark` as text-only on `openai-codex` while the public OpenAI row lists image input. The native Chat fast path and web-search image verbalization consume the same effective-capability decision.
