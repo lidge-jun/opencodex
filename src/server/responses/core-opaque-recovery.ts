@@ -1,0 +1,380 @@
+import { ENCRYPTED_FUNCTION_OUTPUT_REJECTION, upstreamErrorMessageFromPayload } from "../../lib/errors";
+import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isReasoningEffortRejection } from "../../providers/reasoning-metadata";
+import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import type { OcxParsedRequest } from "../../types";
+import type { RequestLogContext } from "../request-log";
+import type { AttemptRecoveryKind } from "../../usage/log";
+import { rememberReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
+
+export const OPAQUE_RESPONSES_INPUT_TYPES = new Set([
+  "reasoning",
+  "compaction",
+  "compaction_summary",
+  "context_compaction",
+]);
+
+export const FUNCTION_OUTPUT_TYPES = new Set(["function_call_output", "custom_tool_call_output"]);
+
+// codex-app subagent results replay as agent_message items whose content parts may carry
+// backend-minted encrypted_content; the ChatGPT backend decrypts them in its function-output
+// path, so a cross-identity replay of those parts produces ENCRYPTED_FUNCTION_OUTPUT_REJECTION.
+export const AGENT_MESSAGE_TYPE = "agent_message";
+
+
+export function encryptedFunctionOutputParts(output: unknown): boolean {
+  return Array.isArray(output) && output.some(part => (
+    part !== null
+    && typeof part === "object"
+    && !Array.isArray(part)
+    && (part as { type?: unknown }).type === "encrypted_content"
+    && typeof (part as { encrypted_content?: unknown }).encrypted_content === "string"
+    && (part as { encrypted_content: string }).encrypted_content.length > 0
+  ));
+}
+
+
+export function outboundResponsesInput(bodyText: string | undefined): unknown[] | undefined {
+  if (!bodyText) return undefined;
+  try {
+    const body = JSON.parse(bodyText) as unknown;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+    const input = (body as { input?: unknown }).input;
+    return Array.isArray(input) ? input : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+
+export function outboundResponsesBodyCarriesEncryptedFunctionOutput(bodyText: string | undefined): boolean {
+  const input = outboundResponsesInput(bodyText);
+  if (!input) return false;
+  return input.some(item => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
+    const candidate = item as { type?: unknown; output?: unknown; content?: unknown };
+    const type = String(candidate.type ?? "");
+    if (FUNCTION_OUTPUT_TYPES.has(type) && encryptedFunctionOutputParts(candidate.output)) return true;
+    return type === AGENT_MESSAGE_TYPE && encryptedFunctionOutputParts(candidate.content);
+  });
+}
+
+
+export function outboundResponsesBodyCarriesOpaqueBlob(bodyText: string | undefined): boolean {
+  const input = outboundResponsesInput(bodyText);
+  if (!input) return false;
+  return input.some(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const candidate = item as { type?: unknown; encrypted_content?: unknown; output?: unknown };
+    if (
+      typeof candidate.type === "string"
+      && OPAQUE_RESPONSES_INPUT_TYPES.has(candidate.type)
+      && typeof candidate.encrypted_content === "string"
+      && candidate.encrypted_content.length > 0
+    ) return true;
+    if (
+      typeof candidate.type === "string"
+      && FUNCTION_OUTPUT_TYPES.has(candidate.type)
+      && encryptedFunctionOutputParts(candidate.output)
+    ) return true;
+    return candidate.type === AGENT_MESSAGE_TYPE
+      && encryptedFunctionOutputParts((candidate as { content?: unknown }).content);
+  });
+}
+
+
+export function isEncryptedFunctionOutputRejection(bodyText: string): boolean {
+  if (bodyText.trim() === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
+  try {
+    const payload = JSON.parse(bodyText) as unknown;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const record = payload as { detail?: unknown; message?: unknown; error?: unknown };
+    if (record.detail === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
+    if (record.message === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
+    if (record.error === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
+    return record.error !== null
+      && typeof record.error === "object"
+      && !Array.isArray(record.error)
+      && (record.error as { message?: unknown }).message === ENCRYPTED_FUNCTION_OUTPUT_REJECTION;
+  } catch {
+    return false;
+  }
+}
+
+
+/**
+ * #4469: reasoning encrypted_content is minted per caller identity, so replaying it under a
+ * different caller is rejected with "reasoning `encrypted_content` was not issued to this
+ * caller". Substring checks tolerate the optional backticks and a leading or trailing
+ * sentence, while the "was not issued to this caller" anchor plus an encrypted-content or
+ * reasoning subject keep unrelated invalid_request_error prose from gaining a hidden resend.
+ */
+export function isReasoningBlobCallerMismatchMessage(message: string): boolean {
+  if (!message.includes("was not issued to this caller")) return false;
+  return message.includes("encrypted_content") || message.includes("reasoning");
+}
+
+
+export function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
+  if (isEncryptedFunctionOutputRejection(bodyText)) return true;
+  try {
+    if (upstreamErrorMessageFromPayload(JSON.parse(bodyText) as unknown) === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) {
+      return true;
+    }
+  } catch {
+    /* invalid JSON bodies fall through to the exact nested envelope checks */
+  }
+  try {
+    const payload = JSON.parse(bodyText) as unknown;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const record = payload as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
+
+    if (record.error && typeof record.error === "object" && !Array.isArray(record.error)) {
+      const error = record.error as { type?: unknown; code?: unknown; message?: unknown };
+      if (error.type === "invalid_request_error") {
+        if (error.code === "invalid_encrypted_content") return true;
+        if (
+          (error.code === null || error.code === undefined)
+          && typeof error.message === "string"
+          && error.message.startsWith("The encrypted content ")
+          && error.message.endsWith(
+            " could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+          )
+        ) return true;
+        // #4469: the caller-mismatch wording arrives without a dedicated code, so the
+        // message itself is the identity. It is not gated on code being null — the upstream
+        // may attach a generic code — because the anchored phrase is already specific.
+        if (typeof error.message === "string" && isReasoningBlobCallerMismatchMessage(error.message)) {
+          return true;
+        }
+      }
+    }
+
+    // The flat stream-error envelope carries type/message at the top level rather than under
+    // an error object; the same anchored identity applies there.
+    if (
+      record.type === "invalid_request_error"
+      && typeof record.message === "string"
+      && isReasoningBlobCallerMismatchMessage(record.message)
+    ) return true;
+
+    if (record.code !== "invalid-argument" || typeof record.error !== "string") return false;
+    return record.error.startsWith("Could not decode the compaction blob")
+      || record.error.startsWith("Could not decrypt the provided encrypted_content");
+  } catch {
+    return false;
+  }
+}
+
+
+/**
+ * Whether an upstream Responses 4xx authoritatively rejected opaque replay state.
+ *
+ * The outbound-body check is intentional: the inbound transcript may contain a proxy envelope or
+ * compaction blob that the adapter already lowered, in which case a replay would be byte-identical.
+ * OpenAI usually exposes a dedicated nested code; ChatGPT also emits one exact code-less
+ * unverifiable-ciphertext message, and #4469 added the anchored caller-mismatch wording for
+ * reasoning blobs minted under a different caller. xAI's code is generic, so its two concrete
+ * decoder error identities are also required. Unrelated error prose must never gain a hidden resend.
+ */
+export function shouldAttemptOpaqueBlobRecovery(args: {
+  status: number;
+  adapterName: string;
+  outboundBody?: string;
+  errorBody: string;
+  alreadyAttempted: boolean;
+}): boolean {
+  const acceptedStatus = (args.status >= 400 && args.status < 500)
+    || (
+      args.status === 502
+      && outboundResponsesBodyCarriesEncryptedFunctionOutput(args.outboundBody)
+      && isEncryptedFunctionOutputRejection(args.errorBody)
+    );
+  return acceptedStatus
+    && args.adapterName === "openai-responses"
+    && !args.alreadyAttempted
+    && outboundResponsesBodyCarriesOpaqueBlob(args.outboundBody)
+    && isSelfIdentifiedOpaqueBlobRejection(args.errorBody);
+}
+
+
+/**
+ * Peek the upstream error body for the reasoning-effort downgrade. Only 400/403 are considered
+ * and the body must be complete and display-safe, the same contract the other rejection peeks
+ * use. The match is deliberately narrow: the upstream has to name reasoning effort, so an
+ * unrelated 400 never triggers a replay.
+ */
+export async function reasoningEffortRejectionText(
+  response: Response,
+  alreadyAttempted: boolean,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (alreadyAttempted) return undefined;
+  if (response.status !== 400 && response.status !== 403) return undefined;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    if (!body.displaySafe || body.truncated) return undefined;
+    return isReasoningEffortRejection(body.text) ? body.text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+
+export async function opaqueBlobRejectionBodyForRecovery(
+  response: Response,
+  outboundBody: string | undefined,
+  adapterName: string,
+  alreadyAttempted: boolean,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (
+    isNonReplayableResponse(response)
+    || response.status < 400
+    || (response.status >= 500 && response.status !== 502)
+    || adapterName !== "openai-responses"
+    || alreadyAttempted
+    || !outboundResponsesBodyCarriesOpaqueBlob(outboundBody)
+  ) return undefined;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    return body.displaySafe && !body.truncated ? body.text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+
+/**
+ * Backoff for the single exact-request replay after a canonical Console upload rejection.
+ */
+export const CONSOLE_GO_UPLOAD_RETRY_DELAY_MS = 800;
+
+
+/**
+ * Peek the upstream error body for the Console Go transient-400 recovery. Only a complete,
+ * display-safe body may drive a retry decision (same contract as
+ * opaqueBlobRejectionBodyForRecovery), and reading a clone leaves the original response intact
+ * for the caller's own error surface when no retry is taken.
+ */
+export async function consoleGoUploadRejectionBody(
+  response: Response,
+  alreadyAttempted: boolean,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (isNonReplayableResponse(response) || response.status !== 400 || alreadyAttempted) return undefined;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    return body.displaySafe && !body.truncated ? body.text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+
+export function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
+  parsed._stripReasoningEncryptedContent = true;
+  const rawBody = parsed._rawBody;
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return;
+  const input = (rawBody as { input?: unknown }).input;
+  if (!Array.isArray(input)) return;
+  const stripEncryptedParts = (parts: unknown[]): unknown[] => {
+    let changed = false;
+    const stripped = parts.map(part => {
+      if (
+        part !== null
+        && typeof part === "object"
+        && !Array.isArray(part)
+        && (part as { type?: unknown }).type === "encrypted_content"
+        && typeof (part as { encrypted_content?: unknown }).encrypted_content === "string"
+        && (part as { encrypted_content: string }).encrypted_content.length > 0
+      ) {
+        changed = true;
+        return { type: "input_text", text: "[encrypted content omitted]" };
+      }
+      return part;
+    });
+    return changed ? stripped : parts;
+  };
+  const strippedInput = input.map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const record = item as Record<string, unknown>;
+    const type = String(record.type ?? "");
+    if (FUNCTION_OUTPUT_TYPES.has(type) && Array.isArray(record.output)) {
+      const output = stripEncryptedParts(record.output);
+      return output !== record.output ? { ...record, output } : item;
+    }
+    if (type === AGENT_MESSAGE_TYPE && Array.isArray(record.content)) {
+      const content = stripEncryptedParts(record.content);
+      return content !== record.content ? { ...record, content } : item;
+    }
+    return item;
+  });
+  Object.assign(rawBody, { input: strippedInput });
+}
+
+
+export function resetStreamedOpaqueBlobLogContext(logCtx: RequestLogContext): void {
+  delete logCtx.upstreamError;
+  delete logCtx.terminalHttpStatus;
+  delete logCtx.terminalErrorCode;
+  delete logCtx.terminalIncompleteReason;
+}
+
+
+export type OpaqueBlobRecoveryGuard = { attempted: boolean };
+
+
+export type OpaqueBlobRecoveryResult =
+  | { kind: "skipped" }
+  | { kind: "recovered"; response: Response }
+  | { kind: "failed"; response: Response };
+
+
+export async function attemptOpaqueBlobRecovery(
+  args: {
+    response: Response;
+    outboundBody?: string;
+    adapterName: string;
+    parsed: OcxParsedRequest;
+    guard: OpaqueBlobRecoveryGuard;
+    signal: AbortSignal;
+  },
+  rebuild: (kind: AttemptRecoveryKind) => Promise<Response | { failed: Response }>,
+): Promise<OpaqueBlobRecoveryResult> {
+  const errorBody = await opaqueBlobRejectionBodyForRecovery(
+    args.response,
+    args.outboundBody,
+    args.adapterName,
+    args.guard.attempted,
+    args.signal,
+  );
+  if (errorBody === undefined || !shouldAttemptOpaqueBlobRecovery({
+    status: args.response.status,
+    adapterName: args.adapterName,
+    outboundBody: args.outboundBody,
+    errorBody,
+    alreadyAttempted: args.guard.attempted,
+  })) {
+    return { kind: "skipped" };
+  }
+
+  args.guard.attempted = true;
+  const rejectedScope = args.parsed._reasoningReplayScope
+    ? {
+        clientThreadId: args.parsed._reasoningReplayScope.clientThreadId,
+        ...(args.parsed._reasoningReplayScope.current
+          ? { current: { ...args.parsed._reasoningReplayScope.current } }
+          : {}),
+      }
+    : undefined;
+  prepareOpaqueBlobRecovery(args.parsed);
+  try { void args.response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+  const result = await rebuild("opaque-blob-rejection");
+  if (!("failed" in result) && result.ok) {
+    rememberReasoningReplayOpaqueBlobRejection(rejectedScope);
+  }
+  return "failed" in result
+    ? { kind: "failed", response: result.failed }
+    : { kind: "recovered", response: result };
+}

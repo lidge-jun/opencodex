@@ -481,6 +481,16 @@ export async function runUpdate(): Promise<void> {
         "    After the update: close the Codex app, run 'ocx doctor', then run 'ocx stop' once to retry.",
       );
     }
+    if (decision.reason === "history-deferred") {
+      // Not the same warning: nothing was restored here. Saying "history metadata is
+      // incomplete" would imply config and catalog came back, and an operator who
+      // believed that would not know a teardown is still owed.
+      console.warn(
+        "⚠️  The shared teardown was refused by the Codex history preflight and restored nothing.\n" +
+        "    Config, catalog, history and provenance were preserved, and the teardown receipt was kept.\n" +
+        "    The proxy is down, so the update continues; close the Codex app and run 'ocx stop' once afterwards to finish the restore.",
+      );
+    }
   }
 
   console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);

@@ -2,10 +2,10 @@
  * Retry guard for upstream fetches that die on stale pooled keep-alive sockets.
  *
  * chatgpt.com (Cloudflare) closes idle keep-alive connections server-side; Bun's fetch pool
- * reuses the half-closed socket and the request write fails with ECONNRESET before any
- * response bytes arrive. Retrying on a fresh connection is safe for our replayable
- * (string-body) upstream requests, because fetch() rejects only before response headers —
- * a caught error here means no response was ever received.
+ * reuses the half-closed socket and a request can fail before response headers arrive.
+ * A pre-header rejection does not prove that the origin did not process the request.
+ * Mechanically reusable bytes do not make a model POST idempotent: an ambiguous reset
+ * becomes a terminal, non-replayable response unless the operation is explicitly safe.
  *
  * Deliberately narrow: timeouts, aborts, ECONNREFUSED/DNS/TLS failures, and HTTP error
  * statuses (returned as Response, never thrown) are NOT retried. Mid-stream SSE resets are
@@ -40,14 +40,39 @@ export function isNonReplayableResponse(response: Response): boolean {
 export const UPSTREAM_NO_RESPONSE_CODE = "upstream_no_response";
 /** Transport closed after the send, before any response event. */
 export const UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE = "upstream_closed_before_response";
+/**
+ * This proxy refused to replay a pre-header fetch rejection.
+ *
+ * Distinct from {@link UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE}, which the Codex WebSocket
+ * transport settles as a 502 after the create frame was already sent. Both are ambiguous,
+ * but only this one is a refusal this process made before any response existed, so it
+ * follows the send-budget precedent and answers 429: the Codex client is configured with
+ * `retry_429: false` and `retry_5xx: true` over four attempts, so a 5xx here multiplies
+ * the duplicate send the refusal exists to prevent. See
+ * structure/transports/responses.md#ambiguous-connection-reset-replay-boundary.
+ */
+export const UPSTREAM_RESET_REPLAY_REFUSED_CODE = "upstream_reset_replay_refused";
 const NON_REPLAYABLE_UPSTREAM_CODES: ReadonlySet<string> = new Set([
   UPSTREAM_NO_RESPONSE_CODE,
   UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 ]);
 
 export function isNonReplayableUpstreamCode(code: unknown): boolean {
   return typeof code === "string" && NON_REPLAYABLE_UPSTREAM_CODES.has(code);
 }
+
+/**
+ * True for the one non-replayable code this proxy owns end to end. The status it carries is
+ * a local decision, so a re-wrapping formatter must restate it rather than inherit the
+ * caller's upstream-shaped status.
+ */
+export function isReplayRefusalCode(code: unknown): boolean {
+  return code === UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+}
+
+/** Client-facing status for {@link UPSTREAM_RESET_REPLAY_REFUSED_CODE}. */
+export const REPLAY_REFUSED_STATUS = 429;
 
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
 const RESET_RETRY_MAX_ATTEMPTS = 3;
@@ -139,7 +164,11 @@ export interface RetryBackoffOptions {
    * first instead of silently lengthening every adapter's backoff.
    */
   retryAfterIsLowerBound?: boolean;
-  /** Hard ceiling for an honoured `Retry-After`, so an hour-long wait cannot park a request. */
+  /**
+   * The wait deadline a caller applies to an honoured `Retry-After`. The delay itself is
+   * never shortened: an instruction longer than the deadline is a reason to END with the
+   * upstream answer, not to send early. Kept for callers that still pass it.
+   */
   retryAfterCeilingMs?: number;
 }
 
@@ -305,10 +334,10 @@ export function retryBackoffDelayMs(attempt: number, opts: RetryBackoffOptions):
   // A provider that names a wait is stating when it will serve again; sending earlier is a
   // request we already know will be refused, and refusing it twice is the retry storm the
   // header exists to prevent. The local maximum bounds our OWN exponential backoff and has no
-  // business shortening someone else's instruction. The ceiling is separate: it stops an
-  // hour-long Retry-After from parking a request forever.
-  const ceiling = opts.retryAfterCeilingMs ?? RETRY_AFTER_CEILING_MS;
-  return Math.min(Math.max(retryAfter, jittered), ceiling);
+  // business shortening someone else's instruction, so the instruction is returned in full.
+  // Whether the request can afford to wait that long is the caller's deadline decision --
+  // fetchWithTransientRetry ends with the upstream answer rather than retrying early.
+  return Math.max(retryAfter, jittered);
 }
 
 export function cancelResponseBodyBestEffort(res: Response): void {
@@ -348,22 +377,42 @@ export async function fetchWithAttemptDeadline(
 }
 
 export interface ResetRetryOptions {
+  /**
+   * Opt in only when repeating this operation cannot duplicate upstream effects.
+   * This permits reset retries, not extra sends: attempts and onSendsConsumed still
+   * bound and count every physical send. A string body is not replay-safety proof.
+   */
+  replaySafe?: boolean;
   abortSignal?: AbortSignal;
   /** Short host/path label for the retry warn log (no secrets/query strings). */
   label?: string;
   /** Total upstream sends allowed, including the first one. Not a per-layer retry count. */
   attempts?: number;
+  /**
+   * Reports how many upstream sends this call actually consumed, so a caller that spans
+   * several legs of one request (initial send, then a 429/account-recovery refetch) can
+   * keep them on ONE budget instead of handing each leg a fresh one.
+   *
+   * It lives on the RESET options, not on the transient ones, because every leg that falls
+   * back to reset-only retry -- the non-policy adapter initial send, and every
+   * `rebuildAndRefetch` recovery kind whose provider has no transient policy -- was not merely
+   * uncounted but UNCOUNTABLE: the callback existed on a type those call sites never reach.
+   */
+  onSendsConsumed?: (sends: number) => void;
 }
 
 export interface TransientRetryOptions extends ResetRetryOptions {
   /** Test seam: per-attempt slow budget override (defaults to TRANSIENT_RETRY_SLOW_ATTEMPT_MS). */
   slowAttemptMs?: number;
   /**
-   * Reports how many upstream sends this call actually consumed, so a caller that spans
-   * several legs of one request (initial send, then a 429/account-recovery refetch) can
-   * keep them on ONE budget instead of handing each leg a fresh one.
+   * How long this caller can wait on an honoured `Retry-After`, defaulting to
+   * {@link RETRY_AFTER_CEILING_MS}. It is a deadline, never a clamp: an instruction inside it
+   * is slept in full, and an instruction past it ends the call with the upstream answer and
+   * its `Retry-After` intact rather than sending early at a provider that already said it
+   * would refuse. A caller with a shorter budget than a minute says so and is not parked past
+   * it; a caller that can genuinely wait longer says so and is not cut short.
    */
-  onSendsConsumed?: (sends: number) => void;
+  retryAfterCeilingMs?: number;
 }
 
 export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
@@ -424,9 +473,9 @@ export function applyUpstreamRecoveryInit<T extends RequestInit>(
 }
 
 /**
- * Run `doFetch`, retrying only connection-reset-shaped rejections (see
- * isConnectionResetError) with jittered backoff. The caller's thunk must be replay-safe
- * (string body); every retry is logged so persistent resets stay visible.
+ * Run `doFetch` within one send budget. Connection-reset-shaped rejections are
+ * terminal by default; only an explicitly replay-safe operation receives reset retries
+ * with jittered backoff. HTTP responses retain the caller's existing retry policy.
  */
 export async function fetchWithResetRetry(
   doFetch: ReplayableFetch,
@@ -442,6 +491,10 @@ export async function fetchWithResetRetry(
   let sawReset = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
+    // Reported before the await, one physical send at a time: a send that rejects has still
+    // been made, and this helper leaves through four exits (return, reset give-up, non-reset
+    // rethrow, abort), so a per-send report is the only shape that is correct on all of them.
+    opts.onSendsConsumed?.(1);
     try {
       return await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
     } catch (err) {
@@ -452,6 +505,19 @@ export async function fetchWithResetRetry(
         // downgraded to the pre-connection neutral class (#914 review).
         if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
         throw err;
+      }
+      if (opts.replaySafe !== true) {
+        // Return evidence instead of throwing a generic transport error: outer catches
+        // otherwise turn it into a replayable 502 and a combo/account recovery resends it.
+        // The WeakSet protects in-process recovery; the code survives JSON re-wrapping.
+        // Never expose the raw exception, which can contain credentials or request data.
+        const response = new Response(JSON.stringify({ error: {
+          type: "upstream_error",
+          code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+          message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
+        } }), { status: REPLAY_REFUSED_STATUS, headers: { "content-type": "application/json" } });
+        markResponseNonReplayable(response);
+        return response;
       }
       if (attempt === attempts - 1) throw err;
       sawReset = true;
@@ -469,9 +535,9 @@ export async function fetchWithResetRetry(
 }
 
 /**
- * fetchWithResetRetry plus a transient-5xx status retry layer, PRE-STREAM only: a
- * returned Response has by definition not been relayed to the client yet, so replaying
- * the (string-body) request is safe. The failed attempt's body is cancelled before the
+ * fetchWithResetRetry plus the caller-selected transient-5xx policy, PRE-STREAM only.
+ * A received HTTP error follows that policy; an ambiguous reset's non-replayable
+ * verdict always stops it. The failed attempt's body is cancelled before the
  * retry; every returned response (ok, non-transient, aborted, slow, exhausted) keeps
  * its body intact. Honors Retry-After via retryBackoffDelayMs.
  *
@@ -504,13 +570,22 @@ export async function fetchWithTransientRetry(
   // more send -- the loop condition alone was never enough, because every later recovery leg
   // called this helper again and the floor funded each of them.
   const remaining = () => Math.max(0, budget - sent);
+  // The inner reset layer now has its own `onSendsConsumed`, and these are the same physical
+  // sends `countedFetch` already counts. Forwarding the reporter down the `remaining()` path
+  // would report each of them twice, which is how a four-send cap becomes a two-send cap. One
+  // send is counted once, by the outermost layer that owns the budget.
+  const innerResetOptions = (): ResetRetryOptions => ({
+    ...opts,
+    attempts: remaining(),
+    onSendsConsumed: undefined,
+  });
   // Reported in `finally` rather than at each exit: this function returns from five places
   // and throws from one, and a caller sharing the budget across request legs must be told the
   // real count on every one of them.
   try {
   if (budget === 0) throw new SendBudgetExhaustedError(opts.label);
   let attemptStart = Date.now();
-  let res = await fetchWithResetRetry(countedFetch, { ...opts, attempts: remaining() });
+  let res = await fetchWithResetRetry(countedFetch, innerResetOptions());
   for (let attempt = 0; sent < budget; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
@@ -519,6 +594,19 @@ export async function fetchWithTransientRetry(
     // a response whose body we just cancelled.
     if (opts.abortSignal?.aborted) return res;
     if (Date.now() - attemptStart > slowAttemptMs) return res;
+    const instructedDelay = retryAfterDelayMs(res.headers);
+    // The deadline is the CALLER'S, not this module's default. Reading the constant directly
+    // broke it in both directions: a caller with a 30s budget slept the full 45s an upstream
+    // asked for, and a caller that could genuinely wait 120s was handed the error back for a
+    // 90s instruction it was willing to honour.
+    const waitDeadlineMs = opts.retryAfterCeilingMs ?? RETRY_AFTER_CEILING_MS;
+    if (instructedDelay !== undefined && instructedDelay > waitDeadlineMs) {
+      // Honouring the stated wait would park this request past the deadline it can commit
+      // to, and sleeping only up to the deadline is a send the provider already said it will
+      // refuse. End here instead: the caller receives the upstream answer with its
+      // Retry-After intact and applies its own policy, exactly as on the direct path.
+      return res;
+    }
     console.warn(
       `[upstream-retry] transient ${res.status}${opts.label ? ` (${opts.label})` : ""} — retrying (${sent + 1}/${budget})`,
     );
@@ -535,7 +623,7 @@ export async function fetchWithTransientRetry(
     attemptStart = Date.now();
     transientStatuses.push(res.status);
     try {
-      res = await fetchWithResetRetry(countedFetch, { ...opts, attempts: remaining() }, "transient-5xx");
+      res = await fetchWithResetRetry(countedFetch, innerResetOptions(), "transient-5xx");
     } catch (err) {
       // Keep the prior 5xx evidence attached: the origin already responded, so
       // this rejection is not pre-connection and must not classify as neutral.

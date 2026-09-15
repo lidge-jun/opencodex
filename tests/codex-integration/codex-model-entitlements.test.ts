@@ -6,6 +6,7 @@ import {
   ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS,
   availableAccountGatedNativeModels,
   cachedAvailableAccountGatedNativeModels,
+  cachedDeniedCodexAccountIdsForModel,
   codexModelEntitlementStateForAccount,
   composeGatedClientVersionFloorForTests,
   compareClientVersionsForTests,
@@ -45,6 +46,7 @@ const DAYBREAK = "gpt-daybreak-blue-latest";
 const SOL = "gpt-5.6-sol";
 const TERRA = "gpt-5.6-terra";
 const LUNA = "gpt-5.6-luna";
+const ASTRA = "gpt-6-astra";
 
 function credential(accountId: string): CodexModelEntitlementCredentialSnapshot {
   return {
@@ -1791,5 +1793,75 @@ describe("entitlement client version (#2886)", () => {
     // success TTL in place would pass an assertion about the flag alone.
     expect(await ask(1_000 + 15_001)).toBe(false);
     expect(fetches).toBe(2);
+  });
+});
+
+/**
+ * #4768. The flagships stay unconditionally visible, so their routing evidence has to have the
+ * opposite polarity from the account-gated set: only a CONFIRMED DENIAL counts, and it feeds an
+ * ordering preference rather than a refusal. These tests pin that polarity, because the failure
+ * mode of getting it wrong is #3022 -- a model disappearing from accounts that own it.
+ */
+describe("cached per-account denials for always-visible natives", () => {
+  test("an account whose confirmed roster omits the model is denied", () => {
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests("plus", [SOL, ASTRA], now, TEST_CLIENT_VERSION);
+    seedCodexModelEntitlementsForTests("free", ["gpt-5.5"], now, TEST_CLIENT_VERSION);
+
+    expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now) ?? [])]).toEqual(["free"]);
+  });
+
+  test("no evidence and no denial both answer undefined, never an empty set", () => {
+    const now = 1_800_000_000_000;
+    // Nothing cached at all.
+    expect(cachedDeniedCodexAccountIdsForModel(ASTRA, now)).toBeUndefined();
+
+    // Cached, confirmed, and granting: still undefined, so a caller cannot read "no denials"
+    // as "no candidates".
+    seedCodexModelEntitlementsForTests("plus", [ASTRA], now, TEST_CLIENT_VERSION);
+    expect(cachedDeniedCodexAccountIdsForModel(ASTRA, now)).toBeUndefined();
+  });
+
+  test("an expired entry is unknown rather than a denial", () => {
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests("free", ["gpt-5.5"], now, TEST_CLIENT_VERSION);
+
+    expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now) ?? [])]).toEqual(["free"]);
+    // Five-minute roster TTL. Past it the entry answers for a window that has closed.
+    expect(cachedDeniedCodexAccountIdsForModel(ASTRA, now + 5 * 60_000 + 1)).toBeUndefined();
+  });
+
+  /**
+   * Sol carries a measured minimum client version, so a roster fetched under an older client
+   * legitimately omits it without that being a denial. This is the #3022 guard, reached through
+   * the new reader: it must inherit the tri-state rule rather than restate a simpler one.
+   */
+  test("a roster fetched under too old a client is unknown, not denied", () => {
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests("free", ["gpt-5.5"], now, "0.143.0");
+
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+    // Astra has no measured minimum, so the same roster IS a denial for it. Asserted here so the
+    // test above proves the version rule rather than the roster simply being ignored.
+    expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now) ?? [])]).toEqual(["free"]);
+  });
+
+  test("a grant under one client version clears a denial recorded under another", () => {
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests("plus", ["gpt-5.5"], now, "0.143.0");
+    expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now) ?? [])]).toEqual(["plus"]);
+
+    seedCodexModelEntitlementsForTests("plus", [ASTRA], now, TEST_CLIENT_VERSION);
+    expect(cachedDeniedCodexAccountIdsForModel(ASTRA, now)).toBeUndefined();
+  });
+
+  test("a model outside the always-visible set is not this reader's business", () => {
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests("free", ["gpt-5.5"], now, TEST_CLIENT_VERSION);
+
+    // Daybreak is account-gated: it fails closed through the eligibility path instead.
+    expect(cachedDeniedCodexAccountIdsForModel(DAYBREAK, now)).toBeUndefined();
+    expect(cachedDeniedCodexAccountIdsForModel("gpt-5.5", now)).toBeUndefined();
+    expect(cachedDeniedCodexAccountIdsForModel(undefined, now)).toBeUndefined();
   });
 });

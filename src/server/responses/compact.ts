@@ -51,7 +51,9 @@ import {
   materializeCodexUpstreamAuthAsync,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  codexPoolAffinityKey,
   codexProbeLeaseId,
+  codexTransientProbeGrant,
   codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
   stripCodexRuntimeProviderFields,
@@ -68,6 +70,13 @@ import {
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
 import {
+  applyAccountChangeConversationStateScrub,
+  conversationStateBindingFromAuth,
+  accountChangeFileReferenceRefusal,
+  rememberServingConversationStateIssuer,
+  conversationCarriesUploadedFiles,
+} from "./account-change-state";
+import {
   TokenRefreshError,
   forceRefreshCodexPoolToken,
   readCodexAccountRecord,
@@ -76,6 +85,7 @@ import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
+  isNonReplayableResponse,
   SendBudgetExhaustedError,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   type UpstreamSendRecovery,
@@ -134,7 +144,6 @@ import {
   catalogModelSupportsServiceTier,
   finishRequestAttempt,
   inspectResponseLogJson,
-  noteAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
@@ -682,6 +691,13 @@ export async function handleResponsesCompact(
   // Combo-resolved targets skip native compact so failover can advance through the
   // combo target list when the picked model returns 429/5xx — the routed path below
   // dispatches through handleResponses → handleComboResponses with full failover.
+  //
+  // One holder for the WHOLE logical compact, declared above the native branch because the
+  // routed fallback below is not a different request: a native attempt that 404s, or a quota
+  // failure that hands off, continues here. The routed turn used to call handleResponses with
+  // no budget at all, so `handleResponsesInner` minted a fresh four after the native attempt
+  // had already spent some of the first one.
+  const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();
   if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider) && !accountGatedCompactWireModel && !route.combo) {
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
@@ -773,10 +789,32 @@ export async function handleResponsesCompact(
     // buildRequest, but the compact endpoint forwards directly. Apply the same sanitizer here
     // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
     const compactBody = sanitizeReasoningInputContent(compactBodyRaw) as typeof compactBodyRaw;
+    {
+      const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
+      if (binding) {
+        // Refused rather than scrubbed: an uploaded file is content the caller attached, not
+        // continuation state the turn can do without.
+        const refusal = accountChangeFileReferenceRefusal({
+          body: raw,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+        });
+        if (refusal) return refusal;
+        applyAccountChangeConversationStateScrub({
+          body: raw,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+          logCtx,
+        });
+        applyAccountChangeConversationStateScrub({
+          body: compactBody,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+          logCtx,
+        });
+      }
+    }
     const compactUrl = `${base}/responses/compact`;
-    // One holder for this logical compact, inherited by the handoff child so a second model
-    // does not start over with a fresh four.
-    const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();
     const compactTargetKey = `${route.providerName}|${route.modelId}|compact`;
     const actualCompactHostKey = upstreamHostHealthKey(
       route.providerName,
@@ -842,6 +880,7 @@ export async function handleResponsesCompact(
         // replacement (#2887). Also covers the replay's own second 401.
         ...(ctx.kind === "pool" ? { credentialGeneration: ctx.generation } : {}),
         probeQuotaScope: codexProbeQuotaScope(ctx),
+        transientProbe: codexTransientProbeGrant(ctx),
         writerGeneration: ctx.kind === "pool" || ctx.kind === "main-pool"
           ? ctx.writerGeneration
           : undefined,
@@ -1041,6 +1080,10 @@ export async function handleResponsesCompact(
     // — reporting exhausted retries while another pool account sat idle (#913).
     if (
       (upstream.status === 429 || upstream.status === 402)
+      // A replay refusal this proxy synthesized carries 429 for the client's benefit only.
+      // It is not pool quota evidence, and the alternate account below is another send of a
+      // compact turn that may already have been processed.
+      && !isNonReplayableResponse(upstream)
       && !storedPool401ReplayAttempted
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
@@ -1055,15 +1098,22 @@ export async function handleResponsesCompact(
       ].filter(Boolean);
       // Build the alternate COMPLETELY before cancelling the first body: if construction
       // throws, the first rejection is still intact and can be returned to the client.
-      const alternate = await resolveAlternateCompactContext({
-        req,
-        admission,
-        config,
-        route,
-        selectedModelId,
-        excludeAccountId: authCtx.accountId,
-        turnAdmissionLease,
-      });
+      // The same reasoning refuses an uploaded-file move here: no alternate can read a file the
+      // issuing account received, so which one is chosen is irrelevant and asking before the
+      // resolution costs nothing. It also reuses the guarantee the comment above depends on --
+      // the first body is still uncancelled -- so the client gets the original rejection rather
+      // than an inaccessible-file error from account B (#4710).
+      const alternate = conversationCarriesUploadedFiles(raw)
+        ? undefined
+        : await resolveAlternateCompactContext({
+          req,
+          admission,
+          config,
+          route,
+          selectedModelId,
+          excludeAccountId: authCtx.accountId,
+          turnAdmissionLease,
+        });
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
       // cancelling its body, and sending B are all observable side effects, and B's
@@ -1096,6 +1146,30 @@ export async function handleResponsesCompact(
         await upstream.body?.cancel().catch(() => undefined);
         outcomeCtx = alternate.authCtx;
         logCtx.accountLogLabel = codexAuthContextLogLabel(alternate.authCtx, config);
+        {
+          const binding = conversationStateBindingFromAuth(
+            alternate.authCtx,
+            (authCtx.kind === "pool" || authCtx.kind === "main-pool")
+              ? authCtx.affinityKey
+              : codexPoolAffinityKey(req.headers),
+          );
+          if (binding) {
+            applyAccountChangeConversationStateScrub({
+              body: raw,
+              bindingKey: binding.bindingKey,
+              servingAccountId: binding.accountId,
+              priorAccountId: authCtx.accountId,
+              logCtx,
+            });
+            applyAccountChangeConversationStateScrub({
+              body: compactBody,
+              bindingKey: binding.bindingKey,
+              servingAccountId: binding.accountId,
+              priorAccountId: authCtx.accountId,
+              logCtx,
+            });
+          }
+        }
         try {
           upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx);
         } catch (err) {
@@ -1142,8 +1216,14 @@ export async function handleResponsesCompact(
     const bufferedErrorText = buffered.ok
       ? ""
       : await buffered.clone().text().catch(() => "");
-    const explicitQuotaStatus = buffered.status === 429 || buffered.status === 402;
-    const bodyInferredQuota = !buffered.ok
+    // The client-facing 429 of a synthesized replay refusal says nothing about this
+    // account's quota. Pool accounting keeps reading it as the transport failure it is,
+    // which is also what it recorded before the status was corrected for the client.
+    const replayRefused = isNonReplayableResponse(upstream);
+    const explicitQuotaStatus = !replayRefused
+      && (buffered.status === 429 || buffered.status === 402);
+    const bodyInferredQuota = !replayRefused
+      && !buffered.ok
       && !explicitQuotaStatus
       && isRateLimitOrQuotaFailureMessage(bufferedErrorText);
     const quotaFailure = explicitQuotaStatus || bodyInferredQuota;
@@ -1156,13 +1236,18 @@ export async function handleResponsesCompact(
     // A body-confirmed quota failure can arrive behind a generic 5xx. Record it as
     // quota evidence; otherwise preserve the real upstream status so a local buffering
     // failure after a 200 cannot soft-avoid a healthy account or rotate a thread.
-    recordCompactPoolOutcome(outcomeCtx, bodyInferredQuota ? 429 : upstream.status, { retryAfter, resetAt });
+    recordCompactPoolOutcome(
+      outcomeCtx,
+      bodyInferredQuota ? 429 : replayRefused ? 502 : upstream.status,
+      { retryAfter, resetAt },
+    );
     // Lift usage and response metadata from the buffered upstream JSON into the
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.
     if (buffered.ok) {
       inspectResponseLogJson(logCtx, await buffered.clone().text());
       forgetCompactHandoffRoute(req);
+      rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
     } else if (quotaFailure && !storedPool401ReplayAttempted) {
       const fallbackModel = compactHandoffRoute(req, raw.model);
       if (fallbackModel && !req.signal.aborted) {
@@ -1223,7 +1308,10 @@ export async function handleResponsesCompact(
     body: JSON.stringify(internalBody),
   });
   linkRequestSessionLane(req, internalReq);
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, ...(admission ? { admission } : {}) });
+  // The routed compaction turn is a handoff inside the same logical request, so it draws the
+  // REMAINDER. Minting here is what let a native attempt spend three sends and the routed
+  // fallback spend four more.
+  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, ...(admission ? { admission } : {}) });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
   if (response.headers.get("content-type")?.includes("text/event-stream")) {

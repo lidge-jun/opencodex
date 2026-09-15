@@ -1,9 +1,16 @@
 # Model Catalog
 
-The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+Catalog discovery remains separate from the Responses final-route
+[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
-Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts.
+The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
+
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
+
+## Remote catalog HTTP proxy routing
+
+`src/codex/catalog/remote.ts` permits loopback HTTP only when Bun fetch has no effective HTTP proxy or a matching NO_PROXY bypass. Its local matcher follows [Bun fetch semantics](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/dotenv/env_loader.rs#L369), including non-empty lowercase-variable priority, ASCII whitespace, literal host/port comparison and bracket-preserving IPv6. It does not normalize URL-shaped bypass entries, paths, wildcard prefixes, trailing dots or Unicode whitespace, and leaves the broader WebSocket proxy grammar unchanged. It refuses before authentication headers and fetch with a content-free `insecure_http_refused` error. ALL_PROXY and HTTPS-only settings do not affect HTTP acquisition; HTTPS and existing redirect, size, validation and coordinated-installation contracts are preserved. `tests/codex-integration/catalog-remote-pull.test.ts` covers these routing and non-disclosure boundaries.
 
 ## Shared catalog
 
@@ -34,6 +41,8 @@ Shared parsing and streaming follow the [request-copy](transports/byte-accountin
   native rows from the output without rewriting the pristine backup or unrelated snapshots;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
 
+`src/codex/catalog/model-visibility.ts` also excludes models owned by disabled providers, including custom rows. `src/codex/catalog/routed-gather.ts` does not inherit provider configuration into custom rows while that provider is disabled.
+
 On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
 the rows being merged. This split is required because empty or partial provider discovery must
@@ -63,6 +72,11 @@ ordinary retained provider rows still receive the existing mock-tier policy. A p
 marker alone never grants this exemption. Both gather entry points, retained sync, management
 convergence and direct Codex model discovery use the same producer. The legacy runtime effort
 union clamp remains separate; it is not a per-model or per-client-version grammar oracle.
+Before combo derivation, an explicit custom-model context, modality, reasoning, or
+tool-mode declaration overlays the matching provider member in the private combo input map. This
+keeps a combo's advertised intersection aligned with the final custom row without changing the
+provider-native row or inventing capabilities for other models. Public custom-row materialization
+and routed-slug deduplication remain the final catalog owner's responsibility.
 Codex's native `ultra` mode is preserved and is not a literal API wire promise.
 When account selectors are enabled, the sync path may also observe exact, visible, API-supported
 OpenAI-family ids from Codex's user-owned catalog/cache. Only rows with native catalog provenance
@@ -134,6 +148,8 @@ removal markers. These presentation operations do not grant routing or account e
 > Decision record: [ADR-0021](decisions/ADR-0021-shared-catalog.md)
 
 ## Startup readiness
+
+When the desktop app is explicitly restarted to reload synchronized state, [process membership](runtime.md#codex-desktop-process-membership) is determined from its installation path; catalog model selectors do not identify restart targets.
 
 Each `startServer` invocation owns a private, one-shot readiness gate created before the listener
 binds. `handleStart` supplies its gate and transitions it only after the shared catalog sync and
@@ -230,10 +246,75 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   an omitted flag preserves the established behavior of a nonempty hand-written selector map.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
+- **A transient hold is probed half-open, never opened all at once.** While a bound account is
+  held for a 5xx streak, one in-flight probe may test it and every other request keeps the
+  remembered detour; the lease carries a deadline and a generation so a late answer from a
+  probe that already lost cannot overwrite a newer binding or failure state. When every
+  candidate is held the caller gets a typed withheld outcome, not a send. Recovery dispatches
+  (retries and probes, never a new request's initial send) sit under a pool-wide ratio ceiling
+  measured over a sliding window (`src/routing/probe-lease.ts`).
+
+  Where that reaches production, because a primitive nobody calls bounds nothing: the two
+  transient-hold branches of `resolveCodexAccountForThreadDetailed`
+  (`src/codex/routing.ts`) ask `resolveHeldAccountDispatch` what this request may do and
+  return a `withheld` resolution instead of selecting the failing account;
+  `resolveCodexAuthContext` (`src/codex/auth-context.ts`) turns that into
+  `CodexRecoveryWithheldError` before any upstream I/O, so a refused request reaches the
+  client as a 429 carrying the limiter's own change point in `Retry-After`. A granted probe
+  travels on the auth context, is settled by `recordCodexUpstreamOutcome` under the credential
+  generation the binding held, and is handed back by `releaseCodexAuthContextProbeLease` on
+  every path that never sends. The pool window observes demand at the initial passthrough send
+  and gates the alternate-account replay through `classifyPoolRecoveryDispatch`, which lives
+  with the window itself rather than in the transport: `src/server/responses/fetch-helpers.ts`
+  owns no routing policy and `tests/responses/responses-fetch-helpers-boundary.test.ts` pins
+  its runtime imports to three transport modules. Same-account transient retries remain bounded
+  by the per-request send budget alone: refusing inside the retry helper's thunk would surface a
+  pool refusal as a 502 transport failure and record a transient outcome against an account
+  that was never asked, which is worse than the gap.
+
+  This hold and the quota-cooldown probe (`src/codex/routing/probe-lease.ts`) are different
+  domains one directory apart. They cannot both describe an account at once, because
+  `isTransientOnlyAffinityBlock` refuses to recognise a transient hold on an account carrying
+  quota health -- which is why no request ever pays two recovery permits for one send.
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the
   generation it started from still holds; a lost race raises a generation-conflict error rather
   than overwriting the newer credential (`src/codex/account-store.ts`). Callers handle that error;
   they do not assume a silent retry.
+  The lock itself is identity-scoped: a not-yet-readable lock counts as held until it ages out,
+  and release requires a usable matching descriptor identity. Unknown identity leaves the path
+  for stale recovery without replacing the callback outcome when the path probe fails; confirmed-owner unlink errors other than `ENOENT` still propagate. Acquisition, stale reclamation and identity-checked release run inside the existing synchronous SQLite config-mutation transaction; the async refresh callback runs outside it. Release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Busy release coordination preserves the callback outcome and leaves the path for stale recovery. This serializes cooperating writers; stat/unlink is not atomic against non-cooperating filesystem writers.
+- **Authentication identity, quota domain, and cache domain are tracked separately**
+  (`src/routing/identity-domains.ts`). `classifyCredential` returns all three with provenance:
+  `pool.credentialGroups` supplies operator-declared quota domains, a small built-in table
+  supplies the provider-documented cases (OpenAI limits per organization and project and caches
+  per organization and region, Anthropic cache per workspace, Azure per deployment), and every
+  other answer is `unknown`. `unknown` is a first-class relation result, never silently read as
+  shared or as distinct: `assessQuotaRotation` reports `same-domain` so a quota refusal is not
+  answered by rotating inside the limit that refused, `countQuotaCapacity` counts one known
+  domain once and reports unknown-domain credentials separately, and
+  `canPortConversationState` keeps conversational-state portability a separate question from
+  cache compatibility by refusing any request that carries `previous_response_id`, a
+  provider-side conversation id, uploaded file ids, or encrypted reasoning. The classifier is groundwork that no routing boundary calls yet: it lands with its tests
+  so the consuming layers can be reviewed one at a time. Until one of them wires it, declaring
+  `pool.credentialGroups` changes no routing decision, and the rules above state the contract
+  those consumers must honour rather than behaviour an operator can rely on today.
+- **Proven separation and proven sharing are separate facts** (`src/routing/identity-domains.ts`).
+  Every domain carries `evidence` alongside its provenance: a rule that documents only that two
+  credentials are in different domains never lets an equal key mean "shared". OpenAI's cache rule
+  is the case that forces it — caches are documented as not shared across organizations or
+  regional processing boundaries, while no documentation states that two keys inside one
+  organization do share a cache, so a different org or region relates `distinct` and the same org
+  and region relates `unknown`. The absent promise is what withholds `shared` there, not a
+  documented denial. OpenAI quota, Anthropic workspace cache, and Azure deployment domains carry
+  the sharing half as well and still relate `shared`.
+- **A declared credential group cannot mean two things** (`src/routing/identity-domains.ts`,
+  `src/config.ts`). `credentialGroupIssues` is the one definition of a valid grouping: unique
+  group ids, a non-empty member list, and each credential in at most one group, with members
+  written `"<provider>:<credential-id>"` because ids are provider-scoped in the auth store. The
+  config write path rejects a declaration that breaks any of those and the load path drops the
+  list with a warning, keeping `pool.kernel` and `pool.cacheAffinity`; `classifyCredential`
+  reports an ambiguous claim on `declaredGroupConflict` and falls back to the documented or
+  unknown answer rather than taking the first matching group.
 
 Warmup issues a bounded request with a fallback model so a cold account reports usability before a
 real turn depends on it (`src/codex/warmup.ts`).
@@ -299,7 +380,7 @@ spelling; the V1 and compaction cap exemptions are preserved.
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Connected CLI usage follows the [client-scoped hub usage contract](gui-and-management-api.md#usage-accounting); local management and account data remain separate.
 
@@ -322,7 +403,7 @@ Provider `showThinkingSummary` is a Responses request default; it does not rewri
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
@@ -340,7 +421,7 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 
 ## Provider-scoped approval reviewer
 
-`src/codex/catalog/sync.ts` resolves exact case-preserving provider/model reviewer selectors against the final catalog in both retained sync and `src/codex/convergence.ts`. Valid per-model selection wins over valid provider-wide selection, then the root selector supplies fallback. Native root stamps retain the observed original value and applied selector bound to their slug; removal restores the original only while the applied value is unchanged. The native provenance remains after restoration so an equal provider reviewer cannot trigger legacy reclassification on the next sync. Ambiguous legacy unmarked catalogs retain their existing heuristic cleanup. Provider stamps do not change routing or credentials.
+`src/codex/catalog/auto-review.ts` resolves exact case-preserving provider/model reviewer selectors against the final catalog in both retained sync and `src/codex/convergence.ts`. Valid per-model selection wins over valid provider-wide selection, then the root selector supplies fallback. Native root stamps retain the observed original value and applied selector bound to their slug; removal restores the original only while the applied value is unchanged. The native provenance remains after restoration so an equal provider reviewer cannot trigger legacy reclassification on the next sync. Ambiguous legacy unmarked catalogs retain their existing heuristic cleanup. Provider stamps do not change routing or credentials.
 
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
@@ -349,3 +430,5 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 ## Renamed destination reasoning metadata
 
 `src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Identity, transport and other capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.

@@ -512,7 +512,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   signal: headerDeadline.signal,
                 }, retryRecovery));
               },
-              { abortSignal: headerDeadline.signal, label: "web-search-loop" },
+              { replaySafe: true, abortSignal: headerDeadline.signal, label: "web-search-loop" },
             );
           }
         } finally {

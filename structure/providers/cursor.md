@@ -28,6 +28,8 @@ that survives the transport budget: unified Desktop `exec` as well as the legacy
 unified `exec` keeps its own schema and is surfaced back to Codex as a client tool. It must never
 fall through to the separate native-local-exec dispatcher.
 
+In external Cursor turns using code mode or shell aliases, the bounded leading-commentary guard in `src/adapters/cursor/envelope-echo.ts` counts `Shell`, `네이티브 셸`, and `네이티브 쉘` as one `shell` identity, including spacing variants and names split across text deltas. Korean aliases require a Unicode-aware left token boundary so wording embedded in a larger word or identifier is not counted; punctuation and following Korean grammatical suffixes remain supported. Rejection still requires a failure claim plus either an explicit redirect or at least two distinct native-tool identities; repeated aliases alone do not count as multiple tools.
+
 > Decision record: [ADR-0048](../decisions/ADR-0048-cursor-native-exec.md)
 
 ## Cursor parameterized models
@@ -130,3 +132,5 @@ Translated Chat request construction uses the [inline-image budget](../transport
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.

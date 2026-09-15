@@ -80,7 +80,7 @@ export async function runGeminiWebSearch(
         signal: linkedSignal.signal,
         redirect: "manual",
       }, recovery)),
-      { abortSignal: linkedSignal.signal, label: "gemini-web-search-sidecar" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "gemini-web-search-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
