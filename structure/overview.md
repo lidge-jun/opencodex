@@ -5,6 +5,8 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 
 Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
+Native-main device cancellation, polling and restart follow the [flow-ownership contract](gui-and-management-api.md#dashboard-surfaces), including status-gated error DTO handling.
+
 ## Product boundary
 
 opencodex is a local proxy for Codex. It does not patch Codex binaries. It changes local Codex
@@ -147,3 +149,5 @@ Translated Chat request construction uses the [inline-image budget](transports/s
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+Native-main reauthentication retains the same flow and its Cancel control from the cancellation click, including an unresolved DELETE racing with a GET HTTP failure; retryable failure keeps cancellation available, and a trusted terminal result releases ownership.

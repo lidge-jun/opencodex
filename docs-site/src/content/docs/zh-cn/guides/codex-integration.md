@@ -359,3 +359,7 @@ ocx restore back # point plain Codex at the running proxy again
 如果受影响的历史存储支持分页，提供商切换可能返回 `history_paginated_requires_native_writer`。该原因不再拒绝写入 Codex 配置、参考配置档和模型目录。`ocx sync` 与 `ocx start` 仍会写入这些文件并设置 `model_catalog_json`，因此 Codex 模型选择器会继续显示所有经 OpenCodex 路由的模型。只有这一条原因会让会话历史的重新标记停手，因为分页历史序号由 Codex 自己的写入器分配，重试也不会改变。无法读取的状态数据库、身份已变的历史文件、未能运行的预检等其他历史预检原因仍会拒绝整个切换并回滚，因为那些情况以后可能成功。在此状态下，OpenCodex 不会修改分页历史文件或线程行。现有会话保留已标记的提供商，不会被迁移；新会话仍正常经代理路由。重新标记停手时，主目录里已有的 `[model_providers.opencodex]` 表会保留而不是撤下，即便是 root-override（loopback）形式也一样，这样行上标记为 `opencodex` 的会话仍能对应到还存在的提供商 id。可迁移存储中的 legacy 记录也适用。CLI 会打印 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore` 和移除 Codex 配置仍会因 `history_paginated_requires_native_writer` 被拒绝。线程行仍在引用时撤掉 `[model_providers.opencodex]` 定义会使这些会话无法解析，而恢复路径没有办法留下兼容提供商表。已经分页的主目录目前无法通过产品卸载；这是已知的未完成工作，而非预期行为。
 
 不要改写正在使用的分页历史文件或线程行来自行迁移这些会话。恢复前关闭相关会话，并只报告准确的错误和版本，不要公开私人历史。备份或脚本成功并不能证明显示已恢复；重新打开 Codex 后检查会话。
+
+## 取消主账号重新认证
+
+取消主账号的设备代码重新认证时，如果 DELETE 请求暂时失败、发生网络错误，或响应状态未知或尚未结束，系统会保留当前流程和取消失败提示，以便重试取消。通常状态轮询会继续，因此仍能检测到登录完成。如果流程处于 `pending` 或 `committing` 状态时，可重试的取消失败与 GET 状态查询的非 2xx HTTP 响应同时发生，无论响应到达顺序如何，系统都会保留或恢复服务器最后提供的设备代码、验证 URL 和阶段，使同一流程仍可重试取消。GET 的 HTTP 失败仍会停止轮询，但无需发送第二次登录 POST 即可重试取消。终止状态为 `failed` 的响应会释放流程并显示规范化的失败原因，只有 `succeeded` 才表示登录成功。确认状态为 `cancelled` 的响应会释放流程，以便开始新的设备代码登录。明确返回 HTTP 404 且代码为 `unknown_flow` 的响应也会释放已过期的流程 ID，以便开始新的设备代码登录，但不会显示登录成功或已确认取消。先前流程中延迟到达的 POST、GET 或 DELETE 响应不能改变新流程，也不能将新流程报告为登录成功。
