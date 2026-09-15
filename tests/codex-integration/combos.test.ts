@@ -855,7 +855,7 @@ describe("combo failure policy and advancement", () => {
     for (const status of [401, 403, 404, 408, 429, 500, 503]) {
       expect(comboFailureDecision(status, "provider failure")).toBe("hop");
     }
-    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("stop");
+    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("hop");
     expect(comboFailureDecision(403, '{"code":"origin_rejected"}')).toBe("stop");
     expect(comboFailureDecision(413, "request too large")).toBe("stop");
     expect(comboFailureDecision(409, "conflict")).toBe("stop");
@@ -874,9 +874,9 @@ describe("combo failure policy and advancement", () => {
     // verdict by echoing the token, so that shape must NOT hop.
     expect(comboFailureDecision(413, 'refused', { code: 'input_admission_refused' })).toBe('hop');
     expect(comboFailureDecision(400, 'upstream mentions input_admission_refused in prose')).toBe('stop');
-    // An UPSTREAM context verdict still stops: retrying that elsewhere is guesswork, and a
-    // generic 413 with no structured code keeps its existing conservative handling.
-    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("stop");
+    // An UPSTREAM context verdict is target-local in a heterogeneous combo: another model may
+    // have a larger window. A generic 413 with no structured context signal stays conservative.
+    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("hop");
     const providerHardCap = JSON.stringify({ error: {
       message: "Prompt 346030 > 262144 maximum context length",
       type: "invalid_request_prompt_too_long",

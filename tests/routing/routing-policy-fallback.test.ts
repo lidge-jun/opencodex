@@ -142,9 +142,7 @@ describe("policy candidate fallback", () => {
     expect(response.status).toBe(400);
     expect(seenModels).toEqual(["policy/daily"]);
   });
-  test("an upstream context_length_exceeded still stops the chain (#1524)", async () => {
-    // The mirror-image contract. An upstream verdict is about the REQUEST, so retrying it
-    // elsewhere is guesswork -- and hopping would burn every candidate on a doomed request.
+  test("an upstream context_length_exceeded advances to the next policy candidate", async () => {
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
     const seenModels: string[] = [];
@@ -153,16 +151,17 @@ describe("policy candidate fallback", () => {
       seenModels.push(String(body.model));
       ctx.routeDecision = trace;
       seedAttempt(ctx, "provider", String(body.model));
-      return Response.json(
+      if (seenModels.length === 1) return Response.json(
         { error: { message: "context length exceeded", type: "invalid_request_error", code: "context_length_exceeded" } },
         { status: 400 },
       );
+      return Response.json({ id: "resp", object: "response", status: "completed", output: [] });
     };
 
     const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, { runCore });
 
-    expect(response.status).toBe(400);
-    expect(seenModels).toEqual(["policy/daily"]);
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
   });
   test("retries the next policy candidate and keeps distinct physical attempts", async () => {
     const trace = policyTrace();

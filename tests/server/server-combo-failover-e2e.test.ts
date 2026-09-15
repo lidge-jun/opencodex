@@ -1,3 +1,4 @@
+import { registerComboContextOverflowCases } from "../helpers/combo-context-overflow-cases";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
@@ -2085,38 +2086,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(primaryHits.every(hit => hit.webTool === valid)).toBe(true);
   });
 
-  test("context 400 stops while exhausted retryable targets return the sanitized last status", async () => {
-    let stopBackupHits = 0;
-    const context = serve(() => Response.json({ error: { code: "context_length_exceeded", message: "too many tokens" } }, { status: 400 }));
-    const unused = serve(() => {
-      stopBackupHits += 1;
-      return chatSuccess("must not run");
-    });
-    const stopConfig = comboConfig({
-      a: provider("openai-chat", baseUrl(context), "key-a"),
-      b: provider("openai-chat", baseUrl(unused), "key-b"),
-    });
-    const stopped = await post(stopConfig);
-    expect(stopped.status).toBe(400);
-    expect(stopBackupHits).toBe(0);
-
-    const order: string[] = [];
-    const first = serve(() => {
-      order.push("a");
-      return new Response("secret sk-a-should-redact", { status: 503 });
-    });
-    const last = serve(() => {
-      order.push("b");
-      return Response.json({ error: { message: "missing model" } }, { status: 404 });
-    });
-    const exhausted = await post(comboConfig({
-      a: provider("openai-chat", baseUrl(first), "key-a"),
-      b: provider("openai-chat", baseUrl(last), "key-b"),
-    }));
-    expect(exhausted.status).toBe(404);
-    expect(order).toEqual(["a", "b"]);
-    expect(await exhausted.text()).not.toContain("sk-a-should-redact");
-  });
+  registerComboContextOverflowCases({ serve, baseUrl, chatSuccess, provider, comboConfig, post, chatStream, collectSse });
 
   test("provider-specific prompt-too-long 400 hops to a larger-context combo target", async () => {
     let backupHits = 0;

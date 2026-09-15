@@ -401,9 +401,12 @@ export function comboFailureCooldownScope(
 ): ComboFailureCooldownScope {
   const code = normalizedFailureCode(options?.code);
   // Request-shape refusals first: an oversized request must not cool a healthy target.
+  // Some native transports surface a definite zero-output model overflow as a generic
+  // upstream_server_error plus precise context-window prose, so honor the bounded classifier too.
   if (
     status === 413
     || REQUEST_SHAPE_FAILURE_CODES.has(code)
+    || isDefiniteContextOverflow(message)
     || isRequestLocalFreePromptCap(status, message, options?.code)
     || isProviderTargetContextOverflow(status, message, options?.code)
     || isRequestLocalTargetIncompatibility(status, message, options?.code)
@@ -451,6 +454,44 @@ function isProviderTargetContextOverflow(
     && /\bprompt\s+\d+\s*>\s*\d+\s+maximum context length\b/i.test(message);
 }
 
+/**
+ * Confirm context overflow from the provider MESSAGE, not merely from a JSON code token.
+ * Upstreams control both fields and can emit contradictory envelopes; a stray
+ * `context_length_exceeded` code beside an unrelated refusal must not authorize replay.
+ * Bounded wrapper unwrapping covers OpenCodex's own `Provider error N: {...}` envelope.
+ */
+function isDefiniteContextOverflow(message: string): boolean {
+  if (message.length > 16_384) return false;
+  let text = message.trim();
+  for (let depth = 0; depth < 4; depth += 1) {
+    const providerPrefix = /^Provider error \d{3}:\s*/.exec(text);
+    if (providerPrefix) text = text.slice(providerPrefix[0].length).trim();
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch {
+      const normalized = text.toLowerCase();
+      return normalized === "context_length_exceeded"
+        || normalized.includes("exceeds the context window")
+        || normalized.includes("context window exceeded")
+        || normalized.includes("context length exceeded")
+        || normalized.includes("maximum context length")
+        || normalized.includes("maximum context window")
+        || normalized.includes("too many tokens");
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const record = payload as Record<string, unknown>;
+    const response = record.response && typeof record.response === "object" && !Array.isArray(record.response)
+      ? record.response as Record<string, unknown>
+      : undefined;
+    const candidates = [record.error, response?.error, response?.last_error, record.last_error, record];
+    const source = candidates.find((candidate): candidate is Record<string, unknown> =>
+      !!candidate && typeof candidate === "object" && !Array.isArray(candidate)
+        && typeof (candidate as Record<string, unknown>).message === "string");
+    if (!source || typeof source.message !== "string") return false;
+    text = source.message.trim();
+  }
+  return false;
+}
+
 export function comboFailureDecision(
   status: number,
   message: string,
@@ -472,6 +513,10 @@ export function comboFailureDecision(
   if (isModelLifecycleGone(status, message, options?.code)) return "hop";
   const error = classifyError(status, "upstream_error", message);
   if (isCyberPolicyCode(error.code)) return "stop";
+  // A definite context-window refusal is target-local inside a heterogeneous combo: this
+  // model cannot fit the turn, but a later model may have a larger window. Non-replayable
+  // post-send transport ambiguity was already rejected above, before this classification.
+  if (isDefiniteContextOverflow(message)) return "hop";
   // A provider can expose its own target hard cap with a non-semantic vendor code
   // (for example 5059 + invalid_request_prompt_too_long). That is evidence that this
   // target is too small, not that every later combo target is incapable of serving it.
@@ -510,7 +555,7 @@ export function comboFailureDecision(
   // per-request cap, not provider-wide evidence), so keep its hop verdict explicit here.
   if (failureCode === "free_rate_limited") return "hop";
   if (isRequestLocalTargetIncompatibility(status, message, options?.code)) return "hop";
-  if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
+  if (["origin_rejected", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }
   // 402 (payment required) and 425 (too early) are provider-state signals, not verdicts about

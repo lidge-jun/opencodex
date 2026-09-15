@@ -62,6 +62,9 @@ describe("combo failure cooldown scope", () => {
     }
     // Hyphenated spellings normalize to the same codes.
     expect(comboFailureCooldownScope(400, "refused", { code: "input-admission-refused" })).toBe("none");
+    expect(comboFailureCooldownScope(502,
+      "Your input exceeds the context window of this model. Please adjust your input and try again.",
+      { code: "upstream_server_error" })).toBe("none");
     // A provider's own per-target hard cap (vendor code 5059) is equally request-shaped.
     expect(comboFailureCooldownScope(
       400,
@@ -248,12 +251,19 @@ describe("request-local optional control incompatibility", () => {
   });
   test("hard refusal and non-replayable codes take precedence over a compatible message", () => {
     const message = JSON.stringify({ error: unsupportedUser });
-    for (const code of ["origin_rejected", "context_length_exceeded", "upstream_no_response", "upstream_closed_before_response"]) {
+    for (const code of ["origin_rejected", "upstream_no_response", "upstream_closed_before_response"]) {
       expect(comboFailureDecision(400, message, { code })).toBe("stop");
     }
+    expect(comboFailureDecision(400, "context length exceeded", { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(499, message)).toBe("stop");
     expect(comboFailureDecision(413, message)).toBe("stop");
   });
+});
+
+test("zero-output upstream context overflow is target-local and may hop", () => {
+  const message = "Your input exceeds the context window of this model. Please adjust your input and try again.";
+  const body = JSON.stringify({ error: { type: "server_error", code: "upstream_server_error", message } });
+  expect(comboFailureDecision(502, body, { code: "upstream_server_error" })).toBe("hop");
 });
 
 describe("bounded optional-control error envelopes", () => {
