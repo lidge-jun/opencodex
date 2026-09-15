@@ -379,7 +379,11 @@ describe("routed replay recovery", () => {
       expect(upstreamRequests).toHaveLength(1);
       expect(upstreamRequests[0]!.previous_response_id).toBeUndefined();
       expect(upstreamRequests[0]!.input).toEqual([
-        history[0], reasoning,
+        history[0],
+        // The client replayed this reasoning item with no `summary`; the reasoning sanitizer
+        // supplies the empty array the Responses API requires on a reasoning input item, so the
+        // forwarded item is the replayed one plus that field.
+        { ...reasoning, summary: [] },
         { type: "function_call", call_id: "call_replay", name: custom ? "exec" : "lookup",
           arguments: custom ? JSON.stringify({ input: "text(1)" }) : "{}", status: "completed" },
         { ...toolResult, type: "function_call_output" },
