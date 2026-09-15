@@ -118,6 +118,7 @@ describe("windows replace retry counters", () => {
       "lab-automation",
       "lab-ledger",
       "storage-cleanup",
+      "usage-retention",
       "tray",
     ];
     for (const publisher of publishers) renameAtomicFile("a", "b", flakyIo(1), publisher);
@@ -130,6 +131,7 @@ describe("windows replace retry counters", () => {
       "prompt-journal:EBUSY",
       "storage-cleanup:EBUSY",
       "tray:EBUSY",
+      "usage-retention:EBUSY",
     ]);
     // @ts-expect-error a path is not a ReplacePublisher
     renameAtomicFile("a", "b", flakyIo(0), "C:\\Users\\someone\\.opencodex");

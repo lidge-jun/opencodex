@@ -115,6 +115,23 @@ The value returned is the **applied** one after server normalization, not what y
 `digest` binds a run to this preview; the mutating call must carry it and the server rejects a stale
 one with 409. The CLI handles that for you — it always previews first.
 
+## `ocx storage usage-limit --json`
+
+The status response is the management payload:
+
+```json
+{"enabled":false,"maxBytes":1073741824,"currentBytes":67108864,"overLimit":false,"job":{"status":"idle"}}
+```
+
+The default policy is Unlimited (`enabled:false`). On an unconfigured installation, `maxBytes`
+remembers 1 GiB (`1073741824`) as the ceiling used on first enable; later API/CLI changes preserve
+the saved ceiling while retention is disabled.
+
+`set` returns the same fields with `ok: true`; it merges only the fields supplied by
+`--enabled` and `--mib`. Oversized ledgers are compacted by the automatic scheduler after the
+limit is enabled; there is no manual run response. The `job` field reports the scheduler's
+process-local status and latest outcome.
+
 ## Error shape
 
 A management error prints up to three lines and returns a non-zero code:

@@ -221,6 +221,8 @@ by the current window size.
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
 | `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; returns an `error: "read_failed"` summary if storage cannot be read |
 | `GET /api/storage` | Scan Codex storage usage by bucket | Returns an `error: "scan_failed"` payload on scan failure |
+| `GET /api/storage/usage-ledger-retention` | Read the usage-ledger retention policy, current `usage.jsonl` size, over-limit state, and the last background job state | — |
+| `PUT /api/storage/usage-ledger-retention` | Replace the retention fields supplied in `{ "enabled"?: boolean, "maxBytes"?: integer }`; omitted fields keep their saved values | 400 malformed body, unknown field, or `maxBytes` below 1 MiB; 500 `config_write_failed` |
 | `POST /api/storage/cleanup/preview` | Preview archived-session cleanup and return a binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Quarantine or permanently remove the previewed archived set | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
 | `GET /api/storage/trash` | List quarantined cleanup entries | 500 `trash_list_failed` |
@@ -237,6 +239,13 @@ responses and incremental appends, including empty or unmatched results; a rebui
 No provider, model, or API-key identifier is shortened to make a row fit. An absent flag is not proof
 that every ledger record was valid. This is separate from `historyTruncated`, `entriesTruncated`,
 and token measurement coverage.
+
+The retention status response is shaped as `{ enabled, maxBytes, currentBytes, overLimit, job }`;
+`job` reports the process-local background state (`idle` or `running`) and the last outcome when
+one exists. `PUT` accepts only `enabled` and `maxBytes`, and merges the supplied fields with the
+saved policy. It never starts a compaction by itself. The background scheduler queues a Worker
+when the ledger exceeds the ceiling; the canonical ledger is replaced only after complete-row,
+active-turn, and source-revision checks pass.
 
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
 for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key

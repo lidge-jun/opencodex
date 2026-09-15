@@ -6,7 +6,18 @@ import {
   detectInitial,
 } from "../src/i18n/shared";
 import { en } from "../src/i18n/en";
+import { de } from "../src/i18n/de";
+import { fr } from "../src/i18n/fr";
+import { ko } from "../src/i18n/ko";
+import { zh } from "../src/i18n/zh";
+import { zhTW } from "../src/i18n/zh-TW";
+import { ru } from "../src/i18n/ru";
+import { ja } from "../src/i18n/ja";
+import { tr } from "../src/i18n/tr";
+import { LAB_CATALOG_OVERRIDES } from "../src/i18n/lab-translations";
 import { formatUptime } from "../src/formatUptime";
+
+const BASE_DICTS = { en, de, fr, ko, zh, "zh-TW": zhTW, ru, ja, tr };
 
 describe("i18n locale contracts", () => {
   test("LOCALES and DICTS contain exactly the same locales", () => {
@@ -31,12 +42,55 @@ describe("i18n locale contracts", () => {
     }
   });
 
-  test("every locale catalog has exactly the English key set", () => {
+  test("every base locale catalog has exactly the English key set", () => {
     const expectedKeys = Object.keys(en).sort();
 
     for (const { code } of LOCALES) {
-      const actualKeys = Object.keys(DICTS[code]).sort();
+      const actualKeys = Object.keys(BASE_DICTS[code]).sort();
       expect(actualKeys).toEqual(expectedKeys);
+    }
+  });
+
+  test("lab catalog overlay preserves its key set in every locale", () => {
+    const overlays = [["lab", LAB_CATALOG_OVERRIDES]] as const;
+
+    for (const [name, catalog] of overlays) {
+      const expectedKeys = Object.keys(catalog.en).sort();
+
+      for (const { code } of LOCALES) {
+        expect(Object.keys(catalog[code]).sort(), `${name}.${code}`).toEqual(expectedKeys);
+
+        const prefix = "lab.";
+        const composedKeys = Object.keys(DICTS[code])
+          .filter(key => key.startsWith(prefix) && !key.startsWith("lab.production."))
+          .sort();
+        expect(composedKeys, `DICTS.${code}.${name}`).toEqual(expectedKeys);
+      }
+    }
+  });
+
+  test("usage retention strings are ordinary base catalog keys", () => {
+    const expectedKeys = [
+      "usage.retention.title",
+      "usage.retention.help",
+      "usage.retention.enabled",
+      "usage.retention.current",
+      "usage.retention.limit",
+      "usage.retention.increase",
+      "usage.retention.decrease",
+      "usage.retention.unlimited",
+      "usage.retention.error",
+      "usage.retention.disabled",
+    ].sort();
+
+    expect(Object.keys(en).filter(key => key.startsWith("storage.usageRetention.")).sort()).toEqual([]);
+    expect(Object.keys(en).filter(key => key.startsWith("usage.retention.")).sort()).toEqual(expectedKeys);
+
+    for (const { code } of LOCALES) {
+      expect(
+        Object.keys(BASE_DICTS[code]).filter(key => key.startsWith("usage.retention.")).sort(),
+        code,
+      ).toEqual(expectedKeys);
     }
   });
 

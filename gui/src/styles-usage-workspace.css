@@ -214,6 +214,69 @@
   gap: 6px;
 }
 
+/* Retention belongs to Usage, but stays a compact setting row rather than a second dashboard card. */
+.usage-retention-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  min-width: 0;
+}
+
+.usage-retention-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.usage-retention-heading .h-section {
+  margin: 0;
+  font-size: var(--text-body);
+}
+
+.usage-retention-heading p {
+  margin: var(--space-1) 0 0;
+  max-width: 68ch;
+}
+
+.usage-retention-editor {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.usage-retention-editor .usage-retention-limit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.usage-retention-editor .usage-retention-limit .field-label {
+  white-space: nowrap;
+}
+
+.usage-retention-editor .codex-auto-switch-input {
+  width: 104px;
+}
+
+.usage-retention-current {
+  margin: 0;
+  white-space: nowrap;
+}
+
+/* Match the Models context-cap cluster: keep the remembered value visible when off,
+   but visually demote it so Unlimited remains the active state. */
+.usage-retention-limit.is-disabled {
+  opacity: 0.55;
+}
+
 @media (max-width: 640px) {
   .usage-source-row { align-items: flex-start; flex-direction: column; }
+  .usage-retention-heading { align-items: flex-start; }
+  .usage-retention-current { white-space: normal; }
 }

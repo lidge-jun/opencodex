@@ -291,3 +291,77 @@ describe("ocx integration native", () => {
     }
   });
 });
+
+const RETENTION_STATUS = {
+  enabled: false,
+  maxBytes: 128 * 1024 * 1024,
+  currentBytes: 64 * 1024 * 1024,
+  overLimit: false,
+  job: { status: "idle" },
+};
+
+describe("ocx storage usage-limit", () => {
+  test("show reads the usage-ledger retention status", async () => {
+    const { calls, deps } = harness(() => ({ json: RETENTION_STATUS }));
+    const cap = capture();
+    try {
+      expect(await handleStorageCommand(["usage-limit", "show"], deps)).toBe(0);
+    } finally {
+      cap.restore();
+    }
+    expect(calls).toEqual([{ method: "GET", path: "/api/storage/usage-ledger-retention", body: undefined }]);
+  });
+
+  test("set sends only the fields explicitly given", async () => {
+    const { calls, deps } = harness(() => ({ json: { ok: true, ...RETENTION_STATUS } }));
+    const cap = capture();
+    try {
+      expect(await handleStorageCommand(["usage-limit", "set", "--mib", "1024"], deps)).toBe(0);
+    } finally {
+      cap.restore();
+    }
+    expect(calls[0]).toMatchObject({
+      method: "PUT",
+      path: "/api/storage/usage-ledger-retention",
+      body: { maxBytes: 1024 * 1024 * 1024 },
+    });
+    expect(calls[0]?.body).not.toHaveProperty("enabled");
+  });
+
+  test("set can explicitly enable without changing the saved ceiling", async () => {
+    const { calls, deps } = harness(() => ({ json: { ok: true, ...RETENTION_STATUS, enabled: true } }));
+    const cap = capture();
+    try {
+      expect(await handleStorageCommand(["usage-limit", "set", "--enabled", "true"], deps)).toBe(0);
+    } finally {
+      cap.restore();
+    }
+    expect(calls[0]?.body).toEqual({ enabled: true });
+  });
+
+  test("set with no fields is rejected locally", async () => {
+    const { calls, deps } = harness(() => ({ json: RETENTION_STATUS }));
+    const cap = capture();
+    let code: number;
+    try {
+      code = await handleStorageCommand(["usage-limit", "set"], deps);
+    } finally {
+      cap.restore();
+    }
+    expect(code).not.toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("manual run is no longer exposed", async () => {
+    const { calls, deps } = harness(() => ({ json: { ok: true, started: true } }));
+    const cap = capture();
+    let code: number;
+    try {
+      code = await handleStorageCommand(["usage-limit", "run"], deps);
+    } finally {
+      cap.restore();
+    }
+    expect(code).not.toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+});

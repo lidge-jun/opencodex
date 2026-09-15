@@ -327,10 +327,12 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: starring spends the user's identity. Must never gain a CLI verb." } },
   // server/management/storage-log-guard-routes
   { method: "GET", path: "/api/storage/codex-logs", module: "server/management/storage-log-guard-routes", mutates: false },
+  { method: "GET", path: "/api/storage/usage-ledger-retention", module: "server/management/storage-log-guard-routes", mutates: false },
   { method: "POST", path: "/api/storage/codex-logs/compact", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/protect", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/repair", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
+  { method: "PUT", path: "/api/storage/usage-ledger-retention", module: "server/management/storage-log-guard-routes", mutates: true },
   // server/management/remote-workspace-routes
   { method: "GET", path: "/api/remote-workspace", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub status through the authenticated dashboard; a distinct CLI Hub-status verb is still owed and must not be confused with the Executor-local status command.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },
   { method: "GET", path: "/api/remote-workspace/runtimes", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub runtime availability through the authenticated dashboard; a distinct CLI Hub-status verb is still owed.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },

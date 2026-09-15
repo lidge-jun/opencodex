@@ -148,3 +148,28 @@ describe("GET /api/storage", () => {
     }
   });
 });
+
+describe("usage ledger retention management route", () => {
+  test("keeps GET/PUT policy management while removing the manual run endpoint", async () => {
+    const server = startServer(0);
+    try {
+      const status = await fetch(new URL("/api/storage/usage-ledger-retention", server.url));
+      expect(status.status).toBe(200);
+      expect(await status.json()).toMatchObject({ enabled: false, maxBytes: expect.any(Number), currentBytes: expect.any(Number) });
+
+      const updated = await fetch(new URL("/api/storage/usage-ledger-retention", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: true, maxBytes: 8 * 1024 * 1024 }),
+      });
+      expect(updated.status).toBe(200);
+      expect(await updated.json()).toMatchObject({ enabled: true, maxBytes: 8 * 1024 * 1024 });
+
+      const removed = await fetch(new URL("/api/storage/usage-ledger-retention/run", server.url), { method: "POST" });
+      expect(removed.status).toBe(404);
+      expect(await removed.json()).toMatchObject({ error: { type: "not_found", code: "not_found" } });
+    } finally {
+      await server.stop(true);
+    }
+  });
+});

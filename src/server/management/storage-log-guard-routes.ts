@@ -12,6 +12,16 @@ import {
   type CodexLogGuardStatus,
 } from "../../codex/log-guard/protection";
 import { scanStorage } from "../../storage/scanner";
+import {
+  applyUsageLedgerRetentionToLiveConfig,
+  getUsageLedgerRetentionStatus,
+  parseUsageLedgerRetentionInput,
+  writeUsageLedgerRetentionToConfig,
+} from "../../usage/ledger-retention-config";
+import {
+  getUsageLedgerRetentionJobState,
+  invalidateUsageLedgerRetentionRun,
+} from "../../usage/ledger-retention-job";
 import { jsonResponse } from "../auth-cors";
 import {
   managementBodyTooLargeResponse,
@@ -21,10 +31,12 @@ import type { ManagementContext } from "./context";
 
 const INSPECTION_FAILED_MESSAGE = "Codex log inspection failed";
 
+/** Report whether the Log Guard schema cannot be inspected on this install. */
 function inspectionUnavailable(report: CodexLogGuardStatus): boolean {
   return report.schema.state === "unavailable";
 }
 
+/** Map a Log Guard mutation result to its management HTTP status. */
 function mutationStatus(result: CodexLogGuardMutationResult): number {
   if (result.ok) return 200;
   switch (result.error) {
@@ -42,6 +54,7 @@ function mutationStatus(result: CodexLogGuardMutationResult): number {
   }
 }
 
+/** Map a Log Guard compaction result to its management HTTP status. */
 function compactStatus(result: CodexLogGuardCompactionResult): number {
   if (result.ok) return 200;
   switch (result.error) {
@@ -59,6 +72,7 @@ function compactStatus(result: CodexLogGuardCompactionResult): number {
   }
 }
 
+/** Serialize a Log Guard mutation result through the shared CORS-aware JSON helper. */
 function mutationResponse(
   result: CodexLogGuardMutationResult,
   ctx: ManagementContext,
@@ -68,6 +82,7 @@ function mutationResponse(
     : jsonResponse({ error: result.error }, mutationStatus(result), ctx.req, ctx.config);
 }
 
+/** Serialize a Log Guard compaction result through the shared CORS-aware JSON helper. */
 function compactResponse(
   result: CodexLogGuardCompactionResult,
   ctx: ManagementContext,
@@ -85,6 +100,7 @@ function compactResponse(
   );
 }
 
+/** Parse the explicit Log Guard protection mode from a bounded management body. */
 async function readProtectMode(ctx: ManagementContext): Promise<"compat" | "quiet" | Response> {
   let body: unknown;
   try {
@@ -104,10 +120,47 @@ async function readProtectMode(ctx: ManagementContext): Promise<"compat" | "quie
   return mode;
 }
 
-/** Codex Log Guard diagnostics plus explicit protection and maintenance mutations. */
+/** Storage diagnostics plus explicit protection, retention, and maintenance mutations. */
 export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
   const protectionDeps = deps.codexLogGuardProtectionDeps;
+
+  if (url.pathname === "/api/storage/usage-ledger-retention" && req.method === "GET") {
+    return jsonResponse({
+      ...getUsageLedgerRetentionStatus(config),
+      job: getUsageLedgerRetentionJobState(),
+    }, 200, req, config);
+  }
+
+  if (url.pathname === "/api/storage/usage-ledger-retention" && req.method === "PUT") {
+    let body: unknown;
+    try {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      const tooLarge = managementBodyTooLargeResponse(error, req, config);
+      if (tooLarge) return tooLarge;
+      return jsonResponse({ error: "invalid_json" }, 400, req, config);
+    }
+    const previous = getUsageLedgerRetentionStatus(config);
+    const parsed = parseUsageLedgerRetentionInput(body, previous);
+    if (!parsed.ok) return jsonResponse({ error: parsed.error }, 400, req, config);
+    try {
+      const saved = writeUsageLedgerRetentionToConfig(parsed.policy);
+      applyUsageLedgerRetentionToLiveConfig(config, saved);
+      // Every policy change invalidates the snapshot captured by an older Worker.
+      // The old preparation may finish, but its generation can no longer commit.
+      invalidateUsageLedgerRetentionRun();
+      // PUT changes policy only. Automatic enforcement belongs to the scheduler;
+      // there is no public manual trigger for destructive compaction.
+      return jsonResponse({
+        ok: true,
+        ...getUsageLedgerRetentionStatus(config),
+        job: getUsageLedgerRetentionJobState(),
+      }, 200, req, config);
+    } catch {
+      return jsonResponse({ error: "config_write_failed" }, 500, req, config);
+    }
+  }
 
   if (url.pathname === "/api/storage/codex-logs") {
     if (req.method !== "GET") return null;

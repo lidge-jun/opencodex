@@ -164,6 +164,12 @@ export const configSchema = z.object({
   quotaResetNotify: quotaResetNotifySchema.optional().catch(undefined),
   // Same rationale: a bad auto-refresh section must not cost the operator their providers.
   catalogAutoRefresh: catalogAutoRefreshSchema.optional().catch(undefined),
+  // Opt-in usage.jsonl byte ceiling. Reject unknown nested keys and degrade the
+  // whole optional section so a misspelled policy can never enable retention.
+  usageLedgerRetention: z.object({
+    enabled: z.boolean().optional(),
+    maxBytes: z.number().int().min(1024 * 1024).optional(),
+  }).strict().optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide
