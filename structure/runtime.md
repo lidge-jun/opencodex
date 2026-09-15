@@ -156,7 +156,11 @@ package-registry request and reads bounded provenance evidence for the configure
 package metadata, and shim binding. The proof-bound launcher snapshot does not attest successful Codex execution;
 environment and persisted candidates remain report-only and cannot produce a managed classification in this one-shot command.
 On Windows this first slice performs no candidate/configuration filesystem I/O: it preserves only proof-captured
-absolute environment candidates for lexical app-bundle/version-manager reporting and otherwise fails closed.
+absolute environment candidates for lexical app-bundle/version-manager reporting and otherwise fails closed. That
+fail-closed result records which observation was missing: a run with no proof-captured environment candidate reports
+`windows_inspection_deferred`, because persisted selection is never consulted there and the command cannot claim that
+no Codex CLI exists; a captured candidate whose path is not lexically eligible reports `candidate_path_unavailable`.
+POSIX keeps `candidate_unavailable` for an unobserved candidate.
 This check does not attest or admit a selected runtime. The command exposes no private mutation authority and does not query
 a registry, execute Codex/npm, install, repair, stop, restart, or change configuration/cache state.
 
