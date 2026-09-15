@@ -182,7 +182,7 @@ describe("providerDestinationResolvedError — canonical Antigravity config-writ
       { ...canonical, baseUrl: "https://antigravity-relay.example.com" },
       { ...canonical, adapter: "openai-chat" },
       { ...canonical, authMode: "key" },
-    ]) {
+    ] as const) {
       lookupMock.mockResolvedValueOnce([{ address: "198.18.1.68", family: 4 }]);
       expect(await providerDestinationResolvedError("google-antigravity", candidate))
         .toContain("benchmark address (198.18.1.68)");
