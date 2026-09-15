@@ -428,6 +428,12 @@ Pool mode needs stable public names and a store that survives concurrent refresh
 - The credential store is generation-guarded and refresh-locked (`src/codex/account-store.ts`): a
   refresh persists only if the generation it started from still holds, and a lost race raises a
   generation-conflict error instead of overwriting the newer credential.
+  The lock is held and released by file identity rather than by path. A lock that exists but is
+  not yet readable counts as held until it ages past the stale window, because its owner creates
+  the file and writes its metadata as two steps, and a holder deletes the lock only while the
+  path still resolves to the file it created. If descriptor identity is unavailable or unusable,
+  release leaves the path for stale-lock recovery. Path-probe errors preserve the callback outcome; confirmed-owner unlink errors other than `ENOENT` still propagate. The stat/unlink pair is not an atomic
+  compare-and-delete against non-cooperating writers. Cooperating acquisition, stale reclamation and release serialize inside the synchronous config-mutation transaction, released before the async callback. Release keeps its descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery.
 
 ## Sidecars, management, and UI
 
@@ -560,8 +566,8 @@ consulted, and they run in `resolveCodexAccountForThreadDetailed` ahead of it. A
 with no recorded refusal is deliberately not a release path on its own — stickiness until the
 account actually refuses is intended — but it does surrender the binding as soon as a sibling with
 headroom exists. Unbound assignment is untouched and still takes the coolest eligible account,
-because a fresh request has no warm prefix to lose. `pool.cacheAffinity` remains the stronger
-opt-in, raising the bar from the threshold to genuine exhaustion.
+because a fresh request has no warm prefix to lose. `pool.cacheAffinity` is enabled by default,
+raising the bar from the threshold to genuine exhaustion.
 
 Two call sites need the rule — the live path in `reevaluateAffinityQuota` and the side-effect-free
 `previewReusableAffinityAccount` that subagent fallback reads — and they share one helper rather

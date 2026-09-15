@@ -244,6 +244,9 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   generation it started from still holds; a lost race raises a generation-conflict error rather
   than overwriting the newer credential (`src/codex/account-store.ts`). Callers handle that error;
   they do not assume a silent retry.
+  The lock itself is identity-scoped: a not-yet-readable lock counts as held until it ages out,
+  and release requires a usable matching descriptor identity. Unknown identity leaves the path
+  for stale recovery without replacing the callback outcome when the path probe fails; confirmed-owner unlink errors other than `ENOENT` still propagate. Acquisition, stale reclamation and identity-checked release run inside the existing synchronous SQLite config-mutation transaction; the async refresh callback runs outside it. Release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Busy release coordination preserves the callback outcome and leaves the path for stale recovery. This serializes cooperating writers; stat/unlink is not atomic against non-cooperating filesystem writers.
 - **Authentication identity, quota domain, and cache domain are tracked separately**
   (`src/routing/identity-domains.ts`). `classifyCredential` returns all three with provenance:
   `pool.credentialGroups` supplies operator-declared quota domains, a small built-in table
