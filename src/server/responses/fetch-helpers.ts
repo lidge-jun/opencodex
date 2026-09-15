@@ -9,6 +9,7 @@ import type { OcxProviderConfig } from "../../types";
 import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
+import { InvalidProviderEgressError, resolveProviderEgress } from "../../lib/provider-egress";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 
 export { withUpstreamHttpVersion };
@@ -70,7 +71,9 @@ export function providerFetch(
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
   options: ProviderFetchOptions = {},
 ): ProviderFetch {
-  const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  const customExecutor = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
+  const base = customExecutor ?? globalThis.fetch;
+  const providerName = options.providerName ?? "unknown";
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
     base.preconnect?.(...args);
   };
@@ -81,10 +84,36 @@ export function providerFetch(
       base(input, { ...init, redirect: "manual" }),
     { preconnect },
   ) as typeof globalThis.fetch;
+  // Resolve provider egress before pacing or dispatch.
+  const resolveEgress = (input: Parameters<typeof globalThis.fetch>[0]) =>
+    resolveProviderEgress({
+      providerName,
+      modelId: options.modelId,
+      provider,
+      url: typeof input === "string" || input instanceof URL ? input : input.url,
+      purpose: "providerFetch",
+    });
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      const egress = resolveEgress(input);
+      if (egress.kind === "proxy") {
+        if (input instanceof Request) {
+          throw new InvalidProviderEgressError(
+            "providers." + providerName + ".proxy cannot be honored for a prebuilt Request on this runtime; pass a URL instead."
+          );
+        }
+        if (customExecutor) {
+          throw new InvalidProviderEgressError(
+            "providers." + providerName + ".proxy cannot be honored through a caller-owned fetch executor."
+          );
+        }
+      }
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
-      const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 };
+      const dispatchInit = {
+        ...withUpstreamHttpVersion(input, init, provider),
+        timeout: 0,
+        ...(egress.kind === "proxy" ? { proxy: egress.proxyUrl } : {}),
+      };
       return options.dispatchOverride
         ? options.dispatchOverride(input, dispatchInit, dispatch)
         : dispatch(input, dispatchInit);
@@ -96,6 +125,10 @@ export function providerFetch(
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const upstreamWebsocket = provider.upstreamWebsocket === true;
+    if (resolveEgress(input).kind === "proxy") {
+      // Use HTTP/SSE before WebSocket dispatch for explicit routes.
+      return httpFetch(input, init);
+    }
     if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
       // The fallback has to be the same HTTP fetch the non-WS branch would have
       // used, protocol pin included: a WS turn that falls back is serving the
@@ -116,6 +149,8 @@ export function providerFetch(
       : Promise.resolve();
   };
   const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    // Validate before pacing or dispatch.
+    resolveEgress(input);
     await waitForPacing(init?.signal ?? undefined);
     return unpaced(input, init);
   };
