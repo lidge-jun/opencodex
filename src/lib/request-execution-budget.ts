@@ -183,8 +183,15 @@ function createBudgetScope(
     policy,
     deriveScope(scopePolicy, prepaid) {
       const booking = prepaid && permitBookings.get(prepaid);
-      return createBudgetScope(scopePolicy, logicalRequestId, ledger,
-        booking?.ledger === ledger ? booking.ticket : undefined);
+      // Intermediate scopes retain the exact prepaid booking. A dispatched child consumes
+      // it from the shared ledger, so sibling scopes cannot turn it into a second send.
+      const inherited = prepaid === undefined ? prepaidBooking : booking?.ledger === ledger ? booking.ticket : undefined;
+      const inheritedPolicy = prepaid === undefined && inherited && ledger.pendingExternalSends.has(inherited)
+        ? { ...scopePolicy, maxTotalModelSends: Math.min(scopePolicy.maxTotalModelSends, policy.maxTotalModelSends),
+          baseSendAllowance: Math.min(scopePolicy.baseSendAllowance, policy.baseSendAllowance),
+          finalRecoveryAllowance: Math.min(scopePolicy.finalRecoveryAllowance, policy.finalRecoveryAllowance) }
+        : scopePolicy;
+      return createBudgetScope(inheritedPolicy, logicalRequestId, ledger, inherited);
     },
     get reserveSpent() { return reserveSpent; },
     get alternateTargetSends() { return alternateTargetSends; },
@@ -193,7 +200,7 @@ function createBudgetScope(
     remainingBaseSends(cap: number): number {
       const capped = Number.isFinite(cap) ? Math.trunc(cap) : 0;
       const prepaid = prepaidBooking && ledger.pendingExternalSends.has(prepaidBooking) ? 1 : 0;
-      return Math.max(0, Math.min(capped, policy.baseSendAllowance - ledger.spent + prepaid));
+      return Math.max(0, Math.min(capped, Math.max(prepaid, policy.baseSendAllowance - ledger.spent + prepaid)));
     },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
@@ -217,7 +224,7 @@ function createBudgetScope(
       // The base allowance is spent first. Only once it is gone does a recovery class reach
       // for the single shared reserve -- an account move and a validated rebuild cannot each
       // take one.
-      const drawsReserve = policy.baseSendAllowance - spentBeforeSend <= 0;
+      const drawsReserve = !inherited && policy.baseSendAllowance - spentBeforeSend <= 0;
       if (drawsReserve) {
         if (!RESERVE_FUNDED_CLASSES.has(intent.sendClass)) {
           return { allowed: false, reason: "base-allowance-exhausted" };

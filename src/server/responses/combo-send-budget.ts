@@ -67,7 +67,8 @@ export function comboTargetSendBudget(
 ): RequestExecutionBudget {
   const policy = comboScope.policy;
   const heldForLaterTargets = Math.max(0, targetsDeclaredAfterThisOne);
-  const ceiling = Math.max(1, policy.maxTotalModelSends - heldForLaterTargets);
+  const ceiling = Math.min(policy.maxTotalModelSends,
+    Math.max(comboScope.used, 1, policy.maxTotalModelSends - heldForLaterTargets));
   return deriveSendBudgetScope(comboScope, {
     maxTotalModelSends: ceiling,
     baseSendAllowance: Math.min(ceiling, comboScope.used - (prepaid ? 1 : 0) + COMBO_TARGET_BASE_SENDS),

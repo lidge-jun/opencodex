@@ -1,6 +1,6 @@
 # Client Integrations
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Responses dispatch scopes share [reservation and settlement accounting](../transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local.
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Responses dispatch scopes share [reservation and settlement accounting](../transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local. Nested compact/combo recovery follows the [prepaid send-budget contract](../transports/responses.md#bounded-api-key-429-rotation).
 
 The client-integration subsystem writes one generated OpenCodex provider contribution into a
 third-party client's existing config without taking ownership of the rest of that file. Its core

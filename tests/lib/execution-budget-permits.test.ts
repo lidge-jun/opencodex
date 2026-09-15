@@ -128,6 +128,38 @@ describe("atomic dispatch permits", () => {
 });
 
 describe("combo scopes share reservation accounting", () => {
+  test("a prepaid compact handoff survives an intermediate scope without a second charge", () => {
+    const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const hop = parent.reserveDispatch({ sendClass: "initial", targetKey: "handoff", countedExternally: true });
+    if (!hop.allowed) throw new Error("expected hop");
+    const handoff = deriveSendBudgetScope(parent, ONE_SEND_LEFT, hop.permit);
+    const combo = deriveSendBudgetScope(handoff, ONE_SEND_LEFT);
+    expect(combo.remainingBaseSends(3)).toBe(1);
+    const first = combo.reserveDispatch({ sendClass: "initial", targetKey: "combo", countedExternally: true });
+    expect(first.allowed).toBe(true);
+    if (!first.allowed) throw new Error("prepaid send lost");
+    first.permit.use(); parent.used += 1;
+    expect(parent.used).toBe(1);
+    expect(handoff.reserveDispatch({ sendClass: "initial", targetKey: "duplicate" }).allowed).toBe(false);
+  });
+
+  test("a combo handoff keeps its prepaid recovery and cannot enlarge the compact ceiling", () => {
+    const parent = createRequestExecutionBudget(); parent.used = 3;
+    const hop = parent.reserveDispatch({ sendClass: "account-failover", targetKey: "handoff", countedExternally: true });
+    if (!hop.allowed) throw new Error("expected recovery");
+    const handoff = deriveSendBudgetScope(parent, { ...parent.policy, baseSendAllowance: 4, finalRecoveryAllowance: 0 }, hop.permit);
+    const combo = deriveSendBudgetScope(handoff, comboExecutionBudgetPolicy(3));
+    expect(combo.policy.maxTotalModelSends).toBe(4);
+    const booked = combo.reserveDispatch({ sendClass: "initial", targetKey: "first", countedExternally: true });
+    if (!booked.allowed) throw new Error("lost prepaid recovery");
+    const target = comboTargetSendBudget(combo, 2, booked.permit);
+    expect(target.remainingBaseSends(3)).toBe(1);
+    const physical = target.reserveDispatch({ sendClass: "transient", targetKey: "first" });
+    expect(physical.allowed).toBe(true);
+    expect(parent.used).toBe(4);
+    expect(combo.reserveDispatch({ sendClass: "combo-failover", targetKey: "second" }).allowed).toBe(false);
+  });
+
   test("a child sees the last send reserved by its parent before dispatch", () => {
     const parent = createRequestExecutionBudget(ONE_SEND_LEFT);
     const child = deriveSendBudgetScope(parent, ONE_SEND_LEFT);

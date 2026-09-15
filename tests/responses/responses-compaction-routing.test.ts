@@ -1464,10 +1464,10 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   });
 
-  test("a quota-blocked previous-model compact retries the same thread's successful routed handoff target (#2723)", async () => {
+  test.each([false, true])("a quota-blocked previous-model compact retries its routed handoff (combo: %s)", async combo => {
     await withPoolEnv("ocx-compact-routed-handoff-", async config => {
       config.providers.deepseek = {
-        adapter: "openai-chat",
+        adapter: combo ? "openai-responses" : "openai-chat",
         baseUrl: "https://api.deepseek.com",
         authMode: "key",
         apiKey: "deepseek-test-key",
@@ -1481,6 +1481,7 @@ describe("compact alternate-account attempt (#913)", () => {
         models: ["gpt-5.6-sol"],
       };
       const headers = { "x-codex-parent-thread-id": "compact-routed-handoff-thread" };
+      config.combos = { summarizer: { strategy: "failover", targets: [{ provider: "deepseek", model: "deepseek-v4-flash" }] } };
       const calls: Array<{ model: string; nativeCompact: boolean }> = [];
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         const url = typeof input === "string"
@@ -1496,12 +1497,12 @@ describe("compact alternate-account attempt (#913)", () => {
             status: 502,
           });
         }
-        return jsonResponse(completedPayload("DeepSeek handoff summary"));
+        return combo ? sseResponse([{ type: "response.completed", response: completedPayload("DeepSeek handoff summary") }])
+          : jsonResponse(completedPayload("DeepSeek handoff summary"));
       }) as typeof fetch;
-
       const manual = await handleResponsesCompact(
         compactionRequest(
-          baseCompactionBody({ model: "deepseek/deepseek-v4-flash" }),
+          baseCompactionBody({ model: combo ? "combo/summarizer" : "deepseek/deepseek-v4-flash" }),
           undefined,
           headers,
         ),
@@ -1525,7 +1526,6 @@ describe("compact alternate-account attempt (#913)", () => {
       expect(calls.length).toBeGreaterThan(0);
       expect(calls.every(call => call.model === "gpt-5.6-sol" && call.nativeCompact)).toBe(true);
       calls.length = 0;
-
       const logCtx: RequestLogContext = { model: "", provider: "" };
       const automatic = await handleResponsesCompact(
         compactionRequest(
@@ -1540,7 +1540,7 @@ describe("compact alternate-account attempt (#913)", () => {
       expect(automatic.status).toBe(200);
       const output = await automatic.json() as { output?: unknown[] };
       expect(output.output?.length).toBeGreaterThan(0);
-      expect(logCtx.provider).toBe("deepseek");
+      expect(logCtx.provider).toBe(combo ? "combo" : "deepseek");
       expect(calls.at(-1)).toEqual({ model: "deepseek-v4-flash", nativeCompact: false });
       expect(calls.slice(0, -1)).toHaveLength(3); // Native ladder + one handoff = four sends.
       expect(calls.slice(0, -1).every(call => (
