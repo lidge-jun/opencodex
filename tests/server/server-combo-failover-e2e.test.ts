@@ -1,3 +1,4 @@
+import { comboProviderFactory } from "../helpers/combo-provider";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
@@ -58,6 +59,7 @@ const { createCursorAdapter } = await import("../../src/adapters/cursor");
 import type { CursorTransportFactory } from "../../src/adapters/cursor/transport";
 let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
 let customFetchResponse: NonNullable<ProviderAdapter["fetchResponse"]> | undefined;
+const provider = comboProviderFactory(() => customFetchResponse);
 let customTransientResponse: (() => Promise<Response>) | undefined;
 let customUsageEstimate: ((model: string) => number | undefined) | undefined;
 let customCursorTransportFactory: CursorTransportFactory | undefined;
@@ -249,28 +251,6 @@ function responsesSuccess(text: string, model = "responses-model"): Record<strin
       content: [{ type: "output_text", text, annotations: [] }],
     }],
     usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
-  };
-}
-
-function provider(
-  adapter: string,
-  url: string,
-  apiKey: string,
-  extra: Partial<OcxProviderConfig> = {},
-): OcxProviderConfig {
-  return {
-    adapter,
-    baseUrl: url,
-    allowPrivateNetwork: url.includes("127.0.0.1"),
-    authMode: "key",
-    apiKey,
-    ...(adapter === "test-response" ? { fetch: (async (input, init) => {
-      if (!customFetchResponse) throw new Error("custom fetchResponse not installed");
-      return customFetchResponse({ url: String(input), method: init?.method ?? "POST",
-        headers: Object.fromEntries(new Headers(init?.headers)), body: String(init?.body ?? "") },
-      { abortSignal: init?.signal ?? undefined });
-    }) as typeof globalThis.fetch } : {}),
-    ...extra,
   };
 }
 

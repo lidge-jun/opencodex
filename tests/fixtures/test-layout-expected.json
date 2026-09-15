@@ -1,4 +1,5 @@
 {
+  "key-attribution.test.ts": "usage",
   "responses-core-modules.test.ts": "responses",
   "chat-responses-control-integration.test.ts": "responses",
   "coding-agent-tool-result-images.test.ts": "adapters",
