@@ -166,8 +166,10 @@ discovery or catalog/cache replacement. Deterministic config and ownership refus
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
 Exactly one conversation-history refusal scopes the relabel unit instead of vetoing the apply
 transition, and only because it is permanent. Codex allocates paginated rollout ordinals inside
-its own writer, so `history_paginated_requires_native_writer` is not retryable: the transition
-writes config, profile, and `model_catalog_json`, the relabel job is skipped without spawning
+its own writer, so `history_paginated_requires_native_writer` is not retryable: when the admitted
+candidate preserves any existing provider table, the transition writes config, profile,
+and `model_catalog_json`.
+On successful apply, the relabel job is skipped without spawning
 its Worker, and the reason travels in the human message and in the structured
 `historyPreflightFailureReason` field *alongside* `success: true`. Every other reason — an
 unreadable state database, a rollout whose identity changed, a preflight that could not run —
@@ -175,12 +177,14 @@ describes a store that may be relabelable on the next attempt, so those keep the
 and the compensating rollback. Recording them as a stand-down would mark the transition
 converged and suppress the relabel permanently.
 
-Standing the relabel down changes what the routing form may retire. Rows this home tagged
-`opencodex` resolve only through a `[model_providers.opencodex]` table; the loopback form
-normally retires that table precisely because the relabel migrates those rows back to `openai`
-in the same pass. With the relabel stood down, a table the home already published survives the
-write, so those conversations keep a provider id that exists. Paginated rollout bytes and thread
-rows are never modified in this state.
+Rows this home tagged `opencodex` resolve through a `[model_providers.opencodex]` table.
+Apply retains that existing definition before building the candidate witness, even when
+history preflight passes. The root-override form still selects the built-in provider for new
+conversations. Background history work is not atomic with config publication, so its future
+success cannot authorize retiring the old definition first. If native pagination begins after
+artifact commit or while the worker starts, the old references still resolve and any worker
+failure is reported. Paginated rollout bytes and thread rows remain untouched. Explicit
+restore and removal retain their separate guards below.
 
 Treating the refusal as a veto is what made every current Codex home unusable: paginated
 rollouts refuse unconditionally, so `model_catalog_json` never reached config.toml and both the
