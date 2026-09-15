@@ -125,6 +125,20 @@ const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string
   },
 ];
 
+const REGISTRY_BY_ID = new Map(PROVIDER_REGISTRY.map(entry => [entry.id, entry]));
+
+const REGISTRY_STATIC_MODEL_IDS = new Map<string, readonly string[]>(
+  PROVIDER_REGISTRY.map(entry => {
+    const ids = new Set<string>();
+    for (const id of entry.models ?? []) ids.add(id);
+    for (const id of registryModelIdKeys(entry)) ids.add(id);
+    return [entry.id, Object.freeze([...ids])];
+  }),
+);
+
+const REGISTRY_ALIAS_BY_ID = new Map(PROVIDER_REGISTRY.flatMap(entry => entry.alias ? [[entry.id, entry.alias]] : []));
+
+
 /**
  * Known native model ids for a provider — the decode source for the Codex slug codec
  * (src/providers/slug-codec.ts). Union of static config ids, registry seeds, and the
@@ -139,16 +153,12 @@ export function knownModelIdsForProvider(
   const ids = new Set<string>();
   for (const id of prov.models ?? []) ids.add(id);
   if (prov.defaultModel) ids.add(prov.defaultModel);
-  const registry = providerMatchesRegistryTransportWithStaticGuards(provName, prov)
-    ? PROVIDER_REGISTRY.find(entry => entry.id === provName)
-    : undefined;
-  for (const id of registry?.models ?? []) ids.add(id);
-  // Registry model-keyed hint maps double as known native ids (e.g. NVIDIA carries no
-  // static models list but names `moonshotai/kimi-k2.6` in its effort/window maps). Which
-  // maps count is classified by the registry itself rather than listed here, so an id declared
-  // only in a map this function forgot is no longer undecodable, and a new model-keyed field
-  // fails typecheck until its keys are given a meaning.
-  for (const id of registry ? registryModelIdKeys(registry) : []) ids.add(id);
+  if (providerMatchesRegistryTransportWithStaticGuards(provName, prov)) {
+    const staticIds = REGISTRY_STATIC_MODEL_IDS.get(provName);
+    if (staticIds) {
+      for (let i = 0; i < staticIds.length; i++) ids.add(staticIds[i]);
+    }
+  }
   for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
   for (const model of config?.customModels ?? []) {
     if (model.provider === provName && model.modelId) ids.add(model.modelId);
@@ -258,7 +268,7 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
 
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   provider = { ...provider, _apiKeyAttempt: provider._apiKeyAttempt ?? captureProviderApiKeySelection(provider) };
-  const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
+  const registryEntry = REGISTRY_BY_ID.get(providerName);
   if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
     // A row whose adapter no longer matches its registry entry still reaches the Responses
@@ -698,7 +708,7 @@ function routeModelInternal(
         // and whose registry alias has not been claimed by another configured provider name or alias
         const registryMatches = Object.entries(config.providers).filter(([name, provider]) => {
           if (provider.alias !== undefined) return false;
-          const regAlias = PROVIDER_REGISTRY.find(e => e.id === name)?.alias;
+          const regAlias = REGISTRY_ALIAS_BY_ID.get(name);
           if (!regAlias || regAlias.toLowerCase() !== requestedLower) return false;
           const claimedByOther = Object.entries(config.providers).some(([otherName, p]) =>
             otherName !== name && (
