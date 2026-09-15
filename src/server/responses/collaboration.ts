@@ -152,6 +152,30 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
       dottedAliasOwners.set(t.name, null);
     }
   }
+  // Bare echo alias (`name` with no namespace spelling, #4679): some providers — observed
+  // on the muse family via Command Code — echo a namespaced tool by its bare name. The
+  // bare spelling is only a safe alias while it names ONE tool and cannot be read as
+  // another identity's canonical or dotted spelling.
+  const bareAliasOwners = new Map<string, string | null>();
+  for (const t of authorizedTools) {
+    if (!t.namespace) continue;
+    const identity = JSON.stringify([t.namespace, t.name]);
+    const owner = bareAliasOwners.get(t.name);
+    if (owner === undefined) bareAliasOwners.set(t.name, identity);
+    else if (owner !== identity) bareAliasOwners.set(t.name, null);
+  }
+  for (const t of authorizedTools) {
+    const canonical = namespacedToolName(t.namespace, t.name);
+    const owner = bareAliasOwners.get(canonical);
+    if (owner !== undefined && owner !== JSON.stringify([t.namespace, t.name])) {
+      bareAliasOwners.set(canonical, null);
+    }
+    const dotted = dottedToolName(t.namespace, t.name);
+    const dottedOwner = bareAliasOwners.get(dotted);
+    if (dottedOwner !== undefined && dottedOwner !== JSON.stringify([t.namespace, t.name])) {
+      bareAliasOwners.set(dotted, null);
+    }
+  }
   for (const t of authorizedTools) {
     // Upstream output is untrusted: only restore calls for tools the caller authorized.
     const wireName = namespacedToolName(t.namespace, t.name);
@@ -174,6 +198,17 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
         budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([dottedName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
         toolNsMap.set(dottedName, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
         if (t.parameters && typeof t.parameters === "object") toolParameterSchemas.set(dottedName, t.parameters);
+      }
+      // Bare echo alias (`name` with no namespace spelling, #4679): same tool identity as
+      // the flattened wire name, so a provider that drops the namespace prefix still
+      // restores against this entry. Ambiguous bare names were resolved to null above;
+      // skipping them falls back to the spellings every provider can still echo.
+      if (bareAliasOwners.get(t.name) === JSON.stringify([t.namespace, t.name])) {
+        budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+        declaredToolNames.add(t.name);
+        budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([t.name, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
+        toolNsMap.set(t.name, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
+        if (t.parameters && typeof t.parameters === "object") toolParameterSchemas.set(t.name, t.parameters);
       }
     }
     if (t.freeform) {
