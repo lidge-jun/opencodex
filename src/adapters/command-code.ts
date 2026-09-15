@@ -8,6 +8,7 @@ import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./bas
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { debugDroppedFrame } from "../lib/debug";
+import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { configuredReasoningEfforts } from "../reasoning-effort";
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
@@ -556,6 +557,9 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       };
     },
     async fetchResponse(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> {
+      // The outer caller records the entry send but does not reserve adapter-owned dispatches.
+      const initial = ctx?.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: request.url });
+      if (initial && (!initial.allowed || !initial.permit.use())) throw new SendBudgetExhaustedError(request.url);
       const response = await fetchCommandCode(request, ctx, executor);
       if (response.ok) return response;
       const currentEffort = (() => {
@@ -577,7 +581,11 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       if (!refreshed || refreshed.includes(currentEffort)) return response;
       const retry = requestWithoutReasoningEffort(request);
       if (!retry) return response;
+      const decision = ctx?.sendBudget?.reserveDispatch({ sendClass: "repair", targetKey: retry.url });
+      if (decision && (!decision.allowed || !decision.permit.use())) return response;
       try { void response.body?.cancel(); } catch { /* already closed */ }
+      // The caller owns the entry send; this adapter owns only its additional retry.
+      ctx?.onPhysicalSend?.({ ordinal: 2, recovery: "reasoning-effort-downgrade" });
       return fetchCommandCode(retry, ctx, executor);
     },
     async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {

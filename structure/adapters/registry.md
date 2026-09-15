@@ -183,3 +183,6 @@ implement legacy call/result pairing. Modern tool-image carriers are unchanged.
 raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
 translation boundary and verifies that rejection sends no upstream request.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+Command Code sends and its reasoning-effort downgrade retry share the request send budget;
+its retry observer follows the [physical-attempt attribution contract](../gui-and-management-api.md#upstream-key-account-attribution).

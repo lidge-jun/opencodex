@@ -246,12 +246,16 @@ final provider. Custom destinations and historic rows omit the field; consumers 
 infer subscription usage from the current configuration, model name, or inbound API key.
 The log reports usage, not subscription invoice amounts.
 
+<a id="api-key-usage-attribution"></a>
+
 API-key attempts also record `accountLogLabel` as `k` followed by 32 lowercase hex digits.
 The label is the first 128 bits of SHA-256 over
 `JSON.stringify(["ocx-key-account-v1", providerName, entryId ?? null, reference])`.
 The reference is the configured key value captured for the physical request, before environment
 or keychain resolution. Raw keys, references, and pool IDs are not written to the label field.
 A consumer can derive the same label from its local configuration without resolving secrets.
+This is a deterministic pseudonymous identifier, not encryption: anyone with a candidate
+configuration can recompute its label.
 Changing a literal key or reference changes the label; replacing the secret behind an unchanged
 reference keeps the same logical account. Older unlabeled records cannot be attributed reliably.
 
@@ -261,6 +265,9 @@ reported usage from failed responses. Missing usage remains unreported. Routed a
 are observed before image/search loops or continuation guards combine their usage. Consumers
 sum the flat attempts by provider/account and do not add the parent combo total again. These
 records identify usage; provider quota percentages remain separate upstream observations.
+Command Code reasoning-effort retries consume the shared request send budget and record one
+additional physical send as `reasoning-effort-downgrade`. A refused retry preserves the original
+upstream error response and does not add a send.
 
 `GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather

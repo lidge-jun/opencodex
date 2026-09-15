@@ -576,6 +576,12 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 Data keys authorize only the data matrix and authenticated catalog. Admin credentials authorize ordinary management and key rotation but cannot mint, exchange, or refresh a `gui-session`. Pairing grants are digest-only, origin-bound, one-use, capped at 128 live grants, burned after five grant failures, and source-limited after ten failures in ten minutes with at most 1,024 source buckets. `POST /api/session/logout` invalidates only the current origin/CSRF-authorized browser session.
 
+The hash is a deterministic pseudonym, not encryption; a consumer holding candidate local
+configuration can recompute it. Command Code reserves the initial request and reasoning-effort
+retry against the shared send budget. Refusing a retry preserves the original error body.
+Its inner-retry observer goes through the same routed dispatch owner as the entry send, so
+key requests record exactly one additional send with `reasoning-effort-downgrade`.
+
 ### Model picker ordering settings
 
 `GET /api/subagent-models` retains `chosen`, `available`, and `catalogState`, and adds routed-only

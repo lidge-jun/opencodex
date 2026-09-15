@@ -78,12 +78,12 @@ export function createAdapterContinuations(
     | "genericFailovers"
     | "applyFailoverSnapshot"
     | "noteRoutedAttemptSend"
+    | "noteAdapterPhysicalSend"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   sendBudgetState: Pick<
     ResponsesSendBudget,
     | "adapterSendBudget"
-    | "noteAdapterPhysicalSend"
     | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "reserveCredentialHop"
@@ -111,7 +111,6 @@ export function createAdapterContinuations(
   const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs } = adapterExchange;
   const {
     adapterSendBudget,
-    noteAdapterPhysicalSend,
     remainingTransientSendBudget,
     noteTransientSends,
     reserveCredentialHop,
@@ -188,7 +187,7 @@ export function createAdapterContinuations(
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
               sendBudget: adapterSendBudget,
-            onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
+            onPhysicalSend: send => transportState.noteAdapterPhysicalSend(continuationEstimate, send),
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               pacingSlotAcquired: true,

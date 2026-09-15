@@ -247,10 +247,15 @@ export async function prepareResponsesTransport(
   };
   // Key sends may be rebuilt while queued. Keep metadata pending until the guarded
   // physical dispatch binds it to the selection that actually reaches the upstream.
+  // A process exit before dispatch discards this unsent metadata; it is not usage evidence.
   let pendingKeySend: { estimate: number | undefined; recovery?: AttemptRecoveryKind } | undefined;
   const noteRoutedAttemptSend = (estimate: number | undefined, recovery?: AttemptRecoveryKind): void => {
     if (usesApiKeyAccount(route.provider)) pendingKeySend = { estimate, recovery };
     else noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery);
+  };
+  /** Inner adapter retries use the same dispatch owner as the entry send. */
+  const noteAdapterPhysicalSend = (estimate: number | undefined, send: { ordinal: number; recovery?: AttemptRecoveryKind }): void => {
+    if (send.ordinal > 1) noteRoutedAttemptSend(estimate, send.recovery);
   };
   const commitKeyAttemptSend = (): void => {
     if (!usesApiKeyAccount(route.provider)) return;
@@ -793,6 +798,7 @@ export async function prepareResponsesTransport(
     refreshRunTurnAdapter,
     oauthDispatch,
     noteRoutedAttemptSend,
+    noteAdapterPhysicalSend,
     commitKeyAttemptSend,
     bindKeyUsageFromBridge,
     anthropicSessionKey,

@@ -383,6 +383,7 @@
   "combos.test.ts": "codex-integration",
   "command-code-error-finish.test.ts": "providers",
   "command-code-provider.test.ts": "providers",
+    "command-code-retry.test.ts": "providers",
   "command-code-quota.test.ts": "providers",
   "command-code-workspace-cache.test.ts": "providers",
   "commandcode-provider.test.ts": "providers",

@@ -702,3 +702,7 @@ What must not happen is a ladder that charges and then returns through a path th
 nor releases. That is not a lost send; it is a send the request never made, spending an allowance a
 later recovery in the same request then cannot have. `tests/lib/execution-budget-permits.test.ts`
 pins both ladder shapes against exactly that.
+
+Adapter-owned retries enter the same pending dispatch metadata path as initial key sends.
+The actual dispatch commits their count and recovery label once; unsent pending metadata
+is discarded on process exit and is not usage evidence. See [key attribution](../gui-and-management-api.md#upstream-key-account-attribution).

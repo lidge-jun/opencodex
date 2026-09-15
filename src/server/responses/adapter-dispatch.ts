@@ -115,12 +115,12 @@ export async function prepareAdapterExchange(
     | "genericFailovers"
     | "applyFailoverSnapshot"
     | "noteRoutedAttemptSend"
+    | "noteAdapterPhysicalSend"
   >,
   responseEffects: Pick<ResponsesEffects, "cancelResponseCompletion" | "notifyResponseComplete" | "refreshRequestToolAliases">,
   sendBudgetState: Pick<
     ResponsesSendBudget,
     | "adapterSendBudget"
-    | "noteAdapterPhysicalSend"
     | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "recoverySendAllowance"
@@ -152,7 +152,6 @@ export async function prepareAdapterExchange(
   const { cancelResponseCompletion, notifyResponseComplete, refreshRequestToolAliases } = responseEffects;
   const {
     adapterSendBudget,
-    noteAdapterPhysicalSend,
     remainingTransientSendBudget,
     noteTransientSends,
     recoverySendAllowance,
@@ -278,7 +277,7 @@ export async function prepareAdapterExchange(
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
         sendBudget: adapterSendBudget,
-        onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
+        onPhysicalSend: send => transportState.noteAdapterPhysicalSend(inputTokenEstimate, send),
         stream: parsed.stream,
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               pacingSlotAcquired: true,
@@ -427,7 +426,7 @@ export async function prepareAdapterExchange(
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
             sendBudget: adapterSendBudget,
-              onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
+              onPhysicalSend: send => transportState.noteAdapterPhysicalSend(retryEstimate, send),
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 pacingSlotAcquired: true,
