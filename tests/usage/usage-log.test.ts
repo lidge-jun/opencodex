@@ -21,8 +21,10 @@ import {
   usageReadCacheStatsForTests,
   usageLogRevisionKey,
   type PersistedUsageEntry,
+  type PersistedUsageAttempt,
 } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import type { RequestLogContext } from "../../src/server/request-log";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -1126,9 +1128,9 @@ describe("usage log", () => {
   });
 
   test("shared request logging flow populates streamTimeline and failure attribution from real streaming failure (#1217)", async () => {
-    const { addFinalRequestLog } = await import("../src/server/request-log");
-    const { consumeForInspection } = await import("../src/server/relay");
-    type ReqLogCtx = import("../src/server/request-log").RequestLogContext;
+    const { addFinalRequestLog } = await import("../../src/server/request-log");
+    const { consumeForInspection } = await import("../../src/server/relay");
+    type ReqLogCtx = import("../../src/server/request-log").RequestLogContext;
 
     const requestId = "ocx-real-stream-fail-test";
     const start = Date.now() - 50;
@@ -1184,12 +1186,11 @@ describe("usage log", () => {
   });
 
   test("synthetic clean EOF sets transportPhase to mid_stream", async () => {
-    const { addFinalRequestLog } = await import("../src/server/request-log");
-    const { consumeForInspection } = await import("../src/server/relay");
+    const { addFinalRequestLog } = await import("../../src/server/request-log");
+    const { consumeForInspection } = await import("../../src/server/relay");
     const requestId = "ocx-stream-clean-eof-test";
     const start = Date.now() - 50;
     const logCtx: RequestLogContext = {
-      requestId,
       provider: "anthropic",
       model: "claude-sonnet-5",
       requestStartedAt: start,
@@ -1243,7 +1244,7 @@ describe("usage log", () => {
   });
 
   test("preserves distinct attempt-relative and request-relative streamTimeline on retry", async () => {
-    const { addFinalRequestLog, noteStreamTimelineEvent } = await import("../src/server/request-log");
+    const { addFinalRequestLog, noteStreamTimelineEvent } = await import("../../src/server/request-log");
     const requestId = "ocx-stream-retry-timeline-test";
     const requestStart = 10000;
     const attemptStart = 12000; // attempt starts 2000ms after request
@@ -1257,11 +1258,10 @@ describe("usage log", () => {
       status: 200,
       durationMs: 1500,
       sendCount: 2,
-      recoveryKinds: ["retry"],
+      recoveryKinds: ["transient-5xx"],
       usageStatus: "reported",
     };
     const logCtx: RequestLogContext = {
-      requestId,
       provider: "anthropic",
       model: "claude-sonnet-5",
       requestStartedAt: requestStart,

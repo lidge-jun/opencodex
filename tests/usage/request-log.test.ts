@@ -18,6 +18,7 @@ import {
   getRequestLogEntries,
   hydrateRequestLogsFromDisk,
   noteAttemptSend,
+  noteStreamTimelineEvent,
   recordAdapterReasoning,
   recordFirstOutput,
   requestLogEntryFromPersistedUsage,
@@ -44,6 +45,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../../src/server/request-log-cursor";
 
 async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -2272,5 +2274,56 @@ describe("request log snapshot cursor", () => {
     const stale = decodeRequestLogCursor(encode({ ...payload, h: "0".repeat(64) }));
     expect(stale).not.toBeNull();
     expect(selectRequestLogPoll(rows, query, stale, epoch)).toMatchObject({ logs: rows, reset: true });
+  });
+});
+
+describe("stream timeline modularization regressions", () => {
+  test("restart projection preserves safe relay diagnostics and drops credential-shaped values", () => {
+    const persisted: PersistedUsageEntry = {
+      requestId: "ocx-timeline-rebase", timestamp: 1, provider: "mock", model: "m",
+      status: 502, durationMs: 20, usageStatus: "unreported",
+      transportPhase: "x".repeat(90), terminalSource: "relay",
+      failureSide: "relay", failureStage: "relay_transform",
+      streamTimeline: { upstreamFirstByteMs: 3 },
+    };
+    const row = requestLogEntryFromPersistedUsage(normalizeUsageEntryForTest(persisted));
+    expect(row).toMatchObject({
+      transportPhase: "x".repeat(64), terminalSource: "relay",
+      failureSide: "relay", failureStage: "relay_transform",
+      streamTimeline: { upstreamFirstByteMs: 3 },
+    });
+    const unsafe = requestLogEntryFromPersistedUsage({
+      ...persisted, transportPhase: "password=super-secret-pw",
+      terminalSource: "api-key=supersecret12345",
+    });
+    expect(unsafe.transportPhase).toBeUndefined();
+    expect(unsafe.terminalSource).toBeUndefined();
+  });
+
+  test("a zero request origin is retained for later timeline events", () => {
+    const context: RequestLogContext = { model: "m", provider: "mock" };
+    noteStreamTimelineEvent(context, "upstreamFirstByteMs", 0, 25);
+    noteStreamTimelineEvent(context, "upstreamFirstSemanticOutputMs", undefined, 40);
+    expect(context.requestStartedAt).toBe(0);
+    expect(context.streamTimeline).toEqual({ upstreamFirstByteMs: 25, upstreamFirstSemanticOutputMs: 40 });
+  });
+
+  for (const [owner, expectedContexts] of [
+    ["serve-options.ts", 10],
+    ["websocket-handler.ts", 1],
+  ] as const) {
+    test(owner + " seeds every ingress log context", () => {
+      const source = readFileSync(repoPath("src/server/index", owner), "utf8");
+      const contexts = [...source.matchAll(/const logCtx: RequestLogContext = \{([\s\S]*?)\};/g)];
+      expect(contexts).toHaveLength(expectedContexts);
+      for (const context of contexts) expect(context[1]).toContain("requestStartedAt: start");
+    });
+  }
+
+  test("combo and passthrough owners retain the parent timeline origin", () => {
+    const combo = readFileSync(repoPath("src/server/responses/core-combo.ts"), "utf8");
+    const delivery = readFileSync(repoPath("src/server/responses/passthrough-delivery.ts"), "utf8");
+    expect(combo).toContain("requestStartedAt: logCtx.requestStartedAt");
+    expect(delivery).toContain("requestStartedAt: logCtx.requestStartedAt");
   });
 });

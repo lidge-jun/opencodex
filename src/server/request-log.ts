@@ -27,8 +27,6 @@ import {
   isKnownAffinityReason,
   isKnownCacheTelemetryProvenance,
   isKnownInboundProtocol,
-  isKnownTerminalSource,
-  isKnownTransportPhase,
   isKnownUsageSurface,
   isCodexUsageAccountLogLabel,
   isLogicalRequestId,
@@ -405,11 +403,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       ? { cacheProvenance: entry.cacheProvenance }
       : {}),
     ...persistedAffinityFields(entry),
-    ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
-    ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
-    ...(entry.streamTimeline ? { streamTimeline: entry.streamTimeline } : {}),
-    ...(entry.failureSide ? { failureSide: entry.failureSide } : {}),
-    ...(entry.failureStage ? { failureStage: entry.failureStage } : {}),
+    ...normalizeStreamDiagnostics(entry),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(entry.conversationStateScrub === "account-change"
@@ -574,14 +568,8 @@ export function addRequestLog(entry: RequestLogEntry) {
         ? { cacheProvenance: entry.cacheProvenance }
         : {}),
       ...persistedAffinityFields(entry),
-      ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
-      ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
       ...failureDiagnostics,
-      ...(entry.streamTimeline ? { streamTimeline: entry.streamTimeline } : {}),
-      ...(entry.failureSide ? { failureSide: entry.failureSide } : {}),
-      ...(entry.failureStage ? { failureStage: entry.failureStage } : {}),
-      ...(entry.transportPhase ? { transportPhase: entry.transportPhase } : {}),
-      ...(entry.terminalSource ? { terminalSource: entry.terminalSource } : {}),
+      ...diagnostics,
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
       ...(entry.claudeCompatibility ? { claudeCompatibility: entry.claudeCompatibility } : {}),
       ...(entry.conversationStateScrub === "account-change"
@@ -624,7 +612,7 @@ export function noteStreamTimelineEvent(
   now = Date.now(),
 ): void {
   if (!logCtx) return;
-  if (requestStartedAt && !logCtx.requestStartedAt) {
+  if (requestStartedAt !== undefined && logCtx.requestStartedAt === undefined) {
     logCtx.requestStartedAt = requestStartedAt;
   }
   if (!logCtx.streamTimeline) logCtx.streamTimeline = {};
@@ -1280,7 +1268,7 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
-  if (!logCtx.requestStartedAt) logCtx.requestStartedAt = start;
+  if (logCtx.requestStartedAt === undefined) logCtx.requestStartedAt = start;
   // Mid-stream web-search aborts used to emit response.failed and land as 502/upstream_server_error.
   // Prefer the client-close classification whenever the captured reason says so.
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
