@@ -1,3 +1,4 @@
+import type { SideChatCacheMetrics } from "../usage/side-chat-cache";
 import type { AdapterEvent, OcxParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
@@ -91,6 +92,7 @@ export interface ProviderAdapter {
 }
 
 export interface AdapterRequest {
+  sideChatCache?: SideChatCacheMetrics;
     url: string;
     method: string;
     headers: Record<string, string>;

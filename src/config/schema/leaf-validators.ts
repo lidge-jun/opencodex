@@ -277,6 +277,7 @@ export const providerConfigSchema = z.object({
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
+  experimentalCodexSideChatCache: z.boolean().optional(),
   // Validated rather than passed through: this schema ends in `.passthrough()`, so an
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
   // accepted, persisted, and then silently resolved to the `code_mode_only` default — the

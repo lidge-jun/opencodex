@@ -394,6 +394,7 @@ export interface OcxProviderConfig {
    * failover engine; "direct" pins the caller's main Codex login and never touches pool state.
    */
   codexAccountMode?: CodexAccountMode;
+  experimentalCodexSideChatCache?: boolean;
   apiKey?: string;
   /**
    * Key-auth header style for Anthropic-compatible providers.
