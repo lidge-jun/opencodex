@@ -411,6 +411,10 @@ Sum of the table: **1061**. Zero leftover.
 
 `fulfill-video.test.ts`, `plan-video.test.ts`, `xai-video-client.test.ts`
 
+#### `tests/telemetry/` (2)
+
+`telemetry-fingerprint.test.ts`, `telemetry-ledger.test.ts`
+
 #### `tests/e2e-style/` (1)
 
 `phase100-native-parity.test.ts`
