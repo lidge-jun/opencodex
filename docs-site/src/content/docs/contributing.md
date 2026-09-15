@@ -172,7 +172,7 @@ does not change `main`/`preview` review rules or allow direct pushes, force-push
 
 ## Adding a provider to the catalog
 
-All provider pickers and seeds derive from the canonical registry (`src/providers/registry.ts`):
+All provider pickers and seeds derive from the canonical registry (`src/providers/registry/entries-extended.ts`):
 
 ```ts
 {

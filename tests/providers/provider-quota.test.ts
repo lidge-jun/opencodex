@@ -119,8 +119,8 @@ afterEach(() => {
 
 describe("fetchProviderQuotaReports", () => {
   test("provider quota probes have no direct Response.json calls", () => {
-    const source = readFileSync(repoPath("src/providers/quota.ts"), "utf8");
-    expect(source).not.toMatch(/\.\s*json\s*\(/);
+    // Probes live in leaves now; the facade alone no longer holds one.
+    for (const p of ["quota.ts", "quota/vendor-probes-key.ts", "quota/vendor-probes-oauth.ts", "quota/antigravity.ts"]) expect(readFileSync(repoPath(`src/providers/${p}`), "utf8")).not.toMatch(/\.\s*json\s*\(/);
   });
 
   test("quota JSON reading cancels a body that stalls before its first byte", async () => {

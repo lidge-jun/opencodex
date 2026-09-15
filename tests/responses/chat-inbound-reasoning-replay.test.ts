@@ -15,6 +15,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { chatCompletionsToResponsesBody } from "../../src/chat/inbound";
+import { sanitizeReasoningInputContent } from "../../src/adapters/openai-responses";
 import { responsesRequestSchema } from "../../src/responses/schema";
 
 type Item = Record<string, unknown>;
@@ -39,6 +40,29 @@ describe("F6 assistant reasoning survives translation", () => {
     // Adjacency matters: the parser prepends a buffered reasoning item to the NEXT
     // assistant message, so it must sit immediately before it.
     expect(out[idx + 1]).toMatchObject({ type: "message", role: "assistant" });
+  });
+
+  // Regression: a Pi/Aside chat replay reached a Responses backend as
+  // `{ type: "reasoning", content: [...] }` with no `summary`, and the upstream refused the
+  // whole request with `Missing required parameter: 'input[2].summary'`. The field is optional
+  // in responsesRequestSchema, so only the live call failed.
+  test("the synthesized reasoning item carries the summary the Responses API requires", () => {
+    const item = items(body([USER, { role: "assistant", content: "a", reasoning_content: "prior analysis" }]))
+      .find(i => i.type === "reasoning")!;
+
+    expect(item.summary).toEqual([{ type: "summary_text", text: "prior analysis" }]);
+  });
+
+  // sanitizeReasoningInputContent blanks `content` on every destination that does not opt into
+  // plaintext replay, so the summary is what actually reaches a native backend.
+  test("the replayed thinking survives reasoning-content sanitization", () => {
+    const sanitized = sanitizeReasoningInputContent(
+      body([USER, { role: "assistant", content: "a", reasoning_content: "prior analysis" }]),
+    ) as Record<string, unknown>;
+    const item = (sanitized.input as Item[]).find(i => i.type === "reasoning")!;
+
+    expect(item.content).toEqual([]);
+    expect(item.summary).toEqual([{ type: "summary_text", text: "prior analysis" }]);
   });
 
   test("reasoning_details segments are joined in order", () => {

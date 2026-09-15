@@ -123,6 +123,12 @@ body and response, with narrow compatibility rewrites for routed gateways.
 `forward` uses configured static headers without relaying caller authorization; `key` uses the
 configured provider key.
 
+The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
+some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
+An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;
+if the caller sends none, OpenCodex does not invent one. No other caller header is widened by this
+exception.
+
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
 WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses Bun's
@@ -364,13 +370,13 @@ important than cosmetic de-duplication. Tool-free requests retain normal text co
 
 ### Reasoning effort
 
-`gpt-5.6-sol` and `claude-opus-5` have verified native effort support, and each model family names
-the request field differently. A selected `low`, `medium`, `high`, `xhigh`, or `max` value is sent
-as `additionalModelRequestFields.reasoning.effort` for `gpt-5.6-sol` and as
-`additionalModelRequestFields.output_config.effort` for `claude-opus-5`. Other Kiro models currently
-use emulated reasoning: opencodex converts the selected level into bounded thinking instructions in
-the user content because their native effort field has not been verified. Do not interpret an
-advertised effort control on those models as proof of upstream-native reasoning support.
+The GPT-5.6 family uses `additionalModelRequestFields.reasoning.effort`; `claude-opus-5`
+uses `additionalModelRequestFields.output_config.effort`. For `gpt-5.6-luna` and
+`gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the verified native path.
+Their `xhigh` selection retains the previous bounded thinking instructions in user content
+because that native rung has not been verified. `gpt-5.6-sol` and `claude-opus-5` keep
+their existing native `low`, `medium`, `high`, `xhigh`, and `max` behavior. Other Kiro
+models use emulated reasoning; an advertised effort control is not proof of native support.
 
 ## `cursor`
 

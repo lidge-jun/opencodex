@@ -710,10 +710,10 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["system", "codex-restart"],
-    summary: "Restart the Codex app-server.",
+    summary: "Restart the Codex desktop app and app-servers.",
     routes: [{ method: "POST", path: "/api/system/codex-restart" }],
     flags: [
-      { name: "--yes", value: "boolean", summary: "Required: restarts the operator's running Codex app-server." },
+      { name: "--yes", value: "boolean", summary: "Required: fully quits and relaunches the operator's Codex desktop app and restarts its app-servers." },
       { name: "--json", value: "boolean", summary: "Emit the restart result as JSON." },
     ],
     mutates: true,

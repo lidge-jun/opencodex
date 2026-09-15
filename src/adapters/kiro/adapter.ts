@@ -13,6 +13,7 @@ import type {
 } from "../../types";
 import type { ProviderAdapter } from "../base";
 import type { AdapterFetchContext, AdapterRequest } from "../base";
+import type { RequestExecutionBudget } from "../../lib/request-execution-budget";
 import { safeKiroHttpErrorMessage } from "../kiro-errors";
 import { calibrateKiroEstimate } from "../kiro-calibration";
 import { normalizeKiroImages } from "../kiro-images";
@@ -44,6 +45,10 @@ import {
   type KiroWireClient,
 } from "./wire";
 
+/** The physical-send observer an `AdapterFetchContext` may carry, and the record it receives. */
+type KiroPhysicalSendObserver = NonNullable<AdapterFetchContext["onPhysicalSend"]>;
+type KiroPhysicalSend = Parameters<KiroPhysicalSendObserver>[0];
+
 // Adapter
 export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter {
   // Per-request closure (resolveAdapter builds a fresh adapter per request — server.ts:440 — so this
@@ -58,6 +63,28 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
   let requestSnapshot: OcxParsedRequest | undefined;
   let firstRequestBodyBytes = 0;
   let requestAbortSignal: AbortSignal | undefined;
+  // Captured the same way as the abort signal, because the text-fallback rebuild below runs
+  // outside the fetchResponse frame and used to construct a context without either (#4546).
+  let requestSendBudget: RequestExecutionBudget | undefined;
+  // Captured for the same reason, and needed for the same leg to be COUNTABLE rather than merely
+  // bounded: the rebuild's sends were paid for out of the request budget but reported by nobody,
+  // so no regression could pin how many requests one Kiro turn actually makes.
+  let requestOnPhysicalSend: KiroPhysicalSendObserver | undefined;
+  // One ordinal sequence across the whole turn. `fetchKiroWithRetry` numbers from 1 inside each
+  // call, and the caller reads ordinal 1 as the send it already recorded itself; forwarding the
+  // rebuild's raw ordinals would therefore drop its first send — the very send that makes the
+  // fallback a second request rather than a continuation of the first.
+  let physicalSendsObserved = 0;
+  const forwardPhysicalSend = (
+    send: KiroPhysicalSend,
+    ordinalBase: number,
+    defaultRecovery?: KiroPhysicalSend["recovery"],
+  ): void => {
+    const ordinal = ordinalBase + send.ordinal;
+    if (ordinal > physicalSendsObserved) physicalSendsObserved = ordinal;
+    const recovery = send.recovery ?? defaultRecovery;
+    requestOnPhysicalSend?.({ ordinal, ...(recovery ? { recovery } : {}) });
+  };
 
   const build = async (
     parsed: OcxParsedRequest,
@@ -204,10 +231,22 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       retryBodyReservation.commitRetained();
       retryBodyRetained = true;
       budget.releaseRetained(retryBodyUpperBound - retryBodyBytes, { kind: "request_copies" });
+      // Fixed before the rebuild dispatches, so the leg's ordinals continue the first attempt's
+      // sequence even though this call's own counter restarts at 1.
+      const fallbackOrdinalBase = physicalSendsObserved;
       const response = await fetchKiroWithRetry(retry.request, {
         abortSignal: requestAbortSignal,
         returnRawErrors: true,
         stream: true,
+        // The text-fallback rebuild used to construct a fresh context and drop the budget,
+        // so everything after the first send escaped the per-request cap.
+        ...(requestSendBudget ? { sendBudget: requestSendBudget } : {}),
+        // And reported nothing, so the sends it paid for were invisible. Its own first send is
+        // the completion retry itself: the first attempt produced progress without a final
+        // answer, which is the same recovery class the generic empty-completion guard records.
+        ...(requestOnPhysicalSend
+          ? { onPhysicalSend: (send: KiroPhysicalSend) => forwardPhysicalSend(send, fallbackOrdinalBase, "empty-completion") }
+          : {}),
       });
       return {
         response,
@@ -278,7 +317,17 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       // Keep it for the adapter-owned bounded continuation so cancelling the client turn aborts
       // both the first Kiro request and its one allowed completion retry.
       if (ctx?.abortSignal) requestAbortSignal = ctx.abortSignal;
-      return fetchKiroWithRetry(request, ctx);
+      if (ctx?.sendBudget) requestSendBudget = ctx.sendBudget;
+      if (ctx?.onPhysicalSend) requestOnPhysicalSend = ctx.onPhysicalSend;
+      // Reset per fetch call, because `ordinal` is defined within one call and the caller records
+      // ordinal 1 of each new attempt itself. The text fallback that follows this attempt then
+      // continues THIS attempt's sequence rather than an earlier one's.
+      physicalSendsObserved = 0;
+      // Routed through the same forwarder as the fallback so both legs share one ordinal
+      // sequence; a context without an observer is passed through untouched.
+      return fetchKiroWithRetry(request, requestOnPhysicalSend
+        ? { ...ctx, onPhysicalSend: (send: KiroPhysicalSend) => forwardPhysicalSend(send, 0) }
+        : ctx);
     },
 
     formatErrorBody(status: number, headers: Headers, payloadText: string): string {

@@ -1,0 +1,35 @@
+{
+  "stage": "transcript",
+  "kind": "frames",
+  "title": "Transcription frames reach the client, including multibyte text",
+  "protocol": "frameless-bidi-v3",
+  "provenance": "Synthetic. The transcript strings are written for this fixture and describe the fixture itself; they are not a recorded conversation.",
+  "note": "v3 reports incremental transcript text as input_transcript.added and output_transcript.added with the text at item.text, and ends each turn with turn.done, whose turn.role separates the user transcript from the assistant one. This is the class of frame the field report says never arrives.",
+  "deidentified": true,
+  "callId": "rtc_fixture_transcript",
+  "preamble": [],
+  "clientFrames": [
+    {
+      "type": "input_audio.append",
+      "audio": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }
+  ],
+  "upstreamFrames": [
+    {
+      "type": "input_transcript.added",
+      "item": { "id": "input_fixture_0001", "type": "input_transcript", "text": "list the " }
+    },
+    {
+      "type": "turn.done",
+      "turn": { "id": "turn_fixture_0001", "role": "user", "transcript": "list the fixture files" }
+    },
+    {
+      "type": "output_transcript.added",
+      "item": { "id": "output_fixture_0001", "type": "output_transcript", "text": "고정된 " }
+    },
+    {
+      "type": "turn.done",
+      "turn": { "id": "turn_fixture_0002", "role": "assistant", "transcript": "고정된 픽스처 파일을 나열합니다" }
+    }
+  ]
+}

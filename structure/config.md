@@ -1,11 +1,19 @@
 # Config Surface
 
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
+
+Configuration consumers retain the [refresh-lock ownership boundary](catalog.md#accounts-namespaces-and-pool-rotation); failing to establish a usable matching lock identity does not authorize deleting its path or replacing the refresh callback outcome with a path-probe error. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
 
 Connected-client catalog diagnostics use the [terminal rendering contract](runtime.md#cli-readiness-diagnostics) on the first connection and on every `ocx sync` refresh; stored catalog values are unchanged.
 
 Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
+
+Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
+
+The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
 ## Config surface
 
@@ -46,7 +54,7 @@ must not replace it with a local temp-and-rename shortcut.
 
 > Decision record: [ADR-0016](decisions/ADR-0016-config-surface.md)
 
-`src/types.ts` is the shape and `src/config.ts` is the loader; neither is reproduced here. What
+`src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What
 matters for maintainers is which groups exist and who resolves them:
 
 | Group | Keys | Resolution rule |
@@ -59,18 +67,20 @@ matters for maintainers is which groups exist and who resolves them:
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
 | Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`gui-and-management-api.md`](gui-and-management-api.md). |
 
-Env values are resolved through `src/config.ts`, so a config value naming an env var never persists
+Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists
 the secret itself.
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
-`claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config.ts` salvage already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
+`claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config/salvage.ts` already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
 
 The former `showCodexSparkQuota` key is inert passthrough data when loading an old config.
 It is absent from the typed settings contract and cannot re-enable Spark quota through the
 management API. Retirement does not migrate user-selected model ids or erase usage history.
 
 ## Config injection
+
+An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
 
 `src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
 keeps its native provider id, which decides whether existing thread history still resolves.
@@ -164,8 +174,10 @@ discovery or catalog/cache replacement. Deterministic config and ownership refus
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
 Exactly one conversation-history refusal scopes the relabel unit instead of vetoing the apply
 transition, and only because it is permanent. Codex allocates paginated rollout ordinals inside
-its own writer, so `history_paginated_requires_native_writer` is not retryable: the transition
-writes config, profile, and `model_catalog_json`, the relabel job is skipped without spawning
+its own writer, so `history_paginated_requires_native_writer` is not retryable: when the admitted
+candidate preserves any existing provider table, the transition writes config, profile,
+and `model_catalog_json`.
+On successful apply, the relabel job is skipped without spawning
 its Worker, and the reason travels in the human message and in the structured
 `historyPreflightFailureReason` field *alongside* `success: true`. Every other reason — an
 unreadable state database, a rollout whose identity changed, a preflight that could not run —
@@ -173,12 +185,14 @@ describes a store that may be relabelable on the next attempt, so those keep the
 and the compensating rollback. Recording them as a stand-down would mark the transition
 converged and suppress the relabel permanently.
 
-Standing the relabel down changes what the routing form may retire. Rows this home tagged
-`opencodex` resolve only through a `[model_providers.opencodex]` table; the loopback form
-normally retires that table precisely because the relabel migrates those rows back to `openai`
-in the same pass. With the relabel stood down, a table the home already published survives the
-write, so those conversations keep a provider id that exists. Paginated rollout bytes and thread
-rows are never modified in this state.
+Rows this home tagged `opencodex` resolve through a `[model_providers.opencodex]` table.
+Apply retains that existing definition before building the candidate witness, even when
+history preflight passes. The root-override form still selects the built-in provider for new
+conversations. Background history work is not atomic with config publication, so its future
+success cannot authorize retiring the old definition first. If native pagination begins after
+artifact commit or while the worker starts, the old references still resolve and any worker
+failure is reported. Paginated rollout bytes and thread rows remain untouched. Explicit
+restore and removal retain their separate guards below.
 
 Treating the refusal as a veto is what made every current Codex home unusable: paginated
 rollouts refuse unconditionally, so `model_catalog_json` never reached config.toml and both the
@@ -267,7 +281,7 @@ The unregistered executor CLI module stores Remote Workspace state separately fr
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 `dropCodexSafetyBuffering` is an optional boolean, default false. Invalid API candidates reject;
 malformed persisted values stay disabled. It controls only the allowlisted client-output hints
@@ -307,6 +321,6 @@ The text-only consumer reads exact inputModalities declarations before legacy hi
 
 ## Catalog auto-refresh
 
-`catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
+`catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
 
 Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.

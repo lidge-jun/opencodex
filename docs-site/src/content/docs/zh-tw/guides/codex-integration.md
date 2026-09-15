@@ -365,4 +365,6 @@ ocx restore back # 讓普通 Codex 再次指向仍在執行的 proxy
 
 如果受影響的歷史儲存區支援分頁，提供者切換可能傳回 `history_paginated_requires_native_writer`。此原因不再拒絕寫入 Codex 設定、參考設定檔與模型目錄。`ocx sync` 與 `ocx start` 仍會寫入這些檔案並設定 `model_catalog_json`，因此 Codex 模型選擇器會繼續顯示所有經 OpenCodex 路由的模型。只有這一條原因會讓對話歷史的重新標記停手，因為分頁歷史序號由 Codex 自己的寫入器分配，重試也不會改變。無法讀取的狀態資料庫、身分已變的歷史檔案、未能執行的預檢等其他歷史預檢原因仍會拒絕整個切換並回復，因為那些情況以後可能成功。在此狀態下，OpenCodex 不會修改分頁歷史檔案或執行緒列。既有對話保留已標記的提供者，不會被遷移；新對話仍正常經代理路由。重新標記停手時，家目錄裡既有的 `[model_providers.opencodex]` 表會保留而不是撤下，即便是 root-override（loopback）形式也一樣，這樣列上標記為 `opencodex` 的對話仍能對應到還存在的提供者 id。可遷移儲存區中的 legacy 記錄也適用。CLI 會印出 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore` 與移除 Codex 設定仍會因 `history_paginated_requires_native_writer` 被拒絕。執行緒列仍在參照時撤掉 `[model_providers.opencodex]` 定義會使這些對話無法解析，而復原路徑沒有辦法留下相容提供者表。已經分頁的家目錄目前無法透過產品解除安裝；這是已知的未完成工作，而非預期行為。
 
+返回根 URL 覆寫模式時，即使歷史預檢通過，OpenCodex 也會在提交設定前保留既有的 `[model_providers.opencodex]` 定義。如此一來，即使 Codex 在提交後或背景歷史工作啟動時遷移歷史格式，舊的 `opencodex` 對話仍能找到其提供者。新對話繼續使用所選的根提供者；明確要求的還原仍執行原有的獨立刪除檢查。
+
 請勿改寫使用中的分頁歷史檔案或執行緒列來自行遷移這些對話。復原前關閉相關對話，只回報確切錯誤與版本，不要公開私人歷史。備份或指令碼成功不能證明顯示已復原；重新開啟 Codex 後確認對話。
