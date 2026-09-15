@@ -246,3 +246,85 @@ package allowlist and the CI path filters rather than assumed.
 The release-surface slice adds one result worth stating separately, because it is the failure mode
 that no test would catch: all 125 source files this range adds are covered by the `src` entry in the
 package allowlist, so no facade imports a leaf the published package would omit.
+
+### What the audit changed on dev
+
+Two regressions fixed, and one of the accepted risks closed because it was cheap to close.
+
+- The generic-OAuth 429 ladder now hands its reservation back when nothing was sent.
+  `src/server/responses/adapter-dispatch.ts` confirms the permit immediately before the rebuild
+  that spends it and releases in its `catch`; since `release()` is a no-op once used, that one
+  catch covers both a pre-dispatch throw and a throw from the send itself.
+  `src/server/responses/adapter-continuation.ts` only releases, because its replay happens on the
+  next loop iteration and confirming before `continue` would charge a hop that never ran. This is
+  the shape `run-turn-execution.ts` already had.
+- A replacement credential no longer inherits the dead one's quarantine:
+  `src/codex/auth-api/login-flow.ts` clears the refresh-failure record where it replaces the
+  credential, beside the quota and needs-reauth clears that were already there. The store already
+  cleared on a successful refresh and on deletion; replacement was the missing case. Keying the
+  cooldown by account id alone stays latent — a stale in-flight refresh of the old generation can
+  still record a failure after the clear — and is left for a generation-fencing change rather than
+  widened here.
+- The file-size ratchet gets its six former god-files back at their current sizes
+  (`src/codex/routing.ts` 1626, `src/responses/state.ts` 1371, `src/codex/shim.ts` 1246,
+  `src/codex/inject.ts` 987, `src/providers/quota.ts` 558, `src/codex/catalog/sync.ts` 52). They
+  had been dropped from the cap list when they fell under the 2,000-line threshold, so the files
+  this whole decomposition programme exists to shrink were the only ones free to grow back.
+
+The remaining accepted risks are unchanged: two guards with false-negative shapes, eleven
+hand-written files exempted as "generated", the unwired spend ledger, the adapter path reporting
+budget exhaustion as a 502, and the file-only account-change scrub. None is a regression in this
+range, and each is written down here rather than carried silently into the release.
+
+### The fix itself needed a second round
+
+The release-decision review caught that the first permit fix moved the leak rather than closing it.
+Confirming the hop with `use()` immediately before `rebuildAndRefetch` looked right, but that
+function returns `{ failed }` when `buildRequest` throws — a request-shaping failure that never
+reaches the wire — and the outer `catch` never sees it, so the charge stayed for a send that never
+happened.
+
+The hop is now confirmed by a callback the rebuild invokes at its own dispatch boundary, after the
+request is shaped and immediately before `noteAttemptSend`, and the `{ failed }` arm releases:
+a no-op when the boundary was reached, a refund when the rebuild died before it. That boundary is
+also the honest place to name, because it is the line where "we are about to send" becomes true.
+
+Two residuals stay recorded rather than closed. The permit guards are source oracles: they pin the
+control flow at the boundary, not the budget arithmetic under an injected failure, because
+exercising that path needs a rotation fixture with a throwing snapshot fetch. And the cooldown fix
+has a source oracle for the caller plus a unit case for the store, where an integration test
+through the existing mock OAuth harness could assert eligibility directly after a reauthentication.
+
+### Closing the cooldown race rather than accepting it
+
+The release-decision review also pointed out that clearing on replacement is mitigation, not
+elimination: a refresh flight already in the air when the reauthentication lands still fails
+afterwards, and its late report would re-quarantine the credential that replaced the one it was
+about. Relative to 2.55.0, which had no cooldown at all, that is a new user-visible exclusion, so
+it is fixed rather than written down.
+
+`clearCodexPoolRefreshFailure` now bumps a per-account fence, a refresh flight captures that fence
+before it settles, and a failure reporting a stale fence is dropped. A failure of the NEW credential
+still counts, so the bound the cooldown exists to enforce is unchanged. `clearAllCodexPoolRefreshFailures`
+deliberately does not bump: it is the coarse reset the routing layer performs when it discards
+per-account state, and a later genuine failure should still count against the account.
+
+### Third round on the same fix
+
+An interdiff audit of the shipping tree — not the tree the audit started from — found the boundary
+was still one step too early. `onDispatch` fired before `waitForProviderRequestSlot`, and that wait
+rejects for an abort, a saturated queue, an expired slot or a removed provider without ever calling
+the adapter. Since `release()` is a no-op once used, neither the `{ failed }` arm nor the catch
+could refund that no-send case.
+
+The hop is now confirmed at the two places that actually reach the wire: after the pacing wait and
+immediately before `fetchResponse`, and inside the retry thunk immediately before
+`fetchWithHeaderTimeout`. The guard pins both orderings rather than the single textual placement it
+pinned before, which is what let the earlier version pass.
+
+The same audit recorded one High finding that is **not** from this change and is accepted with the
+others: the hop reservation and the adapter's own budget can both charge one physical replay,
+because the hop is not handed down through `pendingHopPermit` the way the passthrough ladder does
+it, and Kiro reserves again immediately before its send. That is the same #4546 accounting
+incompleteness already listed above, it predates this range's fix, and closing it means threading
+the permit through the adapter boundary rather than widening this patch.

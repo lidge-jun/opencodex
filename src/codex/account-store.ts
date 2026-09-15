@@ -20,6 +20,7 @@ import { CODEX_REFRESH_FLIGHT_CEILING_MS } from "./quota-recovery-timing";
 import {
   CodexPoolRefreshCooldownError,
   clearCodexPoolRefreshFailure,
+  codexPoolRefreshFence,
   isCodexPoolRefreshCooling,
   noteCodexPoolRefreshFailure,
 } from "./pool-refresh-backoff";
@@ -851,6 +852,10 @@ export async function forceRefreshCodexPoolToken(
     // the credential, not for whoever happened to be waiting.
     undefined,
   );
+  // Captured before the flight settles, spent only if it fails. A reauthentication that lands
+  // while this is in the air replaces the grant and clears its failures; this fence is how the
+  // late failure knows it is talking about a credential that no longer exists.
+  const refreshFence = codexPoolRefreshFence(id);
   completion.then(
     resolved => {
       clearCodexPoolRefreshFailure(id);
@@ -865,7 +870,7 @@ export async function forceRefreshCodexPoolToken(
       if (isTerminalCodexPoolRefreshFailure(error) || isOperationalCodexPoolRefreshFailure(error)) {
         if (isTerminalCodexPoolRefreshFailure(error)) clearCodexPoolRefreshFailure(id);
       } else {
-        noteCodexPoolRefreshFailure(id, classifyCodexPoolRefreshFailureReason(error));
+        noteCodexPoolRefreshFailure(id, classifyCodexPoolRefreshFailureReason(error), undefined, refreshFence);
       }
       settle({ kind: "failed", error });
     },

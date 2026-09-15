@@ -673,3 +673,23 @@ acyclic dependencies, recursive dispatch, lease-transfer wiring, capture-name hy
 send-holder/permit behavior. Cross-owner source assertions read the actual implementations via
 `tests/helpers/responses-core-source.ts`; focused passthrough and subagent assertions read their
 specific delivery/preparation owner. Existing runtime Lab-boundary tests still start at `core.ts`.
+
+## Credential-hop reservations
+
+A credential rotation inside one provider's roster reserves a hop from the request's shared send
+budget before it knows whether a rotation is even possible, because the reservation is the charge:
+`reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
+idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
+
+Two shapes are correct and both are in the tree. Where the ladder dispatches inside its own `try`
+— `adapter-dispatch.ts`, `run-turn-execution.ts` — it confirms with `use()` immediately before the
+send and releases in its `catch`, so one catch covers a pre-dispatch throw and a throw from the
+send alike. Where the replay happens after the loop continues — `adapter-continuation.ts` — it must
+not confirm, because the send has not happened yet; it only releases. The passthrough ladder is a
+third shape: it reserves with `countedExternally: true` and hands the permit to the rebuild through
+`pendingHopPermit`, because there the retry helper reports the same physical send.
+
+What must not happen is a ladder that charges and then returns through a path that neither confirms
+nor releases. That is not a lost send; it is a send the request never made, spending an allowance a
+later recovery in the same request then cannot have. `tests/lib/execution-budget-permits.test.ts`
+pins both ladder shapes against exactly that.

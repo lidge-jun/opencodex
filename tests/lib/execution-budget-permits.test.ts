@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
@@ -194,5 +195,74 @@ describe("layer caps intersect the shared budget", () => {
     if (fourth.allowed) throw new Error("unreachable");
     expect(fourth.reason).toBe("base-allowance-exhausted");
     expect(budget.reserveSpent).toBe(false);
+  });
+});
+
+/**
+ * The refund property above is only worth something if every caller actually uses it.
+ *
+ * The generic-OAuth 429 ladder reserves a hop before it knows whether a rotation is possible.
+ * Two of its three exits released correctly and the `catch` did not, so a throw from the
+ * snapshot fetch or from credential application charged the request for a send that never left
+ * the process — and a later recovery in the same request was then refused on an allowance
+ * nothing had spent. The passthrough and runTurn ladders already had it right; these two did not.
+ *
+ * This is a source oracle because the defect lives in the caller's control flow, not in the
+ * budget: a unit test of the budget cannot see a caller that forgets to hand the permit back.
+ */
+describe("generic-OAuth hop reservations are handed back when no send happens", () => {
+  // Bounded to each ladder's own span and matched on the catch that opens it. An earlier version
+  // of this test searched from the first following "catch {" and found the inline body-cancel
+  // catch instead, so it passed while the defect was still present.
+  const ladder = (relativePath: string, fromMarker: string, toMarker: string): string => {
+    const source = readFileSync(new URL("../../" + relativePath, import.meta.url), "utf8");
+    const from = source.indexOf(fromMarker);
+    const to = source.indexOf(toMarker, from);
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    return source.slice(from, to);
+  };
+  const refundsOnThrow = /catch \{[^}]*hop\.permit\?\.release\(\)/;
+
+  test("the adapter dispatch ladder confirms at the dispatch boundary and refunds otherwise", () => {
+    const source = readFileSync(new URL("../../src/server/responses/adapter-dispatch.ts", import.meta.url), "utf8");
+    // Confirming before the rebuild is not enough: buildRequest failures return { failed }
+    // without reaching the wire, so the hop is confirmed by the callback the rebuild invokes at
+    // its dispatch boundary, and the { failed } arm refunds whatever that callback did not spend.
+    expect(source).toContain("onDispatch?.()");
+    // Confirmed at the wire, not before the pacer: waitForProviderRequestSlot can reject for an
+    // abort, a saturated queue, an expired slot or a removed provider without ever calling the
+    // adapter, and release() is a no-op once used, so an early confirm could never be refunded.
+    const slotWait = source.indexOf("await waitForProviderRequestSlot(");
+    const confirmAfterWait = source.indexOf("onDispatch?.()", slotWait);
+    const adapterSend = source.indexOf("transportState.activeAdapter.fetchResponse(retryRequest", confirmAfterWait);
+    expect(slotWait).toBeGreaterThan(-1);
+    expect(confirmAfterWait).toBeGreaterThan(slotWait);
+    expect(adapterSend).toBeGreaterThan(confirmAfterWait);
+    // The helper path has the same boundary inside the thunk that reaches the wire.
+    const thunkConfirm = source.indexOf("onDispatch?.()", adapterSend);
+    const headerTimeout = source.indexOf("fetchWithHeaderTimeout(retryRequest.url", thunkConfirm);
+    expect(thunkConfirm).toBeGreaterThan(adapterSend);
+    expect(headerTimeout).toBeGreaterThan(thunkConfirm);
+    const block = ladder(
+      "src/server/responses/adapter-dispatch.ts",
+      "adapter-recovery-oauth-429",
+      "attemptOpaqueBlobRecovery",
+    );
+    expect(block).toContain('rebuildAndRefetch("oauth-account-429", () => { hop.permit?.use(); })');
+    expect(block).toMatch(/if \("failed" in result\) \{[^}]*hop\.permit\?\.release\(\)/);
+    expect(block).toMatch(refundsOnThrow);
+  });
+
+  test("the continuation ladder refunds, because its send happens after the loop continues", () => {
+    const block = ladder(
+      "src/server/responses/adapter-continuation.ts",
+      "continuation-oauth-429",
+      "shouldAttemptImageTierRetry",
+    );
+    // Nothing in that try dispatches: the replay is the next iteration, so a throw must return
+    // the reservation rather than confirm it.
+    expect(block).not.toContain("hop.permit?.use()");
+    expect(block).toMatch(refundsOnThrow);
   });
 });

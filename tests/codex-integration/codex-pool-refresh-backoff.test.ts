@@ -1,9 +1,11 @@
 import { describe, expect, test, beforeEach } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES,
   CODEX_POOL_REFRESH_FAILURE_BACKOFF_MS,
   CodexPoolRefreshCooldownError,
   clearCodexPoolRefreshFailure,
+  codexPoolRefreshFence,
   getCodexPoolRefreshCooldownUntil,
   isCodexPoolRefreshCooling,
   noteCodexPoolRefreshFailure,
@@ -128,3 +130,93 @@ describe("terminal has one definition", () => {
   });
 });
 
+
+/**
+ * The cooldown is learned about a CREDENTIAL and keyed by account id alone, so a replacement
+ * generation inherited the dead one's quarantine: an account that had just been reauthenticated
+ * stayed out of selection for up to a minute, and with a healthy sibling the thread detoured and
+ * lost its warm cache and continuation. Clearing on a successful refresh was already there
+ * (`account-store`); clearing on a successful credential REPLACEMENT was not.
+ *
+ * The behaviour is asserted at the unit below; the oracle is what pins the caller, because a
+ * store-level test cannot see a login path that forgets to call it.
+ */
+describe("a replacement credential does not inherit the failed one's cooldown", () => {
+  test("clearing after the cooldown opened restores eligibility immediately", () => {
+    const now = 2_000_000;
+    setCodexPoolRefreshFailureNowForTests(now);
+    for (let attempt = 0; attempt < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; attempt += 1) {
+      noteCodexPoolRefreshFailure("acct-reauth", "unknown");
+    }
+    expect(isCodexPoolRefreshCooling("acct-reauth")).toBe(true);
+    clearCodexPoolRefreshFailure("acct-reauth");
+    expect(isCodexPoolRefreshCooling("acct-reauth")).toBe(false);
+    expect(getCodexPoolRefreshCooldownUntil("acct-reauth")).toBeNull();
+    setCodexPoolRefreshFailureNowForTests(undefined);
+  });
+
+  test("the login path clears it where it replaces the credential", () => {
+    const source = readFileSync(
+      new URL("../../src/codex/auth-api/login-flow.ts", import.meta.url),
+      "utf8",
+    );
+    const save = source.indexOf("saveCodexAccountCredential(accountId, credential");
+    const settled = source.indexOf("clearAccountNeedsReauth(accountId)", save);
+    expect(save).toBeGreaterThan(-1);
+    expect(settled).toBeGreaterThan(save);
+    // Same block that already drops the stale quota and the needs-reauth flag: the refresh
+    // cooldown belongs with them, because the credential those failures were about is gone.
+    expect(source.slice(save, settled)).toContain("clearCodexPoolRefreshFailure(accountId)");
+  });
+});
+
+/**
+ * Clearing on replacement is only half the fix. A refresh flight that started before the
+ * reauthentication is still in the air, and its late failure would have re-quarantined the
+ * credential that replaced the one it was actually about — the same 15-60s exclusion, arriving
+ * a moment after the account was let back in.
+ */
+describe("a late failure from the replaced credential cannot re-cool the new one", () => {
+  test("a stale fence is ignored and a current one still counts", () => {
+    const now = 3_000_000;
+    setCodexPoolRefreshFailureNowForTests(now);
+    const staleFence = codexPoolRefreshFence("acct-fenced");
+    for (let attempt = 0; attempt < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; attempt += 1) {
+      noteCodexPoolRefreshFailure("acct-fenced", "unknown", undefined, staleFence);
+    }
+    expect(isCodexPoolRefreshCooling("acct-fenced")).toBe(true);
+
+    // The reauthentication lands: failures cleared, fence moved.
+    clearCodexPoolRefreshFailure("acct-fenced");
+    expect(isCodexPoolRefreshCooling("acct-fenced")).toBe(false);
+    const freshFence = codexPoolRefreshFence("acct-fenced");
+    expect(freshFence).not.toBe(staleFence);
+
+    // The old flight finally fails. It is speaking for a grant that no longer exists.
+    for (let attempt = 0; attempt < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; attempt += 1) {
+      noteCodexPoolRefreshFailure("acct-fenced", "unknown", undefined, staleFence);
+    }
+    expect(isCodexPoolRefreshCooling("acct-fenced")).toBe(false);
+
+    // A failure of the NEW credential still counts, so the bound is not weakened.
+    for (let attempt = 0; attempt < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; attempt += 1) {
+      noteCodexPoolRefreshFailure("acct-fenced", "unknown", undefined, freshFence);
+    }
+    expect(isCodexPoolRefreshCooling("acct-fenced")).toBe(true);
+    setCodexPoolRefreshFailureNowForTests(undefined);
+  });
+
+  test("the refresh flight captures the fence before it settles", () => {
+    const source = readFileSync(
+      new URL("../../src/codex/account-store.ts", import.meta.url),
+      "utf8",
+    );
+    const captured = source.indexOf("codexPoolRefreshFence(id)");
+    const reported = source.indexOf("noteCodexPoolRefreshFailure(id,");
+    expect(captured).toBeGreaterThan(-1);
+    // Captured before the settlement that spends it, not read at failure time — reading it late
+    // would return the post-reauthentication value and defeat the fence.
+    expect(reported).toBeGreaterThan(captured);
+    expect(source.slice(reported, reported + 200)).toContain("refreshFence");
+  });
+});

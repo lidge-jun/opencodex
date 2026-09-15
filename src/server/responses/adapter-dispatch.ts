@@ -369,6 +369,13 @@ export async function prepareAdapterExchange(
      */
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
+      /**
+       * Called at the dispatch boundary — after the request is rebuilt and shaped, immediately
+       * before the send. A caller holding a reserved hop confirms it here rather than before the
+       * rebuild, because a build failure returns `{ failed }` without ever reaching the wire and
+       * a permit confirmed earlier would keep the charge for a send that never happened.
+       */
+      onDispatch?: () => void,
     ): Promise<Response | { failed: Response }> => {
       let retryRequest: AdapterRequest;
       if (transportState.sameTargetRequest !== undefined && transportState.sameTargetParsed === parsed && transportState.sameTargetToken === transportState.transportToken) {
@@ -410,6 +417,11 @@ export async function prepareAdapterExchange(
         try {
           if (transportState.activeAdapter.fetchResponse) {
             await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
+            // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
+            // an abort, a saturated queue, an expired slot or a removed provider, and none of
+            // those reach the wire. Confirming earlier would hold the charge for a send that the
+            // pacer refused.
+            onDispatch?.();
             return await transportState.activeAdapter.fetchResponse(retryRequest, {
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
@@ -449,6 +461,9 @@ export async function prepareAdapterExchange(
                 if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
                   throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
                 }
+                // Same boundary on the helper path: the thunk is what reaches the wire, and it
+                // can be refused above before it does. use() past the first attempt is a no-op.
+                onDispatch?.();
                 return fetchWithHeaderTimeout(retryRequest.url,
                   applyUpstreamRecoveryInit({
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
@@ -740,10 +755,23 @@ export async function prepareAdapterExchange(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-          const result = await rebuildAndRefetch("oauth-account-429");
-          if ("failed" in result) return result.failed;
+          // Confirm at the dispatch boundary, not here: a rebuild can fail while shaping the
+          // request and return `{ failed }` without reaching the wire, and a permit confirmed
+          // before that would hold the charge for a send that never happened.
+          const result = await rebuildAndRefetch("oauth-account-429", () => { hop.permit?.use(); });
+          if ("failed" in result) {
+            // A no-op if the boundary was reached; a refund if the rebuild died before it.
+            hop.permit?.release();
+            return result.failed;
+          }
           upstreamResponse = result;
         } catch {
+          // A throw before the send — snapshot fetch, credential application, adapter
+          // resolution — must hand the reservation back. Without this the ladder charges the
+          // request for a send it never made, and a later recovery in the same request is
+          // refused on an allowance nothing spent. release() is idempotent and a no-op once
+          // used, so a throw from the rebuild keeps its charge.
+          hop.permit?.release();
           break;
         }
       }
