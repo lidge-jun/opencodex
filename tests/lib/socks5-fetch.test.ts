@@ -2,12 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createServer as createHttpServer } from "node:http";
 import net, { createConnection, createServer as createTcpServer, Socket, type Server as TcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
-import { configureSocks5Fetch } from "../src/lib/proxy-env";
-import { providerOutboundGet } from "../src/lib/provider-outbound";
-import { socks5Fetch } from "../src/lib/socks5-fetch";
-import { applyProxyEnv } from "../src/config";
-import { providerFetch } from "../src/server/responses/fetch-helpers";
-import type { OcxProviderConfig } from "../src/types";
+import { configuredOutboundFetch, effectiveProxyFor, configureSocks5Fetch } from "../../src/lib/proxy-env";
+import { providerOutboundGet } from "../../src/lib/provider-outbound";
+import { socks5Fetch } from "../../src/lib/socks5-fetch";
+import { applyProxyEnv } from "../../src/config";
+import { providerFetch } from "../../src/server/responses/fetch-helpers";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const proxyEnvKeys = [
   "HTTP_PROXY",
@@ -261,8 +261,8 @@ describe("socks5Fetch", () => {
       expect(outcome.message).toBe("test write failure");
       if (!clientSocket || !listenerCountsBeforeWait) throw new Error("backpressure socket was not captured");
       expect(clientSocket.listenerCount("drain")).toBe(listenerCountsBeforeWait.drain);
-      expect(clientSocket.listenerCount("error")).toBe(listenerCountsBeforeWait.error);
-      expect(clientSocket.listenerCount("close")).toBe(listenerCountsBeforeWait.close);
+      expect(clientSocket.listenerCount("error")).toBe(0);
+      expect(clientSocket.listenerCount("close")).toBe(0);
     } finally {
       Socket.prototype.write = originalWrite;
       heldSocket?.destroy();
@@ -539,4 +539,92 @@ describe("configured SOCKS5 fetch", () => {
       await Promise.all([close(proxy), close(target)]);
     }
   });
+});
+
+describe("SOCKS5 framing after modularization", () => {
+  test.each([
+    ["headers", ["HTTP/1.1 200 OK\r\nContent-Len", "gth: 2\r\n", "\r\nok"]],
+    ["chunk sizes", ["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", "2\r", "\nok\r\n", "0\r", "\n\r\n"]],
+  ] as Array<[string, string[]]>)("waits for fresh bytes across fragmented %s", async (_name, fragments) => {
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const target = createTcpServer(socket => {
+      socket.on("error", () => undefined);
+      let request = "";
+      const onRequest = (data: Buffer) => {
+        request += data.toString("latin1");
+        if (!request.includes("\r\n\r\n")) return;
+        socket.removeListener("data", onRequest);
+        const send = (index: number) => {
+          if (socket.destroyed || index >= fragments.length) return;
+          socket.write(fragments[index]!);
+          if (index + 1 < fragments.length) timers.push(setTimeout(() => send(index + 1), 10));
+        };
+        send(0);
+      };
+      socket.on("data", onRequest);
+    });
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    try {
+      const response = await socks5Fetch(
+        "http://provider.invalid:" + targetPort + "/fragmented", undefined,
+        "socks5://127.0.0.1:" + proxyPort,
+      );
+      expect(await response.text()).toBe("ok");
+    } finally {
+      for (const timer of timers) clearTimeout(timer);
+      await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
+  test("rejects an over-limit header even when its delimiter is already buffered", async () => {
+    const target = createTcpServer(socket => {
+      socket.on("error", () => undefined);
+      let request = "";
+      const onRequest = (data: Buffer) => {
+        request += data.toString("latin1");
+        if (!request.includes("\r\n\r\n")) return;
+        socket.removeListener("data", onRequest);
+        socket.end("HTTP/1.1 200 OK\r\nX-Large: " + "x".repeat(64 * 1024) + "\r\nContent-Length: 0\r\n\r\n");
+      };
+      socket.on("data", onRequest);
+    });
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    try {
+      await expect(socks5Fetch("http://provider.invalid:" + targetPort + "/headers", undefined,
+        "socks5://127.0.0.1:" + proxyPort)).rejects.toThrow("headers are too large");
+    } finally { await Promise.all([close(proxy), close(target)]); }
+  });
+
+  test("an admitted explicit SOCKS route cannot be replaced by changed environment routing", async () => {
+    const target = createHttpServer((_request, response) => response.end("snapshot"));
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    process.env.ALL_PROXY = "socks5://127.0.0.1:1";
+    process.env.NO_PROXY = "*";
+    let fallbackCalls = 0;
+    const fallback = (async () => { fallbackCalls++; throw new Error("snapshot must remain proxied"); }) as typeof fetch;
+    try {
+      const init: RequestInit & { proxy: string } = { proxy: "socks5://127.0.0.1:" + proxyPort };
+      const response = await configuredOutboundFetch("http://provider.invalid:" + targetPort + "/snapshot", init, fallback);
+      expect(await response.text()).toBe("snapshot");
+      expect(fallbackCalls).toBe(0);
+    } finally { await Promise.all([close(proxy), close(target)]); }
+  });
+
+  test("effective proxy selection agrees with the SOCKS wrapper while ignoring HTTP ALL_PROXY", () => {
+    const url = new URL("https://provider.invalid/");
+    expect(effectiveProxyFor(url, { ALL_PROXY: "socks5://127.0.0.1:1080", HTTPS_PROXY: "http://other:8080" }))
+      .toBe("socks5://127.0.0.1:1080");
+    expect(effectiveProxyFor(url, { ALL_PROXY: "http://other:8080" })).toBeNull();
+  });
+});
+
+test("SOCKS5 does not silently downgrade an explicit HTTP/2 protocol pin", async () => {
+  for (const protocol of ["http2", "h2"]) {
+    const init = { protocol } as RequestInit & { protocol: string };
+    await expect(socks5Fetch("https://provider.invalid/", init, "socks5://127.0.0.1:1"))
+      .rejects.toThrow("cannot honor an explicit HTTP/2 pin");
+  }
 });

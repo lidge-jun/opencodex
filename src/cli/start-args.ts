@@ -32,7 +32,7 @@ export function normalizeSocks5(raw: string): string {
       }
       return trimmed;
     } catch {
-      throw new StartArgsError(`Invalid SOCKS5 address: ${trimmed}`);
+      throw new StartArgsError("Invalid SOCKS5 address; expected socks5://host:port");
     }
   }
   if (/^socks4a?:\/\//i.test(trimmed)) {
@@ -56,7 +56,7 @@ export function normalizeSocks5(raw: string): string {
     }
     return `socks5://${trimmed}`;
   }
-  throw new StartArgsError(`Invalid SOCKS5 address: ${trimmed}`);
+  throw new StartArgsError("Invalid SOCKS5 address; expected socks5://host:port");
 }
 
 export function parseStartOptions(argv: string[]): StartOptions {

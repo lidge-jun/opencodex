@@ -48,7 +48,7 @@ function validateProxy(proxy: string): URL {
     throw new Socks5FetchError(`unsupported SOCKS5 proxy protocol: ${parsed.protocol}`);
   }
   if (!parsed.hostname) throw new Socks5FetchError("SOCKS5 proxy URL has no host");
-  if (parsed.port && (!/^\d+$/.test(parsed.port) || Number(parsed.port) > 65535)) {
+  if (parsed.port && (!/^\d+$/.test(parsed.port) || Number(parsed.port) < 1 || Number(parsed.port) > 65535)) {
     throw new Socks5FetchError("SOCKS5 proxy port is invalid");
   }
   if (parsed.search || parsed.hash) throw new Socks5FetchError("SOCKS5 proxy URL must not contain a query or fragment");
@@ -108,6 +108,7 @@ function connectSocket(hostname: string, port: number, signal?: AbortSignal): Pr
 class SocketReader {
   private buffer = Buffer.alloc(0);
   private ended = false;
+  private failure: Error | undefined;
   private readonly exactWaiters: Array<{
     length: number;
     resolve: (value: Buffer) => void;
@@ -123,6 +124,7 @@ class SocketReader {
     socket.once("error", this.onError);
     socket.once("end", this.onEnd);
     socket.once("close", this.onEnd);
+    socket.resume();
   }
 
   private readonly onData = (chunk: Buffer | string): void => {
@@ -133,9 +135,11 @@ class SocketReader {
     }
     this.buffer = Buffer.concat([this.buffer, value]);
     this.flushExact();
+    if (this.buffer.byteLength >= MAX_BODY_SLICE_BYTES) this.socket.pause();
   };
 
   private readonly onError = (error: Error): void => {
+    this.failure = error;
     this.ended = true;
     this.rejectExact(error);
     this.rejectAny(error);
@@ -143,8 +147,9 @@ class SocketReader {
 
   private readonly onEnd = (): void => {
     this.ended = true;
-    this.rejectExact(new Socks5FetchError("SOCKS5 socket ended before the expected bytes arrived"));
-    while (this.anyWaiters.length > 0) this.anyWaiters.shift()!.resolve(Buffer.alloc(0));
+    this.rejectExact(this.failure ?? new Socks5FetchError("SOCKS5 socket ended before the expected bytes arrived"));
+    if (this.failure) this.rejectAny(this.failure);
+    else while (this.anyWaiters.length > 0) this.anyWaiters.shift()!.resolve(Buffer.alloc(0));
   };
 
   private flushExact(): void {
@@ -165,86 +170,89 @@ class SocketReader {
   }
 
   read(length: number, signal?: AbortSignal): Promise<Buffer> {
+    if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("The operation was aborted"));
     if (this.buffer.byteLength >= length) {
       const value = this.buffer.subarray(0, length);
       this.buffer = this.buffer.subarray(length);
+      if (this.buffer.byteLength < MAX_BODY_SLICE_BYTES) this.socket.resume();
       return Promise.resolve(value);
     }
-    if (this.ended) return Promise.reject(new Socks5FetchError("SOCKS5 socket ended before the expected bytes arrived"));
+    if (this.ended) return Promise.reject(this.failure ?? new Socks5FetchError("SOCKS5 socket ended before the expected bytes arrived"));
     return new Promise((resolve, reject) => {
-      const waiter = { length, resolve, reject };
       const onAbort = () => {
-        signal?.removeEventListener("abort", onAbort);
         const index = this.exactWaiters.indexOf(waiter);
         if (index >= 0) this.exactWaiters.splice(index, 1);
-        reject(signal?.reason instanceof Error ? signal.reason : new Error("The operation was aborted"));
+        waiter.reject(signal?.reason ?? new Error("The operation was aborted"));
       };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      this.exactWaiters.push({
+      // Store this exact object so cancellation removes the queued waiter.
+      const waiter = {
         length,
-        resolve: value => {
-          signal?.removeEventListener("abort", onAbort);
-          resolve(value);
-        },
-        reject: error => {
-          signal?.removeEventListener("abort", onAbort);
-          reject(error);
-        },
-      });
+        resolve: (value: Buffer) => { signal?.removeEventListener("abort", onAbort); resolve(value); },
+        reject: (error: unknown) => { signal?.removeEventListener("abort", onAbort); reject(error); },
+      };
+      this.exactWaiters.push(waiter);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+      else this.socket.resume();
     });
   }
 
   async readUntil(delimiter: Buffer, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
-    while (true) {
-      const index = this.buffer.indexOf(delimiter);
-      if (index >= 0) {
-        const end = index + delimiter.byteLength;
-        const value = this.buffer.subarray(0, end);
-        this.buffer = this.buffer.subarray(end);
-        return value;
-      }
-      if (this.buffer.byteLength > maxBytes) throw new Socks5FetchError("SOCKS5 upstream response headers are too large");
+    // Keep partial framing outside the shared buffer: readAny must wait for NEW
+    // bytes instead of returning the same unterminated prefix in a microtask loop.
+    let pending = Buffer.alloc(0);
+    for (;;) {
       const chunk = await this.readAny(signal);
       if (chunk.byteLength === 0) throw new Socks5FetchError("SOCKS5 upstream closed before response headers");
-      this.buffer = Buffer.concat([this.buffer, chunk]);
+      pending = Buffer.concat([pending, chunk]);
+      const index = pending.indexOf(delimiter);
+      if (index >= 0) {
+        const end = index + delimiter.byteLength;
+        if (end > maxBytes) throw new Socks5FetchError("SOCKS5 upstream response headers are too large");
+        // Another data event may have arrived while the read promise resumed.
+        this.buffer = Buffer.concat([pending.subarray(end), this.buffer]);
+        if (this.buffer.byteLength >= MAX_BODY_SLICE_BYTES) this.socket.pause();
+        return pending.subarray(0, end);
+      }
+      if (pending.byteLength >= maxBytes) throw new Socks5FetchError("SOCKS5 upstream response headers are too large");
     }
   }
 
   readAny(signal?: AbortSignal): Promise<Buffer> {
+    if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("The operation was aborted"));
     if (this.buffer.byteLength > 0) {
       const value = this.buffer;
       this.buffer = Buffer.alloc(0);
+      this.socket.resume();
       return Promise.resolve(value);
     }
+    if (this.failure) return Promise.reject(this.failure);
     if (this.ended) return Promise.resolve(Buffer.alloc(0));
     return new Promise((resolve, reject) => {
-      const waiter = { resolve, reject };
       const onAbort = () => {
-        signal?.removeEventListener("abort", onAbort);
         const index = this.anyWaiters.indexOf(waiter);
         if (index >= 0) this.anyWaiters.splice(index, 1);
-        reject(signal?.reason instanceof Error ? signal.reason : new Error("The operation was aborted"));
+        waiter.reject(signal?.reason ?? new Error("The operation was aborted"));
       };
+      const waiter = {
+        resolve: (value: Buffer) => { signal?.removeEventListener("abort", onAbort); resolve(value); },
+        reject: (error: unknown) => { signal?.removeEventListener("abort", onAbort); reject(error); },
+      };
+      this.anyWaiters.push(waiter);
       signal?.addEventListener("abort", onAbort, { once: true });
-      this.anyWaiters.push({
-        resolve: value => {
-          signal?.removeEventListener("abort", onAbort);
-          resolve(value);
-        },
-        reject: error => {
-          signal?.removeEventListener("abort", onAbort);
-          reject(error);
-        },
-      });
+      if (signal?.aborted) onAbort();
+      else this.socket.resume();
     });
   }
 
   dispose(): void {
+    this.socket.pause();
     this.socket.removeListener("data", this.onData);
     this.socket.removeListener("error", this.onError);
     this.socket.removeListener("end", this.onEnd);
     this.socket.removeListener("close", this.onEnd);
     if (this.buffer.byteLength > 0) this.socket.unshift(this.buffer);
+    this.buffer = Buffer.alloc(0);
     this.rejectExact(new Socks5FetchError("SOCKS5 reader disposed"));
     this.rejectAny(new Socks5FetchError("SOCKS5 reader disposed"));
   }
@@ -253,7 +261,8 @@ class SocketReader {
 async function socks5Connect(proxy: string, target: URL, signal?: AbortSignal): Promise<Socket> {
   const parsedProxy = validateProxy(proxy);
   const credentials = proxyCredentials(parsedProxy);
-  const socket = await connectSocket(parsedProxy.hostname, Number(parsedProxy.port) || DEFAULT_SOCKS5_PORT, signal);
+  const proxyHost = parsedProxy.hostname.replace(/^\[|\]$/g, "");
+  const socket = await connectSocket(proxyHost, Number(parsedProxy.port) || DEFAULT_SOCKS5_PORT, signal);
   socket.setTimeout(SOCKS5_CONNECT_TIMEOUT_MS, () => {
     socket.destroy(new Socks5FetchError("SOCKS5 handshake timed out"));
   });
@@ -293,6 +302,9 @@ async function socks5Connect(proxy: string, target: URL, signal?: AbortSignal): 
     const reply = await reader.read(4, signal);
     if (reply[0] !== SOCKS5_VERSION) throw new Socks5FetchError("SOCKS5 proxy returned an invalid connect response");
     if (reply[1] !== SOCKS5_SUCCESS) throw new Socks5FetchError(`SOCKS5 proxy refused the connection (code ${reply[1]})`);
+    if (reply[2] !== 0x00 || ![0x01, SOCKS5_DOMAIN, 0x04].includes(reply[3]!)) {
+      throw new Socks5FetchError("SOCKS5 proxy returned an invalid address type or reserved byte");
+    }
     const addressLength = reply[3] === 0x01 ? 4 : reply[3] === SOCKS5_DOMAIN ? (await reader.read(1, signal))[0]! : 16;
     await reader.read(addressLength + 2, signal);
     socket.setTimeout(0);
@@ -436,7 +448,7 @@ function responseBody(
     socket.setTimeout(0);
     socket.destroy();
   };
-  const onAbort = () => socket.destroy(signal.reason instanceof Error ? signal.reason : new Error("The operation was aborted"));
+  const onAbort = () => socket.destroy();
   signal.addEventListener("abort", onAbort, { once: true });
   const readChunk = async (): Promise<Buffer | null> => {
     if (chunked) {
@@ -497,20 +509,33 @@ export async function socks5Fetch(
   init: RequestInit | undefined,
   proxy: string,
 ): Promise<Response> {
+  const protocol = (init as (RequestInit & { protocol?: string }) | undefined)?.protocol;
+  if (protocol === "http2" || protocol === "h2") {
+    throw new Socks5FetchError("SOCKS5 transport cannot honor an explicit HTTP/2 pin");
+  }
   const request = new Request(input, init);
   const target = new URL(request.url);
   if (target.protocol !== "http:" && target.protocol !== "https:") {
     throw new Socks5FetchError(`SOCKS5 fetch only supports HTTP(S) URLs, got ${target.protocol}`);
   }
   const tunnel = await socks5Connect(proxy, target, request.signal);
+  if (request.signal.aborted) {
+    tunnel.destroy();
+    throw request.signal.reason ?? new Error("The operation was aborted");
+  }
   let socket: Socket = tunnel;
-  const onAbort = () => socket.destroy(request.signal.reason instanceof Error ? request.signal.reason : new Error("The operation was aborted"));
+  let reader: SocketReader | undefined;
+  // Pending reads carry the abort reason; destruction must not enqueue an
+  // unhandled socket error after their listeners have been removed.
+  const onAbort = () => socket.destroy();
   request.signal.addEventListener("abort", onAbort, { once: true });
   try {
     if (target.protocol === "https:") socket = await secureSocket(tunnel, target, request.signal);
     socket.setTimeout(SOCKS5_RESPONSE_TIMEOUT_MS, () => {
       socket.destroy(new Socks5FetchError("SOCKS5 upstream request timed out"));
     });
+    // Observe socket errors and early responses while uploading, not only after it.
+    reader = new SocketReader(socket);
     const headers = requestHeaders(request, target);
     const head = `${request.method} ${target.pathname}${target.search} HTTP/1.1\r\n${headers.text}\r\n`;
     socket.write(head);
@@ -530,7 +555,6 @@ export async function socks5Fetch(
         bodyReader.releaseLock();
       }
     }
-    const reader = new SocketReader(socket);
     let responseHead = parseResponseHead(await reader.readUntil(HEADER_END, MAX_RESPONSE_HEADER_BYTES, request.signal));
     while (responseHead.status >= 100 && responseHead.status < 200 && responseHead.status !== 101) {
       responseHead = parseResponseHead(await reader.readUntil(HEADER_END, MAX_RESPONSE_HEADER_BYTES, request.signal));
@@ -544,6 +568,7 @@ export async function socks5Fetch(
     });
   } catch (error) {
     request.signal.removeEventListener("abort", onAbort);
+    reader?.dispose();
     socket.destroy();
     throw error;
   }

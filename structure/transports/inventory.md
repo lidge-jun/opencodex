@@ -159,3 +159,13 @@ configured outbound fetch, preserving physical-send admission and dispatch overr
 Native WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
 Proxy-selected discovery peers remain unpinnable, and private destinations still
 require explicit private-network permission plus NO_PROXY before direct transport.
+
+The tunnel reader keeps incomplete framing separate from queued socket bytes,
+waits for new input, and caps headers even when the terminating delimiter arrives
+in the same chunk. Cancellation removes the exact queued waiter; socket errors
+remain errors on later reads rather than turning into clean EOF. Buffered body
+reads pause the socket at the local high-water mark, and upload errors are observed
+before the response reader takes ownership. `tests/lib/socks5-fetch.test.ts` covers
+fragmented framing, header limits and explicit-route snapshot preservation.
+Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
+honor them and must not silently downgrade the provider contract.
