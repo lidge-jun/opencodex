@@ -53,7 +53,7 @@ export function dottedToolName(namespace: string | undefined, name: string): str
  * name (an MCP server may legitimately advertise one under its own namespace).
  */
 const LEGACY_SHELL_BRIDGE_TOOL_NAMES = ["exec_command", "shell_command"] as const;
-const CODE_MODE_HELPER_TOOL_NAMES = [
+export const CODE_MODE_HELPER_TOOL_NAMES = [
   ...LEGACY_SHELL_BRIDGE_TOOL_NAMES,
   "write_stdin",
   "apply_patch",

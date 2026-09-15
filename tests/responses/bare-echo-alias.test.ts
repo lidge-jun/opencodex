@@ -63,8 +63,8 @@ describe("bare echo alias for namespaced tools (#4679)", () => {
     } as any);
     const maps = buildToolBridgeMaps(parsed as any);
     // Tool B's bare name ("collaboration.list_agents") collides with tool A's dotted
-    // spelling and vice versa — the mutual ambiguity poisons BOTH spellings, so no echo
-    // can be mis-attributed; only the canonical flats stay declared.
+    // spelling, so that bare alias is poisoned; tool A's dotted spelling is poisoned in
+    // return by the pre-existing dotted rule. Only the canonical flats stay declared.
     expect(maps.declaredToolNames.has("collaboration.list_agents")).toBe(false);
     expect(maps.toolNsMap.has("collaboration.list_agents")).toBe(false);
     expect(maps.declaredToolNames.has("collaboration__list_agents")).toBe(true);

@@ -30,7 +30,7 @@ import {
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
-import { dottedToolName, modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
+import {CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_HELPER_TOOL_NAMES, dottedToolName, modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
@@ -158,8 +158,10 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   // another identity's canonical or dotted spelling.
   const bareAliasOwners = new Map<string, string | null>();
   for (const t of authorizedTools) {
-    if (!t.namespace) continue;
-    const identity = JSON.stringify([t.namespace, t.name]);
+    // Bare (no-namespace) declarations participate as owners too: a namespaced tool whose
+    // bare name equals a bare-declared function must not gain the bare alias, mirroring how
+    // the tool_choice bare path refuses ambiguous owners across the whole request catalog.
+    const identity = JSON.stringify([t.namespace ?? null, t.name]);
     const owner = bareAliasOwners.get(t.name);
     if (owner === undefined) bareAliasOwners.set(t.name, identity);
     else if (owner !== identity) bareAliasOwners.set(t.name, null);
@@ -203,7 +205,14 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
       // the flattened wire name, so a provider that drops the namespace prefix still
       // restores against this entry. Ambiguous bare names were resolved to null above;
       // skipping them falls back to the spellings every provider can still echo.
-      if (bareAliasOwners.get(t.name) === JSON.stringify([t.namespace, t.name])) {
+      // Code-mode helper spellings never gain a bare alias: admitting bare `exec` into the
+      // declared set would let normalizeDeclaredToolName authorize the unrelated helper
+      // names, the exact surface the CODE_MODE_EXEC exception exists to contain.
+      if (
+        bareAliasOwners.get(t.name) === JSON.stringify([t.namespace, t.name])
+        && t.name !== CODE_MODE_EXEC_TOOL_NAME
+        && !(CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(t.name)
+      ) {
         budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
         declaredToolNames.add(t.name);
         budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([t.name, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
