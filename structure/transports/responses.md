@@ -234,6 +234,10 @@ Native Responses participates in the same pre-stream OAuth HTTP-429 account rota
 bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
 the complete credential/transport/replay identity, and attributes usage to the serving account.
 Single-account installs do not retry; a missing alternate credential preserves the original error.
+Credential-refresh failures are fenced by both the account generation and a global routing-state
+generation. Reauthentication advances the account fence; replacing the whole routing roster
+advances the global fence. A late failure from either obsolete state is ignored, while failures
+captured after the reset still contribute to the bounded cooldown.
 
 Startup removes legacy Grok 4.5/4.6 Chat overrides once and persists the provider-owned
 `xaiResponsesDefaultVersion` marker. Later explicit Chat choices survive restarts. The migration
