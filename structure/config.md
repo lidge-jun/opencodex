@@ -244,6 +244,16 @@ and removes only normalized manifest entries. Manifest-owned directory links are
 traversing their targets. Unknown files remain in place and make the command report a partial
 uninstall with their exact paths.
 
+The newly created OAuth downgrade copy is registered after copying, so owned uninstall
+includes it. Invalid-config recovery copies are deliberately NOT registered: their names carry
+a timestamp, so one entry per invalid load would grow the uninstall manifest without bound, and
+the manifest stops validating past its path ceiling. A manifest that stops validating makes
+uninstall refuse outright, which would leave credentials on disk. Sweeping those copies by name
+pattern at removal time is the shape that fits; it is not in this change. Registration is best-effort: an intentionally
+unowned legacy home or a metadata-write failure must not suppress the recovery copy. Existing
+OAuth downgrade copies are neither rewritten nor retroactively claimed. Unregistered copies
+remain subject to the existing partial/refused uninstall result.
+
 Legacy nonempty config directories are deliberately not retroactively claimed. If either ownership
 file is missing, malformed, or bound to another root, uninstall refuses config deletion and reports
 the residual directory for manual review; there is no recursive-delete fallback.

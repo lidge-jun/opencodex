@@ -47,7 +47,8 @@ preserves saved user model selections and historical usage. See the bounded
 installed service resolve it the same way (`src/config.ts`). Ownership inside that root is tracked
 by the uninstall manifest in `src/lib/config-ownership.ts`, which starts from a declared path list
 and grows as opencodex claims further paths at runtime — so the manifest, not this table, is what
-bounds uninstall. This table groups the state by purpose; it is not an exhaustive file list, and
+bounds uninstall. Newly generated recovery backups follow the [backup ownership contract](config.md#restore)
+without suppressing recovery when registration is unavailable. This table groups state by purpose; it is not an exhaustive file list, and
 derived files such as `auth.json.pre-multiauth` are covered by the group they belong to.
 
 `$CODEX_HOME` is a separate root with a separate owner, and opencodex writes there too: removing the
