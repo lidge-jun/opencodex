@@ -146,6 +146,8 @@ selector，而不是分配一个新名称。
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
 
+注册或替换提供商（`POST /api/providers`）时，会先验证 `responsesPath` 和 `chatCompletionsPath`，再修改内存或磁盘中的配置。 加载配置文件时也适用同样的路径规则。
+
 API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/reference/configuration/server/#claude-code) 下配置。
 
 ## 提供者诊断出站安全性

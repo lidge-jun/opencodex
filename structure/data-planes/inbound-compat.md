@@ -1,5 +1,7 @@
 # Inbound Compatibility Surfaces
 
+Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+
 Compatibility callers retain the public Responses ingress described by the
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

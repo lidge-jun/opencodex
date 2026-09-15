@@ -116,6 +116,8 @@ ocx models provider openrouter on
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 舊版布林值，僅在較新欄位未設定時等同於 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本機執行政策。`off` 為預設；`codex-sandbox` 目前像 `off` 般 fail closed。 |
 
+註冊或替換供應商（`POST /api/providers`）時，會先驗證 `responsesPath` 和 `chatCompletionsPath`，再修改記憶體或磁碟中的設定。 載入設定檔時也適用相同的路徑規則。
+
 API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用由 `ocx login` 填入的憑證存放；訂閱支援的 Claude Code 啟動行為在 [`claudeCode.authMode`](/zh-tw/reference/configuration/server/#claude-code) 下設定。
 
 ## 供應商診斷對外安全

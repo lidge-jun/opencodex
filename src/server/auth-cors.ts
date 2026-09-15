@@ -1,3 +1,4 @@
+import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { modelCapabilitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { initialModelSelection } from "../providers/initial-model-selection";
@@ -754,6 +755,10 @@ export function providerManagementConfigError(
   }
   const destinationError = providerDestinationConfigError(name, typed);
   if (destinationError) return `provider ${name} ${destinationError}`;
+  for (const field of ["responsesPath", "chatCompletionsPath"] as const) {
+    const sendPathError = providerRelativeSendPathConfigError(field, raw[field]);
+    if (sendPathError) return `provider ${JSON.stringify(redactSecretString(name))} ${sendPathError}`;
+  }
   const headersError = providerHeadersConfigError(typed.headers);
   if (headersError) return `provider ${name} ${headersError}`;
   const retryOn429Error = retryOn429PolicyConfigError(raw.retryOn429);

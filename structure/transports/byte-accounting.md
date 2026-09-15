@@ -1,5 +1,7 @@
 # Byte Accounting
 
+Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+
 Responses body-reader limits and lifetime handling follow the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 
