@@ -25,7 +25,7 @@ import {
   joinSseFrameBytes,
   MAX_CLIENT_SSE_FRAME_BYTES,
 } from "./sse-frame-buffer";
-import { replaceSseDataPayload } from "./sse-payload-rewrite";
+import { replaceSseDataPayload, sseDataPayload } from "./sse-payload-rewrite";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
@@ -402,15 +402,7 @@ export function nextSseBlock(buffer: string): { block: string; delimiter: string
   };
 }
 
-export function sseDataPayload(block: string): string | null {
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const value = line.slice(5);
-    data.push(value.startsWith(" ") ? value.slice(1) : value);
-  }
-  return data.length > 0 ? data.join("\n") : null;
-}
+export { sseDataPayload } from "./sse-payload-rewrite";
 
 type JsonRecord = Record<string, unknown>;
 
