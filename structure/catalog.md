@@ -37,6 +37,8 @@ Shared parsing and streaming follow the [request-copy](transports/byte-accountin
   native rows from the output without rewriting the pristine backup or unrelated snapshots;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
 
+`src/codex/catalog/model-visibility.ts` also excludes models owned by disabled providers, including custom rows. `src/codex/catalog/routed-gather.ts` does not inherit provider configuration into custom rows while that provider is disabled.
+
 On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
 the rows being merged. This split is required because empty or partial provider discovery must
