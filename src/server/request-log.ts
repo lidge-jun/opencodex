@@ -21,24 +21,33 @@ import type { AdapterTierMetadata } from "../providers/fastwire";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import {
   appendUsageEntry,
+  classifyCacheTelemetryProvenance,
   isKnownAdmissionKind,
+  isKnownAffinityMove,
+  isKnownAffinityReason,
+  isKnownCacheTelemetryProvenance,
   isKnownInboundProtocol,
   isKnownTerminalSource,
   isKnownTransportPhase,
   isKnownUsageSurface,
   isCodexUsageAccountLogLabel,
+  isLogicalRequestId,
   isValidReasoningWireValue,
   normalizeClaudeCompatibilityUsageLog,
+  normalizeRequestSpend,
   readRecentUsageEntries,
   usageForFinalLog,
   usageStatusForFinalLog,
   usageTotalTokens,
   type AttemptRecoveryKind,
+  type CacheTelemetryProvenance,
+  type PersistedRequestSpend,
   type PersistedUsageAttempt,
   type PersistedUsageEntry,
   type PersistedClaudeCompatibilityLog,
   type UsageStatus,
 } from "../usage/log";
+import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import {
   appendUsageDebug,
   isUsageDebugEnabled,
@@ -57,6 +66,29 @@ import { modelRecordValue } from "../reasoning-effort";
 export interface RequestLogContext {
   model: string;
   provider: string;
+  /**
+   * Identity of the ONE logical request this context serves (#4546). Set from the execution
+   * budget minted at ingress; a retry leg, a repair refetch and a combo child share it.
+   */
+  logicalRequestId?: string;
+  /**
+   * Internal live reference to this request's execution budget; omitted from RequestLogEntry and
+   * JSONL. Read at final-log time so the row reports the budget's FINAL state rather than a
+   * snapshot taken before the recovery legs that the row is meant to explain.
+   */
+  executionBudget?: RequestExecutionBudget;
+  /**
+   * True once usage counts were taken from a response wire rather than reported raw by the
+   * adapter. It decides cache provenance: the normalizer writes zero-default token-detail
+   * objects, so an all-zero cache detail from a parsed wire is not a measured cache miss.
+   */
+  usageWireParsed?: boolean;
+  /**
+   * Every affinity reason recorded for this request, in order. `affinityReason` keeps the final
+   * one for the existing row shape; a request that moved twice has two causes and losing the
+   * first one loses the more expensive half of the story.
+   */
+  affinityMoveReasons?: CodexAffinityReason[];
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
   firstOutputMs?: number;
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
@@ -143,6 +175,11 @@ export interface RequestLogContext {
   affinity?: CodexAffinityMove;
   /** Why the binding was kept, moved, or released (#4546). */
   affinityReason?: CodexAffinityReason;
+  /**
+   * Set when this request dropped account-bound continuation because the serving
+   * Codex pool account was not the issuer. Never an account identifier.
+   */
+  conversationStateScrub?: "account-change";
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
@@ -153,6 +190,8 @@ export interface RequestLogContext {
 
 export interface RequestLogEntry {
   requestId: string;
+  /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
+  logicalRequestId?: string;
   timestamp: number;
   model: string;
   provider: string;
@@ -206,13 +245,30 @@ export interface RequestLogEntry {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /**
+   * Upstream spend for the whole logical request: sends aggregated across attempts and combo
+   * children, split into settled and unresolved, with the budget state and move reasons that
+   * explain them. Per-attempt `sendCount` stays the accounting source; this is the total.
+   */
+  spend?: PersistedRequestSpend;
+  /** Whether this row's cache detail was observed, synthesized for the wire, or absent. */
+  cacheProvenance?: CacheTelemetryProvenance;
   /** Codex pool affinity decision for this request (diagnostics for #186). */
   affinity?: CodexAffinityMove;
   /** Why that decision was made (#4546): a move is the expensive event, so it names its cause. */
   affinityReason?: CodexAffinityReason;
+  /**
+   * Set when this request dropped account-bound continuation after a Codex pool
+   * account change. Never an account identifier.
+   */
+  conversationStateScrub?: "account-change";
   /** Where the upstream terminal/failure was observed. */
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
-  /** Whether the terminal came from a real upstream SSE event or a proxy synthetic tail. */
+  /**
+   * Whether the HTTP status and message originated upstream or were synthesized by this
+   * proxy. Covers SSE tails and pre-stream JSON refusals. Management surfaces this so a
+   * local refusal cannot be presented as an upstream reason.
+   */
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
@@ -287,8 +343,10 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const closeReason = asCloseReason(entry.closeReason);
   const routeDecision = normalizeRouteDecisionTraceForLog(entry.routeDecision);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
+  const spend = normalizeRequestSpend(entry.spend);
   return {
     requestId: entry.requestId,
+    ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
     model: entry.model,
     provider: entry.provider,
@@ -328,10 +386,33 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
     ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+    ...(spend ? { spend } : {}),
+    ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
+      ? { cacheProvenance: entry.cacheProvenance }
+      : {}),
+    ...persistedAffinityFields(entry),
     ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
     ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...(entry.conversationStateScrub === "account-change"
+      ? { conversationStateScrub: "account-change" }
+      : {}),
+  };
+}
+
+/**
+ * Affinity survived only in memory before this: `addFinalRequestLog` set it on the row and the
+ * field-by-field disk projection never named it, so the move that discarded a warm prefix was
+ * gone at the next restart — the same whitelist trap #4592 hit one layer up.
+ */
+function persistedAffinityFields(
+  entry: Pick<RequestLogEntry, "affinity" | "affinityReason">,
+): Pick<PersistedUsageEntry, "affinity" | "affinityReason"> {
+  if (!isKnownAffinityMove(entry.affinity)) return {};
+  return {
+    affinity: entry.affinity,
+    ...(isKnownAffinityReason(entry.affinityReason) ? { affinityReason: entry.affinityReason } : {}),
   };
 }
 
@@ -410,6 +491,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       : {};
     appendUsageEntry({
       requestId: entry.requestId,
+      ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
       timestamp: entry.timestamp,
       provider: entry.provider,
       model: entry.model,
@@ -451,11 +533,19 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
       ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+      ...(entry.spend ? { spend: entry.spend } : {}),
+      ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
+        ? { cacheProvenance: entry.cacheProvenance }
+        : {}),
+      ...persistedAffinityFields(entry),
       ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
       ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
       ...failureDiagnostics,
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
       ...(entry.claudeCompatibility ? { claudeCompatibility: entry.claudeCompatibility } : {}),
+      ...(entry.conversationStateScrub === "account-change"
+        ? { conversationStateScrub: "account-change" }
+        : {}),
     });
   } catch {
     /* request logging must never fail a user request */
@@ -684,6 +774,10 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   if (usage && !logCtx.usageFromBridge) {
     logCtx.usage = usage;
     if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+    // Counts taken off a wire, not reported raw. The zero-default token-detail objects strict
+    // clients require are indistinguishable here from a measured zero, so the cache detail these
+    // counts carry is recorded as synthesized rather than as an observed miss.
+    logCtx.usageWireParsed = true;
   }
 }
 
@@ -739,6 +833,15 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
     };
   }
   return undefined;
+}
+
+/**
+ * Mark a refusal this proxy synthesized locally. Sets origin to `synthetic` and a
+ * distinct local reason so the request log cannot be read as an upstream overload.
+ */
+export function markLocalRequestLogRefusal(logCtx: RequestLogContext, reason: string): void {
+  logCtx.localTerminalReason = reason;
+  logCtx.terminalSource = "synthetic";
 }
 
 export function inspectResponseLogJson(logCtx: RequestLogContext, text: string): void {
@@ -977,6 +1080,133 @@ export function httpStatusForRequestLogTerminal(
   return httpStatusForTerminalStatus(status);
 }
 
+/**
+ * Aggregate one logical request's upstream spend from the rows that recorded it.
+ *
+ * Attempts are the accounting source and combo children are attempts of the same context, so a
+ * sum over `logCtx.attempts` is the send count for one user turn — the number the amplification
+ * in #4546 is measured in. A terminal status is what makes a send explainable, so the split is
+ * drawn there rather than at success: a 502 is settled spend, an attempt abandoned in flight is
+ * not. The budget's own counter is folded in as `reserved` because a leg that re-sent without
+ * opening an attempt row is charged and unobserved, and that difference belongs in
+ * `unresolved` rather than quietly inflating `settled`.
+ */
+export function requestSpendRecord(
+  logCtx: Pick<RequestLogContext, "executionBudget" | "affinityMoveReasons" | "affinityReason">,
+  attempts: readonly PersistedUsageAttempt[] | undefined,
+): PersistedRequestSpend | undefined {
+  const rows = attempts ?? [];
+  const budget = logCtx.executionBudget;
+  const reasons = [...new Set(
+    (logCtx.affinityMoveReasons ?? (logCtx.affinityReason ? [logCtx.affinityReason] : []))
+      .filter(isKnownAffinityReason),
+  )];
+  if (rows.length === 0 && !budget && reasons.length === 0) return undefined;
+  const sends = rows.reduce((total, attempt) => total + attempt.sendCount, 0);
+  const settled = rows.reduce(
+    (total, attempt) => attempt.status >= 100 ? total + attempt.sendCount : total,
+    0,
+  );
+  const charged = Math.max(sends, budget?.used ?? 0);
+  return {
+    sends,
+    settled,
+    unresolved: Math.max(0, charged - settled),
+    ...(budget ? { reserved: budget.used, policyVersion: budget.policyVersion } : {}),
+    ...(reasons.length > 0 ? { moveReasons: reasons } : {}),
+  };
+}
+
+/**
+ * Record an affinity decision so both the row's final answer and the sequence survive. A request
+ * that moved for `quota_refusal` and then again for `transient` paid for two discarded prefixes,
+ * and the single-valued field can only report the second.
+ */
+export function noteAffinityMove(
+  logCtx: RequestLogContext,
+  move: CodexAffinityMove,
+  reason: CodexAffinityReason,
+): void {
+  logCtx.affinity = move;
+  logCtx.affinityReason = reason;
+  (logCtx.affinityMoveReasons ??= []).push(reason);
+}
+
+/**
+ * The affinity scope a released binding belonged to: one thread, one model lane.
+ *
+ * Both halves are part of the key. A thread holds a separate binding per model lane, so a
+ * quota refusal on one lane and a transient streak on another are two releases; keyed by thread
+ * alone the second overwrites the first and one of the two rows reports a cause that never
+ * happened on it.
+ */
+export interface AffinityModelLane {
+  model: string;
+  /** Thread/conversation that owns the binding; omitted when the caller has no thread identity. */
+  conversationId?: string;
+}
+
+/**
+ * Release reasons waiting for the request that can report them (#4546, #4598).
+ *
+ * Bounded like the routing-side map it mirrors: this is a diagnostic, and an unbounded map keyed
+ * by conversation is a leak.
+ */
+const pendingNoAccountReasons = new Map<string, CodexAffinityReason>();
+const MAX_PENDING_NO_ACCOUNT_REASONS = 1024;
+
+function affinityLaneKey(lane: AffinityModelLane): string {
+  return `${lane.conversationId ?? ""}\u0000${lane.model}`;
+}
+
+export function noteNoAccountAffinityReason(lane: AffinityModelLane, reason: CodexAffinityReason): void {
+  if (!isKnownAffinityReason(reason)) return;
+  const key = affinityLaneKey(lane);
+  if (!pendingNoAccountReasons.has(key) && pendingNoAccountReasons.size >= MAX_PENDING_NO_ACCOUNT_REASONS) {
+    const oldest = pendingNoAccountReasons.keys().next();
+    if (!oldest.done) pendingNoAccountReasons.delete(oldest.value);
+  }
+  pendingNoAccountReasons.set(key, reason);
+}
+
+/** Read and forget one lane's reason. Other lanes on the same thread keep theirs. */
+export function takeNoAccountAffinityReason(lane: AffinityModelLane): CodexAffinityReason | undefined {
+  const key = affinityLaneKey(lane);
+  const reason = pendingNoAccountReasons.get(key);
+  if (reason !== undefined) pendingNoAccountReasons.delete(key);
+  return reason;
+}
+
+/** Test-only process-state reset for isolated harnesses. */
+export function clearNoAccountAffinityReasonsForTests(): void {
+  pendingNoAccountReasons.clear();
+}
+
+/**
+ * Report a selection that produced no account, on the request that failed because of it.
+ *
+ * A no-account resolve reaches no auth context, so until now its cause was handed to whichever
+ * later resolve happened to succeed — and a pool that stays exhausted never produces one, leaving
+ * the failure permanently unexplained. Attaching the reason to THIS request's own record is what
+ * makes the failure self-describing: the row is written, persisted and hydrated like any other,
+ * and it survives a restart.
+ *
+ * Deliberately not a separate synthetic row. `/api/usage` counts one row as one request, so an
+ * extra event row would report a request that never existed and skew the very cost totals this
+ * work exists to make trustworthy.
+ */
+export function recordNoAccountAffinityFailure(
+  logCtx: RequestLogContext,
+  lane: AffinityModelLane,
+  reason?: CodexAffinityReason,
+): CodexAffinityReason | undefined {
+  const resolved = isKnownAffinityReason(reason) ? reason : takeNoAccountAffinityReason(lane);
+  if (resolved === undefined) return undefined;
+  noteAffinityMove(logCtx, "cleared", resolved);
+  logCtx.errorCode ??= "codex_no_account";
+  return resolved;
+}
+
 export function addFinalRequestLog(
   requestId: string,
   start: number,
@@ -1032,6 +1262,11 @@ export function addFinalRequestLog(
   const loggedUsage = aggregate?.usage ?? existing.usage;
   const usageStatus = aggregate?.status ?? existing.status;
   const totalTokens = aggregate?.totalTokens ?? existing.totalTokens;
+  const spend = requestSpendRecord(logCtx, attempts);
+  const cacheProvenance = classifyCacheTelemetryProvenance(loggedUsage, {
+    wireParsed: logCtx.usageWireParsed === true,
+  });
+  const logicalRequestId = logCtx.logicalRequestId ?? logCtx.executionBudget?.logicalRequestId;
   // Sanitize at the logging layer, not only at the one call site that populates this today.
   // The value originates in an upstream-supplied model id, so an unsanitized newline would
   // let a single field forge a record boundary in any line-oriented log viewer. Doing it here
@@ -1041,6 +1276,7 @@ export function addFinalRequestLog(
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(logCtx.claudeCompatibility);
   addLog({
     requestId,
+    ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),
     timestamp: start,
     model: isCombo ? logCtx.requestedModel! : logCtx.model,
     provider: isCombo ? "combo" : logCtx.provider,
@@ -1084,8 +1320,16 @@ export function addFinalRequestLog(
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
+    ...(spend ? { spend } : {}),
+    // "unknown" is recorded rather than omitted whenever usage exists: a row that reported tokens
+    // with no cache detail at all is a different fact from a row with no usage, and the summary
+    // has to refuse both as a hit-rate denominator.
+    ...(loggedUsage || cacheProvenance !== "unknown" ? { cacheProvenance } : {}),
     ...(logCtx.affinity ? { affinity: logCtx.affinity } : {}),
     ...(logCtx.affinityReason ? { affinityReason: logCtx.affinityReason } : {}),
+    ...(logCtx.conversationStateScrub === "account-change"
+      ? { conversationStateScrub: "account-change" }
+      : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),

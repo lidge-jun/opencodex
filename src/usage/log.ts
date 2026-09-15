@@ -80,6 +80,46 @@ export type AttemptRecoveryKind =
 /** Request-time upstream credential class, never a credential or account identifier. */
 export type UsageCredentialSource = "grok-oauth" | "xai-api-key";
 
+/**
+ * Where a row's cache-token detail came from.
+ *
+ * Strict-client normalization emits zero-default token-detail objects on every bridged wire
+ * (`responsesUsage` in src/bridge.ts), so a `cached_tokens: 0` read back off that wire is a
+ * wire-compatibility artifact and not a measured cache miss. The three values stay distinct all
+ * the way to the summary because folding `synthesized` or `unknown` into `observed` is what
+ * lets a pool that discarded every warm prefix still report a plausible cache hit rate (#4546).
+ */
+export type CacheTelemetryProvenance = "observed" | "synthesized" | "unknown";
+
+const KNOWN_CACHE_PROVENANCE = new Set<CacheTelemetryProvenance>([
+  "observed", "synthesized", "unknown",
+]);
+
+export function isKnownCacheTelemetryProvenance(value: unknown): value is CacheTelemetryProvenance {
+  return typeof value === "string" && KNOWN_CACHE_PROVENANCE.has(value as CacheTelemetryProvenance);
+}
+
+/**
+ * Classify one usage record's cache detail.
+ *
+ * `wireParsed` means the counts were read back off a response wire rather than reported raw by
+ * the adapter. An all-zero cache detail from that source cannot be told apart from the zero
+ * defaults the normalizer writes, so it is `synthesized`; the same shape reported raw is a real
+ * zero and stays `observed`. A record with no cache fields at all is `unknown`, which is not a
+ * zero either.
+ */
+export function classifyCacheTelemetryProvenance(
+  usage: OcxUsage | undefined,
+  options: { wireParsed?: boolean } = {},
+): CacheTelemetryProvenance {
+  if (!usage) return "unknown";
+  const present = [usage.cachedInputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (present.length === 0) return "unknown";
+  if (present.some(value => value > 0)) return "observed";
+  return options.wireParsed === true ? "synthesized" : "observed";
+}
+
 export interface PersistedUsageAttempt {
   ordinal: number;
   provider: string;
@@ -113,6 +153,11 @@ export interface PersistedUsageAttempt {
   usage?: OcxUsage;
   totalTokens?: number;
   errorCode?: string;
+  /**
+   * Provenance of this attempt's cache detail. Absent on rows written before the distinction
+   * existed, where `classifyCacheTelemetryProvenance` reconstructs the pre-existing reading.
+   */
+  cacheProvenance?: CacheTelemetryProvenance;
   /** Installation-local exact Compatibility Lab route-subject digest for this attempt. */
   labRouteSubjectId?: string;
   /** Target-specific reasoning intent and exact adapter-normalized wire parameter. */
@@ -132,9 +177,84 @@ export interface PersistedUsageAttempt {
   codexWsStage?: CodexWsStageRecord;
 }
 
+/**
+ * What one logical request spent upstream, and why (#4546, devlog 040 slice D).
+ *
+ * `sendCount` counts physical sends per ATTEMPT, which answers the wrong question: a user turn
+ * that failed over twice and fanned out to three combo targets is one turn, and the number an
+ * operator needs is the total that reached upstream carrying the full prompt. These fields are
+ * that total, decomposed by how much of it is explained.
+ */
+export interface PersistedRequestSpend {
+  /** Physical upstream sends summed across every attempt of this logical request, combo children included. */
+  sends: number;
+  /** Sends whose attempt reached a terminal status, so the spend has a known outcome. */
+  settled: number;
+  /**
+   * Sends charged with no terminal outcome behind them: an attempt abandoned mid-flight, or a
+   * budget charge no attempt row ever accounted for. Never folded into `settled` — an unexplained
+   * send is the exact quantity this record exists to make visible.
+   */
+  unresolved: number;
+  /** Model sends the request execution budget charged. Absent when no budget was attached. */
+  reserved?: number;
+  /** Budget profile that produced `reserved`, so a count can be read against the policy it obeyed. */
+  policyVersion?: string;
+  /**
+   * Why the pool binding moved during this request. A move discards the warmed prompt-cache
+   * prefix, so the reason belongs next to the send count rather than a page away from it.
+   */
+  moveReasons?: CodexAffinityReason[];
+}
+
+const MAX_PERSISTED_MOVE_REASONS = 8;
+const LOGICAL_REQUEST_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+export function isLogicalRequestId(value: unknown): value is string {
+  return typeof value === "string" && LOGICAL_REQUEST_ID_RE.test(value);
+}
+
+/**
+ * A spend record is trusted only when every count is a non-negative integer and the decomposition
+ * holds. A hand-edited row that reports more settled spend than it sent would understate exactly
+ * the quantity the record exists to expose, so the whole record is dropped instead.
+ */
+export function normalizeRequestSpend(value: unknown): PersistedRequestSpend | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const spend = value as Record<string, unknown>;
+  const count = (raw: unknown): number | null =>
+    typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : null;
+  const sends = count(spend.sends);
+  const settled = count(spend.settled);
+  const unresolved = count(spend.unresolved);
+  if (sends === null || settled === null || unresolved === null) return undefined;
+  if (settled > sends) return undefined;
+  const reserved = "reserved" in spend ? count(spend.reserved) : undefined;
+  if (reserved === null) return undefined;
+  const moveReasons = Array.isArray(spend.moveReasons)
+    ? [...new Set(spend.moveReasons.filter(isKnownAffinityReason))].slice(0, MAX_PERSISTED_MOVE_REASONS)
+    : [];
+  return {
+    sends,
+    settled,
+    unresolved,
+    ...(reserved !== undefined ? { reserved } : {}),
+    ...(typeof spend.policyVersion === "string" && spend.policyVersion
+      ? { policyVersion: capMetadataString(spend.policyVersion) }
+      : {}),
+    ...(moveReasons.length > 0 ? { moveReasons } : {}),
+  };
+}
+
 export interface PersistedUsageEntry {
   requestedAlias?: string;
   requestId: string;
+  /**
+   * Identity of the ONE logical request this row belongs to (#4546), minted by
+   * `createRequestExecutionBudget` at ingress. `requestId` identifies a log row; a retry layer,
+   * a repair leg and a combo child are all the same logical request, and only this field says so.
+   */
+  logicalRequestId?: string;
   timestamp: number;
   provider: string;
   model: string;
@@ -177,6 +297,10 @@ export interface PersistedUsageEntry {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** Aggregated upstream spend for this logical request; additive, older rows omit it. */
+  spend?: PersistedRequestSpend;
+  /** Provenance of this row's cache detail; absent rows are reconstructed, never assumed observed. */
+  cacheProvenance?: CacheTelemetryProvenance;
   // Failure diagnostics (devlog/_plan/260716_claudecode_hardening/030): persisted for
   // status>=400 or non-completed terminals so incidents survive the in-memory ring buffer.
   errorCode?: string;
@@ -195,6 +319,11 @@ export interface PersistedUsageEntry {
    */
   affinity?: CodexAffinityMove;
   affinityReason?: CodexAffinityReason;
+  /**
+   * Set when this request dropped account-bound continuation after a Codex pool
+   * account change. Never an account identifier.
+   */
+  conversationStateScrub?: "account-change";
   /**
    * Bounded route-decision trace (RI-01): why this provider/model/account was
    * selected. Additive field; old rows without it parse unchanged. Never
@@ -268,6 +397,9 @@ const KNOWN_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["affinity
   "healthy", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
   "unusable", "paused", "plan_excluded", "cooldown", "quota_avoided", "generation",
   "expired", "model_lane",
+]);
+const KNOWN_CONVERSATION_STATE_SCRUBS = new Set<NonNullable<PersistedUsageEntry["conversationStateScrub"]>>([
+  "account-change",
 ]);
 
 export function isKnownAffinityMove(value: unknown): value is NonNullable<PersistedUsageEntry["affinity"]> {
@@ -519,6 +651,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       ? { totalTokens: attempt.totalTokens }
       : {}),
     ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
+    ...(isKnownCacheTelemetryProvenance(attempt.cacheProvenance)
+      ? { cacheProvenance: attempt.cacheProvenance }
+      : {}),
     ...(isLabRouteSubjectId(attempt.labRouteSubjectId)
       ? { labRouteSubjectId: attempt.labRouteSubjectId }
       : {}),
@@ -625,11 +760,17 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const affinityReason = affinity !== undefined && isKnownAffinityReason(entry.affinityReason)
     ? entry.affinityReason
     : undefined;
+  const conversationStateScrub = typeof entry.conversationStateScrub === "string"
+    && KNOWN_CONVERSATION_STATE_SCRUBS.has(entry.conversationStateScrub)
+    ? entry.conversationStateScrub
+    : undefined;
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
+  const spend = normalizeRequestSpend(entry.spend);
   return {
     requestId: entry.requestId,
+    ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
@@ -693,10 +834,15 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
     ...(Array.isArray(entry.attempts) ? { attempts } : {}),
+    ...(spend ? { spend } : {}),
+    ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
+      ? { cacheProvenance: entry.cacheProvenance }
+      : {}),
     ...(transportPhase ? { transportPhase } : {}),
     ...(terminalSource ? { terminalSource } : {}),
     ...(affinity ? { affinity } : {}),
     ...(affinityReason ? { affinityReason } : {}),
+    ...(conversationStateScrub ? { conversationStateScrub } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),

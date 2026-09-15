@@ -1,12 +1,15 @@
 # Transport Inventory
 
+The existing Responses transport is divided by responsibility in the
+[core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
 The Chat adapter's [OpenCode Go instruction ordering](../providers/chat-compat.md#opencode-go-chronological-instructions)
 changes translated message placement only; endpoint selection and transport stay with their existing owners.
 
-Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314).
 
 ## Transport inventory
 

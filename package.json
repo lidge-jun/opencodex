@@ -1,6 +1,6 @@
 {
   "name": "@bitkyc08/opencodex",
-  "version": "2.56.0",
+  "version": "2.57.0",
   "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
   "main": "./bin/package-main.mjs",
@@ -53,6 +53,7 @@
     "skill:surface:check": "bun scripts/generate-ocx-skill-surface.ts --check",
     "structure:index": "bun scripts/structure-ssot.ts --fix",
     "structure:check": "bun scripts/structure-ssot.ts",
+    "ratchet:update": "bun scripts/file-size-ratchet.ts --update",
     "generate:model-metadata": "bun scripts/generate-model-metadata.ts",
     "build:gui": "cd gui && bun install --frozen-lockfile && bun run build && cd .. && bun run prepare:package",
     "build:remote-workspace-helper": "cargo build --release --locked --manifest-path native/remote-workspace-helper/Cargo.toml",

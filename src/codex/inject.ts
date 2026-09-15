@@ -1,11 +1,9 @@
-import { contextCompatibleBaseLine } from "./context-compat";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   atomicWriteFile,
   loadConfig,
   observeConfigGeneration,
   readConfigAdmissionSnapshot,
-  subagentDefaultSyncEffective,
   websocketsEnabled,
   withConfigMutationLockSync,
 } from "../config";
@@ -30,7 +28,6 @@ import {
 } from "./inject-coordination";
 import { readIntegrationRecord } from "./integration-record";
 import { classifyNativeRoutedResidue } from "./native-residue";
-import { inspectNativeCodexOwnership } from "../integrations/native/ownership-preflight";
 import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
@@ -40,14 +37,10 @@ import {
   markJournalInjectedState,
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
-  journaledInjectedCatalogPath,
   removeJournal,
-  restoreJournalState,
   writeJournal,
 } from "./journal";
-import { withCatalogWriteSerialization } from "./catalog-write-serialization";
-import { restoreCodexCatalogWithPermit } from "./catalog/sync";
-import { preflightCodexHistoryInjection, syncCodexHistoryProvider, type CodexHistoryFailureReason } from "./history-provider";
+import { preflightCodexHistoryInjection } from "./history-provider";
 import {
   describeHistoryJobFailure,
   deriveCodexHistoryOperation,
@@ -56,73 +49,55 @@ import {
   type CodexHistoryJobOutcome,
 } from "./history-job";
 import {
-  OCX_SECTION_MARKER,
   REALTIME_WS_BASE_URL_KEY,
   hasInjectedCodexRouting,
   hasInjectedOpenaiBaseUrl,
-  isRootOpenaiBaseUrlLine,
-  isRootRealtimeWsBaseUrlLine,
-  providerTableStart,
-  providerTableString,
   rootTomlString,
   stripJournaledOpenaiBaseUrl,
-  tomlStringPattern,
 } from "./injected-marker";
 import {
   CODEX_CONFIG_PATH,
   CODEX_PROFILE_PATH,
-  DEFAULT_CATALOG_PATH,
   getCodexHome,
-  parseTomlString,
-  readRootTomlString,
-  resolveCodexConfigPath,
   resolveCodexStateDbPath,
   tomlString,
 } from "./paths";
-import { resolveEffectiveProjectModelProvider } from "./project-config-warnings";
-import {
-  transformManagedSubagentDefaults,
-  type ManagedSubagentDefaults,
-} from "./subagent-defaults";
+import { transformManagedSubagentDefaults } from "./subagent-defaults";
 import type { OcxConfig } from "../types";
-import { effectiveLoopbackListenerPort, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
+import {
+  configuredManagedSubagentDefaults,
+  standaloneCodexRoutingTarget,
+  usesProviderTable,
+  validateCodexRoutingTarget,
+  type CodexRoutingTarget,
+} from "./inject/routing-target";
+import {
+  applyEol,
+  buildProfileFileForTarget,
+  buildProviderTableBlockForTarget,
+  chooseCatalogPathForInjection,
+  dominantEol,
+  ensureFastModeFeature,
+  externalCodexModelProvider,
+  normalizeServiceTier,
+  removeProfileSection,
+  setRootModelCatalogPath,
+  setRootModelProvider,
+  setRootOpenaiBaseUrlForTarget,
+  setRootRealtimeWsBaseUrl,
+  stripExistingModelProvider,
+  stripInjectedOpenaiBaseUrl,
+  stripOpencodexCatalogPath,
+  stripRootContextWindowOverrides,
+} from "./inject/config-toml";
+import { hasOcxProviderTable, removeOcxSection } from "./inject/remove";
+
 
 export { effectiveLoopbackListenerPort, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
 
 // Ownership predicates live in `./injected-marker` so `journal.ts` can reach them
 // without importing this module back. Re-exported for existing external callers.
 export { hasInjectedCodexRouting, hasInjectedOpenaiBaseUrl };
-
-export function externalCodexModelProvider(content: string): string | null {
-  const provider = resolveEffectiveProjectModelProvider(content).provider;
-  return provider && provider !== "openai" && provider !== "opencodex"
-    ? provider
-    : null;
-}
-
-export function currentExternalCodexModelProvider(): string | null {
-  if (!existsSync(CODEX_CONFIG_PATH)) return null;
-  return externalCodexModelProvider(readFileSync(CODEX_CONFIG_PATH, "utf8"));
-}
-
-/**
- * Detect the file's dominant line ending. Every transform in this module is LF-pure
- * (split("\n") + hard "\n" joins), so CRLF configs (Windows-edited config.toml) are
- * normalized to LF at the pipeline boundary and converted back on write — otherwise a
- * single inject would leave a mixed-EOL file.
- */
-export function dominantEol(content: string): "\r\n" | "\n" {
-  const crlf = (content.match(/\r\n/g) ?? []).length;
-  if (crlf === 0) return "\n";
-  const bareLf = (content.match(/\n/g) ?? []).length - crlf;
-  return crlf >= bareLf ? "\r\n" : "\n";
-}
-
-/** Normalize all line endings to `eol` (CRLF first collapsed to LF, then expanded). */
-export function applyEol(content: string, eol: "\r\n" | "\n"): string {
-  const lf = content.replace(/\r\n/g, "\n");
-  return eol === "\n" ? lf : lf.replace(/\n/g, "\r\n");
-}
 
 /**
  * Design B (2026-07-06): loopback installs no longer re-tag the provider. Instead of
@@ -170,727 +145,6 @@ function runClientWriteGuard(guard: InjectCodexOptions["beforeClientWrite"]): vo
   }
 }
 
-export interface CodexRoutingTarget {
-  baseUrl: string;
-  requiresAdmissionToken: boolean;
-  tokenEnv: "OPENCODEX_API_AUTH_TOKEN";
-  /**
-   * Opt-in authless Codex Desktop mode (#1107): inject the dedicated provider table with
-   * `requires_openai_auth = false` so Desktop skips the ChatGPT login gate. Only ever true for
-   * loopback targets that need no admission token; non-loopback admission is a separate layer
-   * and is never weakened by this flag.
-   */
-  desktopAuthless?: boolean;
-  /** Select the dedicated provider identity so Codex owns compaction locally. */
-  clientCompaction?: boolean;
-}
-
-function validateCodexRoutingTarget(target: CodexRoutingTarget): CodexRoutingTarget {
-  let parsed: URL;
-  try {
-    parsed = new URL(target.baseUrl);
-  } catch {
-    throw new TypeError("Codex routing target must be an absolute HTTP(S) /v1 URL");
-  }
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-    || parsed.username
-    || parsed.password
-    || parsed.pathname !== "/v1"
-    || parsed.search
-    || parsed.hash
-    || target.tokenEnv !== "OPENCODEX_API_AUTH_TOKEN"
-  ) {
-    throw new TypeError("Codex routing target must be a canonical HTTP(S) /v1 URL without credentials, query, or fragment");
-  }
-  return { ...target, baseUrl: `${parsed.origin}/v1` };
-}
-
-/** Provider-table form is used when auth, admission, or compaction policy needs a dedicated provider. */
-function usesProviderTable(target: CodexRoutingTarget): boolean {
-  return target.requiresAdmissionToken
-    || target.desktopAuthless === true
-    || target.clientCompaction === true;
-}
-
-export function standaloneCodexRoutingTarget(
-  port: number,
-  config?: Pick<
-    OcxConfig,
-    "hostname" | "unauthenticatedLoopbackListener" | "codexDesktopAuthless" | "codexClientCompaction"
-  >,
-): CodexRoutingTarget {
-  // An enabled listener with no `port` is the companion form: it answers on `port` itself,
-  // bound to 127.0.0.1 (#4236). Resolving it through the shared helper is what makes the
-  // one-port hub work without every writer repeating `?? port`.
-  const loopback = config?.unauthenticatedLoopbackListener;
-  const effectivePort = effectiveLoopbackListenerPort(config, port) ?? port;
-  const hostname = loopback?.enabled ? undefined : config?.hostname;
-  const requiresAdmissionToken = loopback?.enabled ? false : shouldInjectApiAuthHeader(config);
-  return {
-    baseUrl: `http://${providerBaseHost(hostname)}:${effectivePort}/v1`,
-    requiresAdmissionToken,
-    tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
-    ...(config?.codexDesktopAuthless === true && !requiresAdmissionToken
-      ? { desktopAuthless: true }
-      : {}),
-    ...(config?.codexClientCompaction === true && !requiresAdmissionToken
-      ? { clientCompaction: true }
-      : {}),
-  };
-}
-
-function routingTargetOrigin(target: CodexRoutingTarget): string {
-  return target.baseUrl.slice(0, -3);
-}
-
-function configuredManagedSubagentDefaults(
-  config:
-    | Pick<
-        OcxConfig,
-        "injectionModel" | "injectionEffort" | "syncCodexSubagentDefaults"
-      >
-    | undefined,
-): ManagedSubagentDefaults | null {
-  if (!subagentDefaultSyncEffective(config ?? {})) return null;
-  return {
-    model: config!.injectionModel!.trim(),
-    ...(config!.injectionEffort?.trim()
-      ? { reasoningEffort: config!.injectionEffort.trim() }
-      : {}),
-  };
-}
-
-/**
- * The `[model_providers.opencodex]` TABLE only. A table is position-independent in TOML, so it is
- * safe to append at EOF. The bare root key `model_provider = "opencodex"` is NOT included here —
- * it must live at the document root (before any table header) and is set separately by
- * setRootModelProvider(). Appending the bare key at EOF was the original bug: it nested under
- * whatever `[table]` happened to be open last (e.g. `[plugins."chrome@openai-bundled"]`), so Codex
- * never saw a global model_provider and silently fell back to the `openai` (ChatGPT) provider.
- */
-export function providerBaseHost(hostname: string | undefined): string {
-  const trimmed = (hostname ?? "127.0.0.1").trim();
-  const lower = trimmed.toLowerCase();
-  // Match what the server actually binds. Writing "localhost" while binding IPv4-only
-  // 127.0.0.1 breaks on Windows, where localhost commonly resolves to ::1 first.
-  if (lower === "::1" || lower === "[::1]") return "[::1]";
-  if (
-    isLoopbackHostname(trimmed) ||
-    trimmed === "0.0.0.0" ||
-    trimmed === "::" ||
-    trimmed === "[::]"
-  )
-    return "127.0.0.1";
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
-  return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
-}
-
-export function buildProviderTableBlock(
-  port: number,
-  supportsWebsockets?: boolean,
-  includeApiAuthHeader?: boolean,
-  hostname?: string,
-): string;
-export function buildProviderTableBlock(
-  target: CodexRoutingTarget,
-  supportsWebsockets?: boolean,
-): string;
-export function buildProviderTableBlock(
-  portOrTarget: number | CodexRoutingTarget,
-  supportsWebsockets = false,
-  includeApiAuthHeader = false,
-  hostname?: string,
-): string {
-  const target = typeof portOrTarget === "number"
-    ? validateCodexRoutingTarget({
-        baseUrl: `http://${providerBaseHost(hostname)}:${portOrTarget}/v1`,
-        requiresAdmissionToken: includeApiAuthHeader,
-        tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
-      })
-    : validateCodexRoutingTarget(portOrTarget);
-  return buildProviderTableBlockForTarget(target, supportsWebsockets);
-}
-
-function buildProviderTableBlockForTarget(
-  target: CodexRoutingTarget,
-  supportsWebsockets = false,
-): string {
-  const lines = [
-    "",
-    OCX_SECTION_MARKER,
-    "[model_providers.opencodex]",
-    'name = "OpenCodex Proxy"',
-    `base_url = ${tomlString(target.baseUrl)}`,
-    'wire_api = "responses"',
-    // false only in the authless Desktop opt-in (#1107); true keeps the App/TUI account gate.
-    `requires_openai_auth = ${target.desktopAuthless === true ? "false" : "true"}`,
-  ];
-  if (target.requiresAdmissionToken) {
-    // codex-cli 0.146+ contract (#2073): env_key sends Authorization: Bearer $VAR and
-    // hard-errors on a missing/empty variable instead of silently omitting auth. It
-    // coexists with requires_openai_auth (env_key wins wire auth; the flag keeps the
-    // login/account UX), and the server substitutes stored main auth for our admission
-    // bearer (#1686), so the modern form is strictly better than the legacy
-    // env_http_headers table this line used to emit.
-    lines.push(`env_key = ${tomlString(target.tokenEnv)}`);
-  }
-  if (supportsWebsockets) lines.push("supports_websockets = true");
-  return lines.join("\n") + "\n";
-}
-
-export function buildOpenaiBaseUrlLine(
-  port: number,
-  hostname?: string,
-): string;
-export function buildOpenaiBaseUrlLine(target: CodexRoutingTarget): string;
-export function buildOpenaiBaseUrlLine(
-  portOrTarget: number | CodexRoutingTarget,
-  hostname?: string,
-): string {
-  return typeof portOrTarget === "number"
-    ? `openai_base_url = "http://${providerBaseHost(hostname)}:${portOrTarget}/v1"`
-    : buildOpenaiBaseUrlLineForTarget(validateCodexRoutingTarget(portOrTarget));
-}
-
-function buildOpenaiBaseUrlLineForTarget(target: CodexRoutingTarget): string {
-  return `openai_base_url = ${tomlString(target.baseUrl)}`;
-}
-
-/**
- * Realtime sideband override (codex-rs `experimental_realtime_ws_base_url`), written with the
- * SAME value as `openai_base_url`. Desktop voice creates its WebRTC call through the proxy
- * (`POST /v1/live`, answered under the Pool account the proxy selects) but, since openai/codex
- * 438c9e98d (#35830), joins the sideband at `wss://api.openai.com/v1/live/{callId}` with the
- * app's own login unless this key redirects it. Two accounts, one call: the join 404s. Pointing
- * the key at the proxy sends the join through `GET /v1/live/{callId}` (src/server/live.ts),
- * where the same Pool account is reused. codex-rs turns `http` into `ws` and appends
- * `/live/{callId}` itself; the value must stay the canonical `/v1` root.
- */
-export function buildRealtimeWsBaseUrlLine(target: CodexRoutingTarget): string {
-  return `${REALTIME_WS_BASE_URL_KEY} = ${tomlString(target.baseUrl)}`;
-}
-
-/**
- * Design B root-key injection: place `OCX_SECTION_MARKER` + `openai_base_url` at the document
- * ROOT (before the first table header). Idempotent: an existing marker-owned line is rewritten
- * in place. A user's OWN root `openai_base_url` (no marker above it) is respected — we keep it
- * and inject nothing, reporting `keptUserBaseUrl` so the caller can surface it.
- */
-export function setRootOpenaiBaseUrl(
-  content: string,
-  port: number,
-  hostname?: string,
-): { content: string; keptUserBaseUrl: boolean };
-export function setRootOpenaiBaseUrl(
-  content: string,
-  target: CodexRoutingTarget,
-): { content: string; keptUserBaseUrl: boolean };
-export function setRootOpenaiBaseUrl(
-  content: string,
-  portOrTarget: number | CodexRoutingTarget,
-  hostname?: string,
-): { content: string; keptUserBaseUrl: boolean } {
-  if (typeof portOrTarget !== "number") {
-    return setRootOpenaiBaseUrlForTarget(content, validateCodexRoutingTarget(portOrTarget));
-  }
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = contextCompatibleBaseLine(content, buildOpenaiBaseUrlLine(portOrTarget, hostname));
-
-  for (let i = 0; i < rootEnd; i++) {
-    if (!isRootOpenaiBaseUrlLine(lines[i])) continue;
-    const markerOwned = i > 0 && lines[i - 1].includes(OCX_SECTION_MARKER);
-    if (!markerOwned) return { content, keptUserBaseUrl: true };
-    lines[i] = key;
-    return { content: lines.join("\n"), keptUserBaseUrl: false };
-  }
-
-  if (firstTable === -1) {
-    return {
-      content:
-        content.replace(/\n+$/, "") +
-        "\n" +
-        OCX_SECTION_MARKER +
-        "\n" +
-        key +
-        "\n",
-      keptUserBaseUrl: false,
-    };
-  }
-  let insertAt = firstTable;
-  while (insertAt > 0 && lines[insertAt - 1].trim() === "") insertAt--;
-  lines.splice(insertAt, 0, OCX_SECTION_MARKER, key);
-  return { content: lines.join("\n"), keptUserBaseUrl: false };
-}
-
-function setRootOpenaiBaseUrlForTarget(
-  content: string,
-  target: CodexRoutingTarget,
-): { content: string; keptUserBaseUrl: boolean } {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = contextCompatibleBaseLine(content, buildOpenaiBaseUrlLineForTarget(target));
-  for (let index = 0; index < rootEnd; index += 1) {
-    if (!isRootOpenaiBaseUrlLine(lines[index])) continue;
-    const markerOwned = index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER);
-    if (!markerOwned) return { content, keptUserBaseUrl: true };
-    lines[index] = key;
-    return { content: lines.join("\n"), keptUserBaseUrl: false };
-  }
-  if (firstTable === -1) {
-    return {
-      content: `${content.replace(/\n+$/, "")}\n${OCX_SECTION_MARKER}\n${key}\n`,
-      keptUserBaseUrl: false,
-    };
-  }
-  let insertAt = firstTable;
-  while (insertAt > 0 && lines[insertAt - 1].trim() === "") insertAt -= 1;
-  lines.splice(insertAt, 0, OCX_SECTION_MARKER, key);
-  return { content: lines.join("\n"), keptUserBaseUrl: false };
-}
-
-/**
- * Companion to `setRootOpenaiBaseUrlForTarget` for the realtime sideband override. Same
- * ownership rule, applied per key: the line is ours only when the marker sits directly
- * above it; a user's own line (no marker above it) is kept and nothing is injected. The
- * key gets its OWN marker line rather than sharing the routing override's, so a user line
- * that happens to sit right under our `openai_base_url` is never mistaken for ours.
- * Placement: directly after the marker-owned `openai_base_url` pair. Only ever called on
- * the Design B (loopback) path right after the routing override was written — the legacy
- * provider-table form needs the admission-token header, which the sideband cannot carry.
- */
-export function setRootRealtimeWsBaseUrl(
-  content: string,
-  target: CodexRoutingTarget,
-): { content: string; keptUserRealtimeWsBaseUrl: boolean } {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = buildRealtimeWsBaseUrlLine(validateCodexRoutingTarget(target));
-  for (let index = 0; index < rootEnd; index += 1) {
-    if (!isRootRealtimeWsBaseUrlLine(lines[index])) continue;
-    const markerOwned = index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER);
-    if (!markerOwned) return { content, keptUserRealtimeWsBaseUrl: true };
-    lines[index] = key;
-    return { content: lines.join("\n"), keptUserRealtimeWsBaseUrl: false };
-  }
-  for (let index = 0; index < rootEnd; index += 1) {
-    if (!isRootOpenaiBaseUrlLine(lines[index])) continue;
-    if (!(index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER))) continue;
-    lines.splice(index + 1, 0, OCX_SECTION_MARKER, key);
-    return { content: lines.join("\n"), keptUserRealtimeWsBaseUrl: false };
-  }
-  // No marker-owned routing override to attach to: the override has no owner, so inject nothing.
-  return { content, keptUserRealtimeWsBaseUrl: false };
-}
-
-/**
- * Remove the marker-owned root `openai_base_url` (marker line + the key line right after it).
- * A user's own root override (no marker) survives; an orphaned marker with no key line after
- * it is dropped too so repeated strip/inject cycles cannot accumulate marker comments.
- * A marker-owned `experimental_realtime_ws_base_url` pair is removed by the same rule.
- */
-export function stripInjectedOpenaiBaseUrl(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const drop = new Set<number>();
-  for (let i = 0; i < rootEnd; i++) {
-    if (!lines[i].includes(OCX_SECTION_MARKER)) continue;
-    if (i + 1 < rootEnd && (isRootOpenaiBaseUrlLine(lines[i + 1]) || isRootRealtimeWsBaseUrlLine(lines[i + 1]))) {
-      drop.add(i);
-      drop.add(i + 1);
-    } else if (i + 1 >= rootEnd || lines[i + 1].trim() === "") {
-      drop.add(i); // orphaned marker at root
-    }
-  }
-  if (drop.size === 0) return content;
-  return lines.filter((_, i) => !drop.has(i)).join("\n");
-}
-
-export type CodexRoutingKind =
-  "native" | "opencodex-local" | "custom-local" | "custom-remote" | "unknown";
-
-type RoutingEndpointKind = "local" | "remote" | "unknown";
-
-function ipv4Octets(hostname: string): number[] | null {
-  const dotted = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
-  if (dotted) {
-    const octets = dotted.slice(1).map(Number);
-    return octets.some((octet) => octet > 255) ? null : octets;
-  }
-  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(hostname);
-  if (!mapped) return null;
-  const high = Number.parseInt(mapped[1], 16);
-  const low = Number.parseInt(mapped[2], 16);
-  return [high >>> 8, high & 0xff, low >>> 8, low & 0xff];
-}
-
-function classifyRoutingEndpoint(value: string): RoutingEndpointKind {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return "unknown";
-    const hostname = url.hostname
-      .toLowerCase()
-      .replace(/^\[|\]$/g, "")
-      .replace(/\.$/, "");
-    if (!hostname) return "unknown";
-    if (hostname === "localhost" || hostname.endsWith(".localhost"))
-      return "local";
-    if (hostname === "::" || hostname === "::1" || hostname === "0.0.0.0")
-      return "local";
-    const octets = ipv4Octets(hostname);
-    if (octets) {
-      if (octets.every((octet) => octet === 0)) return "local";
-      if (octets[0] === 127) return "local";
-      return "remote";
-    }
-    if (/^::ffff:/i.test(hostname)) return "unknown";
-    return "remote";
-  } catch {
-    return "unknown";
-  }
-}
-
-/** Classify actual routing dependency separately from opencodex ownership. */
-export function classifyCodexRouting(content: string): CodexRoutingKind {
-  const rootBaseUrl = rootTomlString(content, "openai_base_url");
-  if (rootBaseUrl) {
-    const endpoint = classifyRoutingEndpoint(rootBaseUrl);
-    if (endpoint === "unknown") return "unknown";
-    if (hasInjectedOpenaiBaseUrl(content)) return "opencodex-local";
-    return endpoint === "local" ? "custom-local" : "custom-remote";
-  }
-  const rootProvider = rootTomlString(content, "model_provider");
-  if (rootProvider) {
-    const providerTableExists =
-      providerTableStart(content.split("\n"), rootProvider) !== -1;
-    const providerBaseUrl = providerTableString(
-      content,
-      rootProvider,
-      "base_url",
-    );
-    if (providerBaseUrl) {
-      const endpoint = classifyRoutingEndpoint(providerBaseUrl);
-      if (endpoint === "unknown") return "unknown";
-      if (rootProvider === "opencodex") return "opencodex-local";
-      return endpoint === "local" ? "custom-local" : "custom-remote";
-    }
-    if (
-      rootProvider === "opencodex" ||
-      providerTableExists ||
-      rootProvider !== "openai"
-    )
-      return "unknown";
-  }
-  return "native";
-}
-
-/** Read-only probe used by status, doctor, and the dashboard. */
-export function isCodexRoutingInjected(): boolean {
-  const path = CODEX_CONFIG_PATH;
-  if (!existsSync(path)) return false;
-  try {
-    return hasInjectedCodexRouting(readFileSync(path, "utf8"));
-  } catch {
-    return false;
-  }
-}
-
-export function getCodexRoutingKind(): CodexRoutingKind {
-  const path = CODEX_CONFIG_PATH;
-  if (!existsSync(path)) return "native";
-  try {
-    return classifyCodexRouting(readFileSync(path, "utf8"));
-  } catch {
-    return "unknown";
-  }
-}
-
-/**
- * Strip every existing `model_provider` line that we must not duplicate: any line set to
- * "opencodex" (wherever it sits — including a previously mis-nested one under a table), plus any
- * ROOT-level model_provider (before the first table) of any value, since we override the global.
- * A `model_provider` legitimately inside a user table/profile with a non-opencodex value is left
- * untouched.
- */
-function stripExistingModelProvider(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const out: string[] = [];
-  lines.forEach((line, i) => {
-    if (/^\s*model_provider\s*=/.test(line)) {
-      const isOurs = /^\s*model_provider\s*=\s*"opencodex"\s*$/.test(line);
-      const isRoot = firstTable === -1 || i < firstTable;
-      if (isOurs || isRoot) return; // drop it
-    }
-    out.push(line);
-  });
-  return out.join("\n");
-}
-
-/**
- * Drop ROOT-level `model_context_window` overrides (keys before the first table header). Codex
- * treats this root key as a global override that wins over the per-model catalog values, so a stale
- * `model_context_window = 1000000` makes every model (e.g. gpt-5.5) report a 1M window. User-owned
- * compaction limits do not alter the advertised context window and must survive reinjection.
- */
-export function stripRootContextWindowOverrides(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  return lines
-    .filter((line, i) => {
-      const isRoot = firstTable === -1 || i < firstTable;
-      return !isRoot || !/^\s*model_context_window\s*=/.test(line);
-    })
-    .join("\n");
-}
-
-function stripRootRoutedModel(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  return lines
-    .filter((line, i) => {
-      const isRoot = firstTable === -1 || i < firstTable;
-      if (!isRoot) return true;
-      const m = line.match(/^\s*model\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')\s*$/);
-      if (!m) return true;
-      const model = parseTomlString(m[1]);
-      return !model?.includes("/");
-    })
-    .join("\n");
-}
-
-/**
- * Insert `model_provider = "opencodex"` at the document ROOT — immediately before the first table
- * header (TOML root keys must precede all tables). If there are no tables, append it to the root body.
- */
-function setRootModelProvider(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const key = 'model_provider = "opencodex"';
-  if (firstTable === -1) {
-    return content.replace(/\n+$/, "") + "\n" + key + "\n";
-  }
-  let insertAt = firstTable;
-  while (insertAt > 0 && lines[insertAt - 1].trim() === "") insertAt--;
-  lines.splice(insertAt, 0, key);
-  return lines.join("\n");
-}
-
-function readRootModelCatalogPath(content: string): string | null {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
-  let ownedCatalogPath: string | null = null;
-  for (let index = 0; index < rootEnd; index += 1) {
-    const match = modelCatalogAssignment.exec(lines[index]);
-    if (!match) continue;
-    const catalogPath = parseTomlString(match[1]);
-    if (!isOpencodexCatalogPath(catalogPath)) return catalogPath;
-    ownedCatalogPath ??= catalogPath;
-  }
-  return ownedCatalogPath;
-}
-
-function setRootModelCatalogPath(content: string, catalogPath: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const key = `model_catalog_json = ${tomlString(catalogPath)}`;
-  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const ownedAssignments: number[] = [];
-  let hasUserAssignment = false;
-  for (let i = 0; i < rootEnd; i++) {
-    const m = modelCatalogAssignment.exec(lines[i]);
-    if (!m) continue;
-    const existing = parseTomlString(m[1]);
-    if (isOpencodexCatalogPath(existing)) {
-      ownedAssignments.push(i);
-    } else {
-      hasUserAssignment = true;
-    }
-  }
-  if (hasUserAssignment) {
-    const owned = new Set(ownedAssignments);
-    return lines.filter((_, index) => !owned.has(index)).join("\n");
-  }
-  if (ownedAssignments.length > 0) {
-    lines[ownedAssignments[0]] = key;
-    const duplicates = new Set(ownedAssignments.slice(1));
-    return lines.filter((_, index) => !duplicates.has(index)).join("\n");
-  }
-  if (firstTable === -1) {
-    return content.replace(/\n+$/, "") + "\n" + key + "\n";
-  }
-  let insertAt = firstTable;
-  while (insertAt > 0 && lines[insertAt - 1].trim() === "") insertAt--;
-  lines.splice(insertAt, 0, key);
-  return lines.join("\n");
-}
-
-function removeProfileSection(content: string): string {
-  const lines = content.split("\n");
-  const filtered: string[] = [];
-  let inProfile = false;
-  for (const line of lines) {
-    if (line.trim() === "[profiles.opencodex]") {
-      inProfile = true;
-      continue;
-    }
-    if (inProfile) {
-      if (/^\s*\[/.test(line) && line.trim() !== "[profiles.opencodex]") {
-        inProfile = false;
-        filtered.push(line);
-      }
-      continue;
-    }
-    filtered.push(line);
-  }
-  return (
-    filtered
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trimEnd() + "\n"
-  );
-}
-
-function normalizeServiceTier(content: string): string {
-  return content.replace(
-    /^(\s*service_tier\s*=\s*)["']priority["']\s*$/gm,
-    '$1"fast"',
-  );
-}
-
-function ensureFastModeFeature(content: string, fastMode?: boolean): string {
-  // Tri-state fast mode (see OcxConfig.fastMode): true forces `fast_mode = true`,
-  // false forces `fast_mode = false`, and undefined leaves the user's config
-  // untouched (no [features] table is added and an existing fast_mode line is
-  // preserved as-is). Table and key matching accept the valid TOML spellings
-  // `[features] # comment`, `["features"]` / `['features']`, and quoted keys.
-  const lines = content.split("\n");
-  const featuresHeader = /^\s*\[(["']?)\s*features\s*\1\]\s*(?:#.*)?$/;
-  const fastModeKey = /^\s*(?:"fast_mode"|'fast_mode'|fast_mode)\s*=/;
-  const featuresStart = lines.findIndex(line => featuresHeader.test(line));
-  if (featuresStart === -1) {
-    if (fastMode === undefined) return content;
-    return content.trimEnd() + "\n\n[features]\nfast_mode = " + (fastMode ? "true" : "false") + "\n";
-  }
-
-  const nextTable = lines.findIndex(
-    (line, index) => index > featuresStart && /^\s*\[/.test(line),
-  );
-  const featuresEnd = nextTable === -1 ? lines.length : nextTable;
-  for (let i = featuresStart + 1; i < featuresEnd; i++) {
-    if (fastModeKey.test(lines[i])) {
-      if (fastMode === undefined) return lines.join("\n");
-      lines[i] = lines[i].replace(/^(\s*)(?:"fast_mode"|'fast_mode'|fast_mode)\s*=.*$/, `$1fast_mode = ${fastMode ? "true" : "false"}`);
-      return lines.join("\n");
-    }
-  }
-
-  if (fastMode === undefined) return lines.join("\n");
-  let insertAt = featuresEnd;
-  while (insertAt > featuresStart + 1 && lines[insertAt - 1].trim() === "") insertAt--;
-  lines.splice(insertAt, 0, `fast_mode = ${fastMode ? "true" : "false"}`);
-  return lines.join("\n");
-}
-
-function isOpencodexCatalogPath(path: string): boolean {
-  return path.replace(/\\/g, "/").split("/").pop() === "opencodex-catalog.json";
-}
-
-function stripOpencodexCatalogPath(content: string): string {
-  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  return lines
-    .filter((line, index) => {
-      if (index >= rootEnd) return true;
-      const m = modelCatalogAssignment.exec(line);
-      return !m || !isOpencodexCatalogPath(parseTomlString(m[1]));
-    })
-    .join("\n");
-}
-
-export function buildProfileFile(port: number, catalogPath?: string | null, supportsWebsockets?: boolean, includeApiAuthHeader?: boolean, hostname?: string, fastMode?: boolean): string;
-export function buildProfileFile(target: CodexRoutingTarget, catalogPath?: string | null, supportsWebsockets?: boolean, fastMode?: boolean): string;
-export function buildProfileFile(
-  portOrTarget: number | CodexRoutingTarget,
-  catalogPath?: string | null,
-  supportsWebsockets = false,
-  includeApiAuthHeaderOrFastMode?: boolean,
-  hostname?: string,
-  fastMode?: boolean,
-): string {
-  const target = typeof portOrTarget === "number"
-    ? validateCodexRoutingTarget({
-        baseUrl: `http://${providerBaseHost(hostname)}:${portOrTarget}/v1`,
-        requiresAdmissionToken: includeApiAuthHeaderOrFastMode === true,
-        tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
-      })
-    : validateCodexRoutingTarget(portOrTarget);
-  return buildProfileFileForTarget(
-    target,
-    catalogPath,
-    supportsWebsockets,
-    typeof portOrTarget === "number" ? fastMode : includeApiAuthHeaderOrFastMode,
-  );
-}
-
-function buildProfileFileForTarget(
-  target: CodexRoutingTarget,
-  catalogPath?: string | null,
-  supportsWebsockets = false,
-  fastMode?: boolean,
-): string {
-  const origin = routingTargetOrigin(target);
-  const host = new URL(origin).host;
-  // Design B (loopback): the reference/fallback file documents the root override form.
-  // Non-loopback keeps the legacy provider-table shape (built-in provider cannot carry
-  // the x-opencodex-api-key env header); explicit Desktop policies share that shape.
-  if (!usesProviderTable(target)) {
-    const lines = [
-      "# OpenCodex proxy fallback config (Design B)",
-      `# Root override that points Codex's built-in openai provider at the proxy on ${host}.`,
-      "# Merge these root keys into ~/.codex/config.toml manually if auto-injection was removed.",
-      buildOpenaiBaseUrlLineForTarget(target),
-    ];
-    if (catalogPath) lines.push(`model_catalog_json = ${tomlString(catalogPath)}`);
-    if (fastMode !== undefined) lines.push("", "[features]", `fast_mode = ${fastMode ? "true" : "false"}`, "");
-    return lines.join("\n");
-  }
-  const lines = [
-    "# OpenCodex proxy profile — use with: codex --profile opencodex",
-    `# Routes all model requests through the opencodex proxy at ${host}`,
-    'model_provider = "opencodex"',
-  ];
-  if (catalogPath) lines.push(`model_catalog_json = ${tomlString(catalogPath)}`);
-  if (fastMode !== undefined) lines.push("", "[features]", `fast_mode = ${fastMode ? "true" : "false"}`);
-  lines.push(buildProviderTableBlockForTarget(target, supportsWebsockets).trimEnd(), "");
-  return lines.join("\n");
-}
-
-export function chooseCatalogPathForInjection(
-  content: string,
-  requested?: string | null,
-): string | null {
-  if (requested !== undefined) return requested;
-
-  const existing = readRootModelCatalogPath(content);
-  if (existing) {
-    const resolved = resolveCodexConfigPath(existing);
-    if (!isOpencodexCatalogPath(resolved) || existsSync(resolved))
-      return existing;
-  }
-
-  return existsSync(DEFAULT_CATALOG_PATH) ? DEFAULT_CATALOG_PATH : null;
-}
 
 export interface CodexInjectResult {
   success: boolean;
@@ -916,18 +170,9 @@ export interface CodexInjectResult {
 const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
 
 class CodexHistoryPreflightRefusal extends Error {}
-class CodexRestoreRefusal extends Error {
-  constructor(readonly config: CodexRestoreConfigResult) {
-    super(config.message);
-  }
-}
 let historyArtifactStageForTests: ((stage: string) => void) | undefined;
 export function setHistoryArtifactStageForTests(hook: typeof historyArtifactStageForTests): void {
   historyArtifactStageForTests = hook;
-}
-let beforeRestoreConfigForTests: ((kind: string) => void) | undefined;
-export function setBeforeRestoreConfigForTests(hook: typeof beforeRestoreConfigForTests): void {
-  beforeRestoreConfigForTests = hook;
 }
 let beforeHistoryArtifactCommitForTests: ((kind: string) => void) | undefined;
 export function setBeforeHistoryArtifactCommitForTests(hook: typeof beforeHistoryArtifactCommitForTests): void {
@@ -1661,656 +906,6 @@ async function injectCodexConfigImpl(
   };
 }
 
-/**
- * Sub-table headers like `[model_providers.opencodex.env_http_headers]` appear when a Codex app
- * config rewrite re-serializes the provider's inline `env_http_headers` table. They define the
- * same `model_providers.opencodex` provider, so cleanup must remove them too — otherwise the
- * provider survives with no `name` and Codex rejects the whole config
- * ("provider name must not be empty"). The dot terminator keeps a user's
- * `[model_providers.opencodex_backup]`-style tables out of scope.
- */
-function isOcxProviderHeaderLine(trimmedLine: string): boolean {
-  // Root form matched by regex, not equality: TOML v1.0 allows a trailing comment
-  // (`[model_providers.opencodex] # comment`), and an exact compare would miss that form.
-  // The sub-table prefix check already tolerates trailing comments by construction.
-  return (
-    /^\[model_providers\.opencodex\]\s*(?:#.*)?$/.test(trimmedLine) ||
-    trimmedLine.startsWith("[model_providers.opencodex.")
-  );
-}
-
-function hasOcxProviderTable(content: string): boolean {
-  return content
-    .split("\n")
-    .some((line) => isOcxProviderHeaderLine(line.trim()));
-}
-
-function removeOcxSection(content: string): string {
-  const lines = content.split("\n");
-  const filtered: string[] = [];
-  let inOcxSection = false;
-  for (const line of lines) {
-    if (
-      line.includes(OCX_SECTION_MARKER) ||
-      isOcxProviderHeaderLine(line.trim())
-    ) {
-      inOcxSection = true;
-      continue;
-    }
-    if (inOcxSection) {
-      // End the injected section at the next table header that ISN'T our own. Exact match on the
-      // provider name (plus our own sub-tables) so a user's
-      // "[model_providers.opencodex_backup]" (or similar) is preserved, not swallowed.
-      if (/^\s*\[/.test(line) && !isOcxProviderHeaderLine(line.trim())) {
-        inOcxSection = false;
-        filtered.push(line);
-      }
-      continue;
-    }
-    filtered.push(line);
-  }
-  return (
-    filtered
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trimEnd() + "\n"
-  );
-}
-
-interface StripOpencodexConfigResult {
-  content: string;
-  managedDefaultsError: string | null;
-}
-
-/**
- * Detailed form used by the on-disk restore path. A damaged ownership marker is
- * ambiguous: keep the associated value, but return the transform error so the
- * caller cannot report a complete restore.
- */
-function stripOpencodexConfigResult(
-  content: string,
-  journaledBaseUrl: string | null = null,
-  journaledRealtimeWsBaseUrl: string | null = null,
-): StripOpencodexConfigResult {
-  let out = content;
-  const hadRootOcxProvider =
-    readRootTomlString(out, "model_provider") === "opencodex";
-  // #1798: marker adjacency is FORMATTING evidence, and a Codex app rewrite keeps values
-  // while dropping comments. Fall back to VALUE evidence -- the exact URL we recorded
-  // writing -- so an app-rewritten config is still recognized as ours.
-  const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out)
-    || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
-  out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
-  out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl, journaledRealtimeWsBaseUrl);
-  if (hasOcxProviderTable(out)) {
-    out = removeOcxSection(out);
-  }
-  out = removeProfileSection(out);
-  // Regex (not exact-string) removal so compact `model_provider="opencodex"` is stripped too —
-  // must match the detection regex above, or a detected line could survive un-removed.
-  out = out
-    .split("\n")
-    .filter((l) => !/^\s*model_provider\s*=\s*"opencodex"\s*$/.test(l))
-    .join("\n");
-  // Routed root model ids (`model = "provider/slug"`) only make sense while the proxy serves
-  // them — strip on both the legacy re-tag form and the Design B injected-base-url form.
-  if (hadRootOcxProvider || hadInjectedBaseUrl) out = stripRootRoutedModel(out);
-  const managedDefaults = transformManagedSubagentDefaults(out, null);
-  if (managedDefaults.ok) out = managedDefaults.content;
-  out = stripOpencodexCatalogPath(out);
-  return {
-    content: out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n",
-    managedDefaultsError: !managedDefaults.ok ? managedDefaults.error : null,
-  };
-}
-
-/** Pure transform: strip the opencodex provider block + `model_provider = "opencodex"` lines. */
-export function stripOpencodexConfig(content: string): string {
-  return stripOpencodexConfigResult(content).content;
-}
-
-function hasOpencodexRouting(content: string): boolean {
-  return (
-    hasOcxProviderTable(content) ||
-    /^\s*model_provider\s*=\s*"opencodex"/m.test(content) ||
-    hasInjectedOpenaiBaseUrl(content)
-  );
-}
-
-export function removeCodexConfig(
-  options: { preserveProfile?: boolean } = {},
-): { success: boolean; message: string } {
-  const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
-  if (!existsSync(CODEX_CONFIG_PATH)) {
-    if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
-      unlinkSync(CODEX_PROFILE_PATH);
-    return {
-      success: true,
-      message: `Codex config not found; no native restore was needed${options.preserveProfile ? "." : ", and the opencodex profile was removed if present."}`,
-    };
-  }
-  const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
-  // Same EOL boundary as inject: strip in LF space, write back in the file's own ending.
-  // The unchanged fast path compares in LF space so an untouched file is never rewritten.
-  const eol = dominantEol(rawContent);
-  const content = applyEol(rawContent, "\n");
-  // Read the recorded injection once: the strip below consumes it, and so does the
-  // ownership verdict, which must agree with what was actually removed.
-  const journaledBaseUrl = journaledInjectedOpenaiBaseUrl();
-  const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl();
-  const had = hasOpencodexRouting(content)
-    || (journaledBaseUrl !== null && rootTomlString(content, "openai_base_url") === journaledBaseUrl)
-    || (journaledRealtimeWsBaseUrl !== null
-      && rootTomlString(content, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
-  const stripped = stripOpencodexConfigResult(content, journaledBaseUrl, journaledRealtimeWsBaseUrl);
-  if (had || stripped.content !== content) {
-    atomicWriteFile(CODEX_CONFIG_PATH, applyEol(stripped.content, eol));
-  }
-  if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
-    unlinkSync(CODEX_PROFILE_PATH);
-  const removedMessage = had
-    ? `Removed opencodex routing from Codex config${options.preserveProfile ? "." : " + profile."}`
-    : "opencodex not present in Codex config.";
-  if (stripped.managedDefaultsError) {
-    const routingMessage = had
-      ? removedMessage
-      : "No opencodex routing was present in Codex config.";
-    return {
-      success: false,
-      message:
-        `${routingMessage} Native Codex sub-agent defaults could not be safely removed: ${stripped.managedDefaultsError}. ` +
-        "The ambiguous marker and adjacent value were preserved; inspect $CODEX_HOME/config.toml before using native Codex.",
-    };
-  }
-  return {
-    success: true,
-    message: removedMessage,
-  };
-}
-
-export type CodexRestoreArtifactState = "ok" | "skipped" | "failed";
-
-export interface CodexRestoreConfigResult {
-  state: CodexRestoreArtifactState;
-  changed: boolean;
-  action: "journal-restored" | "owned-fields-stripped" | "external-provider-preserved" | "failed";
-  message: string;
-}
-
-export interface CodexRestoreCatalogResult {
-  state: CodexRestoreArtifactState;
-  changed: boolean;
-  removed: number;
-  kept: number;
-  path: string | null;
-  message: string;
-}
-
-export interface CodexRestoreHistoryResult {
-  state: CodexRestoreArtifactState;
-  changed: boolean;
-  reason?: CodexHistoryFailureReason;
-  rows: number;
-  files: number;
-  ejectedRows: number;
-  message: string;
-}
-
-export interface CodexNativeRestoreResult {
-  success: boolean;
-  message: string;
-  externalProvider?: string;
-  artifacts: {
-    config: CodexRestoreConfigResult;
-    catalog: CodexRestoreCatalogResult;
-    history: CodexRestoreHistoryResult;
-  };
-}
-
-function failedHistoryRestore(
-  reason?: CodexHistoryFailureReason,
-  detail?: string,
-  progress: { rows?: number; files?: number } = {},
-): CodexRestoreHistoryResult {
-  const rows = progress.rows ?? 0;
-  const files = progress.files ?? 0;
-  const changed = rows > 0 || files > 0;
-  return {
-    state: "failed",
-    changed,
-    ...(reason ? { reason } : {}),
-    rows,
-    files,
-    ejectedRows: 0,
-    message: reason === "permission"
-      ? changed
-        ? "Codex resume history changed but did NOT converge because permission was denied while finalizing the backup manifest; the manifest was retained for review and safe retry."
-        : "Codex resume history could NOT be restored because permission was denied."
-      : reason === "busy"
-        ? changed
-          ? "Codex resume history changed but did NOT converge because backup-manifest finalization remained busy; the manifest was retained for review and safe retry."
-          : detail ?? "Codex resume history could NOT be restored — the Codex app appears to be holding the history database."
-        : reason === "integrity"
-          ? changed
-            ? "Codex resume history changed but did NOT converge because the backup or target changed; the manifest was retained for review and safe retry."
-            : "Codex resume history could NOT be restored because the backup or restore target failed integrity checks; unverified provider metadata was left unchanged."
-        : detail
-          ? `Codex resume history could NOT be restored: ${detail}`
-          : "Codex resume history could NOT be restored; the reason was not recorded. Run 'ocx doctor'.",
-  };
-}
-
-/**
- * Restore failure wording for a Worker outcome.
- *
- * Only a genuine busy result blames the Codex app. An unsafe-path refusal, an
- * unavailable coordinator database, a permission denial, or a dead/timed-out
- * worker is a different problem; the old collapse made every one of those read
- * as "the Codex app is holding the database" (issue #1191). `busy` and
- * `permission` keep the restore-specific sentence built by
- * `failedHistoryRestore`; every other reason reuses the single formatter so
- * the two modules cannot drift apart.
- */
-export function failedHistoryRestoreFromOutcome(
-  outcome: Extract<CodexHistoryJobOutcome, { kind: "blocked" | "failed" }>,
-): CodexRestoreHistoryResult {
-  if (outcome.kind === "blocked" && outcome.reason === "busy") return failedHistoryRestore("busy");
-  if (outcome.kind === "failed" && outcome.historyFailureReason === "busy") {
-    return failedHistoryRestore(
-      "busy",
-      describeHistoryJobFailure(outcome, "restore"),
-      { rows: outcome.rows, files: outcome.files },
-    );
-  }
-  if (outcome.kind === "failed" && outcome.historyFailureReason === "permission") {
-    return failedHistoryRestore("permission", undefined, { rows: outcome.rows, files: outcome.files });
-  }
-  if (outcome.kind === "failed" && outcome.historyFailureReason === "integrity") {
-    return failedHistoryRestore("integrity", undefined, { rows: outcome.rows, files: outcome.files });
-  }
-  return failedHistoryRestore(undefined, describeHistoryJobFailure(outcome, "restore"));
-}
-
-function externalProviderRestoreResult(activeProvider: string): CodexNativeRestoreResult {
-  const message = `External Codex provider ${tomlString(activeProvider)} preserved; no native restore was needed.`;
-  return {
-    success: true,
-    message,
-    externalProvider: activeProvider,
-    artifacts: {
-      config: { state: "skipped", changed: false, action: "external-provider-preserved", message },
-      catalog: { state: "skipped", changed: false, removed: 0, kept: 0, path: null, message },
-      history: { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message },
-    },
-  };
-}
-
-/** A foreign service claim is an authority boundary, including explicit CLI restore. */
-function foreignOwnershipRestoreRefusal(message: string): CodexNativeRestoreResult {
-  return {
-    success: false,
-    message: `Codex native restore refused: ${message}`,
-    artifacts: {
-      config: { state: "skipped", changed: false, action: "failed", message },
-      catalog: { state: "skipped", changed: false, removed: 0, kept: 0, path: null, message },
-      history: { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message },
-    },
-  };
-}
-
-function desiredEnabledRestoreSkip(): CodexNativeRestoreResult {
-  const message = "Codex integration was re-enabled; native restore was skipped.";
-  return skippedRestoreEnvelope(true, message);
-}
-
-/**
- * A schema-complete all-skipped envelope for outcomes decided before any
- * restore machinery runs. Every `restore --json` path must stay shape-stable
- * with `CodexNativeRestoreResult`; consumers never special-case early exits.
- */
-export function skippedRestoreEnvelope(success: boolean, message: string): CodexNativeRestoreResult {
-  return {
-    success,
-    message,
-    artifacts: {
-      config: { state: "skipped", changed: false, action: "owned-fields-stripped", message },
-      catalog: { state: "skipped", changed: false, removed: 0, kept: 0, path: null, message },
-      history: { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message },
-    },
-  };
-}
-
-/** Config was attempted and failed; downstream artifacts were never attempted. */
-function failedConfigRestoreEnvelope(config: CodexRestoreConfigResult): CodexNativeRestoreResult {
-  const result = skippedRestoreEnvelope(false, config.message);
-  result.artifacts.config = config;
-  return result;
-}
-
-/** The config/profile half of a native restore, reported as one artifact. */
-function restoreCodexConfigInline(kind = "sync"): CodexRestoreConfigResult {
-  const preImages = captureCodexPreImages();
-  const result = restoreCodexConfigInlineImpl(kind);
-  if (result.state === "failed") {
-    const compensated = restoreCodexPreImages(preImages);
-    if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
-  }
-  return result;
-}
-
-function restoreCodexConfigInlineImpl(kind: string): CodexRestoreConfigResult {
-  try {
-    beforeRestoreConfigForTests?.(kind);
-    const historyError = preflightCodexHistoryInjection(false, false);
-    if (historyError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${historyError}.` };
-    const journal = restoreJournalState();
-    if (journal.unverified) {
-      return {
-        state: "failed", changed: false, action: "failed",
-        message: "Codex journal recovery was not verified; current configuration files and the journal were preserved.",
-      };
-    }
-    const restored = journal.configRestored
-      ? { success: true, message: "Codex config restored from opencodex journal." }
-      : removeCodexConfig({ preserveProfile: journal.profileRestored || journal.profileChanged });
-    if (restored.success) {
-      // A successful journal/fallback write can race native history migration too.
-      // Refuse here while preimage compensation and the remove transaction can roll back.
-      const finalHistoryError = preflightCodexHistoryInjection(false, false);
-      if (finalHistoryError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${finalHistoryError}.` };
-    }
-    return restored.success
-      ? {
-          state: "ok",
-          changed: journal.configRestored || journal.profileRestored || journal.profileChanged || restored.message.startsWith("Removed"),
-          action: journal.configRestored ? "journal-restored" : "owned-fields-stripped",
-          message: restored.message,
-        }
-      : { state: "failed", changed: false, action: "failed", message: restored.message };
-  } catch (error) {
-    return { state: "failed", changed: false, action: "failed", message: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-/** The catalog half, always inside its own K acquisition. */
-/**
- * The catalog half, always inside its own K acquisition.
- *
- * `journaledCatalogPath` must be captured by the CALLER, before the config half runs: a
- * successful journal restore deletes the journal, and a config restore can remove
- * `model_catalog_json`. Reading it here would be too late in both cases (#1798).
- */
-function restoreCodexCatalogArtifact(
-  revalidateDesiredState: boolean,
-  journaledCatalogPath: string | null,
-): CodexRestoreCatalogResult {
-  const owningCodexHome = getCodexHome();
-  try {
-    const restored = withCatalogWriteSerialization(owningCodexHome, permit =>
-      revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())
-        ? null
-        : restoreCodexCatalogWithPermit(permit, owningCodexHome, journaledCatalogPath));
-    return restored.kind === "completed" && restored.value !== null
-      ? { state: "ok", changed: restored.value.removed > 0, ...restored.value, message: "Codex catalog restored." }
-      : restored.kind === "completed"
-        ? {
-            state: "skipped", changed: false, removed: 0, kept: 0, path: null,
-            message: "Codex integration was re-enabled; native catalog restoration was skipped.",
-          }
-        : {
-            state: "failed", changed: false, removed: 0, kept: 0, path: DEFAULT_CATALOG_PATH,
-            message: `Codex catalog could not be restored: ${restored.reason}.`,
-          };
-  } catch (error) {
-    return {
-      state: "failed", changed: false, removed: 0, kept: 0, path: DEFAULT_CATALOG_PATH,
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-/**
- * Restore native Codex, running history in a Worker under H.
- *
- * On a coordinated home the config/profile restore happens INSIDE the Codex
- * write lock, publishing a `remove` transition — the same serialization inject
- * uses. Without it, an older restore could overwrite a config a concurrent
- * enable had just written under the lock, and then honestly report success
- * while desired intent said ON. The desired-state re-read under the lock turns
- * that lost race into the discriminated `desired_enabled` skip.
- */
-export async function restoreNativeCodexAsync(
-  options: { revalidateDesiredState?: boolean } = {},
-): Promise<CodexNativeRestoreResult> {
-  try {
-    return await restoreNativeCodexAsyncImpl(options);
-  } catch (error) {
-    if (!(error instanceof CodexRestoreRefusal)) throw error;
-    return failedConfigRestoreEnvelope(error.config);
-  }
-}
-
-async function restoreNativeCodexAsyncImpl(
-  options: { revalidateDesiredState?: boolean },
-): Promise<CodexNativeRestoreResult> {
-  const activeProvider = currentExternalCodexModelProvider();
-  if (activeProvider) {
-    // External-provider courtesy: only the stale journal is removed. The
-    // history worker must not launch — it would turn a read-mostly courtesy
-    // result into a history mutation on a home we do not own.
-    removeJournal();
-    return externalProviderRestoreResult(activeProvider);
-  }
-
-  // `restore` normally honours a human request even when an unrelated
-  // service-manager probe is unavailable. A recorded FOREIGN home is not an
-  // unrelated probe: it is positive evidence another installation owns these
-  // native artifacts, so do not create profile/claim locks before refusing.
-  if (options.revalidateDesiredState) {
-    const ownership = inspectNativeCodexOwnership();
-    if (ownership.ownership === "foreign") return foreignOwnershipRestoreRefusal(ownership.reason);
-    if (shouldSyncCodexOnStart(loadConfig())) return desiredEnabledRestoreSkip();
-  }
-
-  const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
-
-  const eligibility = codexWriteCoordinationEligibility({
-    coordinatorPath: () =>
-      resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), getCodexHome()),
-    residue: () => classifyNativeRoutedResidue(),
-    integrationRecord: () => readIntegrationRecord(),
-  });
-
-  // Captured before the config half: a successful journal restore DELETES the journal, and
-  // restoring the config can drop `model_catalog_json`. Either one would hide the routed
-  // catalog we actually wrote (#1798).
-  const journaledCatalogPath = journaledInjectedCatalogPath();
-  let config: CodexRestoreConfigResult;
-  let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
-
-  if (eligibility.kind === "coordinated" || eligibility.kind === "adopt") {
-    // The restore has no candidate bytes to witness; freshness comes from the
-    // filesystem reads and the desired-state re-read performed under the lock.
-    const witness = { authoritySnapshotId: "codex-native-restore" };
-    const coordinated = await withCodexWriteLock(
-      {
-        timeoutMs: DEFAULT_INJECT_LOCK_TIMEOUT_MS,
-        ...(eligibility.kind === "adopt" ? { adoption: { direction: "remove" as const } } : {}),
-        admitted: witness,
-        readAdmissionUnderLock: () => witness,
-      },
-      (ctx) => {
-        if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
-          throw new CodexWriteLockSkipped("desired_enabled");
-        }
-        const published = ctx.coordinator.beginTransition(
-          {
-            nativeGeneration: ctx.expectation.nativeBefore,
-            currentTxId: ctx.currentTxId,
-          },
-          {
-            txId: ctx.expectation.txId,
-            direction: "remove",
-            authoritySnapshotId: ctx.admission.authoritySnapshotId,
-            nextRetryAt: new Date().toISOString(),
-          },
-        );
-        if (published.kind !== "updated") {
-          throw new CodexWriteConflictError(
-            `The Codex transition could not be published: ${published.kind}.`,
-          );
-        }
-        const preImages = captureCodexPreImages();
-        let restored: CodexRestoreConfigResult;
-        try {
-          restored = restoreCodexConfigInline(eligibility.kind);
-          // Throw inside N so the published remove transition rolls back too.
-          if (restored.state === "failed") throw new CodexRestoreRefusal(restored);
-        } catch (error) {
-          const compensated = restoreCodexPreImages(preImages);
-          if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
-          throw error;
-        }
-        return {
-          config: restored,
-          preImages,
-          receipt: {
-            nativeGeneration: ctx.expectation.nativeAfter,
-            currentTxId: ctx.expectation.txId,
-          },
-        };
-      },
-    );
-    if (coordinated.status === "skipped") return desiredEnabledRestoreSkip();
-    if (coordinated.status !== "acquired") {
-      config = {
-        state: "failed",
-        changed: false,
-        action: "failed",
-        message: coordinated.status === "busy"
-          ? `Another process is writing Codex configuration right now (waited ${coordinated.waitedMs}ms). Retry shortly.`
-          : `Codex configuration was not restored: ${coordinated.message}`,
-      };
-    } else {
-      recordCodexNativeTransactionProvenance(
-        coordinated.value.preImages,
-        coordinated.value.receipt.currentTxId,
-      );
-      config = coordinated.value.config;
-      transitionReceipt = coordinated.value.receipt;
-    }
-  } else {
-    // Legacy-uncoordinated (or unresolvable) homes keep the unserialized path
-    // they have always had; restore is the escape hatch and must not strand
-    // them. The plain re-read still honors an intervening re-enable.
-    if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
-      return desiredEnabledRestoreSkip();
-    }
-    config = restoreCodexConfigInline(eligibility.kind);
-  }
-
-  if (config.state === "failed") return failedConfigRestoreEnvelope(config);
-  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
-  const outcome = await runCodexHistoryJob({
-    ...resolveCodexHistoryJobTarget(),
-    ...(options.revalidateDesiredState ? { expectedDesiredEnabled: false } : {}),
-    operation: deriveCodexHistoryOperation({ direction: "restore", resumeHistory: true, legacyMode: false }),
-  });
-  if (transitionReceipt) {
-    resolveCodexHistoryTransition(transitionReceipt, outcome);
-  }
-  const history: CodexRestoreHistoryResult = outcome.kind === "converged"
-    ? {
-        state: "ok", changed: outcome.rows > 0 || outcome.files > 0, rows: outcome.rows, files: outcome.files, ejectedRows: 0,
-        message: outcome.rows > 0
-          ? `Resume history metadata restored from opencodex backup (${outcome.rows} thread(s)); original providers preserved.`
-          : "No backed-up resume-history metadata was pending; untracked routed history was left unchanged.",
-      }
-    : outcome.kind === "skipped"
-      ? { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message: "Codex resume history was skipped." }
-      : outcome.kind === "blocked" && (outcome.reason === "desired_disabled" || outcome.reason === "desired_enabled")
-        ? {
-            state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0,
-            message: outcome.reason === "desired_disabled"
-              ? "Codex integration was disabled; history restoration was skipped."
-              : "Codex integration was enabled; history restoration was skipped.",
-          }
-      : outcome.kind === "blocked" || outcome.kind === "failed"
-        ? failedHistoryRestoreFromOutcome(outcome)
-        : failedHistoryRestore();
-  const base = catalog.removed > 0
-    ? `${config.message} Catalog restored to ${catalog.kept} native model(s) (dropped ${catalog.removed} proxy-routed).`
-    : config.message;
-  const success = catalog.state !== "failed"
-    && history.state !== "failed";
-  return {
-    success,
-    message: `${base}${history.state === "failed" ? ` ⚠️ ${history.message}` : ""}`,
-    artifacts: { config, catalog, history },
-  };
-}
-
-export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateDesiredState?: boolean } = {}): CodexNativeRestoreResult {
-  const activeProvider = currentExternalCodexModelProvider();
-  if (activeProvider) {
-    removeJournal();
-    return externalProviderRestoreResult(activeProvider);
-  }
-  if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
-    return desiredEnabledRestoreSkip();
-  }
-  const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
-  // Captured before the config half: a successful journal restore DELETES the journal, and
-  // restoring the config can drop `model_catalog_json`. Either one would hide the routed
-  // catalog we actually wrote (#1798).
-  const journaledCatalogPath = journaledInjectedCatalogPath();
-  const config = restoreCodexConfigInline();
-  if (config.state === "failed") return failedConfigRestoreEnvelope(config);
-  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
-  // Design B (loopback) steady state: threads are already tagged openai, so prove the
-  // no-op with a readonly probe instead of write-opening a DB the Codex app may hold
-  // (Windows: WAL writer lock -> seconds of stalling + a false warning on every stop).
-  // Legacy (non-loopback) installs keep the unconditional write-open restore.
-  let skipWhenProvablyNoop = false;
-  try {
-    skipWhenProvablyNoop = !shouldInjectApiAuthHeader(loadConfig());
-  } catch {
-    /* unreadable config: keep the conservative write-open restore */
-  }
-  // `skipHistory` is how the async wrapper takes this work for itself: the
-  // native files come down here, and history runs in the Worker under H.
-  const rawHistory = options.skipHistory
-    ? { rows: 0, files: 0 }
-    : syncCodexHistoryProvider("openai", undefined, undefined, {
-        skipWhenProvablyNoop,
-      });
-  const history: CodexRestoreHistoryResult = options.skipHistory
-    ? { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message: "History restoration runs asynchronously." }
-    : rawHistory.failed
-      ? failedHistoryRestore(rawHistory.failureReason, undefined, rawHistory)
-      : {
-          state: "ok",
-          changed: rawHistory.rows > 0 || rawHistory.files > 0 || (rawHistory.ejectedRows ?? 0) > 0,
-          rows: rawHistory.rows,
-          files: rawHistory.files,
-          ejectedRows: rawHistory.ejectedRows ?? 0,
-          message: rawHistory.rows > 0
-            ? `Resume history metadata restored from opencodex backup (${rawHistory.rows} thread(s)); original providers preserved.`
-            : "No backed-up resume-history metadata was pending; untracked routed history was left unchanged.",
-        };
-  const message = catalog.removed > 0
-    ? `${config.message} Catalog restored to ${catalog.kept} native model(s) (dropped ${catalog.removed} proxy-routed).`
-    : config.message;
-  return {
-    success: catalog.state !== "failed" && history.state !== "failed",
-    message,
-    artifacts: { config, catalog, history },
-  };
-}
-
 export function getCodexConfigPath(): string {
   return CODEX_CONFIG_PATH;
 }
@@ -2340,3 +935,53 @@ export function formatApplyHistoryFailure(outcome: CodexHistoryJobOutcome, legac
       : "Codex resume history NOT changed";
   return `  ⚠️ ${headline}: ${describeHistoryJobFailure(outcome, "apply", legacyMode)}\n`;
 }
+
+export {
+  providerBaseHost,
+  standaloneCodexRoutingTarget,
+} from "./inject/routing-target";
+export type { CodexRoutingTarget } from "./inject/routing-target";
+
+export {
+  applyEol,
+  buildOpenaiBaseUrlLine,
+  buildProfileFile,
+  buildProviderTableBlock,
+  buildRealtimeWsBaseUrlLine,
+  chooseCatalogPathForInjection,
+  currentExternalCodexModelProvider,
+  dominantEol,
+  externalCodexModelProvider,
+  setRootOpenaiBaseUrl,
+  setRootRealtimeWsBaseUrl,
+  stripInjectedOpenaiBaseUrl,
+  stripRootContextWindowOverrides,
+} from "./inject/config-toml";
+
+export {
+  classifyCodexRouting,
+  getCodexRoutingKind,
+  isCodexRoutingInjected,
+} from "./inject/routing-classify";
+export type { CodexRoutingKind } from "./inject/routing-classify";
+
+export {
+  removeCodexConfig,
+  stripOpencodexConfig,
+} from "./inject/remove";
+
+export type {
+  CodexNativeRestoreResult,
+  CodexRestoreArtifactState,
+  CodexRestoreCatalogResult,
+  CodexRestoreConfigResult,
+  CodexRestoreHistoryResult,
+} from "./inject/restore";
+export {
+  failedHistoryRestoreFromOutcome,
+  restoreNativeCodex,
+  restoreNativeCodexAsync,
+  setBeforeRestoreConfigForTests,
+  skippedRestoreEnvelope,
+} from "./inject/restore";
+

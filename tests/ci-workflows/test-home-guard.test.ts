@@ -535,4 +535,56 @@ const canSymlink = (() => {
 
     expect(JSON.parse(probe.stdout.trim())).toEqual({ armed: true, rejected: true });
   });
+  /*
+   * The guard covers WRITERS, so a test that removes the config directory outright never
+   * reaches it: rmSync is plain node:fs, not a guarded writer. And the sandbox that would
+   * otherwise make the removal harmless is not universal — Bun resolves bunfig.toml, and with
+   * it the preload, from the CURRENT WORKING DIRECTORY. A run started outside the repository
+   * arms nothing, leaves OPENCODEX_HOME unset, and getConfigDir() then returns the developer's
+   * real ~/.opencodex. On 2026-09-15 a test did exactly that and deleted a live home: every
+   * OAuth login, the Codex account store, the service tokens and a 372MB usage ledger.
+   *
+   * Nothing runtime can be asserted here — the directory is gone before any guarded call runs
+   * — so the invariant is asserted on the test sources. A test that needs a config directory
+   * pins its own OPENCODEX_HOME and names that directory; none may hand the process-global one
+   * to a destructive fs call.
+   */
+  test("no test file hands the process-global config directory to a destructive fs call", async () => {
+    const DESTRUCTIVE = "rmSync|rmdirSync|unlinkSync|renameSync|cpSync";
+    const direct = new RegExp("\\b(?:" + DESTRUCTIVE + ")\\(\\s*getConfigDir\\(\\)");
+    const bound = new RegExp("\\bconst\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*getConfigDir\\(\\)");
+
+    // A line that merely NAMES the pattern is not a call: tests/cli/uninstall.test.ts asserts
+    // the CLI does not contain it, and the oracle at the end of this test is a literal. Both
+    // carry a quote on the line; a destructive call on a directory variable does not.
+    const isCode = (line: string): boolean => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) return false;
+      return !trimmed.includes('"') && !trimmed.includes("'");
+    };
+
+    const offenders = new Set<string>();
+    const testsDir = join(repoRoot(), "tests");
+    for await (const relative of new Bun.Glob("**/*.test.ts").scan({ cwd: testsDir })) {
+      const lines = (await Bun.file(join(testsDir, relative)).text()).split("\n");
+      const names = new Set<string>();
+      for (const line of lines) {
+        const found = bound.exec(line);
+        if (found) names.add(found[1]);
+      }
+      for (const line of lines) {
+        if (!isCode(line)) continue;
+        if (direct.test(line)) offenders.add(relative + ": getConfigDir() passed directly");
+        for (const name of names) {
+          const viaName = new RegExp("\\b(?:" + DESTRUCTIVE + ")\\(\\s*" + name + "\\b");
+          if (viaName.test(line)) offenders.add(relative + ": config dir removed via " + name);
+        }
+      }
+    }
+
+    // The matcher must be able to see the shape it looks for, so an empty result is evidence
+    // rather than a silently broken regex.
+    expect(direct.test("rmSync(getConfigDir(), { recursive: true })")).toBe(true);
+    expect([...offenders].sort()).toEqual([]);
+  });
 });
