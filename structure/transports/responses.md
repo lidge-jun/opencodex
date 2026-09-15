@@ -11,6 +11,11 @@ Plaintext collaboration restoration treats a null namespace as absent, rejects n
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../runtime.md#hosted-search-continuation-binding).
 
+The `openai-responses` adapter preserves the incoming `User-Agent` as a non-credential fallback in
+both key and forward modes. A configured provider header with that name wins case-insensitively;
+when the caller omits it, the adapter invents no client identity. This does not widen the canonical
+forward credential/metadata allowlist or copy any other caller header.
+
 Retired Codex Spark has no model-specific tool or Responses Lite override; general Lite handling and
 namespace scrubbing remain shared compatibility behavior. Codex quota/reset evidence follows the
 [shared/Reserve policy](../providers/openai-tiers.md#public-provider-contract), including suppression of retired model-derived evidence before shared recovery.
