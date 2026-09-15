@@ -89,4 +89,3 @@ export function computeCodexUsageScore(
   const values = finite(shortPercent) ? [...knownLong, shortPercent] : knownLong;
   return values.length ? Math.max(...values) : null;
 }
-
