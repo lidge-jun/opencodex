@@ -60,7 +60,6 @@ import { restorePlaintextV2AgentMessageCalls } from "../../responses/plaintext-v
 import {
   recordAdapterReasoning,
   recordAdapterTier,
-  noteAttemptSend,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
@@ -171,6 +170,7 @@ export async function preparePassthroughExchange(
     | "replayOAuthCredentialSnapshot"
     | "genericFailovers"
     | "applyFailoverSnapshot"
+    | "noteRoutedAttemptSend"
   >,
   responseEffects: Pick<
     ResponsesEffects,
@@ -752,7 +752,7 @@ export async function preparePassthroughExchange(
       // Body is a replayable string; nothing has streamed to the client yet.
       upstreamResponse = await fetchWithTransientRetry(
         recovery => {
-          noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
+          transportState.noteRoutedAttemptSend(passthroughEstimate, recovery);
           return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
             method: request.method,
             headers: request.headers,
@@ -848,7 +848,7 @@ export async function preparePassthroughExchange(
             if (allowance.permit && !allowance.permit.use()) {
               throw new SendBudgetExhaustedError(safeHostLabel(request.url));
             }
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, innerRecovery ?? recovery);
+            transportState.noteRoutedAttemptSend(passthroughEstimate, innerRecovery ?? recovery);
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,
@@ -946,7 +946,7 @@ export async function preparePassthroughExchange(
         // every other build site; a replay is exactly when a grown payload reappears.
         const replayBodyRefusal = refuseOversizedOutboundBody(request);
         if (replayBodyRefusal) return replayBodyRefusal;
-        noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, "oauth-401");
+        transportState.noteRoutedAttemptSend(passthroughEstimate, "oauth-401");
         upstreamResponse = await fetchWithHeaderTimeout(
           request.url,
           { method: request.method, headers: request.headers, body: request.body },
@@ -1075,7 +1075,7 @@ export async function preparePassthroughExchange(
       try {
         upstreamResponse = await fetchWithTransientRetry(
           recovery => {
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "oauth-401");
+            transportState.noteRoutedAttemptSend(passthroughEstimate, recovery ?? "oauth-401");
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,
@@ -1192,7 +1192,7 @@ export async function preparePassthroughExchange(
           recovery => {
             // The first send of every replay is itself a rate-limit retry; inner transient-5xx
             // recoveries keep their own label (recovery is provided for those).
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "rate-limit-429");
+            transportState.noteRoutedAttemptSend(passthroughEstimate, recovery ?? "rate-limit-429");
             return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
               method: request.method,
               headers: request.headers,

@@ -66,7 +66,7 @@ import {
   recordAdapterTier,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
-  noteAttemptSend,
+  noteProviderAttemptSend,
 } from "../request-log";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
@@ -702,7 +702,7 @@ export async function retryCodexPoolOnAlternateAccount(
         // The move is a physical send like any other, so the root workflow is charged too.
         chargeWorkflowSends(args.options.workflowRootId, 1);
       }
-      noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+      noteProviderAttemptSend(logCtx, route.providerName, route.provider, passthroughEstimate);
       try {
         upstreamResponse = await fetchWithHeaderTimeout(
           request.url,

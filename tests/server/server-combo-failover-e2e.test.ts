@@ -102,7 +102,8 @@ mock.module("../../src/server/adapter-resolve", () => ({
         },
         async fetchResponse(request, context) {
           if (!customFetchResponse) throw new Error("custom fetchResponse not installed");
-          return customFetchResponse(request, context);
+          return context!.executor!(request.url, { method: request.method, headers: request.headers,
+            body: request.body, signal: context?.abortSignal });
         },
       };
     }
@@ -263,6 +264,12 @@ function provider(
     allowPrivateNetwork: url.includes("127.0.0.1"),
     authMode: "key",
     apiKey,
+    ...(adapter === "test-response" ? { fetch: (async (input, init) => {
+      if (!customFetchResponse) throw new Error("custom fetchResponse not installed");
+      return customFetchResponse({ url: String(input), method: init?.method ?? "POST",
+        headers: Object.fromEntries(new Headers(init?.headers)), body: String(init?.body ?? "") },
+      { abortSignal: init?.signal ?? undefined });
+    }) as typeof globalThis.fetch } : {}),
     ...extra,
   };
 }
@@ -1834,7 +1841,7 @@ describe("server combo failover 030 activation matrix", () => {
       .toEqual({ inputTokens: 17, outputTokens: 3, totalTokens: 20 });
   });
 
-  test("provider-local retry keeps one attempt, two sends, recovery kind, and latest estimate", async () => {
+  test("provider-local key retry keeps separate attempts and the latest estimate on the selected key", async () => {
     const estimates = [10, 25];
     customUsageEstimate = () => estimates.shift();
     let calls = 0;
@@ -1855,11 +1862,14 @@ describe("server combo failover 030 activation matrix", () => {
     const response = await postLogged(config);
     expect(response.status).toBe(200);
     await response.text();
-    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    const attempts = (await latestAttemptReceipts(config)).usage.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts?.[0]).toMatchObject({ sendCount: 1, usageStatus: "unreported" });
+    const attempt = attempts?.[1];
     expect(attempt).toMatchObject({
       provider: "a",
       model: "m1",
-      sendCount: 2,
+      sendCount: 1,
       inputTokenEstimate: 25,
       recoveryKinds: ["key-429"],
     });

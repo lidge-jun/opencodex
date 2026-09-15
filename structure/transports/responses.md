@@ -564,6 +564,15 @@ change target order or attempt accounting; provider-400 decisions follow the [re
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
+## Upstream key attempt accounting
+
+Key identity is sealed at the guarded physical dispatch after queued selections are rebuilt.
+Raw adapter terminal usage is recorded before continuation, search, or image loops merge it;
+repeated parsing of one physical response does not count it twice. Key changes preserve the
+previous attempt while retaining the active attempt object shared by streaming/combo callbacks.
+Bounded failure-body observation retains reported usage and releases cloned readers on abort.
+Identity and consumer aggregation follow the [account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution).
+
 ## Combo streaming commit boundary
 
 An HTTP 200 does not by itself commit a streaming combo child. The combo parent runs the child's
