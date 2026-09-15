@@ -4,8 +4,16 @@
  * `bun run test` already sandboxes HOME/OPENCODEX_HOME/CODEX_HOME through
  * `scripts/test.ts`. The incident this file prevents happened under a bare
  * `bun test <file>` — the command anyone reaches for while iterating on one test —
- * which gets no wrapper and therefore had no isolation at all. A preload runs for
- * EVERY invocation, so the protection no longer depends on remembering the wrapper.
+ * which gets no wrapper and therefore had no isolation at all. A preload runs for every
+ * invocation that READS bunfig.toml, so the protection no longer depends on remembering
+ * the wrapper.
+ *
+ * It does still depend on WHERE the run starts. Bun resolves bunfig.toml from the current
+ * working directory, so a run launched outside the repository never loads this file: no
+ * sandbox, no arming, and getConfigDir() resolves the real ~/.opencodex. On 2026-09-15 a
+ * run of that shape deleted a live home. Nothing here can close that hole from inside, so
+ * a test that needs a config directory pins its own OPENCODEX_HOME rather than inheriting
+ * one, and tests/ci-workflows/test-home-guard.test.ts enforces it for destructive calls.
  * (devlog `_plan/260730_codex_rs_upstream_v2_live_handoff/070`.)
  *
  * Import order below is load-bearing: importing the guard captures the real home at

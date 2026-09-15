@@ -83,8 +83,10 @@ what protects the operator who explicitly opts back out.
 ## Write scope
 
 Permitted: `src/codex/routing.ts`, `src/types/config.ts`, `src/config.ts`, the
-account-pool and session-affinity code, their tests under
-`tests/codex-integration/`, `docs-site/` configuration reference and its locales,
+account-pool and session-affinity code, `src/routing/` for the identity, quota and
+cache-domain layers `090_remaining_stack.md` plans (wpc's classifier, wpe's reservation
+ledger, wpf's probe lease), their tests under `tests/codex-integration/` and
+`tests/routing/`, `docs-site/` configuration reference and its locales,
 `structure/` docs that own the affected invariants, and this unit.
 
 Excluded, owned by concurrent lanes: `src/providers/devin*`,

@@ -143,3 +143,113 @@ That is observable today on the Codex, passthrough and combo paths --
 `logCtx.attempts[].sendCount` across combo children. It is **not** observable for the
 Kiro and Cursor inner retries, which call `noteAttemptSend` once before dispatching,
 so those need instrumentation before their counts can be pinned.
+
+## Step 1 status, and six corrections the next audit round produced
+
+Step 1 landed (`7f9284ab1e`): `sendBudget` rides `HandleResponsesOptions`, is minted once at
+ingress (`core.ts:3461`) and inherited by a combo child through the existing options spread
+(`core.ts:3113`). Six findings from the follow-up audit change what comes next, so they are
+recorded rather than quietly folded in.
+
+**The combo fix is half a fix.** A child inherits the *counter* but the adapter initial send
+never reads it as a *limit*: `core.ts:7656` passes `attempts: transientPolicy.attempts` raw.
+The oracle's own comment justifies that with "nothing has been spent yet", which is true for a
+first turn and false for combo target 2. So target 1 can spend the budget and target 2 still
+draws a fresh full policy allowance. Until `:7656` draws the remainder like every other leg,
+the measured 12 does not come down.
+
+**The cross-account move is not merely unbudgeted, it is unbounded per request.**
+`retryCodexPoolOnAlternateAccount` is at `core.ts:1434` (not `:1645`), and it sends directly
+with `fetchWithHeaderTimeout` at `:1626` inside a loop whose `maxRetrySends` is 1 for a real
+alternate but **7** for the same-account gated-400 ladder. The important part is the caller:
+it sits inside `passthroughRecovery: for (;;)` (`:5628`), `excludeAccountId` excludes only the
+account that just failed (`:1492`), and no per-request flag records that a move already
+happened. Sequential account moves are bounded today by pool exhaustion and cooldowns, by
+nothing else. A flat `used` counter does not close that; a separate move counter does.
+
+**`fetchWithResetRetry` has no counting seam at all.** `onSendsConsumed` lives only on
+`TransientRetryOptions` (`upstream-retry.ts:304`) and fires only from `fetchWithTransientRetry`
+(`:479`). Every leg that falls back to reset-only retry -- the non-policy adapter initial send
+and every `rebuildAndRefetch` recovery kind when `refetchTransientPolicy` is null -- is
+*uncountable*, not just uncounted. Step 2 therefore starts by giving `ResetRetryOptions` the
+same callback, not by adding call-site wiring.
+
+**There is a fourth floor.** Besides `core.ts:4995` and `upstream-retry.ts:374, 420`, the
+inner `remaining = () => Math.max(1, budget - sent)` at `upstream-retry.ts:439` re-floors the
+reset call. Removing the three named sites still lets a spent budget send once.
+
+**The exhaustion contract is already decided by the codebase, twice.** `fetchWithTransientRetry`
+returns the last response with its body intact when the budget runs out (`:476`), and the
+reachable native-Chat path preserves the terminal 429 (pinned at
+`tests/responses/chat-completions-endpoint.test.ts:1553, 1597`). The synthetic throw at
+`chat-native.ts:308` is an unreachable backstop, not the policy. Return-the-last-answer is the
+contract; a throw would hide the status, the `Retry-After` header and any quota body -- exactly
+the evidence #3294/#3606 said to preserve. The throw stays only as a typed backstop for a
+caller that forgot to check.
+
+**`sendCount` already reaches the wire.** The claim above that it "never reaches /api/usage or
+the GUI" is wrong. It is a required persisted field (`src/usage/log.ts:100`), it survives the
+whitelist normalizer (`:465`), `/api/logs` spreads it (`src/server/management/shared.ts:222`)
+and the GUI already types it (`gui/src/pages/Logs.tsx:126`). What is missing is rendering (the
+attempts table has no column) and aggregation (`summarizeUsage` counts attempts, never sends).
+
+## Delivery slices
+
+Steps 2-5 are not one diff. Verification here is hosted CI only, so a slice that breaks forty
+pinned counts at once is undiagnosable. They ship in this order, one PR each:
+
+- **Slice A (this cycle).** Split the budget and close the two holes that need no new plumbing:
+  `TransientSendBudget` gains `accountMoves` with `CROSS_ACCOUNT_MAX_SENDS = 1`;
+  `retryCodexPoolOnAlternateAccount` charges a move and refuses a second one with the existing
+  `{ kind: "no-alternate" }` path after `recordUnmovedTransientOutcome()`; the adapter initial
+  send at `:7656` draws `remainingTransientSendBudget(transientPolicy.attempts)`. The split has
+  to come first because step 2 without it collapses the working 3 same-account + 1 alternate
+  shape that `tests/responses/responses-compaction-routing.test.ts:1346` pins.
+- **Slice B.** `onSendsConsumed` on `ResetRetryOptions`, unconditional wiring at `:7652` and
+  `:7775`, `sendBudget` on `HandleResponsesCompactOptions`, and the empty-completion /
+  `runTurnAttempt` charge at `core.ts:7346`.
+- **Slice C.** All four floors to `Math.max(0, ...)` plus the refusal contract above, with the
+  pinned counts in `responses-opaque-blob-recovery.test.ts` rewritten to the refusal shape.
+- **Slice D.** The pool-wide retry ratio cap and `sendCount` aggregation.
+
+Kiro (up to ~18 sends per call, ~36 with the text fallback) and Cursor ride
+`AdapterFetchContext`; that field must be optional and unlimited by default or every adapter
+unit test that calls the transport context-free breaks.
+
+## Slice A landed, and the four counterexamples that shaped it
+
+PR #4609 carries the guarded profile from the PRD: four model sends per logical request, a base
+allowance of three, and one final-recovery reserve that an account move and a validated rebuild
+share. An adversarial audit round found four things that would have shipped as defects.
+
+**Charging the same send twice.** `permit.use()` increments `used`, and `onSendsConsumed`
+increments it again for anything routed through the retry helper. A four-send cap would have
+behaved as a two-send cap and every acceptance row would have been off by a factor of two. The
+intent now carries `countedExternally`, so a helper-routed permit books the reserve and the
+alternate-target ledgers but leaves `used` to the reporter.
+
+**Removing the floor kills a recovery the PRD wants kept.** The pinned sanitized-rebuild case
+at `responses-opaque-blob-recovery.test.ts:600` is three 502s plus one rebuild, and its own
+comment says the rebuild "draws on what is LEFT of that same budget" -- which is the floor. With
+the floor gone the rebuild gets zero and the request dies at three. `recoverySendAllowance`
+spends the base allowance first and only then draws the reserve, which is what keeps that fourth
+send alive for the right reason instead of by accident.
+
+**The exhaustion contract is a call-site problem.** A typed throw inside the helper cannot
+restore a body the caller already cancelled, and every catch on these paths launders a rejection
+into 502 `upstream_error`. So the OAuth 401 replay and the same-target 429 wait check the
+remainder in their own conditions, before the cancel, and an exhausted request returns the real
+401 or 429 with its `Retry-After`. The typed error stays only as the backstop for a leg that
+never had a prior response.
+
+**Reserving too early burns the slot on a request that never moved.** The same-account
+gated-model 400 ladder runs through the same function and is bounded at eight sends by
+`maxRetrySends`. Reserving before `retrySameConfirmedAccount` is known would have spent the
+single failover slot on it. The reservation is guarded on `!retryAuthCtx`, which the ladder has
+already set.
+
+Residual, accepted rather than hidden: `maxTargetTransitions` and `maxAlternateTargetSends`
+would refuse the pinned three-target combo hop, so combo hops are not wired to
+`reserveDispatch` in this slice and those fields are exercised only by the account-failover
+path. Wiring combo needs a per-target policy, not a per-request transition cap. Compact, Kiro,
+Cursor and the generic OAuth hops still hold their own allowances.

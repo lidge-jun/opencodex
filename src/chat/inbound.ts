@@ -313,7 +313,18 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
         // here keeps that adjacency intact.
         const reasoningText = assistantReasoningText(msg);
         if (reasoningText !== undefined) {
-          input.push({ type: "reasoning", content: [{ type: "reasoning_text", text: reasoningText }] });
+          // `summary` is required on a reasoning input item by the OpenAI Responses API, and our
+          // own responsesRequestSchema marks it optional, so a summary-less item validated locally
+          // and was refused upstream with `Missing required parameter: 'input[N].summary'`. It also
+          // has to carry the text, not just satisfy the field: sanitizeReasoningInputContent blanks
+          // `content` for every destination except a `preserveResponsesReasoningContent` provider,
+          // so summary is the only channel that survives to a native backend. This mirrors the
+          // Claude ingress (src/claude/inbound.ts), which has always minted both.
+          input.push({
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: reasoningText }],
+            content: [{ type: "reasoning_text", text: reasoningText }],
+          });
         }
         const blocks = assistantContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "assistant", content: blocks });

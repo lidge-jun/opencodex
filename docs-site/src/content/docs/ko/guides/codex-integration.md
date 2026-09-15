@@ -205,13 +205,20 @@ Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 
 네이티브 ChatGPT forward 요청의 로컬 재생 상태가 만료되었거나 없으면 opencodex는
 upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex WebSocket 클라이언트는
 일반 스트림 재시도 한도 안에서 다시 연결하고, 완료된 도구 호출과 결과를 포함한 현재 보유
-컨텍스트 전체를 다시 보낼 수 있습니다. 따라서 프록시의 1시간 캐시가 만료되었다는 이유만으로
-새 작업을 만들 필요는 없습니다. 캐시 한도와 보존 기간은 그대로이며, 클라이언트가 더 이상
-보유하지 않는 기록을 복구하는 기능은 아닙니다. HTTP 클라이언트는 이 오류를 직접 처리하고
-`previous_response_id` 없이 전체 컨텍스트를 다시 보내야 합니다. 같은 ID만 재시도해서는
-누락된 상태를 복구할 수 없습니다.
+컨텍스트 전체를 다시 보낼 수 있습니다. 따라서 프록시의 재생 캐시가 만료되었다는 이유만으로
+새 작업을 만들 필요는 없습니다. 재생 상태는 24시간 보존하며 기존 메모리·디스크·항목 수
+상한은 그대로입니다. 클라이언트가 더 이상 보유하지 않는 기록을 복구하는 기능은 아닙니다.
+HTTP 클라이언트는 이 오류를 직접 처리하고 `previous_response_id` 없이 전체 컨텍스트를 다시
+보내야 합니다. 같은 ID만 재시도해서는 누락된 상태를 복구할 수 없습니다.
 
-`statelessResponses: true`로 설정한 routed Responses provider에도 같은 복구 신호가 적용됩니다.
+routed 목적지에는 모두 같은 복구 신호가 적용됩니다. 프록시가 잃어버린 기록을 대신 볼 수 있는
+것은 네이티브 Responses 패스스루뿐입니다. 체인을 저장해 둔 백엔드로 `previous_response_id`를
+그대로 넘기기 때문입니다. 나머지 wire는 매 턴 요청에 담긴 입력만으로 대화를 다시 구성하므로,
+재생이 실패한 채 전달하면 이번 턴 한 줄만 올라가고 대화가 조용히 사라집니다. 상태를 들고
+있어 보이는 셋도 마찬가지입니다. Devin은 매 턴 전체 대화를 다시 보내고, Cursor의 체크포인트
+참조는 방금 만료된 그 저장소에 있어 없으면 full-replay로 떨어지며, Kiro는 넘겨받은 턴으로
+conversation history를 다시 만듭니다.
+`statelessResponses: true`로 설정한 routed Responses provider에도 같은 신호가 적용됩니다.
 routed 경로에서 custom 도구를 function으로 낮췄는데 증분 결과에 대응하는 로컬 호출 기록이
 없을 때도 전체 기록을 다시 요청합니다. 호출과 결과, reasoning을 함께 재생하며 결과 유형을
 추측하거나 버리지 않습니다. 상태를 저장하는 provider의 네이티브 function 및 네이티브 custom
