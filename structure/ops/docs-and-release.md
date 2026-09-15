@@ -26,6 +26,11 @@ sharing a model-name fragment remain distinct from current Codex-native support.
 The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
 `tests/cli/cli-connect-readiness.test.ts` exercises that boundary and general status's single discovery pass with isolated executable fixtures.
 
+The provider guide's OrcaRouter login section in English and all seven translated sources follows
+the [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
+64 KiB of valid UTF-8 JSON and one 30-second deadline covering headers and body. These are login
+limits, so the public guide does not apply them to inference payloads.
+
 ## GitHub Pages
 
 `.github/workflows/deploy-docs.yml` publishes the docs to:
