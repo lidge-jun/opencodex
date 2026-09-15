@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,8 +21,9 @@ import {
   saveCredential,
   setActiveAccount,
 } from "../../src/oauth/store";
-import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let home: string;
@@ -381,3 +382,27 @@ describe("model-aware failover and pre-dispatch integration", () => {
   });
 });
 
+describe("modular Responses model-family forwarding", () => {
+  test("initial selection receives the routed model in the transport owner", () => {
+    const source = readFileSync(repoPath("src/server/responses/request-transport.ts"), "utf8");
+    expect(source).toContain("preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)");
+  });
+
+  for (const [owner, retryAfter] of [
+    ["passthrough-dispatch.ts", 'upstreamResponse.headers.get("retry-after")'],
+    ["adapter-dispatch.ts", 'upstreamResponse.headers.get("retry-after")'],
+    ["adapter-continuation.ts", 'response.headers.get("retry-after")'],
+    ["sidecar-execution.ts", "retryAfter"],
+    ["run-turn-execution.ts", "null"],
+  ] as const) {
+    test(owner + " forwards the routed model on account rotation", () => {
+      const source = readFileSync(repoPath("src/server/responses", owner), "utf8");
+      expect(source.match(/\brotateGenericOAuthAccountOn429\s*\(/g)).toHaveLength(1);
+      expect(source.replace(/\s+/g, " ")).toContain(
+        "rotateGenericOAuthAccountOn429( config, route.providerName, "
+          + "transportState.genericFailoverAccountId, " + retryAfter
+          + ", Date.now(), route.modelId, )",
+      );
+    });
+  }
+});

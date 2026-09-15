@@ -148,3 +148,14 @@ Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#r
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+## Model-family-aware OAuth headroom
+
+`src/oauth/account-quota-rank.ts` ranks Antigravity custom windows for the requested
+Gemini or Claude family, including GPT-OSS in the Claude family. An unknown model
+retains all-window ranking; absent matching evidence retains the existing unranked behavior.
+`src/server/responses/request-transport.ts` passes the routed model at initial selection.
+The passthrough, adapter, continuation, sidecar and run-turn execution owners pass
+the same routed model during account rotation, without bypassing their send-budget
+admission or account-snapshot pairing. The forwarding contract is covered in
+`tests/oauth/oauth-account-quota-rank.test.ts`; the core facade remains orchestration-only.
