@@ -18,7 +18,7 @@
     "gui/src/pages/Models.tsx": 2792,
     "gui/src/styles.css": 2958,
     "src/adapters/openai-chat.ts": 822,
-    "src/adapters/openai-responses.ts": 2627,
+    "src/adapters/openai-responses.ts": 6,
     "src/bridge.ts": 2206,
     "src/codex/auth-api.ts": 43,
     "src/codex/catalog/provider-fetch.ts": 54,
