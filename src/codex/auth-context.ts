@@ -1235,6 +1235,7 @@ export function materializeCodexUpstreamAuth(
     if (!stored?.accessToken || !isMainAccountTokenLive()) {
       throw new CodexMainSubstitutionUnavailableError();
     }
+    selected.delete("chatgpt-account-id");
     selected.set("authorization", `Bearer ${stored.accessToken}`);
     if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
     observeSelectedMainCredential(stored, writer);
@@ -1312,6 +1313,7 @@ export async function materializeCodexUpstreamAuthAsync(
     ...(options.nativeMainRefreshDependencies ?? {}),
   });
   if (!stored?.accessToken) throw new CodexMainSubstitutionUnavailableError();
+  selected.delete("chatgpt-account-id");
   selected.set("authorization", `Bearer ${stored.accessToken}`);
   if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
   observeSelectedMainCredential(stored, writer);
