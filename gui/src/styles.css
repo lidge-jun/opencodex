@@ -2956,8 +2956,3 @@ button.prov-account-row.active { cursor: default; }
 }
 .claude-effort-badge.on { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 .claude-effort-badge.off { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); }
-
-/* Usage chart controls retain chart styling while exposing keyboard focus. */
-.heatmap-grid button.heatmap-cell { appearance: none; border: 0; padding: 0; cursor: pointer; }
-.heatmap-grid button.heatmap-cell:focus-visible, .daybar:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
-.chart-overlay { box-sizing: border-box; overflow: hidden; white-space: normal; overflow-wrap: anywhere; }
