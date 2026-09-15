@@ -12,6 +12,8 @@ import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import RemoteWorkspace from "./pages/RemoteWorkspace";
 import { Skills } from "./pages/Skills";
+import { Security } from "./pages/Security";
+import { Credentials } from "./pages/Credentials";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
@@ -35,6 +37,8 @@ const PAGE_TKEY: Record<Page, TKey> = {
   models: "nav.models",
   subagents: "nav.subagents",
   skills: "nav.skills",
+  security: "nav.security",
+  credentials: "nav.credentials",
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
@@ -450,6 +454,8 @@ export default function App() {
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} />}
                 {page === "subagents" && <Subagents key={sharedBase} apiBase={sharedBase} />}
                 {page === "skills" && <Skills apiBase={sharedBase} />}
+                {page === "security" && <Security apiBase={sharedBase} />}
+                {page === "credentials" && <Credentials apiBase={sharedBase} />}
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}

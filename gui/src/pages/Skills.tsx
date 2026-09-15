@@ -1,4 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { useDataSurface } from "../data-surface";
+import { readJsonIfOk } from "../fetch-json";
+import { navigateHash, normalizeHashPath } from "../hash-routing";
+import { useT, type TKey } from "../i18n/shared";
 import "../styles-skills-workspace.css";
 
 export interface SkillsProps {
@@ -64,82 +68,139 @@ interface AuditEventItem {
   metadata?: Record<string, unknown>;
 }
 
+const TAB_FROM_HASH: Record<string, TabType> = {
+  skills: "overview",
+  "skills/marketplace": "marketplace",
+  "skills/registry": "registry",
+  "skills/editor": "editor",
+  "skills/matrix": "matrix",
+  "skills/agents": "agents",
+  "skills/nodes": "nodes",
+  "skills/drift": "drift",
+  "skills/reviews": "reviews",
+  "skills/audit": "audit",
+};
+
+function readTabFromHash(): TabType {
+  const raw = normalizeHashPath(typeof window !== "undefined" ? window.location.hash : "skills");
+  return TAB_FROM_HASH[raw] ?? "overview";
+}
+
+function hashForTab(tab: TabType): string {
+  return tab === "overview" ? "skills" : `skills/${tab}`;
+}
+
+interface SkillsWorkspace {
+  skills: SkillItem[];
+  marketplaceItems: MarketplaceItem[];
+  deployments: DeploymentItem[];
+  auditEvents: AuditEventItem[];
+}
+
+const EMPTY_WORKSPACE: SkillsWorkspace = {
+  skills: [],
+  marketplaceItems: [],
+  deployments: [],
+  auditEvents: [],
+};
+
+const TABS: Array<{ id: TabType; labelKey: TKey; count?: boolean }> = [
+  { id: "overview", labelKey: "skills.tab.overview" },
+  { id: "marketplace", labelKey: "skills.tab.marketplace" },
+  { id: "registry", labelKey: "skills.tab.registry", count: true },
+  { id: "editor", labelKey: "skills.tab.editor" },
+  { id: "matrix", labelKey: "skills.tab.matrix" },
+  { id: "agents", labelKey: "skills.tab.agents" },
+  { id: "nodes", labelKey: "skills.tab.nodes" },
+  { id: "drift", labelKey: "skills.tab.drift" },
+  { id: "reviews", labelKey: "skills.tab.reviews" },
+  { id: "audit", labelKey: "skills.tab.audit" },
+];
+
+async function readData<T>(res: Response, fallback: T): Promise<T> {
+  const payload = await readJsonIfOk<{ data?: T }>(res);
+  return payload?.data ?? fallback;
+}
+
 export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
-  const [tab, setTab] = useState<TabType>("overview");
-  const [skills, setSkills] = useState<SkillItem[]>([]);
-  const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>([]);
-  const [deployments, setDeployments] = useState<DeploymentItem[]>([]);
-  const [auditEvents, setAuditEvents] = useState<AuditEventItem[]>([]);
+  const t = useT();
+  const [tab, setTab] = useState<TabType>(readTabFromHash);
   const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-
-  // Editor states
-  const [editorName, setEditorName] = useState("Custom Assistant");
+  const [editorName, setEditorName] = useState(() => t("skills.editorDefaultName"));
   const [editorVersion, setEditorVersion] = useState("1.0.0");
-  const [editorMarkdown, setEditorMarkdown] = useState(
-    `---\nname: custom-assistant\ndisplayName: Custom Assistant\nversion: 1.0.0\ndescription: Custom guidance procedure.\ntags: custom, utility\n---\n\n# Custom Assistant\n\nInstructions for the agent.\n`
-  );
+  const [editorMarkdown, setEditorMarkdown] = useState(() => t("skills.editorDefaultMarkdown"));
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const sRes = await fetch(`${apiBase}/api/skills`).then(r => r.json());
-      if (sRes?.data) setSkills(sRes.data);
-
-      const mRes = await fetch(`${apiBase}/api/skill-marketplace/search?q=${encodeURIComponent(searchQuery)}`).then(r => r.json());
-      if (mRes?.data) setMarketplaceItems(mRes.data);
-
-      const dRes = await fetch(`${apiBase}/api/skill-deployments`).then(r => r.json());
-      if (dRes?.data) setDeployments(dRes.data);
-
-      const aRes = await fetch(`${apiBase}/api/skill-audit`).then(r => r.json());
-      if (aRes?.data) setAuditEvents(aRes.data);
-    } catch {
-      /* ignore */
-    } finally {
-      setLoading(false);
-    }
+  const selectTab = (next: TabType) => {
+    setTab(next);
+    navigateHash(hashForTab(next));
   };
 
   useEffect(() => {
-    void loadData();
+    const onHash = () => setTab(readTabFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const loadWorkspace = useCallback(async (signal: AbortSignal): Promise<SkillsWorkspace> => {
+    const [skillsRes, marketplaceRes, deploymentsRes, auditRes] = await Promise.all([
+      fetch(`${apiBase}/api/skills`, { signal }),
+      fetch(`${apiBase}/api/skill-marketplace/search?q=${encodeURIComponent(searchQuery)}`, { signal }),
+      fetch(`${apiBase}/api/skill-deployments`, { signal }),
+      fetch(`${apiBase}/api/skill-audit`, { signal }),
+    ]);
+    return {
+      skills: await readData<SkillItem[]>(skillsRes, []),
+      marketplaceItems: await readData<MarketplaceItem[]>(marketplaceRes, []),
+      deployments: await readData<DeploymentItem[]>(deploymentsRes, []),
+      auditEvents: await readData<AuditEventItem[]>(auditRes, []),
+    };
   }, [apiBase, searchQuery]);
+
+  const resource = useDataSurface<SkillsWorkspace>(
+    `skills-workspace:${apiBase}:${searchQuery}`,
+    [apiBase, searchQuery],
+    loadWorkspace,
+    { isEmpty: () => false },
+  );
+  const workspace = resource.state.data ?? EMPTY_WORKSPACE;
+  const { skills, marketplaceItems, deployments, auditEvents } = workspace;
+  const loading = resource.state.refreshing || resource.state.showSkeleton;
 
   const handleImportMarketplace = async (refId: string) => {
     try {
-      setStatusMessage(`Importing ${refId}...`);
+      setStatusMessage(t("skills.status.importing", { id: refId }));
       await fetch(`${apiBase}/api/skill-imports`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "marketplace", ref: refId }),
       });
-      setStatusMessage(`Successfully imported ${refId}!`);
-      await loadData();
+      setStatusMessage(t("skills.status.imported", { id: refId }));
+      resource.refresh();
     } catch (e) {
-      setStatusMessage(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
+      setStatusMessage(t("skills.status.importFailed", { error: e instanceof Error ? e.message : String(e) }));
     }
   };
 
   const handlePublish = async (skillId: string) => {
     try {
-      setStatusMessage(`Publishing ${skillId}...`);
+      setStatusMessage(t("skills.status.publishing", { id: skillId }));
       await fetch(`${apiBase}/api/skills/${encodeURIComponent(skillId)}/publish`, { method: "POST" });
-      setStatusMessage(`Published ${skillId} successfully!`);
-      await loadData();
+      setStatusMessage(t("skills.status.published", { id: skillId }));
+      resource.refresh();
     } catch (e) {
-      setStatusMessage(`Publish failed: ${e instanceof Error ? e.message : String(e)}`);
+      setStatusMessage(t("skills.status.publishFailed", { error: e instanceof Error ? e.message : String(e) }));
     }
   };
 
   const handleDeployQuick = async (skillId: string, version: string, agentType: string) => {
     try {
-      setStatusMessage(`Planning deployment for ${skillId} to ${agentType}...`);
+      setStatusMessage(t("skills.status.planning", { id: skillId, agent: agentType }));
       const planRes = await fetch(`${apiBase}/api/skill-deployments/plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ skillVersionId: `${skillId}@${version}`, agentType, scope: "user", nodeId: "local" }),
-      }).then(r => r.json());
+      }).then(r => r.json()) as { plan?: { planId?: string } };
 
       if (planRes?.plan?.planId) {
         await fetch(`${apiBase}/api/skill-deployments`, {
@@ -147,27 +208,46 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ planId: planRes.plan.planId }),
         });
-        setStatusMessage(`Deployed ${skillId} to ${agentType}!`);
-        await loadData();
+        setStatusMessage(t("skills.status.deployed", { id: skillId, agent: agentType }));
+        resource.refresh();
       }
     } catch (e) {
-      setStatusMessage(`Deploy failed: ${e instanceof Error ? e.message : String(e)}`);
+      setStatusMessage(t("skills.status.deployFailed", { error: e instanceof Error ? e.message : String(e) }));
     }
+  };
+
+  const saveDraft = async () => {
+    try {
+      await fetch(`${apiBase}/api/skills`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editorName, markdown: editorMarkdown }),
+      });
+      setStatusMessage(t("skills.status.saved"));
+      resource.refresh();
+    } catch (e) {
+      setStatusMessage(t("skills.status.saveFailed", { error: String(e) }));
+    }
+  };
+
+  const agentStatus = (skill: SkillItem, agent: string) => {
+    const dep = deployments.find(d => d.agent_id === agent && d.skill_version_id.startsWith(skill.id));
+    if (!dep) return { label: t("skills.notInstalled"), cls: "empty" };
+    if (dep.status === "DEPLOYED") return { label: t("skills.inSync", { version: skill.current_version }), cls: "in-sync" };
+    if (dep.status === "FAILED") return { label: t("skills.blocked"), cls: "blocked" };
+    return { label: dep.status, cls: "drift" };
   };
 
   return (
     <div className="skills-workspace">
-      {/* Header */}
       <div className="skills-header">
         <div className="skills-title-group">
-          <h1>Skill Control Plane</h1>
-          <p className="skills-subtitle">
-            Universal Agent Skill Registry, Visual Marketplace & Policy Governed Deployment (Phase 20.57)
-          </p>
+          <h1>{t("skills.title")}</h1>
+          <p className="skills-subtitle">{t("skills.subtitle")}</p>
         </div>
         <div className="skills-header-actions">
-          <button className="skills-tab-btn" onClick={() => void loadData()} disabled={loading}>
-            {loading ? "Refreshing..." : "Refresh"}
+          <button type="button" className="skills-tab-btn" onClick={() => resource.refresh()} disabled={loading}>
+            {loading ? t("skills.refreshing") : t("skills.refresh")}
           </button>
         </div>
       </div>
@@ -178,74 +258,52 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
         </div>
       )}
 
-      {/* Tabs */}
       <div className="skills-tabs">
-        <button className={`skills-tab-btn ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
-          Overview
-        </button>
-        <button className={`skills-tab-btn ${tab === "marketplace" ? "active" : ""}`} onClick={() => setTab("marketplace")}>
-          Marketplace
-        </button>
-        <button className={`skills-tab-btn ${tab === "registry" ? "active" : ""}`} onClick={() => setTab("registry")}>
-          Registry ({skills.length})
-        </button>
-        <button className={`skills-tab-btn ${tab === "editor" ? "active" : ""}`} onClick={() => setTab("editor")}>
-          Skill Editor
-        </button>
-        <button className={`skills-tab-btn ${tab === "matrix" ? "active" : ""}`} onClick={() => setTab("matrix")}>
-          Deployment Matrix
-        </button>
-        <button className={`skills-tab-btn ${tab === "agents" ? "active" : ""}`} onClick={() => setTab("agents")}>
-          Agents
-        </button>
-        <button className={`skills-tab-btn ${tab === "nodes" ? "active" : ""}`} onClick={() => setTab("nodes")}>
-          Remote Nodes
-        </button>
-        <button className={`skills-tab-btn ${tab === "drift" ? "active" : ""}`} onClick={() => setTab("drift")}>
-          Drift & Rollback
-        </button>
-        <button className={`skills-tab-btn ${tab === "reviews" ? "active" : ""}`} onClick={() => setTab("reviews")}>
-          Review Queue
-        </button>
-        <button className={`skills-tab-btn ${tab === "audit" ? "active" : ""}`} onClick={() => setTab("audit")}>
-          Audit Trail
-        </button>
+        {TABS.map(entry => (
+          <button
+            key={entry.id}
+            type="button"
+            className={`skills-tab-btn ${tab === entry.id ? "active" : ""}`}
+            onClick={() => selectTab(entry.id)}
+          >
+            {entry.count ? t(entry.labelKey, { count: skills.length }) : t(entry.labelKey)}
+          </button>
+        ))}
       </div>
 
-      {/* TAB 1: OVERVIEW */}
       {tab === "overview" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div className="skills-overview-grid">
             <div className="skills-card">
-              <span className="skills-card-label">Registered Skills</span>
+              <span className="skills-card-label">{t("skills.card.registered")}</span>
               <span className="skills-card-val">{skills.length}</span>
             </div>
             <div className="skills-card">
-              <span className="skills-card-label">Active Deployments</span>
+              <span className="skills-card-label">{t("skills.card.deployments")}</span>
               <span className="skills-card-val">{deployments.filter(d => d.status === "DEPLOYED").length}</span>
             </div>
             <div className="skills-card">
-              <span className="skills-card-label">Marketplace Items</span>
+              <span className="skills-card-label">{t("skills.card.marketplace")}</span>
               <span className="skills-card-val">{marketplaceItems.length}</span>
             </div>
             <div className="skills-card">
-              <span className="skills-card-label">Audit Events</span>
+              <span className="skills-card-label">{t("skills.card.audit")}</span>
               <span className="skills-card-val">{auditEvents.length}</span>
             </div>
           </div>
 
           <div className="skills-card">
-            <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>Recent Control Plane Activity</h3>
+            <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>{t("skills.recentActivity")}</h3>
             {auditEvents.length === 0 ? (
-              <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>No recent events recorded.</p>
+              <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>{t("skills.noEvents")}</p>
             ) : (
               <table className="skills-table">
                 <thead>
                   <tr>
-                    <th>Timestamp</th>
-                    <th>Event</th>
-                    <th>Actor</th>
-                    <th>Target</th>
+                    <th>{t("skills.col.timestamp")}</th>
+                    <th>{t("skills.col.event")}</th>
+                    <th>{t("skills.col.actor")}</th>
+                    <th>{t("skills.col.target")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -254,7 +312,7 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
                       <td style={{ color: "#94a3b8" }}>{new Date(ev.created_at).toLocaleTimeString()}</td>
                       <td style={{ fontWeight: 600, color: "#60a5fa" }}>{ev.event_type}</td>
                       <td>{ev.actor_type}</td>
-                      <td>{ev.skill_id ?? "system"}</td>
+                      <td>{ev.skill_id ?? t("skills.system")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -270,7 +328,7 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
           <div style={{ display: "flex", gap: 10 }}>
             <input
               type="text"
-              placeholder="Search public skills.sh catalog..."
+              placeholder={t("skills.searchPlaceholder")}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               style={{
@@ -291,18 +349,18 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
                 <div className="skill-card-top">
                   <div>
                     <h4 className="skill-card-title">{item.name}</h4>
-                    <span className="skill-card-version">v{item.version} by {item.author}</span>
+                    <span className="skill-card-version">{t("skills.byAuthor", { version: item.version, author: item.author })}</span>
                   </div>
                   {item.verified && (
                     <span style={{ fontSize: 11, background: "rgba(59, 130, 246, 0.2)", color: "#60a5fa", padding: "2px 6px", borderRadius: 4 }}>
-                      VERIFIED
+                      {t("skills.verified")}
                     </span>
                   )}
                 </div>
                 <p className="skill-card-desc">{item.description}</p>
                 <div className="skill-tags">
-                  {item.tags.map(t => (
-                    <span key={t} className="skill-tag">{t}</span>
+                  {item.tags.map(tag => (
+                    <span key={tag} className="skill-tag">{tag}</span>
                   ))}
                 </div>
                 <div className="skill-card-actions">
@@ -311,7 +369,7 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
                     style={{ flex: 1 }}
                     onClick={() => void handleImportMarketplace(item.id)}
                   >
-                    Import to Registry
+                    {t("skills.importToRegistry")}
                   </button>
                 </div>
               </div>
@@ -325,19 +383,19 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {skills.length === 0 ? (
             <div className="skills-card">
-              <p style={{ margin: 0, color: "#94a3b8" }}>No skills registered yet. Import one from Marketplace or Local Folder.</p>
+              <p style={{ margin: 0, color: "#94a3b8" }}>{t("skills.emptyRegistry")}</p>
             </div>
           ) : (
             <div className="matrix-container">
               <table className="skills-table">
                 <thead>
                   <tr>
-                    <th>Skill</th>
-                    <th>Version</th>
-                    <th>Status</th>
-                    <th>Risk</th>
-                    <th>Tags</th>
-                    <th>Actions</th>
+                    <th>{t("skills.col.skill")}</th>
+                    <th>{t("skills.col.version")}</th>
+                    <th>{t("skills.col.status")}</th>
+                    <th>{t("skills.col.risk")}</th>
+                    <th>{t("skills.col.tags")}</th>
+                    <th>{t("skills.col.actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -355,15 +413,15 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
                         <span className={`status-pill ${s.risk_level ?? "low"}`}>{s.risk_level ?? "low"}</span>
                       </td>
                       <td>
-                        {s.tags.slice(0, 3).map(t => (
-                          <span key={t} className="skill-tag" style={{ marginRight: 4 }}>{t}</span>
+                        {s.tags.slice(0, 3).map(tag => (
+                          <span key={tag} className="skill-tag" style={{ marginRight: 4 }}>{tag}</span>
                         ))}
                       </td>
                       <td>
                         <div style={{ display: "flex", gap: 6 }}>
                           {s.status !== "PUBLISHED" && (
                             <button className="skills-tab-btn" style={{ padding: "4px 8px", fontSize: 11 }} onClick={() => void handlePublish(s.id)}>
-                              Publish
+                              {t("skills.publish")}
                             </button>
                           )}
                           <button
@@ -371,7 +429,7 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
                             style={{ padding: "4px 8px", fontSize: 11 }}
                             onClick={() => void handleDeployQuick(s.id, s.current_version, "codex")}
                           >
-                            Deploy to Codex
+                            {t("skills.deployCodex")}
                           </button>
                         </div>
                       </td>
@@ -388,18 +446,18 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
       {tab === "editor" && (
         <div className="skill-editor-container">
           <div className="skill-editor-pane">
-            <h3 style={{ margin: 0, fontSize: 16, color: "#fff" }}>SKILL.md Editor</h3>
+            <h3 style={{ margin: 0, fontSize: 16, color: "#fff" }}>{t("skills.editorTitle")}</h3>
             <div style={{ display: "flex", gap: 10 }}>
               <input
                 type="text"
-                placeholder="Skill Name"
+                placeholder={t("skills.editorNamePlaceholder")}
                 value={editorName}
                 onChange={e => setEditorName(e.target.value)}
                 style={{ flex: 1, background: "#0f1115", border: "1px solid var(--border, #262933)", color: "#fff", padding: "6px 10px", borderRadius: 4, fontSize: 13 }}
               />
               <input
                 type="text"
-                placeholder="Version"
+                placeholder={t("skills.editorVersionPlaceholder")}
                 value={editorVersion}
                 onChange={e => setEditorVersion(e.target.value)}
                 style={{ width: 80, background: "#0f1115", border: "1px solid var(--border, #262933)", color: "#fff", padding: "6px 10px", borderRadius: 4, fontSize: 13 }}
@@ -412,27 +470,16 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
             />
             <div style={{ display: "flex", gap: 10 }}>
               <button
+                type="button"
                 className="skills-tab-btn active"
-                onClick={async () => {
-                  try {
-                    await fetch(`${apiBase}/api/skills`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ name: editorName, markdown: editorMarkdown }),
-                    });
-                    setStatusMessage("Skill draft saved to registry!");
-                    await loadData();
-                  } catch (e) {
-                    setStatusMessage(`Save failed: ${String(e)}`);
-                  }
-                }}
+                onClick={() => void saveDraft()}
               >
-                Save Draft
+                {t("skills.saveDraft")}
               </button>
             </div>
           </div>
           <div className="skill-preview-pane">
-            <h3 style={{ margin: 0, fontSize: 16, color: "#fff" }}>Live Rendered Preview</h3>
+            <h3 style={{ margin: 0, fontSize: 16, color: "#fff" }}>{t("skills.previewTitle")}</h3>
             <div className="skill-preview-content">
               <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit" }}>{editorMarkdown}</pre>
             </div>
@@ -443,46 +490,36 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
       {/* TAB 5: DEPLOYMENT MATRIX */}
       {tab === "matrix" && (
         <div className="matrix-container">
-          <h3 style={{ margin: "0 0 14px 0", fontSize: 16, color: "#fff" }}>Fleet Deployment Matrix</h3>
+          <h3 style={{ margin: "0 0 14px 0", fontSize: 16, color: "#fff" }}>{t("skills.matrixTitle")}</h3>
           <table className="skills-matrix-table">
             <thead>
               <tr>
-                <th>Skill</th>
-                <th>Codex</th>
-                <th>Claude Code</th>
-                <th>OpenCode</th>
-                <th>Universal</th>
+                <th>{t("skills.col.skill")}</th>
+                <th>{t("skills.agent.codex")}</th>
+                <th>{t("skills.agent.claudeCode")}</th>
+                <th>{t("skills.agent.opencode")}</th>
+                <th>{t("skills.agent.universal")}</th>
               </tr>
             </thead>
             <tbody>
-              {skills.map(s => {
-                const getStatusForAgent = (agent: string) => {
-                  const dep = deployments.find(d => d.agent_id === agent && d.skill_version_id.startsWith(s.id));
-                  if (!dep) return { label: "Not Installed", cls: "empty" };
-                  if (dep.status === "DEPLOYED") return { label: `v${s.current_version} In Sync`, cls: "in-sync" };
-                  if (dep.status === "FAILED") return { label: "Blocked", cls: "blocked" };
-                  return { label: dep.status, cls: "drift" };
-                };
-
-                return (
-                  <tr key={s.id}>
-                    <td style={{ fontWeight: 600, color: "#fff" }}>{s.display_name}</td>
-                    {(["codex", "claude-code", "opencode", "universal"] as const).map(agent => {
-                      const st = getStatusForAgent(agent);
-                      return (
-                        <td key={agent}>
-                          <span
-                            className={`cell-badge ${st.cls}`}
-                            onClick={() => void handleDeployQuick(s.id, s.current_version, agent)}
-                          >
-                            {st.label}
-                          </span>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
+              {skills.map(s => (
+                <tr key={s.id}>
+                  <td style={{ fontWeight: 600, color: "#fff" }}>{s.display_name}</td>
+                  {(["codex", "claude-code", "opencode", "universal"] as const).map(agent => {
+                    const st = agentStatus(s, agent);
+                    return (
+                      <td key={agent}>
+                        <span
+                          className={`cell-badge ${st.cls}`}
+                          onClick={() => void handleDeployQuick(s.id, s.current_version, agent)}
+                        >
+                          {st.label}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -491,45 +528,45 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
       {/* TAB 6: AGENTS */}
       {tab === "agents" && (
         <div className="skills-card">
-          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>Target Agent Fleet</h3>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>{t("skills.agentsTitle")}</h3>
           <table className="skills-table">
             <thead>
               <tr>
-                <th>Agent</th>
-                <th>Target Root (User Scope)</th>
-                <th>Target Root (Project Scope)</th>
-                <th>Adapter Version</th>
-                <th>Status</th>
+                <th>{t("skills.col.agent")}</th>
+                <th>{t("skills.col.userRoot")}</th>
+                <th>{t("skills.col.projectRoot")}</th>
+                <th>{t("skills.col.adapterVersion")}</th>
+                <th>{t("skills.col.status")}</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td style={{ fontWeight: 600, color: "#fff" }}>OpenAI Codex</td>
-                <td>~/.codex/skills/</td>
-                <td>.codex/skills/</td>
+                <td style={{ fontWeight: 600, color: "#fff" }}>{t("skills.agent.openaiCodex")}</td>
+                <td><code>~/.codex/skills/</code></td>
+                <td><code>.codex/skills/</code></td>
                 <td>1.0.0</td>
-                <td><span className="status-pill low">READY</span></td>
+                <td><span className="status-pill low">{t("skills.statusReady")}</span></td>
               </tr>
               <tr>
-                <td style={{ fontWeight: 600, color: "#fff" }}>Claude Code</td>
-                <td>~/.claude/skills/</td>
-                <td>.claude/skills/</td>
+                <td style={{ fontWeight: 600, color: "#fff" }}>{t("skills.agent.claudeCode")}</td>
+                <td><code>~/.claude/skills/</code></td>
+                <td><code>.claude/skills/</code></td>
                 <td>1.0.0</td>
-                <td><span className="status-pill low">READY</span></td>
+                <td><span className="status-pill low">{t("skills.statusReady")}</span></td>
               </tr>
               <tr>
-                <td style={{ fontWeight: 600, color: "#fff" }}>OpenCode</td>
-                <td>~/.config/opencode/skills/</td>
-                <td>.opencode/skills/</td>
+                <td style={{ fontWeight: 600, color: "#fff" }}>{t("skills.agent.opencode")}</td>
+                <td><code>~/.config/opencode/skills/</code></td>
+                <td><code>.opencode/skills/</code></td>
                 <td>1.0.0</td>
-                <td><span className="status-pill low">READY</span></td>
+                <td><span className="status-pill low">{t("skills.statusReady")}</span></td>
               </tr>
               <tr>
-                <td style={{ fontWeight: 600, color: "#fff" }}>Universal Agent</td>
-                <td>~/.agents/skills/</td>
-                <td>.agents/skills/</td>
+                <td style={{ fontWeight: 600, color: "#fff" }}>{t("skills.agent.universalAgent")}</td>
+                <td><code>~/.agents/skills/</code></td>
+                <td><code>.agents/skills/</code></td>
                 <td>1.0.0</td>
-                <td><span className="status-pill low">READY</span></td>
+                <td><span className="status-pill low">{t("skills.statusReady")}</span></td>
               </tr>
             </tbody>
           </table>
@@ -539,39 +576,39 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
       {/* TAB 7: REMOTE NODES */}
       {tab === "nodes" && (
         <div className="skills-card">
-          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>Remote Execution Nodes (SSH)</h3>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>{t("skills.nodesTitle")}</h3>
           <p style={{ margin: "0 0 16px 0", color: "#94a3b8", fontSize: 13 }}>
-            Manage remote VPS, GPU workers, and development hosts with strict host-key pinning.
+            {t("skills.nodesHelp")}
           </p>
           <table className="skills-table">
             <thead>
               <tr>
-                <th>Node</th>
-                <th>Type</th>
-                <th>Host</th>
-                <th>Environment</th>
-                <th>Status</th>
-                <th>Actions</th>
+                <th>{t("skills.col.node")}</th>
+                <th>{t("skills.col.type")}</th>
+                <th>{t("skills.col.host")}</th>
+                <th>{t("skills.col.environment")}</th>
+                <th>{t("skills.col.status")}</th>
+                <th>{t("skills.col.actions")}</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td style={{ fontWeight: 600, color: "#fff" }}>Local Machine</td>
-                <td>local</td>
-                <td>127.0.0.1</td>
-                <td>dev</td>
-                <td><span className="status-pill low">ONLINE</span></td>
-                <td><span style={{ fontSize: 12, color: "#8b949e" }}>Self</span></td>
+                <td style={{ fontWeight: 600, color: "#fff" }}>{t("skills.localMachine")}</td>
+                <td><code>local</code></td>
+                <td><code>127.0.0.1</code></td>
+                <td><code>dev</code></td>
+                <td><span className="status-pill low"><code>ONLINE</code></span></td>
+                <td><span style={{ fontSize: 12, color: "#8b949e" }}>{t("skills.self")}</span></td>
               </tr>
               <tr>
-                <td style={{ fontWeight: 600, color: "#fff" }}>VPS Main</td>
-                <td>ssh</td>
-                <td>vps.internal:22</td>
-                <td>staging</td>
-                <td><span className="status-pill low">CONFIGURED</span></td>
+                <td style={{ fontWeight: 600, color: "#fff" }}>{t("skills.vpsMain")}</td>
+                <td><code>ssh</code></td>
+                <td><code>vps.internal:22</code></td>
+                <td><code>staging</code></td>
+                <td><span className="status-pill low"><code>CONFIGURED</code></span></td>
                 <td>
-                  <button className="skills-tab-btn" style={{ padding: "4px 8px", fontSize: 11 }}>
-                    Test Connection
+                  <button type="button" className="skills-tab-btn" style={{ padding: "4px 8px", fontSize: 11 }}>
+                    {t("skills.testConnection")}
                   </button>
                 </td>
               </tr>
@@ -583,17 +620,17 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
       {/* TAB 8: DRIFT */}
       {tab === "drift" && (
         <div className="skills-card">
-          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>Configuration Drift & Rollback</h3>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>{t("skills.driftTitle")}</h3>
           <p style={{ margin: "0 0 16px 0", color: "#94a3b8", fontSize: 13 }}>
-            Continuous monitoring compares live disk files against immutable registry content hashes.
+            {t("skills.driftHelp")}
           </p>
           <table className="skills-table">
             <thead>
               <tr>
-                <th>Deployment</th>
-                <th>Target Path</th>
-                <th>Drift State</th>
-                <th>Actions</th>
+                <th>{t("skills.col.deployment")}</th>
+                <th>{t("skills.col.targetPath")}</th>
+                <th>{t("skills.col.driftState")}</th>
+                <th>{t("skills.col.actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -601,10 +638,10 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
                 <tr key={d.id}>
                   <td style={{ fontWeight: 600 }}>{d.skill_version_id}</td>
                   <td>{d.target_path}</td>
-                  <td><span className="status-pill low">IN_SYNC</span></td>
+                  <td><span className="status-pill low"><code>IN_SYNC</code></span></td>
                   <td>
-                    <button className="skills-tab-btn" style={{ padding: "4px 8px", fontSize: 11 }}>
-                      Check Hash
+                    <button type="button" className="skills-tab-btn" style={{ padding: "4px 8px", fontSize: 11 }}>
+                      {t("skills.checkHash")}
                     </button>
                   </td>
                 </tr>
@@ -617,22 +654,22 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
       {/* TAB 9: REVIEWS */}
       {tab === "reviews" && (
         <div className="skills-card">
-          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>Policy & Approval Queue</h3>
-          <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>No pending elevated reviews require operator decision.</p>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>{t("skills.reviewsTitle")}</h3>
+          <p style={{ margin: 0, color: "#94a3b8", fontSize: 13 }}>{t("skills.reviewsEmpty")}</p>
         </div>
       )}
 
       {/* TAB 10: AUDIT */}
       {tab === "audit" && (
         <div className="skills-card">
-          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>Audit Log</h3>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: 16, color: "#fff" }}>{t("skills.auditTitle")}</h3>
           <table className="skills-table">
             <thead>
               <tr>
-                <th>Timestamp</th>
-                <th>Event Type</th>
-                <th>Actor</th>
-                <th>Target ID</th>
+                <th>{t("skills.col.timestamp")}</th>
+                <th>{t("skills.col.eventType")}</th>
+                <th>{t("skills.col.actor")}</th>
+                <th>{t("skills.col.targetId")}</th>
               </tr>
             </thead>
             <tbody>
@@ -641,7 +678,7 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
                   <td style={{ color: "#94a3b8" }}>{new Date(ev.created_at).toLocaleString()}</td>
                   <td style={{ fontWeight: 600, color: "#60a5fa" }}>{ev.event_type}</td>
                   <td>{ev.actor_type}</td>
-                  <td>{ev.skill_id ?? "system"}</td>
+                  <td>{ev.skill_id ?? t("skills.system")}</td>
                 </tr>
               ))}
             </tbody>

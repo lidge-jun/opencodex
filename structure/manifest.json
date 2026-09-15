@@ -326,6 +326,24 @@
       ]
     },
     {
+      "path": "security-control.md",
+      "tier": 5,
+      "title": "Authorized Security Agent Control Plane",
+      "scope": "Authorization-first scope registry, policy engine, human-approval gate, fixture recon, validation, evidence, and audit.",
+      "documents": [
+        "src/security/"
+      ]
+    },
+    {
+      "path": "credential-runtime.md",
+      "tier": 5,
+      "title": "Provider Access Control Plane",
+      "scope": "Encrypted credential lifecycle, OAuth session gateway, health-checked token pool, and policy-governed leases.",
+      "documents": [
+        "src/credentials/"
+      ]
+    },
+    {
       "path": "clients/integrations.md",
       "tier": 5,
       "title": "Client Integrations",

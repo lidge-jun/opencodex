@@ -61,6 +61,8 @@ import type { ManagementApiDeps } from "./management/context";
 import { handleConfigRoutes } from "./management/config-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
 import { handleSkillRoutes } from "./management/skill-routes";
+import { handleSecurityRoutes } from "./management/security-routes";
+import { handleCredentialRoutes } from "./management/credential-routes";
 import { handleStorageLogGuardRoutes } from "./management/storage-log-guard-routes";
 import { handleRequestHistoryRoutes } from "./management/request-history-routes";
 import { handleRoutingAnalyticsRoutes } from "./management/routing-analytics-routes";
@@ -272,6 +274,8 @@ export async function handleManagementAPI(
     ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
     ??     (await handleConfigRoutes(ctx))
     ??     (await handleSkillRoutes(ctx))
+    ??     (await handleSecurityRoutes(ctx))
+    ??     (await handleCredentialRoutes(ctx))
     ??     (await handleStorageLogGuardRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
