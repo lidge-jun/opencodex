@@ -17,6 +17,7 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  "combo-send-budget.ts",
   "request-prepare.ts",
   "request-transport.ts",
   "request-sidecar-auth.ts",

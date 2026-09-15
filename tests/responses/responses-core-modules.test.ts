@@ -118,7 +118,9 @@ function budgetOwner(sendBudget: TransientSendBudget) {
     req: new Request("http://localhost/v1/responses"),
     logCtx: { model: "test", provider: "test" },
     options: { translatorBudget, sendBudget },
-  });
+  }, { route: { providerName: "test", modelId: "test", provider: {
+    adapter: "openai-chat", authMode: "key", baseUrl: "https://budget-fixture.invalid/v1",
+  } } } as Parameters<typeof createResponsesSendBudget>[1]);
   if (result instanceof Response) {
     translatorBudget.dispose();
     throw new Error("Unexpected workflow refusal without a workflow root");

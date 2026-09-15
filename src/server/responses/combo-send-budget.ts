@@ -5,7 +5,7 @@ import { CODEX_TEXT_GUARDED_BUDGET_POLICY, type RequestExecutionBudget, type Req
  * request as far as its own provider is concerned, so this is the guarded profile's base
  * allowance rather than a separate number to keep in sync.
  */
-const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSendAllowance;
+export const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSendAllowance;
 
 /**
  * A combo's execution policy is DECLARED by the combo, not inherited from the single-target

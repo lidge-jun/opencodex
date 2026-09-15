@@ -24,6 +24,8 @@ import {
 } from "../../providers/key-failover";
 import {
   fetchWithTransientRetry,
+  TRANSIENT_RETRY_MAX_ATTEMPTS,
+  SendBudgetExhaustedError,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
   prepareSameTarget429Wait,
@@ -87,6 +89,11 @@ export function createAdapterContinuations(
     | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "reserveCredentialHop"
+    | "pendingHopPermit"
+    | "keyPoolFailovers"
+    | "recoverySendAllowance"
+    | "recoveryClassFor"
+    | "sendBudgetExhausted"
   >,
   adapterExchange: Pick<
     AdapterExchange,
@@ -95,6 +102,7 @@ export function createAdapterContinuations(
     | "rateLimitPolicy"
     | "rateLimitRetries"
     | "stallTimeoutMs"
+    | "keyPool429RetryAllowed"
   >,
 ) {
   const { options, logCtx, config } = requestContext;
@@ -115,6 +123,9 @@ export function createAdapterContinuations(
     remainingTransientSendBudget,
     noteTransientSends,
     reserveCredentialHop,
+    recoverySendAllowance,
+    recoveryClassFor,
+    sendBudgetExhausted,
   } = sendBudgetState;
 
 
@@ -203,8 +214,17 @@ export function createAdapterContinuations(
         const fetchContinuationWithRetryPolicy = (route.provider.adapter === "google" || continuationTransientPolicy)
           ? fetchWithTransientRetry
           : fetchWithResetRetry;
-        return await fetchContinuationWithRetryPolicy(
+        const continuationCap = continuationTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+        const allowance = replayKind
+          ? recoverySendAllowance(continuationCap, recoveryClassFor(replayKind),
+            `${route.providerName}|${route.modelId}|${replayKind}`)
+          : { attempts: remainingTransientSendBudget(continuationCap), permit: undefined };
+        try {
+          return await fetchContinuationWithRetryPolicy(
           recovery => {
+            if (allowance.permit && !allowance.permit.use()) {
+              throw new SendBudgetExhaustedError(safeHostLabel(builtContinuationRequest.url));
+            }
             noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
@@ -229,19 +249,19 @@ export function createAdapterContinuations(
             // Same request-scoped budget as the initial send and the 429/rotation refetches:
             // a terminal-guard continuation is another leg of ONE request, so handing it a
             // fresh `attempts` would let one request exceed the configured total-send ceiling.
-            ...(continuationTransientPolicy
-              ? {
-                attempts: remainingTransientSendBudget(continuationTransientPolicy.attempts),
-                onSendsConsumed: noteTransientSends,
-              }
-              : {}),
+            attempts: allowance.attempts,
+            onSendsConsumed: noteTransientSends,
           },
           );
+        } finally {
+          allowance.permit?.release();
+        }
       } finally {
         builtContinuationRequest.releaseBodyObservation?.();
       }
     };
     while (true) {
+      const continuationHop = sendBudgetState.pendingHopPermit;
       try {
         const recoveryKind = nextContinuationRecoveryKind;
         nextContinuationRecoveryKind = undefined;
@@ -253,6 +273,9 @@ export function createAdapterContinuations(
           yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
         }
         return;
+      } finally {
+        sendBudgetState.pendingHopPermit = undefined;
+        continuationHop?.release();
       }
 
       // Same-target 429 wait-and-retry (opt-in `retryOn429`) before key/account failover:
@@ -262,6 +285,7 @@ export function createAdapterContinuations(
         response.status === 429
         && rateLimitPolicy !== null
         && adapterExchange.rateLimitRetries < rateLimitPolicy.attempts
+        && !sendBudgetExhausted()
       ) {
         adapterExchange.rateLimitRetries += 1;
         // Release unread body + heartbeat-fed wait via the shared same-target helper.
@@ -308,8 +332,10 @@ export function createAdapterContinuations(
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
           promptCacheKey: nextParsed.options.promptCacheKey,
+          allowRotation: adapterExchange.keyPool429RetryAllowed(),
         });
         if (rotated) {
+          sendBudgetState.keyPoolFailovers += 1;
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           route.provider = rotated;
           invalidateSameTargetRequest();
@@ -388,6 +414,7 @@ export function createAdapterContinuations(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|continuation-oauth-429`,
+          !transportState.activeAdapter.fetchResponse,
         );
         const nextAccountId = hop.allowed
           ? rotateGenericOAuthAccountOn429(
@@ -418,6 +445,7 @@ export function createAdapterContinuations(
               sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
               nextContinuationRecoveryKind = "oauth-account-429";
+              sendBudgetState.pendingHopPermit = transportState.activeAdapter.fetchResponse ? undefined : hop.permit;
               continue;
             }
           } catch {
