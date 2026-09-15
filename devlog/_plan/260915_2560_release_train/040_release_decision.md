@@ -44,3 +44,29 @@ What the decision rests on, and what it does not:
 Recorded as each step completes.
 
 - #4690 head `0026b14e83`, the post-fix candidate.
+
+## What actually happened
+
+- Candidate: `386303af1c` on `dev` — the squash of #4690, which carried the two regression fixes.
+  Its pre-merge head `26b3ff244434846149b560e28f7441afae529564` passed Cross-platform CI as run
+  `34945255301`.
+- `dev` moved to 2.57.0 through #4686 before any promotion, so `assert-ahead` could pass.
+- `main`: #4694 merged as `e4a8539b957b7ae7cd278666f0364eb0f82d4ac3`, carrying 2.56.0. Its push
+  runs at that exact SHA: Cross-platform CI `34947608073` success, Service lifecycle `34947608122`
+  success. #4687, cut from the pre-fix `2702911708`, was closed as superseded.
+- `preview`: #4698 merged as `b552b1db59`. The head was an `ours`-strategy merge, so its tree is
+  byte-identical to the candidate and to what `main` received; the merge exists to record the old
+  preview tip as a parent, which is the shape every earlier promotion onto that branch used.
+- Release: `release.yml` run `34951392978`, dispatched from `main` with
+  `expected-sha=e4a8539b95…`, `version=2.56.0`, `tag=latest`, `dry-run=false`. Both jobs succeeded.
+  The publish step reported `+ @bitkyc08/opencodex@2.56.0` with a provenance statement written to
+  the sigstore transparency log, and tag `v2.56.0` plus the GitHub release exist.
+- Registry metadata still read 2.55.0 immediately afterwards. The workflow says so itself and
+  instructs against republishing; a lagging read is not a failed publish.
+
+## What shipped that the audit did not clear
+
+Nothing. The two regressions it found were fixed before promotion, and the fix itself went through
+three review rounds: the first only released in the `catch`, the second confirmed before a rebuild
+that can fail without sending, and only the third confirms at the two points that reach the wire.
+The accepted risks are listed in `020_regression_audit.md` and are unchanged by this release.
