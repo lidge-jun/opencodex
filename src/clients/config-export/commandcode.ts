@@ -62,4 +62,3 @@ export function buildCommandCodeContribution(ctx: ExportContext): ManagedContrib
   const doc = buildCommandCodeClientConfig(ctx);
   return singleFragment("commandcode", ["provider", OPENCODE_PROVIDER_ID], doc.provider[OPENCODE_PROVIDER_ID]);
 }
-
