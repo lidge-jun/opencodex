@@ -23,6 +23,7 @@ const EXPECTED_ADAPTER_NAMES = {
   cursor: "cursor",
   devin: "devin",
   "mimo-free": "mimo-free",
+  "zcode-start-plan": "zcode-start-plan",
   qoder: "qoder",
 } as const;
 
