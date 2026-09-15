@@ -8017,11 +8017,10 @@ async function handleResponsesInner(
         || adapterSendBudget.remainingBaseSends(adapterSendBudget.policy.baseSendAllowance) > 0;
     }
     const policy = transientRetryPolicyFor(route.provider);
-    // Reset-only transports do not opt into the shared transient policy; the rotation cap
-    // still bounds them without granting a new retry policy or changing their reset limit.
-    if (!policy) return true;
-    if (!Number.isInteger(policy.attempts) || policy.attempts <= 0) return false;
-    if (remainingTransientSendBudget(policy.attempts) > 0) return true;
+    // Reset-only transports spend the same physical budget without gaining 5xx retries.
+    const attempts = policy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+    if (!Number.isInteger(attempts) || attempts <= 0) return false;
+    if (remainingTransientSendBudget(attempts) > 0) return true;
     // Continuations currently draw base sends only. Probe the initial recovery reserve,
     // then release its unused reservation: rebuildAndRefetch owns the actual send permit.
     if (continuation || !isRequestExecutionBudget(sendBudget)) return false;
@@ -8178,15 +8177,9 @@ async function handleResponsesInner(
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
-          ...(transientPolicy
-            // Draws the remainder, not the raw policy. A combo child inherits the parent's
-            // holder but used to take a fresh full allowance on its own first send, so the
-            // shared counter was inherited without ever being read as a limit.
-            ? {
-              attempts: remainingTransientSendBudget(transientPolicy.attempts),
-              onSendsConsumed: noteTransientSends,
-            }
-            : {}),
+          // Count both retry policies; reset-only still hops immediately on HTTP 5xx.
+          attempts: remainingTransientSendBudget(transientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS),
+          onSendsConsumed: noteTransientSends,
         },
       );
     }
@@ -8299,13 +8292,11 @@ async function handleResponsesInner(
           // Same rule as the passthrough rebuild: spend the base allowance first, then the one
           // shared final-recovery reserve, so a recovery that follows a spent streak still gets
           // its single send instead of dying at three.
-          const refetchAllowance = refetchTransientPolicy
-            ? recoverySendAllowance(
-              refetchTransientPolicy.attempts,
-              recoveryClassFor(recovery),
-              `${route.providerName}|${route.modelId}|${recovery}`,
-            )
-            : undefined;
+          const refetchAllowance = recoverySendAllowance(
+            refetchTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS,
+            recoveryClassFor(recovery),
+            `${route.providerName}|${route.modelId}|${recovery}`,
+          );
           try {
             return await refetchWithPolicy(
               recoveryKind => {
@@ -8900,12 +8891,8 @@ async function handleResponsesInner(
             // Same request-scoped budget as the initial send and the 429/rotation refetches:
             // a terminal-guard continuation is another leg of ONE request, so handing it a
             // fresh `attempts` would let one request exceed the configured total-send ceiling.
-            ...(continuationTransientPolicy
-              ? {
-                attempts: remainingTransientSendBudget(continuationTransientPolicy.attempts),
-                onSendsConsumed: noteTransientSends,
-              }
-              : {}),
+            attempts: remainingTransientSendBudget(continuationTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS),
+            onSendsConsumed: noteTransientSends,
           },
           );
       } finally {

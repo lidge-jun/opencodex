@@ -43,6 +43,46 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test.each(["429", "5xx", "reset"] as const)("reset-only combo key rotations preserve later targets (%s)", async mode => {
+    const originalFetch = globalThis.fetch;
+    const counts = [0, 0, 0];
+    const targets = counts.map((_, index) => ({ provider: `reset-key-t${index}`, model: "test" }));
+    const providers = Object.fromEntries(targets.map(({ provider }) => [provider, {
+      adapter: "openai-chat", authMode: "key", baseUrl: `https://${provider}.invalid/v1`,
+      apiKey: `synthetic-${provider}-0`,
+      apiKeyPool: Array.from({ length: 6 }, (_, key) => ({ id: `k${key}`, key: `synthetic-${provider}-${key}` })),
+    }]));
+    const config = { port: 0, hostname: "127.0.0.1", defaultProvider: targets[0]!.provider,
+      providers, combos: { fan: { strategy: "failover", targets } },
+    } as OcxConfig;
+    let server: ReturnType<typeof startServer> | undefined;
+    try {
+      saveConfig(config);
+      server = startServer(0);
+      globalThis.fetch = (async (input) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const index = targets.findIndex(target => url.hostname === `${target.provider}.invalid`);
+        if (index < 0) throw new Error("unexpected reset-only combo fixture request");
+        counts[index]!++;
+        if (counts.reduce((a, b) => a + b, 0) > 18) throw new Error("fixture send ceiling exceeded");
+        if (mode === "reset" && (index !== 0 || counts[index]! > 1)) {
+          throw Object.assign(new Error("socket reset fixture"), { code: "ECONNRESET" });
+        }
+        return Response.json({ error: { message: "key quota exhausted", type: "rate_limit_error" } },
+          { status: mode === "5xx" ? 502 : 429, headers: { "retry-after": "0" } });
+      }) as typeof fetch;
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(10_000),
+        body: JSON.stringify({ model: "combo/fan", input: "hello", stream: false }),
+      });
+      await response.text();
+      expect(response.ok).toBe(false);
+      expect(counts).toEqual(mode === "5xx" ? [1, 1, 1] : mode === "reset" ? [3, 2, 1] : [4, 1, 1]);
+      expect(counts.reduce((a, b) => a + b, 0)).toBe(mode === "5xx" ? 3 : 6);
+    } finally { globalThis.fetch = originalFetch; await server?.stop(true); }
+  }, 15_000);
+
   test.each(["web-search", "image"] as const)(
     "%s bridge bounds rotations after short cooldowns expire",
     async bridge => {

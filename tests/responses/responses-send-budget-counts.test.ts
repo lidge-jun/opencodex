@@ -11,11 +11,10 @@ import type { OcxConfig } from "../../src/types";
  * only assertion that catches a regression here is the exact number of times the proxy reached
  * upstream for one client turn.
  *
- * These rows use a key-auth `openai-chat` provider with `transientRetryOn5xx` because that is the
- * counted path: the generic adapter branch draws `attempts` from the request budget and reports
- * every physical send back through `onSendsConsumed`, and `noteAttemptSend` records the same send
- * on the attempt. An adapter without an opted-in transient policy keeps reset-only semantics and
- * hops on the first 5xx, so it would pin a 1 for every shape and prove nothing.
+ * These 5xx rows opt into `transientRetryOn5xx` to exercise same-target retries. Both generic
+ * retry policies draw from the request budget and report physical sends through
+ * `onSendsConsumed`. Reset-only still hops on the first HTTP 5xx; its key-rotation and socket
+ * reset counts are covered by the server-key-failover end-to-end fixture instead.
  */
 const originalFetch = globalThis.fetch;
 

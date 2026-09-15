@@ -7,7 +7,7 @@
 only explicit true on Responses ingress to the final canonical ChatGPT forward route activates it.
 A default top-level collaboration catalog is required. The compiler preserves caller objects,
 aliases the namespace and three message functions, and removes only their true encryption marker.
-Declaration/reference collisions refuse the whole rewrite without changing the request. Generic Responses API-key failover follows the [bounded rotation contract](transports/responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local.
+Declaration/reference collisions refuse the whole rewrite without changing the request. Generic Responses API-key failover follows the [bounded rotation contract](transports/responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches, key-rotation rebuilds and terminal continuations are also counted without enabling transient-5xx retries.
 
 `src/adapters/openai-responses.ts` returns request-local alias capabilities. The Responses core
 refreshes them after every request rebuild and restores JSON, SSE and WebSocket identities after
