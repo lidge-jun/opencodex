@@ -4,7 +4,7 @@ The existing Responses transport is divided by responsibility in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
 The Chat adapter's [OpenCode Go instruction ordering](../providers/chat-compat.md#opencode-go-chronological-instructions)
 changes translated message placement only; endpoint selection and transport stay with their existing owners.
