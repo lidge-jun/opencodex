@@ -25,8 +25,9 @@ export function clearRememberedAdminToken(): void {
 
 /**
  * Ask for the management credential with a real sign-in form so browsers and
- * password managers can offer save/autofill. OpenCodex itself still keeps the
- * submitted token in memory only; persistence remains entirely browser-owned.
+ * password managers can offer save/autofill. OpenCodex keeps the submitted
+ * token in memory only unless the user explicitly opts in to remembering it
+ * on this device (see the remember checkbox below).
  */
 export function promptForAdminToken(
   verifyToken: AdminTokenVerifier,
@@ -112,7 +113,9 @@ export function promptForAdminToken(
     rememberField.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:var(--space-4);";
     const remember = document.createElement("input");
     remember.id = `${ADMIN_TOKEN_DIALOG_ID}-remember`;
+    remember.name = "remember";
     remember.type = "checkbox";
+    if (getRememberedAdminToken()) remember.checked = true;
     rememberField.append(remember, document.createTextNode(messages["auth.adminTokenRemember"]));
 
     const validationError = document.createElement("div");

@@ -284,12 +284,21 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
         return null;
       }
       const remembered = getRememberedAdminToken();
-      if (remembered && remembered !== failedToken) {
-        if (await verifyAdminToken(plane, remembered) === "accepted") {
-          state.session = { token: remembered, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };
-          return remembered;
+      if (remembered) {
+        if (remembered === failedToken) {
+          // The stored token just caused this 401: it is revoked. Clear it
+          // now so it cannot linger until the next visit.
+          clearRememberedAdminToken();
+        } else {
+          const verdict = await verifyAdminToken(plane, remembered);
+          if (verdict === "accepted") {
+            state.session = { token: remembered, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };
+            return remembered;
+          }
+          if (verdict === "rejected") clearRememberedAdminToken();
+          // "unavailable" (network/server error) leaves the stored token
+          // intact: a transient outage must not delete a valid credential.
         }
-        clearRememberedAdminToken();
       }
       const prompted = await requestAdminToken(token => verifyAdminToken(plane, token));
       if (prompted) {
