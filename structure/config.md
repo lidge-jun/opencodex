@@ -9,6 +9,8 @@ Hub management ingress also selects the [local dashboard address](runtime.md#hub
 
 Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
 
+The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
+
 ## Config surface
 
 ### OpenCodex home and live process state

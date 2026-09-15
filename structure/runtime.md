@@ -20,6 +20,10 @@ Catalog-derived reasoning-level diagnostics are escaped only at the human-output
 
 `src/cli/account-main.ts` emits one JSON object to stdout when `ocx account main reauth --device --no-wait --json` succeeds. The human-readable `follow up:` line is emitted only without `--json`; `flowId` remains available for status polling. `tests/cli/cli-native-profile.test.ts` parses the complete captured stdout and preserves coverage of the human follow-up.
 
+## CLI Codex restart scope
+
+`ocx system codex-restart` requests a full Codex desktop-app restart and app-server restarts through the management endpoint. `src/cli/capabilities.ts` names that scope in its summary and `--yes` description; `src/cli/system-command.ts` explains the desktop interruption when confirmation is missing and sends no restart request. Human output says the restart was requested, while `--json` preserves the complete server result, including skipped or refused desktop outcomes.
+
 ## Hub management dashboard address
 
 When hub management ingress is enabled, `src/cli/dispatch.ts` opens the dashboard on the literal IPv4 loopback address and configured ingress port, matching the listener in `src/server/index.ts`. Other dashboard address selection is unchanged.

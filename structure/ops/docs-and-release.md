@@ -11,6 +11,8 @@ The CLI default dashboard address follows the [management ingress bind](../runti
 
 Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
 
+The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
+
 ## Public docs
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is

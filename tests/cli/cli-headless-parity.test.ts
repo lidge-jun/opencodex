@@ -20,6 +20,40 @@ import { repoPath } from "../helpers/repo-root";
 type Recorded = { path: string; method: string; body: unknown };
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
+describe("ocx system codex-restart confirmation", () => {
+  test("names the desktop interruption before any unconfirmed request", async () => {
+    const { requests, deps } = fakeRuntime();
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["codex-restart"], deps)).toBe(2);
+      expect(requests).toHaveLength(0);
+      const warning = errors.mock.calls.flat().join(" ");
+      expect(warning).toContain("requires --yes");
+      expect(warning).toContain("fully quits and relaunches the Codex desktop app");
+    } finally { errors.mockRestore(); }
+  });
+
+  test.each([false, true])("preserves requested versus completed outcomes (json=%s)", async wantsJson => {
+    // A skipped Desktop outcome must survive JSON output; this fixture cannot restart processes.
+    const result = { success: true, code: "nothing_running", requested: [], stopped: [],
+      desktopApp: { attempted: false, relaunch: "skipped", reason: "self_ancestry" } };
+    const { requests, deps } = fakeRuntime(() => result);
+    const output = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const argv = ["codex-restart", "--yes", ...(wantsJson ? ["--json"] : [])];
+      expect(await handleSystemCommand(argv, deps)).toBe(0);
+      expect(requests).toEqual([{ path: "/api/system/codex-restart", method: "POST", body: null }]);
+      const text = output.mock.calls.flat().join("\n");
+      if (wantsJson) expect(JSON.parse(text)).toEqual(result);
+      else {
+        expect(text).toContain("Codex desktop app");
+        expect(text).toContain("restart requested.");
+        expect(text).not.toContain("restarted");
+      }
+    } finally { output.mockRestore(); }
+  });
+});
+
 describe("ocx system settings client compaction", () => {
   test("persists the explicit boolean through the shared settings endpoint", async () => {
     const { requests, deps } = fakeRuntime((_req, body) => ({ ok: true, ...body }));
