@@ -1,6 +1,7 @@
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
+  deriveRequestExecutionBudget,
   isRequestExecutionBudget,
 } from "../../lib/request-execution-budget";
 import type {
@@ -84,8 +85,8 @@ export const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSend
  * combo may make are exactly the targets it declares minus the one it starts on. What stays
  * capped is the TOTAL: the first target's full ladder, one send for every further declared
  * target, and the one shared final-recovery reserve. A one-target combo reduces to the guarded
- * profile exactly, and a three-target combo whose every target fails hard reaches upstream six
- * times instead of the twelve #4546 measured.
+ * profile exactly. With three hard-failing targets the normal path makes five physical sends
+ * (3 + 1 + 1); a sixth is available only to one validated final-recovery leg.
  */
 export function comboExecutionBudgetPolicy(declaredTargets: number): RequestExecutionBudgetPolicy {
   const targets = Math.max(1, Math.trunc(declaredTargets));
@@ -105,25 +106,17 @@ export function comboExecutionBudgetPolicy(declaredTargets: number): RequestExec
 /**
  * A budget scope that keeps its own recovery ledgers but spends the SAME request-wide counter.
  *
- * `used` is redefined as an accessor onto the parent because the factory reads it back off this
- * object -- `remainingBaseSends` and the total check both do -- so a copied number would let a
- * combo target run its ladder against a stale total, which is precisely the per-layer counting
- * this work exists to remove. The reserve, alternate-target and transition ledgers stay
+ * The budget factory binds derived scopes to one shared physical-send counter, including pending
+ * externally-counted reservations. The reserve, alternate-target and transition ledgers stay
  * per-scope on purpose: a combo target's account failover is its own recovery decision, while
- * the request total still bounds every target together.
+ * the request total still bounds every target together. Copying only the numeric `used` value
+ * would re-arm each child against stale state and recreate the multiplication this fixes.
  */
 export function deriveSendBudgetScope(
   parent: RequestExecutionBudget,
   policy: RequestExecutionBudgetPolicy,
 ): RequestExecutionBudget {
-  const scope = createRequestExecutionBudget(policy, parent.logicalRequestId);
-  Object.defineProperty(scope, "used", {
-    get: () => parent.used,
-    set: (value: number) => { parent.used = value; },
-    enumerable: true,
-    configurable: true,
-  });
-  return scope;
+  return deriveRequestExecutionBudget(parent, policy);
 }
 
 

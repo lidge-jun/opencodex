@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
+  deriveRequestExecutionBudget,
   type RequestExecutionBudgetPolicy,
 } from "../../src/lib/request-execution-budget";
 
@@ -108,6 +109,29 @@ describe("atomic dispatch permits", () => {
     // Sends the helper made beyond the reserved one are still charged in full.
     budget.used += 2;
     expect(budget.used).toBe(3);
+  });
+
+  test("derived scopes share physical sends and counted-externally settlement", () => {
+    const parent = createRequestExecutionBudget({
+      maxTotalModelSends: 8, baseSendAllowance: 7, finalRecoveryAllowance: 1,
+      maxAlternateTargetSends: 7, maxTargetTransitions: 7,
+    });
+    const combo = deriveRequestExecutionBudget(parent, {
+      maxTotalModelSends: 8, baseSendAllowance: 7, finalRecoveryAllowance: 1,
+      maxAlternateTargetSends: 7, maxTargetTransitions: 7,
+    });
+    const target = deriveRequestExecutionBudget(combo, {
+      maxTotalModelSends: 8, baseSendAllowance: 7, finalRecoveryAllowance: 1,
+      maxAlternateTargetSends: 1, maxTargetTransitions: 1,
+    });
+    const hop = combo.reserveDispatch({ sendClass: "initial", targetKey: "provider-a/model-a", countedExternally: true });
+    expect(hop.allowed).toBe(true);
+    expect(parent.used).toBe(1);
+    expect(target.used).toBe(1);
+    target.used += 1;
+    expect(parent.used).toBe(1);
+    target.used += 2;
+    expect(parent.used).toBe(3);
   });
 
   test("an external report settles the booking, so a late release refunds nothing", () => {

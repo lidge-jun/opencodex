@@ -134,33 +134,37 @@ const RESERVE_FUNDED_CLASSES: ReadonlySet<SendClass> = new Set<SendClass>([
 
 let logicalRequestSeq = 0;
 
-export function createRequestExecutionBudget(
-  policy: RequestExecutionBudgetPolicy = CODEX_TEXT_GUARDED_BUDGET_POLICY,
-  logicalRequestId?: string,
+interface SharedSendCounter {
+  spent: number;
+  pendingExternalSends: number;
+}
+
+const sharedSendCounters = new WeakMap<RequestExecutionBudget, SharedSendCounter>();
+
+function createRequestExecutionBudgetWithCounter(
+  policy: RequestExecutionBudgetPolicy,
+  logicalRequestId: string | undefined,
+  counter: SharedSendCounter,
 ): RequestExecutionBudget {
-  let spent = 0;
-  // Reservations whose physical send is reported by a retry helper rather than by the permit.
-  // They are already charged; the reporter's first send settles one instead of charging again.
-  let pendingExternalSends = 0;
   let reserveSpent = false;
   let alternateTargetSends = 0;
   let targetTransitions = 0;
   let lastTargetKey: string | undefined;
 
   const budget: RequestExecutionBudget = {
-    get used(): number { return spent; },
+    get used(): number { return counter.spent; },
     set used(next: number) {
       // The retry helpers report their real send count by assigning through this field. A
       // reservation taken with `countedExternally` has already booked one of those sends, so
       // the report settles the pending booking first and only the surplus is charged.
-      const delta = next - spent;
+      const delta = next - counter.spent;
       if (delta <= 0) {
-        spent = Math.max(0, next);
+        counter.spent = Math.max(0, next);
         return;
       }
-      const settled = Math.min(delta, pendingExternalSends);
-      pendingExternalSends -= settled;
-      spent += delta - settled;
+      const settled = Math.min(delta, counter.pendingExternalSends);
+      counter.pendingExternalSends -= settled;
+      counter.spent += delta - settled;
     },
     logicalRequestId: logicalRequestId ?? `lr-${Date.now().toString(36)}-${(logicalRequestSeq += 1).toString(36)}`,
     policyVersion: REQUEST_BUDGET_POLICY_VERSION,
@@ -171,11 +175,11 @@ export function createRequestExecutionBudget(
     get lastTargetKey() { return lastTargetKey; },
     remainingBaseSends(cap: number): number {
       const capped = Number.isFinite(cap) ? Math.trunc(cap) : 0;
-      return Math.max(0, Math.min(capped, policy.baseSendAllowance - spent));
+      return Math.max(0, Math.min(capped, policy.baseSendAllowance - counter.spent));
     },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
-      if (spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
+      if (counter.spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
 
       const changesTarget = lastTargetKey !== undefined && lastTargetKey !== intent.targetKey;
       const isAlternateTarget = changesTarget || intent.sendClass === "account-failover"
@@ -190,7 +194,7 @@ export function createRequestExecutionBudget(
       // The base allowance is spent first. Only once it is gone does a recovery class reach
       // for the single shared reserve -- an account move and a validated rebuild cannot each
       // take one.
-      const drawsReserve = policy.baseSendAllowance - spent <= 0;
+      const drawsReserve = policy.baseSendAllowance - counter.spent <= 0;
       if (drawsReserve) {
         if (!RESERVE_FUNDED_CLASSES.has(intent.sendClass)) {
           return { allowed: false, reason: "base-allowance-exhausted" };
@@ -205,8 +209,8 @@ export function createRequestExecutionBudget(
       // one remaining send admitted two physical sends, which is the per-request multiplication
       // this budget exists to stop. Everything is booked now; `release()` is the way back.
       const previousTargetKey = lastTargetKey;
-      spent += 1;
-      if (intent.countedExternally === true) pendingExternalSends += 1;
+      counter.spent += 1;
+      if (intent.countedExternally === true) counter.pendingExternalSends += 1;
       if (drawsReserve) reserveSpent = true;
       if (isAlternateTarget) alternateTargetSends += 1;
       if (changesTarget) targetTransitions += 1;
@@ -228,10 +232,10 @@ export function createRequestExecutionBudget(
             // An externally counted reservation the reporter already settled paid for a send
             // that physically happened. Refunding it would hand the request a free send back.
             if (intent.countedExternally === true) {
-              if (pendingExternalSends === 0) return;
-              pendingExternalSends -= 1;
+              if (counter.pendingExternalSends === 0) return;
+              counter.pendingExternalSends -= 1;
             }
-            spent -= 1;
+            counter.spent -= 1;
             if (drawsReserve) reserveSpent = false;
             if (isAlternateTarget) alternateTargetSends -= 1;
             if (changesTarget) targetTransitions -= 1;
@@ -241,7 +245,25 @@ export function createRequestExecutionBudget(
       };
     },
   };
+  sharedSendCounters.set(budget, counter);
   return budget;
+}
+
+export function createRequestExecutionBudget(
+  policy: RequestExecutionBudgetPolicy = CODEX_TEXT_GUARDED_BUDGET_POLICY,
+  logicalRequestId?: string,
+): RequestExecutionBudget {
+  return createRequestExecutionBudgetWithCounter(policy, logicalRequestId, { spent: 0, pendingExternalSends: 0 });
+}
+
+/** Derive a policy scope that shares the exact physical-send ledger with its parent. */
+export function deriveRequestExecutionBudget(
+  parent: RequestExecutionBudget,
+  policy: RequestExecutionBudgetPolicy,
+): RequestExecutionBudget {
+  const counter = sharedSendCounters.get(parent);
+  if (!counter) throw new Error("request execution budget is not factory-backed");
+  return createRequestExecutionBudgetWithCounter(policy, parent.logicalRequestId, counter);
 }
 
 export function isRequestExecutionBudget(
