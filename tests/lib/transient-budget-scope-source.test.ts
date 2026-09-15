@@ -65,15 +65,15 @@ describe("transient send budget stays request-scoped", () => {
     // EVERY leg asks for the remainder now, including the adapter initial send. That one used
     // to pass the raw policy on the argument that nothing had been spent yet -- true for a first
     // turn, false for a combo child, which inherits the parent's holder and then took a fresh
-    // full allowance on its own first send. Five sites spell it directly; the two rebuild legs
+    // full allowance on its own first send. Five sites spell it directly; rebuild and recovery legs
     // go through recoverySendAllowance, which spends the base allowance first and only then
     // draws the single shared final-recovery reserve.
     expect(core.match(/attempts: remainingTransientSendBudget\(/g)).toHaveLength(5);
-    expect(core).toContain("attempts: remainingTransientSendBudget(transientPolicy.attempts)");
-    expect(core).toContain("attempts: remainingTransientSendBudget(continuationTransientPolicy.attempts)");
+    expect(core).toContain("attempts: remainingTransientSendBudget(transientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS)");
+    expect(core).toContain("attempts: remainingTransientSendBudget(continuationCap)");
     // The reserve path: an account move and a validated rebuild share ONE final send, so a
     // request cannot take both and reach five.
-    expect(core.match(/recoverySendAllowance\(/g)).toHaveLength(2);
+    expect(core.match(/recoverySendAllowance\(/g)).toHaveLength(3);
     expect(core).toContain("countedExternally: true");
     // The passthrough legs have no adapter policy to draw from, so they name the helper's own
     // ceiling rather than re-spelling the number.
@@ -140,7 +140,9 @@ describe("every dispatch path reports into the shared budget", () => {
     // fresh four.
     expect(compact).toContain("turnAdmissionLease, sendBudget,");
     // The handoff child already inherited; both paths must keep doing so.
-    expect(compact).toContain("{ ...options, sendBudget }");
+    expect(compact).toContain("{ ...options, sendBudget: handoffBudget }");
+    expect(compact).toContain("sendBudget.deriveScope({");
+    expect(compact).toContain("}, hop.permit)");
   });
 
   test("credential hops keep their roster cap AND reserve from the shared budget", () => {

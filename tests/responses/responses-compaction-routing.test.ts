@@ -1542,7 +1542,7 @@ describe("compact alternate-account attempt (#913)", () => {
       expect(output.output?.length).toBeGreaterThan(0);
       expect(logCtx.provider).toBe("deepseek");
       expect(calls.at(-1)).toEqual({ model: "deepseek-v4-flash", nativeCompact: false });
-      expect(calls.slice(0, -1).length).toBeGreaterThan(0);
+      expect(calls.slice(0, -1)).toHaveLength(3); // Native ladder + one handoff = four sends.
       expect(calls.slice(0, -1).every(call => (
         call.model === "gpt-5.6-sol" && call.nativeCompact
       ))).toBe(true);

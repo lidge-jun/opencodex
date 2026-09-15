@@ -8009,7 +8009,7 @@ async function handleResponsesInner(
     : 300_000;
   activeAdapter = adapter;
 
-  const keyPool429RetryAllowed = (continuation: boolean): boolean => {
+  const keyPool429RetryAllowed = (): boolean => {
     if (keyPoolFailovers >= maxKeyPoolFailovers) return false;
     // Adapter-owned sends retain their existing base-only admission (for example Kiro).
     if (activeAdapter.fetchResponse) {
@@ -8021,9 +8021,9 @@ async function handleResponsesInner(
     const attempts = policy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
     if (!Number.isInteger(attempts) || attempts <= 0) return false;
     if (remainingTransientSendBudget(attempts) > 0) return true;
-    // Continuations currently draw base sends only. Probe the initial recovery reserve,
-    // then release its unused reservation: rebuildAndRefetch owns the actual send permit.
-    if (continuation || !isRequestExecutionBudget(sendBudget)) return false;
+    // Probe the shared recovery reserve, then release the unused reservation:
+    // the initial or continuation refetch owns the actual send permit.
+    if (!isRequestExecutionBudget(sendBudget)) return false;
     const decision = sendBudget.reserveDispatch({
       sendClass: "auth-recovery",
       targetKey: `${route.providerName}|${route.modelId}|key-429`,
@@ -8483,7 +8483,7 @@ async function handleResponsesInner(
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
           promptCacheKey: parsed.options.promptCacheKey,
-          allowRotation: keyPool429RetryAllowed(false),
+          allowRotation: keyPool429RetryAllowed(),
         });
         if (!rotated) break;
         keyPoolFailovers += 1;
@@ -8566,6 +8566,7 @@ async function handleResponsesInner(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
+          !activeAdapter.fetchResponse,
         );
         if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOn429(
@@ -8596,10 +8597,17 @@ async function handleResponsesInner(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, activeAdapter.name);
-          const result = await rebuildAndRefetch("oauth-account-429");
-          if ("failed" in result) return result.failed;
-          upstreamResponse = result;
+          pendingHopPermit = activeAdapter.fetchResponse ? undefined : hop.permit;
+          try {
+            const result = await rebuildAndRefetch("oauth-account-429");
+            if ("failed" in result) return result.failed;
+            upstreamResponse = result;
+          } finally {
+            pendingHopPermit = undefined;
+            if (!activeAdapter.fetchResponse) hop.permit?.release();
+          }
         } catch {
+          if (!activeAdapter.fetchResponse) hop.permit?.release();
           break;
         }
       }
@@ -8865,8 +8873,17 @@ async function handleResponsesInner(
         const fetchContinuationWithRetryPolicy = (route.provider.adapter === "google" || continuationTransientPolicy)
           ? fetchWithTransientRetry
           : fetchWithResetRetry;
-        return await fetchContinuationWithRetryPolicy(
+        const continuationCap = continuationTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+        const allowance = replayKind
+          ? recoverySendAllowance(continuationCap, recoveryClassFor(replayKind),
+            `${route.providerName}|${route.modelId}|${replayKind}`)
+          : { attempts: remainingTransientSendBudget(continuationCap), permit: undefined };
+        try {
+          return await fetchContinuationWithRetryPolicy(
           recovery => {
+            if (allowance.permit && !allowance.permit.use()) {
+              throw new SendBudgetExhaustedError(safeHostLabel(builtContinuationRequest.url));
+            }
             noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
@@ -8891,15 +8908,19 @@ async function handleResponsesInner(
             // Same request-scoped budget as the initial send and the 429/rotation refetches:
             // a terminal-guard continuation is another leg of ONE request, so handing it a
             // fresh `attempts` would let one request exceed the configured total-send ceiling.
-            attempts: remainingTransientSendBudget(continuationTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS),
+            attempts: allowance.attempts,
             onSendsConsumed: noteTransientSends,
           },
           );
+        } finally {
+          allowance.permit?.release();
+        }
       } finally {
         builtContinuationRequest.releaseBodyObservation?.();
       }
     };
     while (true) {
+      const continuationHop = pendingHopPermit;
       try {
         const recoveryKind = nextContinuationRecoveryKind;
         nextContinuationRecoveryKind = undefined;
@@ -8911,6 +8932,9 @@ async function handleResponsesInner(
           yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
         }
         return;
+      } finally {
+        pendingHopPermit = undefined;
+        continuationHop?.release();
       }
 
       // Same-target 429 wait-and-retry (opt-in `retryOn429`) before key/account failover:
@@ -8967,7 +8991,7 @@ async function handleResponsesInner(
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
           promptCacheKey: nextParsed.options.promptCacheKey,
-          allowRotation: keyPool429RetryAllowed(true),
+          allowRotation: keyPool429RetryAllowed(),
         });
         if (rotated) {
           keyPoolFailovers += 1;
@@ -9049,6 +9073,7 @@ async function handleResponsesInner(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|continuation-oauth-429`,
+          !activeAdapter.fetchResponse,
         );
         const nextAccountId = hop.allowed
           ? rotateGenericOAuthAccountOn429(
@@ -9079,6 +9104,7 @@ async function handleResponsesInner(
               sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, activeAdapter.name);
               nextContinuationRecoveryKind = "oauth-account-429";
+              pendingHopPermit = activeAdapter.fetchResponse ? undefined : hop.permit;
               continue;
             }
           } catch {

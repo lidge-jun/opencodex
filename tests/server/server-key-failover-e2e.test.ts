@@ -15,6 +15,8 @@ import { resetProviderRequestPacingForTest, setProviderRequestPacingRuntimeForTe
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../src/providers/api-key-selection";
 import { routedProviderConfig } from "../../src/router";
 import type { OcxProviderTransport } from "../../src/providers/xai-transport";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -43,6 +45,43 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test.each([false, true])("OAuth hops charge each reset-only refetch once (third succeeds: %s)", async succeeds => {
+    const originalFetch = globalThis.fetch;
+    const authorizations: string[] = [];
+    let server: ReturnType<typeof startServer> | undefined;
+    clearGenericFailoverHealth();
+    try {
+      for (let i = 0; i < 3; i++) {
+        await saveCredential("nous", { access: `synthetic-oauth-${i}`, refresh: `synthetic-refresh-${i}`,
+          expires: Date.now() + 3_600_000, accountId: `fixture-account-${i}` }, { addAccount: true });
+      }
+      await setActiveAccount("nous", getAccountSet("nous")!.accounts[0]!.id);
+      saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "nous", providers: { nous: {
+        adapter: "openai-chat", authMode: "oauth", baseUrl: "https://oauth-refetch.invalid/v1", models: ["test"],
+      } } } as OcxConfig);
+      server = startServer(0);
+      globalThis.fetch = (async (_input, init) => {
+        authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (succeeds && authorizations.length === 3) return Response.json({ id: "third-account", object: "chat.completion",
+          choices: [{ index: 0, message: { role: "assistant", content: "third account works" }, finish_reason: "stop" }] });
+        return Response.json({ error: { message: `oauth-quota-${authorizations.length}`, type: "rate_limit_error" } },
+          { status: 429, headers: { "retry-after": "30" } });
+      }) as typeof fetch;
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "nous/test", stream: false, input: "hello" }),
+      });
+      const text = await response.text();
+      expect(authorizations).toEqual(["Bearer synthetic-oauth-0", "Bearer synthetic-oauth-1", "Bearer synthetic-oauth-2"]);
+      expect(response.status).toBe(succeeds ? 200 : 429);
+      expect(text).toContain(succeeds ? "third account works" : "oauth-quota-3");
+    } finally {
+      globalThis.fetch = originalFetch;
+      await server?.stop(true);
+      clearGenericFailoverHealth();
+    }
+  });
+
   test.each(["429", "5xx", "reset"] as const)("reset-only combo key rotations preserve later targets (%s)", async mode => {
     const originalFetch = globalThis.fetch;
     const counts = [0, 0, 0];

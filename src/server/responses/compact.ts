@@ -1218,6 +1218,20 @@ export async function handleResponsesCompact(
     } else if (quotaFailure && !storedPool401ReplayAttempted) {
       const fallbackModel = compactHandoffRoute(req, raw.model);
       if (fallbackModel && !req.signal.aborted) {
+        const hop = sendBudget.reserveDispatch({
+          sendClass: "account-failover",
+          targetKey: `compact-handoff:${fallbackModel}`,
+          countedExternally: true,
+        });
+        if (!hop.allowed) return buffered;
+        // The routed child's initial send spends this exact recovery booking. Its base
+        // exposes the prepaid send even after native compact used the three-send ladder;
+        // it shares the total ledger and receives no additional recovery reserve.
+        const handoffBudget = sendBudget.deriveScope({
+          ...sendBudget.policy,
+          baseSendAllowance: Math.max(sendBudget.policy.baseSendAllowance, sendBudget.used),
+          finalRecoveryAllowance: 0,
+        }, hop.permit);
         const fallbackReq = new Request(req.url, {
           method: "POST",
           headers: req.headers,
@@ -1233,13 +1247,15 @@ export async function handleResponsesCompact(
             admission,
             // The handoff child is the same logical compact on a second model, so it inherits
             // the holder. Forwarding `options` alone was not enough: the child minted its own.
-            { ...options, sendBudget },
+            { ...options, sendBudget: handoffBudget },
           );
           if (fallback.ok || fallback.status === 499) return fallback;
           await fallback.body?.cancel().catch(() => undefined);
         } catch {
           // The previous-model rejection is the authoritative failure when the
           // remembered handoff route can no longer compact this thread.
+        } finally {
+          hop.permit.release();
         }
       }
     }
