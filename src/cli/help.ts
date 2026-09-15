@@ -89,6 +89,9 @@ Usage:
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config <sub>            Validated configuration show/get/set/import/export
   ocx lab <sub>               Read-only Compatibility Lab projection inspection
+  ocx skill <command>         Universal Agent Skill Control Plane
+  ocx security <command>      Authorized Security Agent Control Plane
+  ocx credentials <command>   Provider Access Control Plane
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
   ocx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)

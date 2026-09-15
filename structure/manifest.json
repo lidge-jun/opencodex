@@ -317,6 +317,33 @@
       ]
     },
     {
+      "path": "skill-control.md",
+      "tier": 5,
+      "title": "Universal Agent Skill Control Plane",
+      "scope": "Universal skill registry, visual marketplace, static scanning, cross-agent deployment, remote sync, and drift governance.",
+      "documents": [
+        "src/skills/"
+      ]
+    },
+    {
+      "path": "security-control.md",
+      "tier": 5,
+      "title": "Authorized Security Agent Control Plane",
+      "scope": "Authorization-first scope registry, policy engine, human-approval gate, fixture recon, validation, evidence, and audit.",
+      "documents": [
+        "src/security/"
+      ]
+    },
+    {
+      "path": "credential-runtime.md",
+      "tier": 5,
+      "title": "Provider Access Control Plane",
+      "scope": "Encrypted credential lifecycle, OAuth session gateway, health-checked token pool, and policy-governed leases.",
+      "documents": [
+        "src/credentials/"
+      ]
+    },
+    {
       "path": "clients/integrations.md",
       "tier": 5,
       "title": "Client Integrations",
