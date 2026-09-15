@@ -655,7 +655,7 @@ pending lease to `passthrough-execution.ts`; both owners await response construc
 cleanup. Stream body ownership, cancellation and post-commit behavior stay in the delivery owners.
 This decomposition changes ownership boundaries, not credential-selection or retry policy.
 
-`tests/responses/core-modules.test.ts` covers the owner inventory, the 1,999-line ceiling,
+`tests/responses/responses-core-modules.test.ts` covers the owner inventory, the 1,999-line ceiling,
 acyclic dependencies, recursive dispatch, lease-transfer wiring, capture-name hygiene and live
 send-holder/permit behavior. Cross-owner source assertions read the actual implementations via
 `tests/helpers/responses-core-source.ts`; focused passthrough and subagent assertions read their
