@@ -167,8 +167,8 @@ describe("google adapter — Chat Completions video input", () => {
       parts: [
         { text: "When do the arms pick up the gear?" },
         {
-          file_data: { file_uri: "https://www.youtube.com/watch?v=example", mime_type: "video/*" },
-          processing: "agentic",
+          file_data: { file_uri: "https://www.youtube.com/watch?v=example" },
+          media_processing: "AGENTIC",
         },
       ],
     });
@@ -193,14 +193,63 @@ describe("google adapter — Chat Completions video input", () => {
     expect(contents).toContainEqual({
       role: "user",
       parts: [{
-        file_data: {
-          file_uri: "https://generativelanguage.googleapis.com/v1beta/files/abc123",
-          mime_type: "video/*",
-        },
+        file_data: { file_uri: "https://generativelanguage.googleapis.com/v1beta/files/abc123" },
       }],
     });
     // A caller who did not ask for a mode must not gain an unknown upstream field.
-    expect(JSON.stringify(contents)).not.toContain("processing");
+    expect(JSON.stringify(contents)).not.toContain("media_processing");
+  });
+
+  test("inline video bytes carry the mode too — it rides on the part, not the uri", async () => {
+    // `media_processing` sits beside `inline_data`/`file_data`, so a data: URL is
+    // just as eligible. Emitting it on only the fetched-uri branch silently
+    // dropped agentic mode for callers who inline their clip.
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "google-antigravity/gemini-3.7-flash",
+      messages: [{
+        role: "user",
+        content: [{
+          type: "video_url",
+          video_url: { url: "data:video/mp4;base64,aGVsbG8=", processing: "agentic" },
+        }],
+      }],
+    });
+    const parsed = parseRequest(responsesBody);
+    parsed.modelId = "gemini-3.7-flash";
+
+    const contents = await geminiContents(parsed);
+
+    expect(contents).toContainEqual({
+      role: "user",
+      parts: [{
+        inline_data: { mime_type: "video/mp4", data: "aGVsbG8=" },
+        media_processing: "AGENTIC",
+      }],
+    });
+  });
+
+  test("the mode is sent as GenerateContent spells it, not the caller's spelling", async () => {
+    // The caller sends `processing: "agentic"` (the Interactions API spelling, and
+    // what #3271 asked for). GenerateContent reads `media_processing` with an
+    // upper-case enum; forwarding the caller's spelling verbatim would have looked
+    // like a pass-through while agentic mode never engaged.
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "google-antigravity/gemini-3.7-flash",
+      messages: [{
+        role: "user",
+        content: [{
+          type: "video_url",
+          video_url: { url: "https://youtu.be/example", processing: "agentic" },
+        }],
+      }],
+    });
+    const parsed = parseRequest(responsesBody);
+    parsed.modelId = "gemini-3.7-flash";
+
+    const wire = JSON.stringify(await geminiContents(parsed));
+
+    expect(wire).toContain('"media_processing":"AGENTIC"');
+    expect(wire).not.toContain('"processing":"agentic"');
   });
 
   test("a look-alike host is not treated as fetchable", async () => {

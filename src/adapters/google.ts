@@ -218,16 +218,19 @@ function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
 /**
  * A video URI Gemini fetches on its own behalf, as a `file_data` reference.
  *
- * Deliberately an allowlist of the two forms Google documents, not "anything
- * that is not a data: URL". `file_data` tells Gemini to go and get the bytes;
- * pointing it at an arbitrary host would either fail upstream or make the proxy
- * the reason a caller's private URL got dereferenced by Google. Anything not
- * matched here keeps the existing `[video: …]` text marker.
+ * Deliberately an allowlist of the forms Google documents, not "anything that is
+ * not a data: URL". `file_data` tells Gemini to go and get the bytes; pointing it
+ * at an arbitrary host would either fail upstream or make the proxy the reason a
+ * caller's private URL got dereferenced by Google. Anything not matched here
+ * keeps the existing `[video: …]` text marker.
  *
- * YouTube is the case agentic video understanding is built around; the Files API
- * uri is what `files.upload` hands back for a clip that was uploaded first.
+ * Returns the uri alone: the documented REST example for a YouTube part carries
+ * `file_data.file_uri` and nothing else, and the Files API knows the type of what
+ * it stored. An invented `mime_type` would be a guess on both paths.
+ *
+ * https://ai.google.dev/gemini-api/docs/generate-content/video-understanding
  */
-function geminiFetchableVideoUri(url: string): { uri: string; mimeType: string } | null {
+function geminiFetchableVideoUri(url: string): string | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -237,15 +240,41 @@ function geminiFetchableVideoUri(url: string): { uri: string; mimeType: string }
   if (parsed.protocol !== "https:") return null;
 
   const host = parsed.hostname.toLowerCase();
-  const youtubeHosts = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"]);
-  if (youtubeHosts.has(host)) return { uri: url, mimeType: "video/*" };
+  const youtubeHosts = new Set([
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "www.youtube-nocookie.com",
+    "youtube-nocookie.com",
+  ]);
+  if (youtubeHosts.has(host)) return url;
 
   // https://generativelanguage.googleapis.com/v1beta/files/<id>
   if (host === "generativelanguage.googleapis.com" && /\/files\/[^/]+$/.test(parsed.pathname)) {
-    return { uri: url, mimeType: "video/*" };
+    return url;
   }
 
   return null;
+}
+
+/**
+ * The caller's requested video mode as GenerateContent spells it.
+ *
+ * `media_processing` sits on the part beside `inline_data`/`file_data` and takes
+ * `STATIC` (the default) or `AGENTIC`. `processing: "agentic"` — the spelling in
+ * the original request and in Google's Interactions API — is a different API and
+ * is ignored here, so forwarding it verbatim would have looked like a
+ * pass-through while agentic mode never actually engaged.
+ *
+ * Upper-cased and forwarded rather than checked against our own copy of the enum:
+ * that list is Google's to extend, and a stale allowlist here would silently
+ * downgrade a caller using a newer mode. An unrecognized value fails upstream
+ * naming the field, which is a better failure than us dropping it.
+ */
+function geminiMediaProcessing(processing: string | undefined): string | undefined {
+  return processing ? processing.toUpperCase() : undefined;
 }
 
 const GEMINI_EMPTY_PLACEHOLDER = "(empty)";
@@ -354,10 +383,19 @@ function messagesToGeminiFormat(
               continue;
             }
             if (p.type === "video") {
+              // `media_processing` rides on the PART, so it applies to inline bytes
+              // exactly as it does to a fetched uri — emitting it on only one of the
+              // two would silently drop the mode for data: URLs.
+              const mediaProcessing = geminiMediaProcessing(p.processing);
+              const processingPart = mediaProcessing ? { media_processing: mediaProcessing } : {};
+
               // Gemini accepts inline video bytes in the same Part union as images.
               const data = parseDataUrl(p.videoUrl);
               if (data) {
-                parts.push({ inline_data: { mime_type: data.mediaType, data: data.base64 } });
+                parts.push({
+                  inline_data: { mime_type: data.mediaType, data: data.base64 },
+                  ...processingPart,
+                });
                 continue;
               }
               // Two URI forms Gemini fetches itself: a YouTube watch URL and a Files API
@@ -367,12 +405,9 @@ function messagesToGeminiFormat(
               // marker: we have no mime type for it and no evidence Gemini can fetch it.
               const fileUri = geminiFetchableVideoUri(p.videoUrl);
               if (fileUri) {
-                parts.push({
-                  file_data: { file_uri: fileUri.uri, mime_type: fileUri.mimeType },
-                  // Carried verbatim from the caller; emitted only when they asked for it,
-                  // so no existing request gains an unknown field.
-                  ...(p.processing ? { processing: p.processing } : {}),
-                });
+                // Emitted only when the caller asked for a mode, so no existing
+                // request gains a field it did not have.
+                parts.push({ file_data: { file_uri: fileUri }, ...processingPart });
                 continue;
               }
               parts.push({ text: `[video: ${p.videoUrl}]` });
