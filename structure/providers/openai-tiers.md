@@ -402,6 +402,10 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   unconfirmed, expired and too-old-client rosters stay unknown and change nothing; a grant under any
   client version clears a denial recorded under another. Nothing refuses before dispatch, and the
   bounded alternate-account retry on an exact unsupported-model 400 remains the safety net (#4768).
+  `getEligiblePoolAccounts` is not the only door, so `preferModelEntitledAccount` applies the same
+  evidence to an already-active shared cursor: the replacement is drawn from the eligible list, the
+  active account is returned unchanged when no entitled alternative exists, and the correction is
+  request-scoped and never persisted, so the operator's cursor is unchanged for the next request.
   An operator's manual pin is exempt: evidence orders the pool's own discretion and never overrules
   an explicit selection, and because `selectPriorityTier` reads the pin to lower the tier ceiling,
   filtering it out beforehand would re-enable the tiers the operator excluded rather than merely
@@ -623,9 +627,11 @@ rotation away from being permanently blocked (#4778).
 `conversationCarriesUploadedFiles` answers that question from the request body alone — the same
 predicate the refusal guard uses, so routing and refusal can never disagree about which
 conversations are in scope — and `resolveResponsesCodexAuth` carries the answer into
-`CodexAccountUsabilityOptions.retainAccountForUploadedFiles`. `mayRebindAffinityForQuota` then
-applies the default cache-affinity bar even when `pool.cacheAffinity` is false: that flag trades
-cache locality for capacity, not correctness for capacity.
+`CodexAccountUsabilityOptions.retainAccountForUploadedFiles`. `src/codex/routing/cache-affinity.ts`
+owns the rule: `retainsBoundAccountForQuota` names every reason a healthy bound account is kept,
+and `mayRebindAffinityForQuota` applies the default cache-affinity bar whenever one of them holds,
+even with `pool.cacheAffinity` false. That flag trades cache locality for capacity, not
+correctness for capacity.
 
 The retention is a preference over the VOLUNTARY move only, and it is not an eligibility boundary.
 Genuine exhaustion and an unusable account still release the binding, and every involuntary release

@@ -602,6 +602,45 @@ export function isUnknownUsage(usage: number): boolean {
 }
 
 /**
+ * Correct a shared cursor that names an account this model's own roster denies (#4768).
+ *
+ * {@link getEligiblePoolAccounts} is not the only door into selection. An account that is already
+ * ACTIVE is served straight from {@link isCodexAccountSelectable} and never passes through the
+ * eligible list, so ordering that list alone left the exact case the issue reports: once the Free
+ * account becomes the cursor, every Sol/Astra request keeps going to it and keeps taking the
+ * upstream unsupported-model 400. {@link pickPriorityPreemption} does not cover it either -- it
+ * refuses to move toward a tier that does not strictly outrank the active one, which is the usual
+ * shape here.
+ *
+ * Three properties keep this inside "order the already-eligible set" rather than widening it.
+ * It admits nothing: the replacement comes from {@link getEligiblePoolAccounts}, so every
+ * eligibility guard has already passed on it. It cannot fail: with no entitled alternative the
+ * active account is returned unchanged, so this can never turn a served request into `none`.
+ * And it changes nothing without evidence: absent `deniedModelAccountIds`, or an active account
+ * nobody denied, it is the identity function.
+ *
+ * The caller must NOT persist the result. This is one request's correction for one model, in the
+ * same spirit as a model detour; the operator's cursor is theirs. A pinned active account is
+ * exempt outright, for the reason {@link withoutModelDeniedAccounts} gives.
+ */
+export function preferModelEntitledAccount(
+  config: OcxConfig,
+  active: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string {
+  const denied = selectionOptions?.deniedModelAccountIds;
+  if (denied === undefined || !denied.has(active)) return active;
+  if (pinnedCodexAccountId(config) === active) return active;
+  // The eligible list restores denied members when filtering would empty it, so re-filter here:
+  // moving from one denied account to another buys nothing and costs the warm prefix.
+  const entitled = getEligiblePoolAccounts(config, active, now, quotaScope, selectionOptions)
+    .filter(id => !denied.has(id));
+  return pickLowestUsageAmong(config, entitled, selectionOptions, now) ?? active;
+}
+
+/**
  * Move an unbound request back up when a higher tier regains headroom — the
  * weekly-reset case. Returns null when nothing should change.
  *

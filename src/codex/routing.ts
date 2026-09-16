@@ -92,7 +92,6 @@ import {
   getPoolAccountPlanForSelection,
   hasCodexQuotaHeadroom,
   isCodexAccountPlanExcluded,
-  isCacheAffinityEnabled,
   isCodexAccountSelectable,
   isHealthySharedCodexSelection,
   isUnknownUsage,
@@ -103,11 +102,13 @@ import {
   pickPriorityPreemption,
   pickResetFirstCodexAccount,
   pickUnboundStrategyAccount,
+  preferModelEntitledAccount,
   sharedStateSelectionOptions,
   strategySelectionOptionsForModelDetour,
   shouldFailover,
   peekAlternateCodexAccount,
 } from "./routing/selection";
+import { mayRebindAffinityForQuota } from "./routing/cache-affinity";
 import {
   clearAllManualPreferences,
   consumeManualPreference,
@@ -587,50 +588,6 @@ function previewReusableAffinityAccount(
   return entry.accountId;
 }
 
-/**
- * May a LIVE binding be moved for quota reasons?
- *
- * Default: no. The bar is genuine exhaustion, because moving a bound conversation discards
- * the prompt cache warmed on its account and a threshold crossing is a hint that the account
- * is getting busy rather than evidence it cannot serve (#4546). Deliberately NOT
- * `hasCodexQuotaHeadroom`, which reads `usage < autoSwitchThreshold` and would reproduce the
- * old rule under a new name.
- *
- * With `pool.cacheAffinity: false` the historical rule comes back: a crossing of
- * `autoSwitchThreshold` is enough. That is capacity-first routing, and an operator who wants
- * it keeps it -- but it is no longer what an install gets by never having heard of the flag.
- *
- * A conversation carrying live uploaded-file references is the one case that does not get that
- * choice (#4778). Uploaded files are scoped to the account that issued them, so a voluntary move
- * does not cost a cold prefix -- it orphans the reference, and because the reference stays in
- * conversation history EVERY later turn is refused with `409 account_change_file_scope` until
- * the user re-uploads or restarts. That is a dead conversation rather than an expensive one, and
- * it is a cost `pool.cacheAffinity: false` was never asking to accept: that flag trades cache
- * locality for capacity, not correctness for capacity.
- *
- * The retention covers only the VOLUNTARY move. Exhaustion and an unusable account still release
- * the binding here, and every involuntary release above this point -- quota refusal, failover
- * streak, pause, cooldown, lost generation, expiry -- is untouched, so a pinned conversation can
- * never be wedged on an account that cannot serve it. The refusal from #4710 stays exactly where
- * it is for that corner.
- */
-function mayRebindAffinityForQuota(
-  config: OcxConfig,
-  accountId: string,
-  usage: number,
-  threshold: number,
-  selectionOptions?: CodexAccountUsabilityOptions,
-): boolean {
-  const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
-  if (!isCacheAffinityEnabled(config) && selectionOptions?.retainAccountForUploadedFiles !== true) {
-    return overThreshold;
-  }
-  // The usable half is already guaranteed by both callers, which gate on
-  // isCodexAccountSelectable; kept explicit so the predicate reads correctly on its own.
-  return !isCodexAccountUsable(config, accountId, selectionOptions)
-    || (!isUnknownUsage(usage) && usage >= 100);
-}
-
 /** Reset ordering may move a binding only under the existing cache-affinity release policy. */
 function resetFirstAffinityReplacement(
   entry: ThreadAffinityEntry,
@@ -863,6 +820,9 @@ export function previewCodexAccountForRequest(
     const best = pickLowestUsageCodexAccount(config, active, now, quotaScope, selectionOptions);
     if (best) active = best;
   }
+  // Same correction resolve applies, for the same reason: preview must name the account the
+  // request will actually use, or subagent fallback scores a model against the wrong one.
+  active = preferModelEntitledAccount(config, active, now, quotaScope, selectionOptions);
   if (!isCodexAccountUsable(config, active, selectionOptions)) {
     return hasConfiguredPoolAccount(config, active, selectionOptions) ? active : null;
   }
@@ -1253,6 +1213,10 @@ export function resolveCodexAccountForThreadDetailed(
     selectionOptions,
     !preserveSharedSelectionForModelDetour,
   );
+  // The shared cursor can name an account whose own roster denies this model, and an active
+  // account never passes through the eligible list. Correct it for THIS request only -- nothing
+  // is persisted -- and only toward an account eligibility already admitted (#4768).
+  active = preferModelEntitledAccount(config, active, now, quotaScope, selectionOptions);
   if (!isCodexAccountUsable(config, active, selectionOptions)) {
     return hasConfiguredPoolAccount(config, active, selectionOptions)
       ? { status: "selected", accountId: active, affinity: affinityAfterRelease(threadId, releaseReason) }
