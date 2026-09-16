@@ -32,7 +32,11 @@ export class NativeMainProfileSession {
   private restartRequired = false;
   private resultHome: string | null = null;
 
-  constructor(private readonly apiBase: string) {}
+  private readonly apiBase: string;
+
+  constructor(apiBase: string) {
+    this.apiBase = apiBase;
+  }
 
   attach(listener: Listener): () => void {
     const epoch = ++this.epoch;
