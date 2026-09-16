@@ -66,6 +66,7 @@ import {
   fetchXaiQuota,
 } from "./quota/vendor-probes-oauth";
 import { fetchCommandCodeQuota, fetchKimiQuota, keyQuotaReaderForProvider } from "./quota/vendor-probes-key";
+import { fetchZcodeStartPlanQuota } from "./quota/vendor-probes-zcode";
 import { antigravityQuotaDiagnosticIdentity, fetchAntigravityQuota, probeAntigravityUsageQuota } from "./quota/antigravity";
 
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
@@ -361,6 +362,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "cursor": result = await fetchCursorQuota(provider, accessToken); break;
     case "kimi": result = await fetchKimiQuota(provider, config, accessToken); break;
     case "command-code": result = await fetchCommandCodeQuota(provider, config, accessToken); break;
+    case "zcode-start-plan": result = await fetchZcodeStartPlanQuota(provider, accessToken); break;
     default: return null;
   }
   return { result, identity, isCurrent };

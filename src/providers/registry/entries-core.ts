@@ -602,6 +602,25 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     note: "Signs in to Meta with a browser device code on any platform, then mints the Muse Code subscription key. That grant is reimplemented from the one the Muse Code CLI performs and has NOT been exercised against Meta from OpenCodex, so treat the first login as unverified. If the Muse Code CLI is already signed in on macOS, the existing key is imported instead of starting a new grant. A pasted key from https://dev.meta.ai still works as a fallback when a device login cannot complete, and faces the same format check and live validation. A device login authenticates as Meta own Muse Code client, which is a stronger claim than reusing a key the CLI already minted. Meta scopes that credential to the Muse Code CLI, so this is an UNSUPPORTED use: Meta does not authorize subscription coverage outside its own CLI, how these calls settle is not observable from the API, and you should treat every call as billable against your account. The key, imported or pasted, is copied into OpenCodex's auth store. For an account signed in with the device login, OpenCodex refreshes Meta's subscription windows on demand from the same key endpoint the login uses, at most once every five minutes. For an imported or pasted key there is no endpoint to query them on demand, so OpenCodex reads them from streaming responses and shows the last observed value with its age; refreshing one then requires another streaming turn, and translated (non-passthrough) turns report none. Rate limits apply per team, not per key. For a supported path use the meta-model provider with your own key (export it as META_MODEL_API_KEY).",
   },
   {
+    id: "zcode-start-plan",
+    label: "ZCode — Z.ai Start Plan",
+    adapter: "zcode-start-plan",
+    baseUrl: "https://zcode.z.ai/api/v1/zcode-plan/anthropic",
+    authKind: "oauth",
+    oauthId: "zcode-start-plan",
+    dashboardUrl: "https://zcode.z.ai",
+    defaultModel: "GLM-5.3",
+    note: "Z.ai Start Plan quota from the ZCode gateway (OAuth login)",
+    models: ["GLM-5.3", "GLM-5.3-Flash", "GLM-5.2", "GLM-5-Turbo"],
+    modelContextWindows: { "GLM-5.3": 1_000_000, "GLM-5.3-Flash": 1_000_000, "GLM-5.2": 1_000_000, "GLM-5-Turbo": 200_000 },
+    // The gateway's Anthropic route has no /models listing; `models` is the allowlist
+    // published by its client config. Live discovery would 404 every startup.
+    liveModels: false,
+    // GLM-5.3-Flash accepts image input on this gateway (per the client config the
+    // desktop client loads); GLM-5.3 and GLM-5.2 stay text-only.
+    modelInputModalities: { "GLM-5.3-Flash": ["text", "image"] },
+  },
+  {
     id: "umans",
     label: "Umans AI Coding Plan",
     adapter: "anthropic",

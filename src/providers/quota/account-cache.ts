@@ -153,7 +153,8 @@ export function supportsPerAccountQuota(provider: string): boolean {
 }
 
 export function explicitAccountReader(provider: string): boolean {
-  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code";
+  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
+    || provider === "zcode-start-plan";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -436,6 +437,13 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (config.disabled === true || config.authMode !== "oauth") return false;
   if (provider === "kimi") return isCanonicalKimiCodeBaseUrl(config.baseUrl);
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
+  if (provider === "zcode-start-plan") return isCanonicalZcodePlanGateway(config.baseUrl);
   // These readers use fixed canonical billing origins, never config.baseUrl.
   return provider === "xai" || provider === "cursor";
+}
+
+function isCanonicalZcodePlanGateway(baseUrl: string): boolean {
+  const normalized = baseUrl.trim().replace(/\/+$/, "").toLowerCase();
+  return normalized === "https://zcode.z.ai/api/v1/zcode-plan/anthropic"
+    || normalized === "https://zcode.z.ai/api/v1/zcode-plan";
 }
