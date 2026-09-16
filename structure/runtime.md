@@ -442,3 +442,5 @@ change target selection. `src/server/responses/core-combo.ts` applies the policy
 and preserves the original requested effort separately from effective wire telemetry.
 `src/server/chat-completions.ts` routes combos through that same child pipeline while
 retaining the current config-aware native-Chat eligibility check for non-combo routes.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.

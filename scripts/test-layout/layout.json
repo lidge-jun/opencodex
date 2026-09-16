@@ -1456,7 +1456,9 @@
     "execution-budget-permits.test.ts": "lib",
     "spend-instrumentation-log.test.ts": "server",
     "codex-pool-refresh-backoff.test.ts": "codex-integration",
-    "responses-account-change-scrub.test.ts": "responses"
+    "responses-account-change-scrub.test.ts": "responses",
+    "response-log-inspection.test.ts": "server",
+    "request-log-nonstream.test.ts": "usage"
   },
   "migrated": [
     "adapters",

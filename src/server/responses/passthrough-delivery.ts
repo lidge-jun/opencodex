@@ -15,6 +15,7 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
+import { teeWithBoundedInspection } from "../inspection-tee";
 import {
   codexForwardTerminalOutcomeRecorder,
   usesCodexForwardPoolAuth,
@@ -593,16 +594,18 @@ export async function deliverPassthroughResponse(
           })),
         );
       }
-      const [nativeBody, inspectBody] = passthroughSseBody.tee();
       const turnAc = new AbortController();
       const clientGone = new AbortController();
+      const clientGoneSignal = options.abortSignal
+        ? AbortSignal.any([clientGone.signal, options.abortSignal])
+        : clientGone.signal;
+      // Pace against raw bytes before rewrites, without detaching terminal ownership.
+      const [nativeBody, inspectBody] = teeWithBoundedInspection(passthroughSseBody, { clientGoneSignal });
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
         // Request abort can reject the fetch body before the response cancel hook runs.
-        clientGoneSignal: options.abortSignal
-          ? AbortSignal.any([clientGone.signal, options.abortSignal])
-          : clientGone.signal,
+        clientGoneSignal,
         drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
         upstream,
         pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
