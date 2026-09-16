@@ -349,7 +349,14 @@ export function resolveHeldAccountDispatch(input: {
     kind: "withheld",
     boundAccountId: input.boundAccountId,
     ...(input.detourAccountId !== undefined ? { detourAccountId: input.detourAccountId } : {}),
-    retryAt: nextProbeAt(input.boundAccountId, now, input.minProbeIntervalMs),
+    // Both bounds, not just the probe pacing. A request refused by the RATIO has no probe state
+    // of its own yet, so `nextProbeAt` answered `now` and the refusal told the caller to try
+    // again immediately -- a withheld dispatch that busy-loops is the same load as the dispatch
+    // it refused. The limiter is the only thing that knows when its window moves.
+    retryAt: Math.max(
+      nextProbeAt(input.boundAccountId, now, input.minProbeIntervalMs),
+      limiter.nextRecoveryAt(now),
+    ),
   };
 }
 
@@ -408,6 +415,16 @@ export interface PoolBackpressureLimiter {
   tryPermitRetryDispatch(now?: number): boolean;
   /** Admit one probe dispatch under the same shared recovery budget. */
   tryPermitProbeDispatch(now?: number): boolean;
+  /**
+   * Earliest moment this limiter could admit another recovery dispatch.
+   *
+   * A refusal has to hand back a time, or the caller has nothing to wait on and busy-loops
+   * against a pool that is already failing -- which is the load this limiter exists to remove.
+   * `now` when the allowance is not spent; otherwise the moment the oldest bucket still inside
+   * the window falls out of it, which is strictly in the future and is a real change point
+   * rather than a guess.
+   */
+  nextRecoveryAt(now?: number): number;
   state(now?: number): PoolBackpressureState;
 }
 
@@ -461,6 +478,19 @@ export function createPoolBackpressureLimiter(
     return true;
   }
 
+  function nextRecoveryAt(now: number): number {
+    const { initials, recoveries } = totals(now);
+    if (recoveries + 1 <= allowanceFor(initials)) return now;
+    // The window has to move before another recovery fits. The earliest that can happen is the
+    // moment the oldest bucket still inside it leaves, and every such bucket started after
+    // `now - windowMs`, so the answer is always strictly in the future.
+    for (const bucket of buckets) {
+      if (bucket.start <= now - policy.windowMs) continue;
+      return bucket.start + policy.windowMs;
+    }
+    return now + policy.windowMs;
+  }
+
   return {
     recordInitialSend(now = Date.now()): void {
       bucketFor(now).initials += 1;
@@ -470,6 +500,9 @@ export function createPoolBackpressureLimiter(
     },
     tryPermitProbeDispatch(now = Date.now()): boolean {
       return tryPermit(now);
+    },
+    nextRecoveryAt(now = Date.now()): number {
+      return nextRecoveryAt(now);
     },
     state(now = Date.now()): PoolBackpressureState {
       const { initials, recoveries } = totals(now);
@@ -508,4 +541,73 @@ export function configureSharedPoolBackpressure(policy: PoolBackpressurePolicy):
 /** Test seam: the shared limiter is module-global. */
 export function resetSharedPoolBackpressureForTests(): void {
   sharedLimiter = undefined;
+}
+
+/**
+ * Forget every account's probe pacing AND the shared recovery window.
+ *
+ * Called when the pool's routing state is reset wholesale -- a roster change, a config reload,
+ * an account removal. Both halves describe a pool that no longer exists: pacing is keyed on
+ * account ids that may be gone, and the window's buckets count sends made by a roster that
+ * changed underneath them. Keeping either across such a reset lets one context's recovery
+ * decisions govern the next one, which is also how it leaks between test files.
+ *
+ * This is the production reset. The two `ForTests` seams above stay separate because a test
+ * frequently wants exactly one half of it.
+ */
+export function clearPoolRecoveryState(): void {
+  probeStates.clear();
+  sharedLimiter = undefined;
+}
+
+/**
+ * What one physical send IS, as far as the recovery window is concerned.
+ *
+ * The window measures recovery traffic against observed demand, so it needs the distinction
+ * made where the send happens -- and the transport wrapper cannot make it. That layer sees a
+ * URL and an init; whether this is a conversation's first attempt, its third retry, or the one
+ * trial admitted against a held account is knowledge only the caller has. So the caller names
+ * it, and the classification lives here with the window rather than in the transport, which
+ * owns no routing policy and has an enforced import boundary saying so.
+ *
+ * - `initial`: a new request's first send. Recorded, never refused -- it is the denominator,
+ *   and refusing it would make this a throughput cap rather than a recovery bound.
+ * - `retry`: a re-send of a request that already reached upstream once. Admitted only while
+ *   recovery traffic stays under its ratio of observed demand.
+ * - `probe`: the half-open trial against a held account. It ALREADY paid at selection, inside
+ *   {@link resolveHeldAccountDispatch}; charging it again would bill one send twice and shrink
+ *   the very budget it was admitted from.
+ */
+export type PoolRecoveryDispatchClass = "initial" | "retry" | "probe";
+
+export interface PoolRecoveryDispatchDecision {
+  readonly admitted: boolean;
+  /**
+   * Earliest moment another recovery dispatch could be admitted. `now` when the send was
+   * admitted; otherwise a real change point strictly in the future, so a refused caller has
+   * something to wait on instead of busy-looping against a pool that is already failing.
+   */
+  readonly retryAt: number;
+}
+
+/**
+ * Admit one physical send against the process-wide recovery window.
+ *
+ * Per-request send budgets cannot see a storm: thousands of requests each staying inside their
+ * own allowance still compose into an unbounded rate against one failing upstream. This is the
+ * layer above them, and it is shared by construction.
+ */
+export function classifyPoolRecoveryDispatch(
+  dispatchClass: PoolRecoveryDispatchClass,
+  now = Date.now(),
+  limiter: PoolBackpressureLimiter = sharedPoolBackpressure(),
+): PoolRecoveryDispatchDecision {
+  if (dispatchClass === "initial") {
+    limiter.recordInitialSend(now);
+    return { admitted: true, retryAt: now };
+  }
+  if (dispatchClass === "probe") return { admitted: true, retryAt: now };
+  return limiter.tryPermitRetryDispatch(now)
+    ? { admitted: true, retryAt: now }
+    : { admitted: false, retryAt: limiter.nextRecoveryAt(now) };
 }

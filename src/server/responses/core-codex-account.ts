@@ -17,6 +17,7 @@ import {
   resetUpstreamHostHealth,
 } from "../../codex/upstream-host-health";
 import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch } from "./fetch-helpers";
+import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { upstreamErrorMessageFromPayload, isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
@@ -40,6 +41,7 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import {
   codexProbeLeaseId,
+  codexTransientProbeGrant,
   codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
   resolveCodexAuthContext,
@@ -60,13 +62,14 @@ import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   conversationStateBindingFromAuth,
   applyAccountChangeConversationStateScrub,
+  conversationCarriesUploadedFiles,
 } from "./account-change-state";
 import {
   recordAdapterReasoning,
   recordAdapterTier,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
-  noteAttemptSend,
+  noteProviderAttemptSend,
 } from "../request-log";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
@@ -221,7 +224,17 @@ export async function shouldRetryCodexPoolAccountQuota(
   // A post-send WebSocket gateway status must not become a second account's send; the
   // body carries no quota evidence either, but the marker is the contract, not the prose.
   if (isNonReplayableResponse(response)) return false;
-  if (response.status === 402 || response.status === 429) return true;
+  if (response.status === 402 || response.status === 429) {
+    // Status alone used to authorize the move, which is right for a limit the ACCOUNT owns and
+    // wrong for one it merely belongs to. An organization- or project-scoped exhaustion refuses
+    // every credential inside that organization, so the second account meets the same counter
+    // and the only thing the rotation buys is a second cold prompt prefix (#4546). Positive
+    // evidence is required to withhold it: the helper fails closed, so an unreadable or
+    // ambiguous body keeps the broad #584 behaviour unchanged, and `rate_limit_exceeded`,
+    // `slow_down` and plan-level exhaustion still rotate exactly as before.
+    const { codexScopedExhaustionCode } = await import("../../codex/quota-rejection");
+    return await codexScopedExhaustionCode(response, { signal }) === undefined;
+  }
   if (response.status < 500 || response.status >= 600) return false;
   try {
     // Reject malformed UTF-8 instead of matching quota words around replacement characters.
@@ -459,6 +472,7 @@ export async function retryCodexPoolOnAlternateAccount(
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
       probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+      transientProbe: codexTransientProbeGrant(firstAuthCtx),
       writerGeneration: firstAuthCtx.writerGeneration,
     });
   };
@@ -486,6 +500,17 @@ export async function retryCodexPoolOnAlternateAccount(
   // Exact account selectors may retry the same confirmed account above, but must never resolve
   // an alternate. Quota failures and a refreshed entitlement miss remain terminal.
   if (!retryAuthCtx && (firstAuthCtx.fixedAccount || args.sameAccountOnly === true)) {
+    recordUnmovedTransientOutcome();
+    return { kind: "no-alternate" };
+  }
+  // An uploaded file is readable only by the account it was sent to, so NO alternate can serve
+  // this body. Which account would be chosen does not change that, which is why this asks before
+  // the resolution rather than after it: refusing here reserves no send, cancels no response, and
+  // leaves the caller holding the first account's rejection to return unchanged (#4710). The
+  // initial-dispatch sites answer with a 400 instead, because there is no earlier response there
+  // to fall back to. A same-account replay -- the gated-model 400 ladder above -- is unaffected,
+  // since it never leaves the issuing account.
+  if (!retryAuthCtx && conversationCarriesUploadedFiles(parsed._rawBody)) {
     recordUnmovedTransientOutcome();
     return { kind: "no-alternate" };
   }
@@ -557,6 +582,7 @@ export async function retryCodexPoolOnAlternateAccount(
         modelId: route.modelId,
         probeLeaseId: codexProbeLeaseId(firstAuthCtx),
         probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+        transientProbe: codexTransientProbeGrant(firstAuthCtx),
         writerGeneration: firstAuthCtx.writerGeneration,
       });
     }
@@ -588,6 +614,7 @@ export async function retryCodexPoolOnAlternateAccount(
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
       probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+      transientProbe: codexTransientProbeGrant(firstAuthCtx),
       writerGeneration: firstAuthCtx.writerGeneration,
       // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
       ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
@@ -693,16 +720,35 @@ export async function retryCodexPoolOnAlternateAccount(
       // The same-account gated-model 400 ladder below keeps its own `maxRetrySends` bound and
       // does not take the reserve again; only the move itself does.
       if (accountMovePermit) {
+        // The pool-wide recovery window is consulted BEFORE the request-local permit is used.
+        // `reserveDispatch` charges at reservation time and `release()` is the only way back, so
+        // using the permit first and refusing afterwards would spend a send the request never
+        // made. An account move is recovery traffic like any other: one request's own budget
+        // cannot see that a thousand other requests are moving at the same moment, which is
+        // precisely the amplification this window exists to bound (#4701).
+        //
+        // A refusal here is not a new failure mode: "no alternate was available" is already the
+        // outcome when the pool has nowhere to move this request to, and it is handled.
+        if (!classifyPoolRecoveryDispatch("retry").admitted) {
+          accountMovePermit.release();
+          accountMovePermit = undefined;
+          // The alternate context was resolved and will not send. Hand back whatever recovery
+          // lease it is holding rather than leaving that account unprobeable.
+          releaseCodexAuthContextProbeLease(retryAuthCtx);
+          recordUnmovedTransientOutcome();
+          return { kind: "no-alternate" };
+        }
         const charged = accountMovePermit.use();
         accountMovePermit = undefined;
         if (!charged) {
+          releaseCodexAuthContextProbeLease(retryAuthCtx);
           recordUnmovedTransientOutcome();
           return { kind: "no-alternate" };
         }
         // The move is a physical send like any other, so the root workflow is charged too.
         chargeWorkflowSends(args.options.workflowRootId, 1);
       }
-      noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+      noteProviderAttemptSend(logCtx, route.providerName, route.provider, passthroughEstimate);
       try {
         upstreamResponse = await fetchWithHeaderTimeout(
           request.url,
@@ -827,6 +873,7 @@ export function codexForwardTerminalOutcomeRecorder(
         modelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
         probeQuotaScope: codexProbeQuotaScope(authCtx),
+        transientProbe: codexTransientProbeGrant(authCtx),
         writerGeneration: authCtx.writerGeneration,
       });
       return;
@@ -849,6 +896,7 @@ export function codexForwardTerminalOutcomeRecorder(
       modelId,
       probeLeaseId: codexProbeLeaseId(authCtx),
       probeQuotaScope: codexProbeQuotaScope(authCtx),
+      transientProbe: codexTransientProbeGrant(authCtx),
       writerGeneration: authCtx.writerGeneration,
       // A mid-stream terminal can carry a semantic 401 long after the credential was
       // replaced. It is never replayed — the client already saw output — but it must

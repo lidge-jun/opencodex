@@ -17,6 +17,8 @@ The hub-side CLI dashboard uses the [management ingress address](../runtime.md#h
 
 Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
 
+The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
+
 ## Connected Claude Desktop profiles
 
 The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership); general status hands its resolved command to this check instead of probing the version twice.
@@ -37,6 +39,15 @@ data credential; `src/cli/claude-desktop.ts` selects connected apply, and `src/c
 writes the resulting local Desktop configuration. No admin token, hub-profile upload or local
 alias regeneration is part of this flow. Unsupported old hubs, invalid snapshots and unavailable
 Desktop models fail apply without a local-catalog or loopback fallback.
+
+Managed-namespace date aliases occupy `claude-opus-4-8-YYYYMMDD` slots across 2026-2035, not 2026
+alone. The original 2026-only design held 365 slots and failed with "all 365 encoded date slots are
+occupied" once a catalog exceeded 365 routes, because stale assignments are retained by design and
+the set only grows. 2026 is still allocated first, so existing assignments keep their ids, and
+2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
+`claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
+distinction. Every emitted suffix stays eight digits so `modelMap` date-stripping keeps working.
+`src/claude/desktop-profile.ts` owns this range.
 
 Date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed
@@ -101,7 +112,7 @@ testable on any host: stubbing `process.platform` does not propagate to `os.plat
 
 > Decision record: [ADR-0046](../decisions/ADR-0046-claude-desktop-config-library-resolution.md)
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
 

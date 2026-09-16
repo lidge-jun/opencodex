@@ -54,6 +54,13 @@ import {
   type CodexUpstreamHealth,
 } from "./routing/health-store";
 import { ownsProbeLease, probeMayClearCooldown, withProbeLeaseReleased } from "./routing/probe-lease";
+// `./routing/probe-lease` above is the QUOTA-COOLDOWN lease; the module below owns the
+// unrelated TRANSIENT-HOLD trial and the pool-wide recovery bound above it (#4701).
+import {
+  isTransientHoldExpired,
+  resolveTransientHoldDispatch,
+  settleTransientProbeForOutcome,
+} from "./routing/transient-hold-dispatch";
 import {
   adoptLegacyLineageAffinity,
   affinityAfterRelease,
@@ -181,6 +188,7 @@ export type {
   CodexAffinityMove,
   CodexAffinityReason,
   CodexAffinityDecision,
+  TransientProbeGrant,
 } from "./routing/thread-affinity";
 export {
   isCodexAccountPlanExcluded,
@@ -274,12 +282,6 @@ function isTransientOnlyAffinityBlock(
   return shouldFailover(config, entry.accountId, now)
     || isCodexAccountSoftAvoided(entry.accountId, now)
     || isCodexPoolRefreshCooling(entry.accountId, now);
-}
-
-/** Has a held binding waited longer than a transient failure can reasonably explain? */
-function isTransientHoldExpired(entry: ThreadAffinityEntry, now: number): boolean {
-  return entry.transientHoldSince !== undefined
-    && now - entry.transientHoldSince > CODEX_TRANSIENT_AFFINITY_HOLD_MS;
 }
 
 /**
@@ -477,6 +479,8 @@ export function resolveCodexAccountForThread(
   lineage?: CodexThreadLineage,
 ): string | null {
   const resolution = resolveCodexAccountForThreadDetailed(threadId, config, now, quotaScope, undefined, undefined, lineage);
+  // A WITHHELD dispatch is deliberately not an account here: this wrapper cannot carry a retry
+  // time, and answering with the held account is the send the hold prevents. Fails closed.
   return resolution.status === "selected" ? resolution.accountId : null;
 }
 
@@ -936,15 +940,12 @@ export function resolveCodexAccountForThreadDetailed(
         const lane = transientDetourAccount(config, detourEntry, now, quotaScope, selectionOptions);
         detourEntry.transientHoldSince ??= now;
         detourEntry.lastUsedAt = now;
-        if (lane !== null && lane !== detourEntry.accountId) {
-          detourEntry.transientDetourAccountId = lane;
-          return { status: "selected", accountId: lane, affinity: { move: "detour", reason: "transient" } };
-        }
         // A provider-wide outage soft-avoids every sibling, so there is nowhere to detour.
         // That is a statement about where this request can go, not about who owns the
         // conversation: dropping the pin here would rebuild the cold prefix elsewhere for
-        // exactly the failure mode the hold exists to survive.
-        return { status: "selected", accountId: detourEntry.accountId, affinity: { move: "held", reason: "transient" } };
+        // exactly the failure the hold exists to survive -- nor a licence to send at the
+        // failing account, which is what the dispatch resolver bounds (#4701).
+        return resolveTransientHoldDispatch(detourEntry, lane, now);
       }
       // Detour expiry or invalidation must not expire the ordinary task. Drop only
       // this model lane and select from ordinary/shared state below.
@@ -1018,16 +1019,11 @@ export function resolveCodexAccountForThreadDetailed(
       const detour = transientDetourAccount(config, entry, now, quotaScope, selectionOptions);
       entry.transientHoldSince ??= now;
       entry.lastUsedAt = now;
-      if (detour !== null && detour !== entry.accountId) {
-        entry.transientDetourAccountId = detour;
-        // Deliberately no promoteActiveCodexAccount and no rebind: this is one request routing
-        // around a blip, not the pool deciding where the conversation now lives.
-        return { status: "selected", accountId: detour, affinity: { move: "detour", reason: "transient" } };
-      }
       // No sibling can take it either -- the usual shape of a provider-wide 503. The binding
       // survives: "cannot send right now" and "forget which account owns this conversation"
-      // are different answers, and conflating them is what the hold was added to stop.
-      return { status: "selected", accountId: entry.accountId, affinity: { move: "held", reason: "transient" } };
+      // are different answers. So is the third answer this used to give -- "send at the
+      // failing account" -- now a bounded probe or a typed refusal (#4701).
+      return resolveTransientHoldDispatch(entry, detour, now);
     }
     // A model-only exclusion does not invalidate the shared task binding. Health,
     // generation, pause, cooldown, and failure evidence still retire it normally.
@@ -1277,6 +1273,10 @@ export function recordCodexUpstreamOutcome(
     recordUpstreamHostFailure(meta.hostKey, { code: meta.lastFailureCode, now: meta.now ?? Date.now() });
   }
   if (!accountId) return;
+  // Conclude the half-open recovery trial BEFORE the admissibility gate below (#4701): an
+  // outcome that gate drops still ended this request, and a lease nobody hands back leaves the
+  // next trial waiting out its deadline. The settle carries its own fences, so this is safe here.
+  settleTransientProbeForOutcome(accountId, meta, classifyCodexUpstreamOutcome(outcome, meta.denial));
   const writerGeneration = meta.writerGeneration ?? captureConfigGeneration();
   if (!isHealthAccountAdmissible(accountId, writerGeneration)) return;
   const now = meta.now ?? Date.now();

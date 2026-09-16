@@ -53,6 +53,7 @@ import {
   resolveCodexAuthContext,
   codexPoolAffinityKey,
   codexProbeLeaseId,
+  codexTransientProbeGrant,
   codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
   stripCodexRuntimeProviderFields,
@@ -71,7 +72,9 @@ import {
 import {
   applyAccountChangeConversationStateScrub,
   conversationStateBindingFromAuth,
+  accountChangeFileReferenceRefusal,
   rememberServingConversationStateIssuer,
+  conversationCarriesUploadedFiles,
 } from "./account-change-state";
 import {
   TokenRefreshError,
@@ -140,7 +143,6 @@ import {
   catalogModelSupportsServiceTier,
   finishRequestAttempt,
   inspectResponseLogJson,
-  noteAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
@@ -789,6 +791,14 @@ export async function handleResponsesCompact(
     {
       const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
       if (binding) {
+        // Refused rather than scrubbed: an uploaded file is content the caller attached, not
+        // continuation state the turn can do without.
+        const refusal = accountChangeFileReferenceRefusal({
+          body: raw,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+        });
+        if (refusal) return refusal;
         applyAccountChangeConversationStateScrub({
           body: raw,
           bindingKey: binding.bindingKey,
@@ -869,6 +879,7 @@ export async function handleResponsesCompact(
         // replacement (#2887). Also covers the replay's own second 401.
         ...(ctx.kind === "pool" ? { credentialGeneration: ctx.generation } : {}),
         probeQuotaScope: codexProbeQuotaScope(ctx),
+        transientProbe: codexTransientProbeGrant(ctx),
         writerGeneration: ctx.kind === "pool" || ctx.kind === "main-pool"
           ? ctx.writerGeneration
           : undefined,
@@ -1082,15 +1093,22 @@ export async function handleResponsesCompact(
       ].filter(Boolean);
       // Build the alternate COMPLETELY before cancelling the first body: if construction
       // throws, the first rejection is still intact and can be returned to the client.
-      const alternate = await resolveAlternateCompactContext({
-        req,
-        admission,
-        config,
-        route,
-        selectedModelId,
-        excludeAccountId: authCtx.accountId,
-        turnAdmissionLease,
-      });
+      // The same reasoning refuses an uploaded-file move here: no alternate can read a file the
+      // issuing account received, so which one is chosen is irrelevant and asking before the
+      // resolution costs nothing. It also reuses the guarantee the comment above depends on --
+      // the first body is still uncancelled -- so the client gets the original rejection rather
+      // than an inaccessible-file error from account B (#4710).
+      const alternate = conversationCarriesUploadedFiles(raw)
+        ? undefined
+        : await resolveAlternateCompactContext({
+          req,
+          admission,
+          config,
+          route,
+          selectedModelId,
+          excludeAccountId: authCtx.accountId,
+          turnAdmissionLease,
+        });
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
       // cancelling its body, and sending B are all observable side effects, and B's

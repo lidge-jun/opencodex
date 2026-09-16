@@ -669,6 +669,24 @@ export function createSpendReservationLedger(options: {
         case "checkpoint": applyCheckpoint(record); break;
       }
     }
+    // A reservation that survived replay has no owner left. The process that made it is gone,
+    // so nothing in this one can ever settle it, and leaving it live means the send stays
+    // pending forever against a scope that can never resolve it. Deleting the entry is not the
+    // alternative either: that would hand the same send id a second reservation.
+    //
+    // Both live states resolve to UNRESOLVED, including an undispatched one. The tempting
+    // distinction -- open never reached the wire, so give its tokens back -- assumes the
+    // journal is complete up to the crash, and the torn-tail handling above says it is not: a
+    // send can dispatch and die before its dispatch record lands. Abandoning that reservation
+    // returns tokens for a send that may have been billed, and worse, it RESETS a ceiling that
+    // had already fired. An exhausted scope staying exhausted across a restart is the whole
+    // reason this store is on disk.
+    const reconciledAt = now();
+    for (const [send, reservation] of reservations) {
+      if (!isLive(reservation.status)) continue;
+      applyResolve(send, "lost", 0, reconciledAt);
+      append({ v: 1, kind: "lost", send, at: reconciledAt });
+    }
   }
 
   /**

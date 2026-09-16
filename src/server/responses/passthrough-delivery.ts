@@ -28,7 +28,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "./ws-upstream";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
-import { codexProbeLeaseId, codexProbeQuotaScope } from "../../codex/auth-context";
+import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant } from "../../codex/auth-context";
 import { consumeComboFailure } from "./core-combo-failure";
 import { readDisplaySafeErrorText } from "./core-errors";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
@@ -252,6 +252,7 @@ export async function deliverPassthroughResponse(
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(admissionState.authCtx),
           probeQuotaScope: codexProbeQuotaScope(admissionState.authCtx),
+          transientProbe: codexTransientProbeGrant(admissionState.authCtx),
           writerGeneration: admissionState.authCtx.writerGeneration,
           // Includes a replay's second 401, which is the case that actually retires the
           // account — fence it on the credential the request was holding.

@@ -17,7 +17,7 @@ opencodex 的 CLI 是 `ocx`。它会根据第一个命令名进行分发；文�
 
 管理命令会通过实时代理的管理 API 往返调用，使用记录下来的运行时端口和身份检查，而不是维护第二条配置路径。已停止或不可达的代理会被表示为 HTTP 503，并导致 CLI 以非零状态退出。明确标注为离线配置操作的命令，则可以在没有实时代理的情况下验证并编辑配置文件。
 
-`ocx system codex-cli-update check` 不需要实时代理，也不会向软件包注册表发起请求。它只会在限定范围内检查已配置候选项的来源元数据，包括经过脱敏的可执行文件位置和所有权证据。受信任的已发布启动器上下文只能验证该候选项快照，并不证明 Codex 已成功运行。由于这条一次性检查命令绝不会运行 Codex，来自环境变量和持久化记录的候选项仅用于报告（`managed: false`，通常为 `selection_unattested`）；JSON 输出包含 `candidateAvailable`、`candidateVersion` 和 `candidateSource`，且 `selectionAttested` 始终为 `false`。检查已配置候选项需要受信任的已发布启动器上下文；直接使用 Bun 启动或从源码运行时没有这项证明，因此会忽略环境变量和持久化记录中的候选项状态，并可能报告 `candidate_unavailable`。在 Windows 上，这个首个切片不会对候选路径或配置路径执行任何文件系统 I/O。只有由受信任启动器捕获的绝对环境候选项可以获得应用捆绑或版本管理器的纯词法标签；其他所有 Windows 候选项都会以失败关闭方式处理。该命令不会安装或修复软件，不会运行 Codex 或 npm，不会控制正在运行的进程，也不会写入配置或缓存状态。
+`ocx system codex-cli-update check` 不需要实时代理，也不会向软件包注册表发起请求。它只会在限定范围内检查已配置候选项的来源元数据，包括经过脱敏的可执行文件位置和所有权证据。受信任的已发布启动器上下文只能验证该候选项快照，并不证明 Codex 已成功运行。由于这条一次性检查命令绝不会运行 Codex，来自环境变量和持久化记录的候选项仅用于报告（`managed: false`，通常为 `selection_unattested`）；JSON 输出包含 `candidateAvailable`、`candidateVersion` 和 `candidateSource`，且 `selectionAttested` 始终为 `false`。检查已配置候选项需要受信任的已发布启动器上下文；直接使用 Bun 启动或从源码运行时没有这项证明，因此会忽略环境变量和持久化记录中的候选项状态，并可能报告 POSIX 下的 `candidate_unavailable` 或 Windows 下的 `windows_inspection_deferred`。在 Windows 上，这个首个切片不会对候选路径或配置路径执行任何文件系统 I/O。只有由受信任启动器捕获的绝对环境候选项可以获得应用捆绑或版本管理器的纯词法标签；其他所有 Windows 候选项都会以失败关闭方式处理。该命令不会安装或修复软件，不会运行 Codex 或 npm，不会控制正在运行的进程，也不会写入配置或缓存状态。
 
 在语义明确时，默认操作是 `list` 或 `status`。使用 `--json` 获取结构化快照，使用 `ocx observe logs --follow --jsonl` 获取流式请求日志。主题、语言、导航以及其他纯视觉浏览器状态都没有 CLI 对应项；Cloudflare Tunnel 的设置不在这组命令之内。
 
