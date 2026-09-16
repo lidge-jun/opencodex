@@ -26,7 +26,10 @@ import { withNativeMainSharedClaim } from "../codex/native-main-claim";
 import { probeNativeProfileRecoveryState, resolveNativeProfileContext } from "../codex/native-profile-store";
 import { NativeProfileError } from "../codex/native-profile-types";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
-import { scanCodexAgentRolesWithTomlModelFallback } from "../codex/subagent-model-fallback";
+import {
+  scanCodexAgentRolesWithTomlModelFallback,
+  scanOpencodexDerivedAgentRolesWithoutModelPin,
+} from "../codex/subagent-model-fallback";
 import { diagnoseCodexShim, findCodexOnPath, isWindowsInteropDir, type CodexShimDiagnostic } from "../codex/shim";
 import { providerTableString, rootTomlString } from "../codex/injected-marker";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
@@ -910,6 +913,14 @@ export function formatCoordinatorDoctorLines(diagnostic: CodexCoordinatorDiagnos
   }
 }
 
+export function formatOpencodexDerivedRoleWarningsForDoctor(roles: readonly string[]): string[] {
+  if (roles.length === 0) return [];
+  return [
+    `  [WARN] ${roles.length} opencodex-derived agent role file${roles.length === 1 ? "" : "s"} lack${roles.length === 1 ? "s" : ""} a \`model\` pin: ${roles.join(", ")}`,
+    "        Codex will run these roles on the parent model; the `ocx-route` directive is only honored on the Claude Code path. Add `model = \"<id>\"` or remove the imported role file.",
+  ];
+}
+
 /** Render the doctor "Memory / runtime" section lines (testable without console capture). */
 export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] {
   const lines: string[] = [];
@@ -1333,6 +1344,8 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     console.log(`  [WARN] ${tomlFallbackRoles.length} agent role file${tomlFallbackRoles.length === 1 ? "" : "s"} contain${tomlFallbackRoles.length === 1 ? "s" : ""} \`model_fallback\`: ${tomlFallbackRoles.join(", ")}`);
     console.log("        Codex >= 0.146 rejects that field as unknown and skips the whole role. Move the chains to opencodex config `subagentModelFallbackByModel` (keyed by primary model) and remove the field from the TOML files.");
   }
+  const unpinnedDerivedRoles = scanOpencodexDerivedAgentRolesWithoutModelPin(resolveCodexHomeDirImpl());
+  for (const line of formatOpencodexDerivedRoleWarningsForDoctor(unpinnedDerivedRoles)) console.log(line);
 
   const dual = collectWslDualInstall();
   if (dual.wsl) {

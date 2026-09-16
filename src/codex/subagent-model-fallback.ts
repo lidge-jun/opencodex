@@ -468,30 +468,13 @@ function rewriteParsedModel(parsed: OcxParsedRequest, model: string): void {
   }
 }
 
-const TOML_MODEL = /^(model)\s*=\s*("(?:\\.|[^"\\])*")\s*$/;
-
-function parseTomlQuotedString(raw: string): string {
-  const trimmed = raw.trim();
-  if ((trimmed.startsWith("\"") && trimmed.endsWith("\""))
-    || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1).replace(/\\"/g, "\"");
-  }
-  return trimmed;
-}
-
 function readAgentModel(filePath: string): string | null {
   try {
     const content = readFileSync(filePath, "utf8");
-    for (const line of content.split(/\r?\n/)) {
-      const match = line.match(TOML_MODEL);
-      if (!match) continue;
-      const model = parseTomlQuotedString(match[2] ?? "");
-      return model.trim() === "" ? null : model.trim();
-    }
+    return parseTomlModelPin(content);
   } catch {
     return null;
   }
-  return null;
 }
 
 export function readCodexAgentModel(role: string, codexHome = CODEX_HOME): string | null {
@@ -692,6 +675,7 @@ export function subagentFallbackGuidanceText(config: OcxConfig): string {
   return ` Subagent model fallback chain (priority order): ${quoted}. When the primary model is quota-exhausted, opencodex rewrites thread_spawn requests to the next available model automatically.`;
 }
 
+const TOML_MODEL_KEY = /^\s*(?:model|"model"|'model')\s*=/;
 const TOML_MODEL_FALLBACK_KEY = /^\s*(?:model_fallback|"model_fallback"|'model_fallback')\s*=/;
 
 type TomlModelFallbackField = { present: false; value: null } | { present: true; value: string[] | null };
@@ -777,6 +761,44 @@ function findTomlMultilineStringEnd(text: string, from: number, quote: string): 
     index = text.indexOf(delimiter, index + 1);
   }
   return -1;
+}
+
+/** Parse a top-level TOML model pin while ignoring strings, comments, and nested tables. */
+function parseTomlModelPin(content: string): string | null {
+  const lines = content.split(/\r?\n/);
+  const state: TomlScanState = { inMultilineString: null, arrayDepth: 0 };
+  let atRoot = true;
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex]!;
+    if (state.inMultilineString) {
+      const end = findTomlMultilineStringEnd(line, 0, state.inMultilineString[0]!);
+      if (end === -1) continue;
+      state.inMultilineString = null;
+      scanTomlLine(line.slice(end + 3), state);
+      continue;
+    }
+    if (state.arrayDepth === 0) {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("[")) atRoot = false;
+      if (atRoot) {
+        const key = line.match(TOML_MODEL_KEY);
+        if (key) {
+          const currentRest = line.slice(key[0].length).trimStart();
+          const multilineDelimiter = currentRest.startsWith('"""') || currentRest.startsWith("'''");
+          const rest = multilineDelimiter
+            ? [currentRest, ...lines.slice(lineIndex + 1)].join("\n")
+            : currentRest;
+          if (rest[0] !== "\"" && rest[0] !== "'") return null;
+          const parsed = parseTomlStringAt(rest, 0);
+          if (!parsed || !isValidTomlArrayTail(rest, parsed.end)) return null;
+          const model = parsed.value.trim();
+          return model === "" ? null : model;
+        }
+      }
+    }
+    scanTomlLine(line, state);
+  }
+  return null;
 }
 
 /** After an array close, only horizontal whitespace, an inline comment, or the line end is valid. */
@@ -907,6 +929,33 @@ export function hasCodexAgentModelFallbackField(role: string, codexHome = CODEX_
 /** Roles whose TOML still carries `model_fallback`, including empty arrays. */
 export function scanCodexAgentRolesWithTomlModelFallback(codexHome = CODEX_HOME): string[] {
   return listCodexAgentRoles(codexHome).filter(role => hasCodexAgentModelFallbackField(role, codexHome));
+}
+
+function isOpencodexDerivedAgentRole(role: string, content: string): boolean {
+  if (role.toLowerCase().startsWith("ocx-")) return true;
+  const normalized = content.toLowerCase();
+  return normalized.includes("generated-by: opencodex")
+    || normalized.includes("<!-- ocx-route:");
+}
+
+/**
+ * Roles recognizably derived from opencodex's Claude agent definitions but
+ * missing an effective Codex `model` pin. The imported `ocx-route` directive
+ * is inert on the Codex Responses path, so these roles inherit the parent
+ * model unless the TOML carries a real `model = "..."` assignment.
+ */
+export function scanOpencodexDerivedAgentRolesWithoutModelPin(
+  codexHome = CODEX_HOME,
+): string[] {
+  return listCodexAgentRoles(codexHome).filter((role) => {
+    const file = join(codexHome, "agents", `${role}.toml`);
+    try {
+      const content = readFileSync(file, "utf8");
+      return isOpencodexDerivedAgentRole(role, content) && readAgentModel(file) === null;
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function listCodexAgentRoles(codexHome = CODEX_HOME): string[] {

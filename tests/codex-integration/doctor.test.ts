@@ -15,6 +15,7 @@ import {
   chatgptPublicEndpointHint,
   collectWslDualInstall,
   fetchServiceMemory,
+  formatOpencodexDerivedRoleWarningsForDoctor,
   formatResponseTempLines,
   formatServiceMemoryLines,
   parseProcessEnvBlock,
@@ -99,6 +100,18 @@ describe("doctor", () => {
   test("resolveCodexHomeDir expands ~ like the hardened runtime paths", () => {
     process.env.CODEX_HOME = "~/custom-codex";
     expect(resolveCodexHomeDir()).toBe(join(homedir(), "custom-codex"));
+  });
+
+  test("formats a warning for opencodex-derived roles without a model pin", () => {
+    expect(formatOpencodexDerivedRoleWarningsForDoctor([])).toEqual([]);
+    expect(formatOpencodexDerivedRoleWarningsForDoctor(["ocx-gpt-5-5"])).toEqual([
+      "  [WARN] 1 opencodex-derived agent role file lacks a `model` pin: ocx-gpt-5-5",
+      expect.stringContaining("Codex will run these roles on the parent model"),
+    ]);
+    expect(formatOpencodexDerivedRoleWarningsForDoctor([
+      "ocx-gpt-5-5",
+      "ocx-gpt-5-6-luna",
+    ])[0]).toContain("2 opencodex-derived agent role files lack a `model` pin");
   });
 
   test("Orca home diagnostic warns only for the Windows Orca runtime mismatch", () => {

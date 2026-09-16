@@ -14,6 +14,7 @@ import {
   resetSubagentModelFallbackStateForTests,
   resolveAgentModelFallbackForPrimary,
   resolveConfiguredModelFallbackForPrimary,
+  scanOpencodexDerivedAgentRolesWithoutModelPin,
   scanCodexAgentRolesWithTomlModelFallback,
   selectAvailableSubagentModel,
   setSubagentQuotaPrimeForTests,
@@ -1334,6 +1335,69 @@ test("the native-main drain sentinel covers the flagships without widening to gp
       "with_fallback",
     ]);
     expect(readCodexAgentModelFallback("empty_fallback", dir)).toEqual([]);
+  });
+
+  test("scanOpencodexDerivedAgentRolesWithoutModelPin reports only derived roles without a model pin", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "ocx-gpt-5-5.toml"), [
+      "name = \"ocx-gpt-5-5\"",
+      "developer_instructions = \"imported role\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "imported-marker.toml"), [
+      "name = \"imported-marker\"",
+      "developer_instructions = \"generated-by: opencodex\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "imported-route.toml"), [
+      "name = \"imported-route\"",
+      "developer_instructions = \"<!-- ocx-route: Codex-ocx-native--gpt-5.5 -->\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "ocx-pinned.toml"), [
+      "name = \"ocx-pinned\"",
+      "model = \"gpt-5.5\"",
+      "developer_instructions = \"<!-- ocx-route: Codex-ocx-native--gpt-5.5 -->\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "ocx-quoted-pin.toml"), [
+      "name = \"ocx-quoted-pin\"",
+      "'model' = 'gpt-5.6-luna' # imported pin",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "ocx-multiline-basic-pin.toml"), [
+      "name = \"ocx-multiline-basic-pin\"",
+      "model = \"\"\"",
+      "gpt-5.5",
+      "\"\"\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "ocx-multiline-literal-pin.toml"), [
+      "name = \"ocx-multiline-literal-pin\"",
+      "model = '''",
+      "gpt-5.6-sol",
+      "'''",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "ocx-textual-model.toml"), [
+      "name = \"ocx-textual-model\"",
+      "developer_instructions = \"\"\"",
+      "model = \"gpt-5.5\"",
+      "\"\"\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "ordinary.toml"), [
+      "name = \"ordinary\"",
+      "developer_instructions = \"no model is intentional\"",
+      "",
+    ].join("\n"), "utf8");
+
+    expect(scanOpencodexDerivedAgentRolesWithoutModelPin(dir).sort()).toEqual([
+      "imported-marker",
+      "imported-route",
+      "ocx-gpt-5-5",
+      "ocx-textual-model",
+    ]);
   });
 
   test("scanCodexAgentRolesWithTomlModelFallback recognizes quoted model_fallback keys", () => {
