@@ -158,6 +158,8 @@ ocx status --json
 
 安裝由另一個 OpenCodex 執行個體的 `/v1/catalog` 端點提供的完整目錄，接著同步 `models_cache.json`。URL 必須是 HTTPS；僅回送位址允許 HTTP。URL 內嵌憑證、查詢、片段、重新導向、超出大小的回應以及無效目錄，都會在任何本機寫入之前遭拒。驗證為選用，且只透過環境變數名稱（`--auth-env`）讀取，不接受 argv 傳入。
 
+如果 `HTTP_PROXY` 或 `http_proxy` 生效，且 `NO_PROXY` 或 `no_proxy` 中沒有相符的略過規則，回送 HTTP 要求會在加入驗證標頭或送出要求之前遭拒。`ALL_PROXY`/`all_proxy` 以及僅設定 `HTTPS_PROXY`/`https_proxy` 的情況不會觸發此 HTTP 限制；仍允許透過 HTTPS 取得目錄。拒絕訊息不會包含代理位址或驗證權杖。 非空的 `http_proxy` 和 `no_proxy` 分別優先於 `HTTP_PROXY` 和 `NO_PROXY`。若要設定與 Bun 相容的代理略過規則，請使用主機名稱、相符的 `host:port`、`[::1]` 等含方括號的 IPv6 位址或 `*`，不要使用 URL、路徑或 `*.` 前綴。
+
 目錄與快取在共用的 Codex 目錄鎖之下寫入；失敗時保留 last-known-good 檔案。位元組完全相同時是保留 mtime 的無操作。`--restart-codex`、`--restart-app-server-only` 以及已棄用別名 `--restart-desktop-app` 僅在實際寫入之後生效，含義與 `ocx sync` / `ocx sync-cache` 相同。`ETag` 條件式請求不屬於此命令。完整的 `--json` 信封與結束碼請參見[英文參考](/reference/cli/lifecycle/)。
 
 ## 背景服務

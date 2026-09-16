@@ -38,7 +38,7 @@ export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated
  * The old name `CodexUsageAccountLogLabel` is kept as an alias because it is exported and used
  * across modules; the two predicates below are what callers should choose between.
  */
-export type UsageAccountLogLabel = "main" | `p${string}` | `o${string}`;
+export type UsageAccountLogLabel = "main" | `p${string}` | `o${string}` | `k${string}`;
 export type CodexUsageAccountLogLabel = UsageAccountLogLabel;
 
 /**

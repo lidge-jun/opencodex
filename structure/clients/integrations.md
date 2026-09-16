@@ -68,6 +68,24 @@ selector, preserving the underlying provider, model ID, modalities, limits, and 
 False or missing metadata never causes local inference, so old or disabled remote hubs remain
 authoritative. Existing client configs receive the entries on export or managed refresh.
 
+## Model input capability exports
+
+All registered integrations consume the shared catalog, including [Anthropic seed image metadata](../runtime.md#capability-aware-image-admission), through their existing schema-specific exports:
+
+| Client | Per-model output |
+| --- | --- |
+| OpenCode | `attachment`, `modalities.input` |
+| Pi, OMP, Prime, Aside, omo, Gajae, DSH | `input` (text/image only) |
+| ZCode | `modalities.input` (text/image only) |
+| Cline | `modalities.input`, `supportsVision` |
+| Hermes | `supports_vision` (see below) |
+| OpenClaw | `input`, filtered to declared text/image/video/audio; omitted when none remain |
+| Kimi Code | `capabilities: ["image_in"]` only for declared image input; omitted for unknown/text-only models |
+| MiniMax Code | No per-model image capability field emitted |
+| Raycast | `abilities.vision.supported` |
+
+No exporter infers image support from a model name. Existing client eligibility filters and ownership/refresh rules remain unchanged; exports do not add fields to schemas without a supported mapping.
+
 ## Hermes Model Capabilities
 
 Hermes cannot infer custom-provider capabilities from its built-in registry. The OpenCodex

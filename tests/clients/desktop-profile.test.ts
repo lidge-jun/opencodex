@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   DesktopProfileError,
+  TOTAL_ALIAS_SLOTS,
   emptyDesktopProfile,
   moveDesktopRoute,
   parseDesktopProfile,
@@ -49,7 +50,7 @@ describe("Claude Desktop profile", () => {
     expect(second).toEqual(first);
     expect(first.defaults.opus).toBe("anthropic/claude-fable-5");
     expect(first.assignments["anthropic/claude-fable-5"]?.alias).toBe("claude-fable-5");
-    expect(first.assignments["native/gpt-5.6-sol"]?.alias).toMatch(/^claude-opus-4-8-2026\d{4}$/);
+    expect(first.assignments["native/gpt-5.6-sol"]?.alias).toMatch(/^claude-opus-4-8-20\d{6}$/);
     expect(new Set(Object.values(first.assignments).map(value => value.alias)).size).toBe(3);
   });
 
@@ -96,16 +97,26 @@ describe("Claude Desktop profile", () => {
     expect(() => parseDesktopProfile(wrongDefault)).toThrow("empty family");
   });
 
-  test("fills all 365 encoded slots then fails without mutating the saved profile", () => {
-    const encoded = Array.from({ length: 365 }, (_, index) => ({
+  test("fills all encoded slots then fails without mutating the saved profile", () => {
+    const encoded = Array.from({ length: TOTAL_ALIAS_SLOTS }, (_, index) => ({
       route: `test/model-${index}`,
       label: `Model ${index}`,
     }));
     const full = reconcileDesktopProfile(emptyDesktopProfile(), encoded);
     const snapshot = structuredClone(full);
-    expect(Object.keys(full.assignments)).toHaveLength(365);
-    expect(() => reconcileDesktopProfile(full, [...encoded, { route: "test/overflow", label: "Overflow" }])).toThrow("365 encoded date slots");
+    expect(Object.keys(full.assignments)).toHaveLength(TOTAL_ALIAS_SLOTS);
+    expect(() => reconcileDesktopProfile(full, [...encoded, { route: "test/overflow", label: "Overflow" }])).toThrow("encoded date slots");
     expect(full).toEqual(snapshot);
+  });
+
+  test("a 366-route catalog no longer exhausts the first-year slots (regression: 365 overflow)", () => {
+    const encoded = Array.from({ length: 366 }, (_, index) => ({
+      route: `test/model-${index}`,
+      label: `Model ${index}`,
+    }));
+    const profile = reconcileDesktopProfile(emptyDesktopProfile(), encoded);
+    expect(Object.keys(profile.assignments)).toHaveLength(366);
+    expect(new Set(Object.values(profile.assignments).map(value => value.alias)).size).toBe(366);
   });
 
   // The apply route writes `appliedFingerprint`/`appliedAt` back onto the stored profile so the

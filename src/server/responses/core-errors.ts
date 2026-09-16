@@ -150,3 +150,21 @@ export function unreadableEncryptedAgentTaskResponse(reason?: AgentTaskRecoveryF
     { status: 400, headers: { "Content-Type": "application/json" } },
   );
 }
+
+
+export const TARGET_INCOMPATIBLE_MESSAGE =
+  "No remaining combo target can continue this tool-bearing history because the reasoning required for replay is unavailable after the serving route changed. Start a new conversation or configure a combo target that can consume the available reasoning.";
+
+
+export function targetIncompatibleResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        message: TARGET_INCOMPATIBLE_MESSAGE,
+        type: "invalid_request_error",
+        code: "target_incompatible",
+      },
+    }),
+    { status: 400, headers: { "Content-Type": "application/json" } },
+  );
+}

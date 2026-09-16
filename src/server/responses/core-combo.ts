@@ -1,6 +1,8 @@
+import { isDeclaredReasoningEffort } from "../../reasoning-effort";
+import { recordAttemptRequestedEffort } from "../request-log";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
-  createRequestExecutionBudget,
+  deriveRequestExecutionBudget,
   isRequestExecutionBudget,
 } from "../../lib/request-execution-budget";
 import type {
@@ -44,6 +46,7 @@ import { isThreadSpawnRequest, supportedLadderFor } from "../effort-policy";
 import {
   clientCancelledResponse,
   comboUnavailable,
+  targetIncompatibleResponse,
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
 import {
@@ -51,7 +54,12 @@ import {
   createChildPassthroughCallbackGate,
   consumeComboFailure,
 } from "./core-combo-failure";
-import { linkRequestSessionLane, sessionLaneIdFromRequest } from "../request-log-conversation";
+import {
+  linkRequestSessionLane,
+  reasoningReplayConversationIdFromResponsesRequest,
+  sessionIdHeaderFromRequest,
+  sessionLaneIdFromRequest,
+} from "../request-log-conversation";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { beginRequestAttempt, sealRequestAttemptIdentity, finishRequestAttempt } from "../request-log";
@@ -65,6 +73,7 @@ import {
 } from "../relay";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
+import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -105,25 +114,27 @@ export function comboExecutionBudgetPolicy(declaredTargets: number): RequestExec
 /**
  * A budget scope that keeps its own recovery ledgers but spends the SAME request-wide counter.
  *
- * `used` is redefined as an accessor onto the parent because the factory reads it back off this
- * object -- `remainingBaseSends` and the total check both do -- so a copied number would let a
- * combo target run its ladder against a stale total, which is precisely the per-layer counting
- * this work exists to remove. The reserve, alternate-target and transition ledgers stay
- * per-scope on purpose: a combo target's account failover is its own recovery decision, while
- * the request total still bounds every target together.
+ * The sharing has to happen inside the factory. Redefining `used` as an accessor onto the parent
+ * only shared what callers read from the outside: `remainingBaseSends`, the total check and the
+ * reserve test all consult the factory's own private counter, which an overridden property
+ * cannot reach. Each derived scope therefore admitted dispatches as though the request had spent
+ * nothing, and the per-target holdback below -- expressed against `maxTotalModelSends` -- had
+ * nothing to hold back from.
+ *
+ * `deriveRequestExecutionBudget` binds the scope to the parent's real ledger, including pending
+ * externally-counted bookings and the durable-spend observer, all of which must travel together.
+ * A pending booking is a send already counted in the total and waiting for its reporter, and the
+ * observer books by watching that same counter move (#4707) -- so a scope that spent the counter
+ * without carrying the observer would move it without booking, and this combo's child sends
+ * would go missing from the spend ledger. The reserve, alternate-target and transition ledgers
+ * stay per-scope on purpose: a combo target's account failover is its own recovery decision,
+ * while the request total still bounds every target together.
  */
 export function deriveSendBudgetScope(
   parent: RequestExecutionBudget,
   policy: RequestExecutionBudgetPolicy,
 ): RequestExecutionBudget {
-  const scope = createRequestExecutionBudget(policy, parent.logicalRequestId);
-  Object.defineProperty(scope, "used", {
-    get: () => parent.used,
-    set: (value: number) => { parent.used = value; },
-    enumerable: true,
-    configurable: true,
-  });
-  return scope;
+  return deriveRequestExecutionBudget(parent, policy);
 }
 
 
@@ -229,6 +240,29 @@ export async function executeComboResponses(
       : undefined,
     recoveredPlaintext: false,
   };
+  const reasoningReplayConversationId = reasoningReplayConversationIdFromResponsesRequest({
+    clientThreadId: inboundClientThreadId,
+    threadIdHeader: req.headers.get("thread-id"),
+    sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
+  });
+  const reasoningReplayEligible = (target: (typeof combo.targets)[number]): boolean => {
+    try {
+      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+      const unavailable = mandatoryResponsesReasoningReplayUnavailable({
+        body,
+        clientThreadId: reasoningReplayConversationId,
+        providerName: route.providerName,
+        provider: route.provider,
+        adapterName: route.provider.adapter,
+        modelId: route.modelId,
+      });
+      return !unavailable;
+    } catch {
+      // Routing failures are not evidence of replay incompatibility. Keep the target eligible so
+      // the existing selection and dispatch path preserves its original routing failure surface.
+      return true;
+    }
+  };
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the most recent
     // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
@@ -260,6 +294,18 @@ export async function executeComboResponses(
   let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
+  const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
+    payloadEligible(target) && reasoningReplayEligible(target);
+  const onlyReplayIncompatibleTargetsRemain = (excluded: Iterable<string> = []): boolean => {
+    const excludedKeys = new Set(excluded);
+    const remaining = combo.targets.filter(target => {
+      const provider = config.providers[target.provider];
+      return provider?.disabled !== true
+        && !excludedKeys.has(targetKey(target))
+        && payloadEligible(target);
+    });
+    return remaining.length > 0 && remaining.every(target => !reasoningReplayEligible(target));
+  };
   let encryptedTaskRecoveryAttempted = false;
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
   let storedPool401ReplayDispatched = false;
@@ -324,7 +370,7 @@ export async function executeComboResponses(
     abortSignal: options.abortSignal,
   });
   let pick = await pickWithWait({
-    eligible: payloadEligible,
+    eligible: targetEligible,
     now: initialNow,
   });
 
@@ -349,6 +395,7 @@ export async function executeComboResponses(
   }
 
   if (!pick) {
+    if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
       : comboUnavailable(comboId);
@@ -356,6 +403,26 @@ export async function executeComboResponses(
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
   logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
+
+  const originalReasoning = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { reasoning?: unknown }).reasoning
+    : undefined;
+  const originalRequestedEffortValue = originalReasoning && typeof originalReasoning === "object" && !Array.isArray(originalReasoning)
+    ? (originalReasoning as { effort?: unknown }).effort
+    : undefined;
+  const originalRequestedEffort = typeof originalRequestedEffortValue === "string"
+    && isDeclaredReasoningEffort(originalRequestedEffortValue)
+    ? originalRequestedEffortValue
+    : undefined;
+  const restoreOriginalRequestedEffort = (childLog: RequestLogContext): void => {
+    if (originalRequestedEffort === undefined) return;
+    const normalizedRequestedEffort = childLog.requestedEffort;
+    const transitionIndex = normalizedRequestedEffort?.indexOf("->") ?? -1;
+    childLog.requestedEffort = transitionIndex >= 0
+      ? `${originalRequestedEffort}${normalizedRequestedEffort!.slice(transitionIndex)}`
+      : originalRequestedEffort;
+    recordAttemptRequestedEffort(childLog);
+  };
 
   let lastFailure: Response | null = null;
   // Dispatched targets, not attempted picks: it indexes the declared target list so the clamp
@@ -407,6 +474,7 @@ export async function executeComboResponses(
       comboDefaultEffort(config, comboId),
       supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
       combo.reasoningEffortMode,
+      combo.defaultEffortMode,
     );
     const childHeaders = buildComboChildHeaders(req.headers);
     const childRequest = new Request(req.url, {
@@ -425,6 +493,13 @@ export async function executeComboResponses(
       config.providers[pick.target.provider]!.adapter,
     );
     childLog.activeAttempt = attempt;
+    if (originalRequestedEffort !== undefined) {
+      childLog.requestedEffort = originalRequestedEffort;
+      recordAttemptRequestedEffort(childLog);
+    }
+    childLog.activeAttemptStartedAt = started;
+    childLog.attempts = logCtx.attempts ??= [];
+    childLog.attempts.push(attempt);
     let attemptRetained = false;
     const retainCancelledAttempt = (): void => {
       if (attemptRetained) return;
@@ -435,7 +510,6 @@ export async function executeComboResponses(
         childLog.accountLogLabel,
       );
       finishRequestAttempt(attempt, 499, Date.now() - started, childLog.usage);
-      (logCtx.attempts ??= []).push(attempt);
       attemptRetained = true;
     };
     const completedTarget = { provider: pick.target.provider, model: pick.target.model };
@@ -472,7 +546,7 @@ export async function executeComboResponses(
       const deferCodexResetDerivedCooldown = combo.strategy === "failover"
         && combo.targets.slice(pick.targetIndex + 1).some(target =>
           target.provider === currentTargetProvider
-          && payloadEligible(target)
+          && targetEligible(target)
           && !isComboTargetInCooldown(comboId, target),
         );
       response = await requestDispatchers.handleResponses(childRequest, config, childLog, {
@@ -499,12 +573,14 @@ export async function executeComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
+      restoreOriginalRequestedEffort(childLog);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {
         retainCancelledAttempt();
         return clientCancelledResponse();
       }
+      finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
       throw error;
     }
 
@@ -526,6 +602,7 @@ export async function executeComboResponses(
           retainCancelledAttempt();
           return clientCancelledResponse();
         }
+        finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
         throw error;
       }
       if (preflight.kind === "failed") {
@@ -546,7 +623,6 @@ export async function executeComboResponses(
         childLog.providerAdapter ?? attempt.adapter,
         childLog.accountLogLabel,
       );
-      (logCtx.attempts ??= []).push(attempt);
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
       Object.assign(logCtx, childLog, {
@@ -580,6 +656,7 @@ export async function executeComboResponses(
         retainCancelledAttempt();
         return clientCancelledResponse();
       }
+      finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
       throw error;
     }
     if (options.abortSignal?.aborted) {
@@ -598,7 +675,6 @@ export async function executeComboResponses(
       Date.now() - started,
       failure.usage,
     );
-    (logCtx.attempts ??= []).push(attempt);
     attemptRetained = true;
     lastFailure = failure.response;
     lastFailedChildLog = childLog;
@@ -664,7 +740,7 @@ export async function executeComboResponses(
       cooldownScope: comboFailureCooldownScope(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
       }),
-      eligible: payloadEligible,
+      eligible: targetEligible,
       status: failure.response.status,
       code: failure.upstreamCode,
       message: failure.classificationText,
@@ -674,12 +750,16 @@ export async function executeComboResponses(
     } else {
       pick = await pickWithWait({
         exclude: pick.attempted,
-        eligible: payloadEligible,
+        eligible: targetEligible,
         now: failureNow,
       });
     }
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
+      if (onlyReplayIncompatibleTargetsRemain(attemptedTargets)) {
+        adoptFailedChildLog(childLog);
+        return targetIncompatibleResponse();
+      }
       if (unreadableEncryptedAgentTask && !comboPayloadReadable) {
         const recoveredTarget = await pickWithWait({
           exclude: attemptedTargets,

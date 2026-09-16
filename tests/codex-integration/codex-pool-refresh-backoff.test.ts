@@ -4,6 +4,7 @@ import {
   CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES,
   CODEX_POOL_REFRESH_FAILURE_BACKOFF_MS,
   CodexPoolRefreshCooldownError,
+  clearAllCodexPoolRefreshFailures,
   clearCodexPoolRefreshFailure,
   codexPoolRefreshFence,
   getCodexPoolRefreshCooldownUntil,
@@ -218,5 +219,33 @@ describe("a late failure from the replaced credential cannot re-cool the new one
     // would return the post-reauthentication value and defeat the fence.
     expect(reported).toBeGreaterThan(captured);
     expect(source.slice(reported, reported + 200)).toContain("refreshFence");
+  });
+});
+
+/**
+ * The routing layer bulk-clears account state when its roster is replaced. A refresh that began
+ * before that reset may not have recorded any failure yet, so it is absent from both state maps.
+ * The global fence generation is what makes that unknown in-flight attempt stale.
+ */
+describe("a bulk routing reset fences every in-flight refresh", () => {
+  test("a pre-reset failure is ignored while a post-reset failure still counts", () => {
+    const now = 4_000_000;
+    setCodexPoolRefreshFailureNowForTests(now);
+    const staleFence = codexPoolRefreshFence("acct-bulk-fenced");
+
+    clearAllCodexPoolRefreshFailures();
+    expect(isCodexPoolRefreshCooling("acct-bulk-fenced")).toBe(false);
+
+    for (let attempt = 0; attempt < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; attempt += 1) {
+      noteCodexPoolRefreshFailure("acct-bulk-fenced", "unknown", undefined, staleFence);
+    }
+    expect(isCodexPoolRefreshCooling("acct-bulk-fenced")).toBe(false);
+
+    const freshFence = codexPoolRefreshFence("acct-bulk-fenced");
+    expect(freshFence).not.toBe(staleFence);
+    for (let attempt = 0; attempt < CODEX_POOL_REFRESH_COOLDOWN_AFTER_FAILURES; attempt += 1) {
+      noteCodexPoolRefreshFailure("acct-bulk-fenced", "unknown", undefined, freshFence);
+    }
+    expect(isCodexPoolRefreshCooling("acct-bulk-fenced")).toBe(true);
   });
 });

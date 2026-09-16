@@ -159,8 +159,9 @@ Support/Claude/configLibrary` sur macOS, `%APPDATA%\Claude\configLibrary` sur Wi
 `CLAUDE_USER_DATA_DIR` pour utiliser une autre racine de données Claude Desktop. L'ancien répertoire `Claude-3p` n'est
 ni lu ni supprimé automatiquement.
 
-Les routes non Anthropic reçoivent des alias stables comme `claude-opus-4-8-2026MMDD`. La partie qui ressemble à une date
-est un emplacement synthétique de route, et non la date de publication du modèle. Les véritables routes Anthropic Claude conservent
+Les routes non Anthropic reçoivent des alias stables comme `claude-opus-4-8-YYYYMMDD`, dont l'année va de 2026 à 2035. La partie qui ressemble à une date
+est un emplacement synthétique de route, et non la date de publication du modèle. Les emplacements de 2026 sont attribués en premier, de sorte que les alias
+existants conservent leur identifiant ; les années suivantes ne sont utilisées qu'une fois 2026 saturée. Les véritables routes Anthropic Claude conservent
 leur identité. Les nouvelles routes appartiennent par défaut à la famille Opus, mais déplacer une route ne change ni le
 fournisseur ni le modèle qu'elle appelle. Les anciens indicateurs `--static`, `--hybrid` et `--discovery-only`
 restent disponibles pour les scripts existants.

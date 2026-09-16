@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   fetchWithTransientRetry,
   isNonReplayableResponse,
@@ -7,7 +7,8 @@ import {
   markResponseNonReplayable,
 } from "../../src/lib/upstream-retry";
 import { transientRetryPolicyFor } from "../../src/providers/key-failover";
-import type { OcxProviderConfig } from "../../src/types";
+import { handleChatCompletions } from "../../src/server/chat-completions";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 function bodyResponse(status: number, headers?: Record<string, string>): Response {
   // ReadableStream body so cancel() is observable.
@@ -83,9 +84,10 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(504);
   });
 
-  test("the structured codes name exactly the two post-send verdicts", () => {
+  test("the structured codes name the post-send verdicts and the proxy's own refusal", () => {
     expect(isNonReplayableUpstreamCode("upstream_no_response")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_closed_before_response")).toBe(true);
+    expect(isNonReplayableUpstreamCode("upstream_reset_replay_refused")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_error")).toBe(false);
     expect(isNonReplayableUpstreamCode(undefined)).toBe(false);
   });
@@ -149,7 +151,7 @@ describe("fetchWithTransientRetry", () => {
       const err = new Error("socket hang up") as Error & { code?: string };
       err.code = "ECONNRESET";
       throw err;
-    }, { attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) })).rejects.toThrow();
+    }, { replaySafe: true, attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) })).rejects.toThrow();
     expect(reported.length).toBe(1);
     expect(reported[0]!).toBeGreaterThan(0);
   });
@@ -166,7 +168,7 @@ describe("fetchWithTransientRetry", () => {
         throw err;
       }
       return bodyResponse(sends === 3 ? 200 : 503);
-    }, { attempts: 3, slowAttemptMs: 60_000 });
+    }, { replaySafe: true, attempts: 3, slowAttemptMs: 60_000 });
 
     expect(sends).toBe(3);
     expect(res.status).toBe(200);
@@ -240,5 +242,57 @@ describe("fetchWithTransientRetry", () => {
     }, { slowAttemptMs: 10 });
     expect(calls).toBe(1);
     expect(res.status).toBe(502);
+  });
+});
+
+/**
+ * The native Chat surface answers from its own classifier rather than the bridge formatter, so
+ * the refusal reaches the client only if that classifier preserves it. It did not: 429 maps to
+ * `rate_limit_error`, which already carries a code, and the only branch that copied an upstream
+ * code required the classified one to be empty. The client was therefore told the provider
+ * throttled the turn and handed a two-second Retry-After for a rate limit that never happened.
+ */
+describe("native Chat completions and the replay refusal", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  test("keeps the refusal code and attaches no Retry-After", async () => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const config = {
+      port: 0,
+      defaultProvider: "replay-refusal-fixture",
+      providers: {
+        "replay-refusal-fixture": {
+          adapter: "openai-chat",
+          baseUrl: "https://replay-refusal.example.test/v1",
+          authMode: "key",
+          apiKey: "sk-replay-refusal",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const response = await handleChatCompletions(
+      new Request("http://localhost/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "replay-refusal-fixture/model",
+          messages: [{ role: "user", content: "ping" }],
+        }),
+      }),
+      config,
+      { model: "", provider: "" },
+    );
+
+    expect(sends).toBe(1);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBeNull();
+    expect(await response.json()).toMatchObject({
+      error: { code: "upstream_reset_replay_refused" },
+    });
   });
 });

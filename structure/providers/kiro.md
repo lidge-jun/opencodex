@@ -31,26 +31,47 @@ raw body.
 
 > Decision record: [ADR-0061](../decisions/ADR-0061-kiro-responses-text-controls.md)
 
-## Kiro reasoning round-trip (`redactedContent`)
+## Kiro reasoning round-trip (`signature`)
 
 Kiro never returns plaintext reasoning for its **GPT-5.6 family** (`gpt-5.6-sol`, `-terra`,
-`-luna`): `reasoningContentEvent` carries a KMS-encrypted `redactedContent` blob, never `text`.
-Their `additionalModelRequestFieldsSchema` (`ListAvailableModels`) accepts only `reasoning.effort`
-with `additionalProperties: false` — there is no display/summary opt-in, so this is the only
-reasoning these models can return. Kiro's own CLI replays the blob on the matching
-`assistantResponseMessage.reasoningContent` to preserve model reasoning across turns; dropping it
-makes every turn restart without the previous turn's reasoning. Verified on kiro-cli 2.14.1 and
-2.16.0, all three models.
+`-luna`): `reasoningContentEvent` carries a KMS-encrypted blob rather than readable reasoning. It
+arrives on `signature`, holding the `.KTR~~…` value verbatim, which is what every capture of those
+models sent. The event's `text` field is not absent — every captured GPT-5.6 frame left a literal
+`"..."` placeholder there, which the adapter forwards as a `reasoning_raw_delta` — but it never
+carries model reasoning, so `signature` is the only field worth replaying
+(`tests/providers/kiro/kiro-reasoning-roundtrip.test.ts`).
+Their `additionalModelRequestFieldsSchema` (`ListAvailableModels`) accepts only
+`reasoning.effort` with `additionalProperties: false` — there is no display/summary opt-in, so this
+is the only reasoning these models can return, and all three select that native field
+(`KIRO_NATIVE_EFFORT_FIELDS` in `src/adapters/kiro/reasoning.ts`). Kiro's own CLI replays the blob
+on the matching `assistantResponseMessage.reasoningContent` to preserve model reasoning across
+turns; dropping it makes every turn restart without the previous turn's reasoning. Verified on
+kiro-cli 2.14.1 and 2.16.0, all three models.
+
+Native effort admission is narrower than model eligibility: luna and terra send only
+`low`, `medium`, `high`, and `max` on the native field. Their `xhigh` requests retain the
+previous emulated thinking tags because that native rung is unverified. A future shared
+effort rung does not expand this allowlist. Sol and Opus keep their existing native ladder.
+
+The two members of `reasoningContent` are not interchangeable. The wire validates the shape of the
+member rather than its content, and the signature is not base64 — its alphabet contains `.` and
+`~` — so a blob replayed as `redactedContent` is rejected with `REQUEST_BODY_INVALID`
+("Improperly formed request"). `signature` therefore takes the verbatim value and
+`redactedContent` remains the home for the base64 shape another model may send. Which field a blob
+arrived on is carried by the blob itself, one opaque string with a `signature:` tag, rather than by
+a second value that could drift from it; provider data cannot forge the tag, because base64 has no
+colon.
 
 The Claude 4.6+/5 entries advertise a different, richer contract (`thinking.type` adaptive/disabled,
 `thinking.display` summarized/omitted, `output_config.effort`, `max_tokens`) and are not covered by
 that measurement; older Claude, deepseek, minimax, glm, and qwen entries advertise no additional
 fields at all. The handling below keys off the wire field, not the model id, so any model that
-sends `redactedContent` round-trips.
+sends either member round-trips.
 
-- The blob rides the existing `ocxr1:` envelope as `krc` (`src/responses/reasoning-envelope.ts`) on
-  an envelope-only reasoning item — `summary: []`, no text deltas — so it stays invisible in the
-  Codex app while round-tripping, exactly like the hidden-thinking path.
+- The tagged blob rides the existing `ocxr1:` envelope as `krc`
+  (`src/responses/reasoning-envelope.ts`) on an envelope-only reasoning item — `summary: []`, no
+  text deltas — so it stays invisible in the Codex app while round-tripping, exactly like the
+  hidden-thinking path.
 - **Pairing is backwards.** Kiro emits `reasoningContentEvent` at the END of an assistant turn,
   after content AND tool calls. A `krc`-only item therefore belongs to the turn that already
   closed, so the parser attaches it to the PRECEDING assistant message rather than folding it into

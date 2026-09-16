@@ -304,7 +304,11 @@ before rebuilding the cache. It works even when the local Codex integration desi
 
 The URL must be HTTPS; loopback HTTP is accepted for local testing. Embedded URL credentials,
 queries, fragments, redirects, oversized responses, malformed JSON, duplicate or unsafe slugs, and
-unknown `input_modalities` are refused before any local write. Authentication is optional and is
+unknown `input_modalities` are refused before any local write.
+
+Loopback HTTP requests are refused before authentication headers are attached or any request is sent when `HTTP_PROXY` or `http_proxy` applies without a matching `NO_PROXY` or `no_proxy` bypass. `ALL_PROXY`/`all_proxy` and settings limited to `HTTPS_PROXY`/`https_proxy` do not trigger this HTTP restriction; HTTPS catalog acquisition remains allowed. The refusal message includes neither the proxy address nor the authentication token. Nonempty `http_proxy` and `no_proxy` take precedence over `HTTP_PROXY` and `NO_PROXY`, respectively. For Bun-compatible bypass rules, use hostnames, matching `host:port` entries, bracketed IPv6 addresses such as `[::1]`, or `*`; do not use URLs, paths, or `*.` prefixes.
+
+Authentication is optional and is
 read only by environment-variable reference:
 
 ```bash

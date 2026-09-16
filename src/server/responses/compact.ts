@@ -53,6 +53,7 @@ import {
   resolveCodexAuthContext,
   codexPoolAffinityKey,
   codexProbeLeaseId,
+  codexTransientProbeGrant,
   codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
   stripCodexRuntimeProviderFields,
@@ -71,7 +72,9 @@ import {
 import {
   applyAccountChangeConversationStateScrub,
   conversationStateBindingFromAuth,
+  accountChangeFileReferenceRefusal,
   rememberServingConversationStateIssuer,
+  conversationCarriesUploadedFiles,
 } from "./account-change-state";
 import {
   TokenRefreshError,
@@ -82,6 +85,7 @@ import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
+  isNonReplayableResponse,
   SendBudgetExhaustedError,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   type UpstreamSendRecovery,
@@ -140,7 +144,6 @@ import {
   catalogModelSupportsServiceTier,
   finishRequestAttempt,
   inspectResponseLogJson,
-  noteAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
@@ -735,6 +738,14 @@ export async function handleResponsesCompact(
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
           signal: req.signal,
           nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+          // #4778: the same retention the regular Responses path passes at its final auth. The
+          // post-429 guard below only declines to move AFTER this resolution has already bound
+          // an account, so without the bit here a quota-driven rebind could have carried the
+          // conversation off its issuing account before that guard is ever consulted -- and an
+          // uploaded file is readable only by the account that received it. Answered from `raw`,
+          // the same object and the same predicate the guard below uses, so the two can never
+          // disagree about which conversations are in scope.
+          retainAccountForUploadedFiles: conversationCarriesUploadedFiles(raw),
         });
         logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
         const selected = await materializeCodexUpstreamAuthAsync(req.headers, authCtx, {
@@ -789,6 +800,14 @@ export async function handleResponsesCompact(
     {
       const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
       if (binding) {
+        // Refused rather than scrubbed: an uploaded file is content the caller attached, not
+        // continuation state the turn can do without.
+        const refusal = accountChangeFileReferenceRefusal({
+          body: raw,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+        });
+        if (refusal) return refusal;
         applyAccountChangeConversationStateScrub({
           body: raw,
           bindingKey: binding.bindingKey,
@@ -869,6 +888,7 @@ export async function handleResponsesCompact(
         // replacement (#2887). Also covers the replay's own second 401.
         ...(ctx.kind === "pool" ? { credentialGeneration: ctx.generation } : {}),
         probeQuotaScope: codexProbeQuotaScope(ctx),
+        transientProbe: codexTransientProbeGrant(ctx),
         writerGeneration: ctx.kind === "pool" || ctx.kind === "main-pool"
           ? ctx.writerGeneration
           : undefined,
@@ -1068,6 +1088,10 @@ export async function handleResponsesCompact(
     // — reporting exhausted retries while another pool account sat idle (#913).
     if (
       (upstream.status === 429 || upstream.status === 402)
+      // A replay refusal this proxy synthesized carries 429 for the client's benefit only.
+      // It is not pool quota evidence, and the alternate account below is another send of a
+      // compact turn that may already have been processed.
+      && !isNonReplayableResponse(upstream)
       && !storedPool401ReplayAttempted
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
@@ -1082,15 +1106,22 @@ export async function handleResponsesCompact(
       ].filter(Boolean);
       // Build the alternate COMPLETELY before cancelling the first body: if construction
       // throws, the first rejection is still intact and can be returned to the client.
-      const alternate = await resolveAlternateCompactContext({
-        req,
-        admission,
-        config,
-        route,
-        selectedModelId,
-        excludeAccountId: authCtx.accountId,
-        turnAdmissionLease,
-      });
+      // The same reasoning refuses an uploaded-file move here: no alternate can read a file the
+      // issuing account received, so which one is chosen is irrelevant and asking before the
+      // resolution costs nothing. It also reuses the guarantee the comment above depends on --
+      // the first body is still uncancelled -- so the client gets the original rejection rather
+      // than an inaccessible-file error from account B (#4710).
+      const alternate = conversationCarriesUploadedFiles(raw)
+        ? undefined
+        : await resolveAlternateCompactContext({
+          req,
+          admission,
+          config,
+          route,
+          selectedModelId,
+          excludeAccountId: authCtx.accountId,
+          turnAdmissionLease,
+        });
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
       // cancelling its body, and sending B are all observable side effects, and B's
@@ -1193,8 +1224,14 @@ export async function handleResponsesCompact(
     const bufferedErrorText = buffered.ok
       ? ""
       : await buffered.clone().text().catch(() => "");
-    const explicitQuotaStatus = buffered.status === 429 || buffered.status === 402;
-    const bodyInferredQuota = !buffered.ok
+    // The client-facing 429 of a synthesized replay refusal says nothing about this
+    // account's quota. Pool accounting keeps reading it as the transport failure it is,
+    // which is also what it recorded before the status was corrected for the client.
+    const replayRefused = isNonReplayableResponse(upstream);
+    const explicitQuotaStatus = !replayRefused
+      && (buffered.status === 429 || buffered.status === 402);
+    const bodyInferredQuota = !replayRefused
+      && !buffered.ok
       && !explicitQuotaStatus
       && isRateLimitOrQuotaFailureMessage(bufferedErrorText);
     const quotaFailure = explicitQuotaStatus || bodyInferredQuota;
@@ -1207,7 +1244,11 @@ export async function handleResponsesCompact(
     // A body-confirmed quota failure can arrive behind a generic 5xx. Record it as
     // quota evidence; otherwise preserve the real upstream status so a local buffering
     // failure after a 200 cannot soft-avoid a healthy account or rotate a thread.
-    recordCompactPoolOutcome(outcomeCtx, bodyInferredQuota ? 429 : upstream.status, { retryAfter, resetAt });
+    recordCompactPoolOutcome(
+      outcomeCtx,
+      bodyInferredQuota ? 429 : replayRefused ? 502 : upstream.status,
+      { retryAfter, resetAt },
+    );
     // Lift usage and response metadata from the buffered upstream JSON into the
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.

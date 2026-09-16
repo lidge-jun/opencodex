@@ -110,7 +110,7 @@ export async function runXaiWebSearch(
         // Credential-bearing: never follow a redirect off the pinned origin.
         redirect: "manual",
       }, recovery)),
-      { abortSignal: linkedSignal.signal, label: "xai-web-search-sidecar" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "xai-web-search-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     if (!res.ok) {

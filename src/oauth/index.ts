@@ -47,7 +47,7 @@ import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
-import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
+import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
@@ -1228,7 +1228,7 @@ export function buildModelsRequest(
     return { url: discoveryUrl(`${base}/v1/models?limit=1000`), headers };
   }
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  return { url: discoveryUrl(`${effectiveProvider.baseUrl}/models`), headers };
+  return { url: discoveryUrl(providerModelsUrl(effectiveProvider.baseUrl)), headers };
 }
 
 /**

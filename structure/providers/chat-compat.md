@@ -1,7 +1,7 @@
 # Chat Provider Compatibility
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](cursor.md#cursor-native-exec).
 
 Native Codex Spark-specific request exceptions are absent. General Lite and namespace repair
 remain shared [Responses compatibility](../transports/responses.md#responses-httpsse), including
@@ -62,10 +62,20 @@ request-local alias. Raw API-key continuations deliberately preserve ids because
 continuation may reference a call stored upstream under its original id; proxy-expanded API-key
 replays are explicit and receive the same repair.
 
-Separately, Meta Muse Responses (`src/responses/muse-tool-name-alias.ts`) aliases function *tool
-names* that exceed 64 characters or contain characters outside `[a-zA-Z0-9_-]` on `api.meta.ai`
-only. That map is not the call-id repair: it covers tools, `additional_tools`, history calls, and
-`tool_choice`, then restores original names inbound.
+Tool-name normalization stays adapter-scoped. The translated Chat Completions path uses a
+request-scoped registry in `src/adapters/openai-chat/`: only flattened namespaced names over 64
+characters receive a deterministic, charset-safe alias. Catalog declarations, replayed calls and
+`tool_choice` share that registry, and streamed or buffered echoes restore to the original flattened
+name before the Responses bridge restores `{namespace, name}`. Names at or below the bound and bare
+names pass through unchanged, except declarations matching the reserved alias shape; those are
+re-aliased so they cannot shadow an identity-derived alias.
+
+The 64-character bound is a Chat Completions and strict-gateway compatibility concern: Command Code
+rejects a 66-character function name (#4679). Upstream Codex raised its own MCP ceiling to 128 bytes
+in `openai/codex#39594` because native Responses accepts 128, so that Responses limit does not govern
+this translated wire. Kiro (`src/adapters/kiro-tools.ts`), Google (its wire compiler), and Meta Muse
+Responses (`src/responses/muse-tool-name-alias.ts`, gated to `api.meta.ai`) each retain their own
+equivalent normalization and restoration.
 
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
@@ -130,6 +140,14 @@ their outputs in call order; hook-injected messages that split the batch move af
 dropped. This preserves #1292's single-call adjacency repair without splitting a same-turn parallel
 batch away from its preceding plaintext reasoning (#1477). Tolerant providers never enter this pass,
 and duplicate, missing, or backwards call/result pairs are left for the upstream to reject rather than guessed.
+
+That pass is gated by `requiresAdjacentResponsesToolResults`, not by provider name. Kimi's Code Plan
+Responses endpoint enforces the same strict shape and rejects a hook-split pair with HTTP 400 (#4726),
+so `kimi` and `kimi-code` carry the flag as well. The flag is inert while those presets use the Chat
+wire and takes effect when a row is configured onto `openai-responses`, which is the configuration the
+report exercised. No upstream specification documents the requirement; the evidence is the observed
+400 and DeepSeek's identical failure shape, which is why this stays a per-provider capability rather
+than a wire-wide default — upstream Codex leaves an intervening developer message where it is.
 
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
 
@@ -336,6 +354,12 @@ The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images
 real image blocks rather than flattening them to the text `[image]`, and orders image
 blocks chronologically — history before current — so attachment order matches the
 prose the model reads beside them. Vendor tool execution stays disabled on both
-adapters, and Qoder's explicit refusal of original images is unchanged.
+adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
+container followed by a `functions.*` invoke control line in either output channel; it
+preserves preceding answer text, never promotes vendor prose into execution authority,
+and leaves discussed or quoted literals and code examples untouched. Qoder's explicit
+refusal of original images is unchanged.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.

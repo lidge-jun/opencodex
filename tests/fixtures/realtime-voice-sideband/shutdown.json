@@ -1,0 +1,31 @@
+{
+  "stage": "shutdown",
+  "kind": "close",
+  "title": "Either side ending the call is reported to the other with its own code and reason",
+  "protocol": "frameless-bidi-v3",
+  "provenance": "Synthetic. Close codes and reasons are chosen for this fixture, not observed on a real call.",
+  "note": "v3 treats an upstream close of 1000 as the session completing and anything else as a transport loss to reconnect, so the code the proxy forwards decides whether the client retries. The codex-rs writer sends session.close and then closes without an application code; the second case here deliberately supplies one, because the proxy also serves clients that do, and a relay that rewrites every hang-up to 1000 is not transparent.",
+  "deidentified": true,
+  "cases": [
+    {
+      "name": "the upstream ends the session",
+      "callId": "rtc_fixture_shutdown_upstream",
+      "initiator": "upstream",
+      "code": 1000,
+      "reason": "session complete",
+      "observedBy": "client",
+      "clientFrames": [
+        { "type": "input_audio.append", "audio": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }
+      ]
+    },
+    {
+      "name": "the client hangs up",
+      "callId": "rtc_fixture_shutdown_client",
+      "initiator": "client",
+      "code": 1001,
+      "reason": "user left the call",
+      "observedBy": "upstream",
+      "clientFrames": [{ "type": "session.close" }]
+    }
+  ]
+}

@@ -189,9 +189,11 @@ alternatif bir Desktop kullanıcı verisi kökü için `CLAUDE_USER_DATA_DIR`
 değerini ayarlayın. Eski `Claude-3p` dizini otomatik olarak okunmaz veya
 silinmez.
 
-Anthropic harici rotalar, `claude-opus-4-8-2026MMDD` gibi kararlı takma adlar
-alır. Tarih benzeri kısım, modelin çıkış tarihi değil, sentetik bir rota
-yuvasıdır. Gerçek Anthropic Claude rotaları kendi gerçek kimliklerini korur.
+Anthropic harici rotalar, `claude-opus-4-8-YYYYMMDD` gibi kararlı takma adlar
+alır; yıl 2026 ile 2035 arasındadır. Tarih benzeri kısım, modelin çıkış tarihi
+değil, sentetik bir rota yuvasıdır. Önce 2026 yuvaları atanır, bu nedenle mevcut
+takma adlar kimliklerini korur; sonraki yıllara ancak 2026 dolduktan sonra
+geçilir. Gerçek Anthropic Claude rotaları kendi gerçek kimliklerini korur.
 Yeni rotalar varsayılan olarak Opus ailesine gider, ancak bir rotayı taşımak
 çağırdığı sağlayıcıyı veya modeli değiştirmez. Eski uygulama bayrakları
 `--static`, `--hybrid` ve `--discovery-only` mevcut betikler için kullanılabilir

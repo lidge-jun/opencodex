@@ -62,6 +62,13 @@ describe("combo failure cooldown scope", () => {
     }
     // Hyphenated spellings normalize to the same codes.
     expect(comboFailureCooldownScope(400, "refused", { code: "input-admission-refused" })).toBe("none");
+    // A native transport reports a zero-output model overflow as a generic upstream error with
+    // precise context prose. That target is healthy; only the turn was too large for it.
+    expect(comboFailureCooldownScope(502,
+      "Your input exceeds the context window of this model. Please adjust your input and try again.",
+      { code: "upstream_server_error" })).toBe("none");
+    // A credential verdict keeps its provider scope even when the body quotes context prose.
+    expect(comboFailureCooldownScope(401, "invalid key for the 200k context window tier")).toBe("provider");
     // A provider's own per-target hard cap (vendor code 5059) is equally request-shaped.
     expect(comboFailureCooldownScope(
       400,
@@ -253,6 +260,57 @@ describe("request-local optional control incompatibility", () => {
     }
     expect(comboFailureDecision(499, message)).toBe("stop");
     expect(comboFailureDecision(413, message)).toBe("stop");
+  });
+});
+
+describe("definite upstream context overflow", () => {
+  const prose = "Your input exceeds the context window of this model. Please adjust your input and try again.";
+  const failedTerminal = (message: string) => JSON.stringify({
+    error: { type: "server_error", code: "upstream_server_error", message },
+    response: { error: { type: "server_error", code: "upstream_server_error", message } },
+  });
+
+  test("a zero-output context overflow is target-local and may hop", () => {
+    // The combo stream preflight only synthesizes this envelope for a terminal that committed
+    // no output, so the hop can never duplicate text the client already saw.
+    expect(comboFailureDecision(502, failedTerminal(prose), { code: "upstream_server_error" })).toBe("hop");
+    // The shape upstream Codex actually emits: a `response.failed` whose error carries the exact
+    // `context_length_exceeded` code alongside this message. The proxy relays the nested error
+    // verbatim, so both the structured and the generic-wrapper form must reach the same verdict.
+    expect(comboFailureDecision(502, failedTerminal(prose), { code: "context_length_exceeded" })).toBe("hop");
+    expect(comboFailureDecision(400, "context length exceeded", { code: "context_length_exceeded" })).toBe("hop");
+    expect(comboFailureDecision(400, `Provider error 400: ${prose}`)).toBe("hop");
+  });
+
+  test("evidence must come from the innermost message, not a stray code token", () => {
+    const unrelated = JSON.stringify({ error: { ...unsupportedUser, code: "context_length_exceeded" } });
+    expect(comboFailureDecision(400, unrelated)).toBe("stop");
+    expect(comboFailureDecision(400, "ordinary invalid request", { code: "context_length_exceeded" })).toBe("stop");
+    // Reflected prose inside an unrelated body is not the provider's own verdict.
+    expect(comboFailureDecision(400, JSON.stringify({ error: { ...unsupportedUser, param: "tools", note: prose } })))
+      .toBe("stop");
+  });
+
+  test("truncated envelopes and hard refusals do not acquire hop permission", () => {
+    // classificationText is capped at 500 characters upstream, so a long envelope reaches the
+    // classifier as a JSON prefix. Reading that prefix as prose would let any field authorize
+    // a replay, so a JSON-shaped body that does not parse fails closed.
+    expect(comboFailureDecision(400, failedTerminal(prose).slice(0, -1))).toBe("stop");
+    expect(comboFailureDecision(502, prose, { code: "origin_rejected" })).toBe("stop");
+    expect(comboFailureDecision(502, prose, { code: "upstream_no_response" })).toBe("stop");
+    expect(comboFailureDecision(499, prose)).toBe("stop");
+    // A status that speaks about the CREDENTIAL keeps its own verdict and its provider-wide
+    // cooldown, even when the body quotes context prose. Without that gate this envelope would
+    // be reclassified as request-shaped and a rejected key would stop cooling its provider.
+    expect(comboFailureDecision(403, prose)).toBe("stop");
+    expect(comboFailureCooldownScope(403, prose)).toBe("provider");
+  });
+
+  test("the envelope budget is bounded and oversized bodies stay terminal", () => {
+    const wrap = (inner: string) => JSON.stringify({ error: { type: "server_error", message: inner } });
+    expect(comboFailureDecision(400, wrap(wrap(wrap(prose))))).toBe("hop");
+    expect(comboFailureDecision(400, wrap(wrap(wrap(wrap(wrap(prose))))))).toBe("stop");
+    expect(comboFailureDecision(400, `${prose} ${"x".repeat(16_384)}`)).toBe("stop");
   });
 });
 

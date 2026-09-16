@@ -12,12 +12,21 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertNotRealHomeUnderTest, isTestHomeGuardArmed, protectedHomeForTests } from "../../src/lib/test-home-guard";
+import {
+  assertNotRealHomeUnderTest,
+  assertRemovalOutsideProtectedTrees,
+  isTestHomeGuardArmed,
+  protectedHomeForTests,
+  protectedRemovalReason,
+  protectedRemovalTreesForTests,
+} from "../../src/lib/test-home-guard";
 import { getConfigDir } from "../../src/config";
+import { findHomeRemovalViolations, homePathResolvers } from "../helpers/home-destruction-scan";
+import { createTempHome, ownedTempRootsForTests, removeOwnedTree } from "../helpers/temp-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { repoRoot } from "../helpers/repo-root";
+import { repoPath, repoRoot } from "../helpers/repo-root";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { captureTestOutput } from "../../scripts/test";
 
@@ -544,47 +553,178 @@ const canSymlink = (() => {
    * real ~/.opencodex. On 2026-09-15 a test did exactly that and deleted a live home: every
    * OAuth login, the Codex account store, the service tokens and a 372MB usage ledger.
    *
-   * Nothing runtime can be asserted here — the directory is gone before any guarded call runs
-   * — so the invariant is asserted on the test sources. A test that needs a config directory
-   * pins its own OPENCODEX_HOME and names that directory; none may hand the process-global one
-   * to a destructive fs call.
+   * Two things hold it shut now, because either alone leaves a hole. The removal refusal in
+   * src/lib/test-home-guard is unconditional, so it survives the unarmed run above — but it
+   * only sees removals routed through a helper of ours. The scan below covers the rest: a
+   * bare rmSync in a test file reaches no code of ours at all, and the directory is gone
+   * before anything could observe it.
    */
-  test("no test file hands the process-global config directory to a destructive fs call", async () => {
-    const DESTRUCTIVE = "rmSync|rmdirSync|unlinkSync|renameSync|cpSync";
-    const direct = new RegExp("\\b(?:" + DESTRUCTIVE + ")\\(\\s*getConfigDir\\(\\)");
-    const bound = new RegExp("\\bconst\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*getConfigDir\\(\\)");
+  test("no test file removes a home it did not create", async () => {
+    // Derived from src/, not listed here. The predecessor scan knew getConfigDir() and nothing
+    // else, so unlinkSync(getConfigPath()) and rmSync(usageLogPath()) sat outside the guard
+    // while it reported green. A resolver added tomorrow is covered the day it lands.
+    const resolvers = homePathResolvers(repoPath("src"));
+    for (const expected of ["getConfigDir", "getCodexHome", "getConfigPath", "usageLogPath", "getAuthStorePath"]) {
+      expect(resolvers).toContain(expected);
+    }
 
-    // A line that merely NAMES the pattern is not a call: tests/cli/uninstall.test.ts asserts
-    // the CLI does not contain it, and the oracle at the end of this test is a literal. Both
-    // carry a quote on the line; a destructive call on a directory variable does not.
-    const isCode = (line: string): boolean => {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) return false;
-      return !trimmed.includes('"') && !trimmed.includes("'");
-    };
-
-    const offenders = new Set<string>();
+    const offenders: string[] = [];
     const testsDir = join(repoRoot(), "tests");
     for await (const relative of new Bun.Glob("**/*.test.ts").scan({ cwd: testsDir })) {
-      const lines = (await Bun.file(join(testsDir, relative)).text()).split("\n");
-      const names = new Set<string>();
-      for (const line of lines) {
-        const found = bound.exec(line);
-        if (found) names.add(found[1]);
-      }
-      for (const line of lines) {
-        if (!isCode(line)) continue;
-        if (direct.test(line)) offenders.add(relative + ": getConfigDir() passed directly");
-        for (const name of names) {
-          const viaName = new RegExp("\\b(?:" + DESTRUCTIVE + ")\\(\\s*" + name + "\\b");
-          if (viaName.test(line)) offenders.add(relative + ": config dir removed via " + name);
-        }
+      const source = readFileSync(join(testsDir, relative), "utf8");
+      for (const site of findHomeRemovalViolations(source, resolvers)) {
+        offenders.push(relative + ":" + site.line + " " + site.call + "(" + site.argument + ") [" + site.tier + "]");
       }
     }
 
-    // The matcher must be able to see the shape it looks for, so an empty result is evidence
-    // rather than a silently broken regex.
-    expect(direct.test("rmSync(getConfigDir(), { recursive: true })")).toBe(true);
-    expect([...offenders].sort()).toEqual([]);
+    expect(offenders.sort()).toEqual([]);
+  });
+
+  /*
+   * A detector with no adversarial input is indistinguishable from a broken regex, and the
+   * predecessor was closer to the second than a green suite could show. Every case below is a
+   * shape it did NOT flag, written the way a test would plausibly spell it.
+   */
+  test("the scan flags the shapes a line matcher misses", () => {
+    const resolvers = ["getConfigDir", "getCodexHome", "getConfigPath", "usageLogPath"];
+    const tiers = (source: string): string[] =>
+      findHomeRemovalViolations(source, resolvers).map(site => site.tier);
+
+    // The one form the predecessor did catch, kept so a rewrite cannot lose it.
+    expect(tiers("rmSync(getConfigDir(), { recursive: true });")).toEqual(["home-root"]);
+    // Split across lines: a line-at-a-time matcher returns nothing here.
+    expect(tiers("rmSync(\n  getConfigDir(),\n  { recursive: true },\n);")).toEqual(["home-root"]);
+    // A let alias, which the const-only binding pattern never saw.
+    expect(tiers("let dir = getConfigDir();\nrmSync(dir);")).toEqual(["home-root"]);
+    // Routed through a helper, in both the declaration and the arrow spelling.
+    expect(tiers("function home() { return getConfigDir(); }\nrmSync(home());")).toEqual(["home-root"]);
+    expect(tiers("const authPath = () => join(getConfigDir(), \"auth.json\");\nunlinkSync(authPath());")).toEqual(["inside-home"]);
+    // Namespaced, and via the promise API rather than the Sync one.
+    expect(tiers("fs.rmSync(getConfigDir());")).toEqual(["home-root"]);
+    expect(tiers("await fsp.rm(getConfigDir(), { recursive: true });")).toEqual(["home-root"]);
+    // Sibling resolvers: config.json and the usage ledger were both lost in the incident.
+    expect(tiers("unlinkSync(getConfigPath());")).toEqual(["inside-home"]);
+    expect(tiers("rmSync(usageLogPath(), { force: true });")).toEqual(["inside-home"]);
+    // A derived child path, including the template spelling.
+    expect(tiers("rmSync(join(getConfigDir(), \"auth.json\"));")).toEqual(["inside-home"]);
+    expect(tiers("rmSync(`${getConfigDir()}/auth.json`);")).toEqual(["inside-home"]);
+    // A rename is a removal of whatever sat at the source.
+    expect(tiers("renameSync(usageLogPath(), usageLogPath() + \".old\");")).toEqual(["inside-home"]);
+
+    // The two tiers must stay distinguishable through a binding, because only the root tier
+    // has no escape hatch. Classifying a bound child path as the root would refuse a pinned
+    // fixture that legitimately removes one file inside its own temp home.
+    expect(tiers("const p = join(getConfigDir(), \"auth.json\");\nrmSync(p);")).toEqual(["inside-home"]);
+    expect(tiers("const p = getConfigDir();\nrmSync(p);")).toEqual(["home-root"]);
+    expect(tiers("const home = () => getConfigDir();\nrmSync(home());")).toEqual(["home-root"]);
+  });
+
+  test("the scan does not flag a mention, a comment, or a fixture that owns its home", () => {
+    const resolvers = ["getConfigDir", "getConfigPath", "usageLogPath"];
+    const violations = (source: string): unknown[] => findHomeRemovalViolations(source, resolvers);
+
+    // tests/cli/uninstall.test.ts asserts the CLI does NOT contain this shape, and the
+    // adversarial cases above are literals in this very file. Neither is a call.
+    expect(violations("expect(cli).not.toContain(\"rmSync(getConfigDir()\");")).toEqual([]);
+    expect(violations("// rmSync(getConfigDir()) would delete the real home\n")).toEqual([]);
+    expect(violations("/* rmSync(getConfigDir()); */\n")).toEqual([]);
+
+    // A file that creates the home it pins may remove paths inside it: that is ordinary
+    // fixture hygiene, and seventeen files in this tree do exactly it.
+    const pinned = "const home = mkdtempSync(join(tmpdir(), \"p-\"));\nprocess.env.OPENCODEX_HOME = home;\nunlinkSync(getConfigPath());";
+    expect(violations(pinned)).toEqual([]);
+    // But not the home ROOT itself, pinned or not: the fixture already holds that handle, so a
+    // removal routed through the resolver is a removal of whatever home is current.
+    const pinnedRoot = "const home = mkdtempSync(join(tmpdir(), \"p-\"));\nprocess.env.OPENCODEX_HOME = home;\nrmSync(getConfigDir(), { recursive: true });";
+    expect(findHomeRemovalViolations(pinnedRoot, resolvers).map(site => site.tier)).toEqual(["home-root"]);
+    // Restoring a saved value is not ownership.
+    const restoring = "process.env.OPENCODEX_HOME = previousHome;\nunlinkSync(getConfigPath());";
+    expect(findHomeRemovalViolations(restoring, resolvers).map(site => site.tier)).toEqual(["inside-home"]);
+  });
+
+  /*
+   * The runtime half. Every assertion here only produces a string or a throw — nothing in it
+   * can remove anything — so it is free to name the real protected paths of this process.
+   */
+  test("a removal that reaches a protected tree is refused", () => {
+    const trees = protectedRemovalTreesForTests();
+    expect(trees).toContain(protectedHomeForTests());
+    expect(trees.length).toBeGreaterThanOrEqual(4);
+
+    for (const tree of trees) {
+      // The tree itself.
+      expect(protectedRemovalReason(tree)).not.toBeNull();
+      // An ancestor: removing it takes the protected tree with it.
+      expect(protectedRemovalReason(dirname(tree))).not.toBeNull();
+    }
+    // A path INSIDE the protected home: config.json and the usage ledger both live there.
+    expect(protectedRemovalReason(join(protectedHomeForTests(), "config.json"))).not.toBeNull();
+    expect(protectedRemovalReason(join(protectedHomeForTests(), "usage", "ledger.jsonl"))).not.toBeNull();
+    // And the refusal is not armed-gated: the run that caused the incident armed nothing.
+    expect(() => assertRemovalOutsideProtectedTrees(protectedHomeForTests())).toThrow("refusing to remove");
+
+    const ordinary = mkdtempSync(join(tmpdir(), "ocx-removal-allowed-"));
+    try {
+      expect(protectedRemovalReason(ordinary)).toBeNull();
+      expect(() => assertRemovalOutsideProtectedTrees(ordinary)).not.toThrow();
+    } finally {
+      removeTreeWithRetry(ordinary);
+    }
+  });
+
+  test.skipIf(!canSymlink)("a symlink pointing at a protected tree is refused through its target", async () => {
+    const probeId = beginProbe("13-symlink-removal");
+    const { realHome, opencodexHome } = sentinelHome();
+    const probe = await runProbe(probeId, `
+      import { symlinkSync, mkdtempSync } from "node:fs";
+      import { tmpdir } from "node:os";
+      import { join } from "node:path";
+      import { protectedRemovalReason } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+      const dir = mkdtempSync(join(tmpdir(), "ocx-removal-symlink-"));
+      const alias = join(dir, "looks-harmless");
+      symlinkSync(${JSON.stringify(opencodexHome)}, alias);
+      console.log(JSON.stringify({
+        alias: protectedRemovalReason(alias) !== null,
+        plain: protectedRemovalReason(dir) === null,
+      }));
+    `, { OCX_REAL_HOME: realHome, OCX_TEST_HOME_GUARD: "1" });
+
+    expect(JSON.parse(probe.stdout.trim())).toEqual({ alias: true, plain: true });
+  });
+
+  test("removeTreeWithRetry refuses a protected tree before it calls through", () => {
+    const attempted: string[] = [];
+    expect(() => removeTreeWithRetry(protectedHomeForTests(), { remove: path => { attempted.push(path); } }))
+      .toThrow("refusing to remove");
+    // The injected remover proves the refusal happens BEFORE the filesystem call, which is the
+    // only ordering that helps: a check after the fact has nothing left to protect.
+    expect(attempted).toEqual([]);
+  });
+
+  test("the temp-home fixture owns exactly what it removes", () => {
+    const before = ownedTempRootsForTests().length;
+    const home = createTempHome("ocx-guard-fixture-");
+    try {
+      expect(process.env["OPENCODEX_HOME"]).toBe(home.root);
+      expect(getConfigDir()).toBe(home.root);
+      expect(getConfigDir()).not.toBe(protectedHomeForTests());
+      expect(ownedTempRootsForTests()).toContain(home.root);
+
+      writeFileSync(home.path("owned.json"), "{}", "utf8");
+      expect(() => removeOwnedTree(home.path("owned.json"))).not.toThrow();
+
+      // A path nobody handed out is refused, which is the whole point of the handle: a bare
+      // path carries no record of who created it, and that is what the call site got wrong.
+      const foreign = mkdtempSync(join(tmpdir(), "ocx-guard-foreign-"));
+      try {
+        expect(() => removeOwnedTree(foreign)).toThrow("no temp home owns it");
+      } finally {
+        removeTreeWithRetry(foreign);
+      }
+    } finally {
+      home.remove();
+    }
+    expect(ownedTempRootsForTests().length).toBe(before);
+    expect(getConfigDir()).not.toBe(protectedHomeForTests());
   });
 });

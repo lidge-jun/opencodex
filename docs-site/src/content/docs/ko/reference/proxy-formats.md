@@ -271,8 +271,9 @@ call creation과 sideband join은 같은 OpenAI 계정으로 이루어져야 하
 거부합니다(`404`). 두 요청 모두 Codex의 `session-id`와 `thread-id` 헤더를 실어 보냅니다. Pool 모드는
 계정 선택을 그 쌍에 묶어 두므로(프로세스 로컬) 프록시에 도착한 join은 통화를 만든 계정을 그대로 쓰고,
 Direct 모드는 두 요청 모두 호출자의 현재 bearer를 전달합니다. 릴레이되는 클라이언트 헤더는 정확히
-`openai-alpha`, `x-session-id`, `session-id`, `thread-id`, `originator`, `x-oai-attestation`
-(`src/server/live.ts`의 `LIVE_CLIENT_PROTOCOL_HEADERS`)이며, `Authorization`과 ChatGPT 계정 id는
+`openai-alpha`, `x-session-id`, `session-id`, `thread-id`, `originator`, `x-oai-attestation`,
+`x-codex-turn-metadata`(`src/server/live.ts`의 `LIVE_CLIENT_PROTOCOL_HEADERS`)이며, 각 헤더는
+호출자가 보낸 경우에만 전달되고 프록시가 만들어 내지 않습니다. `Authorization`과 ChatGPT 계정 id는
 ChatGPT 경로에서 프록시가 소유합니다(Pool은 저장된 계정으로 교체, Direct는 검증된 호출자 bearer를 전달).
 API 키 프로바이더는 자체 bearer를 씁니다. Codex가 join을 프록시로 보내는 것은
 `experimental_realtime_ws_base_url`이 프록시를 가리킬 때뿐이며, `ocx start`가 이 키를

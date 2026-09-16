@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   CODEX_ACCOUNT_LOG_LABEL_RE,
+  ACCOUNT_LOG_LABEL_RE,
+  apiKeyAccountLogLabel,
   codexAccountLogLabel,
   createCodexAccountLogLabel,
   fallbackCodexAccountLogLabel,
@@ -8,6 +10,22 @@ import {
 } from "../../src/codex/account-label";
 
 describe("codex account privacy labels", () => {
+  test("key labels follow the shared consumer contract and isolate provider, slot and reference", () => {
+    expect(apiKeyAccountLogLabel("test-provider", { entryId: "slot-a", reference: "test-key-a" }))
+      .toBe("k35f7c109222440212853c90de03e7df5");
+    expect(apiKeyAccountLogLabel("test-provider", { entryId: "slot-b", reference: "test-key-b" }))
+      .toBe("kae34539c9f0b302367a033166800ae47");
+    expect(apiKeyAccountLogLabel("test-provider", { reference: "test-key-a" }))
+      .toBe("ke4869182d193d18777b6ce175baaa41a");
+    expect(apiKeyAccountLogLabel("other-provider", { entryId: "slot-a", reference: "test-key-a" }))
+      .toBe("k98c6a69a98c5537c6acd344f116e7579");
+    expect(apiKeyAccountLogLabel("test-provider", undefined)).toBeUndefined();
+    expect(apiKeyAccountLogLabel("test-provider", { reference: "" })).toBeUndefined();
+    expect(apiKeyAccountLogLabel("test-provider", { reference: "env:MISSING_SYNTHETIC_KEY" }))
+      .toMatch(ACCOUNT_LOG_LABEL_RE);
+    expect(ACCOUNT_LOG_LABEL_RE.test("kabc123")).toBe(false);
+    expect(ACCOUNT_LOG_LABEL_RE.test("k" + "a".repeat(33))).toBe(false);
+  });
   test("generates non-PII log labels", () => {
     expect(createCodexAccountLogLabel()).toMatch(CODEX_ACCOUNT_LOG_LABEL_RE);
   });

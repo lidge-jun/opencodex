@@ -268,15 +268,12 @@ tam olarak tekrarlasa bile, çünkü aşama doğruluğu kozmetik tekilleştirmed
 
 ### Akıl yürütme çabası
 
-`gpt-5.6-sol` ve `claude-opus-5` doğrulanmış yerel çaba desteğine sahiptir ve
-her model ailesi istek alanını farklı şekilde adlandırır. Seçilen `low`,
-`medium`, `high`, `xhigh` veya `max` değeri `gpt-5.6-sol` için
-`additionalModelRequestFields.reasoning.effort` olarak ve `claude-opus-5` için
-`additionalModelRequestFields.output_config.effort` olarak gönderilir. Diğer
-Kiro modelleri şu anda öykünülmüş akıl yürütme kullanır: opencodex yerel çaba
-alanları doğrulanmadığı için seçilen seviyeyi kullanıcı içeriğinde sınırlı
-düşünme talimatlarına dönüştürür. Bu modellerde bildirilen bir çaba denetimini
-yukarı akış yerel akıl yürütme desteğinin kanıtı olarak yorumlamayın.
+GPT-5.6 ailesi `additionalModelRequestFields.reasoning.effort`, `claude-opus-5` ise
+`additionalModelRequestFields.output_config.effort` alanını kullanır. `gpt-5.6-luna` ve
+`gpt-5.6-terra` için yalnızca doğrulanmış `low`, `medium`, `high` ve `max` seviyeleri yerel alandan
+gönderilir. Bu iki modelin yerel `xhigh` seviyesi doğrulanmadığı için mevcut sınırlı düşünme
+talimatlarıyla öykünme korunur. `gpt-5.6-sol` ve `claude-opus-5` için mevcut yerel `low`, `medium`,
+`high`, `xhigh` ve `max` davranışı değişmez. Diğer Kiro modelleri öykünme kullanır; çaba seçeneği yerel desteğin kanıtı değildir.
 
 ## `cursor`
 

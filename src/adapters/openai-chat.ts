@@ -6,7 +6,6 @@ import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
-import { frameAgentRouterMessages } from "./agentrouter";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../providers/service-tier";
@@ -39,6 +38,7 @@ import {
   upstreamErrorEvent,
 } from "./openai-chat/errors";
 import { messagesToChatFormat } from "./openai-chat/messages";
+import { withOpenAIChatToolNames } from "./openai-chat/tool-name-registry";
 import { isNativeOpenAIChatTarget, openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wire";
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
 
@@ -88,7 +88,7 @@ function canSerializeOpenAIChatServiceTier(
 
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   let lastRequestedModelId: string | undefined;
-  return {
+  return withOpenAIChatToolNames(toolNames => ({
     name: "openai-chat",
 
     formatErrorBody: formatOpenAIChatErrorBody,
@@ -96,10 +96,10 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
     buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       lastRequestedModelId = parsed.modelId;
       const { url, headers, hasCredential } = openAIChatTransport(provider);
-      const messages = frameAgentRouterMessages(provider.baseUrl, messagesToChatFormat(parsed, provider));
+      const messages = toolNames.messages(parsed, provider.baseUrl, messagesToChatFormat(parsed, provider));
       const finish = (): AdapterRequest => {
-        const tools = toolsToChatFormatForProvider(parsed, provider);
-        const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider);
+        const tools = toolsToChatFormatForProvider(parsed, provider, toolNames.registry());
+        const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider, toolNames.registry());
 
         const body: Record<string, unknown> = {
           model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(parsed.modelId) : parsed.modelId,
@@ -365,7 +365,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             return "terminate";
           }
           if (!call.id) call.id = `call_${++toolCallSeq}`;
-          yield { type: "tool_call_start", id: call.id, name: call.name };
+          yield { type: "tool_call_start", id: call.id, name: toolNames.restore(call.name) };
           if (call.args.length > 0) yield { type: "tool_call_delta", arguments: call.args };
           yield { type: "tool_call_end" };
         }
@@ -801,7 +801,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               logInvalidToolCalls("response", rawToolCalls);
               return [invalidToolCallsEvent(rawToolCalls, "response", usage)];
             }
-            events.push({ type: "tool_call_start", id, name });
+            events.push({ type: "tool_call_start", id, name: toolNames.restore(name) });
             events.push({ type: "tool_call_delta", arguments: args });
             events.push({ type: "tool_call_end" });
           }
@@ -818,5 +818,5 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         budget.releaseRetained(responseBytes, { kind: "retained_collectors" });
       }
     },
-  };
+  }));
 }

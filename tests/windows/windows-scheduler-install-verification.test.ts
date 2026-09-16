@@ -49,6 +49,80 @@ describe("decodeSchtasksOutput", () => {
     const text = "Folder: \\\nTaskName: opencodex-proxy";
     expect(decodeSchtasksOutput(Buffer.from(text, "utf8"))).toBe(text);
   });
+
+  /**
+   * #4691: redirected "schtasks /query /xml" follows the console output code page of the
+   * spawning process tree, not the XML declaration. On a zh-CN host (ACP/OEMCP 936) those
+   * bytes are GBK, and the old UTF-8 fallback turned a CJK account name into U+FFFD. The
+   * trigger scope then stopped matching the correctly resolved [SID, MACHINE\<name>], so
+   * "ocx service repair" refused a registration OpenCodex had created itself, and fresh
+   * installs rolled back at post-create verification.
+   */
+  test("decodes GBK schtasks XML so a CJK account name still matches its trigger scope", () => {
+    const wscript = "C:\\WINDOWS\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\x\\.opencodex\\opencodex-service-launcher.vbs";
+    // Task Scheduler canonicalizes a SID-scoped trigger back to the account name on
+    // export, which is why the identity reaching the decoder is non-ASCII at all.
+    const account = "MACHINE\\张三";
+    const xml = buildWindowsTaskXml(
+      "C:\\Users\\x\\.opencodex\\opencodex-service.cmd",
+      launcher,
+      undefined,
+      account,
+    ).replace(/<Command>.*?<\/Command>/, "<Command>" + wscript + "</Command>");
+
+    // Literal CP936 bytes, for the same reason tests/windows/windows-text-decoding.test.ts
+    // uses literal hex: encoding the fixture with the decoder under test would assert
+    // nothing. 0xD5C5 0xC8FD is the account name on code page 936, and it is not valid
+    // UTF-8 — which is why the old fallback was lossy rather than merely wrong.
+    const cp936 = new Map([["张", [0xd5, 0xc5]], ["三", [0xc8, 0xfd]]]);
+    const bytes = Buffer.concat([...xml].map(ch => {
+      const legacy = cp936.get(ch);
+      if (legacy) return Buffer.from(legacy);
+      if (ch.codePointAt(0)! > 0x7f) throw new Error("fixture has no CP936 bytes for " + ch);
+      return Buffer.from(ch, "ascii");
+    }));
+
+    const decoded = decodeSchtasksOutput(bytes, { locale: "zh-CN" });
+    expect(decoded).toContain("<UserId>" + account + "</UserId>");
+    expect(decoded).not.toContain("\uFFFD");
+    expect(windowsTaskRegistrationHealthy(decoded, wscript, launcher, [TEST_WINDOWS_TASK_SID, account])).toBe(true);
+
+    // The regression itself: the historical decode mangles the name, and the scope check
+    // then fails — the "not a recognized legacy OpenCodex definition" refusal.
+    const mojibake = bytes.toString("utf8");
+    expect(mojibake).toContain("\uFFFD");
+    expect(windowsTaskRegistrationHealthy(mojibake, wscript, launcher, [TEST_WINDOWS_TASK_SID, account])).toBe(false);
+
+    // Decoding correctly does not relax ownership. A different account is still rejected,
+    // and the mojibake spelling is not accepted as an identity of its own — forgiving it
+    // would let two different non-ASCII accounts collapse to the same value.
+    expect(windowsTaskRegistrationHealthy(decoded, wscript, launcher, [TEST_WINDOWS_TASK_SID, "MACHINE\\someone-else"])).toBe(false);
+    expect(windowsTaskRegistrationHealthy(decoded, wscript, launcher, ["MACHINE\\\uFFFD\uFFFD"])).toBe(false);
+  });
+
+  test("a UTF-8 task document is not mistaken for the legacy code page", () => {
+    // The strict UTF-8 attempt runs before any code-page guess, so a CP 65001 console on
+    // the same zh-CN host still decodes correctly. #4106 was closed as not-planned because
+    // that reporter's console was 65001; this pins that the fix leaves that case alone.
+    const utf8Xml = "<Task><UserId>MACHINE\\张三</UserId></Task>";
+    expect(decodeSchtasksOutput(Buffer.from(utf8Xml, "utf8"), { locale: "zh-CN" })).toBe(utf8Xml);
+  });
+
+  test("delegating the decode leaves the UTF-16 paths intact", () => {
+    const text = "Folder: \\\nTaskName: opencodex-proxy";
+    // UTF-16LE with and without a BOM, and UTF-16BE, all still round-trip: that is what
+    // "schtasks /query /xml" emits on an ordinary host and the reason this decoder exists.
+    expect(decodeSchtasksOutput(Buffer.from("\uFEFF" + text, "utf16le"))).toBe(text);
+    expect(decodeSchtasksOutput(Buffer.from(text, "utf16le"))).toBe(text);
+    const be = Buffer.from("\uFEFF" + text, "utf16le");
+    for (let i = 0; i + 1 < be.length; i += 2) {
+      const low = be[i]!;
+      be[i] = be[i + 1]!;
+      be[i + 1] = low;
+    }
+    expect(decodeSchtasksOutput(be)).toBe(text);
+  });
 });
 
 describe("windowsSchedulerCsvIncludesTask", () => {

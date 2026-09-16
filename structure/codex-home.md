@@ -1,5 +1,11 @@
 # Codex Home
 
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
+
+A lock in the Codex credential store is governed by [descriptor identity and age](catalog.md#accounts-namespaces-and-pool-rotation), so the mere presence of its filename is neither acquisition nor release authority. Failed path-identity probes leave the lock for stale recovery and preserve the refresh callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
+
+CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
+
 ## Codex home
 
 `src/codex/paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from
@@ -232,6 +238,8 @@ to snapshot persistence instead of relying on the progress argument alone.
 
 ## Codex-home diagnostics
 
+Desktop executable membership uses the [discovered installation root](runtime.md#codex-desktop-process-membership), independently of the Codex state directory resolved here.
+
 Some Codex-home conditions are reported rather than repaired, because repairing them would overwrite
 a deliberate user choice:
 
@@ -252,7 +260,7 @@ Plan-based automatic exclusions leave native credential files untouched and pres
 
 Injection preflights affected history using the normalized config candidate before writing config/profile/journal, then checks again after the complete artifact write. Native restore also rechecks after successful journal restoration or fallback removal, while exact config/profile/journal preimages and any coordinated remove transaction remain available for compensation.
 
-What a detected migration does depends on which refusal it is, and on direction. On apply, `history_paginated_requires_native_writer` retires the relabel unit and the config/profile/journal write stands: it is permanent, so compensating it only produced a home with no OpenCodex models at all. Any other reason there — an unreadable state database, a changed rollout identity, a preflight that could not run — may succeed on a later attempt, so it still restores all three preimages before returning a structured refusal, including on legacy-uncoordinated homes. Restore and removal compensate on every reason, because retiring a provider definition its thread rows still name would orphan them. A failed config restore stops catalog/history work; coordinated restore rolls back its published remove transition. Legacy first-line provider patches are bound to the validated file identity before and after writing. These compensating checks do not provide a native-writer lock or authorize external ordinal allocation.
+What a detected migration does depends on which refusal it is, and on direction. On apply, `history_paginated_requires_native_writer` retires the relabel unit and the config/profile/journal write stands when the admitted candidate preserves any existing provider table. Retention is decided before witness construction and does not depend on history preflight passing: apply keeps any existing provider definition while selecting the requested root provider. This also protects references when native migration begins after artifact commit or during worker startup, without compensating over newer native writes. Background worker failures remain reported, and candidate bytes never change after admission. Any other reason there — an unreadable state database, a changed rollout identity, a preflight that could not run — may succeed on a later attempt, so it still restores all three preimages before returning a structured refusal, including on legacy-uncoordinated homes. Restore and removal compensate on every reason, because retiring a provider definition its thread rows still name would orphan them. A failed config restore stops catalog/history work; coordinated restore rolls back its published remove transition. Legacy first-line provider patches are bound to the validated file identity before and after writing. These compensating checks do not provide a native-writer lock or authorize external ordinal allocation.
 
 The legacy external writer is now refused for affected rows in any store whose schema includes history_mode, even while their row mode is still legacy. This deliberately sacrifices automatic relabeling on migration-capable stores rather than racing native conversion. Synchronous/asynchronous restore, inline journal restore, and direct config removal preserve all artifacts on that refusal, so an already-paginated home cannot yet be uninstalled through the product; apply instead writes its config and keeps a `[model_providers.opencodex]` table the home already published, so rows naming that provider keep resolving.
 
@@ -275,3 +283,5 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+
+Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.

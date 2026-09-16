@@ -47,7 +47,10 @@ describe("transient send budget stays request-scoped", () => {
     expect(core.match(/const sendBudget = options\.sendBudget \?\? createRequestExecutionBudget\(\);/g))
       .toHaveLength(1);
     // Genuine ingress mints it; a child arrives with the parent's and must not replace it.
-    expect(core).toContain("sendBudget: options.sendBudget ?? createRequestExecutionBudget(),");
+    expect(core).toContain("sendBudget: options.sendBudget ?? createRequestExecutionBudget(");
+    // ...and the durable spend observer is installed WITH it, for the same reason: a child that
+    // inherited the holder must not open a second set of ledger entries for the same sends.
+    expect(core).toContain("attachRequestSpendTracker(req, logCtx)");
     // The regressed shape: a counter local to one call frame, which a combo child restarts.
     expect(core).not.toContain("let transientSendsUsed = 0;");
     expect(core.match(/const remainingTransientSendBudget = \(budget: number\): number =>/g)).toHaveLength(1);

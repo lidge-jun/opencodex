@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ELEVATION_REQUEST_TIMEOUT_MS, OCX_ELEVATED_PROTOCOL_FAILED, raceWithTimeout, resolveTrustedWindowsSchtasksExe, startElevatedSchtasksCreateAndRun, runWindowsElevated, toWindowsSchtasksError, WindowsElevationError, type ElevatedSchedulerOutcome, type ElevatedSchtasksCreateAndRunExecution, type ElevatedSchtasksCreateAndRunResult } from "../lib/windows-elevation";
 import { statusWinswRaw } from "../lib/winsw";
+import { decodeWindowsTextBytes, type WindowsTextDecodeOptions } from "../lib/windows-text";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { TASK, windowsServiceScriptPath, windowsLauncherVbsPath, windowsTaskXmlPath, writeServiceInstallState } from "./state";
 import { buildWindowsSchtasksCreateArgs, windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
@@ -16,28 +17,34 @@ import { WINSW_SERVICE_ID } from "../lib/winsw";
  * Decode schtasks stdout. `/query /xml` emits UTF-16LE (often with BOM) because the
  * registered task document is UTF-16; reading that as UTF-8 makes every health check
  * fail ("registration present but unhealthy") and rolls back a successful elevated create.
+ *
+ * Redirected output is NOT always UTF-16. Its encoding follows the console output code
+ * page of the spawning process tree rather than the XML declaration, so on a zh-CN host
+ * (ACP/OEMCP 936) the bytes are GBK — including inside a no-console background service.
+* Decoding those as UTF-8 turned a CJK account name in
+ * `<SessionStateChangeTrigger><UserId>` into U+FFFD, the trigger scope then failed to
+ * match the correctly resolved `[SID, MACHINE\<name>]`, and `ocx service repair`
+* aborted at its recognition gate on a registration OpenCodex had itself created. The
+ * same mojibake rolled back fresh installs at post-create verification (#4691).
+ *
+ * The fix is entirely in byte decoding, before any XML is parsed. The trigger scope stays
+ * an exact identity comparison: forgiving a replacement character there would let two
+ * different non-ASCII accounts collapse to the same value, which is a worse failure than
+ * the refusal it replaces.
+ *
+ * `decodeWindowsTextBytes` is the decoder this project already built for this class
+ * (UTF-16 -> strict UTF-8 -> the locale's legacy code page), and it already fixed the
+ * sibling `whoami`/PowerShell decode in `src/lib/windows-user-principal.ts` (#2914, and
+ * #722 for CP949). This call site was the last one still ending in a lossy UTF-8 decode.
  */
-export function decodeSchtasksOutput(buffer: Buffer): string {
-  if (buffer.length === 0) return "";
-  const bomUtf16Le = buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe;
-  const bomUtf16Be = buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff;
-  const looksUtf16Le = buffer.length >= 4
-    && buffer[1] === 0x00
-    && buffer[3] === 0x00
-    && buffer[0] !== 0x00;
-  if (bomUtf16Le || looksUtf16Le) {
-    return buffer.toString("utf16le").replace(/^\uFEFF/, "").trim();
-  }
-  if (bomUtf16Be) {
-    // Swap pairs then decode as utf16le.
-    const swapped = Buffer.alloc(buffer.length - 2);
-    for (let i = 2; i + 1 < buffer.length; i += 2) {
-      swapped[i - 2] = buffer[i + 1]!;
-      swapped[i - 1] = buffer[i]!;
-    }
-    return swapped.toString("utf16le").trim();
-  }
-  return buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
+export function decodeSchtasksOutput(
+  buffer: Buffer,
+  options: WindowsTextDecodeOptions = {},
+): string {
+  // `options` exists so a test can pin the code page; every production call passes the
+  // buffer alone and uses the active Intl locale, which is available to a service with no
+  // console because the selection reads the process locale rather than a console handle.
+  return decodeWindowsTextBytes(buffer, options);
 }
 
 function runFile(file: string, args: string[]): string {

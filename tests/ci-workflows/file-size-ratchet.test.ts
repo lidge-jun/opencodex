@@ -13,7 +13,10 @@ import { readFileSync } from "node:fs";
  * Source-oracle reads go through tests/helpers/repo-root.ts (INV-TESTS-01).
  */
 import {
+  DATA_SNAPSHOT_PATHS,
+  EXEMPT_PATHS,
   GENERATED_PATHS,
+  I18N_CATALOG_PATHS,
   THRESHOLD,
   countLines,
   evaluate,
@@ -32,11 +35,13 @@ import { repoPath, repoRoot } from "../helpers/repo-root";
  * green" test would stay green if evaluate() started returning NEW_OK for a
  * 2,000-line new file, as long as this tree had no such file today.
  *
- * Five pure cases plus one repository scan. Do not add a seventh test():
- * SHRANK already covers updateBaseline (lower, drop missing, never raise,
- * seed only when asked).
+ * Five pure cases plus one repository scan cover evaluate() and updateBaseline;
+ * SHRANK already covers the update rules (lower, drop missing, never raise, seed
+ * only when asked), so do not add another case for those. The classification
+ * block below asserts a different property: that each exemption is on the list
+ * for the reason the list claims.
  */
-const emptyBaseline = (): Baseline => ({ generated: [], files: {} });
+const emptyBaseline = (): Baseline => ({ exempt: [], files: {} });
 
 const linesOf = (count: number): string => {
   const rows = Array.from({ length: count }, (_, i) => `line ${i}`);
@@ -74,7 +79,7 @@ describe("file-size ratchet: caps", () => {
     // Grandfathered files may stay oversized, but they may not grow. Equality is
     // UNCHANGED, not SHRANK; a test that only checked isOffender() would not notice
     // if equality started reporting GREW.
-    const baseline: Baseline = { generated: [], files: { "src/config.ts": 4707 } };
+    const baseline: Baseline = { exempt: [], files: { "src/config.ts": 4707 } };
     const grew = evaluate([{ path: "src/config.ts", lines: 4708 }], baseline);
     const same = evaluate([{ path: "src/config.ts", lines: 4707 }], baseline);
 
@@ -90,7 +95,7 @@ describe("file-size ratchet: caps", () => {
     // must not re-grandfather a new godfile, must not raise a cap, and must keep a
     // shrunken former godfile so the facade cannot grow back.
     const baseline: Baseline = {
-      generated: [],
+      exempt: [],
       files: { "src/keep.ts": 2100, "src/gone.ts": 2500, "src/small.ts": 800 },
     };
     const current: FileSize[] = [
@@ -117,13 +122,13 @@ describe("file-size ratchet: caps", () => {
     // A later --update must never raise. If it did, ratchet:update would launder GREW.
     const notRaised = updateBaseline(
       [{ path: "src/keep.ts", lines: 3000 }],
-      { generated: [], files: { "src/keep.ts": 2099 } },
+      { exempt: [], files: { "src/keep.ts": 2099 } },
       false,
     );
     expect(notRaised.files["src/keep.ts"]).toBe(2099);
 
     // seed=true is the first-commit path only (baseline file missing). Exempt
-    // generated paths stay out of files even at 9000 lines. Under-threshold files
+    // exempt paths stay out of files even at 9000 lines. Under-threshold files
     // stay out so the 2,000 cap remains the policy for new modules.
     const seeded = updateBaseline(
       [
@@ -131,27 +136,27 @@ describe("file-size ratchet: caps", () => {
         { path: "src/fresh.ts", lines: 1800 },
         { path: "gui/src/i18n/en.ts", lines: 9000 },
       ],
-      { generated: ["gui/src/i18n/en.ts"], files: {} },
+      { exempt: ["gui/src/i18n/en.ts"], files: {} },
       true,
     );
     expect(seeded.files).toEqual({ "src/old.ts": 2500 });
   });
 
-  test("GENERATED: baseline.generated 경로는 커져도 통과", () => {
-    // Exact paths only. A sibling under cursor/gen/ that is not in generated[] is a
+  test("EXEMPT: baseline.exempt 경로는 커져도 통과", () => {
+    // Exact paths only. A sibling under cursor/gen/ that is not in exempt[] is a
     // new oversized file, even though a glob would have exempted the whole directory.
     const path = "src/adapters/cursor/gen/agent_pb.ts";
     const baseline: Baseline = {
-      generated: [path],
+      exempt: [path],
       files: { [path]: 100 },
     };
     const rows = evaluate([{ path, lines: 99_999 }], baseline);
-    expect(rows).toEqual([{ path, lines: 99_999, verdict: "GENERATED" }]);
+    expect(rows).toEqual([{ path, lines: 99_999, verdict: "EXEMPT" }]);
     expect(rows.filter(isOffender)).toEqual([]);
 
     const globWouldHaveCaught = evaluate(
       [{ path: "src/adapters/cursor/gen/hand-written.ts", lines: 2500 }],
-      { generated: [path], files: {} },
+      { exempt: [path], files: {} },
     );
     expect(globWouldHaveCaught[0]?.verdict).toBe("NEW_OVERSIZED");
   });
@@ -192,11 +197,11 @@ describe("file-size ratchet: repository", () => {
   test("저장소 스캔: 커밋된 기준선 대비 offender가 없다", () => {
     // Mirrors tests/ci-workflows/repo-hygiene.test.ts: git ls-files + expect([]).
     // An empty scan would also equal [], so scanned.length > 0 is the non-vacuous
-    // guard. generated[] is the committed JSON, not the script constant used alone.
+    // guard. exempt[] is the committed JSON, not the script constant used alone.
     const baseline = loadBaseline(
       readFileSync(repoPath("tests/fixtures/file-size-baseline.json"), "utf8"),
     );
-    expect(baseline.generated).toEqual([...GENERATED_PATHS]);
+    expect(baseline.exempt).toEqual([...EXEMPT_PATHS]);
 
     const scanned = scanRepo(repoRoot());
     expect(scanned.length).toBeGreaterThan(0);
@@ -206,7 +211,73 @@ describe("file-size ratchet: repository", () => {
     const rows = evaluate(scanned, baseline);
     expect(rows.filter(isOffender)).toEqual([]);
     expect(
-      rows.filter((row) => row.verdict === "GENERATED").map((row) => row.path).sort(),
-    ).toEqual([...GENERATED_PATHS].slice().sort());
+      rows.filter((row) => row.verdict === "EXEMPT").map((row) => row.path).sort(),
+    ).toEqual([...EXEMPT_PATHS].slice().sort());
+  });
+});
+
+/**
+ * The list said "generated" and eleven of its twelve entries were hand-written. Nothing
+ * failed, because nothing checked: the name was the only claim, and a name cannot be wrong
+ * loudly. These two cases make the claim checkable — the first against the files themselves,
+ * the second against the update rule the exemption relies on.
+ */
+describe("file-size ratchet: exemption classification", () => {
+  const GENERATOR_BANNER = /@generated|DO NOT EDIT|Do not edit/;
+
+  const headOf = (path: string): string =>
+    readFileSync(repoPath(path), "utf8").split("\n").slice(0, 12).join("\n");
+
+  test("분류: 세 목록은 서로소이고 합집합이 면제 목록이다", () => {
+    const lists = [GENERATED_PATHS, I18N_CATALOG_PATHS, DATA_SNAPSHOT_PATHS].map(list => [...list]);
+    const all = lists.flat();
+
+    // Exact allowlists: no duplicates within a list, none across two lists, and the union is
+    // the exemption itself. A path that drifts into two categories would be exempt for two
+    // contradictory reasons and reviewable under neither.
+    expect(new Set(all).size).toBe(all.length);
+    expect([...all].sort()).toEqual([...EXEMPT_PATHS]);
+    expect(EXEMPT_PATHS.length).toBe(12);
+
+    // Every exemption names a file that is actually here. A stale entry exempts nothing and
+    // hides the fact that the policy no longer describes this tree.
+    for (const path of EXEMPT_PATHS) expect(readFileSync(repoPath(path), "utf8").length).toBeGreaterThan(0);
+  });
+
+  test("분류: generated로 분류된 파일만 생성기 배너를 가진다", () => {
+    // The oracle is the file's own first lines, not this list. agent_pb.ts opens with
+    // "@generated by protoc-gen-es"; that is what makes it generated, and it is the only
+    // exemption that can say so.
+    for (const path of GENERATED_PATHS) expect(GENERATOR_BANNER.test(headOf(path))).toBe(true);
+    for (const path of [...I18N_CATALOG_PATHS, ...DATA_SNAPSHOT_PATHS]) {
+      expect(GENERATOR_BANNER.test(headOf(path))).toBe(false);
+    }
+
+    // Positive control on the other side: the real output of the generator whose INPUT used to
+    // sit on the generated list does carry the banner, and is scanned under a cap like any
+    // other source file. Naming the input "generated" had it exactly backwards.
+    expect(GENERATOR_BANNER.test(headOf("src/generated/model-metadata.ts"))).toBe(true);
+    expect([...EXEMPT_PATHS]).not.toContain("src/generated/model-metadata.ts");
+    expect(isScannedPath("src/generated/model-metadata.ts")).toBe(true);
+  });
+
+  test("면제: --update는 면제 경로에 캡을 만들지 않고 기존 캡을 올리지도 않는다", () => {
+    const exemptPath = "gui/src/i18n/en.ts";
+    const baseline: Baseline = { exempt: [exemptPath], files: { "src/held.ts": 2500 } };
+    const current: FileSize[] = [
+      { path: exemptPath, lines: 9000 },
+      { path: "src/held.ts", lines: 9999 },
+    ];
+
+    // Seeding is the only path that adds caps, and it skips exempt paths: an exemption that
+    // silently acquired a cap would start failing on the next line added to a catalogue.
+    const seeded = updateBaseline(current, baseline, true);
+    expect(seeded.files[exemptPath]).toBeUndefined();
+    expect(seeded.exempt).toEqual([exemptPath]);
+    // Math.min, so a file that grew keeps the cap it had. The ratchet only ever tightens.
+    expect(seeded.files["src/held.ts"]).toBe(2500);
+
+    const shrunk = updateBaseline([{ path: "src/held.ts", lines: 40 }], baseline, false);
+    expect(shrunk.files["src/held.ts"]).toBe(40);
   });
 });

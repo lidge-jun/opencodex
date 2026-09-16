@@ -27,6 +27,7 @@ import type { OAuthAccessSnapshot } from "../../oauth";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import { thoughtSignatureReplaySalt } from "../../responses/thought-signature-replay";
 import { randomUUID } from "node:crypto";
+import { requiresPlaintextReasoningReplay } from "../../adapters/openai-responses/passthrough";
 
 /**
  * Adapters whose continuation state must survive Codex's store:false requests.
@@ -107,6 +108,53 @@ export function bindRouteReasoningReplayScope(args: {
   forwardHeaders?: Headers;
 }): void {
   const { parsed, providerName, provider, adapterName } = args;
+  const replayIdentity = routeReasoningReplayIdentity({
+    ...args,
+    modelId: parsed.modelId,
+  });
+  const continuationDestinationIdentity = providerContinuationDestinationIdentity(parsed, provider);
+  const continuationOwner = providerContinuationOwnerFromReplayIdentity(
+    replayIdentity && continuationDestinationIdentity
+      ? { ...replayIdentity, providerDestinationIdentity: continuationDestinationIdentity }
+      : undefined,
+  );
+  if (adapterName === "cursor") {
+    // The final route owner is authoritative for Cursor and supersedes the account-derived
+    // seed assigned before route binding. A Cursor conversation must be scoped to the exact
+    // provider/destination/adapter/model/credential that serves it.
+    if (continuationOwner) parsed._cursorIdentityScope = providerContinuationRouteScope(continuationOwner);
+    else if (!parsed._cursorIdentityScope?.startsWith("cursor-unowned:")) {
+      // Prevent the adapter's token-only fallback from recreating a provider-private id after the
+      // route owner failed closed. The sentinel is per parsed request and contains no credential.
+      parsed._cursorIdentityScope = `cursor-unowned:${randomUUID()}`;
+    }
+  }
+  bindReasoningReplayScope(
+    parsed._reasoningReplayScope,
+    replayIdentity,
+  );
+  // Keep this sticky for the whole outbound request: a later auth/key rebind may compare equal
+  // after the first mismatch, but it cannot make history minted by the prior route decodable.
+  if (reasoningReplayServingIdentityChanged(parsed._reasoningReplayScope)) {
+    parsed._stripReasoningEncryptedContent = true;
+  }
+  if (reasoningReplayOpaqueBlobRejectionMemoized(parsed._reasoningReplayScope)) {
+    parsed._stripReasoningEncryptedContent = true;
+  }
+  bindProviderContinuationForRoute(parsed, continuationOwner);
+}
+
+
+function routeReasoningReplayIdentity(args: {
+  providerName: string;
+  provider: OcxProviderConfig;
+  adapterName: string;
+  modelId: string;
+  oauthCredentialSnapshot?: Pick<OAuthAccessSnapshot, "accountId" | "generation">;
+  codexAuthContext?: CodexAuthContext;
+  forwardHeaders?: Headers;
+}): OcxReasoningReplayIdentity | undefined {
+  const { providerName, provider, adapterName, modelId } = args;
   let credentialIdentity: string | undefined;
   let credentialDurableIdentity: string | undefined;
   const durableSalt = thoughtSignatureReplaySalt();
@@ -165,47 +213,72 @@ export function bindRouteReasoningReplayScope(args: {
     );
   }
   const providerDestinationIdentity = reasoningReplayDestinationIdentity(provider.baseUrl);
-  const replayIdentity: OcxReasoningReplayIdentity | undefined = credentialIdentity && providerDestinationIdentity
+  return credentialIdentity && providerDestinationIdentity
     ? {
         providerName,
         providerDestinationIdentity,
         providerDestinationDurableIdentity: durableReplayDestinationIdentity(provider.baseUrl),
         adapterName,
-        modelId: parsed.modelId,
+        modelId,
         credentialIdentity,
         ...(credentialDurableIdentity ? { credentialDurableIdentity } : {}),
       }
     : undefined;
-  const continuationDestinationIdentity = providerContinuationDestinationIdentity(parsed, provider);
-  const continuationOwner = providerContinuationOwnerFromReplayIdentity(
-    replayIdentity && continuationDestinationIdentity
-      ? { ...replayIdentity, providerDestinationIdentity: continuationDestinationIdentity }
-      : undefined,
-  );
-  if (adapterName === "cursor") {
-    // The final route owner is authoritative for Cursor and supersedes the account-derived
-    // seed assigned before route binding. A Cursor conversation must be scoped to the exact
-    // provider/destination/adapter/model/credential that serves it.
-    if (continuationOwner) parsed._cursorIdentityScope = providerContinuationRouteScope(continuationOwner);
-    else if (!parsed._cursorIdentityScope?.startsWith("cursor-unowned:")) {
-      // Prevent the adapter's token-only fallback from recreating a provider-private id after the
-      // route owner failed closed. The sentinel is per parsed request and contains no credential.
-      parsed._cursorIdentityScope = `cursor-unowned:${randomUUID()}`;
-    }
-  }
-  bindReasoningReplayScope(
-    parsed._reasoningReplayScope,
-    replayIdentity,
-  );
-  // Keep this sticky for the whole outbound request: a later auth/key rebind may compare equal
-  // after the first mismatch, but it cannot make history minted by the prior route decodable.
-  if (reasoningReplayServingIdentityChanged(parsed._reasoningReplayScope)) {
-    parsed._stripReasoningEncryptedContent = true;
-  }
-  if (reasoningReplayOpaqueBlobRejectionMemoized(parsed._reasoningReplayScope)) {
-    parsed._stripReasoningEncryptedContent = true;
-  }
-  bindProviderContinuationForRoute(parsed, continuationOwner);
+}
+
+
+/**
+ * Whether this exact route cannot satisfy its documented plaintext reasoning replay contract.
+ *
+ * A generic plaintext-preserving gateway is not made ineligible. Unknown serving provenance also
+ * stays eligible; only a proven route mismatch may suppress a combo candidate.
+ */
+export function mandatoryResponsesReasoningReplayUnavailable(args: {
+  body: unknown;
+  clientThreadId: string | undefined;
+  providerName: string;
+  provider: OcxProviderConfig;
+  adapterName: string;
+  modelId: string;
+}): boolean {
+  const { body, clientThreadId, provider, adapterName } = args;
+  if (
+    adapterName !== "openai-responses"
+    || !requiresPlaintextReasoningReplay(provider)
+    || !clientThreadId
+    || !requestCarriesTools(body)
+    || !hasOpaqueOnlyReasoningItem(body)
+  ) return false;
+
+  const current = routeReasoningReplayIdentity(args);
+  return reasoningReplayServingIdentityChanged({ clientThreadId, current });
+}
+
+
+function requestCarriesTools(body: unknown): boolean {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  return Array.isArray((body as { tools?: unknown }).tools)
+    && (body as { tools: unknown[] }).tools.length > 0;
+}
+
+
+function hasOpaqueOnlyReasoningItem(body: unknown): boolean {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const input = (body as { input?: unknown }).input;
+  if (!Array.isArray(input)) return false;
+  return input.some(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const reasoning = item as Record<string, unknown>;
+    if (reasoning.type !== "reasoning" || typeof reasoning.encrypted_content !== "string") return false;
+    const content = reasoning.content;
+    const hasPlaintext = Array.isArray(content) && content.some(part =>
+      !!part && typeof part === "object" && !Array.isArray(part)
+      && (part as Record<string, unknown>).type === "reasoning_text"
+      && typeof (part as Record<string, unknown>).text === "string"
+      && ((part as Record<string, unknown>).text as string).length > 0
+    );
+    return !hasPlaintext;
+  });
 }
 
 

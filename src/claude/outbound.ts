@@ -212,6 +212,8 @@ interface OpenBlock {
   argsBuf?: string;
   argsBufBytes?: number;
   webSearchArgsEmitted?: boolean;
+  /** True once ordinary function-call arguments were emitted to Anthropic SSE. */
+  toolArgsEmitted?: boolean;
   callId?: string;
   /** Last fixed-size reasoning identity (item + summary/content index) seen by this block. */
   reasoningPartKey?: string;
@@ -488,6 +490,7 @@ export function responsesSseToAnthropicSse(
               argsBuf: "",
               argsBufBytes: 0,
               webSearchArgsEmitted: false,
+              toolArgsEmitted: false,
             };
             break;
           }
@@ -518,6 +521,14 @@ export function responsesSseToAnthropicSse(
               type: "content_block_delta", index: open.index,
               delta: { type: "input_json_delta", partial_json: data.delta },
             });
+            open.toolArgsEmitted = true;
+            break;
+          }
+          case "response.function_call_arguments.done": {
+            if (!open || open.kind !== "tool_use" || open.bufferWebSearchArgs || open.toolArgsEmitted) break;
+            if (typeof data.arguments !== "string" || data.arguments.length === 0) break;
+            emit("content_block_delta", { type: "content_block_delta", index: open.index, delta: { type: "input_json_delta", partial_json: data.arguments } });
+            open.toolArgsEmitted = true;
             break;
           }
           case "response.output_item.done": {
@@ -565,6 +576,13 @@ export function responsesSseToAnthropicSse(
                   delta: { type: "input_json_delta", partial_json: JSON.stringify(sanitizeWebSearchInput(parsed)) },
                 });
                 open.webSearchArgsEmitted = true;
+              } else if (!open.bufferWebSearchArgs && !open.toolArgsEmitted
+                && typeof item.arguments === "string" && item.arguments.length > 0) {
+                emit("content_block_delta", {
+                  type: "content_block_delta", index: open.index,
+                  delta: { type: "input_json_delta", partial_json: item.arguments },
+                });
+                open.toolArgsEmitted = true;
               }
               closeOpenBlock();
             }

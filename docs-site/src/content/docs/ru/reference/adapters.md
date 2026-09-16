@@ -189,10 +189,12 @@ incomplete. `TOOL_USE` без фактического вызова инстру
 
 ### Reasoning effort
 
-`gpt-5.6-sol` и `claude-opus-5` поддерживают нативный effort, но называют поле запроса по-разному.
-Значения `low` / `medium` / `high` / `xhigh` / `max` отправляются как
-`additionalModelRequestFields.reasoning.effort` и `output_config.effort` соответственно.
-
+Семейство GPT-5.6 использует `additionalModelRequestFields.reasoning.effort`, а `claude-opus-5` —
+`additionalModelRequestFields.output_config.effort`. Для `gpt-5.6-luna` и `gpt-5.6-terra` нативный
+путь проверен только для `low`, `medium`, `high` и `max`. Их `xhigh` сохраняет прежнюю эмуляцию
+через ограниченные инструкции thinking, поскольку нативный уровень не проверен.
+Существующие нативные уровни `gpt-5.6-sol` и `claude-opus-5` (`low`, `medium`, `high`, `xhigh`, `max`)
+не меняются. Остальные модели Kiro используют эмуляцию; наличие настройки effort не доказывает нативную поддержку.
 
 ## `cursor`
 

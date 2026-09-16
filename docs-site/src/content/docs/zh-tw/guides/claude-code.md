@@ -129,8 +129,9 @@ ocx claude desktop import <path> [--apply]
 檔案，因此無效檔案不會改動目前設定檔。加上 `--apply` 可在匯入有效設定檔後立即寫入 Desktop。
 `none` 僅適用於空系列；每個非空系列都必須保留一個預設。
 
-非 Anthropic 路由會得到穩定別名，例如 `claude-opus-4-8-2026MMDD`。看起來像日期的部分是合成的
-路由槽位，不是模型釋出日期。真正的 Anthropic Claude 路由保留真實 id。新路由預設落在 Opus
+非 Anthropic 路由會得到穩定別名，例如 `claude-opus-4-8-YYYYMMDD`，年份範圍為 2026 至 2035。看起來像日期的部分是合成的
+路由槽位，不是模型釋出日期。系統會先配置 2026 的槽位，因此既有別名的 id 不變；2026 用盡後才會用到後續年份。
+真正的 Anthropic Claude 路由保留真實 id。新路由預設落在 Opus
 系列，但移動路由不會改變它所呼叫的供應商或模型。舊版 apply 旗標 `--static`、`--hybrid` 與
 `--discovery-only` 仍可供既有腳本使用。
 

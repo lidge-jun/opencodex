@@ -12,7 +12,7 @@ export type WebSearchSource = SafeWebSearchSource;
 export interface WebSearchResult {
   text: string;
   sources: WebSearchSource[];
-  /** Set only when the stream surfaced an error AND produced no usable answer text. */
+  /** Set when the stream failed, including when partial text was decoded before failure. */
   error?: string;
 }
 
@@ -31,9 +31,12 @@ interface OutputItem {
   content?: OutputTextBlock[];
 }
 
-// ChatGPT's Codex backend does not accept `max_output_tokens` on sidecar requests. Bound the raw
-// streamed response here, before decoded text and authoritative/delta copies can accumulate.
+// Keep this compatibility export for non-Responses sidecar executors and bounded error bodies.
 export const MAX_SIDECAR_RESPONSE_BYTES = 64 * 1024;
+// Responses SSE can spend far more wire bytes on JSON framing than on useful model output. Keep a
+// larger finite wire ceiling while separately bounding the decoded text copies accumulated below.
+export const MAX_SIDECAR_STREAM_BYTES = MAX_SIDECAR_RESPONSE_BYTES * 16;
+export const MAX_SIDECAR_DECODED_CHARS = 64 * 1024;
 
 /** Push a `url_citation` annotation as a source, de-duplicated by URL. */
 function collectAnnotation(ann: AnnotationLike | undefined, sources: WebSearchSource[], seen: Set<string>): void {
@@ -208,10 +211,11 @@ export function cancelReaderWithoutWaiting(
  * `response.output_text.done` text; falls back to accumulated `response.output_text.delta`. Sources are
  * collected from EVERY shape they arrive in — `response.output_text.annotation.added` events (the
  * streaming path, which earlier testing missed → empty citations), `done`-block `annotations[]`, and
- * the final output[]. `response.failed`/`error` events surface as `error` when no answer text was produced.
+ * the final output[]. A terminal failure, a safety bound, or EOF before a terminal event surfaces as
+ * `error` even when partial answer text was decoded.
  */
 export async function parseSidecarSSE(response: Response): Promise<WebSearchResult> {
-  if (!response.body) return { text: "", sources: [] };
+  if (!response.body) return { text: "", sources: [], error: "sidecar stream returned no response body" };
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -224,10 +228,37 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
     final: WebSearchResult | null;
     streamSources: WebSearchSource[];
     error: string | null;
-  } = { deltaText: "", doneText: "", final: null, streamSources: [], error: null };
+    decodedChars: number;
+    terminalEvent: boolean;
+    limitReached: boolean;
+  } = {
+    deltaText: "",
+    doneText: "",
+    final: null,
+    streamSources: [],
+    error: null,
+    decodedChars: 0,
+    terminalEvent: false,
+    limitReached: false,
+  };
+
+  const acceptDecodedChars = (count: number): boolean => {
+    if (count > MAX_SIDECAR_DECODED_CHARS - acc.decodedChars) {
+      acc.error = "sidecar response decoded text limit reached";
+      acc.limitReached = true;
+      return false;
+    }
+    acc.decodedChars += count;
+    return true;
+  };
 
   const handle = (payload: string): void => {
-    if (!payload || payload === "[DONE]") return;
+    if (!payload) return;
+    if (payload === "[DONE]") {
+      acc.terminalEvent = true;
+      return;
+    }
+    if (acc.limitReached) return;
     // Neither warning below copies the frame's content. An upstream SSE payload can carry model
     // output or credential material, and a malformed frame is exactly the case where the content
     // is least trustworthy. Length plus a classification separates the two failure modes in a log
@@ -247,19 +278,27 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
     const data = parsed as Record<string, unknown>;
     const type = data.type as string | undefined;
     if (type === "response.output_text.delta" && typeof data.delta === "string") {
-      acc.deltaText += data.delta;
+      if (acceptDecodedChars(data.delta.length)) acc.deltaText += data.delta;
     } else if (type === "response.output_text.done" && typeof data.text === "string") {
       // The `done` event carries the full, authoritative text for one content part.
-      acc.doneText += data.text;
+      if (acceptDecodedChars(data.text.length)) acc.doneText += data.text;
     } else if (type === "response.completed" || type === "response.done") {
+      acc.terminalEvent = true;
       const resp = data.response as { output?: OutputItem[] } | undefined;
-      if (resp?.output) acc.final = fromOutputArray(resp.output, seen);
+      if (resp?.output) {
+        const final = fromOutputArray(resp.output, seen);
+        if (acceptDecodedChars(final.text.length)) acc.final = final;
+      }
     } else if (type === "response.failed" || type === "response.incomplete" || type === "error") {
+      acc.terminalEvent = true;
       const resp = data.response as { error?: { message?: string } } | undefined;
       const msg = resp?.error?.message
         ?? (data.error as { message?: string } | undefined)?.message
         ?? (typeof data.message === "string" ? data.message : undefined);
-      if (msg) acc.error = msg;
+      acc.error = msg ?? `sidecar stream ended with ${type}`;
+    } else if (type?.includes("reasoning") && typeof data.delta === "string") {
+      // Reasoning is not returned, but it is still decoded payload retained transiently by JSON.parse.
+      acceptDecodedChars(data.delta.length);
     }
     // Citations stream as a dedicated `response.output_text.annotation.added` event (singular
     // `annotation`); capture it regardless of the exact event name so they aren't lost.
@@ -270,7 +309,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const remaining = MAX_SIDECAR_RESPONSE_BYTES - responseBytes;
+      const remaining = MAX_SIDECAR_STREAM_BYTES - responseBytes;
       const accepted = value.byteLength <= remaining ? value : value.subarray(0, remaining);
       responseBytes += accepted.byteLength;
       buffer += decoder.decode(accepted, { stream: true });
@@ -280,11 +319,24 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
         const data = sseFieldValue(line, "data");
         if (data !== null) handle(data.trim());
       }
-      if (responseBytes >= MAX_SIDECAR_RESPONSE_BYTES) {
+      if (acc.limitReached) {
+        cancelReaderWithoutWaiting(reader, "sidecar response decoded text limit reached");
+        buffer = "";
+        break;
+      }
+      if (acc.terminalEvent) {
+        cancelReaderWithoutWaiting(reader, "sidecar terminal event received");
+        buffer = "";
+        break;
+      }
+      if (responseBytes >= MAX_SIDECAR_STREAM_BYTES) {
         // Preserve complete events accepted up to the cap, but discard any unterminated line and
         // TextDecoder carry. Do not let a rejecting/hung cancel turn bounded partial output into
         // an error or keep this parser waiting on upstream teardown.
         cancelReaderWithoutWaiting(reader, "sidecar response byte limit reached");
+        acc.error = "sidecar response byte limit reached before terminal event";
+        acc.limitReached = true;
+        buffer = "";
         break;
       }
     }
@@ -310,6 +362,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
     appendSafeWebSearchSource(sources, s);
   }
   const finalText = stripped ? body : (typeof text === "string" ? text : "");
-  if (!finalText.trim() && acc.error) return { text: "", sources, error: acc.error };
+  const error = acc.error ?? (!acc.terminalEvent ? "sidecar stream ended before terminal event" : null);
+  if (error) return { text: finalText, sources, error };
   return { text: finalText, sources };
 }

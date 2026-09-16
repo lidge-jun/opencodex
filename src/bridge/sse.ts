@@ -88,6 +88,20 @@ export function bridgeToResponsesSSE(
     onUsage?: (usage: OcxUsage | undefined) => void;
     /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
     declaredToolNames?: ReadonlySet<string>;
+    /**
+     * Whether `declaredToolNames` is an authorization boundary this proxy enforces, or only the
+     * catalog used to normalize provider-invented names back to declared ones.
+     *
+     * Defaults to enforcing. The chat and Anthropic inbound wires set it false: those specs make
+     * the server relay a tool call and leave execution or refusal to the client's own runner, and
+     * harnesses on them legitimately defer part of their catalog (#4735).
+     *
+     * It is a separate flag rather than simply withholding `declaredToolNames`, because the set
+     * also drives `normalizeDeclaredToolName` and `declaresCodeModeExec`. Passing `undefined`
+     * turns those off too, so a provider that invents `default.lookup` for a declared `lookup`
+     * would reach the client under the invented name instead of the normalized one.
+     */
+    enforceDeclaredToolNames?: boolean;
     /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
     toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
     /**
@@ -1008,7 +1022,11 @@ export function bridgeToResponsesSSE(
                 : undefined;
               const mapped = toolNsMap?.get(effectiveName);
               const realName = mapped?.name ?? effectiveName;
-              if (options?.declaredToolNames && !options.declaredToolNames.has(effectiveName)) {
+              if (
+                options?.declaredToolNames
+                && options.enforceDeclaredToolNames !== false
+                && !options.declaredToolNames.has(effectiveName)
+              ) {
                 const failure = responseError(
                   502,
                   "upstream_error",

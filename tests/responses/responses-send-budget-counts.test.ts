@@ -1,7 +1,11 @@
+import { shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "../../src/server/responses/core-codex-account";
+import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { fetchWithResetRetry, isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses/core";
+import { COMBO_TARGET_BASE_SENDS, comboExecutionBudgetPolicy } from "../../src/server/responses/core-combo";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 
@@ -120,7 +124,7 @@ describe("upstream sends per logical request", () => {
     expect(sendCounts(logCtx)).toEqual([3]);
   });
 
-  test("a three-target combo fan-out gives every declared target a send and totals six", async () => {
+  test("a three-target combo fan-out gives every declared target a send and stays bounded", async () => {
     const upstream = alwaysFailing(502, "upstream busy");
     const logCtx: RequestLogContext = { model: "", provider: "" };
 
@@ -128,34 +132,44 @@ describe("upstream sends per logical request", () => {
 
     expect(response.status).toBe(502);
     await response.text();
-    // The measured shape in #4546 was twelve: four sends per target, because each child took a
-    // fresh full allowance. Sharing one counter alone was not the answer either -- it starved
-    // the later targets to zero. The first target runs its own ladder, each later target draws
-    // what is left, and the clamp holds back one send for every target still declared, so the
-    // last target is still reached.
-    // Asserted as the INVARIANT the derived policy guarantees rather than as a fixture count.
-    // An exact per-target vector pins how this harness happens to distribute the ladder, which
-    // is not what the layer promises and not something this branch can observe: the local suite
-    // is not run here, so a number guessed from reading is a number nobody checked.
+    // Asserted as the INVARIANT the derived policy guarantees, not as a fixture vector. An exact
+    // per-target count also pins how far this harness's adapter happens to climb its own ladder
+    // inside each allowance, which is not what this layer promises; and the local suite is not
+    // run on this branch, so a vector guessed from reading is a vector nobody checked.
     const bearers = upstream.authorizations;
-    // Every declared target is still reached. Starving the last target is the failure mode that
-    // sharing one counter WITHOUT a per-target policy produces.
+    // Every declared target is reached. Starving the last one is the failure mode that sharing a
+    // counter WITHOUT a per-target policy produces, and #4546 measured the opposite failure --
+    // twelve sends, four per target, because each child drew a fresh full allowance.
     expect(new Set(bearers).size).toBe(3);
-    expect(bearers).toContain("Bearer sk-t2");
-    // The first target keeps its full ladder, so the first sends are all its own.
     expect(bearers[0]).toBe("Bearer sk-t0");
-    // Bounded by the derived total: the first target's ladder, one send per further declared
-    // target, and the single shared final-recovery reserve. The measured regression in #4546 was
-    // twelve, four per target, because each child drew a fresh full allowance.
-    // The measured bound is NINE, and saying six here would be describing an intention rather
-    // than the code. #4546 measured twelve -- four sends per target, each child drawing a fresh
-    // full allowance -- so sharing one counter removes the per-target reserve and takes it to
-    // nine. The clamp that was meant to hold back one send for every target still declared is
-    // NOT yet effective; that is stated in the pull request as the open item rather than hidden
-    // behind an assertion that passes for the wrong reason.
-    expect(bearers.length).toBeLessThanOrEqual(9);
-    expect(bearers.length).toBeLessThan(12);
-    expect(bearers.length).toBeGreaterThanOrEqual(3);
+    expect(bearers).toContain("Bearer sk-t2");
+    // The first target keeps a whole ladder to itself.
+    expect(sendCounts(logCtx)[0]).toBe(COMBO_TARGET_BASE_SENDS);
+    // And the request total is the declared policy total, which is what the derived scope can
+    // now actually enforce: before the shared ledger, each scope admitted against a counter that
+    // had only ever seen its own reservations.
+    expect(totalSends(logCtx)).toBeLessThanOrEqual(comboExecutionBudgetPolicy(3).maxTotalModelSends);
+    expect(totalSends(logCtx)).toBe(bearers.length);
+  });
+
+  test("a thirteen-target combo still reaches every declared fallback", async () => {
+    // The reported shape: a long failover combo exhausted the allowance after a few providers
+    // and returned the last 502 while later declared targets were never attempted at all.
+    const upstream = alwaysFailing(502, "upstream busy");
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(responsesRequest("combo/fan"), comboOverTargets(13), logCtx);
+
+    expect(response.status).toBe(502);
+    await response.text();
+    const bearers = upstream.authorizations;
+    expect(new Set(bearers).size).toBe(13);
+    for (let index = 0; index < 13; index += 1) {
+      expect(bearers).toContain(`Bearer sk-t${index}`);
+    }
+    expect(bearers[0]).toBe("Bearer sk-t0");
+    expect(sendCounts(logCtx)[0]).toBe(COMBO_TARGET_BASE_SENDS);
+    expect(totalSends(logCtx)).toBeLessThanOrEqual(comboExecutionBudgetPolicy(13).maxTotalModelSends);
   });
 
   // REMOVED: "a 401 before the 5xx streak spends one of the same three sends".
@@ -167,4 +181,130 @@ describe("upstream sends per logical request", () => {
   // at the budget in tests/lib/execution-budget-permits.test.ts, where the roster walk and the
   // cross-pool move are both asserted. Restoring an end-to-end row needs a harness that actually
   // rotates, which is its own change.
+});
+
+describe("ambiguous reset safety across Responses recovery", () => {
+  for (const adapter of ["openai-chat", "openai-responses"]) {
+    for (const combo of [false, true]) {
+      test(`${adapter}: no replay or target hop after an ambiguous reset (combo=${combo})`, async () => {
+        const config = comboOverTargets(2);
+        for (const provider of Object.values(config.providers)) provider.adapter = adapter;
+        const authorizations: string[] = [];
+        globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+          authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+          throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+        }) as typeof fetch;
+        const logCtx: RequestLogContext = { model: "", provider: "" };
+        const response = await handleResponses(
+          responsesRequest(combo ? "combo/fan" : "t0/model-t0"), config, logCtx,
+        );
+        expect(response.status).toBe(429);
+        const payload = await response.json();
+        expect(payload.error.code).toBe("upstream_reset_replay_refused");
+        expect(authorizations).toEqual(["Bearer sk-t0"]);
+        expect(totalSends(logCtx)).toBe(1);
+      });
+    }
+  }
+
+  test("a provider 503 policy is retained, but the following reset cannot reach a combo sibling", async () => {
+    const authorizations: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+      if (authorizations.length === 1) {
+        return new Response(JSON.stringify({ error: { message: "busy" } }), {
+          status: 503, headers: { "content-type": "application/json" },
+        });
+      }
+      throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(responsesRequest("combo/fan"), comboOverTargets(2), logCtx);
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+    expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
+    expect(totalSends(logCtx)).toBe(2);
+  });
+
+  test("reset-only providers stop too, without opting into the transient policy", async () => {
+    const config = comboOverTargets(2);
+    for (const provider of Object.values(config.providers)) delete provider.transientRetryOn5xx;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const response = await handleResponses(responsesRequest("combo/fan"), config, { model: "", provider: "" });
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+    expect(sends).toBe(1);
+  });
+});
+
+describe("ambiguous reset safety after outer recovery", () => {
+  test("a 429 recovery refetch cannot launder a subsequent reset into a combo hop", async () => {
+    const config = comboOverTargets(2);
+    config.providers.t0!.retryOn429 = { attempts: 1 };
+    const authorizations: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+      if (authorizations.length === 1) return new Response("rate limited", {
+        status: 429, headers: { "retry-after": "0" },
+      });
+      throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(responsesRequest("combo/fan"), config, logCtx);
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+    expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
+    expect(totalSends(logCtx)).toBe(2);
+  });
+
+  // The row above arms ONE same-target attempt, so the refusal it produces arrives with the
+  // arm already spent and nothing left to replay it. That is the case the guard at the top of
+  // the recovery loop already covered. The defect is the arm that still has an attempt left:
+  // the refusal is itself a 429, the while condition is still true, and the next attempt sends
+  // the turn a third time -- the exact duplicate inference the refusal exists to prevent.
+  for (const adapter of ["openai-chat", "openai-responses"]) {
+    test(`${adapter}: a second same-target 429 attempt cannot replay the refusal`, async () => {
+      const config = comboOverTargets(2);
+      for (const provider of Object.values(config.providers)) provider.adapter = adapter;
+      // Two attempts, not one: the first consumes the real rate limit, the second is the arm
+      // that must NOT fire once the refetch has been refused.
+      config.providers.t0!.retryOn429 = { attempts: 2 };
+      const authorizations: string[] = [];
+      globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+        authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (authorizations.length === 1) return new Response("rate limited", {
+          status: 429, headers: { "retry-after": "0" },
+        });
+        throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(responsesRequest("t0/model-t0"), config, logCtx);
+
+      expect(response.status).toBe(429);
+      expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+      // Exactly two: the rate-limited send and the refetch that was refused. A third entry is
+      // the regression, and the base allowance (3) can afford it, so this count is the proof.
+      expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
+      expect(totalSends(logCtx)).toBe(2);
+    });
+  }
+
+  test("account and combo recovery retain the no-replay verdict after one body read", async () => {
+    const response = await fetchWithResetRetry(async () => {
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    });
+    expect(shouldRetryCodexPoolAccountTransient(response)).toBe(false);
+    expect(await shouldRetryCodexPoolAccountQuota(response)).toBe(false);
+    const failure = await consumeComboFailure(response);
+    expect(failure.upstreamCode).toBe("upstream_reset_replay_refused");
+    expect(isNonReplayableResponse(failure.response)).toBe(true);
+    expect(shouldRetryCodexPoolAccountTransient(failure.response)).toBe(false);
+    expect(await shouldRetryCodexPoolAccountQuota(failure.response)).toBe(false);
+    expect(failure.response.headers.get("retry-after")).toBeNull();
+    expect((await failure.response.json()).error.code).toBe("upstream_reset_replay_refused");
+  });
 });

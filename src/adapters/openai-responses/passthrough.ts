@@ -41,6 +41,19 @@ import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuation
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 
+/**
+ * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
+ * plaintext reasoning and cannot consume opaque reasoning state. The two existing flags are
+ * current evidence for that one provider contract, not equivalent capabilities: preservation
+ * keeps plaintext reasoning on the wire, while adjacency marks its strict tool-history shape.
+ * The moment a second provider needs this behavior, replace this derivation with an explicit
+ * registry capability rather than extending the inference.
+ */
+export function requiresPlaintextReasoningReplay(provider: OcxProviderConfig): boolean {
+  return provider.preserveResponsesReasoningContent === true
+    && provider.requiresAdjacentResponsesToolResults === true;
+}
+
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
 export const FORWARD_HEADERS = [
@@ -63,6 +76,16 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
   CODEX_RESPONSES_LITE_HEADER,
 ];
+
+/** Preserve the caller fingerprint unless the provider explicitly owns that header. */
+function applyCallerUserAgentFallback(
+  headers: Record<string, string>,
+  incoming: IncomingMeta,
+): void {
+  if (Object.keys(headers).some(name => name.toLowerCase() === "user-agent")) return;
+  const userAgent = incoming.headers.get("user-agent");
+  if (userAgent) headers["User-Agent"] = userAgent;
+}
 
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
@@ -221,6 +244,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         if (provider.headers) Object.assign(headers, provider.headers);
       }
+      // Some Responses-compatible gateways select their Codex compatibility path from the real
+      // client fingerprint. This is a single non-credential fallback, not broader caller-header
+      // forwarding. Static provider headers remain authoritative in either auth mode.
+      applyCallerUserAgentFallback(headers, incoming);
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
@@ -357,6 +384,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         }
       }
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
+      // Providers with the strict plaintext tool-continuation contract cannot consume any
+      // encrypted reasoning blob, including one whose provenance is unknown. Combo routing
+      // separately refuses a proven cross-route replay when no plaintext exists; this final
+      // serializer guard ensures the foreign opaque state is never forwarded regardless.
       const sanitizedBody = normalizeToolSchemas(
         stripItemIdsWhenUnstored(
           stripInvalidItemIds(
@@ -370,7 +401,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
                   dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
-                  stripEncryptedContent: threadServingIdentityChanged,
+                  stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                 },
               ),
               provider,

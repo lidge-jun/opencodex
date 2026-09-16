@@ -4,6 +4,7 @@ import { mapReasoningEffort } from "../../reasoning-effort";
 import { buildSystemPrompt } from "../coding-agent/protocol";
 import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type SpawnFn } from "../coding-agent/turn";
 import { CODEBUDDY_PROFILES, type CodeBuddyProfile } from "./profiles";
+import { guardCodeBuddyScaffolding } from "./scaffold-guard";
 
 export type { SpawnFn } from "../coding-agent/turn";
 export type CodeBuddyAdapterDeps = CodingAgentDeps;
@@ -75,7 +76,7 @@ export function createCodeBuddyAdapter(provider: OcxProviderConfig, deps: CodeBu
         provider,
         parsed,
         incoming,
-        emit,
+        emit: guardCodeBuddyScaffolding(emit),
         buildArgs: (resolved, req, prov) => buildArgs(resolved as CodeBuddyProfile, req, prov),
         buildEnv: (resolved, apiKey) => buildChildEnv(resolved as CodeBuddyProfile, apiKey),
         deps,

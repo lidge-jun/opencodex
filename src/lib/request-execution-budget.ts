@@ -56,6 +56,7 @@ export type BudgetDenial =
   | "final-recovery-spent"
   | "alternate-target-exhausted"
   | "target-transition-exhausted"
+  | "spend-exhausted"
   | "not-replay-safe";
 
 export interface DispatchIntent {
@@ -94,11 +95,44 @@ export interface SingleUseDispatchPermit {
    * once an external send reporter already settled it.
    */
   release(): void;
+  /**
+   * Take over an externally counted booking, because the layer holding this permit is the one
+   * that physically sends.
+   *
+   * `countedExternally` promises that a retry helper will name this send through
+   * `onSendsConsumed`. An adapter that owns its own dispatch ladder -- Kiro's reset loop,
+   * Cursor's transport loop -- reserves per physical send instead, so no reporter ever arrives
+   * and the pending booking would sit there until it silently swallowed an unrelated later
+   * report. Confirming through this method settles the permit AND closes the booking, so the
+   * send stays charged exactly once (#4709). Returns false once the permit is settled, which is
+   * what keeps one permit from admitting two sends.
+   */
+  assumeCharge(): boolean;
 }
 
 export type DispatchDecision =
   | { allowed: true; permit: SingleUseDispatchPermit }
   | { allowed: false; reason: BudgetDenial };
+
+/**
+ * Notified when this request's physical-send count moves.
+ *
+ * `spent` is the only number here that counts SENDS rather than intentions: a reservation
+ * increments it, a refund decrements it, and an externally reported send settles against a
+ * booking that was already counted. Anything that books one entry per increment therefore
+ * books exactly one entry per physical send -- which is what lets the durable spend ledger
+ * have a production caller without every dispatch site in the tree remembering to call it.
+ *
+ * `charge` may refuse, and a refusal denies the dispatch. That is deliberate: the ledger is
+ * the only bound here that survives a restart, so a limit it enforces has to be able to stop a
+ * send rather than merely describe one.
+ */
+export interface RequestSendObserver {
+  /** Book one physical send. False refuses the dispatch before the budget charges it. */
+  charge(): boolean;
+  /** Give back a booking whose send never happened. */
+  refund(): void;
+}
 
 /**
  * Carried on HandleResponsesOptions so a combo child, a rebuild and an alternate-account leg
@@ -134,33 +168,57 @@ const RESERVE_FUNDED_CLASSES: ReadonlySet<SendClass> = new Set<SendClass>([
 
 let logicalRequestSeq = 0;
 
-export function createRequestExecutionBudget(
-  policy: RequestExecutionBudgetPolicy = CODEX_TEXT_GUARDED_BUDGET_POLICY,
-  logicalRequestId?: string,
+/**
+ * One request's physical-send ledger, held apart from the budget object so a derived policy
+ * scope can share the exact same one.
+ *
+ * `spent` and `pendingExternalSends` belong together: a pending booking is a send that is
+ * already counted in `spent` and awaiting its reporter, so a scope that shared one without the
+ * other would either charge that send twice or never charge it at all.
+ *
+ * The durable-spend observer belongs here for the same reason. It books one entry per physical
+ * send by watching this counter move, so a derived scope that spent the counter without
+ * carrying the observer would move it without booking, and a combo child's sends would go
+ * missing from the ledger (#4707).
+ */
+interface SharedSendLedger {
+  spent: number;
+  pendingExternalSends: number;
+  readonly observer?: RequestSendObserver;
+}
+
+const sharedSendLedgers = new WeakMap<RequestExecutionBudget, SharedSendLedger>();
+
+function createRequestExecutionBudgetWithLedger(
+  policy: RequestExecutionBudgetPolicy,
+  logicalRequestId: string | undefined,
+  counter: SharedSendLedger,
 ): RequestExecutionBudget {
-  let spent = 0;
-  // Reservations whose physical send is reported by a retry helper rather than by the permit.
-  // They are already charged; the reporter's first send settles one instead of charging again.
-  let pendingExternalSends = 0;
+  const observer = counter.observer;
   let reserveSpent = false;
   let alternateTargetSends = 0;
   let targetTransitions = 0;
   let lastTargetKey: string | undefined;
 
   const budget: RequestExecutionBudget = {
-    get used(): number { return spent; },
+    get used(): number { return counter.spent; },
     set used(next: number) {
       // The retry helpers report their real send count by assigning through this field. A
       // reservation taken with `countedExternally` has already booked one of those sends, so
       // the report settles the pending booking first and only the surplus is charged.
-      const delta = next - spent;
+      const delta = next - counter.spent;
       if (delta <= 0) {
-        spent = Math.max(0, next);
+        counter.spent = Math.max(0, next);
         return;
       }
-      const settled = Math.min(delta, pendingExternalSends);
-      pendingExternalSends -= settled;
-      spent += delta - settled;
+      const settled = Math.min(delta, counter.pendingExternalSends);
+      counter.pendingExternalSends -= settled;
+      const charged = delta - settled;
+      counter.spent += charged;
+      // These sends have already left. The ledger records them even past a ceiling it would
+      // have refused, because refusing after the fact only hides spend that was really
+      // incurred -- the refusal has to happen at the reservation below, or not at all.
+      for (let index = 0; index < charged; index += 1) observer?.charge();
     },
     logicalRequestId: logicalRequestId ?? `lr-${Date.now().toString(36)}-${(logicalRequestSeq += 1).toString(36)}`,
     policyVersion: REQUEST_BUDGET_POLICY_VERSION,
@@ -171,11 +229,11 @@ export function createRequestExecutionBudget(
     get lastTargetKey() { return lastTargetKey; },
     remainingBaseSends(cap: number): number {
       const capped = Number.isFinite(cap) ? Math.trunc(cap) : 0;
-      return Math.max(0, Math.min(capped, policy.baseSendAllowance - spent));
+      return Math.max(0, Math.min(capped, policy.baseSendAllowance - counter.spent));
     },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
-      if (spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
+      if (counter.spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
 
       const changesTarget = lastTargetKey !== undefined && lastTargetKey !== intent.targetKey;
       const isAlternateTarget = changesTarget || intent.sendClass === "account-failover"
@@ -190,7 +248,7 @@ export function createRequestExecutionBudget(
       // The base allowance is spent first. Only once it is gone does a recovery class reach
       // for the single shared reserve -- an account move and a validated rebuild cannot each
       // take one.
-      const drawsReserve = policy.baseSendAllowance - spent <= 0;
+      const drawsReserve = policy.baseSendAllowance - counter.spent <= 0;
       if (drawsReserve) {
         if (!RESERVE_FUNDED_CLASSES.has(intent.sendClass)) {
           return { allowed: false, reason: "base-allowance-exhausted" };
@@ -200,13 +258,18 @@ export function createRequestExecutionBudget(
         }
       }
 
+      // Consulted last, because it is the only bound here that WRITES. A ledger entry booked
+      // for a dispatch a cheaper check above would have refused is spend this request never
+      // makes, and it would hold those tokens against the scope until retention expired.
+      if (observer && !observer.charge()) return { allowed: false, reason: "spend-exhausted" };
+
       // THE RESERVATION IS THE CHARGE. Deciding here and charging in `use()` left a window in
       // which two legs read the same remainder, both received a permit, and both dispatched:
       // one remaining send admitted two physical sends, which is the per-request multiplication
       // this budget exists to stop. Everything is booked now; `release()` is the way back.
       const previousTargetKey = lastTargetKey;
-      spent += 1;
-      if (intent.countedExternally === true) pendingExternalSends += 1;
+      counter.spent += 1;
+      if (intent.countedExternally === true) counter.pendingExternalSends += 1;
       if (drawsReserve) reserveSpent = true;
       if (isAlternateTarget) alternateTargetSends += 1;
       if (changesTarget) targetTransitions += 1;
@@ -222,16 +285,28 @@ export function createRequestExecutionBudget(
             settled = "used";
             return true;
           },
+          assumeCharge(): boolean {
+            if (settled !== "open") return false;
+            settled = "used";
+            // The booking this reservation made for an external reporter is now owned by the
+            // caller. Leaving it pending is not harmless: the next `used` report of this request
+            // would settle against it and one real send would go uncharged.
+            if (intent.countedExternally === true && counter.pendingExternalSends > 0) {
+              counter.pendingExternalSends -= 1;
+            }
+            return true;
+          },
           release(): void {
             if (settled !== "open") return;
             settled = "released";
             // An externally counted reservation the reporter already settled paid for a send
             // that physically happened. Refunding it would hand the request a free send back.
             if (intent.countedExternally === true) {
-              if (pendingExternalSends === 0) return;
-              pendingExternalSends -= 1;
+              if (counter.pendingExternalSends === 0) return;
+              counter.pendingExternalSends -= 1;
             }
-            spent -= 1;
+            counter.spent -= 1;
+            observer?.refund();
             if (drawsReserve) reserveSpent = false;
             if (isAlternateTarget) alternateTargetSends -= 1;
             if (changesTarget) targetTransitions -= 1;
@@ -241,7 +316,58 @@ export function createRequestExecutionBudget(
       };
     },
   };
+  sharedSendLedgers.set(budget, counter);
   return budget;
+}
+
+export function createRequestExecutionBudget(
+  policy: RequestExecutionBudgetPolicy = CODEX_TEXT_GUARDED_BUDGET_POLICY,
+  logicalRequestId?: string,
+  observer?: RequestSendObserver,
+): RequestExecutionBudget {
+  return createRequestExecutionBudgetWithLedger(policy, logicalRequestId, {
+    spent: 0,
+    pendingExternalSends: 0,
+    ...(observer ? { observer } : {}),
+  });
+}
+
+/**
+ * A budget that applies its own policy and keeps its own recovery ledgers while spending the
+ * parent's exact physical-send ledger.
+ *
+ * Aliasing the public `used` property was not enough, and that is the whole defect. The factory
+ * reads its own private counter back in `remainingBaseSends`, in the total check, and in the
+ * reserve test, so an aliased scope answered every admission question from a counter that only
+ * ever saw its own reservations. A combo's per-target holdback is computed from
+ * `maxTotalModelSends` and is therefore unenforceable unless the scope actually observes what
+ * the request has already spent.
+ */
+export function deriveRequestExecutionBudget(
+  parent: RequestExecutionBudget,
+  policy: RequestExecutionBudgetPolicy,
+): RequestExecutionBudget {
+  return createRequestExecutionBudgetWithLedger(policy, parent.logicalRequestId, ledgerFor(parent));
+}
+
+/**
+ * A budget that did not come from this factory still honors the public `used` contract, so
+ * bridge onto it rather than failing the request. `isRequestExecutionBudget` is a shape test,
+ * so a stub can reach here; turning that into a thrown error would convert a routing request
+ * into a 500 to report a condition production never produces. Only a factory-backed parent can
+ * share pending external bookings and a durable-spend observer, which are private by
+ * construction; a bridged scope keeps the parent's spend accurate and books nothing of its own.
+ */
+function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
+  const existing = sharedSendLedgers.get(parent);
+  if (existing) return existing;
+  let pendingExternalSends = 0;
+  return {
+    get spent(): number { return parent.used; },
+    set spent(next: number) { parent.used = next; },
+    get pendingExternalSends(): number { return pendingExternalSends; },
+    set pendingExternalSends(next: number) { pendingExternalSends = next; },
+  };
 }
 
 export function isRequestExecutionBudget(

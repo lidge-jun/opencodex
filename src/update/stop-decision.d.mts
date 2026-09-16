@@ -6,5 +6,5 @@ export declare function decidePostStopUpdate(input: {
   teardownOutstanding?: boolean;
 }): {
   proceed: boolean;
-  reason: "stop-failed" | "runtime-state" | "teardown-outstanding" | "proxy-live" | "proxy-unknown" | "history-only" | "ok";
+  reason: "stop-failed" | "runtime-state" | "teardown-outstanding" | "proxy-live" | "proxy-unknown" | "history-only" | "history-deferred" | "ok";
 };

@@ -266,6 +266,8 @@ yanıtlar ve geçersiz kataloglar, herhangi bir yerel yazma işleminden önce re
 doğrulama isteğe bağlıdır ve yalnızca ortam değişkeni adıyla (`--auth-env`) okunur, argv'den
 alınmaz.
 
+`HTTP_PROXY` veya `http_proxy` geçerliyken `NO_PROXY` ya da `no_proxy` içinde eşleşen bir istisna yoksa loopback HTTP istekleri, kimlik doğrulama başlıkları eklenmeden ve herhangi bir istek gönderilmeden reddedilir. `ALL_PROXY`/`all_proxy` ve yalnızca `HTTPS_PROXY`/`https_proxy` ayarları bu HTTP kısıtlamasını tetiklemez; HTTPS üzerinden katalog alımına izin verilmeye devam edilir. Ret mesajı proxy adresini veya kimlik doğrulama belirtecini içermez. Boş olmayan `http_proxy` ve `no_proxy` değerleri sırasıyla `HTTP_PROXY` ve `NO_PROXY` değerlerinden önce gelir. Bun ile uyumlu proxy atlama kuralları için ana makine adları, eşleşen `host:port` girdileri, `[::1]` gibi köşeli parantez içindeki IPv6 adresleri veya `*` kullanın; URL, yol veya `*.` öneki kullanmayın.
+
 Katalog ve önbellek, paylaşılan Codex katalog kilidi altında yazılır; bir hata durumunda
 last-known-good dosyalar korunur. Aynı baytlar, mtime değerlerini koruyan bir no-op'tur.
 `--restart-codex`, `--restart-app-server-only` ve kullanımdan kaldırılmış takma ad

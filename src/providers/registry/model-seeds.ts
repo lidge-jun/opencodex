@@ -8,6 +8,10 @@ import type { ProviderModelDiscoverySpec } from "./types";
 // always on, per the official models overview and pricing page (platform.claude.com).
 export const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
 export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+// All seeded Claude models support vision: https://platform.claude.com/docs/en/models/overview
+export const ANTHROPIC_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  ANTHROPIC_MODELS.map(id => [id, ["text", "image"]]),
+);
 // Every current Claude family accepts at least 64k output tokens (Haiku 4.5 / Sonnet 4.x
 // through Opus 5 and Fable 5). Anthropic caps max_tokens per model server-side, so a
 // larger request never over-allocates; it only stops the 8192 truncation.

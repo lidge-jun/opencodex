@@ -160,6 +160,78 @@ describe("Codex metadata integrity", () => {
     expect(sync.headers.session_id).toBe("sess-real-2");
     expect(sync.headers["thread-id"]).toBe("thread-real-2");
   });
+
+  test("Responses preserves caller User-Agent as a fallback in key and forward modes", async () => {
+    for (const provider of [
+      {
+        adapter: "openai-responses",
+        baseUrl: "https://gateway.example/v1",
+        authMode: "key",
+        apiKey: "test-key",
+      },
+      {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    ] satisfies OcxProviderConfig[]) {
+      const request = await createResponsesPassthroughAdapter(provider).buildRequest(minimalParsed(), {
+        headers: new Headers({ "User-Agent": "codex_cli_rs/0.154.0" }),
+      });
+      expect(new Headers(request.headers).get("user-agent")).toBe("codex_cli_rs/0.154.0");
+    }
+  });
+
+  test("configured User-Agent wins case-insensitively and a missing caller value stays absent", async () => {
+    const configured = await createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://gateway.example/v1",
+      authMode: "key",
+      headers: { "uSeR-aGeNt": "operator-agent/1" },
+    }).buildRequest(minimalParsed(), {
+      headers: new Headers({ "User-Agent": "caller-agent/1" }),
+    });
+    expect(new Headers(configured.headers).get("user-agent")).toBe("operator-agent/1");
+    expect(Object.keys(configured.headers).filter(name => name.toLowerCase() === "user-agent"))
+      .toHaveLength(1);
+
+    const absent = await createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://gateway.example/v1",
+      authMode: "key",
+    }).buildRequest(minimalParsed(), { headers: new Headers() });
+    expect(new Headers(absent.headers).has("user-agent")).toBe(false);
+  });
+
+  test("the preserved User-Agent is the value received by the HTTP upstream", async () => {
+    let resolveObserved!: (value: string | null) => void;
+    const observed = new Promise<string | null>(resolve => { resolveObserved = resolve; });
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        resolveObserved(request.headers.get("user-agent"));
+        return Response.json({ id: "response-fixture", output: [] });
+      },
+    });
+    try {
+      const built = await createResponsesPassthroughAdapter({
+        adapter: "openai-responses",
+        baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+        authMode: "key",
+      }).buildRequest(minimalParsed(), {
+        headers: new Headers({ "User-Agent": "codex_cli_rs/receiver-proof" }),
+      });
+      await fetch(built.url, {
+        method: built.method,
+        headers: built.headers,
+        body: built.body,
+      });
+      expect(await observed).toBe("codex_cli_rs/receiver-proof");
+    } finally {
+      upstream.stop(true);
+    }
+  });
 });
 
 describe("Codex request transport metadata", () => {

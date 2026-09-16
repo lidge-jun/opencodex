@@ -1,0 +1,37 @@
+{
+  "stage": "tools",
+  "kind": "frames",
+  "title": "A delegated tool request reaches the client and its result reaches the model",
+  "protocol": "frameless-bidi-v3",
+  "provenance": "Synthetic. The delegated request and its result are written for this fixture; no real command, path, or account value appears.",
+  "note": "v3 has no function_call frames. Local work is delegation.created, sent by the server with item.type delegation and target client, and answered by delegation.context.append carrying delegation_item_id. This is the second class of frame the field report says never arrives, and it travels only on this socket: the WebRTC oai-events data channel ignores every inbound message.",
+  "deidentified": true,
+  "callId": "rtc_fixture_tools",
+  "preamble": [],
+  "clientFrames": [
+    {
+      "type": "input_audio.append",
+      "audio": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }
+  ],
+  "upstreamFrames": [
+    {
+      "type": "delegation.created",
+      "offset_ms": 1000,
+      "item": {
+        "id": "delegation_fixture_0001",
+        "type": "delegation",
+        "target": "client",
+        "content": [{ "type": "input_text", "text": "list the fixture files" }]
+      }
+    }
+  ],
+  "clientFollowUpFrames": [
+    {
+      "type": "delegation.context.append",
+      "delegation_item_id": "delegation_fixture_0001",
+      "channel": "commentary",
+      "content": [{ "type": "input_text", "text": "connect.json, session.json, audio.json" }]
+    }
+  ]
+}

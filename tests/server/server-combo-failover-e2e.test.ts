@@ -1,3 +1,7 @@
+import { registerComboForcedEffortCases } from "../helpers/combo-forced-effort-cases";
+import { comboProviderFactory } from "../helpers/combo-provider";
+import { registerComboContextOverflowCases } from "../helpers/combo-context-overflow-cases";
+import { registerComboContextHeadroomCases } from "../helpers/combo-context-headroom-cases";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
@@ -58,6 +62,7 @@ const { createCursorAdapter } = await import("../../src/adapters/cursor");
 import type { CursorTransportFactory } from "../../src/adapters/cursor/transport";
 let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
 let customFetchResponse: NonNullable<ProviderAdapter["fetchResponse"]> | undefined;
+const provider = comboProviderFactory(() => customFetchResponse);
 let customTransientResponse: (() => Promise<Response>) | undefined;
 let customUsageEstimate: ((model: string) => number | undefined) | undefined;
 let customCursorTransportFactory: CursorTransportFactory | undefined;
@@ -102,7 +107,8 @@ mock.module("../../src/server/adapter-resolve", () => ({
         },
         async fetchResponse(request, context) {
           if (!customFetchResponse) throw new Error("custom fetchResponse not installed");
-          return customFetchResponse(request, context);
+          return context!.executor!(request.url, { method: request.method, headers: request.headers,
+            body: request.body, signal: context?.abortSignal });
         },
       };
     }
@@ -248,22 +254,6 @@ function responsesSuccess(text: string, model = "responses-model"): Record<strin
       content: [{ type: "output_text", text, annotations: [] }],
     }],
     usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
-  };
-}
-
-function provider(
-  adapter: string,
-  url: string,
-  apiKey: string,
-  extra: Partial<OcxProviderConfig> = {},
-): OcxProviderConfig {
-  return {
-    adapter,
-    baseUrl: url,
-    allowPrivateNetwork: url.includes("127.0.0.1"),
-    authMode: "key",
-    apiKey,
-    ...extra,
   };
 }
 
@@ -1834,7 +1824,7 @@ describe("server combo failover 030 activation matrix", () => {
       .toEqual({ inputTokens: 17, outputTokens: 3, totalTokens: 20 });
   });
 
-  test("provider-local retry keeps one attempt, two sends, recovery kind, and latest estimate", async () => {
+  test("provider-local key retry keeps separate attempts and the latest estimate on the selected key", async () => {
     const estimates = [10, 25];
     customUsageEstimate = () => estimates.shift();
     let calls = 0;
@@ -1855,11 +1845,14 @@ describe("server combo failover 030 activation matrix", () => {
     const response = await postLogged(config);
     expect(response.status).toBe(200);
     await response.text();
-    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    const attempts = (await latestAttemptReceipts(config)).usage.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts?.[0]).toMatchObject({ sendCount: 1, usageStatus: "unreported" });
+    const attempt = attempts?.[1];
     expect(attempt).toMatchObject({
       provider: "a",
       model: "m1",
-      sendCount: 2,
+      sendCount: 1,
       inputTokenEstimate: 25,
       recoveryKinds: ["key-429"],
     });
@@ -2085,59 +2078,11 @@ describe("server combo failover 030 activation matrix", () => {
     expect(primaryHits.every(hit => hit.webTool === valid)).toBe(true);
   });
 
-  test("context 400 stops while exhausted retryable targets return the sanitized last status", async () => {
-    let stopBackupHits = 0;
-    const context = serve(() => Response.json({ error: { code: "context_length_exceeded", message: "too many tokens" } }, { status: 400 }));
-    const unused = serve(() => {
-      stopBackupHits += 1;
-      return chatSuccess("must not run");
-    });
-    const stopConfig = comboConfig({
-      a: provider("openai-chat", baseUrl(context), "key-a"),
-      b: provider("openai-chat", baseUrl(unused), "key-b"),
-    });
-    const stopped = await post(stopConfig);
-    expect(stopped.status).toBe(400);
-    expect(stopBackupHits).toBe(0);
-
-    const order: string[] = [];
-    const first = serve(() => {
-      order.push("a");
-      return new Response("secret sk-a-should-redact", { status: 503 });
-    });
-    const last = serve(() => {
-      order.push("b");
-      return Response.json({ error: { message: "missing model" } }, { status: 404 });
-    });
-    const exhausted = await post(comboConfig({
-      a: provider("openai-chat", baseUrl(first), "key-a"),
-      b: provider("openai-chat", baseUrl(last), "key-b"),
-    }));
-    expect(exhausted.status).toBe(404);
-    expect(order).toEqual(["a", "b"]);
-    expect(await exhausted.text()).not.toContain("sk-a-should-redact");
+  registerComboContextOverflowCases({
+    serve, baseUrl, chatSuccess, chatStream, provider, comboConfig, post, collectSse,
   });
 
-  test("provider-specific prompt-too-long 400 hops to a larger-context combo target", async () => {
-    let backupHits = 0;
-    const capped = serve(() => Response.json({ error: {
-      message: "Prompt 346030 > 262144 maximum context length",
-      type: "invalid_request_prompt_too_long",
-      code: "5059",
-      raw_status_code: 400,
-    } }, { status: 400 }));
-    const backup = serve(() => {
-      backupHits += 1;
-      return chatSuccess("larger context backup", "m2");
-    });
-    const response = await post(comboConfig({
-      a: provider("openai-chat", baseUrl(capped), "key-a"),
-      b: provider("openai-chat", baseUrl(backup), "key-b"),
-    }));
-    expect(response.status).toBe(200);
-    expect(backupHits).toBe(1);
-    expect(await response.text()).toContain("larger context backup");
-  });
+  registerComboContextHeadroomCases({ serve, baseUrl, chatSuccess, provider, comboConfig, post });
 
   test("429 Retry-After 120 keeps A cooling at 60 seconds and restores it at 120", async () => {
     const t0 = Date.parse("2026-07-18T00:00:00.000Z");
@@ -3059,19 +3004,8 @@ describe("server combo failover 030 activation matrix", () => {
     expect(bodies.map(row => row.body.reasoning_effort)).toEqual(["low", "low"]);
   });
 
-  test("backup noReasoningModels removes the fresh combo default", async () => {
-    const a = serve(() => Response.json({ error: { message: "retry" } }, { status: 503 }));
-    let backupBody: Record<string, unknown> | undefined;
-    const b = serve(async request => {
-      backupBody = await request.json() as Record<string, unknown>;
-      return chatSuccess("no reasoning", "m2");
-    });
-    const config = comboConfig({
-      a: provider("openai-chat", baseUrl(a), "key-a"),
-      b: provider("openai-chat", baseUrl(b), "key-b", { noReasoningModels: ["m2"] }),
-    }, undefined, { defaultEffort: "high" });
-    expect((await post(config)).status).toBe(200);
-    expect(backupBody).not.toHaveProperty("reasoning_effort");
+  registerComboForcedEffortCases({
+    serve, baseUrl, chatSuccess, chatStream, provider, comboConfig, post, latestAttemptReceipts,
   });
 
   test("bare third-party defaultModel keeps max off the native clamp path", async () => {

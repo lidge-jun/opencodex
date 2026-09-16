@@ -78,7 +78,6 @@ import {
   catalogModelSupportsServiceTier,
   finishRequestAttempt,
   inspectResponseLogJson,
-  noteAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,

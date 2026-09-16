@@ -116,11 +116,20 @@ export interface DesktopAppAdapter {
  *
  * `root` is expected to be `realpath`-resolved by discovery already.
  */
+function isMembershipSeparator(character: string): boolean {
+  // `/` separates on every platform this runs on, and Windows accepts it wherever it
+  // accepts `\`. `\` is only a separator where the host says so: it is a legal
+  // FILENAME character on POSIX, so admitting it there would reopen the sibling hole
+  // this function exists to close.
+  return character === "/" || (sep === "\\" && character === "\\");
+}
+
 export function isUnderRoot(executable: string, root: string): boolean {
   if (!executable || !root) return false;
   if (executable === root) return true;
-  const prefix = root.endsWith(sep) ? root : root + sep;
-  return executable.startsWith(prefix);
+  if (!executable.startsWith(root)) return false;
+  if (isMembershipSeparator(root[root.length - 1]!)) return true;
+  return isMembershipSeparator(executable[root.length] ?? "");
 }
 
 /**

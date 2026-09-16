@@ -174,4 +174,38 @@ describe("Responses request-owned send budget after extraction", () => {
       expect(owner.remainingTransientSendBudget(3)).toBe(0);
     } finally { dispose(); }
   });
+
+  test("an adapter reservation spends the handed-down hop instead of buying a second send", () => {
+    const holder = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(holder);
+    try {
+      const hop = owner.reserveCredentialHop("auth-recovery", "test|model", true);
+      expect(hop.allowed).toBe(true);
+      if (!hop.permit) throw new Error("Expected a recovery permit");
+      // The reservation is the charge, before anything dispatched.
+      expect(holder.used).toBe(1);
+      owner.pendingHopPermit = hop.permit;
+      const adapterBudget = owner.adapterDispatchBudget;
+      if (!adapterBudget) throw new Error("Expected an adapter dispatch budget");
+
+      // Kiro and Cursor reserve once per physical send. Their FIRST reservation in this leg is
+      // the hop's own replay, so it spends the permit rather than charging again (#4709).
+      const first = adapterBudget.reserveDispatch({ sendClass: "transient", targetKey: "url" });
+      expect(first.allowed).toBe(true);
+      if (!first.allowed) throw new Error("unreachable");
+      expect(first.permit.use()).toBe(true);
+      expect(first.permit.use()).toBe(false);
+      expect(holder.used).toBe(1);
+      expect(owner.pendingHopPermit).toBeUndefined();
+
+      // Every later send in the same ladder is a new physical send and is charged.
+      const second = adapterBudget.reserveDispatch({ sendClass: "transient", targetKey: "url" });
+      expect(second.allowed).toBe(true);
+      expect(holder.used).toBe(2);
+      // The view delegates live rather than snapshotting: a frozen copy would read as a budget
+      // that can never be exhausted.
+      expect(adapterBudget.used).toBe(2);
+      expect(adapterBudget.remainingBaseSends(3)).toBe(1);
+    } finally { dispose(); }
+  });
 });

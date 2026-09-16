@@ -130,14 +130,14 @@ export async function handleSystemCommand(argv: string[], deps: RuntimeApiDeps =
       const args = [...rest]; const wantsJson = takeFlag(args, "--json"); rejectArgs(args, USAGE);
       printData(await runtimeRequest("/api/system/codex-app-server", {}, deps), wantsJson);
     } else if (sub === "codex-restart") {
-      // --yes required: this restarts the user's running Codex app-server, so it is exactly the
-      // class of action that must not happen because an agent guessed a subcommand.
+      // --yes required: this fully quits and relaunches the user's Codex desktop app as well as
+      // restarting app-servers; an agent guessing a subcommand must not interrupt that session.
       const args = [...rest];
       const wantsJson = takeFlag(args, "--json");
       const yes = takeFlag(args, "--yes");
-      if (!yes) throw new CliUsageError("system codex-restart requires --yes", USAGE);
+      if (!yes) throw new CliUsageError("system codex-restart requires --yes: this fully quits and relaunches the Codex desktop app and restarts its app-servers", USAGE);
       rejectArgs(args, USAGE);
-      printData(await runtimeRequest("/api/system/codex-restart", { method: "POST" }, deps), wantsJson, ["Codex app-server restart requested."]);
+      printData(await runtimeRequest("/api/system/codex-restart", { method: "POST" }, deps), wantsJson, ["Codex desktop app and app-server restart requested."]);
     } else if (sub === "update") await update(rest, deps);
     else throw new CliUsageError(`unknown system command ${sub}`, USAGE);
   });

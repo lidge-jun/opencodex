@@ -38,7 +38,12 @@ import {
   validateKiroConversationState,
   type KiroTurn,
 } from "./conversation";
-import { injectKiroThinkingTags, kiroNativeEffortField, KIRO_NATIVE_EFFORTS } from "./reasoning";
+import {
+  injectKiroThinkingTags,
+  kiroNativeEffortField,
+  kiroReasoningContent,
+  KIRO_NATIVE_EFFORTS,
+} from "./reasoning";
 import { kiroPayloadMessages, userContentText } from "./usage";
 import {
   kiroToolWireNames,
@@ -388,7 +393,11 @@ export function buildKiroPayload(
         assistantResponseMessage: {
           content: turn.content,
           ...(turn.toolUses.length > 0 ? { toolUses: turn.toolUses } : {}),
-          ...(turn.redactedReasoning ? { reasoningContent: { redactedContent: turn.redactedReasoning } } : {}),
+          // Replayed on the field it was received on: the GPT-5.6 signature is not base64 and is
+          // rejected when sent as `redactedContent`.
+          ...(turn.redactedReasoning
+            ? { reasoningContent: kiroReasoningContent(turn.redactedReasoning) }
+            : {}),
         },
       }
     : {
@@ -447,7 +456,12 @@ export function buildKiroPayload(
     if (!KIRO_NATIVE_EFFORTS.includes(effort)) {
       throw new Error(`Kiro ${normalizeKiroModelId(parsed.modelId)} does not support reasoning effort ${JSON.stringify(effort)}`);
     }
-    payload.additionalModelRequestFields = { [effortField]: { effort } };
+    // Model eligibility still owns unsupported-effort validation above; wire eligibility
+    // is narrower for luna/terra, whose unverified rungs retain the thinking-tag path.
+    const verifiedEffortField = kiroNativeEffortField(parsed.modelId, effort);
+    if (verifiedEffortField) {
+      payload.additionalModelRequestFields = { [verifiedEffortField]: { effort } };
+    }
   }
   if (profileArn) payload.profileArn = profileArn;
   return { payload, nameMap, conversationId, completionMode };

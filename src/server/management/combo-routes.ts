@@ -80,17 +80,20 @@ function sparseComboConfig<T extends {
   waitForCooldownMs?: number;
   imageInput?: "auto" | "disabled";
   reasoningEffortMode?: "strict" | "adaptive";
-}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "imageInput" | "reasoningEffortMode"> & {
+  defaultEffortMode?: "fallback" | "force";
+}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode"> & {
   cooldownMs?: number;
   waitForCooldownMs?: number;
   imageInput?: "disabled";
   reasoningEffortMode?: "adaptive";
+  defaultEffortMode?: "force";
 } {
   const {
     cooldownMs,
     waitForCooldownMs,
     imageInput,
     reasoningEffortMode,
+    defaultEffortMode,
     ...rest
   } = combo;
   return {
@@ -101,6 +104,7 @@ function sparseComboConfig<T extends {
       : {}),
     ...(imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
     ...(reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
+    ...(defaultEffortMode === "force" ? { defaultEffortMode: "force" as const } : {}),
   };
 }
 
@@ -169,6 +173,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         : {}),
       ...(!Object.hasOwn(requestedCombo, "waitForCooldownMs") && previous?.waitForCooldownMs !== undefined
         ? { waitForCooldownMs: previous.waitForCooldownMs }
+        : {}),
+      // The dashboard does not expose this advanced CLI/API policy. Preserve it when
+      // a GUI round-trip omits the field instead of silently downgrading to fallback.
+      ...(!Object.hasOwn(requestedCombo, "defaultEffortMode") && previous?.defaultEffortMode !== undefined
+        ? { defaultEffortMode: previous.defaultEffortMode }
         : {}),
     };
     const error = comboConfigError(id, effectiveCombo, config.providers, {

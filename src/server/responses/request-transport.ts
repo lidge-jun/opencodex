@@ -8,7 +8,7 @@ import {
   credentialGeneration,
 } from "../../oauth/store";
 import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../types";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
 import {
   isAnthropicAccountPoolEnabled,
@@ -33,7 +33,7 @@ import {
   preferredInitialAccount,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
-import { stampOAuthAccountLabel } from "../../providers/label";
+import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
@@ -59,7 +59,11 @@ import {
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
   recordAdapterTierMetadata,
+  noteProviderAttemptSend,
+  recordKeyAttemptFailure,
+  recordKeyAttemptUsage,
 } from "../request-log";
+import type { AttemptRecoveryKind } from "../../usage/log";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 
 /** Owns live credential selection and adapter bindings for one request. */
@@ -241,6 +245,30 @@ export async function prepareResponsesTransport(
     replayOAuthCredentialSnapshot = { accountId: snapshot.accountId, generation: snapshot.generation };
     return true;
   };
+  // Key sends may be rebuilt while queued. Keep metadata pending until the guarded
+  // physical dispatch binds it to the selection that actually reaches the upstream.
+  let pendingKeySend: { estimate: number | undefined; recovery?: AttemptRecoveryKind } | undefined;
+  const noteRoutedAttemptSend = (estimate: number | undefined, recovery?: AttemptRecoveryKind): void => {
+    if (usesApiKeyAccount(route.provider)) pendingKeySend = { estimate, recovery };
+    else noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery);
+  };
+  const commitKeyAttemptSend = (): void => {
+    if (!usesApiKeyAccount(route.provider)) return;
+    noteProviderAttemptSend(logCtx, route.providerName, route.provider,
+      pendingKeySend?.estimate ?? logCtx.usageLogInputTokens, pendingKeySend?.recovery);
+    pendingKeySend = undefined;
+  };
+  const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
+    logCtx.usageFromBridge = true;
+    if (usesApiKeyAccount(route.provider)) {
+      logCtx.usage = logCtx.activeAttempt?.usage;
+      return;
+    }
+    if (usage) {
+      logCtx.usage = usage;
+      if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+    }
+  };
   const selectionIsCurrent = (binding: DispatchBinding | undefined): boolean => {
     if (route.provider.authMode === "forward") return true;
     if (!binding) return false;
@@ -260,6 +288,27 @@ export async function prepareResponsesTransport(
         : undefined
       : { kind: "api-key", provider: { ...route.provider } };
     if (binding) adapterBindings.set(resolved, binding);
+    // Observe terminals before search/image loops or continuation guards hide earlier rounds.
+    // Each adapter parser is called once per physical response; bridge totals are client-only.
+    const observedResponses = new WeakSet<object>();
+    const observeUsage = (event: AdapterEvent, response: object): void => {
+      if (usesApiKeyAccount(provider) && "usage" in event && event.usage && !observedResponses.has(response)) {
+        observedResponses.add(response);
+        recordKeyAttemptUsage(logCtx, event.usage);
+      }
+    };
+    const parseStream = resolved.parseStream.bind(resolved);
+    resolved.parseStream = async function* (...args) {
+      for await (const event of parseStream(...args)) { observeUsage(event, args[0]); yield event; }
+    };
+    if (resolved.parseResponse) {
+      const parseResponse = resolved.parseResponse.bind(resolved);
+      resolved.parseResponse = async (...args) => {
+        const events = await parseResponse(...args);
+        events.forEach(event => observeUsage(event, args[0]));
+        return events;
+      };
+    }
     const build = resolved.buildRequest.bind(resolved);
     resolved.buildRequest = async (requestParsed, incoming) => {
       const request = await build(requestParsed, incoming);
@@ -268,7 +317,11 @@ export async function prepareResponsesTransport(
       return request;
     };
     if (resolved.runTurn) {
-      rawRunTurns.set(resolved, resolved.runTurn.bind(resolved));
+      const runTurn = resolved.runTurn.bind(resolved);
+      rawRunTurns.set(resolved, (requestParsed, incoming, emit) => {
+        const response = {};
+        return runTurn(requestParsed, incoming, event => { observeUsage(event, response); emit(event); });
+      });
       resolved.runTurn = (requestParsed, incoming, emit) => runSelectedTurn(resolved, requestParsed, incoming, emit);
     }
     return resolved;
@@ -319,6 +372,7 @@ export async function prepareResponsesTransport(
             refused = true;
             throw new Error("Account selection changed before the first turn dispatch");
           }
+          commitKeyAttemptSend();
           sent = true;
         },
       });
@@ -351,7 +405,9 @@ export async function prepareResponsesTransport(
             && sentHeaders?.get("authorization") === `Bearer ${snapshot.accessToken}`
             && !sentHeaders?.has("x-api-key");
           // Reselection can choose a provider override instead of the supplied executor.
+          commitKeyAttemptSend();
           const response = await fetchImpl(destination, { ...dispatchInit, redirect: "manual" });
+          if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header
           // overrides and credential replacement make ownership unprovable: skip those writes.
@@ -736,6 +792,9 @@ export async function prepareResponsesTransport(
     resolveSelectionAdapter,
     refreshRunTurnAdapter,
     oauthDispatch,
+    noteRoutedAttemptSend,
+    commitKeyAttemptSend,
+    bindKeyUsageFromBridge,
     anthropicSessionKey,
     isPassthrough,
   };

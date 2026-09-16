@@ -290,6 +290,7 @@ export function filterCatalogVisibleModels(
   }
   return models.filter(m => {
     if (initialModelSelectionPending(config.providers[m.provider])) return false;
+    if (config.providers[m.provider]?.disabled === true) return false;
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
     for (const stored of disabled) {

@@ -60,10 +60,8 @@ function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter & { passth
         } : {}),
       };
     },
-    async fetchResponse() {
-      const index = httpCalls;
-      httpCalls += 1;
-      return new Response("", { headers: { "x-fixture-attempt": String(index) } });
+    async fetchResponse(request, context) {
+      return context!.executor!(request.url, { method: request.method, headers: request.headers, body: request.body });
     },
     async *parseStream(response) {
       const index = Number(response.headers.get("x-fixture-attempt"));
@@ -79,6 +77,7 @@ function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter & { passth
           await customRunTurn(parsed, _incoming as never, emit);
           return;
         }
+        await (_incoming as { providerFetch: typeof fetch }).providerFetch(provider.baseUrl, { method: "POST" });
         const index = runTurnCalls;
         runTurnCalls += 1;
         parsedAttempts.push(parsed);
@@ -123,6 +122,11 @@ function config(
     },
     ...extra,
   } as OcxConfig;
+  (result.providers.fixture as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch = async () => {
+    const index = httpCalls;
+    if (adapter === "test-http") httpCalls += 1;
+    return new Response("", { headers: { "x-fixture-attempt": String(index) } });
+  };
   if (adapter === "test-passthrough") {
     (result.providers.fixture as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch = async () => {
       passthroughFetchCalls += 1;

@@ -352,3 +352,7 @@ is gated correctly without manual classification.
 Machine enrollment and browser authentication are separate. The pairing panel names the hub and displays an `ocx gui pair --origin` command for the exact origin currently open in your browser. Run that command on the hub, or send it to the hub operator and request a one-time pairing code. Paste that code into the panel; a data API key or admin token is not a pairing code.
 
 While browser authentication is pending, the dashboard does not recommend restarting a healthy connected client. Completing pairing refreshes the dashboard data immediately, including a previously cached authentication failure. Session expiry returns to pairing; permission denial keeps its own access-settings guidance. Other failed refreshes may show the last received data with a stale-data notice and retry action.
+
+### Usage chart keyboard and touch controls
+
+Usage heatmap days have one Tab entry point. Use Up/Down for adjacent days and Left/Right for adjacent weeks. Weekly bars expose the same day details on keyboard focus, pointer hover, or touch. Day labels include the date, request count, and token count; tooltip overlays stay within the viewport.

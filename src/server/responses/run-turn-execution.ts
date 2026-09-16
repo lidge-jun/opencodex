@@ -12,14 +12,15 @@ import {
   adapterNeedsForcedContinuation,
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
-import { sealRequestAttemptIdentity, noteAttemptSend, recordAttemptCredentialSource } from "../request-log";
+import { sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
 import { waitForProviderRequestSlot, RequestPacingQueueOverloadError } from "../../providers/request-pacing";
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { providerFetch } from "./fetch-helpers";
 import { normalizeLogConversationId } from "../request-log-conversation";
 import type { AdapterEvent, OcxProviderContinuationState } from "../../types";
-import { adapterFailureFromMessage } from "../../lib/errors";
+import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
+import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   isGenericOAuthFailoverEnabled,
@@ -65,6 +66,8 @@ export async function executeResponsesRunTurn(
     | "applyFailoverSnapshot"
     | "resolveSelectionAdapter"
     | "adapter"
+    | "noteRoutedAttemptSend"
+    | "bindKeyUsageFromBridge"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   responseEffects: Pick<
@@ -74,7 +77,10 @@ export async function executeResponsesRunTurn(
     | "continuationStateForResponse"
     | "notifyResponseComplete"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "adapterSendBudget" | "reserveCredentialHop">,
+  sendBudgetState: Pick<
+    ResponsesSendBudget,
+    "adapterDispatchBudget" | "reserveCredentialHop" | "pendingHopPermit"
+  >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
 ): Promise<Response> {
   const { options, logCtx, config } = requestContext;
@@ -94,7 +100,7 @@ export async function executeResponsesRunTurn(
     rememberKiroDeliveredFinalAnswer,
     responseStateOptions,
   } = requestState;
-  const { adapterSendBudget, reserveCredentialHop } = sendBudgetState;
+  const { adapterDispatchBudget, reserveCredentialHop } = sendBudgetState;
   const { emptyCompletionGuardEnabled } = completionPolicy;
   const {
     cancelResponseCompletion,
@@ -140,7 +146,7 @@ export async function executeResponsesRunTurn(
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         await refreshRunTurnSelection();
-        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery);
+        transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
         const runTurnProviderFetch = providerFetch(
           route.provider,
           options.codexWsRuntimeIdentity,
@@ -162,7 +168,7 @@ export async function executeResponsesRunTurn(
             providerFetch: runTurnProviderFetch,
             // The only way the request budget reaches a transport the adapter owns. Without it
             // a Cursor turn's inner ladder was three physical sends the cap read as one.
-            ...(adapterSendBudget ? { sendBudget: adapterSendBudget } : {}),
+            ...(adapterDispatchBudget ? { sendBudget: adapterDispatchBudget } : {}),
           },
           targetQueue.push,
         );
@@ -175,10 +181,22 @@ export async function executeResponsesRunTurn(
               retryable: true,
               message: err.message,
             }
-          : {
-              type: "error",
-              message: err instanceof Error ? err.message : String(err),
-            });
+          : err instanceof SendBudgetExhaustedError
+            // A structured terminal, not a bare message. The turn is already committed to an
+            // SSE response by the time most of these arrive, so the only way to carry "this
+            // proxy refused" to the client is on the event itself -- an unstructured message
+            // is inferred back to 502, which the Codex client retries.
+            ? {
+                type: "error",
+                status: 429,
+                errorType: "rate_limit_error",
+                code: SEND_BUDGET_EXHAUSTED_CODE,
+                message: err.message,
+              }
+            : {
+                type: "error",
+                message: err instanceof Error ? err.message : String(err),
+              });
       } finally {
         // Cursor assigns a stable conversation id inside runTurn on the first headerless
         // turn; backfill so Logs can filter/total that opening request (#330 / #522).
@@ -192,6 +210,11 @@ export async function executeResponsesRunTurn(
     const rotateRunTurnAdapterOnPreflight429 = async (
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {
+      // Our own refusal wears a 429 now, and rotating on it would record a cooldown against an
+      // account that never rate-limited anything -- a fake quota signal that outlives the
+      // request and misroutes later ones. The passthrough path has never had this problem
+      // because it answers before any rotation arm is reached.
+      if (error.code === SEND_BUDGET_EXHAUSTED_CODE) return false;
       const status = error.status ?? adapterFailureFromMessage(error.message).httpStatus;
       if (
         status !== 429
@@ -258,8 +281,11 @@ export async function executeResponsesRunTurn(
         });
         sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, rotatedAdapter.name, logCtx.accountLogLabel);
         recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, rotatedAdapter.name);
-        // The caller replays the turn on this rotation, so the reservation is now confirmed.
-        hop.permit?.use();
+        // The caller replays the turn on this rotation, and a runTurn adapter dispatches through
+        // its own reservation ladder -- Cursor reserves once per physical send. Confirming here
+        // would leave that ladder to charge the same replay a second time (#4709), so hand the
+        // reservation down and let the send that actually happens spend it.
+        sendBudgetState.pendingHopPermit = hop.permit;
         return true;
       } catch {
         hop.permit?.release();
@@ -270,16 +296,24 @@ export async function executeResponsesRunTurn(
       firstSource: AsyncIterable<AdapterEvent>,
     ): Promise<AsyncIterable<AdapterEvent>> => {
       let source = firstSource;
-      while (true) {
-        const preflight = await preflightAdapterEvents(source);
-        if (!preflight.error || !(await rotateRunTurnAdapterOnPreflight429(preflight.error))) {
-          return preflight.stream;
+      try {
+        while (true) {
+          const preflight = await preflightAdapterEvents(source);
+          if (!preflight.error || !(await rotateRunTurnAdapterOnPreflight429(preflight.error))) {
+            return preflight.stream;
+          }
+          const retryQueue = createAdapterEventQueue({
+            onBacklogExceeded: () => runTurnAbort.abort(),
+          });
+          void runTurnAttempt(retryQueue, "oauth-account-429");
+          source = retryQueue.stream();
         }
-        const retryQueue = createAdapterEventQueue({
-          onBacklogExceeded: () => runTurnAbort.abort(),
-        });
-        void runTurnAttempt(retryQueue, "oauth-account-429");
-        source = retryQueue.stream();
+      } finally {
+        // A handed-down hop reservation belongs to the replay this loop dispatched, and the
+        // loop only leaves after that replay's first event has arrived -- so the adapter has
+        // already reserved if it was ever going to. Dropping the reference here keeps an
+        // adapter that reserves nothing from leaving a free send for an unrelated later leg.
+        sendBudgetState.pendingHopPermit = undefined;
       }
     };
     // The empty-completion retry re-runs the turn against a fresh queue: the
@@ -340,6 +374,7 @@ export async function executeResponsesRunTurn(
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           declaredToolNames,
+          enforceDeclaredToolNames: inboundWire !== "chat" && inboundWire !== "anthropic",
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
@@ -349,11 +384,7 @@ export async function executeResponsesRunTurn(
           onUsage: usage => {
             // Raw adapter usage, pre wire-normalization: the bridged SSE now always carries
             // zero-default detail objects, so provenance must come from here (cache_detail_missing).
-            logCtx.usageFromBridge = true;
-            if (usage) {
-              logCtx.usage = usage;
-              if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
-            }
+            transportState.bindKeyUsageFromBridge(usage);
           },
           onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
             commitReasoningReplayServingRoute();
@@ -414,17 +445,14 @@ export async function executeResponsesRunTurn(
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       declaredToolNames,
+      enforceDeclaredToolNames: inboundWire !== "chat" && inboundWire !== "anthropic",
       toolParameterSchemas,
       freeformToolNames,
       toolSearchToolNames,
       ...(routedCompaction ? { compaction: true } : {}),
       onProviderState: state => { providerState = state; },
       onUsage: usage => {
-        logCtx.usageFromBridge = true;
-        if (usage) {
-          logCtx.usage = usage;
-          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
-        }
+        transportState.bindKeyUsageFromBridge(usage);
       },
     });
     if (!routedCompaction) {

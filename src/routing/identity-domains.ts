@@ -37,13 +37,16 @@ export type IdentityDomainProvenance = "operator-declared" | "provider-documente
  * What a domain key is evidence FOR, which is two facts rather than one.
  *
  * Proven SEPARATION and proven SHARING are different claims, and a provider routinely
- * gives the first without the second. OpenAI documents that prompt caches are not shared
- * across organizations or processing regions, and in the same breath documents that
- * changing keys inside one organization does not guarantee a hit. So a different
- * org-or-region key proves two domains, while an identical one proves nothing: a
- * positive cache inference needs the provider to actually promise the hit, and here the
- * provider declines to. Inferring "shared" from an equal key would be the same guess
- * this module exists to refuse, only pointed the other way.
+ * gives the first without the second. OpenAI's prompt-caching guide states the separating
+ * half outright -- "Caches are not shared across organizations and cannot be reused across
+ * regional processing boundaries" -- and never states a sharing half at all. The page does
+ * not discuss two API keys inside one organization, and what it does say about keys is that
+ * they "influence routing; they do not pin requests to a machine or guarantee a cache hit."
+ * So a different org-or-region key proves two domains, while an identical one proves
+ * nothing. A positive cache inference needs the provider to promise the hit, and no such
+ * promise exists here -- the silence is the evidence, not a documented denial. Inferring
+ * "shared" from an equal key would be the same guess this module exists to refuse, only
+ * pointed the other way.
  *
  * "separates" therefore means two different keys are two different domains while two
  * identical keys stay "unknown". "separates-and-shares" means the same source also
@@ -130,7 +133,9 @@ export interface DeclaredCredentialGroup {
  * then classifies "unknown" rather than extrapolating.
  *
  * - OpenAI: rate limits are per organization and project, with model groups sharing a
- *   limit; prompt caches are not shared across organizations or processing regions.
+ *   limit ("Rate limits are defined at the organization level and at the project level, not
+ *   user level", plus the documented shared limit across a model family); prompt caches are
+ *   not shared across organizations or regional processing boundaries.
  * - Anthropic: prompt cache is isolated per workspace even inside one organization.
  *   (Cache-read tokens are also excluded from input TPM there, which is quota
  *   accounting, not domain shape, so it does not appear here.)
@@ -158,12 +163,14 @@ const PROVIDER_DOCUMENTED_DOMAINS: Record<string, {
       evidence: "separates-and-shares",
     },
     cache: {
-      // Separation only. The documentation says caches are not shared across
-      // organizations or processing regions, and says in the same place that changing
-      // keys inside one organization does not guarantee a hit. So a different org or
-      // region is proven distinct, while same org and region is "unknown" -- claiming
-      // "shared" there would assert a warm prefix the provider explicitly refuses to
-      // promise, and the caller would pay for it by replaying a long prompt that misses.
+      // Separation only, and the asymmetry is in the source. The prompt-caching guide says
+      // "Caches are not shared across organizations and cannot be reused across regional
+      // processing boundaries", which settles a DIFFERENT org or region as distinct. It
+      // states no counterpart for an identical one: the guide never discusses two keys in
+      // one organization, and a key is documented to "influence routing" without
+      // guaranteeing a hit. Same org and region therefore stays "unknown" -- claiming
+      // "shared" would assert a warm prefix the provider never promised, and the caller
+      // would pay for the guess by replaying a long prompt that misses.
       key: (ref) => ref.organizationId !== undefined && ref.region !== undefined
         ? `openai:org:${ref.organizationId}:region:${ref.region}`
         : undefined,

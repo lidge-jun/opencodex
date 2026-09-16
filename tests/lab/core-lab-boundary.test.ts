@@ -701,6 +701,215 @@ function resolveDeclarationFollowingReexports(file: string, name: string): Resol
 }
 
 
+/**
+ * A declaration the activation walk can inspect: a named `function` OR a const arrow.
+ *
+ * inspectFunctionDeclaration knows only the first form, which is enough for the window's
+ * direct callees but not for the chain below it: activationKey and every returned cleanup
+ * receipt in the Lab activation path are const arrows, and a walk that cannot see them would
+ * report the most interesting nodes as "declaration not found".
+ */
+export type ActivationDeclaration = {
+  found: boolean;
+  async: boolean;
+  awaitLines: number[];
+  body: string | null;
+};
+
+export function inspectActivationDeclaration(source: string, name: string): ActivationDeclaration {
+  const code = blankCommentsAndStrings(source);
+  const ident = escapeRegExp(name);
+  const fn = new RegExp("(export\\s+)?(async\\s+)?function\\s+" + ident + "\\b").exec(code);
+  if (fn && fn.index !== undefined) {
+    const body = extractFunctionBody(code, fn.index + fn[0].length);
+    return { found: true, async: Boolean(fn[2]), awaitLines: body === null ? [] : bodyLevelAwaitLines(body), body };
+  }
+  const arrow = new RegExp("(?:export\\s+)?(?:const|let|var)\\s+" + ident + "\\s*(?::[^=\\n]+)?=\\s*(async\\s+)?").exec(code);
+  if (!arrow || arrow.index === undefined) return { found: false, async: false, awaitLines: [], body: null };
+  const body = extractArrowBody(code, arrow.index + arrow[0].length);
+  if (body === null) return { found: false, async: false, awaitLines: [], body: null };
+  return { found: true, async: Boolean(arrow[1]), awaitLines: bodyLevelAwaitLines(body), body };
+}
+
+/** The body of an arrow at `afterEquals`, brace form or concise form. */
+function extractArrowBody(code: string, afterEquals: number): string | null {
+  let i = skipWsFwd(code, afterEquals);
+  if (code[i] === "(") {
+    const afterParams = skipParamList(code, i);
+    if (afterParams < 0) return null;
+    i = skipWsFwd(code, afterParams);
+    if (code[i] === ":") {
+      i = skipArrowReturnType(code, i);
+      if (i < 0) return null;
+      i = skipWsFwd(code, i);
+    }
+  } else {
+    while (i < code.length && /[\w$]/.test(code[i]!)) i += 1;
+    i = skipWsFwd(code, i);
+  }
+  if (code[i] !== "=" || code[i + 1] !== ">") return null;
+  const afterArrow = i + 2;
+  const concise = skipConciseArrowBody(code, afterArrow);
+  if (concise !== afterArrow) return code.slice(afterArrow, concise);
+  const brace = skipWsFwd(code, afterArrow);
+  if (code[brace] !== "{") return null;
+  const end = matchPair(code, brace, "{", "}");
+  return end < 0 ? null : code.slice(brace, end);
+}
+
+/**
+ * Skip an arrow's return-type annotation, stopping at the arrow itself.
+ *
+ * skipReturnType cannot be reused: it treats a top-level `=>` as part of a function-TYPE
+ * annotation and keeps scanning for the body brace, which a concise arrow never has. Feeding
+ * it `activationKey` returned -1, and the most interesting nodes in the chain are const arrows.
+ */
+function skipArrowReturnType(code: string, colonIndex: number): number {
+  let i = colonIndex + 1;
+  let paren = 0;
+  let bracket = 0;
+  let brace = 0;
+  let angle = 0;
+  while (i < code.length) {
+    const ch = code[i]!;
+    const atTop = paren === 0 && bracket === 0 && brace === 0 && angle === 0;
+    if (atTop && ch === "=" && code[i + 1] === ">") return i;
+    if (ch === "(") paren++;
+    else if (ch === ")") { if (paren === 0) return -1; paren--; }
+    else if (ch === "[") bracket++;
+    else if (ch === "]") { if (bracket === 0) return -1; bracket--; }
+    else if (ch === "{") brace++;
+    else if (ch === "}") { if (brace === 0) return -1; brace--; }
+    else if (ch === "<") angle++;
+    else if (ch === ">") { if (angle > 0) angle--; }
+    i++;
+  }
+  return -1;
+}
+
+export type ActivationNode = {
+  name: string;
+  file: string;
+  async: boolean;
+  awaitLines: number[];
+  callees: string[];
+};
+
+export type ActivationWalk = {
+  nodes: Map<string, ActivationNode>;
+  failures: string[];
+  /** Free names deliberately not followed, as actually encountered. */
+  skipped: Set<string>;
+  /** Free names resolved to a module outside this repository. */
+  external: Set<string>;
+};
+
+type ActivationResolution =
+  | { kind: "declared"; file: string; source: string; declaration: ActivationDeclaration }
+  | { kind: "external"; spec: string }
+  | { kind: "missing" };
+
+function resolveActivationCallee(
+  name: string,
+  fromFile: string,
+  fromSource: string,
+  load: (file: string) => string,
+): ActivationResolution {
+  const imported = namedImportsOf(fromSource).get(name);
+  if (!imported) {
+    const local = inspectActivationDeclaration(fromSource, name);
+    return local.found ? { kind: "declared", file: fromFile, source: fromSource, declaration: local } : { kind: "missing" };
+  }
+  // A non-relative specifier leaves this repository: node: builtins and packages. Their
+  // synchrony is not ours to assert, and pinning every join/readFileSync by hand would turn
+  // the classification list into noise that hides the two or three names worth reviewing.
+  if (!imported.spec.startsWith(".")) return { kind: "external", spec: imported.spec };
+  let file = resolveSpec(imported.spec, fromFile);
+  if (!file) return { kind: "missing" };
+  let exported = imported.exported;
+  for (let hop = 0; hop < 8; hop++) {
+    if (!existsSync(file)) return { kind: "missing" };
+    const source = load(file);
+    const declaration = inspectActivationDeclaration(source, exported);
+    if (declaration.found) return { kind: "declared", file, source, declaration };
+    const next = reexportOf(source, exported);
+    if (!next) return { kind: "missing" };
+    const resolved = resolveSpec(next.spec, file);
+    if (!resolved) return { kind: "missing" };
+    file = resolved;
+    exported = next.exported;
+  }
+  return { kind: "missing" };
+}
+
+/**
+ * Walk the activation call graph from `activateLab` and report every node that could suspend it.
+ *
+ * Depth one was the defect. `activateLab` calls installLabAutomationRuntime and
+ * startAutomationIfEnabled without awaiting them, so making either async with an await before
+ * its registration call left `activateLab` parsing as synchronous and the guard green while the
+ * window it protects was already broken.
+ *
+ * Two things make a recursive walk usable here rather than a source of false positives.
+ * Nested functions are skipped by collectBodyLevelCalls, so a timer callback, a shutdown hook,
+ * a promise continuation and the deferred route executor are not treated as activation edges —
+ * they run later by construction. And receiver calls are not followed: a method that becomes
+ * async cannot suspend its caller unless the caller awaits it, and an await is exactly what
+ * bodyLevelAwaitLines reports on the caller's own body.
+ */
+export function walkActivationChain(options: {
+  root: string;
+  entryFile: string;
+  entrySource: string;
+  notWalked: ReadonlySet<string>;
+  loadSource?: (file: string) => string;
+  maxNodes?: number;
+}): ActivationWalk {
+  const load = options.loadSource ?? ((file: string) => readFileSync(file, "utf8"));
+  const maxNodes = options.maxNodes ?? 200;
+  const nodes = new Map<string, ActivationNode>();
+  const failures: string[] = [];
+  const skipped = new Set<string>();
+  const external = new Set<string>();
+  const queue: Array<{ name: string; fromFile: string; fromSource: string }> = [
+    { name: options.root, fromFile: options.entryFile, fromSource: options.entrySource },
+  ];
+  while (queue.length > 0) {
+    const item = queue.shift()!;
+    if (nodes.has(item.name)) continue;
+    if (nodes.size >= maxNodes) {
+      failures.push("activation chain exceeded " + maxNodes + " nodes; the walk is no longer bounded");
+      break;
+    }
+    const resolved = resolveActivationCallee(item.name, item.fromFile, item.fromSource, load);
+    if (resolved.kind === "external") { external.add(item.name); continue; }
+    if (resolved.kind === "missing") {
+      failures.push(item.name + ": declaration not found from " + repoRel(item.fromFile));
+      continue;
+    }
+    const { declaration } = resolved;
+    const where = item.name + " in " + repoRel(resolved.file);
+    if (declaration.async) failures.push(where + ": declared async");
+    if (declaration.awaitLines.length > 0) {
+      failures.push(where + ": body-level await at relative line " + declaration.awaitLines.join(","));
+    }
+    const callees = declaration.body === null ? [] : collectBodyLevelCalls(declaration.body).free;
+    nodes.set(item.name, {
+      name: item.name,
+      file: repoRel(resolved.file),
+      async: declaration.async,
+      awaitLines: declaration.awaitLines,
+      callees: [...callees].sort(),
+    });
+    for (const callee of callees) {
+      if (options.notWalked.has(callee)) { skipped.add(callee); continue; }
+      if (nodes.has(callee)) continue;
+      queue.push({ name: callee, fromFile: resolved.file, fromSource: resolved.source });
+    }
+  }
+  return { nodes, failures, skipped, external };
+}
+
 describe("core / Compatibility Lab boundary", () => {
   // Guard 1: the obvious case, a direct import.
   test.each(PROTECTED)("%s has no direct src/lab import", file => {
@@ -989,4 +1198,156 @@ describe("activation window stays synchronous", () => {
     expect(windowCalls.free).toContain("activateLab");
   });
 
+});
+
+/**
+ * Depth one was the whole defect, and #4704 is the report of it.
+ *
+ * The guard above follows the direct callees of `startServer`. That catches `activateLab` becoming
+ * async, but `activateLab` calls installLabAutomationRuntime and startAutomationIfEnabled
+ * without awaiting them. Making either of those async with an await before its registration
+ * call leaves `activateLab` parsing as perfectly synchronous, so every assertion above stays
+ * green while `startServer` returns before Lab is registered — and a policy route can then be
+ * evaluated before its evidence provider exists, which is the one thing the window exists to
+ * prevent.
+ *
+ * So this block walks the chain instead of sampling its first hop. What keeps a recursive walk
+ * from becoming the false-positive machine the depth-one comment warned about is what it
+ * refuses to follow: nested functions are already skipped by collectBodyLevelCalls, so timer
+ * callbacks, shutdown hooks, promise continuations and the deferred route executor are not
+ * treated as activation edges; receiver calls are not followed, because a method that turns
+ * async cannot suspend its caller unless the caller awaits it, and that await is reported on
+ * the caller's own body; and names imported from outside this repository are classified
+ * automatically rather than hand-listed.
+ */
+describe("Lab activation stays synchronous past the first hop", () => {
+  const indexPath = resolve(repoRoot, "src/server/index.ts");
+  const indexSource = readFileSync(indexPath, "utf8");
+  const labActivationPath = resolve(repoRoot, "src/lib/lab-activation.ts");
+  const orchestratorPath = resolve(repoRoot, "src/lab/automation/orchestrator.ts");
+
+  /**
+   * Free identifiers in the chain that are not repository functions. Each one is listed with
+   * why following it is meaningless rather than skipped silently, which is the same contract
+   * UNRESOLVED_CALLEES holds for the window: a name that disappears from this list without
+   * disappearing from the chain fails the equality assertion below.
+   */
+  const ACTIVATION_NOT_WALKED: Record<string, string> = {
+    String: "Language builtin. Not a repository function and not suspendable.",
+    Symbol: "Language builtin, used for the automation runtime owner token.",
+    setInterval: "Host timer. Registers the scheduler tick and returns immediately; the callback is a nested function this walk does not treat as an activation edge.",
+    action: "The callback parameter of withConfigLock. It is invoked synchronously, but its body is the arrow written at the call site, which is a nested function inspected there rather than here.",
+    mutate: "The callback parameter of mutateLabAutomationState. Same shape as action.",
+    release: "A lock receipt returned by acquireConfigLock/acquireStateLock. A returned closure has no declaration to resolve from the call site.",
+  };
+
+  /**
+   * Nodes the walk must reach. Without this the whole block could pass by walking nothing:
+   * a resolver regression that stopped finding `activateLab` would produce an empty graph, zero
+   * failures and a green suite, which is precisely the failure mode being fixed.
+   */
+  const REQUIRED_NODES = [
+    "activateLab",
+    "installLabAutomationRuntime",
+    "startAutomationIfEnabled",
+    "registerLabPassiveRouteLinker",
+    "setCompatibilityEvidenceProvider",
+    "createProductionLabRouteExecutor",
+    "setLabAutomationDispatchDeps",
+    "labAutomationEnabledOnDisk",
+    "startLabAutomationScheduler",
+    "loadLabAutomationConfig",
+    "mutateLabAutomationState",
+  ];
+
+  function walk(loadSource?: (file: string) => string, entrySource = indexSource): ActivationWalk {
+    return walkActivationChain({
+      root: "activateLab",
+      entryFile: indexPath,
+      entrySource,
+      notWalked: new Set(Object.keys(ACTIVATION_NOT_WALKED)),
+      loadSource,
+    });
+  }
+
+  test("every function the activation chain calls is synchronous", () => {
+    const result = walk();
+
+    expect(result.failures).toEqual([]);
+    for (const name of REQUIRED_NODES) expect([...result.nodes.keys()]).toContain(name);
+    // A floor, not an exact count: the chain is allowed to grow, and pinning its size would
+    // turn an ordinary Lab refactor into a failure of this guard.
+    expect(result.nodes.size).toBeGreaterThan(20);
+    // Every classified name must still be reachable, so the list cannot accumulate entries
+    // that no longer describe anything.
+    expect([...result.skipped].sort()).toEqual(Object.keys(ACTIVATION_NOT_WALKED).sort());
+    // And the chain must actually leave this repository somewhere, which is the evidence that
+    // the external-import classification is doing work rather than matching nothing.
+    expect(result.external.size).toBeGreaterThan(0);
+  });
+
+  test("a nested callee turning async is reported, and depth one cannot see it", () => {
+    const mutated = readFileSync(labActivationPath, "utf8")
+      .replace("function installLabAutomationRuntime(", "async function installLabAutomationRuntime(");
+    expect(mutated).toContain("async function installLabAutomationRuntime(");
+
+    const result = walk(file => (file === labActivationPath ? mutated : readFileSync(file, "utf8")));
+    expect(result.failures).toContain("installLabAutomationRuntime in src/lib/lab-activation.ts: declared async");
+
+    // The same mutated source, read the way the depth-one scan reads it: activateLab is still
+    // a plain synchronous function with no body-level await. That is the green the guard used
+    // to report while the window was already broken.
+    expect(inspectFunctionDeclaration(mutated, "activateLab")).toEqual({
+      found: true,
+      async: false,
+      awaitLines: [],
+    });
+  });
+
+  test("an await added inside a nested callee is reported", () => {
+    const mutated = readFileSync(labActivationPath, "utf8")
+      .replace("const previous = record.runtime;", "const previous = await record.runtime;");
+    expect(mutated).toContain("await record.runtime;");
+
+    const result = walk(file => (file === labActivationPath ? mutated : readFileSync(file, "utf8")));
+    expect(result.failures.some(failure =>
+      failure.startsWith("installLabAutomationRuntime in src/lib/lab-activation.ts: body-level await"),
+    )).toBe(true);
+  });
+
+  test("a suspension three hops down is reported", () => {
+    // startLabAutomationScheduler sits under startAutomationIfEnabled, which sits under
+    // activateLab. Nothing between them awaits, so this is the shape the previous guard was
+    // furthest from seeing.
+    const mutated = readFileSync(orchestratorPath, "utf8")
+      .replace("export function startLabAutomationScheduler(", "export async function startLabAutomationScheduler(");
+    expect(mutated).toContain("export async function startLabAutomationScheduler(");
+
+    const result = walk(file => (file === orchestratorPath ? mutated : readFileSync(file, "utf8")));
+    expect(result.failures).toContain(
+      "startLabAutomationScheduler in src/lab/automation/orchestrator.ts: declared async",
+    );
+  });
+
+  test("the arrow inspector sees what the function-only inspector cannot", () => {
+    // activationKey is a const arrow with a return-type annotation. The function-only
+    // inspector reports it missing, and a walk that treated "missing" as "fine" would skip
+    // every const-arrow node in the chain.
+    expect(inspectFunctionDeclaration("const f = (a: string): string => a;", "f").found).toBe(false);
+    expect(inspectActivationDeclaration("const f = (a: string): string => a;", "f")).toEqual({
+      found: true,
+      async: false,
+      awaitLines: [],
+      body: " a",
+    });
+    expect(inspectActivationDeclaration("const f = async (): Promise<void> => { await g(); };", "f")).toMatchObject({
+      found: true,
+      async: true,
+    });
+    expect(inspectActivationDeclaration("const f = (): void => { const x = 1; };", "f")).toMatchObject({
+      found: true,
+      async: false,
+      awaitLines: [],
+    });
+  });
 });

@@ -469,7 +469,7 @@ async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContex
   const timer = setTimeout(() => timeout.abort(new DOMException("Timeout elapsed", "TimeoutError")), ctx?.timeoutMs ?? 200_000);
   const callerSignal = ctx?.abortSignal ?? new AbortController().signal;
   try {
-    return await executor(request.url, {
+    return await (ctx?.executor ?? executor)(request.url, {
       method: request.method,
       headers: request.headers,
       body: request.body,
