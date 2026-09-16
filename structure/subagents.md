@@ -1,5 +1,7 @@
 # Subagents And Multi-Agent Surface
 
+Budget-aware rebuilds reuse or fund a recovery reservation; the first helper send reuses the outer pacing slot under the [recovery and pacing contract](transports/responses.md#credential-hop-reservations).
+
 Encrypted-task and fallback request handling follow the Responses
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

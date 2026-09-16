@@ -17,6 +17,8 @@ import { routedProviderConfig } from "../../src/router";
 import type { OcxProviderTransport } from "../../src/providers/xai-transport";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { handleResponses } from "../../src/server/responses";
+import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -45,6 +47,57 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test.each(["initial-success", "retry-success", "initial-429", "initial-401", "continuation-429", "reserve-refused"] as const)(
+    "Vertex budget-aware recovery uses its final send and one pacing slot per inference (%s)", async mode => {
+      let now = 0, timerId = 0;
+      const timers = new Set<number>();
+      setProviderRequestPacingRuntimeForTest({ now: () => now, setTimer(callback, delayMs) {
+        const id = ++timerId; timers.add(id);
+        queueMicrotask(() => { if (timers.delete(id)) { now += delayMs; callback(); } });
+        return id;
+      }, clearTimer(id) { timers.delete(id as number); }, enqueueMicrotask: queueMicrotask });
+      const cfg = { defaultProvider: "vertex-budget", emptyCompletionRetry: mode === "continuation-429", providers: {
+        "vertex-budget": { adapter: "google", googleMode: "vertex", authMode: "key",
+          baseUrl: "https://aiplatform.googleapis.com", models: ["gemini-3-pro"], apiKey: "vertex-key-a",
+          apiKeyPool: [{ id: "a", key: "vertex-key-a" }, { id: "b", key: "vertex-key-b" }],
+          requestPacing: { enabled: true, minIntervalMs: 100 },
+        },
+      } } as OcxConfig;
+      saveConfig(cfg);
+      const originalFetch = globalThis.fetch;
+      const keys: Array<string | null> = [], times: number[] = [];
+      const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
+        finalRecoveryAllowance: mode === "reserve-refused" ? 0 : 1 });
+      const expectedSends = mode === "initial-success" ? 1 : mode === "retry-success" ? 2 : mode === "reserve-refused" ? 3 : 4;
+      globalThis.fetch = (async (_input, init) => {
+        keys.push(new Headers(init?.headers).get("x-goog-api-key")); times.push(now);
+        if (keys.length > 4) throw new Error("fixture send ceiling exceeded");
+        if (mode === "continuation-429" && keys.length === 1) return Response.json({
+          candidates: [{ content: { role: "model", parts: [] }, finishReason: "STOP" }],
+        });
+        if (mode !== "reserve-refused" && keys.length === expectedSends) return Response.json({
+          candidates: [{ content: { role: "model", parts: [{ text: "vertex recovered" }] }, finishReason: "STOP" }],
+        });
+        const status = keys.length < 3 ? 503 : mode === "initial-401" ? 401 : 429;
+        return Response.json({ error: { code: status, message: "temporary failure" } },
+          { status, headers: { "Retry-After": "0" } });
+      }) as typeof fetch;
+      try {
+        const response = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "vertex-budget/gemini-3-pro", input: "hello", stream: false }),
+        }), cfg, { model: "", provider: "" }, { sendBudget: budget });
+        const body = await response.text();
+        expect(keys).toEqual(Array.from({ length: expectedSends }, (_, index) => index === 3 ? "vertex-key-b" : "vertex-key-a"));
+        expect(response.status).toBe(mode === "reserve-refused" ? 429 : 200);
+        expect(body).toContain(mode === "reserve-refused" ? "temporary failure" : "vertex recovered");
+        expect(budget.used).toBe(expectedSends);
+        expect(times).toEqual(Array.from({ length: expectedSends }, (_, index) => index * 100));
+        if (mode === "reserve-refused") expect(loadConfig().providers["vertex-budget"]!.apiKey).toBe("vertex-key-a");
+      } finally { globalThis.fetch = originalFetch; resetProviderRequestPacingForTest(); }
+    }, 20_000,
+  );
+
   test.each([false, true])("OAuth hops charge each reset-only refetch once (third succeeds: %s)", async succeeds => {
     const originalFetch = globalThis.fetch;
     const authorizations: string[] = [];

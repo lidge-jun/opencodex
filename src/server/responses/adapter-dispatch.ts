@@ -175,7 +175,7 @@ export async function prepareAdapterExchange(
     ? Math.floor(config.stallTimeoutSec * 1000)
     : 300_000;
   transportState.activeAdapter = transportState.adapter;
-  const keyPool429RetryAllowed = () => sendBudgetState.keyPool429RetryAllowed(!!transportState.activeAdapter.fetchResponse);
+  const keyPool429RetryAllowed = () => sendBudgetState.keyPool429RetryAllowed(transportState.activeAdapter.fetchResponseUsesSendBudget === true);
 
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // auth headers, generated compat headers). Same-target 429 replays reuse it verbatim; the
@@ -286,7 +286,8 @@ export async function prepareAdapterExchange(
         onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
         stream: parsed.stream,
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(builtInitialRequest),
+          pacingSlotAcquired: true,
+          dispatchOverride: oauthDispatch(builtInitialRequest),
           providerName: route.providerName,
           modelId: route.modelId,
         }),
@@ -416,24 +417,33 @@ export async function prepareAdapterExchange(
       try {
         try {
           if (transportState.activeAdapter.fetchResponse) {
-            await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
-            // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
-            // an abort, a saturated queue, an expired slot or a removed provider, and none of
-            // those reach the wire. Confirming earlier would hold the charge for a send that the
-            // pacer refused.
-            onDispatch?.();
-            return await transportState.activeAdapter.fetchResponse(retryRequest, {
-              abortSignal: upstream.signal,
-              timeoutMs: connectMs,
-              sendBudget: replaySendBudget,
-              onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
-              stream: parsed.stream,
-              executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(retryRequest),
-                providerName: route.providerName,
-                modelId: route.modelId,
-              }),
-            });
+            // Existing derived OAuth scopes already own their booking. Otherwise an adapter
+            // recovery can fund its first send from the shared reserve, like a continuation.
+            const ownedPermit = transportState.activeAdapter.fetchResponseUsesSendBudget && adapterSendBudget
+              && replaySendBudget === adapterSendBudget
+              ? recoverySendAllowance(adapterSendBudget.policy.baseSendAllowance, recoveryClassFor(recovery), retryRequest.url).permit
+              : undefined;
+            try {
+              await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
+              // Confirm only after pacing: an abort, rejected queue or removed provider
+              // has not reached the executor and must not consume the reservation.
+              onDispatch?.();
+              return await transportState.activeAdapter.fetchResponse(retryRequest, {
+                abortSignal: upstream.signal,
+                timeoutMs: connectMs,
+                sendBudget: ownedPermit && adapterSendBudget
+                  ? adapterSendBudget.deriveScope({ ...adapterSendBudget.policy, finalRecoveryAllowance: 0 }, ownedPermit)
+                  : replaySendBudget,
+                onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
+                stream: parsed.stream,
+                executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                  pacingSlotAcquired: true,
+                  dispatchOverride: oauthDispatch(retryRequest),
+                  providerName: route.providerName,
+                  modelId: route.modelId,
+                }),
+              });
+            } finally { ownedPermit?.release(); }
           }
           // #2643 review: this leg used to call fetchWithHeaderTimeout directly, so an
           // opted-in provider's transient-5xx policy applied to the initial send and to

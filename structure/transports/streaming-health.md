@@ -1,5 +1,7 @@
 # Streaming Health And WebSocket
 
+Budget-aware rebuilds reuse or fund a recovery reservation; the first helper send reuses the outer pacing slot under the [recovery and pacing contract](responses.md#credential-hop-reservations).
+
 Native and translated delivery now have separate owners in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 

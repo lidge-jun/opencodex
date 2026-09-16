@@ -1,5 +1,7 @@
 # Model Catalog
 
+Budget-aware rebuilds reuse or fund a recovery reservation; the first helper send reuses the outer pacing slot under the [recovery and pacing contract](transports/responses.md#credential-hop-reservations).
+
 Catalog discovery remains separate from the Responses final-route
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

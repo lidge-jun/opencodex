@@ -1,5 +1,7 @@
 # xAI Grok Provider
 
+Budget-aware rebuilds reuse or fund a recovery reservation; the first helper send reuses the outer pacing slot under the [recovery and pacing contract](../transports/responses.md#credential-hop-reservations).
+
 xAI uses the same shared credential and delivery policies through the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

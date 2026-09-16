@@ -155,15 +155,16 @@ export function createResponsesSendBudget(
 
   const keyPool429RetryAllowed = (adapterOwnsSends: boolean): boolean => {
     if (keyPoolFailovers >= maxKeyPoolFailovers) return false;
-    if (adapterOwnsSends) return !adapterSendBudget
-      || adapterSendBudget.remainingBaseSends(adapterSendBudget.policy.baseSendAllowance) > 0;
+    if (adapterOwnsSends && !adapterSendBudget) return true;
     const policy = transientRetryPolicyFor(route.provider);
-    const attempts = policy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+    const attempts = adapterOwnsSends ? adapterSendBudget!.policy.baseSendAllowance
+      : policy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
     if (!Number.isInteger(attempts) || attempts <= 0) return false;
     if (remainingTransientSendBudget(attempts) > 0) return true;
     if (!isRequestExecutionBudget(sendBudget)) return false;
     const decision = sendBudget.reserveDispatch({
-      sendClass: "auth-recovery", targetKey: `${route.providerName}|${route.modelId}|key-429`,
+      sendClass: "auth-recovery", targetKey: adapterOwnsSends && adapterSendBudget?.lastTargetKey
+        ? adapterSendBudget.lastTargetKey : `${route.providerName}|${route.modelId}|key-429`,
       countedExternally: true,
     });
     if (!decision.allowed) return false;

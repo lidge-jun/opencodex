@@ -21,7 +21,6 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
     beforeDispatch?: () => void | Promise<void>;
     dispatch: (executor: typeof globalThis.fetch) => Promise<Response>;
   }): Promise<Response> => {
-    await executor.waitForPacing?.(ctx.abortSignal);
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     const decision = ctx.sendBudget?.reserveDispatch({
       sendClass: options.sendClass ?? "transient", targetKey: options.url,
@@ -39,6 +38,8 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
       return (executor.unpacedFetch ?? executor)(input, init);
     }) as typeof globalThis.fetch;
     try {
+      await executor.waitForPacing?.(ctx.abortSignal);
+      if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       await options.beforeDispatch?.();
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       return await options.dispatch(physicalExecutor);

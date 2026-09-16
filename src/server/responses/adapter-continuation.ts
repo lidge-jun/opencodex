@@ -212,6 +212,7 @@ export function createAdapterContinuations(
               onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
               stream: nextParsed.stream,
               executor: storedPoolReplayDispatchNotifier(providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                pacingSlotAcquired: true,
                 dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,

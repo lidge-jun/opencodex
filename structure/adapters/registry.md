@@ -1,5 +1,7 @@
 # Adapter Registry Authority
 
+Budget-aware rebuilds reuse or fund a recovery reservation; the first helper send reuses the outer pacing slot under the [recovery and pacing contract](../transports/responses.md#credential-hop-reservations).
+
 Command Code, MiMo and Google Vertex/Antigravity admit each inference attempt against the shared budget under the [hop confirmation contract](../transports/responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
 
 Request-local adapter bindings are separate from registry authority in the Responses

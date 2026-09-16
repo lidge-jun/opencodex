@@ -1,5 +1,7 @@
 # Images Data Plane
 
+Budget-aware rebuilds reuse or fund a recovery reservation; the first helper send reuses the outer pacing slot under the [recovery and pacing contract](../transports/responses.md#credential-hop-reservations).
+
 Vision preprocessing and image/video/search execution use the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

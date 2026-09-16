@@ -711,6 +711,15 @@ credential rotations after a dispatched hop; MiMo executor and bootstrap separat
 in `tests/providers/mimo-free-provider.test.ts`.
 `tests/adapters/physical-send.test.ts` verifies prepaid adoption, refusal and refund;
 `tests/adapters/google/google-vertex-http.test.ts` bounds Google repair and retry sends.
+Budget-aware adapter rebuilds can fund a key/OAuth recovery from the remaining final reserve;
+an explicitly supplied prepaid scope is reused without another reservation. Key-429 admission
+probes the same reserve and releases that probe; the actual rebuild owns the funded scope.
+Initial, rebuilt and continuation `fetchResponse` calls pass their already-acquired pacing slot
+to the executor. The physical-send helper consumes that slot once, then obtains one new slot
+per internal retry. It reserves before pacing, so a refused internal retry takes no extra slot
+or backoff; this does not remove the outer entry-point pacing wait.
+`tests/server/server-key-failover-e2e.test.ts` checks Vertex key-401/key-429 and empty continuations,
+unchanged selection without a reserve, and one pacing interval per actual inference.
 
 `tests/server/server-kiro-oauth-401-replay.test.ts` counts actual Kiro requests across three stored
 OAuth accounts, including an earlier connection reset and the third account's success or quota

@@ -16,16 +16,19 @@ function prepaid() {
 describe("adapter physical inference admission", () => {
   test("a prepaid scope admits exactly one physical send and rejects replay before backoff", async () => {
     const { parent, scope, hop } = prepaid();
-    let sends = 0, waits = 0;
+    let sends = 0, waits = 0, pacingSlots = 0;
     const ordinals: number[] = [];
     const send = createAdapterPhysicalSend({ sendBudget: scope, onPhysicalSend: event => ordinals.push(event.ordinal) },
-      (async () => { sends += 1; return new Response("ok"); }) as typeof fetch);
+      Object.assign(async () => { sends += 1; return new Response("ok"); }, {
+        waitForPacing: async () => { pacingSlots += 1; },
+      }) as typeof fetch);
     await send({ url, dispatch: executor => executor(url) });
     await expect(send({ url, sendClass: "repair", beforeDispatch: () => { waits += 1; },
       dispatch: executor => executor(url) })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
     hop.release();
     expect(sends).toBe(1);
     expect(waits).toBe(0);
+    expect(pacingSlots).toBe(1);
     expect(ordinals).toEqual([1]);
     expect(parent.used).toBe(4);
   });
