@@ -266,6 +266,7 @@
     "autostart-health.test.ts": "service",
     "azure-adapter.test.ts": "providers",
     "azure-model-router-tool-schema.test.ts": "providers",
+    "bare-echo-alias.test.ts": "responses",
     "baseten-provider.test.ts": "providers",
     "bearer-admission-routed-provider.test.ts": "codex-integration",
     "bounded-body.test.ts": "server",
