@@ -211,6 +211,36 @@ describe("held account dispatch", () => {
       backpressure: limiter,
     });
     expect(noDetour.kind).toBe("withheld");
+    // The refusal has to hand back a time the caller can wait on. This account has no probe
+    // state of its own -- nothing was ever granted for it -- so the probe pacing knows nothing
+    // and only the limiter can answer when its window moves. Asserting the kind alone is what
+    // let a withheld dispatch tell the caller to try again immediately, which is the same load
+    // as the dispatch it refused.
+    if (noDetour.kind === "withheld") {
+      expect(noDetour.retryAt).toBeGreaterThan(now);
+      expect(noDetour.retryAt).toBe(limiter.nextRecoveryAt(now));
+    }
+  });
+
+  test("the limiter reports when its window could next admit a recovery", () => {
+    const now = 2_000_000;
+    const limiter = createPoolBackpressureLimiter({
+      windowMs: 10_000,
+      maxRetryRatio: 0,
+      minRecoveryAllowance: 1,
+    });
+    // Allowance is one and nothing has spent it, so a caller may go now.
+    expect(limiter.nextRecoveryAt(now)).toBe(now);
+    expect(limiter.tryPermitRetryDispatch(now)).toBe(true);
+
+    // Spent. The answer is a real change point -- when the bucket holding that dispatch leaves
+    // the window -- not an arbitrary delay, and never `now`.
+    expect(limiter.tryPermitRetryDispatch(now)).toBe(false);
+    const retryAt = limiter.nextRecoveryAt(now);
+    expect(retryAt).toBeGreaterThan(now);
+    expect(retryAt).toBeLessThanOrEqual(now + 10_000);
+    // ...and once the window has moved past it, the allowance is back.
+    expect(limiter.tryPermitRetryDispatch(retryAt)).toBe(true);
   });
 });
 

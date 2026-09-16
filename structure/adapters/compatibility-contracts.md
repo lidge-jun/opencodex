@@ -78,3 +78,19 @@ before dotted aliases are added. A conflicting explicit namespace is never overw
 restoration retains the existing lowered-kind handling because custom tools are lowered to
 functions before the adapter constructs its alias map; ordinary argument repair independently
 checks the original declaration kind.
+
+## Undeclared-tool refusal is an inbound-protocol claim
+
+Whether a routed provider's call to an undeclared tool is refused depends on the inbound protocol,
+not on the adapter or the upstream protocol. The `responses` inbound protocol refuses it and ends
+the turn, which is the #1700 contract. The `chat` and `anthropic` inbound protocols relay it,
+because those specs place validation and execution with the client's own tool runner.
+
+A manifest claiming a disposition for tool-call delivery therefore names its inbound protocol. The
+same provider, base URL, adapter, and authentication mode produce `passthrough` on `chat` and
+`anthropic` and `unsupported` on `responses` for the identical undeclared call, which is exactly
+the inference the narrow-subject rule above exists to prevent.
+
+Tool-name normalization is not scoped this way and runs on every inbound protocol, so a
+provider-invented `default.` namespace resolves back to the declared tool regardless of subject.
+The contract is stated in full in [Responses Transport](../transports/responses.md).

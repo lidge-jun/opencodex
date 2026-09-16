@@ -123,6 +123,39 @@ export function codexAccountBlockReason(
   return undefined;
 }
 
+/**
+ * Drop accounts a confirmed roster says cannot serve this model, unless that leaves nothing.
+ *
+ * The restore-on-empty is the whole safety argument, not a defensive afterthought. Roster
+ * evidence can be wrong in the direction that matters: a shard that has not caught up reports a
+ * denial for a model the account genuinely owns, and #3022 is what happens when absence is
+ * allowed to remove a model outright. Because this can only ever return a non-empty subset of a
+ * list the caller already computed, no pool that would have found a working account can be left
+ * without one — the worst case is the selection that ships today.
+ *
+ * It is an ordering rule rather than an eligibility one for the same reason. Nothing below
+ * reports `model_not_entitled`, nothing refuses before dispatch, and the existing bounded
+ * alternate-account retry on an exact unsupported-model 400 stays exactly where it is as the
+ * safety net. This only stops the pool from CHOOSING an account that has already told us it
+ * cannot serve the model (#4768).
+ *
+ * An operator's manual pin is never dropped. Roster evidence orders the pool's own discretion;
+ * it does not overrule an explicit human choice, and removing the pinned account here would do
+ * more than demote it -- `selectPriorityTier` reads the pin to lower the tier ceiling, so a pin
+ * filtered out beforehand stops acting as a ceiling at all and silently re-enables tiers the
+ * operator had excluded. An operator who pins an account upstream will refuse still gets the
+ * alternate-account retry; what they do not get is the pool quietly deciding they were wrong.
+ */
+export function withoutModelDeniedAccounts(
+  ids: readonly string[],
+  denied: ReadonlySet<string> | undefined,
+  pinned?: string,
+): readonly string[] {
+  if (denied === undefined || ids.length === 0) return ids;
+  const remaining = ids.filter(id => !denied.has(id) || id === pinned);
+  return remaining.length > 0 ? remaining : ids;
+}
+
 export function getEligiblePoolAccounts(
   config: OcxConfig,
   excludeId?: string,
@@ -168,11 +201,16 @@ export function getEligiblePoolAccounts(
   // Single choke point for selection order: every strategy, failover, and preview
   // reaches the pool through here, so tiering applies once rather than per picker.
   // Eligibility above is unchanged — this only narrows an already-eligible list.
+  //
+  // Model entitlement is applied BEFORE the priority tier, because a tier is a quota-ordering
+  // question and an account that cannot serve the model at all should not be the reason a tier
+  // is selected. Both steps narrow an already-eligible list and neither can empty it.
+  const pinned = pinnedCodexAccountId(config);
   return selectPriorityTier(
-    ids,
+    withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds, pinned),
     codexAccountPriorityLookup(config),
     id => hasCodexQuotaHeadroom(config, id, selectionOptions, now),
-    pinnedCodexAccountId(config),
+    pinned,
   );
 }
 
@@ -561,6 +599,45 @@ export function peekAlternateCodexAccount(
 
 export function isUnknownUsage(usage: number): boolean {
   return usage >= CODEX_UNKNOWN_USAGE_SCORE;
+}
+
+/**
+ * Correct a shared cursor that names an account this model's own roster denies (#4768).
+ *
+ * {@link getEligiblePoolAccounts} is not the only door into selection. An account that is already
+ * ACTIVE is served straight from {@link isCodexAccountSelectable} and never passes through the
+ * eligible list, so ordering that list alone left the exact case the issue reports: once the Free
+ * account becomes the cursor, every Sol/Astra request keeps going to it and keeps taking the
+ * upstream unsupported-model 400. {@link pickPriorityPreemption} does not cover it either -- it
+ * refuses to move toward a tier that does not strictly outrank the active one, which is the usual
+ * shape here.
+ *
+ * Three properties keep this inside "order the already-eligible set" rather than widening it.
+ * It admits nothing: the replacement comes from {@link getEligiblePoolAccounts}, so every
+ * eligibility guard has already passed on it. It cannot fail: with no entitled alternative the
+ * active account is returned unchanged, so this can never turn a served request into `none`.
+ * And it changes nothing without evidence: absent `deniedModelAccountIds`, or an active account
+ * nobody denied, it is the identity function.
+ *
+ * The caller must NOT persist the result. This is one request's correction for one model, in the
+ * same spirit as a model detour; the operator's cursor is theirs. A pinned active account is
+ * exempt outright, for the reason {@link withoutModelDeniedAccounts} gives.
+ */
+export function preferModelEntitledAccount(
+  config: OcxConfig,
+  active: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string {
+  const denied = selectionOptions?.deniedModelAccountIds;
+  if (denied === undefined || !denied.has(active)) return active;
+  if (pinnedCodexAccountId(config) === active) return active;
+  // The eligible list restores denied members when filtering would empty it, so re-filter here:
+  // moving from one denied account to another buys nothing and costs the warm prefix.
+  const entitled = getEligiblePoolAccounts(config, active, now, quotaScope, selectionOptions)
+    .filter(id => !denied.has(id));
+  return pickLowestUsageAmong(config, entitled, selectionOptions, now) ?? active;
 }
 
 /**

@@ -41,6 +41,19 @@ import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuation
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 
+/**
+ * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
+ * plaintext reasoning and cannot consume opaque reasoning state. The two existing flags are
+ * current evidence for that one provider contract, not equivalent capabilities: preservation
+ * keeps plaintext reasoning on the wire, while adjacency marks its strict tool-history shape.
+ * The moment a second provider needs this behavior, replace this derivation with an explicit
+ * registry capability rather than extending the inference.
+ */
+export function requiresPlaintextReasoningReplay(provider: OcxProviderConfig): boolean {
+  return provider.preserveResponsesReasoningContent === true
+    && provider.requiresAdjacentResponsesToolResults === true;
+}
+
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
 export const FORWARD_HEADERS = [
@@ -371,6 +384,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         }
       }
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
+      // Providers with the strict plaintext tool-continuation contract cannot consume any
+      // encrypted reasoning blob, including one whose provenance is unknown. Combo routing
+      // separately refuses a proven cross-route replay when no plaintext exists; this final
+      // serializer guard ensures the foreign opaque state is never forwarded regardless.
       const sanitizedBody = normalizeToolSchemas(
         stripItemIdsWhenUnstored(
           stripInvalidItemIds(
@@ -384,7 +401,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
                   dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
-                  stripEncryptedContent: threadServingIdentityChanged,
+                  stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                 },
               ),
               provider,

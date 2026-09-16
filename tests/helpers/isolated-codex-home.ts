@@ -23,9 +23,10 @@ export function installIsolatedCodexHome(prefix = "ocx-codex-home-"): IsolatedCo
       // disposable. On Windows a proxy or child that is still shutting down can hold
       // a file in this tree open past the retry budget, and rethrowing there failed a
       // test that had already finished asserting -- it read as a defect in whatever
-      // ran here rather than as an OS release race. Leave the temp directory to the
-      // OS instead; a stale directory under TEMP costs nothing, a false red costs a
-      // real signal.
+      // ran here rather than as an OS release race. The owning test root now contains
+      // and removes this path, so a swallowed failure here no longer strands a directory
+      // directly under the user's TEMP -- it strands one inside a tree that goes away with
+      // the run, or with a later run that can prove it owned that tree.
       try {
         removeTreeWithRetry(path);
       } catch {

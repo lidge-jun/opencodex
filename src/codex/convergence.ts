@@ -49,7 +49,7 @@ import {
   orderForSubagents,
   } from "./catalog/sync";
   import { multiAgentV2EnabledFromConfigText } from "./features";
-  import { exactComboCatalogSlugs } from "./catalog/aggregation";
+  import { enforceCatalogSlugUniqueness, exactComboCatalogSlugs } from "./catalog/aggregation";
   import {
   isNativeAliasCatalogEntry,
   accountBoundNativeOpenAiSlugs,
@@ -386,7 +386,12 @@ function prepareCatalog(
       : null,
   );
   finalizeAutoReviewModelOverride(mergedModels, catalogModels, config);
-  catalog.models = mergedModels;
+  // The second writer of this file. A dashboard model toggle, a combo edit, or a Codex account
+  // login reaches `convergeCodexCatalog` and commits through `fixedCommit`, never through
+  // `writeRetainedCatalogSync`, so the #4730 uniqueness guard has to stand here too or the same
+  // `source-invalid` rejection returns by a different route. Silent because this merge runs under
+  // `warningPolicy: "suppress"`.
+  catalog.models = enforceCatalogSlugUniqueness(mergedModels, false);
   return catalog;
 }
 

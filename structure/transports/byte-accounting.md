@@ -66,3 +66,60 @@ These optimizations do not add request queues, retry policies, or RSS-based admi
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+## Response-log inspection
+
+`src/server/response-log-body.ts` forwards raw response chunks on downstream demand.
+Diagnostic retention is limited to 32 MiB for JSON and an 8 KiB prefix for other
+HTTP error bodies. Fixed 64 KiB blocks also bound per-chunk bookkeeping. These
+are retained-source-byte limits, not peak heap or response-delivery limits:
+joining, decoding and parsing a bounded JSON body can temporarily use more memory.
+An oversized JSON candidate is discarded immediately; partial JSON on read error
+or cancellation never replaces model or usage metadata. Existing trusted metadata
+is preserved. The existing parser and redaction path inspect complete admitted
+JSON and bounded non-JSON error prefixes. EOF, read error and cancellation finalize
+once; history records the original status, 502 or 499 respectively, without
+rewriting the response status or bytes already sent to the client.
+
+`src/server/inspection-tee.ts` paces the native SSE inspection branch against raw
+client consumption before rewrites. Its 32 MiB read-ahead allowance is not a total
+turn limit: long streams retain terminal, usage and continuation observation.
+The allowance can be exceeded by one source chunk plus native tee prefetch; it is
+not an RSS limit or a producer-side bound for push transports. Existing eager-path
+selection, WebSocket bounds and SSE frame/output-item limits are unchanged.
+Client departure releases pacing to the existing 15-second/32-MiB bounded drain.
+One tee branch's cancellation is never awaited by the wrapper, because that
+promise may depend on its sibling. A hard owner abort discards pending candidates
+rather than flushing them as successful terminals; genuine EOF/read-error tail
+handling remains distinct.
+
+`tests/server/response-log-inspection.test.ts` covers the real inspector/relay
+composition, including a turn beyond 32 MiB, late usage/output, slow readers,
+cancellation and read-error races. `tests/usage/request-log-nonstream.test.ts`
+binds the bounded non-stream wrapper to request-log status and metadata behavior.
+
+Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+
+## Terminal-continuation retention
+
+`src/server/responses/terminal-guard.ts` retains at most 1,024 text/thinking/signature/redacted
+content events and 65,536 aggregate JavaScript string code units per guarded turn. These are
+semantic-retention limits, not UTF-8 byte accounting or a process-wide memory cap. Heartbeats,
+tool-argument fragments, and events unused by continuation analysis/rebuilding pass through
+without being retained or spending that allowance.
+
+A real tool start, a limit overflow, or text exceeding 280 characters after trimming disables
+analysis for the rest of the turn and clears the retained history. Overflow never produces a
+continuation from truncated reasoning. Consumer events, terminal reasons, and usage still pass
+through unchanged except for existing cross-continuation usage aggregation. Each permitted
+continuation has fresh counters; unsupported adapters and exhausted continuation allowances
+retain no content. Anthropic behavior and the caller's OpenAI Chat opt-in gate remain scoped as
+before. `tests/server/terminal-guard.test.ts` covers inclusive limits, split whitespace, passthrough,
+reasoning replay, analysis shutdown, usage aggregation, and unsuccessful or absent terminals.
+
+If creating a continuation throws or rejects, its error event carries usage already reported by
+completed legs. Unknown usage stays absent rather than becoming a measured zero. This does not
+invent usage for an unreported failed send, retry a failed factory, or turn failure into success.
+Source-iteration exceptions still propagate to the caller. Returning the guard iterator closes
+its active source; cancellation at an assistant boundary does not start the continuation callback.
+The same focused tests cover these lifecycle paths and Unicode code-unit limit boundaries.

@@ -51,7 +51,7 @@ import { bundledCatalogCacheState, loadBundledCodexCatalog } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
 import { clampCatalogModelsToCodexSupport } from "./effort";
 import { filterCatalogVisibleModels, gatherRoutedModels, type CatalogGatherProviderModelOutcome } from "./provider-fetch";
-import { exactComboCatalogSlugs, type ComboCatalogOmission } from "./aggregation";
+import { dedupeCatalogEntriesBySlug, enforceCatalogSlugUniqueness, exactComboCatalogSlugs, type ComboCatalogOmission } from "./aggregation";
 import {
   withCatalogWriteSerialization,
   type CatalogWritePermit,
@@ -522,6 +522,9 @@ function writeRetainedCatalogSync({
   });
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
+  // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering
+  // against the effort clamp is load-bearing rather than cosmetic.
+  catalog.models = enforceCatalogSlugUniqueness(catalog.models, true);
 
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;
@@ -552,6 +555,11 @@ function writeRetainedCatalogSync({
     comboOmissions,
   };
 }
+
+// Re-exported so the #4730 unit regression keeps importing the guard from the sync module it
+// guards; the implementation lives in ./aggregation because the management convergence commit
+// is the second writer that has to apply the identical rule.
+export { dedupeCatalogEntriesBySlug };
 
 export async function syncCatalogModels(
   config: OcxConfig,

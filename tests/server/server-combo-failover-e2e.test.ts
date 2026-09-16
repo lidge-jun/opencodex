@@ -1,4 +1,5 @@
 import { registerComboForcedEffortCases } from "../helpers/combo-forced-effort-cases";
+import { comboProviderFactory } from "../helpers/combo-provider";
 import { registerComboContextOverflowCases } from "../helpers/combo-context-overflow-cases";
 import { registerComboContextHeadroomCases } from "../helpers/combo-context-headroom-cases";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
@@ -61,6 +62,7 @@ const { createCursorAdapter } = await import("../../src/adapters/cursor");
 import type { CursorTransportFactory } from "../../src/adapters/cursor/transport";
 let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
 let customFetchResponse: NonNullable<ProviderAdapter["fetchResponse"]> | undefined;
+const provider = comboProviderFactory(() => customFetchResponse);
 let customTransientResponse: (() => Promise<Response>) | undefined;
 let customUsageEstimate: ((model: string) => number | undefined) | undefined;
 let customCursorTransportFactory: CursorTransportFactory | undefined;
@@ -105,7 +107,8 @@ mock.module("../../src/server/adapter-resolve", () => ({
         },
         async fetchResponse(request, context) {
           if (!customFetchResponse) throw new Error("custom fetchResponse not installed");
-          return customFetchResponse(request, context);
+          return context!.executor!(request.url, { method: request.method, headers: request.headers,
+            body: request.body, signal: context?.abortSignal });
         },
       };
     }
@@ -251,22 +254,6 @@ function responsesSuccess(text: string, model = "responses-model"): Record<strin
       content: [{ type: "output_text", text, annotations: [] }],
     }],
     usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
-  };
-}
-
-function provider(
-  adapter: string,
-  url: string,
-  apiKey: string,
-  extra: Partial<OcxProviderConfig> = {},
-): OcxProviderConfig {
-  return {
-    adapter,
-    baseUrl: url,
-    allowPrivateNetwork: url.includes("127.0.0.1"),
-    authMode: "key",
-    apiKey,
-    ...extra,
   };
 }
 
@@ -1837,7 +1824,7 @@ describe("server combo failover 030 activation matrix", () => {
       .toEqual({ inputTokens: 17, outputTokens: 3, totalTokens: 20 });
   });
 
-  test("provider-local retry keeps one attempt, two sends, recovery kind, and latest estimate", async () => {
+  test("provider-local key retry keeps separate attempts and the latest estimate on the selected key", async () => {
     const estimates = [10, 25];
     customUsageEstimate = () => estimates.shift();
     let calls = 0;
@@ -1858,11 +1845,14 @@ describe("server combo failover 030 activation matrix", () => {
     const response = await postLogged(config);
     expect(response.status).toBe(200);
     await response.text();
-    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    const attempts = (await latestAttemptReceipts(config)).usage.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts?.[0]).toMatchObject({ sendCount: 1, usageStatus: "unreported" });
+    const attempt = attempts?.[1];
     expect(attempt).toMatchObject({
       provider: "a",
       model: "m1",
-      sendCount: 2,
+      sendCount: 1,
       inputTokenEstimate: 25,
       recoveryKinds: ["key-429"],
     });

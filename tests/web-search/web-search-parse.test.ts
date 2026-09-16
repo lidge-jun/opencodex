@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { MAX_SIDECAR_RESPONSE_BYTES, parseSidecarSSE } from "../../src/web-search/parse";
+import {
+  MAX_SIDECAR_DECODED_CHARS,
+  MAX_SIDECAR_RESPONSE_BYTES,
+  MAX_SIDECAR_STREAM_BYTES,
+  parseSidecarSSE,
+} from "../../src/web-search/parse";
 
 function sse(events: { type: string; [k: string]: unknown }[]): Response {
   const body = events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join("");
@@ -30,10 +35,10 @@ describe("parseSidecarSSE trailing Sources block", () => {
       type: "response.output_text.delta",
       delta: "A",
     })}\n\n`);
-    const paddingBytes = MAX_SIDECAR_RESPONSE_BYTES - event.byteLength;
+    const paddingBytes = MAX_SIDECAR_STREAM_BYTES - event.byteLength;
     const padding = encoder.encode(`:${"x".repeat(paddingBytes - 2)}\n`);
     const bytes = joinBytes(event, padding);
-    expect(bytes.byteLength).toBe(MAX_SIDECAR_RESPONSE_BYTES);
+    expect(bytes.byteLength).toBe(MAX_SIDECAR_STREAM_BYTES);
 
     const chunks = [bytes.subarray(0, 12_345), bytes.subarray(12_345)];
     let reads = 0;
@@ -50,6 +55,7 @@ describe("parseSidecarSSE trailing Sources block", () => {
 
     const out = await parseSidecarSSE(new Response(body));
     expect(out.text).toBe("A");
+    expect(out.error).toContain("byte limit reached before terminal event");
     expect(reads).toBe(2);
     expect(cancels).toBe(1);
   });
@@ -61,7 +67,7 @@ describe("parseSidecarSSE trailing Sources block", () => {
       delta: "A",
     })}\n\n`);
     const partial = encoder.encode('data:{"type":"response.output_text.delta","delta":"B');
-    const oversized = new Uint8Array(MAX_SIDECAR_RESPONSE_BYTES + 32);
+    const oversized = new Uint8Array(MAX_SIDECAR_STREAM_BYTES + 32);
     oversized.set(complete);
     oversized.set(partial, complete.byteLength);
     oversized.fill(0x78, complete.byteLength + partial.byteLength);
@@ -73,6 +79,7 @@ describe("parseSidecarSSE trailing Sources block", () => {
 
     const out = await parseSidecarSSE(new Response(body));
     expect(out.text).toBe("A");
+    expect(out.error).toContain("byte limit reached before terminal event");
     expect(cancels).toBe(1);
   });
 
@@ -84,16 +91,20 @@ describe("parseSidecarSSE trailing Sources block", () => {
     })}\n\n`);
     const partialPrefix = encoder.encode('data:{"type":"response.output_text.delta","delta":"');
     const filler = new Uint8Array(
-      MAX_SIDECAR_RESPONSE_BYTES - complete.byteLength - partialPrefix.byteLength - 1,
+      MAX_SIDECAR_STREAM_BYTES - complete.byteLength - partialPrefix.byteLength - 1,
     ).fill(0x78);
     const oversized = joinBytes(complete, partialPrefix, filler, encoder.encode("😀\"}\n\n"));
-
+    let cancels = 0;
     const body = new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(oversized); },
+      cancel() { cancels += 1; },
     });
+
     const out = await parseSidecarSSE(new Response(body));
     expect(out.text).toBe("A");
     expect(out.text).not.toContain("�");
+    expect(out.error).toContain("byte limit reached before terminal event");
+    expect(cancels).toBe(1);
   });
 
   test("returns bounded partial output when body cancellation rejects", async () => {
@@ -102,15 +113,79 @@ describe("parseSidecarSSE trailing Sources block", () => {
       type: "response.output_text.delta",
       delta: "A",
     })}\n\n`);
-    const oversized = new Uint8Array(MAX_SIDECAR_RESPONSE_BYTES + 1).fill(0x78);
+    const oversized = new Uint8Array(MAX_SIDECAR_STREAM_BYTES + 1).fill(0x78);
     oversized.set(event);
+    let cancels = 0;
     const body = new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(oversized); },
-      cancel() { return Promise.reject(new Error("cancel failed")); },
+      cancel() {
+        cancels += 1;
+        return Promise.reject(new Error("cancel failed"));
+      },
     });
 
     const out = await parseSidecarSSE(new Response(body));
     expect(out.text).toBe("A");
+    expect(out.error).toContain("byte limit reached before terminal event");
+    expect(cancels).toBe(1);
+  });
+
+  test("parses a 75 KB tiny-delta caption through response.completed", async () => {
+    const text = "Readable screenshot text. ".repeat(60);
+    const frame = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`;
+    let wire = "";
+    for (let i = 0; i < text.length; i += 3) {
+      wire += frame({
+        type: "response.output_text.delta",
+        item_id: "msg_synthetic",
+        output_index: 0,
+        content_index: 0,
+        sequence_number: i / 3,
+        delta: text.slice(i, i + 3),
+      });
+    }
+    wire += frame({
+      type: "response.completed",
+      response: { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text }] }] },
+    });
+
+    expect(new TextEncoder().encode(wire).byteLength).toBe(75_436);
+    expect(new TextEncoder().encode(wire).byteLength).toBeGreaterThan(MAX_SIDECAR_RESPONSE_BYTES);
+    const out = await parseSidecarSSE(new Response(wire));
+    expect(out).toEqual({ text, sources: [] });
+  });
+
+  test("returns an explicit error when decoded payload limit is exceeded", async () => {
+    const oversizedText = "x".repeat(MAX_SIDECAR_DECODED_CHARS + 1);
+    const out = await parseSidecarSSE(sse([
+      { type: "response.output_text.delta", delta: oversizedText },
+      { type: "response.completed", response: { output: [] } },
+    ]));
+
+    expect(out.text).toBe("");
+    expect(out.error).toContain("decoded text limit reached");
+  });
+
+  test("returns an explicit error when stream ends without a terminal event", async () => {
+    const out = await parseSidecarSSE(sse([
+      { type: "response.output_text.delta", delta: "incomplete prefix" },
+    ]));
+
+    expect(out.text).toBe("incomplete prefix");
+    expect(out.error).toContain("before terminal event");
+  });
+
+  test("stops a runaway raw stream at the bounded wire ceiling", async () => {
+    const chunk = new Uint8Array(MAX_SIDECAR_STREAM_BYTES + 1).fill(0x78);
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(chunk); },
+      cancel() { cancelled = true; },
+    });
+
+    const out = await parseSidecarSSE(new Response(body));
+    expect(cancelled).toBe(true);
+    expect(out.error).toContain("byte limit reached before terminal event");
   });
 
   test("extracts sources from a markdown Sources block when annotations are empty", async () => {

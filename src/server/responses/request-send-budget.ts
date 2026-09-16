@@ -5,7 +5,13 @@ import { workflowRefusalResponse } from "../workflow-refusal";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { noteAttemptSend } from "../request-log";
 import { TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
-import type { SingleUseDispatchPermit, SendClass } from "../../lib/request-execution-budget";
+import type {
+  DispatchDecision,
+  DispatchIntent,
+  RequestExecutionBudget,
+  SendClass,
+  SingleUseDispatchPermit,
+} from "../../lib/request-execution-budget";
 
 /** Owns the shared request send counter and recovery permits. */
 export function createResponsesSendBudget(
@@ -52,7 +58,7 @@ export function createResponsesSendBudget(
   /**
    * Records an adapter's OWN inner retries against this attempt.
    *
-   * Ordinal 1 is the send each call site already recorded through `noteAttemptSend`, so only
+   * Ordinal 1 is the send each call site already recorded through `noteRoutedAttemptSend`, so only
    * the extra physical sends are added here and an adapter that does not retry internally
    * leaves its log byte-for-byte as it was. Kiro reaches roughly eighteen sends per call and
    * Cursor re-sends a whole turn, and both reported one; a count that cannot be observed
@@ -75,6 +81,32 @@ export function createResponsesSendBudget(
    * was recovering from.
    */
   let pendingHopPermit: SingleUseDispatchPermit | undefined;
+  /**
+   * The budget an adapter's OWN dispatch ladder reserves against.
+   *
+   * Kiro and Cursor reserve once per physical send, and that is right: their ladders are the
+   * layer that actually sends, and counting one adapter call as one send hid up to eighteen
+   * upstream requests. But a credential hop has already booked the replay it is about to make,
+   * and a reservation IS the charge, so an adapter that reserves again turns one physical send
+   * into two charges -- and once the base allowance is spent, into a refusal that answers with
+   * a synthetic error in place of the 429 the hop was recovering from (#4709).
+   *
+   * The hop hands its reservation down through `pendingHopPermit`, the same seam the
+   * passthrough ladder already uses, and this view spends it on the adapter's FIRST
+   * reservation. Every later send in that ladder is a new physical send and is charged
+   * normally. A permit the adapter takes but never sends under is released through the same
+   * call it would have used for a reservation of its own, so an abandoned replay is refunded
+   * rather than left charged.
+   */
+  const adapterDispatchBudget: RequestExecutionBudget | undefined = adapterSendBudget === undefined
+    ? undefined
+    : adapterDispatchBudgetView(adapterSendBudget, {
+      claimHopPermit: () => {
+        const permit = pendingHopPermit;
+        pendingHopPermit = undefined;
+        return permit;
+      },
+    });
   /**
    * How many sends a recovery leg may make, and the permit that authorises the last one.
    *
@@ -147,6 +179,7 @@ export function createResponsesSendBudget(
     noteTransientSends,
     remainingTransientSendBudget,
     adapterSendBudget,
+    adapterDispatchBudget,
     noteAdapterPhysicalSend,
     sendBudgetExhausted,
     get pendingHopPermit(): SingleUseDispatchPermit | undefined {
@@ -162,3 +195,65 @@ export function createResponsesSendBudget(
 }
 
 export type ResponsesSendBudget = Exclude<ReturnType<typeof createResponsesSendBudget>, Response>;
+
+/**
+ * A LIVE delegating view of one request's execution budget, with a credential hop's
+ * reservation spendable through it.
+ *
+ * Every member forwards rather than copying. A spread of the budget would freeze `used`,
+ * `reserveSpent` and the target counters at construction time, handing the adapter a budget
+ * that can never read as exhausted -- the same class of defect as the fresh per-layer
+ * allowances #4546 removed.
+ */
+function adapterDispatchBudgetView(
+  budget: RequestExecutionBudget,
+  hop: { claimHopPermit: () => SingleUseDispatchPermit | undefined },
+): RequestExecutionBudget {
+  return {
+    get used(): number { return budget.used; },
+    set used(next: number) { budget.used = next; },
+    logicalRequestId: budget.logicalRequestId,
+    policyVersion: budget.policyVersion,
+    policy: budget.policy,
+    get reserveSpent(): boolean { return budget.reserveSpent; },
+    get alternateTargetSends(): number { return budget.alternateTargetSends; },
+    get targetTransitions(): number { return budget.targetTransitions; },
+    get lastTargetKey(): string | undefined { return budget.lastTargetKey; },
+    remainingBaseSends: (cap: number): number => budget.remainingBaseSends(cap),
+    reserveDispatch(intent: DispatchIntent): DispatchDecision {
+      // A dispatch whose upstream state is unknown is refused on its own merits. A hop that
+      // already paid does not make an unsafe replay safe, so that check stays with the budget.
+      if (intent.replaySafe !== false) {
+        const hopPermit = hop.claimHopPermit();
+        // Confirmed here rather than in `use()`: the adapter reserves immediately before it
+        // opens the transport, which is the same boundary the hop's own confirmation uses.
+        // A permit some other leg already settled returns false, and this falls through to a
+        // real reservation rather than handing the adapter a dead permit -- an adapter whose
+        // `use()` fails treats the request as exhausted and stops sending entirely.
+        if (hopPermit !== undefined && hopPermit.assumeCharge()) {
+          let spent = false;
+          return {
+            allowed: true,
+            permit: {
+              sendClass: hopPermit.sendClass,
+              use: (): boolean => {
+                if (spent) return false;
+                spent = true;
+                return true;
+              },
+              assumeCharge: (): boolean => {
+                if (spent) return false;
+                spent = true;
+                return true;
+              },
+              // The hop's charge is already settled and belongs to the leg that asked for it,
+              // so there is nothing here to refund.
+              release: (): void => {},
+            },
+          };
+        }
+      }
+      return budget.reserveDispatch(intent);
+    },
+  };
+}

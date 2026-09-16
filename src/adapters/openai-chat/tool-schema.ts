@@ -1,7 +1,8 @@
 import { isNativeOpenAIChatTarget } from "./wire";
+import { createOpenAIChatToolNameRegistry, type OpenAIChatToolNameRegistry } from "./tool-name-registry";
 import { isXaiSchemaTarget, lookupLocalJsonPointer, normalizeXaiToolParameters } from "../xai-tool-schema";
 import { stripResponsesOnlyEncryptedMarker, stripUnicodePropertyPatterns } from "../responses-tool-schema";
-import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../../types";
+import { isAllowedToolChoice, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../../types";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../types";
 
 const ZEN_SCHEMA_MAP_KEYS = new Set(["properties", "$defs", "definitions"]);
@@ -409,7 +410,11 @@ function normalizeMoonshotToolParameters(parameters: unknown): Record<string, un
   return isXaiObjectSchema(normalized) ? normalized : rooted;
 }
 
-export function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] | undefined {
+export function toolsToChatFormat(
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+  registry: OpenAIChatToolNameRegistry = createOpenAIChatToolNameRegistry(parsed.context.tools),
+): unknown[] | undefined {
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
   const tools = parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools));
   if (tools.length === 0) return undefined;
@@ -427,7 +432,7 @@ export function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProvide
     return [{
       type: "function",
       function: {
-        name: namespacedToolName(t.namespace, t.name),
+        name: registry.alias(t),
         ...(t.description ? { description: t.description } : {}),
         parameters,
         ...(t.strict !== undefined ? { strict: t.strict } : {}),
@@ -437,8 +442,12 @@ export function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProvide
   return formatted.length > 0 ? formatted : undefined;
 }
 
-export function toolsToChatFormatForProvider(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] | undefined {
-  const base = toolsToChatFormat(parsed, provider);
+export function toolsToChatFormatForProvider(
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+  registry: OpenAIChatToolNameRegistry = createOpenAIChatToolNameRegistry(parsed.context.tools),
+): unknown[] | undefined {
+  const base = toolsToChatFormat(parsed, provider, registry);
   const azureChat = isAzureOpenAiChatTarget(provider);
   const zenChat = shouldSanitizeZenToolParameters(provider);
   if (!base || (!zenChat && !azureChat)) return base;
@@ -463,15 +472,24 @@ export function toolChoiceToChatFormat(
   tc: OcxParsedRequest["options"]["toolChoice"],
   tools: OcxParsedRequest["context"]["tools"],
   provider: OcxProviderConfig,
+  registry: OpenAIChatToolNameRegistry = createOpenAIChatToolNameRegistry(tools),
 ): unknown {
   if (!tc) return undefined;
   if (isAllowedToolChoice(tc)) {
     if (tc.mode === "required" && tc.allowedTools.length === 1 && isNativeOpenAIChatTarget(provider)) {
-      return { type: "function", function: { name: resolveToolChoiceWireName(tools, tc.allowedTools[0]) } };
+      return {
+        type: "function",
+        function: { name: registry.aliasWireName(resolveToolChoiceWireName(tools, tc.allowedTools[0])) },
+      };
     }
     return tc.mode === "required" ? "required" : "auto";
   }
   if (tc === "auto" || tc === "none" || tc === "required") return tc;
-  if ("name" in tc) return { type: "function", function: { name: resolveToolChoiceWireName(tools, tc.name) } };
+  if ("name" in tc) {
+    return {
+      type: "function",
+      function: { name: registry.aliasWireName(resolveToolChoiceWireName(tools, tc.name)) },
+    };
+  }
   return undefined;
 }
