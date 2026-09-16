@@ -520,14 +520,25 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
+  clampCatalogModelsToCodexSupport(catalog.models);
+  finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
+  // Last mutation before serialization, so the uniqueness invariant holds for the exact bytes
+  // written. Running it before the clamp would be unsound: `clampCatalogModelsToObservedCodexSupport`
+  // splices whole rows out (src/codex/catalog/effort.ts:490) when an exact-reserve ladder clamps
+  // empty, so dropping a later same-slug row first can leave the slug with no row at all once the
+  // surviving one is spliced.
   const dedupedCatalogModels = dedupeCatalogEntriesBySlug(catalog.models);
   if (dedupedCatalogModels.length !== catalog.models.length) {
     // A dropped row that differs from the kept one means two emit paths disagree about
     // the same slug's content. First-win still stands (the merge ranked the kept row),
     // but the operator needs to see WHICH slugs diverged instead of silently losing data.
-    const keptBySlug = new Map(catalog.models.flatMap(entry => (
-      typeof entry.slug === "string" ? [[entry.slug, entry] as const] : []
-    )));
+    // The baseline is the row the dedupe actually keeps — the FIRST occurrence — so the
+    // reported divergence is measured against what lands on disk.
+    const keptBySlug = new Map<string, RawEntry>();
+    for (const entry of catalog.models) {
+      if (typeof entry.slug !== "string" || keptBySlug.has(entry.slug)) continue;
+      keptBySlug.set(entry.slug, entry);
+    }
     const divergentSlugs = new Set<string>();
     for (const entry of catalog.models) {
       if (typeof entry.slug !== "string") continue;
@@ -544,8 +555,6 @@ function writeRetainedCatalogSync({
     );
     catalog.models = dedupedCatalogModels;
   }
-  clampCatalogModelsToCodexSupport(catalog.models);
-  finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
 
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;
