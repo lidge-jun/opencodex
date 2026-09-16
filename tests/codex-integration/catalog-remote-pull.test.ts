@@ -29,6 +29,25 @@ const response = (value: unknown, init: ResponseInit = {}) => new Response(JSON.
   headers: { "Content-Type": "application/json", ...init.headers }, status: init.status,
 });
 
+const proxyEnvKeys = [
+  "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
+  "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+] as const;
+
+async function withProxyEnv(env: Record<string, string>, action: () => Promise<void>): Promise<void> {
+  const previous = proxyEnvKeys.map(key => [key, process.env[key]] as const);
+  try {
+    for (const key of proxyEnvKeys) delete process.env[key];
+    for (const [key, value] of Object.entries(env)) process.env[key] = value;
+    await action();
+  } finally {
+    for (const key of proxyEnvKeys) delete process.env[key];
+    for (const [key, value] of previous) {
+      if (value !== undefined) process.env[key] = value;
+    }
+  }
+}
+
 describe("remote catalog acquisition", () => {
   test("accepts HTTPS and loopback HTTP but rejects credentials and insecure remote HTTP", () => {
     expect(validateRemoteCatalogUrl("https://hub.example.com/v1/catalog").href).toBe("https://hub.example.com/v1/catalog");
@@ -51,6 +70,175 @@ describe("remote catalog acquisition", () => {
     await expect(fetchRemoteCatalog("https://hub.example/v1/catalog", {
       token: "secret-marker", fetchImpl: async () => new Response("body-marker", { status: 302, headers: { Location: "https://other.example/secret" } }),
     })).rejects.toMatchObject({ code: "redirect_refused", message: "Remote catalog redirect was refused" });
+  });
+
+  test("refuses proxied loopback HTTP before fetch without disclosing authentication or proxy details", async () => {
+    const proxy = "http://proxy-user:proxy-secret@127.0.0.2:8080";
+    const environments: Record<string, string>[] = [
+      { HTTP_PROXY: proxy },
+      { http_proxy: proxy },
+      { HTTP_PROXY: "", http_proxy: proxy },
+      { HTTP_PROXY: proxy, NO_PROXY: "elsewhere.example" },
+      { HTTP_PROXY: proxy, NO_PROXY: "127.0.0.1:9999" },
+      { HTTP_PROXY: proxy, NO_PROXY: "http://127.0.0.1" },
+      { HTTP_PROXY: proxy, NO_PROXY: "127.0.0.1/path" },
+      { HTTP_PROXY: proxy, NO_PROXY: "*.127.0.0.1" },
+      { HTTP_PROXY: proxy, NO_PROXY: "127.0.0.1." },
+      { HTTP_PROXY: proxy, NO_PROXY: "\u00a0127.0.0.1\u00a0" },
+      { HTTP_PROXY: proxy, NO_PROXY: "127.0.0.1", no_proxy: "elsewhere.example" },
+      { HTTP_PROXY: proxy, NO_PROXY: "127.0.0.1", no_proxy: " " },
+    ];
+    for (const env of environments) {
+      await withProxyEnv(env, async () => {
+        const fetchImpl = mock(async () => response(catalog)) as typeof fetch;
+        const error: unknown = await fetchRemoteCatalog("http://127.0.0.1:10100/v1/catalog", {
+          token: "catalog-token-marker", fetchImpl,
+        }).catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(RemoteCatalogError);
+        expect(error).toMatchObject({ code: "insecure_http_refused" });
+        expect(fetchImpl).not.toHaveBeenCalled();
+        for (const marker of ["catalog-token-marker", "proxy-user", "proxy-secret", "127.0.0.2", "127.0.0.1"]) {
+          expect(String(error)).not.toContain(marker);
+        }
+      });
+    }
+  });
+
+  test("permits direct loopback HTTP with matching proxy bypasses or fetch-irrelevant proxy variables", async () => {
+    const proxy = "http://proxy.example:8080";
+    const environments: Record<string, string>[] = [
+      {},
+      { HTTP_PROXY: proxy, NO_PROXY: "127.0.0.1" },
+      { http_proxy: proxy, no_proxy: "127.0.0.1" },
+      { HTTP_PROXY: proxy, NO_PROXY: "127.0.0.1:10100" },
+      { HTTP_PROXY: proxy, NO_PROXY: "*" },
+      { HTTP_PROXY: proxy, NO_PROXY: ".127.0.0.1" },
+      { HTTP_PROXY: proxy, NO_PROXY: "elsewhere.example", no_proxy: "127.0.0.1" },
+      { HTTP_PROXY: proxy, NO_PROXY: "\v\f127.0.0.1\r\n" },
+      { HTTP_PROXY: '""' },
+      { http_proxy: "''" },
+      { HTTP_PROXY: proxy, http_proxy: '""' },
+      { ALL_PROXY: proxy },
+      { all_proxy: proxy },
+      { HTTPS_PROXY: proxy },
+      { https_proxy: proxy },
+    ];
+    for (const env of environments) {
+      await withProxyEnv(env, async () => {
+        const fetchImpl = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          expect(new Headers(init?.headers).get("authorization")).toBe("Bearer catalog-token-marker");
+          expect(init?.redirect).toBe("manual");
+          return response(catalog);
+        }) as typeof fetch;
+        await expect(fetchRemoteCatalog("http://127.0.0.1:10100/v1/catalog", {
+          token: "catalog-token-marker", fetchImpl,
+        })).resolves.toMatchObject({ document: catalog });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      });
+    }
+  });
+
+  test.each([
+    ["http://127.0.0.1", false],
+    ["127.0.0.1", true],
+  ] as const)("real Bun transport respects the catalog guard for NO_PROXY=%s", async (bypass, direct) => {
+    let targetRequests = 0;
+    let proxyRequests = 0;
+    let authenticatedTargetRequests = 0;
+    const token = "synthetic-catalog-runtime-token";
+    let target: ReturnType<typeof Bun.serve> | undefined;
+    let proxy: ReturnType<typeof Bun.serve> | undefined;
+    let child: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    try {
+      target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+        targetRequests += 1;
+        if (req.headers.get("authorization") === `Bearer ${token}`) authenticatedTargetRequests += 1;
+        return response(catalog);
+      } });
+      proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+        proxyRequests += 1;
+        return response(catalog);
+      } });
+      // Inherit process-launch necessities and test provenance only, never host credentials.
+      const env: Record<string, string> = {};
+      for (const key of ["PATH", "Path", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+        "OCX_TEST_HOME_GUARD", "OCX_TEST_RUN_ID"]) {
+        const value = process.env[key];
+        if (value !== undefined) env[key] = value;
+      }
+      for (const key of proxyEnvKeys) delete env[key];
+      env.OPENCODEX_HOME = home();
+      env.CODEX_HOME = home();
+      env.HOME = env.USERPROFILE = home();
+      // A local dotenv must not override the explicitly supplied routing fixture.
+      writeFileSync(join(env.OPENCODEX_HOME, ".env"), "no_proxy=*\n");
+      env.HTTP_PROXY = `http://127.0.0.1:${proxy.port}`;
+      env.NO_PROXY = bypass;
+      const source = new URL("../../src/codex/catalog/remote.ts", import.meta.url).href;
+      const script = `
+        const { fetchRemoteCatalog } = await import(${JSON.stringify(source)});
+        try {
+          const result = await fetchRemoteCatalog(${JSON.stringify(`http://127.0.0.1:${target.port}/v1/catalog`)},
+            { token: ${JSON.stringify(token)} });
+          console.log(JSON.stringify({ document: result.document }));
+        } catch (error) {
+          console.log(JSON.stringify({ code: error?.code ?? "unexpected_error" }));
+        }
+      `;
+      child = Bun.spawn([process.execPath, "--no-env-file", "--eval", script], { cwd: env.OPENCODEX_HOME, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      timer = setTimeout(() => { timedOut = true; child?.kill("SIGKILL"); }, 10_000);
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      const evidence = JSON.stringify({ exitCode, timedOut, targetRequests, proxyRequests, stdout, stderr });
+      expect(timedOut, evidence).toBe(false);
+      expect(exitCode, evidence).toBe(0);
+      expect(proxyRequests, evidence).toBe(0);
+      expect(targetRequests, evidence).toBe(direct ? 1 : 0);
+      expect(authenticatedTargetRequests, evidence).toBe(direct ? 1 : 0);
+      expect(JSON.parse(stdout)).toEqual(direct ? { document: catalog } : { code: "insecure_http_refused" });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (child && child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+      await proxy?.stop(true);
+      await target?.stop(true);
+    }
+  }, 15_000);
+
+  test("keeps authenticated HTTPS acquisition available with an outbound proxy", async () => {
+    await withProxyEnv({ HTTP_PROXY: "http://proxy.example:8080", HTTPS_PROXY: "http://proxy.example:8080" }, async () => {
+      const fetchImpl = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer catalog-token-marker");
+        expect(init?.redirect).toBe("manual");
+        return response(catalog);
+      }) as typeof fetch;
+      await expect(fetchRemoteCatalog("https://hub.example/v1/catalog", {
+        token: "catalog-token-marker", fetchImpl,
+      })).resolves.toMatchObject({ document: catalog });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test.each([
+    ["http://[::1]:10100/v1/catalog", "::1", false],
+    ["http://[::1]:10100/v1/catalog", "[::1]", true],
+    ["http://[::1]:10100/v1/catalog", "[::1]:10100", true],
+    ["http://[::1]:10100/v1/catalog", "[::1]:9999", false],
+    ["http://127.0.0.1/v1/catalog", "127.0.0.1:80", false],
+  ] as const)("uses Bun's literal host/port bypass for %s and %s", async (url, bypass, direct) => {
+    await withProxyEnv({ HTTP_PROXY: "http://proxy.example:8080", NO_PROXY: bypass }, async () => {
+      const fetchImpl = mock(async () => response(catalog)) as typeof fetch;
+      const result = fetchRemoteCatalog(url, { token: "catalog-token-marker", fetchImpl });
+      if (direct) {
+        await expect(result).resolves.toMatchObject({ document: catalog });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(result).rejects.toMatchObject({ code: "insecure_http_refused" });
+        expect(fetchImpl).not.toHaveBeenCalled();
+      }
+    });
   });
 
   test("never reflects credentials, remote bodies, URLs, or transport causes", async () => {

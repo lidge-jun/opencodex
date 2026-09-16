@@ -4,9 +4,13 @@ Catalog discovery remains separate from the Responses final-route
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
 
 Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
+
+## Remote catalog HTTP proxy routing
+
+`src/codex/catalog/remote.ts` permits loopback HTTP only when Bun fetch has no effective HTTP proxy or a matching NO_PROXY bypass. Its local matcher follows [Bun fetch semantics](https://github.com/oven-sh/bun/blob/744846f844374847c902b5e7fd59b4342a51ef99/src/dotenv/env_loader.rs#L369), including non-empty lowercase-variable priority, ASCII whitespace, literal host/port comparison and bracket-preserving IPv6. It does not normalize URL-shaped bypass entries, paths, wildcard prefixes, trailing dots or Unicode whitespace, and leaves the broader WebSocket proxy grammar unchanged. It refuses before authentication headers and fetch with a content-free `insecure_http_refused` error. ALL_PROXY and HTTPS-only settings do not affect HTTP acquisition; HTTPS and existing redirect, size, validation and coordinated-installation contracts are preserved. `tests/codex-integration/catalog-remote-pull.test.ts` covers these routing and non-disclosure boundaries.
 
 ## Shared catalog
 
@@ -36,6 +40,8 @@ Shared parsing and streaming follow the [request-copy](transports/byte-accountin
   rather than assuming a single file; restoration omits retired bare and trusted account-qualified
   native rows from the output without rewriting the pristine backup or unrelated snapshots;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
+
+`src/codex/catalog/model-visibility.ts` also excludes models owned by disabled providers, including custom rows. `src/codex/catalog/routed-gather.ts` does not inherit provider configuration into custom rows while that provider is disabled.
 
 On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
@@ -143,6 +149,8 @@ removal markers. These presentation operations do not grant routing or account e
 
 ## Startup readiness
 
+When the desktop app is explicitly restarted to reload synchronized state, [process membership](runtime.md#codex-desktop-process-membership) is determined from its installation path; catalog model selectors do not identify restart targets.
+
 Each `startServer` invocation owns a private, one-shot readiness gate created before the listener
 binds. `handleStart` supplies its gate and transitions it only after the shared catalog sync and
 best-effort Claude Code roster reconciliation have both settled. The catalog sync remains the
@@ -249,6 +257,9 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   generation it started from still holds; a lost race raises a generation-conflict error rather
   than overwriting the newer credential (`src/codex/account-store.ts`). Callers handle that error;
   they do not assume a silent retry.
+  The lock itself is identity-scoped: a not-yet-readable lock counts as held until it ages out,
+  and release requires a usable matching descriptor identity. Unknown identity leaves the path
+  for stale recovery without replacing the callback outcome when the path probe fails; confirmed-owner unlink errors other than `ENOENT` still propagate. Acquisition, stale reclamation and identity-checked release run inside the existing synchronous SQLite config-mutation transaction; the async refresh callback runs outside it. Release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Busy release coordination preserves the callback outcome and leaves the path for stale recovery. This serializes cooperating writers; stat/unlink is not atomic against non-cooperating filesystem writers.
 - **Authentication identity, quota domain, and cache domain are tracked separately**
   (`src/routing/identity-domains.ts`). `classifyCredential` returns all three with provenance:
   `pool.credentialGroups` supplies operator-declared quota domains, a small built-in table
@@ -268,9 +279,10 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   Every domain carries `evidence` alongside its provenance: a rule that documents only that two
   credentials are in different domains never lets an equal key mean "shared". OpenAI's cache rule
   is the case that forces it — caches are documented as not shared across organizations or
-  processing regions, while changing keys inside one organization is documented as not
-  guaranteeing a hit, so a different org or region relates `distinct` and the same org and region
-  relates `unknown`. OpenAI quota, Anthropic workspace cache, and Azure deployment domains carry
+  regional processing boundaries, while no documentation states that two keys inside one
+  organization do share a cache, so a different org or region relates `distinct` and the same org
+  and region relates `unknown`. The absent promise is what withholds `shared` there, not a
+  documented denial. OpenAI quota, Anthropic workspace cache, and Azure deployment domains carry
   the sharing half as well and still relate `shared`.
 - **A declared credential group cannot mean two things** (`src/routing/identity-domains.ts`,
   `src/config.ts`). `credentialGroupIssues` is the one definition of a valid grouping: unique
@@ -368,7 +380,7 @@ Provider `showThinkingSummary` is a Responses request default; it does not rewri
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 

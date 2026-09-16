@@ -1329,9 +1329,9 @@ test("sideband frame log preserves delivery without recording damaged or clean t
     expect(received).toContain(FFFD_TEXT);
     expect(c2uClean).toBeDefined();
     expect(c2uClean.fffd).toBe(false);
-    // Even a short damaged transcript must not be persisted as diagnostic context.
+    // Nothing here may persist as diagnostic context, lifecycle rows included (see #4721).
     for (const line of lines) {
-      expect(Object.keys(line).sort()).toEqual(["bytes", "dir", "fffd", "kind", "ts"]);
+      expect(Object.keys(line).sort()).toEqual(line.stage ? ["stage", "ts"] : ["bytes", "dir", "fffd", "kind", "ts"]);
       expect(JSON.stringify(line)).not.toContain("clean-frame");
       expect(JSON.stringify(line)).not.toContain(FFFD_TEXT);
     }

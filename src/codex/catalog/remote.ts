@@ -113,12 +113,42 @@ function safeTimeout(value: number | undefined): number {
     ? Math.min(Math.floor(value), 120_000) : DEFAULT_TIMEOUT_MS;
 }
 
+/** Match Bun fetch's environment routing, not the broader WebSocket NO_PROXY grammar. */
+function catalogRequestUsesBunHttpProxy(url: URL): boolean {
+  if (url.protocol !== "http:") return false;
+  const proxy = process.env.http_proxy || process.env.HTTP_PROXY;
+  if (!proxy || proxy === '""' || proxy === "''") return false;
+  const hostname = url.hostname.toLowerCase();
+  const host = url.host.toLowerCase();
+  // Bun env_loader::is_no_proxy (1.4.2): lowercase wins unless empty, ASCII
+  // whitespace only, no scheme/path/wildcard/bracket/trailing-dot normalization.
+  const bypasses = process.env.no_proxy || process.env.NO_PROXY || "";
+  for (let entry of bypasses.split(",")) {
+    entry = entry.replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, "")
+      .replace(/[A-Z]/g, letter => letter.toLowerCase());
+    if (entry === "*") return false;
+    if (entry.startsWith(".")) entry = entry.slice(1);
+    if (!entry) continue;
+    const hasPort = entry.startsWith("[")
+      ? entry.includes("]:")
+      : (entry.match(/:/g)?.length ?? 0) === 1;
+    if (hasPort ? host === entry : hostname === entry || hostname.endsWith(`.${entry}`)) return false;
+  }
+  return true;
+}
+
 export async function fetchRemoteCatalog(
   input: string,
   options: Pick<PullRemoteCatalogOptions, "token" | "timeoutMs" | "maxBytes" | "fetchImpl"> = {},
 ): Promise<{ document: RemoteCatalogDocument; content: string }> {
   const url = validateRemoteCatalogUrl(input);
   const token = validateToken(options.token);
+  if (catalogRequestUsesBunHttpProxy(url)) {
+    throw new RemoteCatalogError(
+      "insecure_http_refused",
+      "Loopback HTTP catalog requests must bypass outbound HTTP proxy routing",
+    );
+  }
   const headers = new Headers({ Accept: "application/json" });
   if (token !== undefined) headers.set("Authorization", `Bearer ${token}`);
   let response: Response;
