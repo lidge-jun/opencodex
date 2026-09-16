@@ -878,6 +878,26 @@ The actual dispatch commits their count and recovery label once; unsent pending 
 is discarded on process exit and is not usage evidence. See [key attribution](../gui-and-management-api.md#upstream-key-account-attribution).
 Generic refetches record metadata inside each admitted retry callback, retaining the
 transient recovery reason when present and otherwise the outer recovery reason.
+
+## Ambiguous connection-reset replay boundary
+
+`src/lib/upstream-retry.ts` returns a marked 502 with
+`upstream_closed_before_response` when a fetch rejects with an ambiguous connection
+reset. No response headers is not evidence that a model POST was never processed.
+Only an explicitly replay-safe operation opts into reset retries. The existing
+provider HTTP-status policy and the shared physical-send budget remain independent:
+zero refuses dispatch, invalid counts fail, and a stopped send is counted once.
+`src/server/responses/adapter-dispatch.ts` preserves this verdict instead of formatting
+it as a generic replayable upstream error. The existing account and combo guards stop
+on the marker or structured code. The helper and public Responses count regressions
+live in `tests/lib/upstream-retry.test.ts` and
+`tests/responses/responses-send-budget-counts.test.ts`.
+
+`src/bridge/errors.ts` retains only the two allowlisted non-replayable transport
+codes, reapplies the in-process marker, and does not attach `Retry-After` to them.
+Other upstream codes keep the existing classification; cyber-policy hard blocks
+retain precedence. The combo, 429-refetch, and account-guard tests cover this boundary.
+
 ## Combo output headroom
 
 A combo child is admitted against two budgets, not one. `resolveInputCeiling` in

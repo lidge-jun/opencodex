@@ -1,3 +1,6 @@
+import { shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "../../src/server/responses/core-codex-account";
+import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { fetchWithResetRetry, isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
@@ -178,4 +181,98 @@ describe("upstream sends per logical request", () => {
   // at the budget in tests/lib/execution-budget-permits.test.ts, where the roster walk and the
   // cross-pool move are both asserted. Restoring an end-to-end row needs a harness that actually
   // rotates, which is its own change.
+});
+
+describe("ambiguous reset safety across Responses recovery", () => {
+  for (const adapter of ["openai-chat", "openai-responses"]) {
+    for (const combo of [false, true]) {
+      test(`${adapter}: no replay or target hop after an ambiguous reset (combo=${combo})`, async () => {
+        const config = comboOverTargets(2);
+        for (const provider of Object.values(config.providers)) provider.adapter = adapter;
+        const authorizations: string[] = [];
+        globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+          authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+          throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+        }) as typeof fetch;
+        const logCtx: RequestLogContext = { model: "", provider: "" };
+        const response = await handleResponses(
+          responsesRequest(combo ? "combo/fan" : "t0/model-t0"), config, logCtx,
+        );
+        expect(response.status).toBe(502);
+        const payload = await response.json();
+        expect(payload.error.code).toBe("upstream_closed_before_response");
+        expect(authorizations).toEqual(["Bearer sk-t0"]);
+        expect(totalSends(logCtx)).toBe(1);
+      });
+    }
+  }
+
+  test("a provider 503 policy is retained, but the following reset cannot reach a combo sibling", async () => {
+    const authorizations: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+      if (authorizations.length === 1) {
+        return new Response(JSON.stringify({ error: { message: "busy" } }), {
+          status: 503, headers: { "content-type": "application/json" },
+        });
+      }
+      throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(responsesRequest("combo/fan"), comboOverTargets(2), logCtx);
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("upstream_closed_before_response");
+    expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
+    expect(totalSends(logCtx)).toBe(2);
+  });
+
+  test("reset-only providers stop too, without opting into the transient policy", async () => {
+    const config = comboOverTargets(2);
+    for (const provider of Object.values(config.providers)) delete provider.transientRetryOn5xx;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const response = await handleResponses(responsesRequest("combo/fan"), config, { model: "", provider: "" });
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("upstream_closed_before_response");
+    expect(sends).toBe(1);
+  });
+});
+
+describe("ambiguous reset safety after outer recovery", () => {
+  test("a 429 recovery refetch cannot launder a subsequent reset into a combo hop", async () => {
+    const config = comboOverTargets(2);
+    config.providers.t0!.retryOn429 = { attempts: 1 };
+    const authorizations: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+      if (authorizations.length === 1) return new Response("rate limited", {
+        status: 429, headers: { "retry-after": "0" },
+      });
+      throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(responsesRequest("combo/fan"), config, logCtx);
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("upstream_closed_before_response");
+    expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
+    expect(totalSends(logCtx)).toBe(2);
+  });
+
+  test("account and combo recovery retain the no-replay verdict after one body read", async () => {
+    const response = await fetchWithResetRetry(async () => {
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    });
+    expect(shouldRetryCodexPoolAccountTransient(response)).toBe(false);
+    expect(await shouldRetryCodexPoolAccountQuota(response)).toBe(false);
+    const failure = await consumeComboFailure(response);
+    expect(failure.upstreamCode).toBe("upstream_closed_before_response");
+    expect(isNonReplayableResponse(failure.response)).toBe(true);
+    expect(shouldRetryCodexPoolAccountTransient(failure.response)).toBe(false);
+    expect(await shouldRetryCodexPoolAccountQuota(failure.response)).toBe(false);
+    expect(failure.response.headers.get("retry-after")).toBeNull();
+    expect((await failure.response.json()).error.code).toBe("upstream_closed_before_response");
+  });
 });
