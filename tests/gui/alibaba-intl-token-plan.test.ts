@@ -168,6 +168,14 @@ describe("alibaba-token-plan-intl registry entry", () => {
     expect(entry!.promptCacheKey).toBe(true);
     const cn = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan");
     expect(cn!.promptCacheKey).toBe(true);
+    // Beijing roster pinned exactly (Personal Edition subset), including phantom absence.
+    const cnModels = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan")!.models;
+    expect(cnModels).toEqual([
+      "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+      "deepseek-v4-pro", "deepseek-v4-flash-0731", "glm-5.2",
+    ]);
+    expect(cnModels).not.toContain("glm-5.3");
+    expect(cnModels).not.toContain("glm-5.3-flash");
     // providerConfigSeed and enrichProviderFromRegistry are the two paths that carry
     // the flag from the registry into a live provider config.
     expect(providerConfigSeed(cn!).promptCacheKey).toBe(true);

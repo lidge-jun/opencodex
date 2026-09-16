@@ -402,7 +402,7 @@ describe("provider registry parity", () => {
       liveModels: false,
       models: [
         "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "glm-5.2",
+        "deepseek-v4-pro", "deepseek-v4-flash-0731", "glm-5.2",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
@@ -422,6 +422,9 @@ describe("provider registry parity", () => {
         "deepseek-v4-pro": 393_216,
       },
       noVisionModels: expect.arrayContaining(["qwen3.7-max", "deepseek-v4-pro", "glm-5.2"]),
+      // Beijing is the Personal Edition roster: the Team-only 0813 snapshot and the
+      // phantom glm-5.3 pair must stay out of this preset's models list.
+      
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)

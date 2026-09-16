@@ -446,9 +446,15 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // video families) stay out: they answer only on async endpoints openai-chat cannot
 // reach. deepseek-v4-pro-0813 is callable but NOT listed by /models, which is the
 // reason liveModels must stay false for this provider.
+// Beijing serves the Personal Edition, so this is the Personal-tier roster probed
+// 260909 (a strict subset of Team). deepseek-v4-pro-0813 stays out of the Beijing
+// entry: its callability is only proven on Team keys, and no Personal key has been
+// shown to reach it. The Beijing entry also shares the intl maps, so it carries a
+// few orphan keys (kimi/glm-5/MiniMax rows); harmless, and one map beats two
+// drifting ones.
 export const ALIBABA_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "glm-5.2",
+  "deepseek-v4-pro", "deepseek-v4-flash-0731", "glm-5.2",
 ];
 export const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
