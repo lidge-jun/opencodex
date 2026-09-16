@@ -7,6 +7,7 @@ import {
   MAX_RESPONSE_SPILL_PAYLOAD_BYTES,
   prospectiveResponseSpillBytes,
   responseSpillPayloadCap,
+  responseSpillNow,
   type ResponseSpillPublicationControl,
   type ResponseSpillRef,
   writeResponseSpillDurably,
@@ -377,7 +378,7 @@ function responseSpillShutdownBudget(): { totalMs: number; fallbackReserveMs: nu
 }
 
 function awaitResponseSpillTailUntil(observed: Promise<void>, deadline: number): Promise<boolean> {
-  const remaining = deadline - Date.now();
+  const remaining = deadline - responseSpillNow();
   if (remaining <= 0) return Promise.resolve(false);
   return new Promise(resolve => {
     let finished = false;
@@ -554,12 +555,13 @@ function terminalizeExhaustedShutdownFallback(
 }
 
 function fallbackPendingResponseSpills(reserveMs: number): Error[] {
-  const deadline = Date.now() + reserveMs;
+  // Same clock as the harden work this reserve is budgeting — see `responseSpillNow`.
+  const deadline = responseSpillNow() + reserveMs;
   const failures: Error[] = [];
   for (;;) {
     const pending = pendingShutdownFallbackCandidates();
     if (pending.length === 0) return failures;
-    if (Date.now() >= deadline) {
+    if (responseSpillNow() >= deadline) {
       terminalizeExhaustedShutdownFallback(pending, failures);
       return failures;
     }
@@ -569,7 +571,7 @@ function fallbackPendingResponseSpills(reserveMs: number): Error[] {
     for (let index = 0; index < pending.length; index += 1) {
       const { job, candidate } = pending[index]!;
       if (requireStore().currentEntry(job.id) !== candidate) continue;
-      const remaining = deadline - Date.now();
+      const remaining = deadline - responseSpillNow();
       if (remaining <= 0) {
         reserveExhausted = true;
         for (const exhausted of pending.slice(index)) {
@@ -587,7 +589,7 @@ function fallbackPendingResponseSpills(reserveMs: number): Error[] {
     requireStore().recomputeOldestResident();
     requireStore().pruneResponses();
     enforceAppOwnedMemoryBudget();
-    if (reserveExhausted || Date.now() >= deadline) {
+    if (reserveExhausted || responseSpillNow() >= deadline) {
       terminalizeExhaustedShutdownFallback(pendingShutdownFallbackCandidates(), failures);
       return failures;
     }
@@ -597,7 +599,7 @@ function fallbackPendingResponseSpills(reserveMs: number): Error[] {
 export async function drainResponseSpillPublications(): Promise<void> {
   const budget = responseSpillShutdownBudget();
   const fallbackReserveMs = Math.min(budget.totalMs, Math.max(1, budget.fallbackReserveMs));
-  const drainDeadline = Date.now() + Math.max(0, budget.totalMs - fallbackReserveMs);
+  const drainDeadline = responseSpillNow() + Math.max(0, budget.totalMs - fallbackReserveMs);
 
   for (;;) {
     if (pendingResponseSpills.size === 0) return;

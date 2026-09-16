@@ -271,8 +271,8 @@ describe("GitHub Actions hardening", () => {
     // must disable errexit before the crash-prone command or exit 133 aborts
     // the step before PIPESTATUS can be inspected and the retry can run.
     expect(hasExactShellCommand(macosTestRun, "set +e")).toBe(true);
-    expect(macosTestRun).toContain("Segmentation fault at address");
-    expect(macosTestRun).toContain("oh no: Bun has crashed");
+    // The crash signatures themselves moved to scripts/ci/bun-crash-signatures.sh; that one
+    // definition and every lane that sources it are pinned by ci-bun-crash-classifier.test.ts.
     expect(macosTestRun).toContain("assertion failures are not retried");
     expect(macosTestRun).toContain("failing after one retry");
     // `for attempt in 1 2` — one retry, never an unbounded loop.
@@ -355,35 +355,10 @@ describe("GitHub Actions hardening", () => {
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
 
-    // The three crash-signature lists must stay identical, and they must not key on
-    // `panic(thread`.
-    //
-    // Bun emits BOTH `panic(thread 2852)` and `panic(main thread)` for the same class of
-    // failure, so a grep anchored on the numbered form silently misses half of them and the
-    // shard fails on a crash it was supposed to retry. This repository already learned that
-    // once — `devlog/_fin/260731_pr_issue_triage_round/050_windows_ci_flake_rca.md` names
-    // `Internal assertion failure` as the stable fingerprint — and #2152 reintroduced it.
-    // Three copies of one list is the real hazard, so pin the sync rather than the text.
-    const crashSignatures = [
-      "oh no: Bun has crashed",
-      "Internal assertion failure",
-      "Segmentation fault at address",
-      "Illegal instruction",
-      "Bus error",
-    ];
+    // The crash-signature list lives in exactly one file now, and every lane sources it.
+    // ci-bun-crash-classifier.test.ts owns that contract, including the rule that no lane may
+    // reintroduce an inline copy and that a runtime crash fails the shard instead of being swept.
     const windowsTestRun = windowsTestSteps[0]?.run ?? "";
-    const batchScript = await readText("scripts/ci/run-bun-test-batches.sh");
-    for (const signature of crashSignatures) {
-      expect(`macos:${signature}:${macosTestRun.includes(signature)}`).toBe(`macos:${signature}:true`);
-      expect(`macos-control:${signature}:${macosControlTestRun.includes(signature)}`).toBe(`macos-control:${signature}:true`);
-      expect(`windows:${signature}:${windowsTestRun.includes(signature)}`).toBe(`windows:${signature}:true`);
-      expect(`script:${signature}:${batchScript.includes(signature)}`).toBe(`script:${signature}:true`);
-    }
-    // The thread-numbered form must not be the anchor anywhere.
-    expect(macosTestRun).not.toContain("panic\\(thread");
-    expect(macosControlTestRun).not.toContain("panic\\(thread");
-    expect(windowsTestRun).not.toContain("panic\\(thread");
-    expect(batchScript).not.toContain("panic\\(thread");
 
     // Windows carries the same bounded retry as macOS: one attempt, crash-only.
     expect(hasExactShellCommand(windowsTestRun, "set +e")).toBe(true);
