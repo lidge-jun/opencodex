@@ -1,5 +1,7 @@
 # Adapter Registry Authority
 
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 Request-local adapter bindings are separate from registry authority in the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
@@ -183,7 +185,3 @@ implement legacy call/result pairing. Modern tool-image carriers are unchanged.
 raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
 translation boundary and verifies that rejection sends no upstream request.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
-
-The opt-in [native mid-turn steering contract](../transports/streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
-authentication, routing and non-native behavior; its connection-local controls, replay journal
-and multi-response lifetime are owned by the native Responses transport.

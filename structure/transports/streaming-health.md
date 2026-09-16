@@ -266,6 +266,8 @@ upstream connection. The connection remains bound to the credential selected by 
 dispatch path and never enters the idle reuse pool. The normal authentication, admission,
 quota observation and pre-dispatch guard remain in force. `response.steer` accepts user-only
 input, preserves its target response ID, and cannot select another account or lane.
+A steering owner is installed only after turn admission; warmup and capacity refusal leave
+no retained owner. Superseding a turn clears its old owner before any early return.
 
 An acceptance acknowledges queued input, not application. The parent terminal is relayed,
 but the native chain ends only after outstanding submissions settle and the last response
@@ -285,7 +287,8 @@ the existing thread-scoped replay cache. Rejected/uncommitted steer text is excl
 terminal outputs are reconstructed from completed output-item events. Derived state inherits
 the original non-persistable-body restriction from `src/responses/state/body-policy.ts`;
 `state.ts` keeps its existing public exports. The original request is never mutated. The
-bounded journal is discarded at teardown. This keeps subsequent ordinary delta-input turns
+bounded journal is discarded at teardown. Prefix arrays are appended iteratively, so a
+byte-valid history cannot overflow the runtime's positional-argument stack. This keeps subsequent ordinary delta-input turns
 working without inventing IDs or silently dropping the steering instruction.
 
 Native chains bypass single-response SSE repair/terminal truncation. Wire IDs, lane IDs and

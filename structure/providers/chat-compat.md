@@ -1,5 +1,7 @@
 # Chat Provider Compatibility
 
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](cursor.md#cursor-native-exec).
 
@@ -363,7 +365,3 @@ refusal of original images is unchanged.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
-
-The opt-in [native mid-turn steering contract](../transports/streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
-authentication, routing and non-native behavior; its connection-local controls, replay journal
-and multi-response lifetime are owned by the native Responses transport.

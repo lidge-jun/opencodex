@@ -212,6 +212,8 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
         markActivity("ws response.create");
 
         ws.data.cancel?.();
+        // A superseded turn must not keep ownership during warmup or refusal.
+        ws.data.nativeSteering = undefined;
         let nativeSteering: NativeSteeringChannel | undefined;
         try {
           const idleMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec)
@@ -221,7 +223,6 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           sendJsonFrame(ws, buildWsErrorFrame(400, { type: "invalid_request_error", message: "Invalid native steering request settings" }));
           return;
         }
-        ws.data.nativeSteering = nativeSteering;
         const turnId = (ws.data.turnId ?? 0) + 1;
         ws.data.turnId = turnId;
         const isCurrent = () => ws.data.turnId === turnId;
@@ -256,6 +257,8 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           return;
         }
 
+        // Only a genuinely admitted turn may receive steering or continuations.
+        ws.data.nativeSteering = nativeSteering;
         const payload: Record<string, unknown> = { ...frame };
         delete payload.type;
         turnAdmissionLease.bindAbortController(turnAbort);

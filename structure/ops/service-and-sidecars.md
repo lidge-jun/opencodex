@@ -1,5 +1,7 @@
 # Background Service And Sidecars
 
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 Service endpoints are unchanged by the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
@@ -182,7 +184,3 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
-
-The opt-in [native mid-turn steering contract](../transports/streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
-authentication, routing and non-native behavior; its connection-local controls, replay journal
-and multi-response lifetime are owned by the native Responses transport.

@@ -1,5 +1,7 @@
 # Byte Accounting
 
+Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 Responses body-reader limits and lifetime handling follow the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 
@@ -41,7 +43,3 @@ Translated audio/file admission follows the [final-adapter input contract](../ad
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
-
-The opt-in [native mid-turn steering contract](streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
-authentication, routing and non-native behavior; its connection-local controls, replay journal
-and multi-response lifetime are owned by the native Responses transport.

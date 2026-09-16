@@ -11,25 +11,32 @@ export const NATIVE_STEERING_TOOL_WAIT_MS = 30 * 60_000;
 type Frame = Record<string, unknown>;
 type Send = (frame: Frame) => void;
 const responses = new WeakSet<Response>();
+/** Mark the exact response for multi-response delivery without serializing a wire field. */
 export function markNativeSteeringResponse(response: Response): Response { responses.add(response); return response; }
+/** Recognize a marked native response by identity, not by caller-controlled content. */
 export function isNativeSteeringResponse(response: Response): boolean { return responses.has(response); }
 
+/** Narrow JSON object envelopes while excluding arrays and null. */
 function record(value: unknown): value is Frame {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+/** Require a bounded, nonempty protocol identity without control characters. */
 function validId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= CODEX_WS_ID_MAX_BYTES
     && !/[\u0000-\u001f\u007f]/.test(value);
 }
+/** Serialize JSON settings deterministically so key order cannot change equality. */
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (record(value)) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}`;
   return JSON.stringify(value) ?? "null";
 }
+/** Retain only a digest of pinned settings instead of their request payloads. */
 function fingerprint(value: unknown): string { return createHash("sha256").update(stable(value)).digest("hex"); }
 
 /** Typed, content-free local protocol rejection. */
 export class NativeSteeringError extends Error {
+  /** Create a content-free protocol error with a stable downstream rejection code. */
   constructor(readonly code: string, message: string) { super(message); this.name = "NativeSteeringError"; }
 }
 
@@ -72,6 +79,7 @@ function outputRequirement(item: unknown): Frame | undefined {
   return { type, call_id: item.call_id };
 }
 
+/** Match a saved result to its required stub, allowing an omitted optional name. */
 function matchesRequirement(item: Frame, stub: Frame): boolean {
   // The wire may label a required result with its tool name, but the ordinary
   // function/custom output schema identifies the result by call_id, not name.
@@ -107,17 +115,22 @@ export class NativeSteeringChannel {
   private readonly advertised = new Map<string, Frame>();
   private advertisedBytes = 0;
 
+  /** Pin the initial lane and setting digests without opening a transport. */
   constructor(initial: Frame, private readonly idleMs = 300_000) {
     this.lane = initial.stream_id;
     for (const [key, value] of Object.entries(initial)) {
       if (!["type", "input", "previous_response_id", "stream", "stream_id"].includes(key)) this.settings.set(key, fingerprint(value));
     }
   }
+  /** Report whether native dispatch ever bound a physical connection to this owner. */
   get attached(): boolean { return this.everAttached; }
+  /** Report whether ordered terminal handling has finished the native chain. */
   get ended(): boolean { return this.finished; }
+  /** Count unacknowledged or accepted submissions that still own the response chain. */
   get hasOutstanding(): boolean {
     return [...this.parents.values()].some(parent => parent.unacknowledged > 0 || parent.accepted.size > 0);
   }
+  /** Report whether the server has requested a saved-result continuation. */
   get awaitingContinuation(): boolean { return this.pendingParent !== undefined; }
 
   /** Bind only after native credentials have been selected and admission passed. */
@@ -145,6 +158,7 @@ export class NativeSteeringChannel {
     };
   }
 
+  /** Replace the unrefed watchdog; timeout reports uncertainty instead of replaying. */
   private wait(ms = NATIVE_STEERING_WAIT_MS): void {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
@@ -152,6 +166,7 @@ export class NativeSteeringChannel {
     }, ms);
     this.timer.unref?.();
   }
+  /** Check the live owner and byte limit before journaling and sending one control. */
   private liveSend(frame: Frame): void {
     if (!this.send || this.finished) throw new NativeSteeringError("steering_not_supported", "No active native WebSocket steering transport; this route may be disabled or using HTTP fallback.");
     if (codexWsCreateFrameExceedsLimit(JSON.stringify(frame))) throw new NativeSteeringError("invalid_input", "Native steering frame exceeds the upstream byte limit.");
@@ -159,6 +174,7 @@ export class NativeSteeringChannel {
     try { this.send(frame); } catch (error) { rollback?.(); throw error; }
   }
 
+  /** Send user-only input to this connection's active response under the pending cap. */
   steer(frame: Frame): void {
     validateSteeringFrame(frame);
     if (!this.send || this.finished) { this.liveSend(frame); return; }
@@ -179,6 +195,7 @@ export class NativeSteeringChannel {
     }
   }
 
+  /** Retain bounded call or approval identities that authorize early saved results. */
   private advertise(item: unknown): void {
     const stub = outputRequirement(item);
     if (!stub) return;

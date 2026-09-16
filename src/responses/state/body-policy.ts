@@ -19,6 +19,7 @@ export function markBodyNonPersistable(body: unknown): void {
   if (body && typeof body === "object") nonPersistableBodies.add(body as object);
 }
 
+/** Test the body's in-memory persistence restriction without adding a wire marker. */
 export function isBodyNonPersistable(body: unknown): boolean {
   return !!body && typeof body === "object" && nonPersistableBodies.has(body);
 }

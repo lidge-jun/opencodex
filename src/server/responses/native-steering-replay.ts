@@ -5,9 +5,11 @@
  */
 export const MAX_NATIVE_STEERING_REPLAY_BYTES = 32 * 1024 * 1024;
 type Frame = Record<string, unknown>;
+/** Accept JSON object envelopes without treating arrays as records. */
 function record(value: unknown): value is Frame {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+/** Normalize string input to one user message while preserving array order. */
 function inputItems(input: unknown): unknown[] {
   if (typeof input === "string") return [{ type: "message", role: "user", content: [{ type: "input_text", text: input }] }];
   return Array.isArray(input) ? input : [];
@@ -18,6 +20,7 @@ export interface NativeSteeringReplayObserver {
   dispose(): void;
 }
 
+/** Keep bounded, connection-local input until a validated successor commits it. */
 export class NativeSteeringReplay implements NativeSteeringReplayObserver {
   private prefix: unknown[];
   private bytes: number;
@@ -28,14 +31,17 @@ export class NativeSteeringReplay implements NativeSteeringReplayObserver {
   private explicitInput: unknown[] = [];
   private explicitBytes = 0;
 
+  /** Capture the initial prefix and reject over-budget history before dispatch. */
   constructor(input: unknown, private readonly remember: (input: unknown[], response: Frame) => void) {
     this.prefix = [...inputItems(input)];
     this.bytes = Buffer.byteLength(JSON.stringify(this.prefix));
     this.check();
   }
+  /** Reject overflow rather than silently truncating retained conversation input. */
   private check(): void {
     if (this.bytes > MAX_NATIVE_STEERING_REPLAY_BYTES) throw new Error("Native steering replay exceeded its bounded history budget; input was not silently truncated.");
   }
+  /** Reserve replay bytes before send and return a rollback for synchronous failure. */
   submitted(frame: Frame): () => void {
     const input = inputItems(frame.input);
     const bytes = Buffer.byteLength(JSON.stringify(input));
@@ -53,6 +59,7 @@ export class NativeSteeringReplay implements NativeSteeringReplayObserver {
     this.explicitBytes = bytes;
     return () => { this.explicitInput = []; this.bytes -= this.explicitBytes; this.explicitBytes = 0; };
   }
+  /** Apply ordered upstream events; only created successors commit queued input. */
   observe(frame: Frame): void {
     const response = record(frame.response) ? frame.response : undefined;
     const steer = record(frame.steer) ? frame.steer : undefined;
@@ -71,7 +78,12 @@ export class NativeSteeringReplay implements NativeSteeringReplayObserver {
     } else if (frame.type === "response.created") {
       if (this.current) {
         const committed = this.submissions.filter(item => item.parent === this.current && item.id !== undefined);
-        this.prefix.push(...this.previousOutput, ...committed.flatMap(item => item.input), ...this.explicitInput);
+        // Byte-valid histories may exceed the runtime's positional-argument limit.
+        for (const item of this.previousOutput) this.prefix.push(item);
+        for (const submission of committed) {
+          for (const item of submission.input) this.prefix.push(item);
+        }
+        for (const item of this.explicitInput) this.prefix.push(item);
         this.submissions = this.submissions.filter(item => !committed.includes(item));
       }
       this.explicitInput = [];
@@ -100,6 +112,7 @@ export class NativeSteeringReplay implements NativeSteeringReplayObserver {
       if (frame.type === "response.completed") this.remember(this.prefix, { ...response, output });
     }
   }
+  /** Release retained input, output and queued submissions when the owner detaches. */
   dispose(): void {
     this.prefix = [];
     this.previousOutput = [];

@@ -1,5 +1,7 @@
 # Runtime
 
+Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 Responses admission and finalization are composed through the
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
@@ -492,7 +494,3 @@ stamps the configured key selected for the physical request. `src/server/request
 retains per-key attempt usage, and `src/usage/log.ts` validates and persists labels. The
 [account attribution contract](gui-and-management-api.md#upstream-key-account-attribution)
 defines identity, unknown records, and aggregation boundaries.
-
-The opt-in [native mid-turn steering contract](transports/streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
-authentication, routing and non-native behavior; its connection-local controls, replay journal
-and multi-response lifetime are owned by the native Responses transport.

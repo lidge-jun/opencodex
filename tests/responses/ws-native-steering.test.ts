@@ -8,6 +8,7 @@ import { NativeSteeringReplay, MAX_NATIVE_STEERING_REPLAY_BYTES } from "../../sr
 import { type WsData } from "../../src/server/ws-bridge";
 import { getRequestLogEntries, clearRequestLogsForTests } from "../../src/server/request-log";
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
+import { MAX_ACTIVE_TURNS, tryAdmitTurn } from "../../src/server/lifecycle";
 import { configSchema } from "../../src/config/schema/config-schema";
 
 type Frame = Record<string, any>;
@@ -379,4 +380,94 @@ test("early continuation validates advertised call and approval identities and r
   expect(() => channel.continue(continuation)).toThrow("already sent");
   expect(sent).toHaveLength(2);
   detach();
+});
+
+
+test("warmup leaves no steering owner and the next ordinary turn gets a fresh channel", async () => {
+  const { ws, sent, send } = downstream({ generate: false });
+  expect(sent.map(frame => frame.type)).toEqual(["response.created", "response.completed"]);
+  expect(ws.data.nativeSteering).toBeUndefined();
+  expect(ws.data.cancel).toBeUndefined();
+  expect(Socket.all).toHaveLength(0);
+  send({ type: "response.steer", previous_response_id: sent[0].response.id, input: "not a running turn" });
+  expect(sent.at(-1)?.error.code).toBe("steering_not_supported");
+  send({ type: "response.create", model: "gpt-5.5", input: "real turn" });
+  await waitFor(() => Socket.all.length === 1 && sent.filter(frame => frame.type === "response.created").length === 2);
+  expect(ws.data.nativeSteering?.attached).toBe(true);
+  const socket = Socket.all[0];
+  expect(socket.frames[0].input).toBe("real turn");
+  complete(socket, socket.root);
+  await waitFor(() => !ws.data.nativeSteering);
+});
+
+test("admission refusal leaves no steering owner and a later admitted turn is independent", async () => {
+  const leases: NonNullable<ReturnType<typeof tryAdmitTurn>>[] = [];
+  try {
+    for (let i = 0; i < MAX_ACTIVE_TURNS; i++) {
+      const lease = tryAdmitTurn();
+      if (lease) leases.push(lease);
+    }
+    expect(leases.length).toBeGreaterThan(0);
+    const { ws, sent, send } = downstream();
+    expect(sent.at(-1)?.error.code).toBe("server_busy");
+    expect(ws.data.nativeSteering).toBeUndefined();
+    expect(ws.data.cancel).toBeUndefined();
+    expect(Socket.all).toHaveLength(0);
+    for (const lease of leases) lease.release();
+    send({ type: "response.create", model: "gpt-5.5", input: "after admission" });
+    await waitFor(() => sent.some(frame => frame.type === "response.created"));
+    expect(Socket.all).toHaveLength(1);
+    const socket = Socket.all[0];
+    expect(socket.frames[0].input).toBe("after admission");
+    expect(ws.data.nativeSteering?.attached).toBe(true);
+    complete(socket, socket.root);
+    await waitFor(() => !ws.data.nativeSteering);
+  } finally {
+    for (const lease of leases) lease.release();
+  }
+});
+
+test("superseding an active turn with warmup clears its steering owner immediately", async () => {
+  const { ws, socket, send } = await begin();
+  expect(ws.data.nativeSteering?.attached).toBe(true);
+  send({ type: "response.create", model: "gpt-5.5", input: "warmup", generate: false });
+  expect(ws.data.nativeSteering).toBeUndefined();
+  expect(ws.data.cancel).toBeUndefined();
+  await waitFor(() => socket.readyState === 3);
+});
+
+test.each(["output", "steer", "continuation"] as const)("large %s arrays stay ordered below the replay byte limit", (source) => {
+  // 750,000 small, valid messages exceed the runtime argument-count limit while
+  // remaining within the unchanged 32 MiB history budget.
+  const items = Array.from({ length: 750_000 }, (_, i) => ({
+    role: source === "output" ? "assistant" : "user", content: String(i),
+  }));
+  expect(Buffer.byteLength(JSON.stringify(items))).toBeLessThan(MAX_NATIVE_STEERING_REPLAY_BYTES - 1024);
+  let prefix: unknown[] = [];
+  const replay = new NativeSteeringReplay("initial", (input, response) => {
+    if (response.id === "large-successor") prefix = input.slice();
+  });
+  try {
+    replay.observe({ type: "response.created", response: { id: "large-parent" } });
+    replay.submitted({ type: "response.steer", previous_response_id: "large-parent",
+      input: source === "steer" ? items : "committed steer" });
+    replay.observe({ type: "response.steer.accepted", steer: { id: "large-steer", previous_response_id: "large-parent" } });
+    const output = source === "output" ? items : [{ role: "assistant", content: "parent output" }];
+    replay.observe({ type: "response.completed", response: { id: "large-parent", output } });
+    replay.submitted({ type: "response.create", previous_response_id: "large-parent",
+      input: source === "continuation" ? items : "explicit continuation" });
+    replay.observe({ type: "response.created", response: { id: "large-successor", previous_response_id: "large-parent" } });
+    replay.observe({ type: "response.completed", response: { id: "large-successor", output: [] } });
+    expect(prefix).toHaveLength(items.length + 3);
+    expect(prefix[0]).toEqual({ type: "message", role: "user", content: [{ type: "input_text", text: "initial" }] });
+    const offset = source === "output" ? 1 : source === "steer" ? 2 : 3;
+    expect(prefix.slice(offset, offset + items.length)).toEqual(items);
+    if (source !== "output") expect(prefix[1]).toEqual(output[0]);
+    if (source !== "steer") expect(prefix[source === "output" ? items.length + 1 : 2]).toEqual({
+      type: "message", role: "user", content: [{ type: "input_text", text: "committed steer" }],
+    });
+    if (source !== "continuation") expect(prefix.at(-1)).toEqual({
+      type: "message", role: "user", content: [{ type: "input_text", text: "explicit continuation" }],
+    });
+  } finally { replay.dispose(); }
 });
