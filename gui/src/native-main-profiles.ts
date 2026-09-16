@@ -45,7 +45,11 @@ const codes = [
 ] as const;
 export type NativeMainErrorCode = typeof codes[number];
 export class NativeMainError extends Error {
-  constructor(readonly code: NativeMainErrorCode) { super(code); }
+  readonly code: NativeMainErrorCode;
+  constructor(code: NativeMainErrorCode) {
+    super(code);
+    this.code = code;
+  }
 }
 export function nativeMainErrorCode(error: unknown): NativeMainErrorCode {
   return error instanceof NativeMainError ? error.code : "NETWORK_ERROR";
