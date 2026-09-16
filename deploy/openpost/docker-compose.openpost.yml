@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   openpost:
-    image: getopenpost/openpost:v4.12.0
+    image: ghcr.io/getopenpost/openpost:v4.12.0
     container_name: openpost-publishing
     restart: unless-stopped
     ports:
@@ -10,8 +10,9 @@ services:
     environment:
       - PORT=8080
       - DATABASE_URL=sqlite:///data/openpost.db
-      - SECRET_KEY=${OPENPOST_SECRET_KEY:-changeme-production-secret-key-32chars}
-      - API_TOKEN=${OPENPOST_API_TOKEN:-changeme-openpost-api-token}
+      - JWT_SECRET=${OPENPOST_JWT_SECRET}
+      - ENCRYPTION_KEY=${OPENPOST_ENCRYPTION_KEY}
+      - API_TOKEN=${OPENPOST_API_TOKEN}
       - STORAGE_PATH=/data/media
       - MCP_ENABLED=true
       - MCP_PORT=8081

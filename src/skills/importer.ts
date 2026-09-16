@@ -119,7 +119,7 @@ export class SkillImporter {
         inferred_capabilities: risk.inferred_capabilities,
       },
       policy: {
-        approval_required: risk.level === "high" || risk.level === "critical",
+        approval_required: risk.level !== "low",
         allowed_environments: ["dev", "test", "staging"],
       },
       deployment: {

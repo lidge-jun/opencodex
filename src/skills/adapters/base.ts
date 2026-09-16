@@ -166,8 +166,9 @@ export abstract class BaseSkillAgentAdapter implements SkillAgentAdapter {
           mkdirSync(dir, { recursive: true, mode: 0o755 });
         }
 
-        // Action contains relative path; entry content is in manifest or caller provides content
-        // Plan caller populates staged content into actions or deployment coordinator handles staging
+        if (action.relativePath === "SKILL.md" && !existsSync(action.targetPath)) {
+          writeFileSync(action.targetPath, `# ${manifest.metadata.name}\n\n${manifest.metadata.description}\n`, "utf8");
+        }
         filesWritten.push(action.targetPath);
       }
 
@@ -219,10 +220,19 @@ export abstract class BaseSkillAgentAdapter implements SkillAgentAdapter {
       const actual = hashRes.contentSha256;
       const expected = deployment.actualSha256;
 
-      const verified = expected ? actual === expected : true;
+      if (!expected) {
+        return {
+          verified: false,
+          expectedSha256: "",
+          actualSha256: actual,
+          mismatches: ["No expected SHA-256 available for verification"],
+        };
+      }
+
+      const verified = actual === expected;
       return {
         verified,
-        expectedSha256: expected ?? actual,
+        expectedSha256: expected,
         actualSha256: actual,
         mismatches: verified ? [] : [`Hash mismatch: expected ${expected}, got ${actual}`],
       };

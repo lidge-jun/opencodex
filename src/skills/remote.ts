@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join, resolve } from "node:path";
 import { sha256 } from "./hasher";
 import { isPathWithinBoundary } from "./paths";
+import { isSafeRelativePath } from "./validator";
 import type {
   AgentDetectionResult,
   InstalledSkillSnapshot,
@@ -126,11 +127,7 @@ export class ConstrainedSshTransport implements RemoteSshTransport {
     // Allowed roots check on node
     const allowed = node.allowed_roots ?? [];
     if (allowed.length > 0) {
-      const targetPosix = plan.target.targetPath.replace(/^[a-zA-Z]:/, "").split("\\").join("/");
-      const isAllowed = allowed.some(root => {
-        const rootPosix = root.replace(/^[a-zA-Z]:/, "").split("\\").join("/");
-        return targetPosix.startsWith(rootPosix) || isPathWithinBoundary(plan.target.targetPath, root);
-      });
+      const isAllowed = allowed.some(root => isPathWithinBoundary(plan.target.targetPath, root));
       if (!isAllowed) {
         return {
           deploymentId: plan.planId,
@@ -145,9 +142,27 @@ export class ConstrainedSshTransport implements RemoteSshTransport {
     // In local test environment, if fixtureRoot is supplied, write files to fixture
     const written: string[] = [];
     if (this.fixtureRoot) {
+      if (!isSafeRelativePath(node.name)) {
+        return {
+          deploymentId: plan.planId,
+          target: plan.target,
+          status: "FAILED",
+          filesWritten: [],
+          error: `Unsafe node name: ${node.name}`,
+        };
+      }
       const localRemotePath = join(this.fixtureRoot, node.name, plan.target.targetPath.replace(/^[a-zA-Z]:/, ""));
       mkdirSync(localRemotePath, { recursive: true });
       for (const [relPath, content] of Object.entries(files)) {
+        if (!isSafeRelativePath(relPath)) {
+          return {
+            deploymentId: plan.planId,
+            target: plan.target,
+            status: "FAILED",
+            filesWritten: [],
+            error: `Unsafe relative file path: ${relPath}`,
+          };
+        }
         const dest = join(localRemotePath, relPath);
         mkdirSync(dirname(dest), { recursive: true });
         writeFileSync(dest, content, "utf8");

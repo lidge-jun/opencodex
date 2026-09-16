@@ -29,7 +29,12 @@ export function isSafeRelativePath(relPath: string): boolean {
   if (!relPath || typeof relPath !== "string") return false;
 
   // Reject URL encoded traversal e.g. %2e%2e
-  const decoded = decodeURIComponent(relPath).split("\\").join("/");
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(relPath).split("\\").join("/");
+  } catch {
+    return false;
+  }
 
   if (isAbsolute(decoded)) return false;
   if (/^[a-zA-Z]:/.test(decoded)) return false; // Windows drive letters

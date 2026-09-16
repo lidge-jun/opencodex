@@ -18,19 +18,18 @@ export function evaluateSkillPolicy(
 
   // 1. Critical Risk Deny Rule for Autonomous Deployment
   if (risk.level === "critical") {
-    matchedRules.push("deny-critical-autodeploy");
     if (context.isAutonomousDeploy && !context.hasApproval) {
       return {
         effect: "deny",
         reason: "Critical Skills cannot be deployed autonomously. Explicit human review and approval are required.",
-        matched_rules: matchedRules,
+        matched_rules: [...matchedRules, "deny-critical-autodeploy"],
       };
     }
     if (!context.hasApproval) {
       return {
         effect: "require_approval",
         reason: "Critical risk level detected. Human review and explicit approval required prior to deployment.",
-        matched_rules: matchedRules,
+        matched_rules: [...matchedRules, "require-approval-critical"],
         constraints: {
           allowed_environments: ["dev", "test"],
         },
@@ -40,13 +39,12 @@ export function evaluateSkillPolicy(
 
   // 2. Production Environment Rules
   if (env === "prod") {
-    matchedRules.push("protect-production");
     if (risk.level === "critical" || risk.level === "high") {
       if (!context.hasApproval) {
         return {
           effect: "deny",
           reason: "High and Critical risk skills are denied in production without pre-existing executive approval.",
-          matched_rules: matchedRules,
+          matched_rules: [...matchedRules, "protect-production"],
         };
       }
     }

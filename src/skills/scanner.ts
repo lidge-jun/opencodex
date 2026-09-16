@@ -183,9 +183,11 @@ export function scanSkillText(content: string, filePath = "SKILL.md"): SkillScan
 
   for (const rule of SCANNER_RULES) {
     // Check line by line to accurately identify line numbers
+    let matchedInLine = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (rule.pattern.test(line)) {
+        matchedInLine = true;
         const evidence = line.trim();
         findings.push({
           rule_id: rule.id,
@@ -201,6 +203,26 @@ export function scanSkillText(content: string, filePath = "SKILL.md"): SkillScan
           },
         });
       }
+    }
+
+    // If not matched line-by-line, check whole content for multiline patterns (e.g. backslash-continued shell)
+    if (!matchedInLine && rule.pattern.test(content)) {
+      const match = rule.pattern.exec(content);
+      const evidence = match ? match[0].trim() : content.slice(0, 200);
+      findings.push({
+        rule_id: rule.id,
+        severity: rule.severity,
+        file_path: filePath,
+        line_start: 1,
+        line_end: lines.length,
+        evidence_hash: sha256(evidence),
+        message: rule.message,
+        metadata: {
+          category: rule.category,
+          snippet: evidence.slice(0, 200),
+          multiline: true,
+        },
+      });
     }
   }
 

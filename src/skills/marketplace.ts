@@ -167,11 +167,9 @@ export class SkillsShConnector implements SkillMarketplaceConnector {
       version: item.version,
       author: item.author,
       license: item.license,
-      stars: 128,
-      downloads: 1420,
       tags: item.tags,
       sourceUrl: item.sourceUrl,
-      verified: true,
+      verified: false,
     }));
   }
 

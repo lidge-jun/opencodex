@@ -74,8 +74,7 @@ describe("credential lease e2e", () => {
     let breaker = initialBreaker(provider.id, circuitCred.id, now);
     for (let i = 0; i < CIRCUIT_OPEN_THRESHOLD; i++) breaker = recordCircuitFailure(breaker, now);
     svc.db.upsertBreaker(breaker);
-    const next = { ...svc.db.getCredential(circuitCred.id)!, routing_eligible: false };
-    svc.db.upsertCredential(next);
+    expect(svc.db.getCredential(circuitCred.id)!.routing_eligible).toBe(true);
     const blocked = svc.listCandidates("openai-compatible").find(c => c.credential_id === circuitCred.id);
     expect(blocked?.routing_score).toBe(0);
 

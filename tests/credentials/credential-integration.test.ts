@@ -22,9 +22,12 @@ const QUOTA_SECRET = ["quota", "local", "demo"].join("-");
 
 describe("credential runtime integration", () => {
   const prev = process.env.CREDENTIAL_RUNTIME_ENABLED;
+  const prevDb = process.env.PAO_CREDENTIAL_DB_PATH;
   afterEach(() => {
     if (prev === undefined) delete process.env.CREDENTIAL_RUNTIME_ENABLED;
     else process.env.CREDENTIAL_RUNTIME_ENABLED = prev;
+    if (prevDb === undefined) delete process.env.PAO_CREDENTIAL_DB_PATH;
+    else process.env.PAO_CREDENTIAL_DB_PATH = prevDb;
     resetCredentialRuntimeServiceForTests();
   });
 
@@ -158,6 +161,7 @@ describe("credential runtime integration", () => {
   });
 
   test("overview reports vault availability from the injected vault", () => {
+    delete process.env.CREDENTIAL_RUNTIME_ENABLED;
     const svc = service();
     expect(svc.overview().vault_available).toBe(true);
     expect(svc.overview().enabled).toBe(false);

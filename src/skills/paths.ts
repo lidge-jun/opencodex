@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { isSafeRelativePath } from "./validator";
 import type { ScopeType } from "./types";
 
@@ -82,14 +82,43 @@ export function resolveSkillTargetPath(
   const skillRoot = resolve(resolveAgentSkillRoot(options.agentType, options.scope, options));
   const targetPath = resolve(join(skillRoot, skillSlug));
 
+  // Canonicalize approved root if it exists
+  let canonicalRoot = skillRoot;
+  if (existsSync(skillRoot)) {
+    try {
+      canonicalRoot = realpathSync(skillRoot);
+    } catch {
+      canonicalRoot = skillRoot;
+    }
+  }
+
   // Ensure target path is strictly within the resolved skill root
-  if (!isPathWithinBoundary(targetPath, skillRoot)) {
+  if (!isPathWithinBoundary(targetPath, canonicalRoot) && !isPathWithinBoundary(targetPath, skillRoot)) {
     return {
       targetPath: "",
       skillRoot,
       safe: false,
       error: `Resolved target path "${targetPath}" escapes the approved root "${skillRoot}".`,
     };
+  }
+
+  // Canonicalize deepest existing ancestor of targetPath to prevent symlink traversal
+  let ancestor = dirname(targetPath);
+  while (!existsSync(ancestor) && dirname(ancestor) !== ancestor) {
+    ancestor = dirname(ancestor);
+  }
+  if (existsSync(ancestor) && (ancestor === skillRoot || ancestor === canonicalRoot || isPathWithinBoundary(ancestor, canonicalRoot) || isPathWithinBoundary(ancestor, skillRoot))) {
+    try {
+      const realAncestor = realpathSync(ancestor);
+      if (!isPathWithinBoundary(realAncestor, canonicalRoot) && realAncestor !== canonicalRoot && !isPathWithinBoundary(realAncestor, skillRoot)) {
+        return {
+          targetPath,
+          skillRoot,
+          safe: false,
+          error: `Parent directory "${ancestor}" resolves outside approved boundary: "${realAncestor}".`,
+        };
+      }
+    } catch {}
   }
 
   // If explicit allowed roots are provided (e.g. for remote nodes), verify target is within at least one

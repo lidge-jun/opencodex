@@ -136,8 +136,13 @@ export class DriftEngine {
       try {
         const res = await this.checkDeploymentDrift(dep.id);
         results.push(res);
-      } catch {
-        /* best-effort */
+      } catch (e) {
+        this.db.logAudit({
+          event_type: "skill.drift.check_failed",
+          actor_type: "system",
+          deployment_id: dep.id,
+          metadata: { error: e instanceof Error ? e.message : String(e) },
+        });
       }
     }
     return results;
@@ -197,6 +202,10 @@ export class DriftEngine {
     newManifest.integrity.files_sha256 = hashRes.filesSha256;
 
     const versionId = `${baseVersion.skill_id}@${newVersion}`;
+    const existing = this.db.getSkillVersion(versionId);
+    if (existing) {
+      throw new Error(`Cannot adopt drift as version ${newVersion}: version already exists`);
+    }
     const now = new Date().toISOString();
 
     const newVersionRecord: SkillVersionRecord = {

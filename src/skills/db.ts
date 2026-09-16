@@ -237,6 +237,10 @@ export class SkillsDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_skills_status ON skills(status);
       CREATE INDEX IF NOT EXISTS idx_skills_namespace ON skills(namespace);
+      CREATE INDEX IF NOT EXISTS idx_versions_skill ON skill_versions(skill_id);
+      CREATE INDEX IF NOT EXISTS idx_findings_version ON skill_scan_findings(skill_version_id);
+      CREATE INDEX IF NOT EXISTS idx_reviews_version ON skill_reviews(skill_version_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_snapshots_deployment ON skill_deployment_snapshots(deployment_id);
       CREATE INDEX IF NOT EXISTS idx_deployments_node ON skill_deployments(node_id);
       CREATE INDEX IF NOT EXISTS idx_deployments_agent ON skill_deployments(agent_id);
       CREATE INDEX IF NOT EXISTS idx_drift_active ON skill_drift_events(status);
@@ -255,6 +259,10 @@ export class SkillsDatabase {
     if (options.namespace) {
       sql += " AND namespace = ?";
       params.push(options.namespace);
+    }
+    if (options.tag) {
+      sql += " AND EXISTS (SELECT 1 FROM json_each(skills.tags) WHERE json_each.value = ?)";
+      params.push(options.tag);
     }
     sql += " ORDER BY updated_at DESC";
 
@@ -443,30 +451,31 @@ export class SkillsDatabase {
   // --- Scan Findings ---
   public saveFindings(versionId: string, findings: SkillScanFinding[]): void {
     const del = this.db.prepare("DELETE FROM skill_scan_findings WHERE skill_version_id = ?");
-    del.run(versionId);
-
     const insert = this.db.prepare(`
       INSERT INTO skill_scan_findings (id, skill_version_id, rule_id, severity, file_path, line_start, line_end, evidence_hash, message, metadata, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const now = new Date().toISOString();
-    for (let i = 0; i < findings.length; i++) {
-      const f = findings[i];
-      insert.run(
-        f.id ?? `find_${versionId}_${i}`,
-        versionId,
-        f.rule_id,
-        f.severity,
-        f.file_path,
-        f.line_start ?? null,
-        f.line_end ?? null,
-        f.evidence_hash,
-        f.message,
-        f.metadata ? JSON.stringify(f.metadata) : null,
-        now,
-      );
-    }
+    this.db.transaction(() => {
+      del.run(versionId);
+      for (let i = 0; i < findings.length; i++) {
+        const f = findings[i];
+        insert.run(
+          f.id ?? `find_${versionId}_${i}`,
+          versionId,
+          f.rule_id,
+          f.severity,
+          f.file_path,
+          f.line_start ?? null,
+          f.line_end ?? null,
+          f.evidence_hash,
+          f.message,
+          f.metadata ? JSON.stringify(f.metadata) : null,
+          now,
+        );
+      }
+    })();
   }
 
   public getFindings(versionId: string): SkillScanFinding[] {
