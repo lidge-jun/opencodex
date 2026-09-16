@@ -33,7 +33,8 @@ import type { OcxConfig } from "../../src/types";
  * Sandboxed agent environments deny `Bun.serve` outright ("Is port 0 in use?", EADDRINUSE on
  * every port), which is an environment artifact and not a regression — the same class already
  * documented for tests/server/server-combo-failover-e2e.test.ts. Probe once so the
- * listener-bound assertion is hosted-CI-only while the boot-sequence assertions always run.
+ * listener-bound assertions degrade gracefully there while the boot-sequence assertions always
+ * run. The probe result only suppresses a case outside CI (see `SKIP_LISTENER`).
  *
  * The probe has to be `Bun.serve` itself: a `node:net` listener still binds in an environment
  * where Bun's does not, so probing with the wrong API reports a false green and the skip never
@@ -49,9 +50,22 @@ function canBindLoopback(): boolean {
   }
 }
 
+const IS_CI = process.env.CI === "true";
 const CAN_BIND = canBindLoopback();
 
-test.skipIf(!CAN_BIND)("startServer persists the Astra-first legacy roster upgrade", async () => {
+/**
+ * The graceful skip is for a restricted local sandbox only. In hosted CI a runner that cannot
+ * bind loopback is a broken runner, not an environment variation, and the unconditional
+ * `skipIf(!CAN_BIND)` deleted four startup assertions there with no trace in the summary. Under
+ * CI the cases run and fail on the real bind error instead.
+ */
+const SKIP_LISTENER = !CAN_BIND && !IS_CI;
+
+test.skipIf(!IS_CI)("hosted CI can bind a loopback listener for the startup cases", () => {
+  expect(CAN_BIND).toBe(true);
+});
+
+test.skipIf(SKIP_LISTENER)("startServer persists the Astra-first legacy roster upgrade", async () => {
   saveConfig({
     ...staleConfig(),
     subagentModels: ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"],
@@ -66,7 +80,7 @@ test.skipIf(!CAN_BIND)("startServer persists the Astra-first legacy roster upgra
   }
 });
 
-test.skipIf(!CAN_BIND)("startServer migrates old Grok Chat choices once and preserves later opt-in", async () => {
+test.skipIf(SKIP_LISTENER)("startServer migrates old Grok Chat choices once and preserves later opt-in", async () => {
   saveConfig({
     ...staleConfig(), defaultProvider: "xai",
     providers: { xai: {
@@ -93,7 +107,7 @@ test.skipIf(!CAN_BIND)("startServer migrates old Grok Chat choices once and pres
   } finally { await restarted.stop(true); }
 });
 
-test.skipIf(!CAN_BIND)("preset reconciliation cannot undo an in-memory Grok migration after its write fails", async () => {
+test.skipIf(SKIP_LISTENER)("preset reconciliation cannot undo an in-memory Grok migration after its write fails", async () => {
   saveConfig({
     ...staleConfig(), defaultProvider: "xai",
     providers: { xai: {
@@ -205,9 +219,10 @@ test("a fresh install with no config file at all does not throw on the boot path
   }
 });
 
-// Hosted-CI-only: binds a listener, which sandboxed agent environments refuse (see
-// canBindLoopback above). The three assertions above cover the same claim without a port.
-test.skipIf(!CAN_BIND)(
+// Binds a listener, which a sandboxed agent environment refuses (see canBindLoopback above);
+// outside CI that skips this case and the three assertions above still cover the boot sequence
+// without a port. In CI it always runs.
+test.skipIf(SKIP_LISTENER)(
   "startServer completes and serves /healthz when the config disappears before reconcile",
   async () => {
     saveConfig(staleConfig());

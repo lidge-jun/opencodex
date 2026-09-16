@@ -54,7 +54,7 @@ import {
 import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
-import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { COLD_SPAWN_BUDGET_MS, INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const roots: string[] = [];
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -62,13 +62,20 @@ const previousCodexHome = process.env.CODEX_HOME;
 const OWNERSHIP_REPROBE_TEST_HOME = "ownership-reprobe-test-home";
 // One process boot, recovery observation, requests and bounded child teardown.
 const CHILD_CASE_BUDGET_MS = 2 * SPAWN_BUDGET_MS;
+// The same, for the one case whose child pays this process's cold start. Only its readiness
+// wait is longer; everything inside the case keeps the deadlines every other case has, so the
+// wider outer bound cannot slow a real failure down — `waitForPort` still reports first.
+const FIRST_CHILD_CASE_BUDGET_MS = COLD_SPAWN_BUDGET_MS + SPAWN_BUDGET_MS;
 type StartupChild = ReturnType<typeof Bun.spawn>;
 const childOutputs = new WeakMap<StartupChild, {
   stdout: Promise<string>;
   stderr: Promise<string>;
   startedAt: number;
   ready: boolean;
+  cold: boolean;
 }>();
+/** Only the first child spawned in this process pays a cold start; the rest are warm. */
+let coldSpawnPending = true;
 
 function restoreEnv(name: "OPENCODEX_HOME" | "CODEX_HOME", value: string | undefined): void {
   if (value === undefined) delete process.env[name];
@@ -252,7 +259,7 @@ async function waitForPath(path: string, timeoutMs = INTERNAL_DEADLINE_MS): Prom
 // A spawned proxy child needs 10-18 s to reach its port file on a loaded windows-latest shard
 // (runs 33601508392 and 33610501053). A 15 s generic deadline therefore rejects healthy
 // children. Use the intrinsic spawn budget; each scenario has its own larger case bound.
-async function waitForPort(path: string, child: StartupChild, timeoutMs = SPAWN_BUDGET_MS): Promise<number> {
+async function waitForPort(path: string, child: StartupChild, timeoutMs = readinessBudgetMs(child)): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (child.exitCode !== null) {
@@ -268,10 +275,22 @@ async function waitForPort(path: string, child: StartupChild, timeoutMs = SPAWN_
       }
     }
     if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for a real port in ${path}; childExit=${child.exitCode}; elapsedMs=${Date.now() - childOutputs.get(child)!.startedAt}`);
+      const output = childOutputs.get(child)!;
+      throw new Error(`Timed out waiting for a real port in ${path}; childExit=${child.exitCode}; cold=${output.cold}; budgetMs=${timeoutMs}; elapsedMs=${Date.now() - output.startedAt}`);
     }
     await Bun.sleep(10);
   }
+}
+
+/**
+ * Windows gives the first child in a file more room and nothing else: run 35118018849 saw the
+ * first proxy child publish at 50.7s while the very next one was ready in 1.8s. Spending that
+ * allowance on every child would halve the reporting speed of the contention detectors in this
+ * file for a cost only one child pays. The child now logs `child-entry`, `start-server-begin`,
+ * `start-server-end` and `port-published`, so a future breach names its own phase.
+ */
+function readinessBudgetMs(child: StartupChild): number {
+  return childOutputs.get(child)!.cold ? COLD_SPAWN_BUDGET_MS : SPAWN_BUDGET_MS;
 }
 
 function childPaths(f: Fixture) {
@@ -312,7 +331,9 @@ function spawnChild(f: Fixture, paths: ReturnType<typeof childPaths>): StartupCh
     stderr: new Response(child.stderr).text(),
     startedAt,
     ready: false,
+    cold: coldSpawnPending,
   });
+  coldSpawnPending = false;
   return child;
 }
 
@@ -662,7 +683,8 @@ describe("native-main startup journal gate", () => {
       const active = (await f.manager.list()).activeProfileId;
       expect(active).toBe(scenario.active === "target" ? f.targetProfileId : f.sourceProfileId);
     });
-  }, CHILD_CASE_BUDGET_MS);
+    // First spawning case in file order, so its first scenario is the cold one.
+  }, FIRST_CHILD_CASE_BUDGET_MS);
 
   test.each(["unreadable", "third"] as const)("manual observation %s keeps main closed while health and explicit recovery remain available", async (observation) => {
     const f = await fixture("prepared", observation);

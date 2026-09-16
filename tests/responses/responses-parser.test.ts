@@ -227,26 +227,26 @@ describe("Responses parser", () => {
       tools: [{
         type: "namespace",
         name: "mcp__functions",
-        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+        tools: [{ type: "custom", name: "run_command", description: "Run a command" }],
       }],
       tool_choice: {
         type: "allowed_tools",
         mode: "required",
-        tools: [{ type: "custom", name: "exec" }],
+        tools: [{ type: "custom", name: "run_command" }],
       },
     });
 
     let maps = buildToolBridgeMaps(parsed);
     expect([...maps.toolNsMap]).toEqual([
-      ["mcp__functions__exec", { namespace: "mcp__functions", name: "exec", freeform: true }],
-      ["mcp__functions.exec", { namespace: "mcp__functions", name: "exec", freeform: true }],
-      ["exec", { namespace: "mcp__functions", name: "exec", freeform: true }],
+      ["mcp__functions__run_command", { namespace: "mcp__functions", name: "run_command", freeform: true }],
+      ["mcp__functions.run_command", { namespace: "mcp__functions", name: "run_command", freeform: true }],
+      ["run_command", { namespace: "mcp__functions", name: "run_command", freeform: true }],
     ]);
-    expect([...maps.declaredToolNames]).toEqual(["mcp__functions__exec", "mcp__functions.exec", "exec"]);
-    expect([...maps.freeformToolNames]).toEqual(["exec"]);
+    expect([...maps.declaredToolNames]).toEqual(["mcp__functions__run_command", "mcp__functions.run_command", "run_command"]);
+    expect([...maps.freeformToolNames]).toEqual(["run_command"]);
 
     const bridged = buildResponseJSON([
-      { type: "tool_call_start", id: "call_exec", name: "exec" },
+      { type: "tool_call_start", id: "call_exec", name: "run_command" },
       { type: "tool_call_delta", arguments: '{"input":"pwd"}' },
       { type: "tool_call_end" },
       { type: "done" },
@@ -255,14 +255,37 @@ describe("Responses parser", () => {
     expect((bridged.output as Record<string, unknown>[])[0]).toMatchObject({
       type: "custom_tool_call",
       call_id: "call_exec",
-      name: "exec",
+      name: "run_command",
       input: "pwd",
       status: "completed",
     });
 
-    parsed.options.toolChoice = { name: "exec" };
+    parsed.options.toolChoice = { name: "run_command" };
     maps = buildToolBridgeMaps(parsed);
-    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__functions__exec", "mcp__functions.exec", "exec"]);
+    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__functions__run_command", "mcp__functions.run_command", "run_command"]);
+
+    // A code-mode helper spelling is the exception, and it is the spelling that decides -- not the
+    // namespace and not the fact that the caller selected it. Bare `exec` in the DECLARED set is
+    // what turns nested-helper normalization on, so the selector grants the identity alias that
+    // restores the call without granting the declaration that would rewrite helper names onto it.
+    const helperSelector = parseRequest({
+      model: "claude-opus-5",
+      input: "run it",
+      tools: [{
+        type: "namespace",
+        name: "mcp__functions",
+        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+      }],
+      tool_choice: {
+        type: "allowed_tools",
+        mode: "required",
+        tools: [{ type: "custom", name: "exec" }],
+      },
+    });
+    const helperMaps = buildToolBridgeMaps(helperSelector);
+    expect([...helperMaps.declaredToolNames]).toEqual(["mcp__functions__exec", "mcp__functions.exec"]);
+    expect(helperMaps.toolNsMap.get("exec"))
+      .toEqual({ namespace: "mcp__functions", name: "exec", freeform: true });
 
     expect(() => parseRequest({
       model: "claude-opus-5",
