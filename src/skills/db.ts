@@ -613,6 +613,21 @@ export class SkillsDatabase {
     );
   }
 
+  public getSnapshot(id: string): SkillDeploymentSnapshot | null {
+    const r = this.db.prepare("SELECT * FROM skill_deployment_snapshots WHERE id = ?").get(id) as Record<string, unknown> | null;
+    if (!r) return null;
+    return {
+      id: String(r.id),
+      deployment_id: String(r.deployment_id),
+      reason: r.reason as SkillDeploymentSnapshot["reason"],
+      manifest: r.manifest ? JSON.parse(String(r.manifest)) : undefined,
+      file_index: JSON.parse(String(r.file_index)),
+      storage_ref: String(r.storage_ref),
+      created_by: r.created_by ? String(r.created_by) : undefined,
+      created_at: String(r.created_at),
+    };
+  }
+
   public getLatestSnapshotForDeployment(deploymentId: string): SkillDeploymentSnapshot | null {
     const r = this.db.prepare("SELECT * FROM skill_deployment_snapshots WHERE deployment_id = ? ORDER BY created_at DESC LIMIT 1").get(deploymentId) as Record<string, unknown> | null;
     if (!r) return null;

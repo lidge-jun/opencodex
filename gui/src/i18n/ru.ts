@@ -3146,5 +3146,5 @@ export const ru: Record<TKey, string> = {
   "social.status.posting": "POST {path}",
   "social.status.ok": "OK {path}",
   "social.status.failed": "Ошибка: {error}",
-  "social.hashes": "Хэши для закладок: {hashes}",
+  "social.hashes": "Хеши для закладок: {hashes}",
 };

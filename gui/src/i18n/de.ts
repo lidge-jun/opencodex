@@ -2880,7 +2880,7 @@ export const de: Record<TKey, string> = {
   "skills.status.saveFailed": "Speichern fehlgeschlagen: {error}",
   "skills.loadFailed": "Skill-Steuerungsebene konnte nicht geladen werden.",
   "security.title": "Sicherheits-Steuerungsebene",
-  "security.subtitle": "Autorisierungsfirste Erkundung und Validierung. Zielgerichtete Arbeit ist standardmäßig verweigert. R3 ist blockiert. Hash-routbar; keine Sidebar-NAV-Zeile.",
+  "security.subtitle": "Autorisierungsorientierte Erkundung und Validierung. Zielgerichtete Arbeit ist standardmäßig verweigert. R3 ist blockiert. Hash-routbar; keine Sidebar-NAV-Zeile.",
   "security.refresh": "Aktualisieren",
   "security.refreshing": "Aktualisiere…",
   "security.banner": "Nur autorisierte Ziele. Unbekannte Assets, abgelaufene Autorisierungen und ausgeschlossene Hosts werden verweigert. Live-Drittanbieter-Tools werden nicht aufgerufen; die Erkundung nutzt lokale Fixtures.",

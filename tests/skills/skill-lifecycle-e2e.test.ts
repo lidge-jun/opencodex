@@ -312,7 +312,7 @@ Automated inspection checklist for commercial image submission.
     expect(plan.conflicts[0]).toContain("exists but is not managed by Pao-hubPro");
 
     // Refuses deployment when conflict exists
-    expect(service.applyDeploymentPlan(plan.planId)).rejects.toThrow("Cannot execute deployment plan due to conflicts");
+    await expect(service.applyDeploymentPlan(plan.planId)).rejects.toThrow("Cannot execute deployment plan due to conflicts");
   });
 
   test("Security: Denies deployment of revoked skill", async () => {

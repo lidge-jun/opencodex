@@ -11,7 +11,7 @@ import type {
   SkillSourceType,
   SkillVersionRecord,
 } from "./types";
-import { parseSkillFrontmatter, validateSkillPackage } from "./validator";
+import { DEFAULT_SKILL_LIMITS, parseSkillFrontmatter, validateSkillPackage } from "./validator";
 
 export interface ImportOptions {
   namespace?: string;
@@ -49,14 +49,27 @@ export class SkillImporter {
 
     // Read bundled files
     const bundledFiles: Record<string, string | Buffer> = {};
-    function walk(curr: string) {
+    const limits = DEFAULT_SKILL_LIMITS;
+    let fileCount = 1; // SKILL.md
+    let byteCount = Buffer.byteLength(entryContent, "utf8");
+
+    function walk(curr: string, depth = 0) {
+      if (depth > 20) throw new Error("Skill directory structure exceeds maximum depth limit (20).");
       const entries = readdirSync(curr);
       for (const e of entries) {
         const full = join(curr, e);
         const stat = lstatSync(full);
         if (stat.isDirectory()) {
-          walk(full);
+          walk(full, depth + 1);
         } else if (stat.isFile()) {
+          fileCount++;
+          if (fileCount > limits.maxFiles) {
+            throw new Error(`Skill package exceeds maximum file count (${limits.maxFiles}).`);
+          }
+          byteCount += stat.size;
+          if (byteCount > limits.maxTotalBytes) {
+            throw new Error(`Skill package exceeds maximum total size (${limits.maxTotalBytes} bytes).`);
+          }
           const rel = relative(absPath, full).split("\\").join("/");
           if (rel !== "SKILL.md") {
             bundledFiles[rel] = readFileSync(full);

@@ -394,6 +394,9 @@ export class SkillControlService {
 
     const skill = this.db.getSkill(version.skill_id);
     if (!skill) throw new Error(`Skill not found: ${version.skill_id}`);
+    if (version.immutable) {
+      throw new Error(`Version already published and immutable: ${versionId}`);
+    }
 
     const now = new Date().toISOString();
     version.immutable = true;

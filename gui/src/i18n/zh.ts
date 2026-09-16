@@ -3144,5 +3144,5 @@ export const zh: Record<TKey, string> = {
   "social.status.posting": "POST {path}",
   "social.status.ok": "OK {path}",
   "social.status.failed": "失败: {error}",
-  "social.hashes": "可书签路由: {hashes}",
+  "social.hashes": "可收藏哈希：{hashes}",
 };

@@ -52,7 +52,10 @@ DRIFT DETECTION & RECOVERY
 
 Under `$OPENCODEX_HOME` (`~/.opencodex`):
 - `skills.sqlite`: SQLite database storing skill sources, skills, versions, files, scan findings, agent adapters, remote nodes, deployments, snapshots, drift events, reviews, and audit events.
-- `.pao-backups/`: Recovery snapshots taken prior to mutating existing skill deployments.
+
+Inside each agent skill root (for example `~/.codex/skills/` or `<project>/.codex/skills/`):
+- `.pao-backups/<snapshotId>/`: Recovery snapshots taken prior to mutating existing skill deployments.
+- `.pao-staging/<uuid>/`: Ephemeral staging directory for transactional deployments.
 - Target agent locations:
   - Codex: `~/.codex/skills/<slug>/` or `.codex/skills/<slug>/`
   - Claude Code: `~/.claude/skills/<slug>/` or `.claude/skills/<slug>/`

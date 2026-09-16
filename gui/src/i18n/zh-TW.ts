@@ -3109,5 +3109,5 @@ export const zhTW: Record<TKey, string> = {
   "social.status.posting": "POST {path}",
   "social.status.ok": "OK {path}",
   "social.status.failed": "失敗: {error}",
-  "social.hashes": "可加入書籤的網址: {hashes}",
+  "social.hashes": "可加入書籤的雜湊：{hashes}",
 };

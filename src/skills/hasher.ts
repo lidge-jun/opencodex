@@ -15,6 +15,11 @@ export function sha256File(filePath: string): string {
   return sha256(buffer);
 }
 
+/** Paths reserved for Pao control-plane receipts and staging metadata. */
+export function isReservedSkillPath(relPath: string): boolean {
+  return relPath.startsWith(".pao-");
+}
+
 /**
  * Deterministically compute the canonical content SHA-256 for a Skill.
  * Sorts all file paths (including entry SKILL.md) and combines their individual hashes.
@@ -28,7 +33,7 @@ export function computeSkillContentHash(
   filesSha256[entryFileName] = sha256(entryFileContent);
 
   for (const [relPath, content] of Object.entries(bundledFiles)) {
-    if (relPath === entryFileName) continue;
+    if (relPath === entryFileName || isReservedSkillPath(relPath)) continue;
     filesSha256[relPath] = sha256(content);
   }
 

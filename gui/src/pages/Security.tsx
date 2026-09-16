@@ -346,19 +346,24 @@ export function Security({ apiBase }: SecurityProps): React.JSX.Element {
       )}
 
       {tab === "evidence" && (
-        <table className="security-table">
-          <thead><tr><th>{t("security.col.id")}</th><th>{t("security.col.type")}</th><th>{t("security.col.sha256")}</th><th>{t("security.col.preview")}</th></tr></thead>
-          <tbody>
-            {evidence.map(row => (
-              <tr key={String(row.id)}>
-                <td>{String(row.id)}</td>
-                <td>{String(row.type)}</td>
-                <td>{String(row.sha256).slice(0, 12)}…</td>
-                <td>{String(row.redacted_preview ?? "")}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <>
+          <div className="security-banner">
+            {campaigns[0] ? `Campaign evidence: ${String(campaigns[0].name ?? campaigns[0].id)}` : "No active campaign"}
+          </div>
+          <table className="security-table">
+            <thead><tr><th>{t("security.col.id")}</th><th>{t("security.col.type")}</th><th>{t("security.col.sha256")}</th><th>{t("security.col.preview")}</th></tr></thead>
+            <tbody>
+              {evidence.map(row => (
+                <tr key={String(row.id)}>
+                  <td>{String(row.id)}</td>
+                  <td>{String(row.type)}</td>
+                  <td>{String(row.sha256).slice(0, 12)}…</td>
+                  <td>{String(row.redacted_preview ?? "")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
 
       {tab === "skills" && (

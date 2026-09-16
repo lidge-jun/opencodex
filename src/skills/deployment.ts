@@ -212,6 +212,17 @@ export class DeploymentEngine {
         mkdirSync(target.targetPath, { recursive: true, mode: 0o755 });
       }
 
+      // Clean up files in targetPath omitted from the new staged set
+      if (existsSync(target.targetPath)) {
+        const existingTarget = computeDirectoryHash(target.targetPath);
+        for (const ef of existingTarget.files) {
+          if (!stagedHash.files.includes(ef) && !ef.startsWith(".pao-")) {
+            const obsolete = join(target.targetPath, ef);
+            if (existsSync(obsolete)) rmSync(obsolete, { force: true });
+          }
+        }
+      }
+
       // Step 4: Atomic copy / replace files into targetPath
       for (const f of stagedHash.files) {
         const src = join(stageDir, f);
@@ -392,8 +403,12 @@ export class DeploymentEngine {
     }
 
     const snapshot = request.snapshotId
-      ? this.db.getLatestSnapshotForDeployment(request.deploymentId)
+      ? this.db.getSnapshot(request.snapshotId)
       : this.db.getLatestSnapshotForDeployment(request.deploymentId);
+
+    if (request.snapshotId && snapshot && snapshot.deployment_id !== request.deploymentId) {
+      throw new Error(`Snapshot ${request.snapshotId} does not belong to deployment ${request.deploymentId}`);
+    }
 
     if (!snapshot || !existsSync(snapshot.storage_ref)) {
       throw new Error(`No valid rollback snapshot found for deployment ${request.deploymentId}`);

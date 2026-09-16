@@ -3146,5 +3146,5 @@ export const tr: Record<TKey, string> = {
   "social.status.posting": "POST {path}",
   "social.status.ok": "OK {path}",
   "social.status.failed": "Başarısız: {error}",
-  "social.hashes": "Yer imi URL'leri: {hashes}",
+  "social.hashes": "Yer imi hash'leri: {hashes}",
 };

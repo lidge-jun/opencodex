@@ -191,18 +191,32 @@ export async function handleSkillRoutes(ctx: ManagementContext): Promise<Respons
   }
   if (pathname === "/api/skill-nodes" && req.method === "POST") {
     const body = await readManagementJsonBody(req) as Record<string, unknown>;
+    const VALID_NODE_KINDS = new Set(["local", "ssh", "docker", "kubernetes"]);
+    const VALID_NODE_ENVS = new Set(["dev", "staging", "prod", "test"]);
+    const kind = String(body.kind || "ssh");
+    if (!VALID_NODE_KINDS.has(kind)) {
+      return jsonResponse({ error: `Invalid node kind: ${kind}` }, 400, req, config);
+    }
+    const env = String(body.environment || "dev");
+    if (!VALID_NODE_ENVS.has(env)) {
+      return jsonResponse({ error: `Invalid node environment: ${env}` }, 400, req, config);
+    }
+    if (kind === "ssh" && !body.host_key_fingerprint) {
+      return jsonResponse({ error: "Missing required host_key_fingerprint for SSH node" }, 400, req, config);
+    }
+
     const now = new Date().toISOString();
     const node = {
       id: String(body.id || `node_${Date.now()}`),
       name: String(body.name || body.id),
-      kind: (body.kind as any) || "ssh",
+      kind: kind as any,
       hostname: body.hostname ? String(body.hostname) : undefined,
       port: body.port ? Number(body.port) : 22,
       username: body.username ? String(body.username) : "agent",
       auth_ref: body.auth_ref ? String(body.auth_ref) : undefined,
       host_key_fingerprint: body.host_key_fingerprint ? String(body.host_key_fingerprint) : undefined,
-      environment: (body.environment as any) || "dev",
-      status: "ONLINE" as const,
+      environment: env as any,
+      status: (kind === "local" ? "ONLINE" : "UNVERIFIED") as any,
       allowed_roots: (body.allowed_roots as string[]) ?? [],
       tags: (body.tags as string[]) ?? [],
       created_at: now,

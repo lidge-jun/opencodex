@@ -184,16 +184,20 @@ export function Credentials({ apiBase }: CredentialsProps): React.JSX.Element {
   const hashList = useMemo(() => ["credentials", ...CREDENTIALS_TAB_HASHES].join(", "), []);
 
   const post = async (path: string, body?: Record<string, unknown>) => {
-    setStatusMessage(t("credentials.status.posting", { path }));
-    const res = await fetch(`${apiBase}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body ?? { actor: "gui-operator" }),
-    });
-    const data = await res.json().catch(() => ({})) as { error?: unknown };
-    const error = typeof data.error === "string" ? data.error : String(res.status);
-    setStatusMessage(res.ok ? t("credentials.status.ok", { path }) : t("credentials.status.failed", { error }));
-    resource.refresh();
+    try {
+      setStatusMessage(t("credentials.status.posting", { path }));
+      const res = await fetch(`${apiBase}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? { actor: "gui-operator" }),
+      });
+      const data = await res.json().catch(() => ({})) as { error?: unknown };
+      const error = typeof data.error === "string" ? data.error : String(res.status);
+      setStatusMessage(res.ok ? t("credentials.status.ok", { path }) : t("credentials.status.failed", { error }));
+      resource.refresh();
+    } catch (e) {
+      setStatusMessage(t("credentials.status.failed", { error: e instanceof Error ? e.message : String(e) }));
+    }
   };
 
   return (

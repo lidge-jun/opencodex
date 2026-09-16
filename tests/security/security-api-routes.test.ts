@@ -49,4 +49,14 @@ describe("Security Control Management API Routes", () => {
     const res = await handleSecurityRoutes(mockCtx("GET", "/api/skills"));
     expect(res).toBeNull();
   });
+
+  test("mutating routes are denied while the plane is disabled", async () => {
+    delete process.env.PAO_SECURITY_CONTROL_PLANE;
+    const res = await handleSecurityRoutes(
+      mockCtx("POST", "/api/security/campaigns", { name: "c1" }),
+    );
+    expect(res!.status).toBe(403);
+    const body = await res!.json() as { error: string };
+    expect(body.error).toContain("disabled");
+  });
 });

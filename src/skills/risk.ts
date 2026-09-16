@@ -43,17 +43,18 @@ export function assessSkillRisk(findings: SkillScanFinding[]): SkillRiskAssessme
   let totalScore = 0;
   const inferredCapabilitiesSet = new Set<string>();
   const rulesHit = new Set<string>();
+  const seenRuleCounts = new Map<string, number>();
 
   for (const f of findings) {
     rulesHit.add(f.rule_id);
     const weight = RULE_WEIGHTS[f.rule_id] ?? 10;
-    // diminishing returns for repeated hits of the same rule
-    const count = findings.filter(x => x.rule_id === f.rule_id).length;
-    if (count > 1) {
-      totalScore += Math.round(weight * 0.4);
-    } else {
+    const count = seenRuleCounts.get(f.rule_id) ?? 0;
+    if (count === 0) {
       totalScore += weight;
+    } else {
+      totalScore += Math.round(weight * 0.4);
     }
+    seenRuleCounts.set(f.rule_id, count + 1);
 
     // Map rule to inferred capabilities
     if (f.rule_id.includes("shell") || f.rule_id.includes("package")) {

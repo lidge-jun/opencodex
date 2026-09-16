@@ -27,8 +27,8 @@ describe("Agent Adapters & Target Resolution", () => {
 
   test("rejects invalid slugs or traversal in target resolution", async () => {
     const codex = defaultAgentRegistry.get("codex")!;
-    expect(codex.resolveTarget("../escaped", { scope: "user" })).rejects.toThrow();
-    expect(codex.resolveTarget("nested/path", { scope: "user" })).rejects.toThrow();
+    await expect(codex.resolveTarget("../escaped", { scope: "user" })).rejects.toThrow();
+    await expect(codex.resolveTarget("nested/path", { scope: "user" })).rejects.toThrow();
   });
 
   test("detectAll discovers available agent runtimes", async () => {
