@@ -520,6 +520,13 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
+  const dedupedCatalogModels = dedupeCatalogEntriesBySlug(catalog.models);
+  if (dedupedCatalogModels.length !== catalog.models.length) {
+    console.warn(
+      `[opencodex] catalog sync dropped ${catalog.models.length - dedupedCatalogModels.length} duplicate slug row(s); keeping the first occurrence of each slug (#4730).`,
+    );
+    catalog.models = dedupedCatalogModels;
+  }
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
 
@@ -551,6 +558,30 @@ function writeRetainedCatalogSync({
     catalogWritten: true,
     comboOmissions,
   };
+}
+
+/**
+ * Final guard for the written catalog: every slug must appear exactly once (#4730).
+ *
+ * Two emit paths can hand the merge the same model under the same Codex-facing slug and the
+ * equivalence-key merge keeps both (a slash-less `model.alias` slug is an "exact" key, so the
+ * aliased and canonical rows of one provider model never collapse). Observed on 2.56.0: a sync
+ * produced 507 rows for 72 unique slugs, every duplicate byte-identical. Keep the FIRST
+ * occurrence — the merge already ranked it — and never touch distinct slugs.
+ */
+export function dedupeCatalogEntriesBySlug(models: RawEntry[]): RawEntry[] {
+  const seen = new Set<string>();
+  const out: RawEntry[] = [];
+  for (const entry of models) {
+    if (typeof entry.slug !== "string") {
+      out.push(entry);
+      continue;
+    }
+    if (seen.has(entry.slug)) continue;
+    seen.add(entry.slug);
+    out.push(entry);
+  }
+  return out;
 }
 
 export async function syncCatalogModels(
