@@ -24,7 +24,7 @@ export interface CommandCodeGeneratedConfig {
 }
 
 /**
- * Spelling-independent identity of a routed selector.
+ * LOSSY spelling-collision key for a routed selector — not model identity.
  *
  * One provider model reaches this exporter under interchangeable spellings: the raw
  * selector keeps inner slashes (`command-code/deepseek/deepseek-v4.1-flash`, what
@@ -34,13 +34,13 @@ export interface CommandCodeGeneratedConfig {
  * so a catalog that carries both spellings can resolve the active model against one and
  * miss it in the other.
  *
- * The slash is meaningful, not decoration: it separates the provider from the model id,
- * and a provider id never contains one. Splitting on the FIRST slash and normalizing the
- * remainder is therefore exact, and it is the same lossy-but-consistent relation the rest
- * of the codebase already uses for this pair (see `slugEquivalenceKey` in
- * src/providers/slug-codec.ts, which collapses `p/a/b` and `p/a-b` onto one key).
- * Keeping a single implementation of that rule here avoids inventing a second, divergent
- * notion of "same model".
+ * The slash is meaningful: it separates the provider from the model id, and a provider id
+ * never contains one. But the encoding is NOT bijective — `p/a/b` and `p/a-b` are
+ * different model ids that encode to the same string. That is the same lossy relation
+ * `slugEquivalenceKey` documents in src/providers/slug-codec.ts and the same ambiguity
+ * `resolveSlugAliasCollisions` guards in the catalog. Callers must therefore never drop
+ * a row on this key alone; buildCommandCodeClientConfig additionally compares provider
+ * and id before folding two rows into one.
  */
 function canonicalSpellingOf(namespaced: string): string {
   const slash = namespaced.indexOf("/");

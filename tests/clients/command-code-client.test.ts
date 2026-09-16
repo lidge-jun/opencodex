@@ -155,6 +155,61 @@ describe("Command Code model-key spelling", () => {
     expect(Object.keys(document.provider[OPENCODE_PROVIDER_ID]!.models).length).toBe(2);
   });
 
+  test("keeps two genuinely distinct ids that encode to the same dash form callable", () => {
+    // The known dangerous pair: vendor/a/b (id with an inner slash) and vendor/a-b
+    // (id with a literal dash) both encode to vendor/a-b. They are DISTINCT models.
+    const document = buildCommandCodeClientConfig({
+      ...context(),
+      models: [
+        { namespaced: "command-code/vendor/a/b", provider: "command-code", id: "vendor/a/b", contextWindow: 1_000_000 },
+        { namespaced: "command-code/vendor/a-b", provider: "command-code", id: "vendor/a-b", contextWindow: 500_000 },
+      ],
+    }) as CommandCodeGeneratedConfig;
+    const models = document.provider[OPENCODE_PROVIDER_ID]!.models;
+    // Both must survive: neither is a spelling of the other.
+    expect(Object.keys(models).length).toBe(2);
+    expect(models["command-code/vendor/a/b"]?.contextWindow).toBe(1_000_000);
+    expect(models["command-code/vendor/a-b"]?.contextWindow).toBe(500_000);
+  });
+
+  test("folds the same model across spellings regardless of input order", () => {
+    const build = (order: "raw-first" | "encoded-first") => buildCommandCodeClientConfig({
+      ...context(),
+      models: order === "raw-first"
+        ? [
+            { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+            { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 999_999 },
+          ]
+        : [
+            { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 999_999 },
+            { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+          ],
+    }) as CommandCodeGeneratedConfig;
+    const a = build("raw-first");
+    const b = build("encoded-first");
+    const keysA = Object.keys(a.provider[OPENCODE_PROVIDER_ID]!.models);
+    const keysB = Object.keys(b.provider[OPENCODE_PROVIDER_ID]!.models);
+    // One entry either way, and the surviving key is the same (normalizeExportModels
+    // sorts, so input order cannot change the winner).
+    expect(keysA.length).toBe(1);
+    expect(keysB.length).toBe(1);
+    expect(keysA[0]).toBe(keysB[0]);
+  });
+
+  test("never normalizes the provider segment", () => {
+    // Two providers whose names differ around dash handling must never collapse.
+    const document = buildCommandCodeClientConfig({
+      ...context(),
+      models: [
+        { namespaced: "my-provider/model", provider: "my-provider", id: "model", contextWindow: 100 },
+        { namespaced: "my_provider/model", provider: "my_provider", id: "model", contextWindow: 200 },
+      ],
+    }) as CommandCodeGeneratedConfig;
+    const models = document.provider[OPENCODE_PROVIDER_ID]!.models;
+    expect(Object.keys(models).length).toBe(2);
+    expect(models["my-provider/model"]?.contextWindow).toBe(100);
+    expect(models["my_provider/model"]?.contextWindow).toBe(200);
+  });
   test("preserves distinct ids that collide only after slash encoding", () => {
     const document = buildCommandCodeClientConfig({
       ...context(),
