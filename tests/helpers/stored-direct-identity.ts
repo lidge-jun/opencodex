@@ -26,6 +26,30 @@ export function registerStoredDirectIdentityTests(getTestDir: () => string, live
     expect(headers.get("openai-beta")).toBe("responses=experimental");
   });
 
+  test("sync stored Direct substitution clears a missing account ID without changing inbound headers", () => {
+    const storedCredential = liveJwt();
+    writeFileSync(join(getTestDir(), "auth.json"), JSON.stringify({
+      tokens: { access_token: storedCredential },
+    }));
+    const inbound = new Headers({
+      authorization: "Bearer ocx_data_localsecret",
+      "chatgpt-account-id": "caller-account",
+      "openai-beta": "responses=experimental",
+    });
+    const originalHeaders = [...inbound.entries()];
+
+    const headers = materializeCodexUpstreamAuth(
+      inbound,
+      { kind: "main", accountId: null },
+      { substituteMainCredential: true },
+    );
+
+    expect(headers.get("authorization")).toBe(`Bearer ${storedCredential}`);
+    expect(headers.get("chatgpt-account-id")).toBeNull();
+    expect(headers.get("openai-beta")).toBe("responses=experimental");
+    expect([...inbound.entries()]).toEqual(originalHeaders);
+  });
+
   test.each([
     ["absent", undefined, null],
     ["present", "stored_main_acc", "stored_main_acc"],
