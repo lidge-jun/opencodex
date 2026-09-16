@@ -261,6 +261,38 @@ describe("ambiguous reset safety after outer recovery", () => {
     expect(totalSends(logCtx)).toBe(2);
   });
 
+  // The row above arms ONE same-target attempt, so the refusal it produces arrives with the
+  // arm already spent and nothing left to replay it. That is the case the guard at the top of
+  // the recovery loop already covered. The defect is the arm that still has an attempt left:
+  // the refusal is itself a 429, the while condition is still true, and the next attempt sends
+  // the turn a third time -- the exact duplicate inference the refusal exists to prevent.
+  for (const adapter of ["openai-chat", "openai-responses"]) {
+    test(`${adapter}: a second same-target 429 attempt cannot replay the refusal`, async () => {
+      const config = comboOverTargets(2);
+      for (const provider of Object.values(config.providers)) provider.adapter = adapter;
+      // Two attempts, not one: the first consumes the real rate limit, the second is the arm
+      // that must NOT fire once the refetch has been refused.
+      config.providers.t0!.retryOn429 = { attempts: 2 };
+      const authorizations: string[] = [];
+      globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+        authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (authorizations.length === 1) return new Response("rate limited", {
+          status: 429, headers: { "retry-after": "0" },
+        });
+        throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(responsesRequest("t0/model-t0"), config, logCtx);
+
+      expect(response.status).toBe(429);
+      expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+      // Exactly two: the rate-limited send and the refetch that was refused. A third entry is
+      // the regression, and the base allowance (3) can afford it, so this count is the proof.
+      expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
+      expect(totalSends(logCtx)).toBe(2);
+    });
+  }
+
   test("account and combo recovery retain the no-replay verdict after one body read", async () => {
     const response = await fetchWithResetRetry(async () => {
       throw Object.assign(new Error("reset"), { code: "ECONNRESET" });

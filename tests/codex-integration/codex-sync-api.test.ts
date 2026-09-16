@@ -10,7 +10,6 @@ import type { OrcaCodexHomeDiagnostic } from "../../src/codex/home";
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/owned-service-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
-import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-sync-api");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -18,13 +17,23 @@ const TEST_OCX_HOME = join(TEST_DIR, "ocx");
 const TEST_HOME = join(TEST_DIR, "home");
 const repoRoot = resolveRepoRoot();
 const COMPETING_OFF_REAP_MS = 5_000;
-const COMPETING_OFF_BOOT_MS = SPAWN_BUDGET_MS - COMPETING_OFF_REAP_MS;
-// Windows preparation performs real identity/admission preflight before discovery.
-// Reserve that work separately: CI observed 52.7s before the flip could even start.
-// The second process still keeps its original boot and reap limits.
-const COMPETING_OFF_PREPARATION_MS = process.platform === "win32"
-  ? 2 * COMPETING_OFF_BOOT_MS
-  : COMPETING_OFF_BOOT_MS;
+/**
+ * This case owns its numbers instead of deriving them from `SPAWN_BUDGET_MS`.
+ *
+ * It used to derive them, and three derivations multiplied a single edit: when that shared
+ * constant moved 45s -> 90s the outer bound here went 130s -> 265s, which nobody chose and no
+ * measurement asked for. A 265s case on a Windows shard that already runs 25 minutes leaves an
+ * unsafe margin against the 30-minute job timeout, so one hang would have been reported as a
+ * cancelled job rather than as a named Bun timeout.
+ *
+ * What the case costs in practice: five Windows shard logs put it at 3.7s, 3.8s, 4.1s, 7.6s
+ * and 9.4s. What the numbers below are for is the cold-start outlier the reserve was written
+ * against — 52.7s of real identity/admission preflight before the flip could even start. They
+ * are headroom for that, not a duration, and the child now reports its own preparation time on
+ * every green run so the next revision of these bounds can be measured rather than argued.
+ */
+const COMPETING_OFF_BOOT_MS = 40_000;
+const COMPETING_OFF_PREPARATION_MS = process.platform === "win32" ? 80_000 : COMPETING_OFF_BOOT_MS;
 const COMPETING_OFF_CHILD_MS = COMPETING_OFF_PREPARATION_MS + COMPETING_OFF_BOOT_MS + COMPETING_OFF_REAP_MS;
 const COMPETING_OFF_TEST_MS = COMPETING_OFF_CHILD_MS + COMPETING_OFF_REAP_MS;
 let prevCodexHome: string | undefined;
@@ -470,6 +479,7 @@ describe("GUI/CLI Codex sync backend", () => {
         '      const flipEnv = { ...process.env }; delete flipEnv.OCX_TEST_SERVICE_HOME_PROBE;',
         `      const flipBudgetMs = ${COMPETING_OFF_BOOT_MS};`,
         '      const remainingMs = Number(process.env.OCX_TEST_COMPETING_OFF_DEADLINE) - Date.now();',
+        `      console.log("[sync-race] preparation elapsedMs=" + (${COMPETING_OFF_CHILD_MS} - remainingMs));`,
         `      if (!Number.isFinite(remainingMs) || remainingMs < flipBudgetMs + ${COMPETING_OFF_REAP_MS}) {`,
         '        flipFailure = new Error("competing OFF flip not started: insufficient remaining budget " + remainingMs);',
         '        throw flipFailure;',
@@ -512,6 +522,10 @@ describe("GUI/CLI Codex sync backend", () => {
       }
       const line = child.stdout.trim().split("\n").filter(Boolean).pop() ?? "{}";
       expect(JSON.parse(line)).toMatchObject({ status: "skipped", skippedReason: "desired_disabled", ok: true });
+      // Surface the measured preparation window on green runs too: the Windows reserve above is
+      // sized on one 52.7s observation, and this is what makes the next sizing an observation.
+      const prepared = child.stdout.split("\n").find(entry => entry.includes("[sync-race] preparation"));
+      if (prepared) console.info(prepared.trim());
       // The stale ON snapshot wrote nothing: the fixture config is untouched.
       expect(readFileSync(join(raceCodexHome, "config.toml"), "utf8")).toBe(before);
     } finally {
