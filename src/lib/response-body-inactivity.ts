@@ -92,6 +92,7 @@ export function guardResponseBodyInactivity(
         arm();
       }
       try {
+        let emptyReads = 0;
         for (;;) {
           // A producer of immediately resolved empty chunks can starve timers.
           // The monotonic deadline check also bounds that microtask-only loop.
@@ -107,7 +108,18 @@ export function guardResponseBodyInactivity(
             controller.close();
             return;
           }
-          if (value.byteLength === 0) continue;
+          if (value.byteLength === 0) {
+            // Empty chunks are not progress, so the deadline keeps running. Hand the
+            // macrotask queue a turn periodically: otherwise a long configured timeout
+            // lets this microtask chain hold timers and unrelated requests.
+            emptyReads += 1;
+            if (emptyReads % 64 === 0) {
+              await new Promise<void>(resolve => { setTimeout(resolve, 0); });
+              if (settled) return;
+            }
+            continue;
+          }
+          emptyReads = 0;
           pause();
           controller.enqueue(value);
           return;

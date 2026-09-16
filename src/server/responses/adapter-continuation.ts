@@ -541,10 +541,13 @@ export function createAdapterContinuations(
         yield { type: "error", message: "Provider continuation does not support response parsing" };
       }
     } catch (error) {
-      if (options.abortSignal?.aborted || upstream.signal.aborted) {
-        yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
-      } else if (error instanceof ResponseBodyInactivityError) {
+      // Classify the thrown error before reading signal state: cancelling the stalled
+      // source can synchronously abort the shared signal, which would otherwise report
+      // this timeout as a client cancellation.
+      if (error instanceof ResponseBodyInactivityError) {
         yield { type: "error", message: "Provider continuation response body stalled before completing", status: 504 };
+      } else if (options.abortSignal?.aborted || upstream.signal.aborted) {
+        yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
       } else {
         yield { type: "error", message: `Provider continuation parse failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
       }

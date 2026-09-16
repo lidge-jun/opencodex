@@ -332,6 +332,24 @@ bodyCase("bounds a microtask-only producer of empty chunks", async clock => {
   assert.equal(clock.pending, 0);
 });
 
+// Real timers on purpose: the point is that queued macrotasks still run while the
+// guard discards empty chunks, which a faked clock cannot observe.
+test("a microtask-only empty producer still lets queued tasks run before the deadline", async () => {
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) { controller.enqueue(new Uint8Array()); },
+  }, { highWaterMark: 0 });
+  const guard = guardResponseBodyInactivity(new Response(source), undefined, 5_000);
+  const started = performance.now();
+  let queuedTaskAt: number | undefined;
+  setTimeout(() => { queuedTaskAt = performance.now() - started; }, 0);
+  const failure = guard.response.text().then(() => undefined, (error: unknown) => error);
+  await sleep(50);
+  expect(queuedTaskAt).toBeDefined();
+  expect(queuedTaskAt!).toBeLessThan(1_000);
+  guard.dispose();
+  await failure;
+});
+
 bodyCase("consumer cancellation retains its reason and releases the reader", async clock => {
   const f = bodyFixture(clock);
   const guard = f.guard();

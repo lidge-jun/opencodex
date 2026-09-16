@@ -363,6 +363,39 @@ describe("server terminal guard integration", () => {
     expect(sends).toBe(2);
   });
 
+  test("a stalled continuation body reports 504 even when cancelling it aborts the client signal", async () => {
+    // Cancelling the stalled source can disconnect the client in the same tick. The
+    // classifier has to read the thrown error first, or this timeout is reported as a
+    // client cancellation and the caller loses the upstream stall signal.
+    const stallConfig = { ...config, stallTimeoutSec: 1 } as unknown as OcxConfig;
+    const abort = new AbortController();
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 1) return anthropicSse(firstTurn);
+      const stalled = new ReadableStream<Uint8Array>({
+        cancel() { abort.abort(new DOMException("client disconnected", "AbortError")); },
+      });
+      return new Response(stalled, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8",
+        input: "请检查这个问题并修复代码",
+        stream: true,
+        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+      }),
+    }), stallConfig, { model: "", provider: "" }, { abortSignal: abort.signal });
+
+    const text = await response.text();
+    expect(sends).toBe(2);
+    expect(text).toContain("Provider continuation response body stalled before completing");
+    expect(text).not.toContain("client closed request during terminal continuation");
+  });
+
   test("terminal-guard 429 wait longer than the stall budget still succeeds (heartbeats)", async () => {
     const stallConfig = {
       ...config,
