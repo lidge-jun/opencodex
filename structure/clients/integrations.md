@@ -38,6 +38,11 @@ Status and mutation must use the same classifier. A special case added only to a
 would be misleading because refresh or disable could still reject the same file; a special case
 added only to a writer would let a mutation bypass the state users saw.
 
+Gajae export and managed refresh share the loopback-only provider builder. It writes the
+non-secret `LOOPBACK_API_KEY_PLACEHOLDER` as `apiKey`, so the client can activate the provider
+without a separately populated environment variable. The managed contribution owns only the
+provider block in `models.yml`; default presets and proxy routing in `config.yml` remain user-owned.
+
 TOML temporal scalars cannot survive the JSON-cloned merge representation with their types
 intact. The common parser refuses documents containing them before either status or mutation
 proceeds, including nested arrays and inline tables. Quoted date strings remain supported.
