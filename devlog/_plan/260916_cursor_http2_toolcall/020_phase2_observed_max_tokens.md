@@ -32,6 +32,9 @@ Process-local map in `discovery.ts`; checkpoint records a positive
 recorded then heuristic. `cursorRequestSizeContext` is unchanged except
 the comment — it already calls `inferCursorContextWindow`.
 
+https://github.com/lidge-jun/opencodex/pull/4816
+`cursor/l1-text-toolcall-quarantine` ← `cursor/l2-observed-max-tokens` (`8763dee2d2`).
+
 ## Accept
 
 - Checkpoint with `maxTokens: 32000` makes a 20-token request classify as 429
