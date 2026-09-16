@@ -66,6 +66,11 @@ Under `$OPENCODEX_HOME` (`~/.opencodex`):
 
 The GUI page is hash-routable (`#security`, `#security/campaigns`, …) and is **not** a frozen sidebar NAV row. CLI `ocx security` talks to the service/database directly (local-transport), not over HTTP.
 
+Key files:
+- Server management API routes: `src/server/management/security-routes.ts`
+- CLI command: `src/cli/security.ts` (`ocx security`, alias `sec`)
+- GUI page: `gui/src/pages/Security.tsx` (`#security`)
+
 ## 5. Safe demo
 
 The seeded local lab (`lab.local`, `app.lab.local`, exclusion `admin.lab.local`) never opens a network socket. Recon reads in-process fixtures. Expired authorization, unknown host, excluded host, R2-without-approval, and R3 are first-class deny paths covered by tests.

@@ -84,7 +84,7 @@ export class SocialPublishingService {
       return fake;
     }
 
-    if (this.env.NODE_ENV === "test" || this.env.BUN_TEST || inst.base_url.includes(".local") || inst.base_url.includes("localhost")) {
+    if (this.env.NODE_ENV === "test" || Boolean(this.env.BUN_TEST) || this.env.SOCIAL_PROVIDER_MODE === "fake") {
       const fake = new FakeSocialPublishingProvider();
       this.clients.set(instanceId, fake);
       return fake;
@@ -254,26 +254,19 @@ export class SocialPublishingService {
     };
     this.db.upsertPublication(updated);
 
-    // If content changed, invalidate existing approvals
-    const contentChanged = updates.master_caption !== undefined || updates.master_title !== undefined;
-    if (contentChanged) {
-      const renditions = this.db.listRenditions(id);
-      for (const r of renditions) {
-        if (r.approval_status === "approved") {
-          r.approval_status = "pending";
-          r.delivery_status = "draft";
-          // Recompute hash
-          r.content_hash = computeContentHash({
-            caption: r.caption,
-            title: r.title,
-            description: r.description,
-            hashtags: r.hashtags,
-            platform: r.platform,
-            accountRef: r.account_id,
-            scheduledAt: updated.scheduled_at,
-          });
-          this.db.upsertRendition(r);
-        }
+    // If content or schedule changed, invalidate existing approvals and re-derive renditions
+    const materialChange =
+      updates.master_caption !== undefined ||
+      updates.master_title !== undefined ||
+      updates.master_description !== undefined ||
+      updates.master_tags !== undefined ||
+      updates.scheduled_at !== undefined;
+
+    if (materialChange) {
+      const existingRenditions = this.db.listRenditions(id);
+      if (existingRenditions.length > 0) {
+        const accountIds = existingRenditions.map(r => r.account_id);
+        this.generateRenditionsForPublication(id, accountIds);
       }
       updated.status = "draft";
       this.db.upsertPublication(updated);
@@ -547,8 +540,9 @@ export class SocialPublishingService {
 
       // 4. Update local state
       for (const r of renditions) {
+        const acc = accounts.find(a => a.id === r.account_id);
         r.openpost_publication_ref = created.publication_ref;
-        r.openpost_rendition_ref = created.rendition_refs[r.account_id] ?? null;
+        r.openpost_rendition_ref = acc ? created.rendition_refs[acc.openpost_account_ref] ?? null : null;
         r.delivery_status = deliveryResult.status;
         this.db.upsertRendition(r);
       }
@@ -572,12 +566,24 @@ export class SocialPublishingService {
         remote_ref: created.publication_ref,
       });
     } catch (err: unknown) {
+      const isRetryable = err && typeof err === "object" && "retryable" in err ? Boolean((err as Record<string, unknown>).retryable) : false;
+      const errClass = err instanceof Error ? err.name : "UnknownError";
+      const errCode = err && typeof err === "object" && "errorCode" in err ? String((err as Record<string, unknown>).errorCode) : null;
+
       for (const job of jobs) {
-        job.status = "failed_retryable";
         job.attempt_count += 1;
+        job.last_error_class = errClass;
+        job.last_error_code = errCode;
         job.last_error_message = err instanceof Error ? err.message : String(err);
-        const backoffSec = RETRY_BACKOFF_SECONDS[Math.min(job.attempt_count - 1, RETRY_BACKOFF_SECONDS.length - 1)] ?? 60;
-        job.next_attempt_at = new Date(Date.now() + backoffSec * 1000).toISOString();
+
+        if (isRetryable && job.attempt_count < job.max_attempts) {
+          job.status = "failed_retryable";
+          const backoffSec = RETRY_BACKOFF_SECONDS[Math.min(job.attempt_count - 1, RETRY_BACKOFF_SECONDS.length - 1)] ?? 60;
+          job.next_attempt_at = new Date(Date.now() + backoffSec * 1000).toISOString();
+        } else {
+          job.status = "failed_final";
+          job.next_attempt_at = null;
+        }
         this.db.upsertDeliveryJob(job);
       }
 

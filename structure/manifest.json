@@ -389,6 +389,9 @@
       "title": "Universal Agent Skill Control Plane",
       "scope": "Universal skill registry, visual marketplace, static scanning, cross-agent deployment, remote sync, and drift governance.",
       "documents": [
+        "gui/src/pages/Skills.tsx",
+        "src/cli/skill.ts",
+        "src/server/management/skill-routes.ts",
         "src/skills/"
       ]
     },
@@ -398,6 +401,9 @@
       "title": "Authorized Security Agent Control Plane",
       "scope": "Authorization-first scope registry, policy engine, human-approval gate, fixture recon, validation, evidence, and audit.",
       "documents": [
+        "gui/src/pages/Security.tsx",
+        "src/cli/security.ts",
+        "src/server/management/security-routes.ts",
         "src/security/"
       ]
     },
@@ -407,6 +413,9 @@
       "title": "Provider Access Control Plane",
       "scope": "Encrypted credential lifecycle, OAuth session gateway, health-checked token pool, and policy-governed leases.",
       "documents": [
+        "gui/src/pages/Credentials.tsx",
+        "src/cli/credentials.ts",
+        "src/server/management/credential-routes.ts",
         "src/credentials/"
       ]
     },
@@ -416,6 +425,9 @@
       "title": "Social Publishing Control Plane",
       "scope": "External OpenPost instance integration, cross-platform publication orchestration, rendition planning, approval gates, and durable scheduling.",
       "documents": [
+        "gui/src/pages/Social.tsx",
+        "src/cli/social.ts",
+        "src/server/management/social-routes.ts",
         "src/social/"
       ]
     }

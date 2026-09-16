@@ -61,3 +61,8 @@ Under `$OPENCODEX_HOME` (`~/.opencodex`):
 
 Each managed target directory carries a `.pao-managed.json` receipt to distinguish managed assets from unmanaged user files.
 
+Key files:
+- Server management API routes: `src/server/management/skill-routes.ts`
+- CLI command: `src/cli/skill.ts` (`ocx skill`, alias `skills`)
+- GUI page: `gui/src/pages/Skills.tsx` (`#skills`)
+

@@ -1,4 +1,29 @@
-import { sha256 } from "../skills/hasher";
+import { createHash } from "node:crypto";
+
+export function sha256(content: string | Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, canonicalize(v)]),
+    );
+  }
+  return value;
+}
+
+function normalizeSchedule(raw?: string | null): string | null {
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(raw).trim();
+  }
+  return parsed.toISOString();
+}
 
 export interface ContentHashInput {
   caption?: string | null;
@@ -27,8 +52,8 @@ export function computeContentHash(input: ContentHashInput): string {
     mediaSha256s: [...(input.mediaSha256s ?? [])],
     platform: input.platform.toLowerCase().trim(),
     accountRef: input.accountRef.trim(),
-    providerSettings: input.providerSettings ?? {},
-    scheduledAt: input.scheduledAt ? new Date(input.scheduledAt).toISOString() : null,
+    providerSettings: canonicalize(input.providerSettings ?? {}),
+    scheduledAt: normalizeSchedule(input.scheduledAt),
     policyVersion: input.policyVersion ?? "v1",
   };
   return sha256(JSON.stringify(normalized));

@@ -172,7 +172,10 @@ export function evaluateSocialPolicy(ctx: PolicyEvaluationContext): SocialPolicy
   let severity: SocialPolicyEvaluation["severity"] = "info";
 
   if (hasBlocking) {
-    if (hasApprovalPending && ruleResults.filter(r => !r.passed).length === 1) {
+    const otherBlockingFailures = ruleResults.filter(
+      r => !r.passed && r.severity === "blocking" && r.rule_id !== "approval.human_required",
+    ).length;
+    if (hasApprovalPending && otherBlockingFailures === 0) {
       result = "approval_required";
       severity = "warning";
     } else {

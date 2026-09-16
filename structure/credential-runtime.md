@@ -69,6 +69,11 @@ Optional `PAO_CREDENTIAL_DB_PATH` isolates the database (tests, singleton). Mast
 
 The GUI page is hash-routable and is **not** a frozen sidebar NAV row. CLI `ocx credentials` (alias `creds`) talks to the service/database directly (local-transport), not over HTTP.
 
+Key files:
+- Server management API routes: `src/server/management/credential-routes.ts`
+- CLI command: `src/cli/credentials.ts` (`ocx credentials`, alias `creds`)
+- GUI page: `gui/src/pages/Credentials.tsx` (`#credentials`)
+
 Management API prefix: `/api/credentials`.
 
 ## 5. Safe demo

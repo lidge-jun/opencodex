@@ -19,7 +19,7 @@ docker compose -f docker-compose.openpost.yml up -d
 
 Verify service health:
 ```bash
-curl http://localhost:8080/api/health
+curl http://localhost:8080/api/v1/health
 ```
 
 Register instance in Pao-hubPro:

@@ -48,6 +48,17 @@ Under `$OPENCODEX_HOME` (`~/.opencodex`):
 - `social.sqlite`: instances, accounts, publications, assets, renditions, policy evaluations, approvals, delivery jobs, analytics snapshots, and audit events.
 - Optional `PAO_SOCIAL_DB_PATH` overrides the database path for isolated test runs.
 
+Environment:
+- `SOCIAL_PUBLISHING_ENABLED`: feature flag, default off.
+- `OPENPOST_BASE_URL`: OpenPost instance URL. Default `http://localhost:8080` is loopback-only; a remote instance must use `https://`.
+- `OPENPOST_API_TOKEN`: OpenPost API token. It is never persisted in `social.sqlite`; only `secret_ref` is stored.
+- `OPENPOST_TRANSPORT`: selects the HTTP or MCP transport.
+- `PAO_SOCIAL_DB_PATH`: optional database path override.
+
+Key files:
+- Server management API routes: `src/server/management/social-routes.ts`
+- CLI command: `src/cli/social.ts` (`ocx social`, alias `openpost`)
+- GUI page: `gui/src/pages/Social.tsx` (`#social`)
+
 Management API prefix: `/api/social/*`.
-CLI command: `ocx social` (alias `openpost`).
 

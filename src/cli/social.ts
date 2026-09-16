@@ -104,6 +104,25 @@ Options:
           }
           return 0;
         }
+        if (action === "register") {
+          const name = flagValue(cleanArgs, "--name") ?? "OpenPost Instance";
+          const baseUrl = flagValue(cleanArgs, "--base-url") ?? flagValue(cleanArgs, "--url");
+          if (!baseUrl) {
+            console.error("Usage: ocx social instances register --name <n> --base-url <url> [--secret-ref <ref>] [--id <id>]");
+            return 1;
+          }
+          const id = flagValue(cleanArgs, "--id") ?? `inst_${Date.now()}`;
+          const secretRef = flagValue(cleanArgs, "--secret-ref") ?? `secret://openpost/${id}/token`;
+          const inst = await service.registerInstance({
+            id,
+            name,
+            base_url: baseUrl,
+            secret_ref: secretRef,
+            actor: "cli",
+          });
+          printJson({ instance: inst });
+          return 0;
+        }
         if (action === "test") {
           const id = cleanArgs[2] ?? "main";
           const health = await service.testInstance(id);

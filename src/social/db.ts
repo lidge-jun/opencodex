@@ -98,7 +98,8 @@ export class SocialDatabase {
         enabled                INTEGER NOT NULL DEFAULT 1,
         created_at             TEXT NOT NULL,
         updated_at             TEXT NOT NULL,
-        UNIQUE(openpost_instance_id, openpost_account_ref)
+        UNIQUE(openpost_instance_id, openpost_account_ref),
+        FOREIGN KEY (openpost_instance_id) REFERENCES openpost_instances(id) ON DELETE CASCADE
       );
     `);
 
@@ -138,7 +139,8 @@ export class SocialDatabase {
         duration_ms       INTEGER NULL,
         provenance_json   TEXT NOT NULL,
         created_at        TEXT NOT NULL,
-        UNIQUE(publication_id, local_asset_id)
+        UNIQUE(publication_id, local_asset_id),
+        FOREIGN KEY (publication_id) REFERENCES social_publications(id) ON DELETE CASCADE
       );
     `);
 
@@ -164,7 +166,8 @@ export class SocialDatabase {
         content_hash             TEXT NOT NULL,
         created_at               TEXT NOT NULL,
         updated_at               TEXT NOT NULL,
-        UNIQUE(publication_id, account_id)
+        UNIQUE(publication_id, account_id),
+        FOREIGN KEY (publication_id) REFERENCES social_publications(id) ON DELETE CASCADE
       );
     `);
 
@@ -215,7 +218,8 @@ export class SocialDatabase {
         last_error_message    TEXT NULL,
         remote_operation_ref  TEXT NULL,
         created_at            TEXT NOT NULL,
-        updated_at            TEXT NOT NULL
+        updated_at            TEXT NOT NULL,
+        FOREIGN KEY (publication_id) REFERENCES social_publications(id) ON DELETE CASCADE
       );
     `);
 
@@ -258,6 +262,14 @@ export class SocialDatabase {
         after_hash            TEXT NULL,
         metadata_json         TEXT NULL
       );
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_social_jobs_due ON social_delivery_jobs(status, next_attempt_at);
+      CREATE INDEX IF NOT EXISTS idx_social_jobs_pub ON social_delivery_jobs(publication_id);
+      CREATE INDEX IF NOT EXISTS idx_social_renditions_pub ON social_renditions(publication_id);
+      CREATE INDEX IF NOT EXISTS idx_social_pubs_status ON social_publications(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_social_audit_ts ON social_audit_events(timestamp DESC);
     `);
   }
 
@@ -542,6 +554,7 @@ export class SocialDatabase {
         scheduled_at, content_hash, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(publication_id, account_id) DO UPDATE SET
+        id=excluded.id,
         platform=excluded.platform,
         format=excluded.format,
         title=excluded.title,
@@ -734,8 +747,9 @@ export class SocialDatabase {
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(idempotency_key) DO UPDATE SET
+        id=excluded.id,
         status=excluded.status,
-        attempt_count=excluded.attempt_count,
+        attempt_count=max(social_delivery_jobs.attempt_count, excluded.attempt_count),
         next_attempt_at=excluded.next_attempt_at,
         locked_at=excluded.locked_at,
         locked_by=excluded.locked_by,

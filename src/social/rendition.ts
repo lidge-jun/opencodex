@@ -20,12 +20,14 @@ export function generateRenditions(input: GenerateRenditionsInput): SocialRendit
   for (const account of targetAccounts) {
     const caps = account.capabilities;
     const maxLen = caps.text?.max_length ?? 280;
+    const title = caps.text.title ? (publication.master_title ?? null) : null;
+    const titleCost = title ? title.length + 1 : 0;
+    const captionBudget = Math.max(0, maxLen - titleCost);
 
-    // Adapt master caption to platform length
+    // Adapt master caption to platform length budget
     let caption = publication.master_caption ?? "";
-    if (caption.length > maxLen) {
-      // Truncate gracefully if needed
-      caption = caption.slice(0, maxLen - 3) + "…";
+    if (caption.length > captionBudget) {
+      caption = captionBudget > 1 ? caption.slice(0, captionBudget - 1) + "…" : caption.slice(0, captionBudget);
     }
 
     // Format hashtags
@@ -40,8 +42,6 @@ export function generateRenditions(input: GenerateRenditionsInput): SocialRendit
     } else if (hasImage && caps.media.image.allowed) {
       format = assets.length > 1 ? "multi_image" : "single_image";
     }
-
-    const title = caps.text.title ? (publication.master_title ?? null) : null;
     const description = caps.text.description ? (publication.master_description ?? null) : null;
 
     const contentHash = computeContentHash({
