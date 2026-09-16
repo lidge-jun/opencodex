@@ -10,7 +10,7 @@ import { getAccountSet } from "../oauth/store";
 import type { XaiSearchOptions } from "./xai-executor";
 
 /** Every backend id the config union admits. New ids are explicit-only and inert until their executor ships. */
-export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "exa";
+export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "exa" | "openai-apikey";
 
 /**
  * Precedence: explicit config wins; unset defaults to "openai" (ChatGPT forward path). The
@@ -18,7 +18,9 @@ export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "ex
  * it from credential availability caused the sidecar to send incompatible models (e.g. gpt-5.6-luna)
  * to the Anthropic API.
  * The 2188 follow-up ids (xai/gemini/exa) resolve to themselves the same explicit-only way; their
- * planWebSearch arms stay fail-closed until each executor layer lands.
+ * planWebSearch arms stay fail-closed until each executor layer lands. openai-apikey is the
+ * explicit-only, key-auth twin of the ChatGPT forward "openai" backend — resolved to itself like
+ * the other explicit-only ids (no auto-selection from key availability).
  *
  * Lives here rather than in `index.ts` for the reason at the top of this file: the passthrough
  * bridge has to answer "which backend was this global sidecar block configured for?" without
@@ -27,8 +29,28 @@ export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "ex
 export function resolveSidecarBackend(
   explicit: WebSearchBackendId | undefined,
 ): WebSearchBackendId {
-  if (explicit === "anthropic" || explicit === "xai" || explicit === "gemini" || explicit === "exa") return explicit;
+  if (explicit === "anthropic" || explicit === "xai" || explicit === "gemini" || explicit === "exa"
+    || explicit === "openai-apikey") return explicit;
   return "openai";
+}
+
+/**
+ * The OpenAI API key the "openai-apikey" backend authenticates with: the operator's explicit
+ * `webSearchSidecar.openaiApiKey`, falling back to the process `OPENAI_API_KEY`. It NEVER borrows
+ * a persisted ChatGPT login (this backend is the key-auth twin of the forward "openai" path, and
+ * borrowing a stored credential here would silently spend a login the operator did not name).
+ * Empty/whitespace resolves to undefined so the caller fails closed exactly like `exaApiKey`.
+ */
+export function resolveOpenAiApiKeyCredential(
+  config: OcxConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const explicit = config.webSearchSidecar?.openaiApiKey;
+  const fromEnv = env.OPENAI_API_KEY;
+  const candidate = typeof explicit === "string" && explicit.trim() !== ""
+    ? explicit
+    : (typeof fromEnv === "string" && fromEnv.trim() !== "" ? fromEnv : "");
+  return candidate === "" ? undefined : candidate;
 }
 
 /** A configured anthropic-adapter OAuth provider whose ACTIVE stored account is usable (not needs-reauth). */

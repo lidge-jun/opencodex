@@ -1293,7 +1293,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // unknown literal would persist a backend the vision resolver reads as
       // unset (review F1's failure mode).
       const allowedBackends = field === "webSearchSidecar"
-        ? ["openai", "anthropic", "xai", "gemini", "exa"]
+        ? ["openai", "anthropic", "xai", "gemini", "exa", "openai-apikey"]
         : ["openai", "anthropic", "routed"];
       if (section.backend !== undefined && section.backend !== null
         && !allowedBackends.includes(section.backend as string)) {
@@ -1370,7 +1370,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       // The per-field validation above guarantees vision only ever carries the two-member
       // union; the cast is the loop's shared-shape compromise, not a wider write path.
-      const requested = section as { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string };
+      const requested = section as { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | "openai-apikey" | null; model?: string };
       const override = { ...next[field] } as NonNullable<OcxClaudeCodeConfig[typeof field]>;
       if (requested.backend === null) delete override.backend;
       else if (requested.backend !== undefined) override.backend = requested.backend as never;

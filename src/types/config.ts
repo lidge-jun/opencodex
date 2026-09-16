@@ -136,7 +136,7 @@ export interface OcxClaudeCodeConfig {
    */
   subagentEffort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
-  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string };
+  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | "openai-apikey"; model?: string };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
   visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string };
   /** Persisted Claude Desktop four-family routing profile. */
@@ -1247,11 +1247,13 @@ export interface OcxWebSearchSidecarConfig {
    * model authenticated by the STORED anthropic OAuth credential. "xai" runs Grok hosted web_search
    * and optional x_search through stored Grok OAuth. "gemini" (google_search grounding via the
    * Antigravity CCA transport) and "exa" (non-LLM search JSON via an operator key) are explicit-only
-   * and stay inactive until their executors ship. Unset ALWAYS resolves to "openai"; no backend is ever
-   * auto-selected from credential availability (that once sent incompatible models to the
-   * Anthropic API — see resolveSidecarBackend).
+   * and stay inactive until their executors ship. "openai-apikey" runs OpenAI's hosted web_search via
+   * the Responses API with an operator-supplied `openaiApiKey` — the key-auth twin of the ChatGPT
+   * forward "openai" backend, for deployments without a ChatGPT login but with a plain `sk-…` key.
+   * Unset ALWAYS resolves to "openai"; no backend is ever auto-selected from credential
+   * availability (that once sent incompatible models to the Anthropic API — see resolveSidecarBackend).
    */
-  backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa";
+  backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | "openai-apikey";
   /** Sidecar model that runs the real server-side web_search (must be a native ChatGPT model). */
   model?: string;
   /**
@@ -1259,6 +1261,15 @@ export interface OcxWebSearchSidecarConfig {
    * and src/lib/redact.ts strips it from any logged structure or error string.
    */
   exaApiKey?: string;
+  /**
+   * Operator-supplied OpenAI API key for the "openai-apikey" backend (the key-auth twin of the
+   * ChatGPT forward "openai" backend). Management GET responses never echo it, and
+   * src/lib/redact.ts strips it from any logged structure or error string. When unset, the
+   * process `OPENAI_API_KEY` is the fallback (resolved by resolveOpenAiApiKeyCredential). The
+   * backend always posts to `https://api.openai.com/v1/responses` (the endpoint that hosts the
+   * web_search tool for a standard `sk-…` key).
+   */
+  openaiApiKey?: string;
   /**
    * Opt-in X (Twitter) search for the xai backend: adds the hosted x_search tool next to
    * web_search. Limits are doc-validated at the management layer AND in the executor:

@@ -58,7 +58,7 @@ import type {
   ProviderWebSearchBridgeBackend,
 } from "../types";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
-import { runWebSearch, type SidecarOutcome, type SidecarSettings } from "./executor";
+import { resolveSidecarReasoning, runWebSearch, type SidecarOutcome, type SidecarSettings } from "./executor";
 import { buildWebSearchTool, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { safeWebSearchSources } from "./sources";
 import { runOllamaWebSearch } from "./ollama-executor";
@@ -840,7 +840,7 @@ export function sidecarSettingsForBridge(
   const sidecar = context.sidecar ?? {};
   return {
     model: modelForBridgeBackend(backend, sidecar),
-    reasoning: sidecar.reasoning ?? DEFAULT_BRIDGE_REASONING,
+    reasoning: resolveSidecarReasoning(sidecar.reasoning, DEFAULT_BRIDGE_REASONING),
     timeoutMs: plan.timeoutMs,
     describeImages: context.describeImages === true,
   };

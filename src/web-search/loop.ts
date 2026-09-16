@@ -10,6 +10,7 @@ import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
+import { runOpenAiApiKeyWebSearch } from "./openai-apikey-executor";
 import type { WebSearchBackendId } from "./index";
 import { clearableDeadline } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
@@ -289,6 +290,8 @@ export interface WebSearchLoopDeps {
   geminiSidecar?: { providerName: string; provider: OcxProviderConfig };
   /** Required for the exa backend: the operator key, read from config at plan unpack (L9). */
   exaApiKey?: string;
+  /** Required for the openai-apikey backend: the operator's OpenAI API key, read from config at plan unpack. */
+  openaiApiKey?: string;
   /** Opt-in x_search options for the xai backend. */
   xaiSearchOptions?: XaiSearchOptions;
   hostedTool: Record<string, unknown>;
@@ -744,6 +747,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             outcome = deps.exaApiKey
               ? await runExaWebSearch(query, deps.exaApiKey, settings, signal)
               : { text: "", sources: [], error: "exa backend selected without an exaApiKey" };
+          } else if (backend === "openai-apikey") {
+            // Key-auth twin of the forward "openai" lane: the key comes from the loop deps, never the
+            // plan. No ChatGPT forward headers are involved, so no Codex/OpenAI pool outcome recorder
+            // (F5 parity with the anthropic/xai/gemini lanes — wsPlan has no forwardSidecar here).
+            // Fail closed on a missing key.
+            outcome = deps.openaiApiKey
+              ? await runOpenAiApiKeyWebSearch(query, deps.openaiApiKey, hostedTool, settings, signal)
+              : { text: "", sources: [], error: "openai-apikey backend selected without a resolved OpenAI API key" };
           } else {
             outcome = await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome);
           }

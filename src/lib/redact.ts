@@ -7,7 +7,7 @@ export const REDACTED_SECRET = "[REDACTED]";
  * credentials over an unsafe channel (e.g. plaintext non-loopback HTTP) rather than
  * re-deriving a narrower local list.
  */
-export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
+export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|openai[-_]?api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body
@@ -40,7 +40,7 @@ export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cook
 // Every letter position also accepts \u0001, the placeholder the fold emits for
 // an unresolved HTML named reference: `author&ii;zation` is the label with one
 // character we cannot name, and that is still the label.
-const CREDENTIAL_HEADER_LABEL_RAW = "x-api-key|x-goog-api-key|x-amz-security-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
+const CREDENTIAL_HEADER_LABEL_RAW = "x-api-key|x-goog-api-key|x-amz-security-token|api[_-]?key|apiKey|openai[_-]?api[_-]?key|openaiApiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
 
 const CREDENTIAL_HEADER_LABEL = CREDENTIAL_HEADER_LABEL_RAW
   .replace(/(?<![\[\\])([A-Za-z])(?![\]\-])/g, "[$1\u0001]");

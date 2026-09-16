@@ -18,6 +18,7 @@
  */
 import type { OcxConfig } from "../types";
 import { AUTH_SLOT_MODELS, type SidecarAuthState } from "../sidecar/auth";
+import { resolveOpenAiApiKeyCredential } from "./sidecar-providers";
 import type { SidecarCandidate } from "../sidecar/candidates";
 import { getAccountSet } from "../oauth/store";
 import type { WebSearchBackendId } from "./index";
@@ -85,6 +86,17 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
     // match, so the GUI's model list stays untouched by this backend.
     isActive: (_auth, config) => !!config.webSearchSidecar?.exaApiKey,
     eligibleModel: () => false,
+  },
+  {
+    backend: "openai-apikey",
+    // Probe = operator key resolvable (config field or OPENAI_API_KEY env).
+    isActive: (_auth, config) => resolveOpenAiApiKeyCredential(config) !== undefined,
+    // The executor POSTs the model string VERBATIM to api.openai.com, so only a
+    // bare native OpenAI slug is runnable — same stance as the "openai" lane
+    // (no namespaced ids, which this fixed public endpoint cannot route).
+    eligibleModel: candidate => candidate.provider === "openai"
+      && (candidate.native === true || candidate.authSlot === true)
+      && !candidate.id.includes("/"),
   },
 ];
 

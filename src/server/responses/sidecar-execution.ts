@@ -5,7 +5,7 @@ import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { formatErrorResponse } from "../../bridge";
-import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
+import { planWebSearch, buildWebSearchTool, runWithWebSearch, resolveOpenAiApiKeyCredential } from "../../web-search";
 import {
   planImageBridge,
   planVideoBridge,
@@ -420,6 +420,9 @@ export async function executeResponsesSidecars(
       xaiSearchOptions: wsPlan.xaiSearchOptions,
       // The exa key never rides the plan: read it from config at unpack time (L9).
       ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+      // Same invariant for the openai-apikey lane: the key never rides the plan, and resolving it
+      // here (not in planWebSearch) keeps the env fallback (OPENAI_API_KEY) current per request.
+      ...(wsPlan.openaiApiKeyConfigured ? { openaiApiKey: resolveOpenAiApiKeyCredential(config) } : {}),
       hostedTool: wsPlan.hostedTool,
       selectedForwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
       settings: wsPlan.settings,

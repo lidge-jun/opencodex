@@ -17,7 +17,7 @@ import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "../types";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runExaWebSearch } from "./exa-executor";
-import type { SidecarOutcome, SidecarSettings } from "./executor";
+import { resolveSidecarReasoning, type SidecarOutcome, type SidecarSettings } from "./executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import {
   findAnthropicSidecarProvider,
@@ -94,7 +94,11 @@ export function resolveAlphaSearchSidecar(config: OcxConfig): AlphaSearchSidecar
   // for alpha/search" — the one reading under which a disabled backend still spends money.
   if (sidecar?.enabled === false) return { status: "unconfigured" };
   const backend = resolveSidecarBackend(sidecar?.backend);
-  if (backend === "openai") return { status: "unconfigured" };
+  // Both the ChatGPT forward path ("openai") and the operator API-key path ("openai-apikey")
+  // cannot serve /v1/alpha/search — this surface only answers with a stored/secondary OAuth or
+  // Exa credential. See NO_FORWARD_PROVIDER_MESSAGE ("OpenAI API-key providers cannot serve
+  // /v1/alpha/search"). Returning "unconfigured" yields that message, matching the contract.
+  if (backend === "openai" || backend === "openai-apikey") return { status: "unconfigured" };
   switch (backend) {
     case "anthropic": {
       const found = findAnthropicSidecarProvider(config);
@@ -170,7 +174,7 @@ function sidecarSettingsForAlphaSearch(
   const sidecar = config.webSearchSidecar;
   return {
     model: modelForAlphaSearchBackend(backend, sidecar),
-    reasoning: sidecar?.reasoning ?? DEFAULT_REASONING,
+    reasoning: resolveSidecarReasoning(sidecar?.reasoning, DEFAULT_REASONING),
     timeoutMs: config.search?.timeoutMs ?? SEARCH_UPSTREAM_TIMEOUT_MS,
   };
 }

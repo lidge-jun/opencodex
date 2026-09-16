@@ -706,6 +706,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        // Reasoning effort echoed so a client can read the current toggle. It is NOT a secret
+        // (unlike exaApiKey/openaiApiKey, which never leave), so it rides the GET/PUT payloads.
+        // Unset is a distinct "on (lane default)" state from "off": surface only when present.
+        reasoning: ws.reasoning,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
@@ -726,7 +730,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
+      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; openaiApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
@@ -736,10 +740,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         timeoutMs?: unknown;
       };
     };
-    const WEB_SEARCH_BACKENDS_UNION = ["openai", "anthropic", "xai", "gemini", "exa"] as const;
+    const WEB_SEARCH_BACKENDS_UNION = ["openai", "anthropic", "xai", "gemini", "exa", "openai-apikey"] as const;
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && !WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
-      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, or null" }, 400);
+      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, openai-apikey, or null" }, 400);
     }
     if (body.webSearch?.model !== undefined && typeof body.webSearch.model !== "string") {
       return jsonResponse({ error: "webSearch.model must be a string" }, 400);
@@ -845,12 +849,24 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
         webSearchCandidate.backend = body.webSearch.backend as typeof WEB_SEARCH_BACKENDS_UNION[number];
       }
-      if (typeof body.webSearch.reasoning === "string") webSearchCandidate.reasoning = body.webSearch.reasoning;
+      // Reasoning effort toggle: a string sets, an empty string clears (back to the lane
+      // default). The reserved value "off" passes through — resolveSidecarReasoning collapses
+      // it at plan time so the executor omits the `reasoning` field entirely.
+      if (typeof body.webSearch.reasoning === "string") {
+        if (body.webSearch.reasoning === "") delete webSearchCandidate.reasoning;
+        else webSearchCandidate.reasoning = body.webSearch.reasoning;
+      }
       // Operator secret for the exa backend: string sets, empty string clears. The GET
       // payload deliberately never carries it and redact.ts strips the key from logs.
       if (typeof body.webSearch.exaApiKey === "string") {
         if (body.webSearch.exaApiKey === "") delete webSearchCandidate.exaApiKey;
         else webSearchCandidate.exaApiKey = body.webSearch.exaApiKey;
+      }
+      // Operator secret for the openai-apikey backend: string sets, empty string clears. Same
+      // invariants as exaApiKey — the GET payload never carries it and redact.ts strips the key.
+      if (typeof body.webSearch.openaiApiKey === "string") {
+        if (body.webSearch.openaiApiKey === "") delete webSearchCandidate.openaiApiKey;
+        else webSearchCandidate.openaiApiKey = body.webSearch.openaiApiKey;
       }
       // Opt-in x_search block (L7): null clears; an object is doc-validated before persisting.
       if (body.webSearch.xSearch === null) delete webSearchCandidate.xSearch;
@@ -945,6 +961,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
+        // Reasoning effort echoed so a client can read the current toggle. It is NOT a secret
+        // (unlike exaApiKey/openaiApiKey, which never leave), so it rides the GET/PUT payloads.
+        // Unset is a distinct "on (lane default)" state from "off": surface only when present.
+        reasoning: ws.reasoning,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },

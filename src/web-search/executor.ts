@@ -11,7 +11,14 @@ import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
 
 export interface SidecarSettings {
   model: string;
-  reasoning: string;
+  /**
+   * Reasoning effort to send upstream, or `undefined` to omit the `reasoning` field from the
+   * request entirely. `resolveSidecarReasoning` produces it from config: an unset value keeps
+   * the lane default, while `"off"` (or an empty string) yields `undefined` because
+   * non-reasoning models (e.g. gpt-4.1-mini) reject the field with a 400 — the operator turns
+   * it off per backend. Executors omit the field whenever this is undefined.
+   */
+  reasoning?: string;
   timeoutMs: number;
   /** Effective Desktop authless compatibility does not grant auxiliary model use. */
   reserveCompatibility?: boolean;
@@ -21,6 +28,27 @@ export interface SidecarSettings {
    * would receive bare image links it cannot interpret (the image-web-search gap).
    */
   describeImages?: boolean;
+}
+
+/**
+ * Resolve the operator's reasoning effort (`webSearchSidecar.reasoning`) to the value
+ * `SidecarSettings.reasoning` carries. Unset keeps the lane default — a config that never named
+ * an effort behaves exactly as before. `"off"` (or an empty/whitespace string) means "send no
+ * reasoning field at all": non-reasoning models (e.g. gpt-4.1-mini) reject `reasoning` with a
+ * 400, so the operator can turn it off per backend. Anything else passes through verbatim — the
+ * executor posts it as `reasoning.effort` and the upstream decides.
+ *
+ * Lives in the shared executor leaf so the forward plan (index.ts), the alpha/search plan
+ * (alpha-search.ts, which must not import the barrel) and the passthrough-bridge plan all
+ * collapse `"off"` the same way instead of diverging.
+ */
+export function resolveSidecarReasoning(
+  configured: string | undefined,
+  defaultEffort: string,
+): string | undefined {
+  if (configured === undefined) return defaultEffort;
+  const trimmed = configured.trim();
+  return trimmed === "" || trimmed.toLowerCase() === "off" ? undefined : configured;
 }
 
 // Shared with the anthropic-backed executor (single source; audit F3). The instruction is
@@ -67,7 +95,9 @@ export async function runWebSearch(
     input: [{ type: "message", role: "user", content: [{ type: "input_text", text: query }] }],
     tools: [hostedTool],
     tool_choice: "auto",
-    reasoning: { effort: settings.reasoning },
+    // Omitted entirely when the operator turned reasoning off ("off"/"" in config): non-reasoning
+    // models reject the field with a 400. `reasoning.effort` values are sent verbatim otherwise.
+    ...(settings.reasoning !== undefined ? { reasoning: { effort: settings.reasoning } } : {}),
     // NOTE: the ChatGPT (codex) backend rejects `max_output_tokens` ("Unsupported parameter") and
     // requires `store: false` — keep this body minimal. The shared SSE parser bounds raw response
     // bytes before format-result applies its smaller display clamp.

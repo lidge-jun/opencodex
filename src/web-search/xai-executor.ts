@@ -94,7 +94,8 @@ export async function runXaiWebSearch(
     input: [{ role: "user", content: query }],
     tools: [{ type: "web_search" }, ...(options.xSearch ? [buildXSearchTool(options)] : [])],
     include: ["web_search_call.action.sources"],
-    reasoning: { effort: settings.reasoning },
+    // Omitted when reasoning is off — `SidecarSettings.reasoning` is undefined then.
+    ...(settings.reasoning !== undefined ? { reasoning: { effort: settings.reasoning } } : {}),
     stream: true,
   };
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);

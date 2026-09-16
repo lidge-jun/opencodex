@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList, toolChoiceToolPredicate } from "../types";
 import { requiresVisionPreprocessing } from "../vision";
-import type { SidecarSettings } from "./executor";
+import { resolveSidecarReasoning, type SidecarSettings } from "./executor";
 import type { CodexAuthPolicyConfig } from "../codex/auth-context";
 import { isCodexReserveRequestEligible } from "../codex/loopback-target";
 import type { DataPlaneAdmission } from "../server/auth-cors";
@@ -15,6 +15,7 @@ import {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
   findXaiSidecarProvider,
+  resolveOpenAiApiKeyCredential,
   resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
   type AnthropicSidecarProvider,
@@ -27,10 +28,12 @@ export { runAnthropicWebSearch, parseAnthropicSidecarSSE } from "./anthropic-exe
 export { runXaiWebSearch, parseXaiResponsesSSE, validateXaiSearchOptions, type XaiSearchOptions } from "./xai-executor";
 export { runGeminiWebSearch, mapCcaGroundedResponse } from "./gemini-executor";
 export { runExaWebSearch, mapExaSearchResponse } from "./exa-executor";
+export { runOpenAiApiKeyWebSearch } from "./openai-apikey-executor";
 export {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
   findXaiSidecarProvider,
+  resolveOpenAiApiKeyCredential,
   resolveSidecarBackend,
   xaiSearchOptionsFromConfig,
   type AnthropicSidecarProvider,
@@ -117,6 +120,12 @@ export interface SidecarPlan {
   xaiSearchOptions?: XaiSearchOptions;
   /** Presence marker for the exa backend — the API key itself never rides the plan. */
   exaConfigured?: true;
+  /**
+   * Presence marker for the openai-apikey backend — the API key itself never rides the plan (the
+   * call site reads it from config at unpack time, exactly as exa does); the executor posts to the
+   * fixed `api.openai.com` Responses endpoint, so no URL rides the plan either.
+   */
+  openaiApiKeyConfigured?: true;
   hostedTool: Record<string, unknown>;
   settings: SidecarSettings;
   maxSearches: number;
@@ -183,7 +192,7 @@ export function planWebSearch(
   // A target proven unable to accept image input receives verbalized image results instead of
   // search-result images. A genuinely unknown custom target keeps the established pass-through.
   const describeImages = requiresVisionPreprocessing(config, provider, modelId, options.providerName);
-  const reasoning = cfg.reasoning ?? DEFAULT_SIDECAR_REASONING;
+  const reasoning = resolveSidecarReasoning(cfg.reasoning, DEFAULT_SIDECAR_REASONING);
   const streamRoutedModelOutput = cfg.streamRoutedModelOutput === true;
 
   // Anthropic backend authenticates with the STORED credential — no forward provider or ChatGPT login gate.
@@ -250,6 +259,24 @@ export function planWebSearch(
     return {
       backend: "exa",
       exaConfigured: true,
+      hostedTool: parsed._webSearch,
+      settings: { model: cfg.model ?? DEFAULT_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
+      maxSearches,
+      routedModelStallTimeoutMs,
+      stallTimeoutSec,
+      streamRoutedModelOutput,
+    };
+  }
+
+  // openai-apikey: explicit-only, keyed by the operator's OpenAI API key (config or env) — the
+  // key-auth twin of the forward "openai" backend. The KEY never rides the plan (the call site
+  // resolves it at unpack time, exactly as exa does); the plan carries only a presence marker.
+  // Fail-closed without a usable key (no default OpenAI key is ever borrowed).
+  if (backend === "openai-apikey") {
+    if (!resolveOpenAiApiKeyCredential(config)) return undefined;
+    return {
+      backend: "openai-apikey",
+      openaiApiKeyConfigured: true,
       hostedTool: parsed._webSearch,
       settings: { model: cfg.model ?? DEFAULT_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
       maxSearches,
