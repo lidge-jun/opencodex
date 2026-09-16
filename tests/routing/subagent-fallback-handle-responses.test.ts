@@ -1599,10 +1599,34 @@ describe("native fallback account preview", () => {
     // appended the pool lineage after `modelId`, #4768 added `deniedModelAccountIds` beside the
     // eligible set, and pinning either would fail on unrelated growth while still not catching
     // the regression this exists for -- a site dropping `modelEligibleAccountIds` on the way in.
-    const forwarded = source.match(
-      /\{\s*\.\.\.(previewSelectionOptions|recoverySelectionOptions),[^}]*\bmodelEligibleAccountIds\b[^}]*\},\s*modelId,[^)]*\)/g,
-    ) ?? [];
+    //
+    // Read by BRACE BALANCE rather than by a "no closing brace" character class, which was the
+    // same over-pinning in a shape that did not look like one. `[^}]*` quietly assumed the
+    // options object contained no nested literal, so when the #4768 follow-up gave
+    // `deniedModelAccountIds` an options argument of its own, the matcher found ZERO sites and
+    // reported both call sites missing -- failing on exactly the growth the comment above
+    // promises it tolerates, and failing in the direction that looks like the real defect.
+    const forwarded = [...source.matchAll(
+      /\{\s*\.\.\.(?:previewSelectionOptions|recoverySelectionOptions),/g,
+    )].map(match => {
+      const start = match.index ?? 0;
+      let depth = 0;
+      for (let i = start; i < source.length; i++) {
+        if (source[i] === "{") depth += 1;
+        else if (source[i] === "}" && (depth -= 1) === 0) {
+          return { options: source.slice(start, i + 1), tail: source.slice(i + 1, i + 40) };
+        }
+      }
+      throw new Error("unbalanced selection options literal at offset " + start);
+    });
+
     expect(forwarded).toHaveLength(2);
+    for (const { options, tail } of forwarded) {
+      expect(options).toContain("modelEligibleAccountIds");
+      // Still the PREVIEW call rather than any other object spread from these options: the
+      // literal is the argument immediately before `modelId`.
+      expect(tail).toMatch(/^,\s*modelId,/);
+    }
   });
 
   test("uses healthier pool account B when active A is above threshold", async () => {
