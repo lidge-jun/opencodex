@@ -60,15 +60,64 @@ const MAX_QUOTA_COOLDOWN_MS = 32 * 24 * 60 * 60_000;
  * failure — no body, already consumed, slow, malformed — returns undefined and
  * leaves the `Retry-After` path exactly as it was.
  */
-export async function readQuotaResetAt(response: Response, now = Date.now()): Promise<number | undefined> {
+export async function readQuotaResetAt(
+  response: Response,
+  now = Date.now(),
+): Promise<{ at: number | undefined; response: Response }> {
+  if (!response.body) return { at: undefined, response };
   try {
-    if (!response.body) return undefined;
-    const text = await response.clone().text();
-    return parseQuotaResetAt(text, now);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const chunks: Uint8Array[] = [];
+    let seen = 0;
+    let text = "";
+    while (seen < QUOTA_RESET_SCAN_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      seen += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+    // Hand back a Response carrying the bytes already pulled followed by whatever
+    // is left, so the caller can still read or cancel it. `response.clone()` is
+    // NOT usable here: it tees, and with the original branch undrained the tee
+    // stalls once its buffer fills — a 5MB error body hangs the rotation path,
+    // which is worse than the unbounded read this replaced.
+    const rest = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(c);
+      },
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      },
+      cancel(reason) {
+        return reader.cancel(reason);
+      },
+    });
+    const rebuilt = new Response(rest, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+    return { at: parseQuotaResetAt(text, now), response: rebuilt };
   } catch {
-    return undefined;
+    return { at: undefined, response };
   }
 }
+
+/**
+ * How much of a 429 body is read and scanned for the reset instant.
+ *
+ * Bounds the READ, not just the parse: this runs on the rotation path, once per
+ * rotated key under a rate-limit storm, and the body is upstream-controlled.
+ * OpenRouter's rate_limit_error JSON is a few hundred bytes.
+ */
+const QUOTA_RESET_SCAN_BYTES = 4_096;
 
 /**
  * Reset instant an upstream declared in a 429 *body*, in epoch ms.
@@ -79,7 +128,7 @@ export async function readQuotaResetAt(response: Response, now = Date.now()): Pr
  * as a date, so an unparsable body keeps today's behaviour exactly.
  */
 export function parseQuotaResetAt(body: string | null | undefined, now = Date.now()): number | undefined {
-  const text = body?.slice(0, 4_096);
+  const text = body?.slice(0, QUOTA_RESET_SCAN_BYTES);
   if (!text) return undefined;
   // `will reset at 2026-09-09 03:30:06` / `... at 2026-09-09T03:30:06Z` / `resets at <date>`
   const match = /reset[s]?\s+at\s+([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?)/i.exec(text);
