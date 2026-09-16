@@ -2606,6 +2606,27 @@ describe("codex account selection order", () => {
     )).toMatchObject({ status: "selected", accountId: "a" });
   });
 
+  /**
+   * Roster evidence orders the pool's own discretion; it does not overrule an operator. Dropping
+   * a pinned account would do more than demote it -- `selectPriorityTier` reads the pin to lower
+   * the tier ceiling, so a pin filtered out beforehand stops acting as a ceiling and silently
+   * re-enables the tiers the operator excluded. An operator who pins an account upstream will
+   * refuse still gets the alternate-account retry; the pool does not decide they were wrong.
+   */
+  test("a denial never drops the operator's pinned account (#4768)", () => {
+    const config = orderedConfig({ activeCodexAccountPinned: "b" });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+
+    expect(resolveCodexAccountForThreadDetailed(
+      null,
+      config,
+      Date.now(),
+      "shared",
+      { deniedModelAccountIds: new Set(["b"]) },
+    )).toMatchObject({ status: "selected", accountId: "b" });
+  });
+
   test("preemption keeps the operator's persisted selection intact", () => {
     const config = orderedConfig();
     updateAccountQuota("a", 10);

@@ -138,13 +138,21 @@ export function codexAccountBlockReason(
  * alternate-account retry on an exact unsupported-model 400 stays exactly where it is as the
  * safety net. This only stops the pool from CHOOSING an account that has already told us it
  * cannot serve the model (#4768).
+ *
+ * An operator's manual pin is never dropped. Roster evidence orders the pool's own discretion;
+ * it does not overrule an explicit human choice, and removing the pinned account here would do
+ * more than demote it -- `selectPriorityTier` reads the pin to lower the tier ceiling, so a pin
+ * filtered out beforehand stops acting as a ceiling at all and silently re-enables tiers the
+ * operator had excluded. An operator who pins an account upstream will refuse still gets the
+ * alternate-account retry; what they do not get is the pool quietly deciding they were wrong.
  */
 export function withoutModelDeniedAccounts(
   ids: readonly string[],
   denied: ReadonlySet<string> | undefined,
+  pinned?: string,
 ): readonly string[] {
   if (denied === undefined || ids.length === 0) return ids;
-  const remaining = ids.filter(id => !denied.has(id));
+  const remaining = ids.filter(id => !denied.has(id) || id === pinned);
   return remaining.length > 0 ? remaining : ids;
 }
 
@@ -197,11 +205,12 @@ export function getEligiblePoolAccounts(
   // Model entitlement is applied BEFORE the priority tier, because a tier is a quota-ordering
   // question and an account that cannot serve the model at all should not be the reason a tier
   // is selected. Both steps narrow an already-eligible list and neither can empty it.
+  const pinned = pinnedCodexAccountId(config);
   return selectPriorityTier(
-    withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds),
+    withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds, pinned),
     codexAccountPriorityLookup(config),
     id => hasCodexQuotaHeadroom(config, id, selectionOptions, now),
-    pinnedCodexAccountId(config),
+    pinned,
   );
 }
 

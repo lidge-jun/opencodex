@@ -402,6 +402,12 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   unconfirmed, expired and too-old-client rosters stay unknown and change nothing; a grant under any
   client version clears a denial recorded under another. Nothing refuses before dispatch, and the
   bounded alternate-account retry on an exact unsupported-model 400 remains the safety net (#4768).
+  An operator's manual pin is exempt: evidence orders the pool's own discretion and never overrules
+  an explicit selection, and because `selectPriorityTier` reads the pin to lower the tier ceiling,
+  filtering it out beforehand would re-enable the tiers the operator excluded rather than merely
+  demote the account. Eligibility itself is untouched — `isCodexAccountSelectable` remains the sole
+  authority for pause, plan exclusion, quota cooldown and avoidance, soft avoidance, refresh cooling
+  and usability, and `codexAccountBlockReason` still reports which of those guards fired.
 
 - `gpt-daybreak-blue-latest` remains the catalog and entitlement identity, but the canonical
   ChatGPT wire uses `gpt-5.6-sol`, the serving id reported by successful Daybreak responses.
