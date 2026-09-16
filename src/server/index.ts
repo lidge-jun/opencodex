@@ -1,5 +1,6 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { AuxiliaryListenerBindError } from "./ports";
+import { withRaisedInboundBodyAdmission } from "./inbound-body-admission";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -107,6 +108,7 @@ export {
 } from "./lifecycle";
 import {
   addFinalRequestLog,
+  markLocalRequestLogRefusal,
   hydrateRequestLogsFromDisk,
   httpStatusForRequestLogTerminal,
   inspectResponseLogSsePayload,
@@ -519,7 +521,19 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
     let response: Response;
     try {
-      response = await work(lease);
+      response = await withRaisedInboundBodyAdmission(
+        req, codexCompatibleUrl(req.url).pathname, config.maxInboundBodyBytes,
+        () => work(lease), refused => {
+          if (refusalLog) {
+            markLocalRequestLogRefusal(refusalLog.logCtx, "server_busy");
+            refusalLog.logCtx.errorCode = "server_busy";
+            addFinalRequestLog(refusalLog.requestId, refusalLog.start, refusalLog.logCtx, refused.status, {
+              closeReason: "terminal",
+            });
+          }
+          return withCors(refused, req, policy);
+        },
+      );
     } catch (error) {
       releaseWorkflow();
       lease.release();
