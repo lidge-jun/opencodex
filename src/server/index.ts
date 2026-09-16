@@ -1,6 +1,6 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { AuxiliaryListenerBindError } from "./ports";
-import { withRaisedInboundBodyAdmission } from "./inbound-body-admission";
+import { runAdmittedBodyWork } from "./inbound-body-admission";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -107,8 +107,6 @@ export {
   unregisterTurn,
 } from "./lifecycle";
 import {
-  addFinalRequestLog,
-  markLocalRequestLogRefusal,
   hydrateRequestLogsFromDisk,
   httpStatusForRequestLogTerminal,
   inspectResponseLogSsePayload,
@@ -183,7 +181,7 @@ import {
   type NativeMainStartupLifecycle,
 } from "../codex/native-profile-startup";
 import { EXTERNAL_CALL_PREFIX, LiveCallBindings } from "./live-call-bindings";
-import { codexCompatibleUrl, contextEndpoint, contextRelayActivated } from "../codex/context-compat";
+import { contextEndpoint, contextRelayActivated } from "../codex/context-compat";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
   createManagementSessionControl,
@@ -521,19 +519,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
     let response: Response;
     try {
-      response = await withRaisedInboundBodyAdmission(
-        req, codexCompatibleUrl(req.url).pathname, config.maxInboundBodyBytes,
-        () => work(lease), refused => {
-          if (refusalLog) {
-            markLocalRequestLogRefusal(refusalLog.logCtx, "server_busy");
-            refusalLog.logCtx.errorCode = "server_busy";
-            addFinalRequestLog(refusalLog.requestId, refusalLog.start, refusalLog.logCtx, refused.status, {
-              closeReason: "terminal",
-            });
-          }
-          return withCors(refused, req, policy);
-        },
-      );
+      response = await runAdmittedBodyWork(req, policy, config.maxInboundBodyBytes, () => work(lease), refusalLog);
     } catch (error) {
       releaseWorkflow();
       lease.release();

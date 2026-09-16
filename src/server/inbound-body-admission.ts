@@ -3,6 +3,10 @@ import {
   MAX_DECOMPRESSED_BODY_BYTES,
   resolveInboundBodyLimitBytes,
 } from "./request-decompress";
+import { withCors, type RequestPolicyView } from "./auth-cors";
+import { codexCompatibleUrl } from "../codex/context-compat";
+import { addFinalRequestLog, markLocalRequestLogRefusal } from "./request-log";
+import type { WorkflowRefusalLog } from "./workflow-refusal";
 
 /** Admission units, not a bound on process RSS or the size of parsed object graphs. */
 export const MAX_CONCURRENT_INBOUND_BODY_BYTES = MAX_CONFIGURABLE_INBOUND_BODY_BYTES;
@@ -139,4 +143,28 @@ export async function withRaisedInboundBodyAdmission(
     release();
     throw error;
   }
+}
+
+/**
+ * The admitted HTTP call site. Refusal is recorded as a local terminal and
+ * carries the receiving listener's CORS headers, so a browser dashboard can
+ * read it. No request content is read or logged on this path.
+ */
+export function runAdmittedBodyWork(
+  req: Request,
+  policy: RequestPolicyView,
+  configuredLimit: number | undefined,
+  work: () => Promise<Response>,
+  refusalLog?: WorkflowRefusalLog,
+): Promise<Response> {
+  return withRaisedInboundBodyAdmission(req, codexCompatibleUrl(req.url).pathname, configuredLimit, work, refused => {
+    if (refusalLog) {
+      markLocalRequestLogRefusal(refusalLog.logCtx, "server_busy");
+      refusalLog.logCtx.errorCode = "server_busy";
+      addFinalRequestLog(refusalLog.requestId, refusalLog.start, refusalLog.logCtx, refused.status, {
+        closeReason: "terminal",
+      });
+    }
+    return withCors(refused, req, policy);
+  });
 }
