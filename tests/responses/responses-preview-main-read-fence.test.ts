@@ -302,38 +302,63 @@ describe("preview and final authentication agree on the native-main read fence",
     expect(authJsonReads).toBe(0);
   });
 
-  test("the encrypted-recovery re-preview excludes main from denial-cache credential validation", async () => {
-    seedMainDenial();
+  /**
+   * A bare preferred native model can reach the request-prepare recovery re-preview only after
+   * routing has already chosen a noncanonical provider, but bare native ids are reserved to the
+   * canonical OpenAI provider. Combo recovery is the reachable response-driven boundary: the
+   * canonical target rejects, recovery decrypts once, and only then may the routed target run.
+   */
+  test("response-triggered encrypted recovery replays plaintext without post-recovery main reads", async () => {
     calibrateMainReadCounter();
     const config = providerConfig({
       defaultProvider: "openai",
       agentTaskRecovery: { enabled: true },
-      subagentModelFallback: ["gpt-5.6-terra"],
       providers: {
         openai: {
           adapter: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
           authMode: "forward",
-          codexAccountMode: "pool",
+          codexAccountMode: "direct",
+        },
+        backup: {
+          adapter: "openai-responses",
+          baseUrl: "https://backup.example/v1",
+          authMode: "key",
+          apiKey: "backup-test-key",
+        },
+      },
+      combos: {
+        recovery: {
+          strategy: "failover",
+          targets: [
+            { provider: "openai", model: PREFERRED_MODEL },
+            { provider: "backup", model: "m2" },
+          ],
         },
       },
     });
     let recoveryCalls = 0;
-    let dispatchCalls = 0;
-    globalThis.fetch = (async (_input, init) => {
+    const backupBodies: string[] = [];
+    globalThis.fetch = (async (input, init) => {
       const body = typeof init?.body === "string" ? init.body : "";
       if (body.includes("capture_assignment")) {
         recoveryCalls += 1;
-        // Everything before this response is the initial preview or recovery transport. Reads
-        // after this point belong to the recovery re-preview and final authentication.
+        // The canonical target has already failed. Reads after this response belong only to the
+        // recovered routed replay, so the observation cannot be satisfied by pre-recovery work.
         resetMainReadObservations();
         return new Response(recoverySse("Use the recovered assignment."), {
           status: 200,
           headers: { "content-type": "text/event-stream" },
         });
       }
-      dispatchCalls += 1;
-      return completedResponses();
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "backup.example") {
+        backupBodies.push(body);
+        return completedResponses("m2");
+      }
+      // The canonical target is the only target allowed to receive unreadable ciphertext. Its
+      // response forces the combo owner to recover the assignment before backup becomes eligible.
+      return Response.json({ error: { message: "caller credential rejected" } }, { status: 401 });
     }) as typeof fetch;
 
     const response = await postSpawn(
@@ -341,13 +366,14 @@ describe("preview and final authentication agree on the native-main read fence",
       {},
       codexHeaders("caller-account"),
       encryptedInput(),
-      PREFERRED_MODEL,
+      "combo/recovery",
     );
 
     expect(response.status).toBe(200);
     expect(recoveryCalls).toBe(1);
-    expect(dispatchCalls).toBe(1);
-    expect(denialCacheMainReadStacks()).toEqual([]);
+    expect(backupBodies).toHaveLength(1);
+    expect(backupBodies[0]).toContain("Use the recovered assignment.");
+    expect(authJsonReads).toBe(0);
   });
 
   test("ownership alone leaves selection-only off in preview and final authentication", async () => {
