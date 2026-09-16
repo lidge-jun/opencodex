@@ -294,6 +294,7 @@
   "codex-cooldown-recovery.test.ts": "codex-integration",
   "codex-coordinator-doctor.test.ts": "codex-integration",
   "codex-desired-state.test.ts": "codex-integration",
+  "codex-entitlement-identity-read-fence.test.ts": "codex-integration",
   "codex-envkey-admission-substitution.test.ts": "codex-integration",
   "codex-exec-invocation.test.ts": "codex-integration",
   "codex-features-cache.test.ts": "codex-integration",
