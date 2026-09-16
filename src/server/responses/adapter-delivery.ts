@@ -26,7 +26,7 @@ export async function deliverAdapterResponse(
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
-  transportState: Pick<ResponsesTransport, "activeAdapter">,
+  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge">,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   responseEffects: Pick<
     ResponsesEffects,
@@ -106,11 +106,7 @@ export async function deliverAdapterResponse(
         ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
         onUsage: usage => {
           // Raw adapter usage, pre wire-normalization (see the runTurn branch above).
-          logCtx.usageFromBridge = true;
-          if (usage) {
-            logCtx.usage = usage;
-            if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
-          }
+          transportState.bindKeyUsageFromBridge(usage);
         },
         onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
           commitReasoningReplayServingRoute();
@@ -184,11 +180,7 @@ export async function deliverAdapterResponse(
       ...(routedCompaction ? { compaction: true } : {}),
       onProviderState: state => { providerState = state; },
       onUsage: usage => {
-        logCtx.usageFromBridge = true;
-        if (usage) {
-          logCtx.usage = usage;
-          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
-        }
+        transportState.bindKeyUsageFromBridge(usage);
       },
     });
     // See the streaming branch: compaction turns skip the continuation cache.

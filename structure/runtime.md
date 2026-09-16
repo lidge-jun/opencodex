@@ -49,7 +49,7 @@ The prefilter is only an optimization, not final process-membership authority.
 | `bin/ocx.mjs` | Published npm `bin` entry (Node shim). Resolves the bundled or explicit Bun binary before project dotenv can load, stamps its runtime provenance plus a proof-bound Anthropic parent-env snapshot, lazy-runs `bun/install.js` if only the placeholder stub is present, then execs `src/cli/index.ts` under Bun. Lets `npm install -g` work without a separately-installed Bun. The exact `system codex-cli-update` inspection namespace skips both boot repair and lazy Bun installation; missing runtime support fails closed instead of mutating state. |
 | `src/lib/bun-runtime.ts` | Bundled-Bun resolution: `isRealBunBinary()` (size gate vs the ~450-byte placeholder stub), `bundledBunPath()`, and `durableBunPath()` (path baked into service/shim artifacts). Durable selection accepts only the source/path pair already stamped for the running executable; it never re-reads a project-dotenv `OPENCODEX_BUN_PATH`. |
 | `src/cli/index.ts` | `ocx` / `opencodex` CLI. Lifecycle: init, start, stop, restart, status, sync, restore/eject, gui, service, update. `restart` refuses an in-place restart requested by a CLI whose version differs from the attested `/healthz` version, because the replacement respawns from the live installation; placeholder versions (unknown/0.0.0) stay incomparable and keep the restart path. Configuration: provider, account, models, combo/route, access, integrations, v2. Client launchers: Claude, OpenCode, MiniMax Code, and MiniMax CLI text. The MMX launcher owns a child-lifetime loopback path bridge from the client's hard-coded `/anthropic/v1/messages` path to the canonical `/v1/messages` data plane; the server does not expose an extra auth surface. Diagnostics: doctor, debug, observe, health. Windows adds tray. The full command surface is `src/cli/help.ts`; this table names the groups, not every verb. After help/version early exits, ordinary commands run the bounded best-effort Codex-shim auto-restore policy before dispatch. `system codex-cli-update` is the deliberate read-only exception and suppresses auto-restore for its whole namespace, including malformed invocations. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
-| `src/server/index.ts` | Bun server entrypoint: `startServer`, `/v1/responses` HTTP + WebSocket routing (compact handled before generic Responses), exact `POST /v1/images/generations` and `POST /v1/images/edits` routing, `/v1/models`, the Anthropic-shaped `/v1/messages` and OpenAI-shaped `/v1/chat/completions` compatibility surfaces, the Live/Realtime surface, the hosted-search relay, artifact serving, `/healthz`, the `/api/*` auth gate, the `/v1/*` JSON 404 guard, GUI fallback, the opt-in loopback-only hub-management listener, and facade re-exports for split server modules. |
+| `src/server/index.ts` | Bun server entrypoint: `startServer`, `/v1/responses` HTTP + WebSocket routing (compact handled before generic Responses), exact `POST /v1/images/generations` and `POST /v1/images/edits` routing, `/v1/models`, the Anthropic-shaped `/v1/messages` and OpenAI-shaped `/v1/chat/completions` compatibility surfaces, the Live/Realtime surface, the hosted-search relay, artifact serving, `/healthz`, the `/api/*` auth gate, the `/v1/*` JSON 404 guard, GUI fallback, the opt-in loopback-only hub-management listener, and facade re-exports for split server modules. The route table itself is built by `src/server/index/serve-options.ts`; this entry file owns the listener and the startup transaction. |
 | `src/server/images.ts` | Standalone Images data plane: default OpenAI or explicit custom-provider selection, Codex account affinity, bounded opaque request relay, single-attempt upstream fetch, pool health recording, and safe response/cancellation relay. |
 | `src/server/audio-transcriptions.ts` | Standalone multipart transcription; audio-specific key admission, bounded upload/response, stored OpenAI credential resolution and lease-bound cancellation. See [audio contracts](data-planes/inbound-compat.md#standalone-file-transcription). |
 | `src/server/audio-live.ts`, `src/server/audio-dictation.ts` | External voice/dictation orchestration using the existing bounded socket relay, server-owned credentials, cancellation and opaque call ownership. See [streaming audio](data-planes/inbound-compat.md#streaming-audio). |
@@ -80,8 +80,10 @@ there. Feature code is grouped by responsibility:
 
 `src/generated/` is build output committed for the runtime; it is not edited by hand.
 
-`src/server/` is split by responsibility: `index.ts` owns the listener and route ordering;
-`responses.ts` owns Responses handling and compaction; `images.ts` owns the standalone Images relay;
+`src/server/` is split by responsibility: `index.ts` owns the listener and the startup transaction
+while `index/serve-options.ts` owns route ordering; `responses.ts` and `responses/core.ts` compose
+Responses handling from the owners inventoried in [Responses transport](transports/responses.md),
+and `responses/compact.ts` owns compaction; `images.ts` owns the standalone Images relay;
 `responses/codex-auth-error.ts` owns the shared Responses/compact Codex auth-context HTTP mapping.
 Model entitlement denial is a 400 request error and temporary exhaustion of every model-capable
 account is a retryable 429; neither is reported as an invalid API key. Images, Live, and Search
@@ -216,14 +218,19 @@ The server exposes `POST /api/stop` which restores native Codex config, stops an
 | `src/adapters/image.ts`, `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts`, `src/adapters/anthropic-image-codec.ts` | Image conversion for adapter ingress and Anthropic-specific normalization/limits. An image's ladder position is pinned to its own identity (content hash + media type), so appending a newer image cannot re-encode older ones and bust Anthropic's prompt prefix cache (#4532). |
 | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/upstream-http-error.ts` | Shared adapter execution support: turn queueing, tool-catalog nudging, client identity, upstream error normalization. |
 
-Adapter output must stay in internal `AdapterEvent` form until `bridge.ts` converts it back to
-Responses SSE or WebSocket frames.
+Adapter output must stay in internal `AdapterEvent` form until `src/bridge/sse.ts` converts it back
+to Responses SSE or WebSocket frames, or `src/bridge/response-json.ts` buffers it into a JSON
+response. `src/bridge.ts` is the compatibility facade that re-exports both.
 
 The image/video loop bounds each hidden iteration before replay or fulfillment; see
 [media iteration retention](transports/inventory.md#media-iteration-retention).
 
 Live model discovery is bounded and registry-driven through `src/providers/model-discovery.ts`.
-Custom providers keep the conventional `${baseUrl}/models` request; canonical presets may select a
+Custom providers keep the conventional `${baseUrl}/models` request, normalized by
+`providerModelsUrl` the same way `openaiChatCompletionsUrl` normalizes the send path: outer
+whitespace and trailing slashes are trimmed and an already-pasted `/models` is not doubled, so a
+`baseUrl` written with or without a trailing slash yields the identical discovery URL and an
+existing path prefix is preserved. Canonical presets may select a
 trusted URL/path/query and declarative eligibility filter without persisting that policy into user
 config. A response is rejected before caching when it exceeds 4 MiB, contains more than 2,000 raw
 rows, has a malformed OpenAI list envelope, or includes an invalid model id. Tests use fixtures and
@@ -265,7 +272,7 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 ### Hosted-search continuation binding
 
-The opt-in key-auth Responses hosted-search bridge in `src/server/responses/core.ts` captures the
+The opt-in key-auth Responses hosted-search bridge in `src/server/responses/passthrough-delivery.ts` captures the
 request binding that served the first leg, after any permitted initial reselection. Before every
 continuation dispatch, after provider pacing, that binding must remain an API-key selection matching
 the configured entry, reference, revision, resolved key, authentication mode, and base URL; a
@@ -357,7 +364,7 @@ The shared atomic replacement publisher also identifies explicit Remote Workspac
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
-Chat helper admission in `src/server/responses/core.ts` follows the
+Chat helper admission in `src/server/responses/request-sidecar-auth.ts` follows the
 [deferred stored-main contract](providers/openai-tiers.md): only a needed Direct OpenAI helper
 claims stored main, after terminal vision, routed vision and search exclusions.
 
@@ -393,7 +400,7 @@ Responses route normalization resolves provider summary defaults from the origin
 
 ## Live sideband handshake
 
-`src/server/index.ts` establishes the authorized upstream live sideband before accepting the client WebSocket upgrade. `openLiveSidebandUpstream` bounds the handshake to ten seconds and retains at most 32 frames and 1 MiB of preamble within the frame limit. `src/server/ws-bridge.ts` defines the runtime handoff carrying captured frames or terminal state. Failed handshakes return 502/504 and client cancellation returns 499; exact upstream 404/410 status is unavailable from Bun's client WebSocket. Admission ownership lasts until upstream close/CLOSED, including failed upgrades and failed attachment. The ordinary Responses WebSocket exchange remains separate.
+`src/server/index/serve-options.ts` establishes the authorized upstream live sideband before accepting the client WebSocket upgrade, and `src/server/index/live-sideband.ts` implements the bounded upstream dial. `openLiveSidebandUpstream` bounds the handshake to ten seconds and retains at most 32 frames and 1 MiB of preamble within the frame limit. `src/server/ws-bridge.ts` defines the runtime handoff carrying captured frames or terminal state. Failed handshakes return 502/504 and client cancellation returns 499; exact upstream 404/410 status is unavailable from Bun's client WebSocket. Admission ownership lasts until upstream close/CLOSED, including failed upgrades and failed attachment. The ordinary Responses WebSocket exchange remains separate.
 
 The relay is transparent in both directions, and that includes the close: a downstream client's close code and reason are carried to the upstream through `clientCloseForUpstream`, which only substitutes 1000 for a code no endpoint may send and truncates the reason to the 123-byte control-frame limit. This matters to the caller, because a Frameless v3 client reads upstream 1000 as the session completing and any other code as a transport loss to reconnect.
 
@@ -478,3 +485,10 @@ change target selection. `src/server/responses/core-combo.ts` applies the policy
 and preserves the original requested effort separately from effective wire telemetry.
 `src/server/chat-completions.ts` routes combos through that same child pipeline while
 retaining the current config-aware native-Chat eligibility check for non-combo routes.
+## Upstream key usage identity
+
+`src/codex/account-label.ts` owns the provider/selection digest and `src/providers/label.ts`
+stamps the configured key selected for the physical request. `src/server/request-log.ts`
+retains per-key attempt usage, and `src/usage/log.ts` validates and persists labels. The
+[account attribution contract](gui-and-management-api.md#upstream-key-account-attribution)
+defines identity, unknown records, and aggregation boundaries.

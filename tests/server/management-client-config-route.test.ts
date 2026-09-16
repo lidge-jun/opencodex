@@ -462,7 +462,13 @@ describe("GET /api/client-config", () => {
       const config = baseConfig({
         providers: {
           ...baseConfig().providers,
-          openai: { authMode: "forward", liveModels: false, models: [] },
+          // Spelled out the same way as the other `openai` fixture in this file: `adapter` and
+          // `baseUrl` are required by the persisted-config schema, so a row without them is not a
+          // state configuration loading can produce, and discovery builds a request from it.
+          openai: {
+            adapter: "openai-responses", authMode: "forward", liveModels: false,
+            baseUrl: "https://chatgpt.com/backend-api/codex", models: [],
+          },
         },
       });
       const response = await clientConfigApi(config, "?client=opencode");

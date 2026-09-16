@@ -5,6 +5,7 @@ import {
 } from "../quota";
 import { isThirtyDayOnlyCodexPlan } from "../plan";
 import type { CodexQuotaScope } from "./health-store";
+import type { TransientProbeGrant } from "./thread-affinity";
 
 export const CODEX_DEFAULT_QUOTA_COOLDOWN_MS = 60_000;
 export const CODEX_MAX_QUOTA_COOLDOWN_MS = 24 * 60 * 60_000;
@@ -78,6 +79,15 @@ export type CodexUpstreamOutcomeMeta = {
   probeLeaseId?: string;
   /** Scope of `probeLeaseId` when it was granted against a model-scoped cooldown. */
   probeQuotaScope?: CodexQuotaScope;
+  /**
+   * The half-open TRANSIENT-HOLD probe this request was granted, when it was the one request
+   * admitted to test a held account (#4701). A different lease to `probeLeaseId` above, in a
+   * different domain: that one governs a quota cooldown, this one governs a 5xx hold. The two
+   * are mutually exclusive by construction -- `isTransientOnlyAffinityBlock` refuses to
+   * recognise a transient hold on an account that carries quota health -- so a request never
+   * holds both and never pays two recovery permits for one send.
+   */
+  transientProbe?: TransientProbeGrant;
   /**
    * Already-chosen alternate for same-request 429 retry. When set, promotion
    * reuses this account instead of calling {@link pickAlternateCodexAccount}
