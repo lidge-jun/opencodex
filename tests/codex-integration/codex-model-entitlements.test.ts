@@ -37,7 +37,6 @@ import {
 import { clearCodexRuntimeResolveCache, loadPersistedCodexRuntime } from "../../src/codex/runtime";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
 import upstreamModelsSnapshot from "../../src/codex/data/upstream-models.json";
-import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
