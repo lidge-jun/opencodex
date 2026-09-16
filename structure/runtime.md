@@ -497,7 +497,8 @@ and preserves the original requested effort separately from effective wire telem
 retaining the current config-aware native-Chat eligibility check for non-combo routes.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
-\n## Upstream key usage identity
+
+## Upstream key usage identity
 
 `src/codex/account-label.ts` owns the provider/selection digest and `src/providers/label.ts`
 stamps the configured key selected for the physical request. `src/server/request-log.ts`

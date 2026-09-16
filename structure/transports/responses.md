@@ -789,7 +789,7 @@ pins the settlement rule and every ladder shape against exactly that, and
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 
-\nA combo derives a policy scope per target, and that derivation has to happen inside the budget
+A combo derives a policy scope per target, and that derivation has to happen inside the budget
 factory. Overriding the public `used` property shares only what callers read from outside:
 `remainingBaseSends`, the total check and the reserve test all consult the factory's own private
 counter, which an overridden property cannot reach. Each derived scope therefore admitted
