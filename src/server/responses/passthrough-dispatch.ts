@@ -348,10 +348,13 @@ export async function preparePassthroughExchange(
     const declaredWireToolNames = new Set<string>();
     const declaredBareWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
-    // `buildToolBridgeMaps` creates a bare alias only when the caller selected exactly one
-    // namespaced tool through a bare tool_choice. Restore that request-bounded identity before
-    // authorization checks instead of admitting the bare name into the declared set: for `exec`,
-    // the latter would also authorize the unrelated code-mode helper names.
+    // `buildToolBridgeMaps` adds each eligible bare alias to `declaredToolNames` and `toolNsMap`
+    // (one authorized identity claims the bare name). `refreshUndeclaredToolGuard` normally copies
+    // those entries into `declaredWireToolNames`, but passthrough restoration runs before the
+    // undeclared-tool guard, so restore that request-bounded identity here, before authorization
+    // checks. `exec` uses separate handling: its bridge alias is copied into the declared set only
+    // when the client itself declared bare `exec`, because otherwise code-mode normalization could
+    // authorize the unrelated code-mode helper names.
     const authorizedBareNamespaceToolAliases: RoutedNamespaceToolAliases = new Map(
       [...toolBridgeMaps.toolNsMap].flatMap(([alias, identity]) =>
         alias === identity.name
