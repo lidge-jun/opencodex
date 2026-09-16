@@ -968,7 +968,13 @@ function resolveOrcaSourceToken(id: string, forced?: ForcedRefreshFence): CodexR
       throw new Error("Orca credential identity changed; reimport the account explicitly.");
     }
     if (credential.accessToken !== prior.accessToken || credential.expiresAt !== prior.expiresAt) {
-      store[id] = { credential, generation: record.generation + 1, replacedAt: Date.now(), ...preservedValidationMetadata(record) };
+      store[id] = {
+        credential, generation: record.generation + 1, replacedAt: Date.now(),
+        // The source identity was checked above. Retire old-generation writers without
+        // splitting this same account's retained quota history on every source rotation.
+        quotaHistoryIdentity: record.quotaHistoryIdentity,
+        ...preservedValidationMetadata(record),
+      };
       persistCredentialMutation(store);
     }
     if (forced?.rejectedAccessToken === credential.accessToken) {

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../../src/config";
 import { parseOrcaAuth, readBoundedLocalFile, assertPlainLocalPath } from "../../src/codex/orca-auth-source";
 import { importOrcaAccounts } from "../../src/codex/orca-import";
-import { forceRefreshCodexPoolToken, getValidCodexToken, markCodexAccountValidated, readCodexAccountRecord } from "../../src/codex/account-store";
+import { capturePoolQuotaWriter, forceRefreshCodexPoolToken, getValidCodexToken, isPoolQuotaWriterLive, markCodexAccountValidated, poolQuotaHistoryIdentity, readCodexAccountRecord } from "../../src/codex/account-store";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -45,7 +45,8 @@ beforeEach(() => {
   const ok = { success: true, exitCode: 0, timedOut: false, stdout: "" };
   setIcaclsRunnerForTests(() => ok);
   setAsyncIcaclsRunnerForTests(async () => ok);
-  scratch = mkdtempSync(join(tmpdir(), "ocx-orca-import-"));
+  // Resolve the platform temp alias before testing the production no-symlink boundary.
+  scratch = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-orca-import-")));
   target = join(scratch, "target"); source = join(scratch, "orca"); main = join(scratch, "main");
   for (const directory of [target, main, join(source, "codex-accounts")]) mkdirSync(directory, { recursive: true });
   registry = join(source, "orca-data.json");
@@ -189,8 +190,17 @@ describe("offline Orca import", () => {
     const id = importedId();
     const first = await getValidCodexToken(id);
     markCodexAccountValidated(id, Date.now(), first.generation);
+    const oldWriter = capturePoolQuotaWriter(id, first);
+    if (!oldWriter) throw new Error("fixture quota writer was not captured");
     writeFileSync(path, auth("synthetic-account", 2));
-    expect((await getValidCodexToken(id)).generation).toBe(first.generation + 1);
+    const second = await getValidCodexToken(id);
+    expect(second.generation).toBe(first.generation + 1);
+    expect(poolQuotaHistoryIdentity(id)).toBe(oldWriter.historyIdentity);
+    expect(isPoolQuotaWriterLive(oldWriter)).toBe(false);
+    const newWriter = capturePoolQuotaWriter(id, second);
+    if (!newWriter) throw new Error("rotated fixture quota writer was not captured");
+    expect(newWriter.historyIdentity).toBe(oldWriter.historyIdentity);
+    expect(isPoolQuotaWriterLive(newWriter)).toBe(true);
     expect(readCodexAccountRecord(id)).toMatchObject({ lastCodexValidationStatus: "ok" });
     expect(readCodexAccountRecord(id)?.codexValidationPending).toBeUndefined();
   });

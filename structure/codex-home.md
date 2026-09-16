@@ -20,7 +20,9 @@ refresh token. `src/codex/orca-auth-source.ts` bounds reads and rejects linked o
 `src/codex/account-store.ts` rereads the source before returning credentials, pins account and
 subject identity, and fails closed for missing, expired or changed-identity sources. Orca owns
 refresh; even forced refresh never exchanges its refresh token. A new source bearer advances
-the target generation while retaining validation state. New imports remain validation-pending.
+the target generation while retaining validation state and the same account's quota-history identity.
+Writers captured under the old generation become stale; already retained history is not reset.
+New imports remain validation-pending.
 
 `src/codex/auth-api/pool-quota-probe.ts` also rechecks linked sources after asynchronous quota validation before
 issuing deferred inference warmups. Already dispatched requests retain their captured bearer.
