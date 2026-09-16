@@ -691,8 +691,8 @@ dispatch reserves with `countedExternally: true` and passes the booking through 
 An adapter declaring `fetchResponseUsesSendBudget`, currently Kiro, also receives an externally
 counted booking, but adopts it through a derived budget at its own physical-send boundary.
 An initial Kiro empty-completion repair reserves the same final send when no credential hop is
-pending. Its derived scope shares the request ceiling and adds no recovery reserve. Retry-helper
-replays include the prepaid first send alongside remaining base retries, confirming that permit
+pending. Its derived scope shares the request ceiling and adds no recovery reserve. Native Responses
+and translated retry-helper replays include the prepaid first send alongside remaining base retries, confirming that permit
 only on their first dispatch. Other `fetchResponse`
 implementations retain caller-owned confirmation; having that method alone does not establish
 that the adapter consumes budget permits. A queued continuation carries an unused booking into

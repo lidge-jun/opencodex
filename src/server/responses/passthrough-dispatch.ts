@@ -840,12 +840,14 @@ export async function preparePassthroughExchange(
         recoveryClassFor(recovery),
         `${route.providerName}|${route.modelId}|${recovery}`,
       );
+      let firstPermit = allowance.permit;
       try {
         return await fetchWithTransientRetry(
           innerRecovery => {
-            // Gated on the return, not fire-and-forget: a consumed permit means this leg
-            // already sent once, and letting the second call through would be a free send.
-            if (allowance.permit && !allowance.permit.use()) {
+            // The prepaid hop funds the first send; later attempts use the remaining base.
+            const permit = firstPermit;
+            firstPermit = undefined;
+            if (permit && !permit.use()) {
               throw new SendBudgetExhaustedError(safeHostLabel(request.url));
             }
             noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, innerRecovery ?? recovery);

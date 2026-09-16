@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
-import { saveCredential } from "../../src/oauth/store";
+import { saveCredential, getAccountSet, setActiveAccount } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { handleResponses } from "../../src/server/responses";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
@@ -146,6 +149,39 @@ function installOAuthFetch(
 }
 
 describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
+  test("passthrough OAuth hop retains a base retry after its prepaid first send resets", async () => {
+    clearGenericFailoverHealth();
+    await seedOAuth();
+    const firstId = getAccountSet("xai")!.activeAccountId;
+    await saveCredential("xai", {
+      access: "alternate-access", refresh: "alternate-refresh", expires: Date.now() + 3_600_000,
+      accountId: "xai-alternate-account", source: "oauth",
+    }, { addAccount: true });
+    await setActiveAccount("xai", firstId);
+    const budget = createRequestExecutionBudget();
+    const authorizations: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== OAUTH_RESPONSES_ENDPOINT) throw new Error(`Unexpected fixture request: ${url}`);
+      authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+      if (authorizations.length === 1) return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+      if (authorizations.length === 2) throw Object.assign(new Error("fixture ECONNRESET"), { code: "ECONNRESET" });
+      return new Response(successBody("alternate retry completed"), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "xai/grok-4.5", input: "hello", stream: false }),
+      }), xaiConfig(), { model: "", provider: "" }, { sendBudget: budget });
+      const body = await response.text();
+      expect(authorizations).toEqual(["Bearer rejected-access", "Bearer alternate-access", "Bearer alternate-access"]);
+      expect(response.status).toBe(200);
+      expect(body).toContain("alternate retry completed");
+      expect(budget.used).toBe(3);
+      expect(budget.reserveSpent).toBe(false);
+    } finally { clearGenericFailoverHealth(); }
+  });
+
   test("initial OAuth refresh projects raw provider failures before responding", async () => {
     await seedOAuth(0);
     saveConfig(xaiConfig());
