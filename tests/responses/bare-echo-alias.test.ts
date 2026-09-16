@@ -23,6 +23,13 @@ describe("bare echo alias for namespaced tools (#4679)", () => {
     expect(maps.toolNsMap.get("list_agents")).toEqual({ namespace: "collaboration", name: "list_agents" });
   });
 
+  test("Code Mode helper names never gain a bare alias", () => {
+    const maps = buildToolBridgeMaps(collabRequest("exec") as any); // justified: parsed fixture matches the request wire shape
+    expect(maps.declaredToolNames.has("collaboration__exec")).toBe(true);
+    expect(maps.declaredToolNames.has("exec")).toBe(false);
+    expect(maps.toolNsMap.has("exec")).toBe(false);
+  });
+
   test("a bare name claimed by two namespaces stays undeclared (no hijack)", () => {
     const parsed = parseRequest({
       model: "meta/muse-spark-1.3-contributor",
