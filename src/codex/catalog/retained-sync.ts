@@ -51,7 +51,7 @@ import { bundledCatalogCacheState, loadBundledCodexCatalog } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
 import { clampCatalogModelsToCodexSupport } from "./effort";
 import { filterCatalogVisibleModels, gatherRoutedModels, type CatalogGatherProviderModelOutcome } from "./provider-fetch";
-import { exactComboCatalogSlugs, safeCatalogWarningLabel, type ComboCatalogOmission } from "./aggregation";
+import { dedupeCatalogEntriesBySlug, enforceCatalogSlugUniqueness, exactComboCatalogSlugs, type ComboCatalogOmission } from "./aggregation";
 import {
   withCatalogWriteSerialization,
   type CatalogWritePermit,
@@ -522,39 +522,9 @@ function writeRetainedCatalogSync({
   });
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
-  // Last mutation before serialization, so the uniqueness invariant holds for the exact bytes
-  // written. Running it before the clamp would be unsound: `clampCatalogModelsToObservedCodexSupport`
-  // splices whole rows out (src/codex/catalog/effort.ts:490) when an exact-reserve ladder clamps
-  // empty, so dropping a later same-slug row first can leave the slug with no row at all once the
-  // surviving one is spliced.
-  const dedupedCatalogModels = dedupeCatalogEntriesBySlug(catalog.models);
-  if (dedupedCatalogModels.length !== catalog.models.length) {
-    // A dropped row that differs from the kept one means two emit paths disagree about
-    // the same slug's content. First-win still stands (the merge ranked the kept row),
-    // but the operator needs to see WHICH slugs diverged instead of silently losing data.
-    // The baseline is the row the dedupe actually keeps — the FIRST occurrence — so the
-    // reported divergence is measured against what lands on disk.
-    const keptBySlug = new Map<string, RawEntry>();
-    for (const entry of catalog.models) {
-      if (typeof entry.slug !== "string" || keptBySlug.has(entry.slug)) continue;
-      keptBySlug.set(entry.slug, entry);
-    }
-    const divergentSlugs = new Set<string>();
-    for (const entry of catalog.models) {
-      if (typeof entry.slug !== "string") continue;
-      const kept = keptBySlug.get(entry.slug);
-      if (kept && kept !== entry && JSON.stringify(kept) !== JSON.stringify(entry)) {
-        divergentSlugs.add(entry.slug);
-      }
-    }
-    const divergentNote = divergentSlugs.size > 0
-      ? `; divergent content on: ${[...divergentSlugs].slice(0, 5).map(safeCatalogWarningLabel).join(", ")}${divergentSlugs.size > 5 ? ", …" : ""}`
-      : "";
-    console.warn(
-      `[opencodex] catalog sync dropped ${catalog.models.length - dedupedCatalogModels.length} duplicate slug row(s), keeping the first occurrence of each slug (#4730)${divergentNote}.`,
-    );
-    catalog.models = dedupedCatalogModels;
-  }
+  // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering
+  // against the effort clamp is load-bearing rather than cosmetic.
+  catalog.models = enforceCatalogSlugUniqueness(catalog.models, true);
 
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;
@@ -586,29 +556,10 @@ function writeRetainedCatalogSync({
   };
 }
 
-/**
- * Final guard for the written catalog: every slug must appear exactly once (#4730).
- *
- * Two emit paths can hand the merge the same model under the same Codex-facing slug and the
- * equivalence-key merge keeps both (a slash-less `model.alias` slug is an "exact" key, so the
- * aliased and canonical rows of one provider model never collapse). Observed on 2.56.0: a sync
- * produced 507 rows for 72 unique slugs, every duplicate byte-identical. Keep the FIRST
- * occurrence — the merge already ranked it — and never touch distinct slugs.
- */
-export function dedupeCatalogEntriesBySlug(models: RawEntry[]): RawEntry[] {
-  const seen = new Set<string>();
-  const out: RawEntry[] = [];
-  for (const entry of models) {
-    if (typeof entry.slug !== "string") {
-      out.push(entry);
-      continue;
-    }
-    if (seen.has(entry.slug)) continue;
-    seen.add(entry.slug);
-    out.push(entry);
-  }
-  return out;
-}
+// Re-exported so the #4730 unit regression keeps importing the guard from the sync module it
+// guards; the implementation lives in ./aggregation because the management convergence commit
+// is the second writer that has to apply the identical rule.
+export { dedupeCatalogEntriesBySlug };
 
 export async function syncCatalogModels(
   config: OcxConfig,

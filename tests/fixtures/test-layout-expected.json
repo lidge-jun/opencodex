@@ -133,6 +133,7 @@
   "catalog-remote-pull.test.ts": "codex-integration",
   "catalog-retain-models.test.ts": "codex-integration",
   "catalog-seed-window-fill.test.ts": "codex-integration",
+  "catalog-slug-uniqueness-boundary.test.ts": "codex-integration",
   "catalog-verbosity-default.test.ts": "codex-integration",
   "catalog-vision-sidecar-modalities.test.ts": "codex-integration",
   "catalog-zero-credit-picker.test.ts": "codex-integration",
