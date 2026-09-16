@@ -38,14 +38,17 @@ const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
 /** Count reads of the pool account store, whoever performs them. */
 function countAccountStoreReads(): { reads: () => number; restore: () => void } {
-  const original = fs.readFileSync;
+  // `readFileSync` is heavily overloaded, so the pass-through is typed structurally and cast once
+  // rather than trying to satisfy every overload: this counts calls, it does not model the API.
+  const original = fs.readFileSync as (...args: unknown[]) => unknown;
   let reads = 0;
-  const spy = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+  const spy = spyOn(fs, "readFileSync");
+  spy.mockImplementation(((...args: unknown[]) => {
     const target = args[0];
     if (typeof target === "string" && target.endsWith("codex-accounts.json")) reads += 1;
     return original(...args);
-  }) as typeof fs.readFileSync);
-  return { reads: () => reads, restore: () => spy.mockRestore() };
+  }) as unknown as typeof fs.readFileSync);
+  return { reads: () => reads, restore: () => { spy.mockRestore(); } };
 }
 
 /** Store a pool credential and return the identity string the reader will derive from it. */
