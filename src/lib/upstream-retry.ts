@@ -36,6 +36,28 @@ export function isNonReplayableResponse(response: Response): boolean {
   return nonReplayableResponses.has(response);
 }
 
+/**
+ * The narrower marker: responses this proxy synthesized as a replay refusal.
+ *
+ * {@link isNonReplayableResponse} answers "must not be sent again", which the WebSocket
+ * post-send verdicts share. This one answers "the upstream never said this", and that is the
+ * question a quota recorder or a `Retry-After` synthesizer has to ask. Both were written for
+ * a status that only ever arrived from a provider, so a synthetic 429 reads to them as a
+ * credential that rate-limited us and as a wait worth honouring -- one writes a cooldown
+ * against a credential that refused nothing, the other instructs the client to send the turn
+ * again. A marker rather than a body check, because it has to be answerable before the body
+ * is read and cannot be spoofed by an upstream that happens to echo the code.
+ */
+const replayRefusalResponses = new WeakSet<Response>();
+
+export function markReplayRefusalResponse(response: Response): void {
+  replayRefusalResponses.add(response);
+}
+
+export function isReplayRefusalResponse(response: Response): boolean {
+  return replayRefusalResponses.has(response);
+}
+
 /** Origin never produced a response event; the turn may still be executing. */
 export const UPSTREAM_NO_RESPONSE_CODE = "upstream_no_response";
 /** Transport closed after the send, before any response event. */
@@ -517,6 +539,7 @@ export async function fetchWithResetRetry(
           message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
         } }), { status: REPLAY_REFUSED_STATUS, headers: { "content-type": "application/json" } });
         markResponseNonReplayable(response);
+        markReplayRefusalResponse(response);
         return response;
       }
       if (attempt === attempts - 1) throw err;
