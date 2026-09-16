@@ -1,7 +1,7 @@
 # Responses Transport
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
 Plaintext collaboration restoration treats a null namespace as absent, rejects non-string namespace types, and restores the native namespace/name pair before HTTP/WS delivery and continuation publication.
 
@@ -178,6 +178,20 @@ explicit configured selectors before consulting bounded lane state. The existing
 reconciliation owns removal of obsolete targets and generation fencing; core imports no registration
 composition root or Lab code. Recall retains routing identity only, never account credentials.
 
+Retention is bounded on four axes: 256 lanes, 30 minutes, 1 KiB per remembered model id, and 64 KiB
+in aggregate. The model id is the only field of unbounded length — lane keys are already SHA-256
+digests — so the lane cap alone does not bound the bytes those lanes hold. The size test runs on code
+units before encoding, since a UTF-8 encoding is never smaller than its code-unit count and the bound
+must not pay the allocation it exists to prevent. Aggregate eviction drops the least recently written
+lane, which is the front of the map because every write re-inserts its own lane at the back.
+
+An unretainable model id declines the write rather than clearing the lane, matching how every other
+rejection in `rememberComboForLane` returns. Clearing would let a late completion erase a newer
+selection, and the publication path carries a config generation, not a request order, so it has no
+basis on which to decide that its own result is the newer one. The store is also swept periodically
+now: the TTL was previously evaluated only on read or on a generation change, so a lane never read
+again held its entry for the life of the process.
+
 > Decision record: [ADR-0038](../decisions/ADR-0038-responses-http-sse.md)
 
 A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode,
@@ -209,6 +223,35 @@ readable user text, and records `conversationStateScrub: "account-change"` on th
 without account identifiers. Once the new account issues its own state, later turns carry it
 normally. `canPortConversationState` is local until `src/routing/identity-domains.ts` lands.
 
+### Uploaded files do not move between accounts
+
+An uploaded `file_id` has always been classified as account-bound, and the scrub has always
+removed only `previous_response_id` and `conversation`. A body whose only account-bound state was
+a file reference therefore reported nothing scrubbed and went to the new account unchanged.
+
+Deleting the reference is not the contract. A file reference is content the caller attached, not
+continuation state the turn can do without, and dropping it silently answers a different question
+than the one that was asked. `accountChangeFileReferenceRefusal` reads the carriers directly
+rather than through the portability verdict, because that verdict reports the first reason it
+finds: a body carrying both a previous response id and a file reference reports only the former,
+and the file would slip through the scrub.
+
+The initial `/v1/responses` selection and the native compact dispatch answer HTTP 400, not a
+retryable status, and the message names both the cause and the remedy. That message carries more
+than the immediate failure on purpose: the reference stays in conversation history, so every later
+turn is refused the same way until the files are re-uploaded under the serving account or the
+conversation is restarted, and a caller told only that the reference is invalid would resend
+unchanged and see a dead conversation.
+
+The alternate-account paths refuse the move instead of raising a status, because an earlier
+response already exists to return. `conversationCarriesUploadedFiles` answers from the body alone,
+so both the Responses retry helper and the compact retry ask before resolving an alternate: no
+send is reserved, the first response is never cancelled, and the caller returns the original
+upstream rejection. A same-account replay such as the gated-model 400 ladder is unaffected, and a
+single-account install never reaches any of this because serving and issuing accounts cannot
+differ. Pinning a file-carrying conversation to its issuing account is routing-affinity work and
+is tracked separately.
+
 > Decision record: [ADR-0039](../decisions/ADR-0039-responses-http-sse.md)
 
 ### Mixed-wire provider defaults
@@ -239,6 +282,16 @@ Native Responses participates in the same pre-stream OAuth HTTP-429 account rota
 bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
 the complete credential/transport/replay identity, and attributes usage to the serving account.
 Single-account installs do not retry; a missing alternate credential preserves the original error.
+
+`shouldRetryCodexPoolAccountQuota` withholds that rotation when the 429 or 402 body names an
+organization- or project-scoped exhaustion (`codexScopedExhaustionCode` in
+`src/codex/quota-rejection.ts`). Every credential inside the refusing organization meets the same
+counter, so the move would pay a second cold prompt prefix for no new capacity. Withholding the
+move does not withhold the accounting: `src/server/responses/passthrough-delivery.ts` applies the
+response's quota headers to the serving account and records the 429 outcome on the ordinary
+delivery path, so the account still earns its cooldown and leaves the selection pool. The gate
+fails closed — an empty, truncated, unparseable, duplicate-keyed or aborted body keeps the broad
+behaviour, and `rate_limit_exceeded`, `slow_down` and plan-level exhaustion still rotate.
 Credential-refresh failures are fenced by both the account generation and a global routing-state
 generation. Reauthentication advances the account fence; replacing the whole routing roster
 advances the global fence. A late failure from either obsolete state is ignored, while failures
@@ -704,3 +757,30 @@ later recovery in the same request then cannot have. `tests/lib/execution-budget
 pins both ladder shapes against exactly that.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+## Combo output headroom
+
+A combo child is admitted against two budgets, not one. `resolveInputCeiling` in
+`src/server/responses/input-admission.ts` answers "how much input may this target take", which
+`modelMaxInputTokens` can tighten below the window. The context window itself is what input and
+output actually share. When the caller declared `max_output_tokens`,
+`checkComboTargetInputAdmission` requires both `estimated input <= ceiling` and
+`estimated input + min(declared output, target output ceiling) <= window`, so the output reserve
+is counted once rather than charged twice against an already-tightened input budget.
+
+The refusal is local: HTTP 413 `input_admission_refused` before any upstream bytes are sent, which
+existing combo policy already treats as a safe hop. That ordering is the whole point. A target whose
+total window cannot hold the turn plus the caller's allowance answers 200, emits a few hundred
+tokens and stops on `finish_reason: length`, which the Anthropic surface renders as an output-token
+error naming a limit the model never approached — and by then output has committed and no later
+target may be tried.
+
+Scope is deliberately narrow. Direct and single-target requests keep the loose 2.5x
+pathological-input gate, because they have nowhere to hop. Compaction turns stay exempt. Unknown
+context and a caller that declared no output allowance both remain fail-open, so this invents no
+limits for custom providers. Canonical native slugs that the narrower pinned table does not carry
+resolve their window from the generated in-tree bundle, which is what made the gate inert on the
+route where this was first observed; explicit provider and operator caps may only narrow it.
+
+Regression coverage: `tests/server/input-admission.test.ts` and
+`tests/helpers/combo-context-headroom-cases.ts`.

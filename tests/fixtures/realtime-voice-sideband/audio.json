@@ -1,0 +1,25 @@
+{
+  "stage": "audio",
+  "kind": "frames",
+  "title": "Audio frames cross the relay unchanged in both directions",
+  "protocol": "frameless-bidi-v3",
+  "provenance": "Synthetic. The base64 payloads are zero-filled PCM16 silence written for this fixture, not captured microphone or model audio.",
+  "note": "input_audio.append is the v3 outbound name (RealtimeOutboundMessage in protocol.rs); output_audio.delta carries its payload at the top-level audio field rather than inside a content part.",
+  "deidentified": true,
+  "callId": "rtc_fixture_audio",
+  "preamble": [],
+  "clientFrames": [
+    {
+      "type": "input_audio.append",
+      "audio": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }
+  ],
+  "upstreamFrames": [
+    {
+      "type": "output_audio.delta",
+      "audio": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "start_ms": 0,
+      "end_ms": 100
+    }
+  ]
+}

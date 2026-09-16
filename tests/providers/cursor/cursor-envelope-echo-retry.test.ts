@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createCursorAdapter as createCursorAdapterProduction } from "../../../src/adapters/cursor";
 import {
   CURSOR_ECHO_RETRY_CONTINUATION_TEXT,
+  CURSOR_ROUTING_COMMENTARY_RETRY_TEXT,
   CursorEnvelopeEchoSniffer,
   CursorMidstreamEchoObserver,
   CursorRoutingCommentarySniffer,
@@ -210,6 +211,42 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     expect(contextFree.finish().kind).toBe("flush");
   });
 
+  test.each(["네이티브 셸", "네이티브 쉘", "네이티브셸", "네이티브\t쉘", "“네이티브 셸”", "(네이티브쉘)"])(
+    "localized shell requires a redirect or a second distinct tool (%s)", nativeShell => {
+      const redirect = new CursorRoutingCommentarySniffer();
+      expect(redirect.feed(`${nativeShell}이 차단되어 exec_command로 전환합니다.`).kind).toBe("hallucination");
+      const distinct = new CursorRoutingCommentarySniffer();
+      expect(distinct.feed(`${nativeShell}과 Read가 모두 unavailable 상태입니다.`).kind).toBe("hallucination");
+    },
+  );
+
+  test.each(["비네이티브 셸", "비네이티브쉘", "x네이티브 셸", "_네이티브쉘", "1네이티브 셸", "a\u0301네이티브 셸"])(
+    "embedded Korean shell wording does not fabricate a second tool (%s)", nativeShell => {
+      const sniffer = new CursorRoutingCommentarySniffer();
+      expect(sniffer.feed(`${nativeShell} 관련 Read가 unavailable 상태입니다.`).kind).toBe("hold");
+      expect(sniffer.finish().kind).toBe("flush");
+    },
+  );
+
+  test("localized shell detection spans native-name and redirect delta boundaries", () => {
+    const sniffer = new CursorRoutingCommentarySniffer();
+    for (const fragment of ["네이", "티브 ", "쉘이 차단되어 ", "exec_"]) {
+      expect(sniffer.feed(fragment).kind).toBe("hold");
+    }
+    expect(sniffer.feed("command로 전환합니다.").kind).toBe("hallucination");
+  });
+
+  test.each([
+    "네이티브 셸이 unavailable 상태입니다.",
+    "네이티브 셸과 네이티브 쉘이 모두 blocked 상태입니다.",
+    "Shell과 네이티브 셸이 모두 blocked 상태입니다.",
+    "SHELL과 네이티브쉘, 네이티브 셸이 모두 unavailable 상태입니다.",
+  ])("shell aliases alone do not fabricate two distinct tools (%s)", text => {
+    const sniffer = new CursorRoutingCommentarySniffer();
+    expect(sniffer.feed(text).kind).toBe("hold");
+    expect(sniffer.finish().kind).toBe("flush");
+  });
+
   test("external tool-result echo retries once with the corrective action text and no leaked envelope", async () => {
     const { factory, runRequests, attempts } = echoingThenHealthyTransportFactory();
     const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
@@ -318,7 +355,11 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     expect(runRequests[1]?.echoRetryContinuationText).toBeDefined();
   });
 
-  test("code-mode routing commentary that invents a blocked native Shell is quarantined and retried", async () => {
+  test.each([
+    { fragments: ["`Shell` 경로는 차단됐으니 exec_command 경로로 읽겠습니다."] },
+    { fragments: ["네이", "티브 셸은 차단됐으니 ", "exec_command 경로로 읽겠습니다."] },
+    { fragments: ["네이티브", "쉘은 차단됐으니 ", "exec_command 경로로 읽겠습니다."] },
+  ])("code-mode routing commentary is quarantined and retried once (%j)", async ({ fragments }) => {
     let attempt = 0;
     const runRequests: CursorRunRequest[] = [];
     const factory = () => ({
@@ -326,10 +367,9 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
         runRequests.push(request);
         attempt += 1;
         if (attempt === 1) {
-          yield {
-            type: "text",
-            text: "`Shell` 경로는 또 같은 문구로 차단됐으니, 통과가 확인된 `exec_command` 경로로 읽겠습니다.",
-          } satisfies CursorServerMessage;
+          for (const text of fragments) {
+            yield { type: "text", text } satisfies CursorServerMessage;
+          }
         } else {
           yield { type: "text", text: "READ_OK" } satisfies CursorServerMessage;
         }
@@ -359,7 +399,8 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
     expect(attempt).toBe(2);
     expect(text).toBe("READ_OK");
-    expect(text).not.toContain("Shell");
-    expect(runRequests[1]?.echoRetryContinuationText).toBeDefined();
+    expect(text).not.toContain(fragments.join(""));
+    expect(runRequests).toHaveLength(2);
+    expect(runRequests[1]?.echoRetryContinuationText).toBe(CURSOR_ROUTING_COMMENTARY_RETRY_TEXT);
   });
 });

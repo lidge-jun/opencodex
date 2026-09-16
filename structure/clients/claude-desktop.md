@@ -40,6 +40,15 @@ writes the resulting local Desktop configuration. No admin token, hub-profile up
 alias regeneration is part of this flow. Unsupported old hubs, invalid snapshots and unavailable
 Desktop models fail apply without a local-catalog or loopback fallback.
 
+Managed-namespace date aliases occupy `claude-opus-4-8-YYYYMMDD` slots across 2026-2035, not 2026
+alone. The original 2026-only design held 365 slots and failed with "all 365 encoded date slots are
+occupied" once a catalog exceeded 365 routes, because stale assignments are retained by design and
+the set only grows. 2026 is still allocated first, so existing assignments keep their ids, and
+2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
+`claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
+distinction. Every emitted suffix stays eight digits so `modelMap` date-stripping keeps working.
+`src/claude/desktop-profile.ts` owns this range.
+
 Date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed
 `desktop_model_mapping_unavailable` error rather than classifying it as invalid. Unknown legacy hash aliases
