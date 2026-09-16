@@ -104,6 +104,7 @@
   "baseten-provider.test.ts": "providers",
   "bearer-admission-routed-provider.test.ts": "codex-integration",
   "bounded-body.test.ts": "server",
+  "bounded-subprocess.test.ts": "lib",
   "bridge-legacy-shell-normalization.test.ts": "adapters",
   "bridge-lifecycle.test.ts": "adapters",
   "bridge-live-delivery.test.ts": "server",
