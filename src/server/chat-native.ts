@@ -26,8 +26,11 @@ import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
   isNonReplayableResponse,
+  isReplayRefusalCode,
+  isReplayRefusalResponse,
   prepareSameTarget429Wait,
   type UpstreamSendRecovery,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
@@ -486,6 +489,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
       classified.code = CYBER_POLICY_ERROR_CODE;
       classified.type = cyberPolicyErrorType(upstreamType);
+    } else if (isReplayRefusalResponse(response) || isReplayRefusalCode(upstreamCode)) {
+      // 429 classifies as a rate limit and a rate limit already carries a code, so the branch
+      // below -- which only fills an EMPTY code -- could never restore this one. Without it the
+      // client is told the provider throttled the turn, when what happened is that this proxy
+      // declined to send it a second time.
+      classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     } else if (upstreamCode === "model_not_found") {
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
@@ -493,7 +502,10 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       classified.code = upstreamCode;
     }
     const status = isCyberPolicyCode(classified.code) ? 400 : response.status;
-    const retryAfter = isCyberPolicyCode(classified.code)
+    // A refusal this proxy made has no wait to report. Synthesizing one here would hand the
+    // client the default two-second retry for a rate limit that never happened, which is the
+    // duplicate send the refusal exists to prevent.
+    const retryAfter = isCyberPolicyCode(classified.code) || isReplayRefusalCode(classified.code)
       ? undefined
       : resolveClientRetryAfter({
         status: response.status,
