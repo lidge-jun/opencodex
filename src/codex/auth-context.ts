@@ -989,7 +989,18 @@ export async function resolveCodexAuthContext(
     // already gathered -- no upstream fetch joins the request path for the most commonly
     // requested models in the product -- and passed to selection as a preference that is dropped
     // whenever honouring it would leave no candidate.
-    const deniedModelAccountIds = cachedDeniedCodexAccountIdsForModel(options.modelId);
+    //
+    // Under the SAME exclusion the entitlement snapshot above uses. The reader validates each
+    // cached roster against the account's current credential, and for native main that is a
+    // synchronous read of the physical stored token -- exactly what this request is forbidden to
+    // touch while a profile switch drains it or while it is served by a request-owned credential.
+    // Excluding main here costs nothing: the preference is an ordering hint, so main becomes
+    // unknown rather than denied, and unknown leaves selection exactly as it was.
+    const deniedModelAccountIds = cachedDeniedCodexAccountIdsForModel(
+      options.modelId,
+      undefined,
+      { excludeAccountIds },
+    );
     const selectionOptions = {
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.

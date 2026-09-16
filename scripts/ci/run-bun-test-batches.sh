@@ -11,6 +11,10 @@ readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
 # bundled stable runtime anyway, and report a qualification it never performed.
 readonly BUN_BIN="${OPENCODEX_BUN_PATH:-bun}"
 
+# One definition of the crash classifier, shared with the Windows and macOS legs in ci.yml.
+# shellcheck source=scripts/ci/bun-crash-signatures.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bun-crash-signatures.sh"
+
 usage() {
   echo "usage: $0 <shard/total>" >&2
   exit 64
@@ -62,31 +66,6 @@ is_general_test_file() {
       return 1
       ;;
   esac
-}
-
-is_bun_runtime_crash() {
-  local status="$1"
-  local log_file="$2"
-
-  case "$status" in
-    132|133|134|135|136|137|139)
-      return 0
-      ;;
-  esac
-
-  # Bun 1.3.14 can surface a Linux epoll registration failure as exit 1,
-  # even though the failure comes from Bun's internal WriteStream setup rather
-  # than a test assertion. Treat only that narrow runtime signature as a crash.
-  if (( status == 1 )) \
-    && grep -Fq '# Unhandled error between tests' "$log_file" \
-    && grep -Fq 'error: EEXIST: file already exists, epoll_ctl' "$log_file" \
-    && grep -Fq 'at new WriteStream (internal:fs/streams:' "$log_file"; then
-    return 0
-  fi
-
-  grep -Eqi \
-    'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' \
-    "$log_file"
 }
 
 LAST_FAILURE_KIND=""
@@ -189,7 +168,14 @@ recover_batch_file_by_file() {
     return "$status"
   done
 
-  echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} passed under singleton isolation after the original ${batch_failure_kind}; continuing."
+  if [[ "$batch_failure_kind" == "runtime" ]]; then
+    # Not "recovered". One file per process is a configuration in which this class of defect
+    # cannot occur, so the sweep was always going to pass and always going to report nothing.
+    # What it does prove is that the files themselves are sound, which is the half worth keeping.
+    echo "::error::Shard ${SHARD_SPEC} batch ${batch_number} crashed the Bun runtime. Every file in it then passed alone, so the defect is in multi-file process state, not in any test."
+  else
+    echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} passed under singleton isolation after the original ${batch_failure_kind}; continuing."
+  fi
   return 0
 }
 
@@ -218,7 +204,12 @@ fi
 
 readonly TOTAL_BATCHES=$(( (${#SELECTED_FILES[@]} + BATCH_SIZE - 1) / BATCH_SIZE ))
 echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
-echo "Runtime crashes and timeouts fall back to one-file-per-process isolation; assertion/test failures do not retry."
+echo "Timeouts fall back to one-file-per-process isolation and may recover; assertion/test failures do not retry."
+echo "A Bun runtime crash is swept one-file-per-process for attribution and then FAILS this shard: it is a defect in the interpreter, and a green report would be a lie."
+
+# Every batch that crashed the runtime, so one run attributes all of them instead of only the
+# first. Linux was producing twelve to fourteen of these per run while reporting success.
+CRASHED_BATCHES=()
 
 for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
   start=$(( batch_index * BATCH_SIZE ))
@@ -237,8 +228,22 @@ for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
 
   failure_kind="$LAST_FAILURE_KIND"
   if recover_batch_file_by_file "$batch_number" "$failure_kind" "${batch[@]}"; then
-    continue
+    recovery_status=0
   else
-    exit $?
+    recovery_status=$?
+  fi
+
+  if [[ "$failure_kind" == "runtime" ]]; then
+    CRASHED_BATCHES+=("$batch_number")
+  fi
+
+  # A sweep that found a real failing file still reports that file, and immediately.
+  if (( recovery_status != 0 )); then
+    exit "$recovery_status"
   fi
 done
+
+if (( ${#CRASHED_BATCHES[@]} > 0 )); then
+  echo "::error::Shard ${SHARD_SPEC} crashed the Bun runtime in batch(es): ${CRASHED_BATCHES[*]}. Each batch was re-run one file per process and every file passed, so no test is at fault -- the interpreter is. Failing rather than reporting green."
+  exit 1
+fi

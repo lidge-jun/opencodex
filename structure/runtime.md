@@ -109,6 +109,9 @@ until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
 
+An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
+serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
+
 `startServer` composes up to three sockets in one synchronous startup transaction: the public data
 listener, the optional unauthenticated data-loopback listener, and the optional hub-management
 listener.

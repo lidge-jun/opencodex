@@ -1,6 +1,7 @@
 import {
   isNonReplayableUpstreamCode,
   isReplayRefusalCode,
+  markReplayRefusalResponse,
   markResponseNonReplayable,
   REPLAY_REFUSED_STATUS,
 } from "../lib/upstream-retry";
@@ -49,5 +50,9 @@ export function formatErrorResponse(
     headers,
   });
   if (replayBlocked) markResponseNonReplayable(response);
+  // Re-wrapping is where the refusal loses its provenance: combo failure consumption parses
+  // the JSON and builds a new Response, and the code alone does not tell a later quota
+  // recorder that no upstream produced this status. Carry the narrower marker across too.
+  if (replayBlocked && isReplayRefusalCode(error.code)) markReplayRefusalResponse(response);
   return response;
 }
