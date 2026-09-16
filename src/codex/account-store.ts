@@ -281,7 +281,7 @@ export function readCodexAccountRecord(id: string): CodexAccountCredentialRecord
  * view. That is the difference from `loadCodexAccountStore`, which drops both and cannot answer a
  * question about credential generation.
  */
-export function loadCodexAccountRecordSnapshot(): Readonly<CodexAccountStore> {
+export function loadCodexAccountRecordSnapshot(): Readonly<Record<string, CodexAccountCredentialRecord>> {
   return loadCodexAccountRecordStore();
 }
 

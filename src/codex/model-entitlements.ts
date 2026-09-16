@@ -960,8 +960,10 @@ export async function ensureCodexEntitlementFreshness(
     );
     const candidates = normalizedCandidateAccountIds(config);
     const mutationEpoch = codexCredentialMutationEpoch();
+    // Same hoist as the denial pass: this prologue is synchronous and reads once per candidate.
+    const identityOf = credentialIdentityResolver();
     const identityEntries = candidates.map(accountId => (
-      [accountId, currentCredentialIdentity(accountId) ?? null] as const
+      [accountId, identityOf(accountId) ?? null] as const
     ));
     const identityVector = new Map(identityEntries);
     const workset = candidates.filter(accountId => needsEntitlementRefresh(
@@ -1014,8 +1016,9 @@ export function getCodexModelEntitlementStatus(
   clientVersion?: string | null,
 ): CodexModelEntitlementStatus {
   const version = resolveCodexEntitlementClientVersion(clientVersion);
+  const identityOf = credentialIdentityResolver();
   const accounts = candidateAccountIds(config).flatMap(accountId => {
-    const credentialIdentity = currentCredentialIdentity(accountId);
+    const credentialIdentity = identityOf(accountId);
     return credentialIdentity ? [{ accountId, credentialIdentity }] : [];
   });
   if (accounts.length === 0) return { status: "unavailable" };
@@ -1320,8 +1323,9 @@ export function cachedAvailableAccountGatedNativeModels(
 }
 
 export function isCodexModelEntitlementSnapshotCurrent(snapshot: CodexModelEntitlementSnapshot): boolean {
+  const identityOf = credentialIdentityResolver();
   for (const [accountId, identity] of snapshot.credentialIdentities) {
-    if (currentCredentialIdentity(accountId) !== identity) return false;
+    if (identityOf(accountId) !== identity) return false;
   }
   return true;
 }
