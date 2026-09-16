@@ -193,6 +193,7 @@ describe("Responses parser", () => {
     expect([...maps.toolNsMap]).toEqual([
       ["mcp__tools__safe", { namespace: "mcp__tools", name: "safe" }],
       ["mcp__tools.safe", { namespace: "mcp__tools", name: "safe" }],
+      ["safe", { namespace: "mcp__tools", name: "safe" }],
     ]);
     expect([...maps.declaredToolNames]).toEqual(["mcp__tools__safe", "mcp__tools.safe", "apply_patch"]);
     expect([...maps.freeformToolNames]).toEqual(["apply_patch"]);
