@@ -19,6 +19,10 @@ export interface NativeMainProfileState {
 }
 type Listener = (state: NativeMainProfileState) => void;
 
+/** The account refresh is someone else's promise, so it gets its own bound. */
+const ACCOUNT_REFRESH_TIMEOUT_MS = 20_000;
+const ACCOUNT_REFRESH_TIMED_OUT = Symbol("account-refresh-timeout");
+
 /** One in-memory disclosure session per apiBase; no timers or reads until opened. */
 export class NativeMainProfileSession {
   state: NativeMainProfileState = {
@@ -28,14 +32,16 @@ export class NativeMainProfileSession {
   private listener: Listener | null = null;
   private epoch = 0;
   private pending: AbortController | null = null;
-  private onChanged: () => unknown | Promise<unknown> = () => {};
+  private onChanged: (signal?: AbortSignal) => unknown | Promise<unknown> = () => {};
   private restartRequired = false;
   private resultHome: string | null = null;
 
   private readonly apiBase: string;
+  private readonly accountRefreshTimeoutMs: number;
 
-  constructor(apiBase: string) {
+  constructor(apiBase: string, accountRefreshTimeoutMs = ACCOUNT_REFRESH_TIMEOUT_MS) {
     this.apiBase = apiBase;
+    this.accountRefreshTimeoutMs = accountRefreshTimeoutMs;
   }
 
   attach(listener: Listener): () => void {
@@ -55,7 +61,7 @@ export class NativeMainProfileSession {
     };
   }
 
-  updateOptions(blocked: boolean, onChanged: () => unknown | Promise<unknown>): void {
+  updateOptions(blocked: boolean, onChanged: (signal?: AbortSignal) => unknown | Promise<unknown>): void {
     this.onChanged = onChanged;
     if (this.state.blocked !== blocked) this.set({ blocked, action: null, confirmedStopped: false });
   }
@@ -120,10 +126,25 @@ export class NativeMainProfileSession {
   }
   private async refreshAccount(epoch: number): Promise<void> {
     if (!this.current(epoch)) return;
+    // A callback that never settles would otherwise hold `pending`/`busy` forever and
+    // make the session ignore every later refresh, mutation and toggle. Cancel it,
+    // stop waiting, and report the refresh as failed rather than as confirmed.
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const call = (async () => {
+      try { return await this.onChanged(controller.signal); }
+      catch { return false; }
+    })();
+    const bound = new Promise<typeof ACCOUNT_REFRESH_TIMED_OUT>(resolve => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve(ACCOUNT_REFRESH_TIMED_OUT);
+      }, this.accountRefreshTimeoutMs);
+    });
     try {
-      const ok = await this.onChanged();
-      if (this.current(epoch) && ok === false) this.set({ refreshFailed: true });
-    } catch { if (this.current(epoch)) this.set({ refreshFailed: true }); }
+      const ok = await Promise.race([call, bound]);
+      if (this.current(epoch) && (ok === false || ok === ACCOUNT_REFRESH_TIMED_OUT)) this.set({ refreshFailed: true });
+    } finally { clearTimeout(timer); }
   }
   private async reconcile(epoch: number): Promise<void> {
     if (!this.current(epoch)) return;

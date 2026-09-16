@@ -15,7 +15,7 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
-function fixture() {
+function fixture(accountRefreshTimeoutMs?: number) {
   let home = "/srv/codex-fixture";
   let active = a.id;
   let recovery = false;
@@ -54,10 +54,17 @@ function fixture() {
     throw new Error("unexpected route");
   };
   globalThis.fetch = fakeFetch as typeof fetch;
-  const session = new NativeMainProfileSession("/proxy-a");
+  const session = new NativeMainProfileSession("/proxy-a", accountRefreshTimeoutMs);
   let refreshes = 0;
   let accountReadOk = true;
-  session.updateOptions(false, () => { refreshes++; return accountReadOk; });
+  let accountReadHangs = false;
+  const accountSignals: (AbortSignal | undefined)[] = [];
+  session.updateOptions(false, signal => {
+    refreshes++;
+    accountSignals.push(signal);
+    if (accountReadHangs) return new Promise(() => {});
+    return accountReadOk;
+  });
   const stop = session.attach(() => {});
   cleanups.push(stop);
   return { session, calls, list, doctor, stop,
@@ -65,6 +72,7 @@ function fixture() {
     setHome: (value: string) => { home = value; }, setActive: (value: string) => { active = value; },
     setRecovery: (value: boolean) => { recovery = value; }, failRead: (value: boolean) => { failRead = value; },
     failList: (value: boolean) => { failList = value; }, accountReadOk: (value: boolean) => { accountReadOk = value; },
+    accountReadHangs: (value: boolean) => { accountReadHangs = value; }, accountSignals: () => accountSignals,
     intercept: (value: typeof intercept) => { intercept = value; },
   };
 }
@@ -260,6 +268,21 @@ describe("native-main disclosure session", () => {
     f.accountReadOk(true); await f.session.refresh();
     assert.equal(f.session.state.refreshFailed, false);
     assert.equal(f.posts().length, 1);
+  });
+
+  test("an account refresh that never settles is cancelled and releases the session", async () => {
+    const f = fixture(25);
+    await select(f);
+    f.accountReadHangs(true);
+    await f.session.confirm();
+    assert.equal(f.session.state.busy, false);
+    assert.equal(f.session.state.refreshFailed, true);
+    assert.equal(f.accountSignals().at(-1)?.aborted, true);
+    // The session still accepts work: an unsettled callback must not strand `pending`.
+    f.accountReadHangs(false);
+    await f.session.refresh();
+    assert.equal(f.session.state.refreshFailed, false);
+    assert.equal(f.session.state.busy, false);
   });
 
   test("pending recovery remains available without a readable list and sends exact rollback consent", async () => {

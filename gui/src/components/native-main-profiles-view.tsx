@@ -29,6 +29,12 @@ export interface NativeMainProfilesViewProps {
 
 const DOCTOR_CMD = "ocx account main doctor";
 
+/** The global <Trans> chip shape, bound to this closed native-main namespace. */
+function DoctorHint({ t }: { t: NativeMainTFn }) {
+  const [pre, post = ""] = t("nativeMain.doctorHint").split("{cmd}");
+  return <>{pre}<code className="chip">{DOCTOR_CMD}</code>{post}</>;
+}
+
 /** Pure view; credentials and response/error objects never enter its props. */
 export function NativeMainProfilesView({
   t, id, open, busy, blocked, snapshot: s, label, action, confirmedStopped, previousId, error, result,
@@ -62,7 +68,7 @@ export function NativeMainProfilesView({
       {busy && <p role="status">{t("nativeMain.working")}</p>}
       {error && <div role="alert" className="notice notice-err">
         <p>{t(error === "STATE_CHANGED" ? "nativeMain.changed" : "nativeMain.error")}</p>
-        <code>{error}</code> <code>{DOCTOR_CMD}</code>
+        <code>{error}</code> <DoctorHint t={t} />
       </div>}
       {result && <p role="status" className="notice">{t(result === "saved" ? "nativeMain.saved"
         : result === "restart" ? "nativeMain.restart" : "nativeMain.done")}</p>}
