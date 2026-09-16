@@ -208,6 +208,35 @@ readable user text, and records `conversationStateScrub: "account-change"` on th
 without account identifiers. Once the new account issues its own state, later turns carry it
 normally. `canPortConversationState` is local until `src/routing/identity-domains.ts` lands.
 
+### Uploaded files do not move between accounts
+
+An uploaded `file_id` has always been classified as account-bound, and the scrub has always
+removed only `previous_response_id` and `conversation`. A body whose only account-bound state was
+a file reference therefore reported nothing scrubbed and went to the new account unchanged.
+
+Deleting the reference is not the contract. A file reference is content the caller attached, not
+continuation state the turn can do without, and dropping it silently answers a different question
+than the one that was asked. `accountChangeFileReferenceRefusal` reads the carriers directly
+rather than through the portability verdict, because that verdict reports the first reason it
+finds: a body carrying both a previous response id and a file reference reports only the former,
+and the file would slip through the scrub.
+
+The initial `/v1/responses` selection and the native compact dispatch answer HTTP 400, not a
+retryable status, and the message names both the cause and the remedy. That message carries more
+than the immediate failure on purpose: the reference stays in conversation history, so every later
+turn is refused the same way until the files are re-uploaded under the serving account or the
+conversation is restarted, and a caller told only that the reference is invalid would resend
+unchanged and see a dead conversation.
+
+The alternate-account paths refuse the move instead of raising a status, because an earlier
+response already exists to return. `conversationCarriesUploadedFiles` answers from the body alone,
+so both the Responses retry helper and the compact retry ask before resolving an alternate: no
+send is reserved, the first response is never cancelled, and the caller returns the original
+upstream rejection. A same-account replay such as the gated-model 400 ladder is unaffected, and a
+single-account install never reaches any of this because serving and issuing accounts cannot
+differ. Pinning a file-carrying conversation to its issuing account is routing-affinity work and
+is tracked separately.
+
 > Decision record: [ADR-0039](../decisions/ADR-0039-responses-http-sse.md)
 
 ### Mixed-wire provider defaults
@@ -238,6 +267,16 @@ Native Responses participates in the same pre-stream OAuth HTTP-429 account rota
 bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
 the complete credential/transport/replay identity, and attributes usage to the serving account.
 Single-account installs do not retry; a missing alternate credential preserves the original error.
+
+`shouldRetryCodexPoolAccountQuota` withholds that rotation when the 429 or 402 body names an
+organization- or project-scoped exhaustion (`codexScopedExhaustionCode` in
+`src/codex/quota-rejection.ts`). Every credential inside the refusing organization meets the same
+counter, so the move would pay a second cold prompt prefix for no new capacity. Withholding the
+move does not withhold the accounting: `src/server/responses/passthrough-delivery.ts` applies the
+response's quota headers to the serving account and records the 429 outcome on the ordinary
+delivery path, so the account still earns its cooldown and leaves the selection pool. The gate
+fails closed — an empty, truncated, unparseable, duplicate-keyed or aborted body keeps the broad
+behaviour, and `rate_limit_exceeded`, `slow_down` and plan-level exhaustion still rotate.
 Credential-refresh failures are fenced by both the account generation and a global routing-state
 generation. Reauthentication advances the account fence; replacing the whole routing roster
 advances the global fence. A late failure from either obsolete state is ignored, while failures

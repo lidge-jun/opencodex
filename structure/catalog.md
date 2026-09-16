@@ -285,9 +285,10 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   Every domain carries `evidence` alongside its provenance: a rule that documents only that two
   credentials are in different domains never lets an equal key mean "shared". OpenAI's cache rule
   is the case that forces it — caches are documented as not shared across organizations or
-  processing regions, while changing keys inside one organization is documented as not
-  guaranteeing a hit, so a different org or region relates `distinct` and the same org and region
-  relates `unknown`. OpenAI quota, Anthropic workspace cache, and Azure deployment domains carry
+  regional processing boundaries, while no documentation states that two keys inside one
+  organization do share a cache, so a different org or region relates `distinct` and the same org
+  and region relates `unknown`. The absent promise is what withholds `shared` there, not a
+  documented denial. OpenAI quota, Anthropic workspace cache, and Azure deployment domains carry
   the sharing half as well and still relate `shared`.
 - **A declared credential group cannot mean two things** (`src/routing/identity-domains.ts`,
   `src/config.ts`). `credentialGroupIssues` is the one definition of a valid grouping: unique

@@ -115,6 +115,7 @@ import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
   applyAccountChangeConversationStateScrub,
+  accountChangeFileReferenceRefusal,
 } from "./account-change-state";
 
 /** Parses, selects, and admits one request without changing the dispatch policy. */
@@ -921,6 +922,14 @@ export async function prepareResponsesRequest(
   {
     const binding = conversationStateBindingFromAuth(admissionState.authCtx, poolAffinityKey);
     if (binding) {
+      // Before the scrub, because a file reference is refused rather than removed and the
+      // refusal has to happen while there is still no dispatch to undo.
+      const refusal = accountChangeFileReferenceRefusal({
+        body: parsed._rawBody,
+        bindingKey: binding.bindingKey,
+        servingAccountId: binding.accountId,
+      });
+      if (refusal) return refusal;
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
         parsed,

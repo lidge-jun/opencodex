@@ -1069,6 +1069,7 @@
   "server-key-failover-e2e.test.ts": "server",
   "server-kiro-completion-e2e.test.ts": "server",
   "server-kiro-oauth-401-replay.test.ts": "server",
+  "server-live-realtime-fixtures.test.ts": "server",
   "server-live.test.ts": "server",
   "server-loopback-host-gate.test.ts": "server",
   "server-management-auth.test.ts": "server",
