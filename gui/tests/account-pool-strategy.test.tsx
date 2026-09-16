@@ -316,7 +316,7 @@ describe("AccountPoolStrategyControls", () => {
       </LanguageProvider>,
     );
     expect(markupExceeding).toContain("switch threshold (80%)");
-    expect(markupExceeding).toContain("Pinned selection will be released");
+    expect(markupExceeding).toContain("The pinned selection will be released");
 
     const accountOk = {
       ...accountExceeding,

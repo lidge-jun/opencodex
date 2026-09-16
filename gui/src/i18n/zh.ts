@@ -1484,7 +1484,7 @@ export const zh: Record<TKey, string> = {
   "accountPool.strategyLoadFailed": "无法加载轮换策略。",
   "accountPool.strategyUpdateFailed": "无法保存轮换策略。",
   "accountPool.switchAtThreshold": "达到 {threshold}% 切换",
-  "accountPool.drainAtThreshold": "达到 {threshold}% 耗尽",
+  "accountPool.drainAtThreshold": "达到 {threshold}% 时停止分配新任务",
   "accountPool.resetBelowThreshold": "低于 {threshold}% 选最近重置",
   "accountPool.thresholdNotUsed": "不使用阈值",
   "accountPool.proactiveSwitchingOff": "主动切换已关闭",
