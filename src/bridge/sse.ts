@@ -1008,7 +1008,7 @@ export function bridgeToResponsesSSE(
                 : undefined;
               const mapped = toolNsMap?.get(effectiveName);
               const realName = mapped?.name ?? effectiveName;
-              if (options?.declaredToolNames && !options.declaredToolNames.has(effectiveName)) {
+              if (options?.declaredToolNames && options.declaredToolNames.size > 0 && !options.declaredToolNames.has(effectiveName)) {
                 const failure = responseError(
                   502,
                   "upstream_error",

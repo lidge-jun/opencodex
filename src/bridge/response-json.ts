@@ -432,7 +432,7 @@ function buildResponseJSONWithBudget(
         }
         flushToolCall();
         const effectiveName = normalizeDeclaredToolName(e.name, options?.declaredToolNames);
-        if (options?.declaredToolNames && !options.declaredToolNames.has(effectiveName)) {
+        if (options?.declaredToolNames && options.declaredToolNames.size > 0 && !options.declaredToolNames.has(effectiveName)) {
           errorEvent = {
             type: "error",
             message: `routed provider emitted undeclared client tool "${effectiveName}"; only request-declared tools may be called`,
