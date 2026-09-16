@@ -80,6 +80,7 @@ describe("SSE payload rewrite composition", () => {
     // Single colonless data
     expect(sseDataPayload("data")).toBe("");
     expect(sseDataPayload("data\n")).toBe("");
+    expect(sseDataPayload("data\r")).toBe("");
     expect(sseDataPayload("data\r\n")).toBe("");
 
     // Single data with colon
@@ -114,6 +115,7 @@ describe("SSE payload rewrite composition", () => {
 
     // Trailing solitary CR
     expect(sseDataPayload("data: chunk\r")).toBe("chunk");
+    expect(sseDataPayload("data\r")).toBe("");
 
     // Distinguishes near-prefix non-data fields
     expect(sseDataPayload("data-entry: 1\ndatabase: 2")).toBeNull();
