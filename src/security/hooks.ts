@@ -17,7 +17,7 @@ export interface SecurityHookEvent {
   audit?: SecurityAuditEvent;
 }
 
-export type SecurityHookHandler = (event: SecurityHookEvent) => void;
+export type SecurityHookHandler = (event: SecurityHookEvent) => void | Promise<void>;
 
 export class SecurityHookBus {
   private readonly handlers = new Map<SecurityHookName, Set<SecurityHookHandler>>();
@@ -33,7 +33,13 @@ export class SecurityHookBus {
     const set = this.handlers.get(event.name);
     if (!set) return;
     for (const handler of set) {
-      try { handler(event); } catch { /* hooks never throw into the control plane */ }
+      try {
+        void Promise.resolve(handler(event)).catch(() => {
+          /* hooks never reject into the control plane */
+        });
+      } catch {
+        /* hooks never throw into the control plane */
+      }
     }
   }
 }

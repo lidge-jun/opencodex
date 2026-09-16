@@ -25,7 +25,8 @@ export async function withTransientRetry<T>(
       return await fn();
     } catch (error) {
       last = error;
-      const classified = opts.classify?.(error) ?? { retry: true };
+      const classified = opts.classify?.(error);
+      if (!classified) throw error;
       if (!classified.retry || !isTransientFailure(classified.httpStatus ?? null, classified.errorCode)) throw error;
       if (i === attempts - 1) throw error;
       await new Promise(resolve => setTimeout(resolve, backoffMs(i)));

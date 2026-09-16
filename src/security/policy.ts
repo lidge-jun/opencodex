@@ -67,8 +67,6 @@ export function evaluateSecurityPolicy(input: PolicyEvaluationInput): PolicyEval
   // still blocked by default — profile.block_r3 and STRICT_DEFAULTS.r3 are
   // the documented fail-closed knobs even if a future profile tried to lift them.
   if (risk === "R3") {
-    void input.profile.block_r3;
-    void STRICT_DEFAULTS.r3;
     return { decision: "DENY", reason_code: "R3_BLOCKED", policy_version: version, risk_tier: "R3" };
   }
 

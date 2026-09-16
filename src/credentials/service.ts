@@ -153,7 +153,6 @@ export class CredentialRuntimeService {
       status: row.status,
       health_status: row.health_status,
       health_score: row.health_score,
-      secret: maskSecret("masked-display-token"),
       secret_ref: row.secret_ref,
       scopes: row.scopes,
       tags: row.tags,
@@ -337,12 +336,12 @@ export class CredentialRuntimeService {
     const resolved = this.resolveForTrustedBackend(credentialId);
     const adapter = getProviderAdapter(resolved.provider.adapter_type);
     const result = await adapter.validate(resolved);
-    const nextStatus = result.ok ? "valid" : (result.status === "quarantined" ? "quarantined" : "quarantined");
-    assertTransition("validating", nextStatus === "valid" ? "valid" : "quarantined");
+    const nextStatus = result.ok ? "valid" : (result.status === "degraded" ? "degraded" : "quarantined");
+    assertTransition("validating", nextStatus);
     const health = result.health_status;
     const next: CredentialRecord = {
       ...validating,
-      status: nextStatus === "valid" ? "valid" : "quarantined",
+      status: nextStatus,
       health_status: health,
       health_score: result.health_score,
       last_validated_at: ts,
@@ -531,7 +530,6 @@ export class CredentialRuntimeService {
   }
 
   public acquireLease(request: LeaseRequest): LeaseGrant {
-    this.runExpiryPass();
     const provider = this.db.getProviderBySlug(request.provider) ?? this.db.getProvider(request.provider);
     if (!provider) throw new Error(`Unknown provider: ${request.provider}`);
     const candidates = this.listCandidates(provider.slug).filter(c => c.routing_score > 0);

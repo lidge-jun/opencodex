@@ -173,16 +173,15 @@ export function validateSkillPackage(
         fatal: false,
       });
     }
-    if (manifest.metadata) {
-      if (!manifest.metadata.name) {
-        issues.push({ field: "metadata.name", message: "Metadata name is required", fatal: true });
-      }
-      if (!manifest.metadata.slug) {
-        issues.push({ field: "metadata.slug", message: "Metadata slug is required", fatal: true });
-      }
-      if (!manifest.metadata.version) {
-        issues.push({ field: "metadata.version", message: "Metadata version is required", fatal: true });
-      }
+    const metadata = manifest.metadata;
+    if (!metadata?.name) {
+      issues.push({ field: "metadata.name", message: "Metadata name is required", fatal: true });
+    }
+    if (!metadata?.slug) {
+      issues.push({ field: "metadata.slug", message: "Metadata slug is required", fatal: true });
+    }
+    if (!metadata?.version) {
+      issues.push({ field: "metadata.version", message: "Metadata version is required", fatal: true });
     }
   }
 

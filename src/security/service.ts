@@ -68,11 +68,12 @@ export class SecurityControlService {
   }
 
   private bootstrap(seedDemo: boolean): void {
+    if (!seedDemo) return;
     if (this.db.listPolicyProfiles().length === 0 || this.db.listAgents().length === 0) {
       seedDemoEnvironment(this.db);
       return;
     }
-    if (seedDemo && !this.db.getCampaign(DEMO.campaignId)) {
+    if (!this.db.getCampaign(DEMO.campaignId)) {
       seedDemoEnvironment(this.db);
     }
   }
@@ -749,6 +750,7 @@ export class SecurityControlService {
         approval_id: input.approval_id,
         reason: "Policy evaluation (no extra side effects beyond audit/execution record).",
       });
+      const capability = this.db.getCapability(input.capability_id);
       return {
         id: result.execution_id ?? id("pdc"),
         campaign_id: input.campaign_id,
@@ -757,7 +759,7 @@ export class SecurityControlService {
         decision: result.decision,
         reason_code: result.reason_code,
         policy_version: result.policy_version,
-        risk_tier: "R1",
+        risk_tier: capability?.risk_tier ?? "R2",
         created_at: nowIso(),
       };
     }

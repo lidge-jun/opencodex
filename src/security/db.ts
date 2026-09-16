@@ -533,7 +533,8 @@ export class SecurityDatabase {
       (id, name, default_risk_ceiling, block_r3, r2_requires_approval, approval_ttl_minutes, self_approval, require_authorization, require_scope_token, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, default_risk_ceiling=excluded.default_risk_ceiling, block_r3=excluded.block_r3,
-        r2_requires_approval=excluded.r2_requires_approval, approval_ttl_minutes=excluded.approval_ttl_minutes, self_approval=excluded.self_approval`)
+        r2_requires_approval=excluded.r2_requires_approval, approval_ttl_minutes=excluded.approval_ttl_minutes, self_approval=excluded.self_approval,
+        require_authorization=excluded.require_authorization, require_scope_token=excluded.require_scope_token`)
       .run(row.id, row.name, row.default_risk_ceiling, row.block_r3 ? 1 : 0, row.r2_requires_approval ? 1 : 0,
         row.approval_ttl_minutes, row.self_approval ? 1 : 0, row.require_authorization ? 1 : 0, row.require_scope_token ? 1 : 0, row.created_at);
   }
@@ -618,7 +619,10 @@ export class SecurityDatabase {
     this.db.prepare(`INSERT INTO security_capabilities
       (id, name, risk_tier, network_access, requires_scope, requires_approval, restricted, allowed_environments, capabilities, prohibited_capabilities, enabled)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled, restricted=excluded.restricted, risk_tier=excluded.risk_tier`)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name, risk_tier=excluded.risk_tier, network_access=excluded.network_access,
+        requires_scope=excluded.requires_scope, requires_approval=excluded.requires_approval, restricted=excluded.restricted,
+        allowed_environments=excluded.allowed_environments, capabilities=excluded.capabilities,
+        prohibited_capabilities=excluded.prohibited_capabilities, enabled=excluded.enabled`)
       .run(row.id, row.name, row.risk_tier, row.network_access ? 1 : 0, row.requires_scope ? 1 : 0, row.requires_approval ? 1 : 0,
         row.restricted ? 1 : 0, jsonText(row.allowed_environments), jsonText(row.capabilities), jsonText(row.prohibited_capabilities), row.enabled ? 1 : 0);
   }
@@ -655,7 +659,11 @@ export class SecurityDatabase {
     this.db.prepare(`INSERT INTO security_mcp_servers
       (id, name, transport, endpoint, capabilities, risk_tier, network_policy, requires_scope, requires_approval, credential_ref, health_state, kill_switch, last_verified_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET health_state=excluded.health_state, kill_switch=excluded.kill_switch, last_verified_at=excluded.last_verified_at`)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name, transport=excluded.transport, endpoint=excluded.endpoint,
+        capabilities=excluded.capabilities, risk_tier=excluded.risk_tier, network_policy=excluded.network_policy,
+        requires_scope=excluded.requires_scope, requires_approval=excluded.requires_approval,
+        credential_ref=excluded.credential_ref, health_state=excluded.health_state, kill_switch=excluded.kill_switch,
+        last_verified_at=excluded.last_verified_at`)
       .run(row.id, row.name, row.transport, row.endpoint, jsonText(row.capabilities), row.risk_tier, row.network_policy,
         row.requires_scope ? 1 : 0, row.requires_approval ? 1 : 0, row.credential_ref ?? null, row.health_state, row.kill_switch ? 1 : 0, row.last_verified_at ?? null);
   }

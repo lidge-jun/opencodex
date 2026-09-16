@@ -224,6 +224,7 @@ export class CredentialDatabase {
       CREATE INDEX IF NOT EXISTS idx_cred_provider ON credential_records(provider_id, routing_eligible);
       CREATE INDEX IF NOT EXISTS idx_cred_health_cred ON credential_health(credential_id, checked_at);
       CREATE INDEX IF NOT EXISTS idx_cred_leases_status ON credential_leases(status, expires_at);
+      CREATE INDEX IF NOT EXISTS idx_cred_leases_credential ON credential_leases(credential_id, status);
       CREATE INDEX IF NOT EXISTS idx_cred_oauth_state ON credential_oauth_sessions(state_token_hash);
       CREATE INDEX IF NOT EXISTS idx_cred_audit_created ON credential_audit_events(created_at);
       CREATE INDEX IF NOT EXISTS idx_cred_approvals_status ON credential_approvals(status, expires_at);

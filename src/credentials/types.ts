@@ -155,7 +155,6 @@ export interface CredentialPublicView {
   status: CredentialStatus;
   health_status: HealthStatus;
   health_score: number;
-  secret: string;
   secret_ref: string;
   scopes: string[];
   tags: string[];

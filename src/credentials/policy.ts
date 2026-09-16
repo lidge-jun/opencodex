@@ -93,10 +93,10 @@ export function evaluateCredentialPolicy(policies: CredentialPolicy[], ctx: Poli
         return { decision: "deny", policy_id: policy.id, reasons: ["budget-exhausted"] };
       }
     }
-    reasons.push("credential-active", "health-score-pass", "agent-allowed");
-    return { decision: "allow", policy_id: policy.id, reasons };
   }
-  return { decision: "deny", policy_id: null, reasons: ["default-deny"] };
+
+  reasons.push("credential-active", "health-score-pass", "agent-allowed");
+  return { decision: "allow", policy_id: applicable[0]?.id ?? null, reasons };
 }
 
 export function routingScore(input: {

@@ -30,7 +30,7 @@ export function containsSensitiveMemory(body: string): boolean {
 }
 
 export function sanitizeReusableMemory(body: string): { body: string; sanitized: boolean; rejected: boolean } {
-  if (containsSensitiveMemory(body) && SECRET_PATTERNS.some(p => p.test(body))) {
+  if (containsSensitiveMemory(body)) {
     return { body: "", sanitized: false, rejected: true };
   }
   const { redacted } = redactSecrets(body);
@@ -80,7 +80,7 @@ export class LocalSecurityMemoryAdapter implements SecurityMemoryBackend {
       tier: "reusable",
       kind: input.kind,
       body: sanitized.body,
-      sanitized: true,
+      sanitized: sanitized.sanitized,
       sha256: sha256(sanitized.body),
       created_by: input.createdBy,
       created_at: now,

@@ -24,7 +24,7 @@ export const MASK_PLACEHOLDER = "********";
 
 export const LEGAL_STATUS_TRANSITIONS: Record<CredentialStatus, readonly CredentialStatus[]> = {
   new: ["validating", "disabled", "revoked"],
-  validating: ["valid", "quarantined", "disabled", "revoked"],
+  validating: ["valid", "degraded", "quarantined", "disabled", "revoked"],
   valid: ["active", "quarantined", "disabled", "revoked", "expired", "validating", "rotating"],
   active: ["degraded", "quarantined", "expired", "revoked", "rotating", "disabled", "validating"],
   degraded: ["active", "quarantined", "disabled", "revoked", "expired", "validating", "rotating"],

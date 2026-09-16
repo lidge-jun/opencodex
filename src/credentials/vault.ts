@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { MASTER_KEY_ENV, MASTER_KEY_ID_ENV } from "./constants";
 import type { EncryptedEnvelopeV1 } from "./types";
 
@@ -23,8 +23,8 @@ export interface VaultService {
   keyId(): string;
 }
 
-function deriveKey(master: string): Buffer {
-  return createHash("sha256").update(`pao.credential.vault.v1:${master}`).digest();
+function deriveKey(master: string, salt = "pao.credential.vault.v1"): Buffer {
+  return scryptSync(master, salt, 32);
 }
 
 function resolveMaster(env: NodeJS.ProcessEnv = process.env): { key: Buffer; keyId: string } | null {

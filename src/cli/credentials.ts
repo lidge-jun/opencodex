@@ -121,7 +121,7 @@ Options:
         else {
           console.log(`Credentials (${rows.length}):`);
           for (const row of rows) {
-            console.log(`- ${row.id} [${row.status}/${row.health_status}] ${row.provider_slug} ${row.name} secret=${row.secret}`);
+            console.log(`- ${row.id} [${row.status}/${row.health_status}] ${row.provider_slug} ${row.name} ref=${row.secret_ref}`);
           }
         }
         return 0;

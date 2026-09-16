@@ -58,16 +58,31 @@ export async function handleSkillRoutes(ctx: ManagementContext): Promise<Respons
   }
   if (pathname === "/api/skill-sources" && req.method === "POST") {
     const body = await readManagementJsonBody(req) as Record<string, unknown>;
+    const VALID_SOURCE_TYPES = new Set([
+      "LOCAL_FOLDER", "GIT", "GITHUB", "SKILLS_SH", "PRIVATE_GIT",
+      "GENERATED", "BUNDLED", "ORGANIZATION", "UNKNOWN",
+    ]);
+    const VALID_TRUST_LEVELS = new Set(["trusted", "verified", "community", "unknown", "untrusted"]);
+
+    const rawSourceType = String(body.source_type || "LOCAL_FOLDER");
+    if (!VALID_SOURCE_TYPES.has(rawSourceType)) {
+      return jsonResponse({ error: `Invalid source_type: ${rawSourceType}` }, 400, req, config);
+    }
+    const rawTrustLevel = String(body.trust_level || "community");
+    if (!VALID_TRUST_LEVELS.has(rawTrustLevel)) {
+      return jsonResponse({ error: `Invalid trust_level: ${rawTrustLevel}` }, 400, req, config);
+    }
+
     const now = new Date().toISOString();
     const source = {
       id: String(body.id || `src_${Date.now()}`),
-      source_type: (body.source_type as any) || "LOCAL_FOLDER",
+      source_type: rawSourceType as any,
       display_name: String(body.display_name || body.id),
       base_url: body.base_url ? String(body.base_url) : undefined,
       repository_url: body.repository_url ? String(body.repository_url) : undefined,
       default_ref: body.default_ref ? String(body.default_ref) : undefined,
       auth_ref: body.auth_ref ? String(body.auth_ref) : undefined,
-      trust_level: (body.trust_level as any) || "community",
+      trust_level: rawTrustLevel as any,
       enabled: body.enabled !== false,
       created_at: now,
       updated_at: now,

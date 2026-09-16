@@ -66,5 +66,11 @@ export function recordError(
 
 export function resetBreaker(db: SecurityDatabase, campaignId: string, kind: CircuitBreakerKind, now = new Date()): void {
   const current = ensureBreaker(db, campaignId, kind, now);
-  db.upsertBreaker({ ...current, state: "CLOSED", updated_at: now.toISOString() });
+  db.upsertBreaker({
+    ...current,
+    state: "CLOSED",
+    trip_count: 0,
+    last_tripped_at: undefined,
+    updated_at: now.toISOString(),
+  });
 }

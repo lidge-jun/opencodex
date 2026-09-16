@@ -158,8 +158,9 @@ export function seedDemoEnvironment(db: SecurityDatabase, now = new Date()): typ
       reason: "Administrative interface excluded from recon.",
       created_at: ts,
     });
-  } catch {
-    /* re-seed is idempotent enough for demo; unique PK collisions are ignored */
+  } catch (err: unknown) {
+    const isConstraint = err instanceof Error && (err.message.includes("constraint") || err.message.includes("UNIQUE"));
+    if (!isConstraint) throw err;
   }
 
   db.upsertCampaign({

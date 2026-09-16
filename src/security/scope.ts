@@ -17,8 +17,9 @@ export function normalizeAsset(assetClass: AssetClass, raw: string): string {
     case "url_prefix": {
       try {
         const url = new URL(value);
+        const host = url.port ? `${stripWww(url.hostname.toLowerCase())}:${url.port}` : stripWww(url.hostname.toLowerCase());
         const path = url.pathname.replace(/\/+$/, "") || "/";
-        return `${url.protocol}//${stripWww(url.hostname.toLowerCase())}${path}${url.search}`;
+        return `${url.protocol}//${host}${path}${url.search}`;
       } catch {
         return value.toLowerCase().replace(/\/+$/, "");
       }
@@ -104,8 +105,10 @@ export function assetMatches(asset: { asset_class: AssetClass; normalized_asset:
       const host = hostOf(target);
       return host ? domainMatches(asset.normalized_asset, host, true) : false;
     }
-    case "url_prefix":
-      return normalizedTarget === asset.normalized_asset || normalizedTarget.startsWith(asset.normalized_asset.replace(/\/+$/, "") + "/") || normalizedTarget.startsWith(asset.normalized_asset);
+    case "url_prefix": {
+      const cleanPrefix = asset.normalized_asset.replace(/\/+$/, "");
+      return normalizedTarget === asset.normalized_asset || normalizedTarget === cleanPrefix || normalizedTarget.startsWith(`${cleanPrefix}/`);
+    }
     case "ip":
       return ipOf(target) === asset.normalized_asset;
     case "cidr": {

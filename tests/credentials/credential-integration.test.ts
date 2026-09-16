@@ -42,7 +42,7 @@ describe("credential runtime integration", () => {
     expect(created.status).toBe("active");
     expect(created.health_status).toBe("healthy");
     expect(created.routing_eligible).toBe(true);
-    expect(created.secret).not.toBe(DEMO_SECRET);
+    expect(created.secret_ref).toBeDefined();
     expect(JSON.stringify(created)).not.toContain(DEMO_SECRET);
 
     const grant = svc.acquireLease({
