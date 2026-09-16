@@ -70,8 +70,10 @@ it does not silently skip assertions.
 The offline fixture uses the production CSS bundle and App header markup, not
 copied CSS rules. Across 128 combinations of light/dark theme, eight viewport
 widths, four release/prerelease/build strings and two font sizes, it verifies full
-text visibility, containment, ordinary desktop releases staying on one line, and
-no intersection with the mobile drawer close button. Results and a screenshot are
+text visibility, containment, short release text staying on one line, and
+no intersection with the mobile drawer close button. A short badge stays beside
+the product name whenever the measured row budget allows it; larger OS font
+fallbacks may move the complete badge below the name rather than clip it. Results and a screenshot are
 written to `.tmp/sidebar-version-browser/`; pass an output directory after the
 command to change it. No management API, proxy credentials, or live providers are
 used.

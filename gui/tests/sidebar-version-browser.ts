@@ -104,8 +104,17 @@ try {
         const overlapsClose = c.width > 0 && b.left < c.right && b.right > c.left && b.top < c.bottom && b.bottom > c.top;
         const style = getComputedStyle(badge);
         const shortRelease = /^v\\d+\\.\\d+\\.\\d+$/.test(badge.textContent);
-        const singleLine = !shortRelease || innerWidth <= 760 || (text.length === 1 && b.top < n.bottom);
-        return { ok: visible && bounded && complete && !overlapsClose && singleLine, badge:b, brand:h, close:c, text, overlapsClose, bounded, complete, singleLine, overflow:style.textOverflow, value:badge.textContent };
+        const headerStyle = getComputedStyle(brand);
+        const logo = box(brand.querySelector(".brand-logo"));
+        const contentWidth = h.width - parseFloat(headerStyle.paddingLeft) - parseFloat(headerStyle.paddingRight);
+        const requiredWidth = logo.width + n.width + b.width + 2 * parseFloat(headerStyle.columnGap);
+        // Font fallbacks differ by OS. Wrapping the whole badge when the row is
+        // genuinely full is intended; clipping its text or splitting a short
+        // version is not. Require the same row only when all three items fit.
+        const singleLine = !shortRelease || text.length === 1;
+        const rowFits = requiredWidth <= contentWidth + .5;
+        const sameRowWhenPossible = !shortRelease || !rowFits || (b.top < n.bottom && b.bottom > n.top);
+        return { ok: visible && bounded && complete && !overlapsClose && singleLine && sameRowWhenPossible, badge:b, brand:h, name:n, close:c, text, overlapsClose, bounded, complete, singleLine, sameRowWhenPossible, rowFits, requiredWidth, contentWidth, font:headerStyle.fontFamily, overflow:style.textOverflow, value:badge.textContent };
       })()`);
       const row = { theme, width, version, wideFont, ...geometry };
       cases.push(row);
