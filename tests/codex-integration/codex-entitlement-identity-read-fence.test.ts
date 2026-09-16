@@ -38,6 +38,13 @@ const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
 /** Count reads of the pool account store, whoever performs them. */
 function countAccountStoreReads(): { reads: () => number; restore: () => void } {
+  // Spying the `node:fs` namespace DOES observe production code that binds `readFileSync` as an
+  // ESM named import, which is how `src/codex/account-store.ts` binds it. Established in-process
+  // precedent: codex-account-delete-atomicity.test.ts asserts `toHaveBeenLastCalledWith` against a
+  // read performed by production code, and codex-account-store.test.ts intercepts this module's own
+  // `statSync`/`fstatSync` the same way. The case that does NOT work is a spawned child holding its
+  // own `require("node:fs")` (codex-inject-integration.test.ts:146); nothing here spawns one, and
+  // the calibration case below fails loudly if that ever stops being true.
   // `readFileSync` is heavily overloaded, so the pass-through is typed structurally and cast once
   // rather than trying to satisfy every overload: this counts calls, it does not model the API.
   const original = fs.readFileSync as (...args: unknown[]) => unknown;
@@ -147,6 +154,21 @@ describe("the denial pass resolves credential identity once, not once per cache 
         excludeAccountIds: new Set(["fenced"]),
       })).toBeUndefined();
       expect(counter.reads()).toBe(0);
+    } finally {
+      counter.restore();
+    }
+  });
+
+  test("the read counter observes production reads at all", () => {
+    // Calibration for the zero-expecting case above, which is indistinguishable from a counter
+    // that can see nothing. One `readCodexAccountRecord` is exactly one store read by
+    // construction, so this pins the oracle rather than the behavior under test.
+    storedIdentity("calibration");
+
+    const counter = countAccountStoreReads();
+    try {
+      expect(readCodexAccountRecord("calibration")).not.toBeNull();
+      expect(counter.reads()).toBe(1);
     } finally {
       counter.restore();
     }

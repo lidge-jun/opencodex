@@ -1323,9 +1323,13 @@ export function cachedAvailableAccountGatedNativeModels(
 }
 
 export function isCodexModelEntitlementSnapshotCurrent(snapshot: CodexModelEntitlementSnapshot): boolean {
-  const identityOf = credentialIdentityResolver();
   for (const [accountId, identity] of snapshot.credentialIdentities) {
-    if (identityOf(accountId) !== identity) return false;
+    // Deliberately per-id, unlike the passes above. This is a fail-closed publication gate asking
+    // whether a snapshot is STILL current, so the freshest possible answer per account is the
+    // point of the read. A pass-wide snapshot would be a coherence win everywhere else and a
+    // small weakening here: it could answer "current" for a later account from a record a
+    // concurrent reauth had already replaced.
+    if (currentCredentialIdentity(accountId) !== identity) return false;
   }
   return true;
 }
