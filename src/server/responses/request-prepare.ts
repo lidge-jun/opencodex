@@ -35,6 +35,7 @@ import {
   codexPoolAffinityKey,
   previewCodexPoolLineage,
   applyCodexAuthContextToProvider,
+  hasCallerCodexBearer,
 } from "../../codex/auth-context";
 import {
   copyPreviousResponseReplayProvenance,
@@ -456,9 +457,34 @@ export async function prepareResponsesRequest(
     && (route.codexAccountId === undefined || initialSubagentFallbackChain !== null)
     ? codexAccountSelectionForTurn(options.turnAdmissionLease)?.()
     : undefined;
+  // The credential headers final authentication will be given, resolved once and reused by
+  // everything below that has to predict what final auth decides.
+  const previewAuthHeaders = codexRouteCredentialDomainHeaders(
+    req,
+    route,
+    options,
+    credentialDomainWasRewritten,
+  );
+  // Does the CALLER own the credential this request will authenticate with? Validated exactly
+  // the way final auth validates it: the route ownership predicate AND the caller-bearer check
+  // `resolveCodexAuthContext` re-applies to these same headers.
+  const previewRequestScopedMainCredential = codexRouteCredentialOwnership(
+    previewAuthHeaders,
+    config,
+    route,
+    options,
+  ).requestScopedMainCredential && hasCallerCodexBearer(previewAuthHeaders);
   const nativeMainRecoveryBlocked = isNativeMainTrafficBlocked();
-  const nativeMainReadsForbidden = nativeMainRecoveryBlocked
+  // The same three inputs final auth ORs together (src/codex/auth-context.ts). Request-owned
+  // ownership is first there and has to be first here: computing the preview fence from
+  // recovery and drain state alone let a `thread_spawn` carrying a forwardable caller bearer
+  // read the physical main token it is forbidden to touch, and score main differently than the
+  // resolution this preview exists to predict.
+  const nativeMainReadsForbidden = previewRequestScopedMainCredential
+    || nativeMainRecoveryBlocked
     || previewSelectionAdmission?.mainProfileDraining === true;
+  // Deliberately NOT fenced on ownership: final auth derives `nativeMainSelectionOnly` from the
+  // drain alone, and adding a term here would diverge from it in the other direction.
   const previewSelectionOptions = {
     nativeMainSelectionOnly: !nativeMainRecoveryBlocked
       && previewSelectionAdmission?.mainProfileDraining === true,
@@ -484,22 +510,11 @@ export async function prepareResponsesRequest(
   // deliberately create no affinity at all -- previewing a family binding for one of those would
   // hand model fallback an account this request can never authenticate as. Read-only: the record
   // is written by the resolution that binds, never by a preview that may own no Pool state.
-  const previewAuthHeaders = codexRouteCredentialDomainHeaders(
-    req,
-    route,
-    options,
-    credentialDomainWasRewritten,
-  );
   const poolLineage = previewCodexPoolLineage(previewAuthHeaders, options.codexAuthPolicy ?? config, {
     accountId: route.codexAccountId,
     modelId: route.modelId,
     admission: options.admission,
-    requestScopedMainCredential: codexRouteCredentialOwnership(
-      previewAuthHeaders,
-      config,
-      route,
-      options,
-    ).requestScopedMainCredential,
+    requestScopedMainCredential: previewRequestScopedMainCredential,
   });
 
   try {
@@ -681,6 +696,21 @@ export async function prepareResponsesRequest(
           const fallback = (() => {
             try {
               const recoveryNativeMainBlocked = isNativeMainTrafficBlocked();
+              // Recompute ownership here rather than reusing the pre-decryption value: a
+              // subagent fallback above may have re-routed, and `requestScopedMainCredential`
+              // is a function of the route as well as the headers.
+              const recoveryAuthHeaders = codexRouteCredentialDomainHeaders(
+                req,
+                route,
+                options,
+                credentialDomainWasRewritten,
+              );
+              const recoveryRequestScopedMainCredential = codexRouteCredentialOwnership(
+                recoveryAuthHeaders,
+                config,
+                route,
+                options,
+              ).requestScopedMainCredential && hasCallerCodexBearer(recoveryAuthHeaders);
               const recoverySelectionOptions = {
                 nativeMainSelectionOnly: !recoveryNativeMainBlocked
                   && recoverySelectionAdmission?.mainProfileDraining === true,
@@ -707,9 +737,12 @@ export async function prepareResponsesRequest(
                   ...recoverySelectionOptions,
                   modelEligibleAccountIds,
                   // Same read fence as the first preview, evaluated against recovery's own view
-                  // of the drain rather than the one captured before decryption.
+                  // of the drain AND of credential ownership, rather than the one captured before
+                  // decryption. Omitting ownership here would reopen the fence the first preview
+                  // closes, on the one path that re-previews after the route may have moved.
                   deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow, {
-                    excludeAccountIds: recoveryNativeMainBlocked
+                    excludeAccountIds: recoveryRequestScopedMainCredential
+                      || recoveryNativeMainBlocked
                       || recoverySelectionAdmission?.mainProfileDraining === true
                       ? new Set([MAIN_CODEX_ACCOUNT_ID])
                       : undefined,
