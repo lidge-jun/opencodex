@@ -154,4 +154,16 @@ describe("Command Code model-key spelling", () => {
     }) as CommandCodeGeneratedConfig;
     expect(Object.keys(document.provider[OPENCODE_PROVIDER_ID]!.models).length).toBe(2);
   });
+
+  test("preserves distinct ids that collide only after slash encoding", () => {
+    const document = buildCommandCodeClientConfig({
+      ...context(),
+      models: [
+        { namespaced: "command-code/a/b-c", provider: "command-code", id: "a/b-c" },
+        { namespaced: "command-code/a-b/c", provider: "command-code", id: "a-b/c" },
+      ],
+    }) as CommandCodeGeneratedConfig;
+    const models = document.provider[OPENCODE_PROVIDER_ID]!.models;
+    expect(Object.keys(models)).toEqual(["command-code/a-b/c", "command-code/a/b-c"]);
+  });
 });

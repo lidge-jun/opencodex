@@ -51,14 +51,17 @@ function canonicalSpellingOf(namespaced: string): string {
 export function buildCommandCodeClientConfig(ctx: ExportContext): CommandCodeGeneratedConfig {
   const models: Record<string, CommandCodeModelEntry> = {};
   // Fold interchangeable spellings of one model onto a single key. The first
-  // occurrence wins; normalizeExportModels has already sorted, so the surviving key
-  // is deterministic across runs.
-  const emittedKeys = new Set<string>();
+  // occurrence wins per provider+id identity; distinct model ids that happen to
+  // share a lossy spelling collision must both remain addressable.
+  const emittedIdentitiesByCollision = new Map<string, Set<string>>();
   for (const model of normalizeExportModels(ctx.models)) {
     const emittedKey = model.namespaced;
     const collisionKey = canonicalSpellingOf(model.namespaced);
-    if (emittedKeys.has(collisionKey)) continue;
-    emittedKeys.add(collisionKey);
+    const identity = `${model.provider}\u0000${model.id}`;
+    const identities = emittedIdentitiesByCollision.get(collisionKey) ?? new Set<string>();
+    if (identities.has(identity)) continue;
+    identities.add(identity);
+    emittedIdentitiesByCollision.set(collisionKey, identities);
     const entry: CommandCodeModelEntry = {};
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
