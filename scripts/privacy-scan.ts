@@ -175,6 +175,30 @@ function isAllowedBearerToken(file: string, token: string): boolean {
   return /^(?:access|stack|usage-debug)-token(?:-value)?-[A-Za-z0-9-]+$/.test(token);
 }
 
+/**
+ * Placeholder endpoints that are documentation, not infrastructure.
+ *
+ * Deliberately narrow: RFC 2606 reserved names, an obviously templated value, and
+ * SSH's own `%h`/`%p` tokens. Anything else naming a host or an account is treated
+ * as real, because the cost of a false positive here is one allowlist line and the
+ * cost of a false negative is a published endpoint.
+ */
+function isAllowedSshEndpoint(value: string): boolean {
+  const v = value.trim();
+  if (!v) return true;
+  // A bare substitution token is a template. A real command that merely CONTAINS
+  // `%h` is not — `ProxyCommand /opt/homebrew/bin/cloudflared access ssh --hostname %h`
+  // names the binary, the access method and the tunnel, which is the leak itself.
+  if (/^%[hpr]$/.test(v)) return true;
+  // `<host>`, `$HOST`, `{{ runner }}` — templated rather than literal.
+  if (/^[<{$]/.test(v)) return true;
+  // RFC 2606 / RFC 6761 reserved documentation names.
+  if (/(?:^|[.@\s])(?:example\.(?:com|net|org)|example|invalid|localhost|test)(?:$|[\s:/])/i.test(v)) return true;
+  // Generic account placeholders, matching the home-path allowlist's spirit.
+  if (/^(?:user|username|me|you|someone|root|ubuntu|runner)$/i.test(v)) return true;
+  return false;
+}
+
 function addFindingsForPattern(
   findings: Finding[],
   file: string,
@@ -238,6 +262,44 @@ export function scanText(file: string, text: string): Finding[] {
     match => isAllowedTokenLooking(file, match[0]),
   );
   /*
+   * SSH config directives naming a real endpoint.
+   *
+   * `privacy-scan` knew about tokens, emails and home paths, but nothing about
+   * infrastructure — so a devlog could publish a working `Host` block and this
+   * scan passed. That is how `ssh-macmini.lidgeai.com`, `User junny` and the
+   * Cloudflare `ProxyCommand` shipped in `260731_pr_merge_round/022` and had to
+   * be removed by hand in #4623.
+   *
+   * Anchored to the SSH config grammar — directive at the start of a line, with
+   * optional indent — because `User` is an ordinary English word and matching it
+   * in prose would make this unusable. `HostName`/`ProxyCommand` are distinctive
+   * enough on their own but are anchored the same way for consistency.
+   */
+  addFindingsForPattern(
+    findings,
+    file,
+    text,
+    "ssh-endpoint",
+    // `HostName` only, and the value must be the whole rest of the line.
+    //
+    // `User` is deliberately NOT matched. It is an ordinary English word, and
+    // anchoring it to the SSH grammar still fires on wrapped prose — "…the\nuser
+    // configuration." and "…the\nuser notice." both matched a line-anchored
+    // single-token form during development. The username alone is also the least
+    // sensitive part of a Host block, and `MAINTAINER_HOME_USERNAME` already
+    // covers the maintainer's account in path form.
+    /^[ \t]*HostName[ \t]+(\S+)[ \t]*$/gim,
+    match => isAllowedSshEndpoint(match[1] ?? ""),
+  );
+  addFindingsForPattern(
+    findings,
+    file,
+    text,
+    "ssh-endpoint",
+    /^[ \t]*ProxyCommand[ \t]+(\S.*)$/gim,
+    match => isAllowedSshEndpoint(match[1] ?? ""),
+  );
+  /*
    * Meta Model API keys. The pattern above does not match them: the measured shape is
    * `LLM|<16 digits>|<27 chars>`, verified against a real key's grammar (never its value).
    * The `meta-muse` provider imports one of these, so a leak has to be detectable here.
@@ -266,6 +328,21 @@ function scanFile(file: string): Finding[] {
  */
 const REDACTED_FINDING_KINDS = new Set(["bearer-token", "token-looking", "meta-api-key"]);
 
+/**
+ * Run the scan only when invoked as a script.
+ *
+ * Previously this ran at module scope, so `import { scanText }` executed a full
+ * repo scan as a side effect — and a failing scan called `process.exit(1)`,
+ * taking the importing test process with it. That coupling is invisible while
+ * the tree is clean and bites the moment a detector finds something: adding the
+ * `ssh-endpoint` rule below broke `privacy-scan-meta-key.test.ts`, which does
+ * nothing but import the same seam this file exports for testing.
+ */
+if (import.meta.main) {
+  runScan();
+}
+
+function runScan(): void {
 const findings = gitLsFiles()
   .filter(existsSync)
   .filter(shouldScan)
@@ -286,3 +363,4 @@ if (findings.length > 0) {
 }
 
 console.log("Privacy scan passed");
+}
