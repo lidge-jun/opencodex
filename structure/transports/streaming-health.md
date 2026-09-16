@@ -271,15 +271,20 @@ An acceptance acknowledges queued input, not application. The parent terminal is
 but the native chain ends only after outstanding submissions settle and the last response
 ends. Automatic successors are relayed without an extra create. A pending event preserves
 its `required_input` stubs; exactly one explicit same-parent/lane continuation may provide
-the saved results. This initial implementation pins model/settings to the initial request
-and refuses unrelated input or changed settings on that continuation. Explicit continuations
+the saved results. Results may arrive before the pending event: completed output items and
+terminal output advertise the permitted call/approval IDs. Stub `name` is optional on a
+returned function output; a different supplied name is still refused. New user messages may
+accompany results, but privileged messages, unrelated IDs and duplicate results cannot. This
+initial implementation pins model/settings to the initial request. A failed steer does not
+cancel an explicit continuation already dispatched. Explicit continuations
 are paced and recheck the captured dispatch guard after waiting. No tools, accepted input
 or ambiguously delivered sends are automatically replayed.
 
 `src/server/responses/native-steering-replay.ts` journals only committed native input into
 the existing thread-scoped replay cache. Rejected/uncommitted steer text is excluded. Sparse
 terminal outputs are reconstructed from completed output-item events. Derived state inherits
-the original non-persistable-body restriction; the original request is never mutated. The
+the original non-persistable-body restriction from `src/responses/state/body-policy.ts`;
+`state.ts` keeps its existing public exports. The original request is never mutated. The
 bounded journal is discarded at teardown. This keeps subsequent ordinary delta-input turns
 working without inventing IDs or silently dropping the steering instruction.
 

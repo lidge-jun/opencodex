@@ -896,10 +896,13 @@ This option is off by default. It forwards steering to the same native ChatGPT W
 connection and selected account, preserving automatic successor responses and pending
 saved-tool-result continuations. Acceptance means queued, not yet applied.
 
-For `response.steer.pending`, supply the reported required tool results or approval decisions
-**once per parent**, on the same lane. Do not rerun tools or resend accepted steering text.
-This first implementation accepts saved-result-only continuations with unchanged model and
-request settings. A changed model/settings requires an explicitly stopped or finished turn
+Supply the required tool results or approval decisions **once per parent**, on the same lane.
+Results can arrive before `response.steer.pending`: the relay also matches the completed
+parent's advertised calls and approvals. A `name` on a pending function-output stub is
+optional on the result, as in the native schema. Additional user messages may accompany
+these results; system/developer messages, duplicate results and unrelated call IDs are refused.
+Do not rerun tools or resend accepted steering text. This first implementation requires
+unchanged model and request settings. A changed model/settings requires an explicitly stopped or finished turn
 and normal new dispatch. Multiple independent conversations use independent connections.
 
 HTTP fallback, other providers, translated models, sidecars, Combo attempts and plaintext V2

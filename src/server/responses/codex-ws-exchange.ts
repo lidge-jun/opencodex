@@ -345,7 +345,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               beforeDispatch?.(new Headers(headers));
               let outgoing = frame;
               if (frame.type === "response.create") {
-                // The channel validates same settings/lane and saved-result-only input.
+                // The channel validates same settings/lane, saved results and user-only additions.
                 // Reuse the already-routed/authorized native settings; never feed a
                 // previous_response_id through the REST sanitizer or account selector.
                 const base = JSON.parse(frameText) as Record<string, unknown>;

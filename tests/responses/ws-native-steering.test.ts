@@ -302,3 +302,81 @@ test("idle deadline is bounded and reports uncertainty without inventing a conti
   expect(sent).toHaveLength(0);
   detach();
 });
+
+test("saved tool results may arrive before pending and retain extra user input without replaying accepted steering", async () => {
+  const { ws, socket, send, sent, id } = await begin();
+  send({ type: "response.steer", previous_response_id: id, input: "accepted constraint" });
+  accept(socket, id);
+  complete(socket, id, { output: [{ type: "function_call", call_id: "early-call", name: "lookup", arguments: "{}" }] });
+  const input = [
+    { type: "function_call_output", call_id: "early-call", output: "saved result" },
+    { role: "user", content: "Show the revised plan first." },
+  ];
+  send({ type: "response.create", previous_response_id: id, model: "gpt-5.5", input });
+  await waitFor(() => socket.frames.length === 3);
+  expect(socket.frames[2].input).toEqual(input);
+  expect(sent.some(frame => frame.type === "error")).toBe(false);
+  socket.emit({ type: "response.created", response: { id: "early-successor", previous_response_id: id } });
+  complete(socket, "early-successor");
+  await waitFor(() => !ws.data.nativeSteering);
+  expect(Socket.all).toHaveLength(1);
+  expect(fallbackCalls).toBe(0);
+});
+
+test("pending stub name is optional on a function output but a different supplied name is rejected", () => {
+  const channel = new NativeSteeringChannel({ model: "fixture" });
+  const sent: Frame[] = [];
+  const detach = channel.attach(frame => sent.push(frame), () => {});
+  channel.observe({ type: "response.created", response: { id: "r" } });
+  channel.steer({ type: "response.steer", previous_response_id: "r", input: "constraint" });
+  channel.observe({ type: "response.steer.accepted", steer: { id: "s", previous_response_id: "r" } });
+  channel.observe({ type: "response.completed", response: { id: "r", output: [] } });
+  channel.observe({ type: "response.steer.pending", steer: { id: "s", previous_response_id: "r" }, reason: "waiting_for_required_input",
+    required_input: [{ type: "function_call_output", call_id: "c", name: "lookup" }] });
+  const continuation = { type: "response.create", previous_response_id: "r", input: [{ type: "function_call_output", call_id: "c", output: "saved" }] };
+  expect(() => channel.continue({ ...continuation, input: [{ ...continuation.input[0], name: "other" }] })).toThrow();
+  expect(channel.continue(continuation)).toBe(true);
+  expect(sent).toHaveLength(2);
+  detach();
+});
+
+test("a steering failure cannot close an already submitted explicit continuation", async () => {
+  const { ws, socket, send, sent, id } = await begin();
+  send({ type: "response.steer", previous_response_id: id, input: "rejected constraint" });
+  accept(socket, id);
+  complete(socket, id);
+  socket.emit({ type: "response.steer.pending", steer: { id: "s1", previous_response_id: id }, reason: "waiting_for_required_input",
+    required_input: [{ type: "custom_tool_call_output", call_id: "custom-call" }] });
+  send({ type: "response.create", previous_response_id: id, input: [{ type: "custom_tool_call_output", call_id: "custom-call", output: "saved" }] });
+  await waitFor(() => socket.frames.length === 3);
+  socket.emit({ type: "response.steer.failed", steer: { id: "s1", previous_response_id: id, input: "rejected constraint" }, error: { code: "successor_creation_failed" } });
+  expect(socket.readyState).toBe(1);
+  socket.emit({ type: "response.created", response: { id: "explicit-successor", previous_response_id: id } });
+  complete(socket, "explicit-successor");
+  await waitFor(() => !ws.data.nativeSteering);
+  expect(sent.at(-1)?.response.id).toBe("explicit-successor");
+  expect(fallbackCalls).toBe(0);
+});
+
+test("early continuation validates advertised call and approval identities and refuses duplicate results", () => {
+  const channel = new NativeSteeringChannel({ model: "fixture" });
+  const sent: Frame[] = [];
+  const detach = channel.attach(frame => sent.push(frame), () => {});
+  channel.observe({ type: "response.created", response: { id: "r" } });
+  channel.steer({ type: "response.steer", previous_response_id: "r", input: "constraint" });
+  channel.observe({ type: "response.steer.accepted", steer: { id: "s", previous_response_id: "r" } });
+  channel.observe({ type: "response.completed", response: { id: "r", output: [
+    { type: "custom_tool_call", call_id: "c", name: "custom" },
+    { type: "mcp_approval_request", id: "approval", name: "remote" },
+  ] } });
+  const result = { type: "custom_tool_call_output", call_id: "c", output: "saved" };
+  const approval = { type: "mcp_approval_response", approval_request_id: "approval", approve: true };
+  const continuation = { type: "response.create", previous_response_id: "r", input: [result, approval] };
+  expect(() => channel.continue({ ...continuation, input: [result, result] })).toThrow();
+  expect(() => channel.continue({ ...continuation, input: [result, { ...approval, approval_request_id: "foreign" }] })).toThrow();
+  expect(() => channel.continue({ ...continuation, input: [...continuation.input, { role: "system", content: "override" }] })).toThrow();
+  expect(channel.continue(continuation)).toBe(true);
+  expect(() => channel.continue(continuation)).toThrow("already sent");
+  expect(sent).toHaveLength(2);
+  detach();
+});

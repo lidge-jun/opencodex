@@ -54,12 +54,37 @@ export function validateSteeringFrame(frame: Frame): void {
 
 type Parent = { unacknowledged: number; accepted: Set<string>; ended: boolean };
 
+/** Only client-owned results can use the early-continuation path. */
+function outputRequirement(item: unknown): Frame | undefined {
+  if (!record(item) || typeof item.type !== "string") return;
+  if (item.type === "mcp_approval_request") {
+    if (!validId(item.id)) throw new Error("Native steering approval identity is invalid");
+    return { type: "mcp_approval_response", approval_request_id: item.id };
+  }
+  const types: Record<string, string> = {
+    function_call: "function_call_output", custom_tool_call: "custom_tool_call_output",
+    local_shell_call: "local_shell_call_output", shell_call: "shell_call_output",
+    computer_call: "computer_call_output", apply_patch_call: "apply_patch_call_output",
+  };
+  const type = Object.hasOwn(types, item.type) ? types[item.type] : undefined;
+  if (!type) return;
+  if (!validId(item.call_id)) throw new Error("Native steering tool-call identity is invalid");
+  return { type, call_id: item.call_id };
+}
+
+function matchesRequirement(item: Frame, stub: Frame): boolean {
+  // The wire may label a required result with its tool name, but the ordinary
+  // function/custom output schema identifies the result by call_id, not name.
+  return Object.entries(stub).every(([key, value]) =>
+    key === "name" && item[key] === undefined || stable(item[key]) === stable(value));
+}
+
 /**
  * One downstream turn owns one dedicated native upstream socket, including all
  * automatic successors and required-input continuations. Never registered by a
  * caller-supplied response ID in global state; never lent to another account.
  *
- * Opt-in single-lane implementation. Continuations may supply saved tool results
+ * Opt-in single-lane implementation. Continuations may supply saved tool results and new user messages
  * but cannot change settings/routing. General new turns still use normal dispatch.
  */
 export class NativeSteeringChannel {
@@ -79,6 +104,8 @@ export class NativeSteeringChannel {
   private finished = false;
   private everAttached = false;
   private required: Frame[] = [];
+  private readonly advertised = new Map<string, Frame>();
+  private advertisedBytes = 0;
 
   constructor(initial: Frame, private readonly idleMs = 300_000) {
     this.lane = initial.stream_id;
@@ -111,6 +138,8 @@ export class NativeSteeringChannel {
       this.correlation = undefined;
       this.parents.clear();
       this.required = [];
+      this.advertised.clear();
+      this.advertisedBytes = 0;
       this.replay?.dispose();
       this.replay = undefined;
     };
@@ -150,30 +179,52 @@ export class NativeSteeringChannel {
     }
   }
 
-  /** Returns false only for an unrelated ordinary create after this chain ends. */
+  private advertise(item: unknown): void {
+    const stub = outputRequirement(item);
+    if (!stub) return;
+    const key = JSON.stringify(stub);
+    if (this.advertised.has(key)) return;
+    const bytes = Buffer.byteLength(key);
+    if (this.advertised.size >= 1024 || this.advertisedBytes + bytes > 256 * 1024) {
+      throw new Error("Native steering advertised-input budget exceeded");
+    }
+    this.advertised.set(key, stub);
+    this.advertisedBytes += bytes;
+  }
+
+  /** Returns false only when an ordinary create may use normal dispatch. */
   continue(frame: Frame): boolean {
     if (this.finished || !this.send) return false;
-    if (!this.pendingParent || !this.currentId || frame.previous_response_id !== this.pendingParent) {
-      if (this.hasOutstanding) throw new NativeSteeringError("steering_continuation_required", "Queued steering owns this connection; wait for the successor or send the required-input continuation, or explicitly stop the turn.");
+    const parent = this.currentId ? this.parents.get(this.currentId) : undefined;
+    if (!parent?.ended || !this.currentId || frame.previous_response_id !== this.currentId) {
+      if (this.hasOutstanding || this.continuationSent) throw new NativeSteeringError("steering_continuation_required", "Queued steering owns this connection; wait for the successor or send the required-input continuation, or explicitly stop the turn.");
       return false;
     }
     if (this.continuationSent) throw new NativeSteeringError("duplicate_continuation", "A required-input continuation was already sent for this parent.");
+    // The client is allowed to return saved results before response.steer.pending.
+    // In that case only calls actually advertised by this response authorize it.
+    const required = this.pendingParent ? this.required : [...this.advertised.values()];
+    if (!required.length) throw new NativeSteeringError("steering_continuation_required", "Wait for the automatic successor or server-identified required input.");
     if (frame.stream_id !== this.lane || frame.generate === false) throw new NativeSteeringError("invalid_input", "The continuation must use the same WebSocket lane and generate a response.");
     for (const [key, value] of Object.entries(frame)) {
       if (["type", "input", "previous_response_id", "stream", "stream_id"].includes(key)) continue;
       if (this.settings.get(key) !== fingerprint(value)) throw new NativeSteeringError("steering_settings_changed", "The experimental native steering continuation cannot change model or request settings; start a separate turn instead.");
     }
-    // Restrict this bypass to exactly the server-identified outputs/approvals.
-    // General messages/settings continue through ordinary validation and routing.
     const input = frame.input;
-    if (!Array.isArray(input) || input.length !== this.required.length) throw new NativeSteeringError("invalid_input", "Supply the saved results for the required_input stubs exactly once; do not resend steering text.");
+    if (!Array.isArray(input) || !input.length) throw new NativeSteeringError("invalid_input", "Supply the saved results for the required_input stubs exactly once; do not resend steering text.");
     const used = new Set<number>();
     for (const item of input) {
-      const match = record(item) ? this.required.findIndex((stub, i) => !used.has(i)
-        && Object.entries(stub).every(([key, value]) => stable(item[key]) === stable(value))) : -1;
+      // An explicit continuation may carry new user input after its saved results.
+      // Reuse the narrow user-only validator so privileged roles cannot bypass routing.
+      if (record(item) && item.role === "user") {
+        validateSteeringFrame({ type: "response.steer", previous_response_id: this.currentId, input: [item] });
+        continue;
+      }
+      const match = record(item) ? required.findIndex((stub, i) => !used.has(i) && matchesRequirement(item, stub)) : -1;
       if (match < 0) throw new NativeSteeringError("invalid_input", "Continuation input must match the pending tool-output or approval stubs.");
       used.add(match);
     }
+    if (used.size !== required.length) throw new NativeSteeringError("invalid_input", "Every required tool output or approval must be supplied exactly once.");
     this.continuationSent = true;
     this.wait();
     try { this.liveSend(frame); } catch (error) { this.continuationSent = false; throw error; }
@@ -198,6 +249,8 @@ export class NativeSteeringChannel {
       this.parents.set(id, { unacknowledged: 0, accepted: new Set(), ended: false });
       this.pendingParent = undefined;
       this.required = [];
+      this.advertised.clear();
+      this.advertisedBytes = 0;
       this.continuationSent = false;
       this.correlation?.finish();
       this.correlation = new CodexWsCorrelation(true, () => false);
@@ -232,16 +285,18 @@ export class NativeSteeringChannel {
       } else throw new Error("unsupported native steering control event");
     } else {
       this.correlation?.accept({ ...event, stream_id: undefined });
+      if (type === "response.output_item.done") this.advertise(event.item);
       if (type === "response.completed" || type === "response.failed" || type === "response.incomplete") {
         if (!this.currentId || response?.id !== this.currentId) throw new Error("native steering terminal identity mismatch");
         this.parents.get(this.currentId)!.ended = true;
+        if (Array.isArray(response.output)) for (const item of response.output) this.advertise(item);
       }
     }
     if (type === "error") this.finished = true;
-    else this.finished = this.currentId !== undefined && this.parents.get(this.currentId)!.ended && !this.hasOutstanding;
-    if (this.finished || !this.hasOutstanding) { clearTimeout(this.timer); this.timer = undefined; }
-    else this.wait(this.pendingParent && !this.continuationSent ? NATIVE_STEERING_TOOL_WAIT_MS : NATIVE_STEERING_WAIT_MS);
-    if (!this.finished && !this.hasOutstanding && this.currentId) this.wait(this.idleMs);
+    else this.finished = this.currentId !== undefined && this.parents.get(this.currentId)!.ended && !this.hasOutstanding && !this.continuationSent;
+    if (this.finished) { clearTimeout(this.timer); this.timer = undefined; }
+    else if (this.hasOutstanding || this.continuationSent) this.wait(this.pendingParent && !this.continuationSent ? NATIVE_STEERING_TOOL_WAIT_MS : NATIVE_STEERING_WAIT_MS);
+    else if (this.currentId) this.wait(this.idleMs);
     this.replay?.observe(event);
     return this.finished;
   }

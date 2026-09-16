@@ -8,6 +8,9 @@ import { repoPath } from "./repo-root";
 export const RESPONSES_CORE_MODULES = [
   "core.ts",
   "core-options.ts",
+  "native-steering.ts",
+  "native-steering-replay.ts",
+  "codex-ws-correlation.ts",
   "core-lifetime.ts",
   "core-replay.ts",
   "core-errors.ts",
