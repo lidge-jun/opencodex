@@ -24,6 +24,14 @@ client-version bump.
 - `cursorRequestSizeContext` feeds that window into the existing 0.5-window
   overflow vs 429 prior.
 
+## Shipped
+
+Process-local map in `discovery.ts`; checkpoint records a positive
+`maxTokens` when `wireModelId` is set from `live-transport.ts`.
+`inferCursorContextWindow(modelId, observed?)` prefers explicit then
+recorded then heuristic. `cursorRequestSizeContext` is unchanged except
+the comment — it already calls `inferCursorContextWindow`.
+
 ## Accept
 
 - Checkpoint with `maxTokens: 32000` makes a 20-token request classify as 429

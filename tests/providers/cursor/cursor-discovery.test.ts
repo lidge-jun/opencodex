@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   CURSOR_AUTO_WIRE_MODEL_ID,
   CURSOR_DEFAULT_CONTEXT_WINDOW,
@@ -20,6 +20,8 @@ import {
   isCursorNativeWireModel,
   cursorNeedsExternalToolContinuation,
   normalizeCursorModels,
+  recordObservedCursorContextWindow,
+  resetObservedCursorContextWindowsForTests,
 } from "../../../src/adapters/cursor/discovery";
 
 describe("Cursor discovery metadata", () => {
@@ -229,6 +231,34 @@ describe("Cursor discovery metadata", () => {
     expect(cursorNeedsExternalToolContinuation("cursor/composer-2.5-fast")).toBe(false);
     expect(cursorNeedsExternalToolContinuation("auto")).toBe(false);
     expect(cursorNeedsExternalToolContinuation("gpt-5.6-sol")).toBe(true);
+  });
+
+  describe("observed checkpoint maxTokens ceiling", () => {
+    afterEach(() => {
+      resetObservedCursorContextWindowsForTests();
+    });
+
+    test("a positive recorded ceiling wins over the id heuristic", () => {
+      expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000);
+      expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(32_000);
+      expect(inferCursorContextWindow("CLAUDE-4.6-SONNET")).toBe(32_000);
+    });
+
+    test("zero, missing, and non-finite maxTokens keep the heuristic", () => {
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 0);
+      recordObservedCursorContextWindow("claude-4.6-sonnet", undefined);
+      recordObservedCursorContextWindow("claude-4.6-sonnet", Number.NaN);
+      recordObservedCursorContextWindow("claude-4.6-sonnet", -8);
+      recordObservedCursorContextWindow("", 32_000);
+      expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+    });
+
+    test("an explicit observed argument outranks the process-local map", () => {
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", 8_000)).toBe(8_000);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", 0)).toBe(32_000);
+    });
   });
 
   test("normalizes Cursor checkpoint model affinity across prefix and effort", () => {

@@ -25,7 +25,37 @@ const CONTEXT_262K = 262_144;
 const CONTEXT_256K = 256_000;
 const CONTEXT_200K = 200_000;
 
-export function inferCursorContextWindow(modelId: string): number {
+/**
+ * Process-local ceiling from `ConversationTokenDetails.maxTokens` on a live
+ * checkpoint. Plan-gated Cursor accounts advertise a smaller window than the
+ * id heuristic; treating that as the next-turn ceiling is what keeps a tiny
+ * request's bare `RESOURCE_EXHAUSTED` on the 429 class and a request that is
+ * large relative to the real window on overflow (senpi `cursor-context-limit`).
+ */
+const observedCursorContextWindows = new Map<string, number>();
+
+function normalizeObservedWindowKey(modelId: string): string {
+  return modelId.trim().toLowerCase();
+}
+
+export function recordObservedCursorContextWindow(
+  modelId: string,
+  maxTokens: number | undefined,
+): void {
+  if (!modelId.trim()) return;
+  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens) || maxTokens <= 0) return;
+  observedCursorContextWindows.set(normalizeObservedWindowKey(modelId), Math.floor(maxTokens));
+}
+
+export function observedCursorContextWindow(modelId: string): number | undefined {
+  return observedCursorContextWindows.get(normalizeObservedWindowKey(modelId));
+}
+
+export function resetObservedCursorContextWindowsForTests(): void {
+  observedCursorContextWindows.clear();
+}
+
+function inferCursorContextWindowHeuristic(modelId: string): number {
   const id = modelId.trim().toLowerCase();
   if (id.includes("1m")) return CONTEXT_1M;
   if (id.startsWith("gemini-")) return CONTEXT_1M;
@@ -38,6 +68,20 @@ export function inferCursorContextWindow(modelId: string): number {
   if (id.startsWith("grok-")) return CONTEXT_256K;
   if (id.includes("claude")) return CONTEXT_200K;
   return CURSOR_DEFAULT_CONTEXT_WINDOW;
+}
+
+/**
+ * Infer a conservative context window for a Cursor model id.
+ *
+ * A positive `observed` argument wins, then a process-local checkpoint
+ * `maxTokens`, then the id heuristic. Cursor's `AvailableModelsResponse`
+ * does not currently include per-model context window metadata.
+ */
+export function inferCursorContextWindow(modelId: string, observed?: number): number {
+  if (typeof observed === "number" && Number.isFinite(observed) && observed > 0) {
+    return Math.floor(observed);
+  }
+  return observedCursorContextWindow(modelId) ?? inferCursorContextWindowHeuristic(modelId);
 }
 
 function normalizeInputModalities(input: string[] | undefined): string[] {

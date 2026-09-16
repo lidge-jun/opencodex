@@ -1,5 +1,5 @@
 import { create } from "@bufbuild/protobuf";
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   AgentServerMessageSchema,
   ConversationStateStructureSchema,
@@ -21,6 +21,10 @@ import {
   mapCursorProtobufServerMessage,
   mapSyntheticMcpExecToToolEvents,
 } from "../../../src/adapters/cursor/protobuf-events";
+import {
+  inferCursorContextWindow,
+  resetObservedCursorContextWindowsForTests,
+} from "../../../src/adapters/cursor/discovery";
 import { MAX_PENDING_TEXT_TOOLCALL_BYTES } from "../../../src/adapters/cursor/text-toolcall";
 import { resetDebugSettingsForTests } from "../../../src/lib/debug-settings";
 import { createTranslatorBudget } from "../../../src/lib/translator-budget";
@@ -57,12 +61,15 @@ function mcpToolCall(toolName: string, args: Record<string, string>) {
   });
 }
 
-function checkpointUpdate(usedTokens: number) {
+function checkpointUpdate(usedTokens: number, maxTokens?: number) {
   return create(AgentServerMessageSchema, {
     message: {
       case: "conversationCheckpointUpdate",
       value: create(ConversationStateStructureSchema, {
-        tokenDetails: create(ConversationTokenDetailsSchema, { usedTokens }),
+        tokenDetails: create(ConversationTokenDetailsSchema, {
+          usedTokens,
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+        }),
       }),
     },
   });
@@ -1396,6 +1403,32 @@ describe("#2472 the Cursor producer path for a silent empty turn", () => {
   });
 });
 
+
+describe("observed checkpoint maxTokens ceiling", () => {
+  afterEach(() => {
+    resetObservedCursorContextWindowsForTests();
+  });
+
+  test("a positive maxTokens records a process-local window for that wire model", () => {
+    const state = createCursorProtobufEventState({ wireModelId: "claude-4.6-sonnet" });
+    expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+    expect(mapCursorProtobufServerMessage(checkpointUpdate(1_200, 32_000), state)).toEqual([]);
+    expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(32_000);
+  });
+
+  test("zero or missing maxTokens leaves the heuristic in place", () => {
+    const state = createCursorProtobufEventState({ wireModelId: "claude-4.6-sonnet" });
+    expect(mapCursorProtobufServerMessage(checkpointUpdate(1_200, 0), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(checkpointUpdate(1_200), state)).toEqual([]);
+    expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+  });
+
+  test("a checkpoint without wireModelId does not record a window", () => {
+    const state = createCursorProtobufEventState();
+    expect(mapCursorProtobufServerMessage(checkpointUpdate(1_200, 32_000), state)).toEqual([]);
+    expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+  });
+});
 
 describe("#2472 end to end: the real producer output reaches the observer", () => {
   /**

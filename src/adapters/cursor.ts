@@ -103,6 +103,8 @@ function cursorRequestSizeContext(request: { modelId: string; system: string[]; 
   const text = [...request.system, ...request.messages.map(message => message.content)].join("\n");
   return {
     estimatedInputTokens: estimateTokens(text, request.modelId),
+    // Prefers a process-local checkpoint `maxTokens` over the id heuristic so a
+    // plan-gated ceiling participates in the 0.5-window overflow vs 429 prior.
     contextWindow: inferCursorContextWindow(request.modelId),
   };
 }

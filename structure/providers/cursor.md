@@ -139,6 +139,20 @@ drops the whole textual buffer. A missing advertised-name set is fail-closed. Fi
 clears any held or suppressed prefix. Coverage lives in
 `tests/providers/cursor/cursor-protobuf-events.test.ts`.
 
+## Observed checkpoint window
+
+`conversationCheckpointUpdate.tokenDetails.maxTokens` is the account-advertised
+ceiling for that wire model. A positive value is stored in a process-local map
+keyed by model id (`src/adapters/cursor/discovery.ts`) and preferred by
+`inferCursorContextWindow` over the static heuristic. Zero and missing values
+are ignored — the first checkpoint is often 0. The next turn's
+`cursorRequestSizeContext` feeds that window into the existing 0.5-window
+overflow vs 429 prior so a tiny request against a plan-gated 32k ceiling stays
+on the 429 class, while a request that is large relative to the real window
+classifies as overflow. Coverage lives in
+`tests/providers/cursor/cursor-errors.test.ts` and
+`tests/providers/cursor/cursor-protobuf-events.test.ts`.
+
 ## Overflow remint boundary
 
 `src/adapters/cursor.ts` surfaces the first bare context overflow before attempting conversation remint on later eligible requests. `cursorClientThreadOwner` recognizes both client thread aliases; `src/adapters/cursor/thread-continuity.ts` limits recovery to three remints per retained identity-scoped owner, with a one-hour idle TTL and 2,048-entry bound. Conversation-only requests have no stable owner and do not automatically remint. Quota/rate errors, tool-result resumes, partial output, local side effects, isolated helper/shadow requests and compaction remain fail-closed. Isolated requests neither consume the parent allowance nor invalidate its checkpoint. Eligible overflow checks refresh existing retention timestamps and LRU position even after the cap is exhausted, without allocating absent scopes. Retention expiry, eviction or process restart resets the in-memory allowance; this is not a persistent lifetime cap or semantic-progress policy.
