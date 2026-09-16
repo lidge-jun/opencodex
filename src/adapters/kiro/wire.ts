@@ -1,5 +1,6 @@
 import type { OcxProviderConfig } from "../../types";
 import type { KiroImage } from "../kiro-images";
+import type { KiroReasoningContent } from "./reasoning";
 
 export const AMZ_TARGET = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse";
 export const SDK_VERSION = "1.0.27";
@@ -51,7 +52,7 @@ export interface KiroHistoryEntry {
   assistantResponseMessage?: {
     content: string;
     toolUses?: KiroToolUse[];
-    reasoningContent?: { redactedContent: string };
+    reasoningContent?: KiroReasoningContent;
   };
 }
 
