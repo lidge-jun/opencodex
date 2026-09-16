@@ -738,6 +738,14 @@ export async function handleResponsesCompact(
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
           signal: req.signal,
           nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+          // #4778: the same retention the regular Responses path passes at its final auth. The
+          // post-429 guard below only declines to move AFTER this resolution has already bound
+          // an account, so without the bit here a quota-driven rebind could have carried the
+          // conversation off its issuing account before that guard is ever consulted -- and an
+          // uploaded file is readable only by the account that received it. Answered from `raw`,
+          // the same object and the same predicate the guard below uses, so the two can never
+          // disagree about which conversations are in scope.
+          retainAccountForUploadedFiles: conversationCarriesUploadedFiles(raw),
         });
         logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
         const selected = await materializeCodexUpstreamAuthAsync(req.headers, authCtx, {

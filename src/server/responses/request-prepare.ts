@@ -677,6 +677,13 @@ export async function prepareResponsesRequest(
               const recoverySelectionOptions = {
                 nativeMainSelectionOnly: !recoveryNativeMainBlocked
                   && recoverySelectionAdmission?.mainProfileDraining === true,
+                // #4778, same reason as `previewSelectionOptions` above: this preview decides
+                // which account subagent fallback scores against, and final auth passes the
+                // retention. Recovery is exactly where the two could diverge -- it re-previews
+                // against the DECRYPTED body, which is the first point at which a file reference
+                // that was ciphertext-only becomes readable, so reconstructing the options
+                // without the bit lets preview report a quota move the request will not make.
+                retainAccountForUploadedFiles: conversationCarriesUploadedFiles(parsed._rawBody),
               };
               const recoveryNow = Date.now();
               // Carry the entitlement filter through recovery too (#2509/#2623). The scope was

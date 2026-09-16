@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../helpers/repo-root";
 import {
   applyAccountChangeConversationStateScrub,
   canPortConversationState,
@@ -303,5 +305,85 @@ describe("uploaded-file detection answers before an alternate account is chosen 
     expect(ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE).toContain("re-upload the files");
     expect(ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE).toContain("start a new conversation");
     expect(ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE).toContain("no file was removed");
+  });
+});
+
+/**
+ * #4778 retention is only correct if it reaches EVERY resolution that can bind this
+ * conversation to an account, because the sites do not fail the same way.
+ *
+ * The regular Responses path passes it at final auth. Native compact did not pass it at its
+ * initial resolution, and the refusal it does carry runs only after a 429 -- by which time a
+ * quota-driven rebind has already moved the conversation, so the guard declines a move that
+ * happened one step earlier. Encrypted-agent-task recovery rebuilds the preview options from
+ * scratch, and it does so against the DECRYPTED body, which is the first point at which a file
+ * reference that was ciphertext-only becomes readable; a preview reconstructed without the bit
+ * reports one account and final auth binds another.
+ *
+ * Asserted from source because the failure is an omitted option on a call, not a value any
+ * reachable seam returns: a body-level test of the predicate (above) passes either way, and the
+ * behavioural difference only appears against a live pool that is mid-rebind. The claim is
+ * narrow and mechanical -- this exact call carries this exact expression -- so it fails on the
+ * regression and on nothing else.
+ */
+describe("uploaded-file retention reaches every account resolution (#4778)", () => {
+  const source = (...relative: string[]): string => readFileSync(repoPath(...relative), "utf8");
+
+  /** The argument list of the single call whose head is `marker` (which must end at its own `(`). */
+  function callArguments(src: string, marker: string): string {
+    const at = src.indexOf(marker);
+    expect(at).toBeGreaterThan(-1);
+    // A second occurrence would make the assertion below ambiguous about which call it read.
+    expect(src.indexOf(marker, at + 1)).toBe(-1);
+    const open = at + marker.length - 1;
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")" && --depth === 0) return src.slice(open, i + 1);
+    }
+    throw new Error("unbalanced call arguments for: " + marker);
+  }
+
+  /** The object literal opened by `marker` (which must end at its own `{`). */
+  function objectLiteral(src: string, marker: string): string {
+    const at = src.indexOf(marker);
+    expect(at).toBeGreaterThan(-1);
+    expect(src.indexOf(marker, at + 1)).toBe(-1);
+    const open = at + marker.length - 1;
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}" && --depth === 0) return src.slice(open, i + 1);
+    }
+    throw new Error("unbalanced object literal for: " + marker);
+  }
+
+  test("native compact passes the retention at its own initial resolution", () => {
+    const compact = source("src", "server", "responses", "compact.ts");
+    const initialAuth = callArguments(
+      compact,
+      "if (route.codexAccountMode) authCtx = await resolveCodexAuthContext(",
+    );
+
+    expect(initialAuth).toContain("retainAccountForUploadedFiles: conversationCarriesUploadedFiles(raw)");
+  });
+
+  test("the post-429 compact guard stays, because it answers a different question", () => {
+    // The guard is not redundant with the retention above: retention declines a VOLUNTARY quota
+    // move, while this refuses an alternate account after the issuing one has already rejected
+    // the send. Removing either one reopens half of #4778.
+    const compact = source("src", "server", "responses", "compact.ts");
+
+    expect(compact).toContain("const alternate = conversationCarriesUploadedFiles(raw)");
+  });
+
+  test("both Responses previews answer the same question final auth does", () => {
+    const prepare = source("src", "server", "responses", "request-prepare.ts");
+    const retention = "retainAccountForUploadedFiles: conversationCarriesUploadedFiles(parsed._rawBody)";
+
+    expect(objectLiteral(prepare, "const previewSelectionOptions = {")).toContain(retention);
+    expect(objectLiteral(prepare, "const recoverySelectionOptions = {")).toContain(retention);
+    expect(callArguments(prepare, "const finalAuth = await resolveResponsesCodexAuth("))
+      .toContain("conversationCarriesUploadedFiles(parsed._rawBody)");
   });
 });
