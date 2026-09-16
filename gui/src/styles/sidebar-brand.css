@@ -1,0 +1,18 @@
+/* The sidebar is also the mobile drawer's full-version fallback. Keep its badge
+   readable instead of applying the compact topbar's ellipsis policy here.
+   A smaller column gap fits release versions without widening the rail; longer
+   versions move to another line, and very long build ids wrap within the badge. */
+.drawer-head .brand {
+  flex-wrap: wrap;
+  column-gap: var(--space-1-5);
+  row-gap: var(--space-1);
+}
+
+.drawer-head .brand .ver {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

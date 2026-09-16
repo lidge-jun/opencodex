@@ -108,7 +108,7 @@ export async function describeImage(
         // `session_id`, and `x-codex-turn-metadata` to the redirect target.
         redirect: "manual",
       }, recovery)),
-      { abortSignal: linkedSignal.signal, label: "vision-sidecar" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "vision-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {

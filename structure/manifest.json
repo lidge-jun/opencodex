@@ -423,6 +423,7 @@
     ],
     "oversizeDocs": [
       "gui-and-management-api.md",
+      "providers/openai-tiers.md",
       "transports/responses.md"
     ],
     "staleRefs": []

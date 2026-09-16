@@ -1,5 +1,6 @@
 import { formatErrorResponse } from "../../bridge";
 import { isCyberPolicyCode, isCyberPolicyMessage } from "../../lib/errors";
+import { isReplayRefusalCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import {
   resolveClientRetryAfter,
   validateClientRetryAfterHeader,
@@ -25,6 +26,26 @@ function isCyberPolicyBody(body: string): boolean {
 }
 
 /**
+ * True for a body this proxy wrote to refuse replaying an ambiguous pre-header reset.
+ *
+ * It is read off the body rather than a marker because this formatter is handed bytes, not
+ * the response they came from, and the refusal reaches it after the original body was read.
+ * The code is this proxy's own, so an upstream echoing it is not a case worth widening for.
+ */
+function isReplayRefusalBody(body: string): boolean {
+  if (!body.includes(UPSTREAM_RESET_REPLAY_REFUSED_CODE)) return false;
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const error = parsed.error && typeof parsed.error === "object" && !Array.isArray(parsed.error)
+      ? parsed.error as Record<string, unknown>
+      : undefined;
+    return isReplayRefusalCode(error?.code) || isReplayRefusalCode(parsed.code);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Passthrough adapters historically relayed upstream non-2xx bodies verbatim.
  * Codex maps an *empty* body to the literal client string "Unknown error"
  * (UnexpectedResponseError) — issue #452. Only empty bodies need wrapping.
@@ -38,6 +59,9 @@ function isCyberPolicyBody(body: string): boolean {
  * - missing/malformed values are replaced when resolveClientRetryAfter yields a value
  * - malformed/expired values are removed when the resolver returns undefined
  *   (e.g. quota-exhausted 429s must not keep junk headers or get the synthetic "2")
+ * - a replay refusal this proxy wrote gets none and keeps none: the whole point of the
+ *   refusal is that the turn may already be running, and the synthetic default for a
+ *   retryable 429 is a direct instruction to the client to send it a second time
  */
 export function formatPassthroughUpstreamError(
   status: number,
@@ -46,6 +70,13 @@ export function formatPassthroughUpstreamError(
     statusText?: string;
     headers?: Headers;
     now?: number;
+    /**
+     * Provenance from the caller that still holds the response: this body is a refusal this
+     * proxy synthesized. The body check below is the fallback for a re-wrapped body, and it
+     * cannot answer at all when the bounded read returned nothing display-safe -- which is
+     * precisely when the empty-body branch would invent the retryable-429 default.
+     */
+    replayRefusal?: boolean;
   },
 ): Response {
   const trimmed = bodyText.trim();
@@ -53,7 +84,12 @@ export function formatPassthroughUpstreamError(
   const upstreamRetryAfter = options?.headers?.get("retry-after")?.trim() || undefined;
   const originalValid = validateClientRetryAfterHeader(upstreamRetryAfter, now);
   const cyberPolicyFailure = isCyberPolicyBody(trimmed);
-  const resolved = cyberPolicyFailure
+  // Two different reasons to answer with no wait at all, handled the same way: a hard policy
+  // block will not become servable, and a refusal we made was never a rate limit.
+  const suppressRetryAfter = cyberPolicyFailure
+    || options?.replayRefusal === true
+    || isReplayRefusalBody(trimmed);
+  const resolved = suppressRetryAfter
     ? undefined
     : resolveClientRetryAfter({
       status,
@@ -64,7 +100,7 @@ export function formatPassthroughUpstreamError(
 
   if (trimmed) {
     const needsSet = resolved !== undefined && upstreamRetryAfter !== resolved;
-    const needsDelete = (cyberPolicyFailure && upstreamRetryAfter !== undefined)
+    const needsDelete = (suppressRetryAfter && upstreamRetryAfter !== undefined)
       || (resolved === undefined
         && upstreamRetryAfter !== undefined
         && originalValid === undefined);

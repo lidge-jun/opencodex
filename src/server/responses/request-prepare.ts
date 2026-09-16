@@ -84,7 +84,11 @@ import {
   canPassThroughEncryptedV2AgentTask,
   applyFinalRouteRequestNormalization,
 } from "./core-normalize";
-import { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
+import {
+  cachedDeniedCodexAccountIdsForModel,
+  resolveCodexModelEntitlements,
+} from "../../codex/model-entitlements";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import {
   previewCodexAccountForRequest,
   codexQuotaScopeForModel,
@@ -116,6 +120,7 @@ import {
   conversationStateBindingFromAuth,
   applyAccountChangeConversationStateScrub,
   accountChangeFileReferenceRefusal,
+  conversationCarriesUploadedFiles,
 } from "./account-change-state";
 
 /** Parses, selects, and admits one request without changing the dispatch policy. */
@@ -457,6 +462,10 @@ export async function prepareResponsesRequest(
   const previewSelectionOptions = {
     nativeMainSelectionOnly: !nativeMainRecoveryBlocked
       && previewSelectionAdmission?.mainProfileDraining === true,
+    // Preview must reach the same answer as the final resolution, including the uploaded-file
+    // retention (#4778): a preview that reported a quota move the request will not make would
+    // hand subagent fallback a different account than the one that actually serves.
+    retainAccountForUploadedFiles: conversationCarriesUploadedFiles(parsed._rawBody),
   };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
@@ -528,7 +537,20 @@ export async function prepareResponsesRequest(
       config,
       previewNow,
       codexQuotaScopeForModel(modelId),
-      { ...previewSelectionOptions, modelEligibleAccountIds },
+      {
+        ...previewSelectionOptions,
+        modelEligibleAccountIds,
+        // Per CANDIDATE model, like the scope and the eligible set above: the preference is
+        // model-specific, so hoisting it out of the closure would score every fallback
+        // candidate against the requested model's evidence and diverge from final auth (#4768).
+        // Under the same native-main read fence final auth applies: the reader validates each
+        // cached roster against the account's current credential, and for main that is a
+        // synchronous read of the stored token. A preview that read it would both cross the
+        // fence and score main differently than the resolution it is supposed to predict.
+        deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow, {
+          excludeAccountIds: nativeMainReadsForbidden ? new Set([MAIN_CODEX_ACCOUNT_ID]) : undefined,
+        }),
+      },
       modelId,
       poolLineage,
     );
@@ -662,6 +684,13 @@ export async function prepareResponsesRequest(
               const recoverySelectionOptions = {
                 nativeMainSelectionOnly: !recoveryNativeMainBlocked
                   && recoverySelectionAdmission?.mainProfileDraining === true,
+                // #4778, same reason as `previewSelectionOptions` above: this preview decides
+                // which account subagent fallback scores against, and final auth passes the
+                // retention. Recovery is exactly where the two could diverge -- it re-previews
+                // against the DECRYPTED body, which is the first point at which a file reference
+                // that was ciphertext-only becomes readable, so reconstructing the options
+                // without the bit lets preview report a quota move the request will not make.
+                retainAccountForUploadedFiles: conversationCarriesUploadedFiles(parsed._rawBody),
               };
               const recoveryNow = Date.now();
               // Carry the entitlement filter through recovery too (#2509/#2623). The scope was
@@ -674,7 +703,18 @@ export async function prepareResponsesRequest(
                 config,
                 previewNow,
                 codexQuotaScopeForModel(modelId),
-                { ...recoverySelectionOptions, modelEligibleAccountIds },
+                {
+                  ...recoverySelectionOptions,
+                  modelEligibleAccountIds,
+                  // Same read fence as the first preview, evaluated against recovery's own view
+                  // of the drain rather than the one captured before decryption.
+                  deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow, {
+                    excludeAccountIds: recoveryNativeMainBlocked
+                      || recoverySelectionAdmission?.mainProfileDraining === true
+                      ? new Set([MAIN_CODEX_ACCOUNT_ID])
+                      : undefined,
+                  }),
+                },
                 modelId,
                 poolLineage,
               );
@@ -915,7 +955,18 @@ export async function prepareResponsesRequest(
   let substituteMainCredential = false;
   let callerAuthHeaders: Headers;
   {
-    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options, credentialDomainWasRewritten);
+    // #4778: uploaded files are scoped to the account that issued them, so a conversation
+    // carrying live references must retain its binding across a voluntary quota move. Answered
+    // from the body alone, by the same predicate the refusal guard uses, so the two can never
+    // disagree about which conversations are in scope.
+    const finalAuth = await resolveResponsesCodexAuth(
+      req,
+      config,
+      route,
+      options,
+      credentialDomainWasRewritten,
+      conversationCarriesUploadedFiles(parsed._rawBody),
+    );
     if (!finalAuth.ok) return finalAuth.response;
     admissionState.authCtx = finalAuth.authCtx;
     selectedForwardHeaders = withClaudeNativeSession(finalAuth.headers, route.provider, options.claudeNativeSessionId);

@@ -147,14 +147,14 @@ describe("issue #914 — pre-connection failures never touch account health", ()
     const err = await fetchWithResetRetry(async recovery => {
       if (!recovery) throw coded("reset", "ECONNRESET");
       throw rejection;
-    }).catch((e: unknown) => e);
+    }, { replaySafe: true }).catch((e: unknown) => e);
     expect(classifyTransportFailureKind(err)).toBe("connect_error");
   });
 
   test("a plain reachability rejection classifies neutral end to end", async () => {
     const err = await fetchWithTransientRetry(async () => {
       throw coded("refused", "ECONNREFUSED");
-    }).catch((e: unknown) => e);
+    }, { replaySafe: true }).catch((e: unknown) => e);
     expect(classifyTransportFailureKind(err)).toBe("connect_neutral");
   });
 

@@ -2,10 +2,10 @@
  * Retry guard for upstream fetches that die on stale pooled keep-alive sockets.
  *
  * chatgpt.com (Cloudflare) closes idle keep-alive connections server-side; Bun's fetch pool
- * reuses the half-closed socket and the request write fails with ECONNRESET before any
- * response bytes arrive. Retrying on a fresh connection is safe for our replayable
- * (string-body) upstream requests, because fetch() rejects only before response headers —
- * a caught error here means no response was ever received.
+ * reuses the half-closed socket and a request can fail before response headers arrive.
+ * A pre-header rejection does not prove that the origin did not process the request.
+ * Mechanically reusable bytes do not make a model POST idempotent: an ambiguous reset
+ * becomes a terminal, non-replayable response unless the operation is explicitly safe.
  *
  * Deliberately narrow: timeouts, aborts, ECONNREFUSED/DNS/TLS failures, and HTTP error
  * statuses (returned as Response, never thrown) are NOT retried. Mid-stream SSE resets are
@@ -36,18 +36,65 @@ export function isNonReplayableResponse(response: Response): boolean {
   return nonReplayableResponses.has(response);
 }
 
+/**
+ * The narrower marker: responses this proxy synthesized as a replay refusal.
+ *
+ * {@link isNonReplayableResponse} answers "must not be sent again", which the WebSocket
+ * post-send verdicts share. This one answers "the upstream never said this", and that is the
+ * question a quota recorder or a `Retry-After` synthesizer has to ask. Both were written for
+ * a status that only ever arrived from a provider, so a synthetic 429 reads to them as a
+ * credential that rate-limited us and as a wait worth honouring -- one writes a cooldown
+ * against a credential that refused nothing, the other instructs the client to send the turn
+ * again. A marker rather than a body check, because it has to be answerable before the body
+ * is read and cannot be spoofed by an upstream that happens to echo the code.
+ */
+const replayRefusalResponses = new WeakSet<Response>();
+
+export function markReplayRefusalResponse(response: Response): void {
+  replayRefusalResponses.add(response);
+}
+
+export function isReplayRefusalResponse(response: Response): boolean {
+  return replayRefusalResponses.has(response);
+}
+
 /** Origin never produced a response event; the turn may still be executing. */
 export const UPSTREAM_NO_RESPONSE_CODE = "upstream_no_response";
 /** Transport closed after the send, before any response event. */
 export const UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE = "upstream_closed_before_response";
+/**
+ * This proxy refused to replay a pre-header fetch rejection.
+ *
+ * Distinct from {@link UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE}, which the Codex WebSocket
+ * transport settles as a 502 after the create frame was already sent. Both are ambiguous,
+ * but only this one is a refusal this process made before any response existed, so it
+ * follows the send-budget precedent and answers 429: the Codex client is configured with
+ * `retry_429: false` and `retry_5xx: true` over four attempts, so a 5xx here multiplies
+ * the duplicate send the refusal exists to prevent. See
+ * structure/transports/responses.md#ambiguous-connection-reset-replay-boundary.
+ */
+export const UPSTREAM_RESET_REPLAY_REFUSED_CODE = "upstream_reset_replay_refused";
 const NON_REPLAYABLE_UPSTREAM_CODES: ReadonlySet<string> = new Set([
   UPSTREAM_NO_RESPONSE_CODE,
   UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 ]);
 
 export function isNonReplayableUpstreamCode(code: unknown): boolean {
   return typeof code === "string" && NON_REPLAYABLE_UPSTREAM_CODES.has(code);
 }
+
+/**
+ * True for the one non-replayable code this proxy owns end to end. The status it carries is
+ * a local decision, so a re-wrapping formatter must restate it rather than inherit the
+ * caller's upstream-shaped status.
+ */
+export function isReplayRefusalCode(code: unknown): boolean {
+  return code === UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+}
+
+/** Client-facing status for {@link UPSTREAM_RESET_REPLAY_REFUSED_CODE}. */
+export const REPLAY_REFUSED_STATUS = 429;
 
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
 const RESET_RETRY_MAX_ATTEMPTS = 3;
@@ -352,6 +399,12 @@ export async function fetchWithAttemptDeadline(
 }
 
 export interface ResetRetryOptions {
+  /**
+   * Opt in only when repeating this operation cannot duplicate upstream effects.
+   * This permits reset retries, not extra sends: attempts and onSendsConsumed still
+   * bound and count every physical send. A string body is not replay-safety proof.
+   */
+  replaySafe?: boolean;
   abortSignal?: AbortSignal;
   /** Short host/path label for the retry warn log (no secrets/query strings). */
   label?: string;
@@ -442,9 +495,9 @@ export function applyUpstreamRecoveryInit<T extends RequestInit>(
 }
 
 /**
- * Run `doFetch`, retrying only connection-reset-shaped rejections (see
- * isConnectionResetError) with jittered backoff. The caller's thunk must be replay-safe
- * (string body); every retry is logged so persistent resets stay visible.
+ * Run `doFetch` within one send budget. Connection-reset-shaped rejections are
+ * terminal by default; only an explicitly replay-safe operation receives reset retries
+ * with jittered backoff. HTTP responses retain the caller's existing retry policy.
  */
 export async function fetchWithResetRetry(
   doFetch: ReplayableFetch,
@@ -475,6 +528,20 @@ export async function fetchWithResetRetry(
         if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
         throw err;
       }
+      if (opts.replaySafe !== true) {
+        // Return evidence instead of throwing a generic transport error: outer catches
+        // otherwise turn it into a replayable 502 and a combo/account recovery resends it.
+        // The WeakSet protects in-process recovery; the code survives JSON re-wrapping.
+        // Never expose the raw exception, which can contain credentials or request data.
+        const response = new Response(JSON.stringify({ error: {
+          type: "upstream_error",
+          code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+          message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
+        } }), { status: REPLAY_REFUSED_STATUS, headers: { "content-type": "application/json" } });
+        markResponseNonReplayable(response);
+        markReplayRefusalResponse(response);
+        return response;
+      }
       if (attempt === attempts - 1) throw err;
       sawReset = true;
       lastError = err;
@@ -491,9 +558,9 @@ export async function fetchWithResetRetry(
 }
 
 /**
- * fetchWithResetRetry plus a transient-5xx status retry layer, PRE-STREAM only: a
- * returned Response has by definition not been relayed to the client yet, so replaying
- * the (string-body) request is safe. The failed attempt's body is cancelled before the
+ * fetchWithResetRetry plus the caller-selected transient-5xx policy, PRE-STREAM only.
+ * A received HTTP error follows that policy; an ambiguous reset's non-replayable
+ * verdict always stops it. The failed attempt's body is cancelled before the
  * retry; every returned response (ok, non-transient, aborted, slow, exhausted) keeps
  * its body intact. Honors Retry-After via retryBackoffDelayMs.
  *
