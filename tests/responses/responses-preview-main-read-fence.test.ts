@@ -59,6 +59,7 @@ let testDir = "";
 let previousOpenCodexHome: string | undefined;
 let previousCodexHome: string | undefined;
 let authJsonReads = 0;
+let authJsonReadStacks: string[] = [];
 let readSpy: ReturnType<typeof spyOn> | undefined;
 let blockedHomeId: string | null = null;
 
@@ -123,7 +124,24 @@ function calibrateMainReadCounter(): void {
     chatgptAccountId: "physical-main-account",
   });
   expect(authJsonReads).toBeGreaterThan(0);
+  resetMainReadObservations();
+}
+
+function resetMainReadObservations(): void {
   authJsonReads = 0;
+  authJsonReadStacks = [];
+}
+
+/**
+ * The request also asks ordinary pool selection whether native main is live: once for the direct
+ * preview and once when fallback invokes the preview callback. Those reads travel through
+ * `isMainAccountCredentialUsable`, not the denial-cache credential validator this conversion
+ * protects. Keep every stack for diagnostics, then select the exact observable whose exclusion
+ * would regress if either request-prepare fence dropped ownership.
+ */
+function denialCacheMainReadStacks(): string[] {
+  return authJsonReadStacks.filter(stack =>
+    stack.replaceAll("\\", "/").includes("/src/codex/model-entitlements.ts"));
 }
 
 function completedResponses(model = PREFERRED_MODEL): Response {
@@ -182,10 +200,13 @@ beforeEach(() => {
   readSpy = spyOn(fs, "readFileSync");
   readSpy.mockImplementation(((...args: unknown[]) => {
     const target = args[0];
-    if (typeof target === "string" && target.endsWith("auth.json")) authJsonReads += 1;
+    if (typeof target === "string" && target.endsWith("auth.json")) {
+      authJsonReads += 1;
+      authJsonReadStacks.push(new Error("auth.json read").stack ?? "stack unavailable");
+    }
     return originalReadFileSync(...args);
   }) as unknown as typeof fs.readFileSync);
-  authJsonReads = 0;
+  resetMainReadObservations();
   blockedHomeId = null;
 });
 
@@ -208,7 +229,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   removeTreeWithRetry(testDir);
   testDir = "";
-  authJsonReads = 0;
+  resetMainReadObservations();
 });
 
 describe("preview and final authentication agree on the native-main read fence", () => {
@@ -233,7 +254,7 @@ describe("preview and final authentication agree on the native-main read fence",
     expect(authJsonReads).toBeGreaterThan(0);
   });
 
-  test("the initial preview does not open physical main for a caller-owned bearer", async () => {
+  test("the initial preview excludes physical main from denial-cache credential validation", async () => {
     seedMainDenial();
     calibrateMainReadCounter();
     const upstreamAuth: Array<string | null> = [];
@@ -246,7 +267,7 @@ describe("preview and final authentication agree on the native-main read fence",
 
     expect(response.status).toBe(200);
     expect(upstreamAuth).toEqual(["Bearer pool-access-token"]);
-    expect(authJsonReads).toBe(0);
+    expect(denialCacheMainReadStacks()).toEqual([]);
   });
 
   test("the initial preview also fences main for recovery blocking and selector drain", async () => {
@@ -275,21 +296,21 @@ describe("preview and final authentication agree on the native-main read fence",
         };
       },
     } satisfies Pick<ActiveTurnLease, "release" | "beginCodexAccountSelection">;
-    authJsonReads = 0;
+    resetMainReadObservations();
     await postSpawn(providerConfig(), { turnAdmissionLease }, new Headers());
     expect(selectionStarts).toBeGreaterThan(0);
     expect(authJsonReads).toBe(0);
   });
 
-  test("the encrypted-recovery re-preview does not reopen main for a caller-owned bearer", async () => {
+  test("the encrypted-recovery re-preview excludes main from denial-cache credential validation", async () => {
     seedMainDenial();
     calibrateMainReadCounter();
     const config = providerConfig({
-      defaultProvider: "routed",
+      defaultProvider: "openai",
       agentTaskRecovery: { enabled: true },
       subagentModelFallback: ["gpt-5.6-terra"],
       providers: {
-        routed: {
+        openai: {
           adapter: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           authMode: "forward",
@@ -305,7 +326,7 @@ describe("preview and final authentication agree on the native-main read fence",
         recoveryCalls += 1;
         // Everything before this response is the initial preview or recovery transport. Reads
         // after this point belong to the recovery re-preview and final authentication.
-        authJsonReads = 0;
+        resetMainReadObservations();
         return new Response(recoverySse("Use the recovered assignment."), {
           status: 200,
           headers: { "content-type": "text/event-stream" },
@@ -326,7 +347,7 @@ describe("preview and final authentication agree on the native-main read fence",
     expect(response.status).toBe(200);
     expect(recoveryCalls).toBe(1);
     expect(dispatchCalls).toBe(1);
-    expect(authJsonReads).toBe(0);
+    expect(denialCacheMainReadStacks()).toEqual([]);
   });
 
   test("ownership alone leaves selection-only off in preview and final authentication", async () => {
