@@ -162,7 +162,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 無——loopback 佔位符 |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | non-secret loopback placeholder |
 | `dsh` | `$DSH_HOME/settings.yaml`（預設 `~/.dsh/settings.yaml`） | `settings.yaml` | 無——非秘密的 loopback bearer 佔位符 |
 | `mcode` | `~/.minimax/config.yaml` (設定後 `MINIMAX_DATA_DIR` 優先，其次為舊的 `MAVIS_DATA_DIR`；相對路徑會被拒絕) | `mcode-config.yaml` | 無——loopback 佔位符 |
 | `zcode` | `~/.zcode/v2/config.json` (設定後 `ZCODE_DATA_DIR` 優先；相對路徑會被拒絕) | `config.json` | 無——loopback 佔位符 |
@@ -184,7 +184,7 @@ opencode 會插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。Pi 與 OMP 的匯出不�
 
 金鑰永不被序列化。設定只帶有文件化的環境變數參考，或非秘密的 loopback 佔位符。loopback 代理（`127.0.0.1`，預設值）完全不需要准入金鑰。只有客戶端 schema 支援、且代理綁定超出 loopback 時，才設定被引用的變數；關於准入金鑰的簽發方式，請見[遠端存取](/zh-tw/reference/configuration/#remote-access)。上游 provider 本身的金鑰是完全不同的事，依[供應商](/zh-tw/guides/providers/)個別設定。
 
-gjc 是例外：`OPENCODEX_GAJAE_API_KEY` 只會從環境提供 provider 憑證，但其 schema 無法傳送遠端准入 header，因此產生的 gjc 整合仍僅支援 loopback。
+產生的 gjc 整合使用非機密的本機回環佔位值，不需要環境變數。此整合僅支援本機回環，不設定遠端存取憑證。
 
 相同的 payload 亦由 `GET /api/client-config` 提供，並在儀表板的 API 分頁渲染，因此 CLI、API 與 GUI 使用相同的位元組。
 

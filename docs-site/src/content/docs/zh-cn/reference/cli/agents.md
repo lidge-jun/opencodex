@@ -164,7 +164,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 无 - loopback placeholder |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | non-secret loopback placeholder |
 | `dsh` | `$DSH_HOME/settings.yaml`（默认 `~/.dsh/settings.yaml`） | `settings.yaml` | 无 — 非秘密环回 bearer 占位值 |
 | `mcode` | `~/.minimax/config.yaml` (设置后 `MINIMAX_DATA_DIR` 优先，其次是旧的 `MAVIS_DATA_DIR`；相对路径会被拒绝) | `mcode-config.yaml` | 无 — loopback placeholder |
 | `zcode` | `~/.zcode/v2/config.json` (设置后 `ZCODE_DATA_DIR` 优先；相对路径会被拒绝) | `config.json` | 无 — loopback placeholder |
@@ -181,7 +181,7 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，请设置对应的 `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY` 或 `OPENCODEX_OPENCLAW_API_KEY`。`OPENCODEX_GAJAE_API_KEY` 只会从环境中提供 gjc provider 凭据，不能发送远程准入 header，因此生成的 gjc 集成仍仅支持环回。关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
+任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，请设置对应的 `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY` 或 `OPENCODEX_OPENCLAW_API_KEY`。`OPENCODEX_GAJAE_API_KEY` 只会从环境中提供 生成的 gjc 集成使用非秘密的本地回环占位值，无需环境变量。此集成仅支持本地回环，不配置远程访问凭据。
 
 同一份负载会通过 `GET /api/client-config` 提供，并在仪表盘的 API 选项卡中渲染，因此 CLI、API 和 GUI 使用的是同一字节内容。
 

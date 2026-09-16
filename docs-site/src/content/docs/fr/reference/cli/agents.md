@@ -202,7 +202,7 @@ propres valeurs par défaut à ces lignes.
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | aucun — espace réservé de bouclage |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | non-secret loopback placeholder |
 | `dsh` | `$DSH_HOME/settings.yaml` (`~/.dsh/settings.yaml` par défaut) | `settings.yaml` | none — espace réservé pour le porteur de bouclage non secret |
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`, puis l'ancien `MAVIS_DATA_DIR`, l'emportent une fois définis ; une valeur relative est refusée) | `mcode-config.yaml` | aucun — espace réservé de bouclage |
 | `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` l'emporte une fois défini ; une valeur relative est refusée) | `config.json` | aucun — espace réservé de bouclage |
@@ -245,9 +245,7 @@ le proxy se lie au-delà du bouclage ; voir
 [Accès à distance](/fr/reference/configuration/server/#accès-à-distance) pour savoir comment les clés d'admission sont délivrées. Clés pour
 les fournisseurs en amont eux-mêmes sont une chose entièrement distincte, configurée par
 [Fournisseurs](/fr/guides/providers/).
-gjc est l'exception : `OPENCODEX_GAJAE_API_KEY` remplit ses informations d'identification de fournisseur à partir du
-environnement, mais son schéma ne peut pas envoyer l'en-tête d'admission à distance, donc l'intégration gjc générée
-l'intégration reste uniquement en boucle.
+L’intégration gjc générée utilise une valeur de remplacement locale non secrète, sans variable d’environnement. Elle reste limitée au loopback et ne configure pas les identifiants d’accès distant.
 
 La même charge utile est servie par `GET /api/client-config` et rendue sur l'onglet API du tableau de bord, donc
 le CLI, l’API, et le GUI utilisent les mêmes octets.

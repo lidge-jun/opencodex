@@ -157,7 +157,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | なし - loopback placeholder |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | non-secret loopback placeholder |
 | `dsh` | `$DSH_HOME/settings.yaml`（既定 `~/.dsh/settings.yaml`） | `settings.yaml` | なし — 秘密ではないループバック bearer プレースホルダー |
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`、次に旧 `MAVIS_DATA_DIR` が設定時に優先。相対値は拒否されます) | `mcode-config.yaml` | なし — loopback placeholder |
 | `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` が設定時に優先。相対値は拒否されます) | `config.json` | なし — loopback placeholder |
@@ -174,7 +174,7 @@ opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex �
 `ocx export` は実際のクライアント設定を書き込むことはありません。宛先は手動でマージできるように出力されます。`--out` は、`--force` なしで既存のファイルを上書きすることを拒否します。これは、設定を置き換えると、その中にすでに含まれている他のプロバイダー、エージェント、および MCP エントリが破壊されるためです。
 :::
 
-キーはシリアル化されません。生成される設定には、文書化された環境参照か、秘密ではないループバック用プレースホルダーのいずれかが入ります。ループバック プロキシ (`127.0.0.1`、デフォルト) にはアドミッション キーはまったく必要ありません。プロキシがループバックを超えてバインドする場合は、対応する `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY`、または `OPENCODEX_OPENCLAW_API_KEY` を設定します。`OPENCODEX_GAJAE_API_KEY` は gjc の provider 認証値を環境から渡しますが、remote admission header は送れないため、生成される gjc 統合はループバック専用のままです。アドミッションキーの発行方法については、[リモートアクセス](/reference/configuration/#remote-access) を参照してください。上流プロバイダー自体のキーは完全に別のものであり、[プロバイダー](/guides/providers/) ごとに構成されます。
+キーはシリアル化されません。生成される設定には、文書化された環境参照か、秘密ではないループバック用プレースホルダーのいずれかが入ります。ループバック プロキシ (`127.0.0.1`、デフォルト) にはアドミッション キーはまったく必要ありません。プロキシがループバックを超えてバインドする場合は、対応する `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY`、または `OPENCODEX_OPENCLAW_API_KEY` を設定します。`OPENCODEX_GAJAE_API_KEY` は 生成される gjc 連携は秘密ではないループバック用の値を使うため、環境変数は不要です。ループバック専用で、リモート接続の認証情報は設定しません。
 
 同じペイロードが `GET /api/client-config` によって提供され、ダッシュボードの [API] タブにレンダリングされるため、CLI、API、および GUI は同じバイトを使用します。
 

@@ -713,6 +713,26 @@ describe("apply", () => {
     expect(readFileSync(configPath, "utf8")).toContain("1e999");
   });
 
+  test("Gajae refresh preserves loopback auth and incorporates catalog additions", () => {
+    const configPath = installGajae();
+    expect(applyIntegration(input({ clientId: "gajae" })).ok).toBe(true);
+    const initial = readFileSync(configPath, "utf8");
+    expect(initial).toContain("apiKey:");
+    expect(initial).not.toContain("apiKeyEnv:");
+
+    const refreshed = applyIntegration({ ...input({ clientId: "gajae" }), models: [
+      ...MODELS,
+      { namespaced: "gpt-5.6-terra", provider: "openai", id: "gpt-5.6-terra", contextWindow: 372_000 },
+    ] });
+    expect(refreshed.ok).toBe(true);
+    const after = readFileSync(configPath, "utf8");
+    expect(after).toContain("gpt-5.6-terra");
+    expect(after).toContain("apiKey:");
+    expect(after).not.toContain("apiKeyEnv:");
+    expect(disableIntegration(input({ clientId: "gajae" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).not.toContain("opencodex:");
+  });
+
   test("yaml clients still refuse a sibling edit rather than risk user comments", () => {
     const configPath = installGajae();
     expect(applyIntegration(input({ clientId: "gajae" })).ok).toBe(true);

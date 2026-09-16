@@ -867,7 +867,7 @@ export interface GajaeModelEntry {
 /** Gajae validates strictly: an unknown field fails the whole config. */
 export interface GajaeProviderBlock {
   baseUrl: string;
-  apiKeyEnv: string;
+  apiKey: string;
   api: "openai-completions";
   models: GajaeModelEntry[];
 }
@@ -1056,7 +1056,7 @@ function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
     providers: {
       [OPENCODE_PROVIDER_ID]: {
         baseUrl: ctx.baseUrl,
-        apiKeyEnv: GAJAE_API_KEY_ENV,
+        apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
         api: "openai-completions",
         models,
       },
@@ -1320,8 +1320,8 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     id: "gajae",
     filename: "gajae-models.yaml",
     destination: env => gajaeConfigPath(env),
-    apiKeyEnv: GAJAE_API_KEY_ENV,
-    exportHint: `export ${GAJAE_API_KEY_ENV}=<your key>`,
+    apiKeyEnv: "",
+    exportHint: "No environment variable is needed for the loopback provider.",
     build: buildGajaeClientConfig,
     format: "yaml",
     summarize: summarizeGajae,
