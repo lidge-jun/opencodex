@@ -389,7 +389,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Manage headless runtime settings, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection.",
     details: [
       "system update manages OpenCodex itself.",
-      "ocx system codex-cli-update check [--json]",
+        "ocx system codex-cli-update check [--json]",
+        "ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]",
       "The Codex CLI inspection command makes no package-registry request, does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
     ],
   },

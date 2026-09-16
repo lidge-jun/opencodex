@@ -709,6 +709,26 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["system", "codex-cli-update", "attest"],
+    summary: "Observe explicitly named Windows npm Codex installation files without enabling updates.",
+    routes: [],
+    flags: [
+      { name: "--candidate", value: "string", summary: "Required absolute npm codex.cmd or package bin/codex.js path." },
+      { name: "--npm-prefix", value: "string", summary: "Required absolute prefix containing node_modules/@openai/codex." },
+      { name: "--npm-cli", value: "string", summary: "Required absolute node_modules/npm/bin/npm-cli.js path." },
+      { name: "--node", value: "string", summary: "Required absolute node.exe path; observed, never executed." },
+      { name: "--json", value: "boolean", summary: "Emit the path-free installation identity observation." },
+    ],
+    mutates: false,
+    json: "envelope",
+    details: [
+      "Opt-in Windows x64 local-volume inspection using held native file handles; refuses reparse points, active writers and unsupported layouts.",
+      "Explicit inputs are not automatically discovered. Success binds observed file identities and bytes, not selected-runtime admission or installer ownership.",
+      "selectionAttested, managed and applyAllowed remain false. The digest is an observation, not a durable update permit.",
+      "Does not run the named Codex/npm/Node files, query a registry, install software, control processes or persist state.",
+    ],
+  },
+  {
     command: ["system", "codex-restart"],
     summary: "Restart the Codex desktop app and app-servers.",
     routes: [{ method: "POST", path: "/api/system/codex-restart" }],

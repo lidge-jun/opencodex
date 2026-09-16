@@ -1,5 +1,7 @@
 # Claude Desktop Integration
 
+Explicit Codex CLI installation observation does not launch or reconfigure a desktop client. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
+
 Desktop callers retain their existing ingress through the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

@@ -6,6 +6,8 @@ A lock in the Codex credential store is governed by [descriptor identity and age
 
 CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
 
+Explicit Codex CLI installation observation does not discover a Codex home or read/write its state. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
+
 ## Codex home
 
 `src/codex/paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from

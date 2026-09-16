@@ -1,5 +1,7 @@
 # GUI And Management API
 
+Explicit Codex CLI installation observation is a local CLI surface, not a management API or GUI update permission. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
+
 The shared server request path follows the Responses
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

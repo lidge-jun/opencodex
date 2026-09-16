@@ -1,5 +1,7 @@
 # Model Catalog
 
+Explicit Codex CLI installation observation supplies no selected-runtime proof to catalog discovery or publication. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
+
 Catalog discovery remains separate from the Responses final-route
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

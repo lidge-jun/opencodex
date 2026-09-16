@@ -3,18 +3,45 @@ import {
   type CodexCliInstallProvenanceDeps,
   type CodexCliInstallReport,
 } from "../codex/cli-install-provenance";
+import type {
+  CodexCliInstallationIdentityInput,
+  CodexCliInstallationIdentityReport,
+} from "../codex/cli-installation-identity";
 import { CliUsageError, isJsonOption, printData, runCliAction } from "./runtime-api";
 import { trustedNodeLauncherContext } from "./launcher-context";
 
 export const CODEX_CLI_UPDATE_USAGE = `Usage:
-  ocx system codex-cli-update check [--json]`;
+  ocx system codex-cli-update check [--json]
+  ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]`;
 
 export type ParsedCodexCliUpdateArgs = Readonly<{
   json: boolean;
+}> | Readonly<{
+  json: boolean;
+  attest: CodexCliInstallationIdentityInput;
 }>;
 
 export interface CodexCliUpdateCommandDeps {
   readonly inspectInstall?: (deps: CodexCliInstallProvenanceDeps) => Promise<CodexCliInstallReport>;
+  readonly inspectIdentity?: (input: CodexCliInstallationIdentityInput) => Promise<CodexCliInstallationIdentityReport>;
+}
+
+function identitySummary(report: CodexCliInstallationIdentityReport): string[] {
+  return [
+    `status: ${report.status}`,
+    `reason: ${report.reason}`,
+    `candidate-source: ${report.candidateSource}`,
+    `installation-identity-observed: ${report.installationIdentityObserved ? "yes" : "no"}`,
+    `selection-attested: ${report.selectionAttested ? "yes" : "no"}`,
+    `managed: ${report.managed ? "yes" : "no"}`,
+    `apply-allowed: ${report.applyAllowed ? "yes" : "no"}`,
+    `package-version: ${report.packageVersion ?? "unavailable"}`,
+    `npm-version: ${report.npmVersion ?? "unavailable"}`,
+    `identity-digest: ${report.identityDigest ?? "unavailable"}`,
+    `proof: ${report.proof ?? "unavailable"}`,
+    `toolchain: ${report.toolchain}`,
+    "scope: explicit installation identity only; runtime selection and update ownership are not attested",
+  ];
 }
 
 function installSummary(report: CodexCliInstallReport): string[] {
@@ -47,8 +74,33 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
     }
     positional.push(token);
   }
+  if (positional[0] === "attest") {
+    const options = new Map<string, keyof CodexCliInstallationIdentityInput>([
+      ["--candidate", "candidate"], ["--npm-prefix", "npmPrefix"],
+      ["--npm-cli", "npmCli"], ["--node", "node"],
+    ]);
+    const input: Partial<Record<keyof CodexCliInstallationIdentityInput, string>> = {};
+    for (let index = 1; index < positional.length; index += 2) {
+      const key = options.get(positional[index]!);
+      if (!key || input[key] !== undefined) {
+        throw new CliUsageError("unsupported or duplicate attest option", CODEX_CLI_UPDATE_USAGE);
+      }
+      const value = positional[index + 1];
+      if (!value || !value.trim() || /[\0\r\n]/.test(value)
+        || !(value.startsWith("/") || /^[a-z]:[\\/]/i.test(value))) {
+        throw new CliUsageError("attest options require explicit absolute paths", CODEX_CLI_UPDATE_USAGE);
+      }
+      input[key] = value;
+    }
+    if (!input.candidate || !input.npmPrefix || !input.npmCli || !input.node) {
+      throw new CliUsageError("attest requires --candidate, --npm-prefix, --npm-cli and --node", CODEX_CLI_UPDATE_USAGE);
+    }
+    return Object.freeze({ json, attest: Object.freeze({
+      candidate: input.candidate, npmPrefix: input.npmPrefix, npmCli: input.npmCli, node: input.node,
+    }) });
+  }
   if (positional[0] !== "check") {
-    throw new CliUsageError("codex-cli-update action must be check", CODEX_CLI_UPDATE_USAGE);
+    throw new CliUsageError("codex-cli-update action must be check or attest", CODEX_CLI_UPDATE_USAGE);
   }
   if (positional.length > 1) {
     throw new CliUsageError("unsupported codex-cli-update argument", CODEX_CLI_UPDATE_USAGE);
@@ -72,6 +124,20 @@ export async function handleCodexCliUpdateCommand(
     throw error;
   }
   return runCliAction(async () => {
+    if ("attest" in parsed) {
+      let report: CodexCliInstallationIdentityReport;
+      try {
+        const inspectIdentity = deps.inspectIdentity
+          ?? (await import("../codex/cli-installation-identity")).inspectCodexCliInstallationIdentity;
+        report = await inspectIdentity(parsed.attest);
+      } catch {
+        // Filesystem/native errors can contain the explicit private paths. The
+        // read-only inspector normally returns a refusal; unexpected errors stay redacted.
+        throw new Error("Installation identity inspection failed");
+      }
+      printData(report, parsed.json, identitySummary(report));
+      return;
+    }
     const trustedInspectionEnv = trustedNodeLauncherContext()?.codexCliInspectionEnv;
     const inspectionDeps: CodexCliInstallProvenanceDeps = trustedInspectionEnv
       && trustedInspectionEnv.managerRoots !== null ? {

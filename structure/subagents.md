@@ -1,5 +1,7 @@
 # Subagents And Multi-Agent Surface
 
+Explicit Codex CLI installation observation does not attest the runtime used by a subagent or change agent selection. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
+
 Encrypted-task and fallback request handling follow the Responses
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
