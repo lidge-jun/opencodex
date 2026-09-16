@@ -72,7 +72,9 @@ import {
 import {
   applyAccountChangeConversationStateScrub,
   conversationStateBindingFromAuth,
+  accountChangeFileReferenceRefusal,
   rememberServingConversationStateIssuer,
+  conversationCarriesUploadedFiles,
 } from "./account-change-state";
 import {
   TokenRefreshError,
@@ -789,6 +791,14 @@ export async function handleResponsesCompact(
     {
       const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
       if (binding) {
+        // Refused rather than scrubbed: an uploaded file is content the caller attached, not
+        // continuation state the turn can do without.
+        const refusal = accountChangeFileReferenceRefusal({
+          body: raw,
+          bindingKey: binding.bindingKey,
+          servingAccountId: binding.accountId,
+        });
+        if (refusal) return refusal;
         applyAccountChangeConversationStateScrub({
           body: raw,
           bindingKey: binding.bindingKey,
@@ -1083,15 +1093,22 @@ export async function handleResponsesCompact(
       ].filter(Boolean);
       // Build the alternate COMPLETELY before cancelling the first body: if construction
       // throws, the first rejection is still intact and can be returned to the client.
-      const alternate = await resolveAlternateCompactContext({
-        req,
-        admission,
-        config,
-        route,
-        selectedModelId,
-        excludeAccountId: authCtx.accountId,
-        turnAdmissionLease,
-      });
+      // The same reasoning refuses an uploaded-file move here: no alternate can read a file the
+      // issuing account received, so which one is chosen is irrelevant and asking before the
+      // resolution costs nothing. It also reuses the guarantee the comment above depends on --
+      // the first body is still uncancelled -- so the client gets the original rejection rather
+      // than an inaccessible-file error from account B (#4710).
+      const alternate = conversationCarriesUploadedFiles(raw)
+        ? undefined
+        : await resolveAlternateCompactContext({
+          req,
+          admission,
+          config,
+          route,
+          selectedModelId,
+          excludeAccountId: authCtx.accountId,
+          turnAdmissionLease,
+        });
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
       // cancelling its body, and sending B are all observable side effects, and B's

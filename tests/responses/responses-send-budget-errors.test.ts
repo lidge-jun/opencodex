@@ -55,7 +55,11 @@ describe("a spent send budget is reported as this proxy's refusal", () => {
       type: "error",
       message: "request send budget exhausted before dispatch",
     });
-    expect(unstructured.httpStatus).toBe(502);
+    // Asserted as the property rather than the exact status: what matters is that the identity
+    // is gone, so the client cannot tell this from an upstream fault and does not get the 429
+    // that would stop it retrying.
+    expect(unstructured.httpStatus).not.toBe(429);
+    expect(unstructured.error.code).not.toBe(SEND_BUDGET_EXHAUSTED_CODE);
   });
 
   test("both adapter catch sites answer before the upstream-failure description", () => {

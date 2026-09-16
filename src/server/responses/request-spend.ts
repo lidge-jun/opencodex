@@ -44,8 +44,14 @@ export function createRequestSpendTracker(
     "provider" | "accountLogLabel" | "usageLogInputTokens" | "spendOutputCeilingTokens"
   >,
   rootId: string | undefined,
-  ledger: SpendReservationLedger = sharedSpendLedger(),
+  injected?: SpendReservationLedger,
 ): RequestSpendTracker {
+  // Resolved on the first CHARGE, not when the request is built. The shared ledger opens a
+  // journal under the OpenCodex home, and a request that never dispatches -- refused at
+  // admission, answered locally, cancelled before its first send -- has no business creating
+  // one. It also means the home in effect at dispatch is the one that gets written.
+  let ledgerRef: SpendReservationLedger | undefined = injected;
+  const ledger = (): SpendReservationLedger => (ledgerRef ??= sharedSpendLedger());
   // Every send this request still owes the ledger an answer for, oldest first.
   const live: string[] = [];
   let refusals = 0;
@@ -56,17 +62,17 @@ export function createRequestSpendTracker(
    * A booking is only marked dispatched once a LATER send exists, because that later send
    * proves the earlier one left. The newest booking stays open until it is settled, so a
    * reservation the budget hands back -- a rotation that found no alternate, a rebuild
-   * abandoned before the wire -- can still be released for free. The cost of that choice is
-   * bounded and stated: a hard crash between reserving and sending replays as abandoned rather
-   * than unresolved, for at most one send per request.
+   * abandoned before the wire -- can still be released for free while this process is alive.
+   * A crash resolves every surviving reservation as unresolved spend regardless of this mark,
+   * because a journal that lost its tail cannot prove a send never left.
    */
   const confirmOlderSends = (): void => {
-    for (let index = 0; index < live.length - 1; index += 1) ledger.markDispatched(live[index] as string);
+    for (let index = 0; index < live.length - 1; index += 1) ledger().markDispatched(live[index] as string);
   };
   return {
     charge(): boolean {
       const sendId = randomUUID();
-      const decision = ledger.reserve({
+      const decision = ledger().reserve({
         sendId,
         scopes: {
           ...(rootId !== undefined ? { rootId } : {}),
@@ -80,7 +86,12 @@ export function createRequestSpendTracker(
       });
       if (!decision.reserved) {
         refusals += 1;
-        return false;
+        // Only an operator's configured ceiling refuses a dispatch. Every other denial --
+        // capacity, durability, a journal this process could not prove complete -- means the
+        // ledger cannot ACCOUNT for this send, which is not a reason to refuse one. An
+        // unconfigured install keeps the count caps it already had and is not newly refused,
+        // and a degraded ledger must not become an outage.
+        return decision.denial.reason !== "spend-limit-exceeded";
       }
       live.push(sendId);
       confirmOlderSends();
@@ -91,7 +102,7 @@ export function createRequestSpendTracker(
       if (sendId === undefined) return;
       // Undispatched, so this returns the tokens. If the send was already confirmed by a later
       // one, `abandon` refuses and unresolved is the only honest outcome left.
-      if (!ledger.abandon(sendId)) ledger.markLost(sendId);
+      if (!ledger().abandon(sendId)) ledger().markLost(sendId);
     },
     settle(usage: TerminalSpendUsage | undefined): void {
       if (resolved) return;
@@ -100,16 +111,16 @@ export function createRequestSpendTracker(
       if (terminal !== undefined) {
         const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
         if (reported) {
-          ledger.settle(terminal, {
+          ledger().settle(terminal, {
             inputTokens: usage?.inputTokens ?? 0,
             outputTokens: usage?.outputTokens ?? 0,
           });
         } else {
           // The response never reported usage. It may still have been billed.
-          ledger.markLost(terminal);
+          ledger().markLost(terminal);
         }
       }
-      for (const sendId of live.splice(0)) ledger.markLost(sendId);
+      for (const sendId of live.splice(0)) ledger().markLost(sendId);
     },
     get refusals(): number { return refusals; },
   };

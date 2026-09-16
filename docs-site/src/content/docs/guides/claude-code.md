@@ -181,8 +181,11 @@ Support/Claude/configLibrary` on macOS, `%APPDATA%\Claude\configLibrary` on Wind
 `CLAUDE_USER_DATA_DIR` for an alternate Desktop user-data root. The legacy `Claude-3p` directory is
 not read or deleted automatically.
 
-Non-Anthropic routes receive stable aliases such as `claude-opus-4-8-2026MMDD`. The date-looking
-part is a synthetic route slot, not the model's release date. Real Anthropic Claude routes keep
+Non-Anthropic routes receive stable aliases such as `claude-opus-4-8-YYYYMMDD`, where the year runs
+from 2026 to 2035. The date-looking
+part is a synthetic route slot, not the model's release date. 2026 slots are allocated first, so
+existing aliases keep their ids; the later years are reached only once 2026 fills.
+Real Anthropic Claude routes keep
 their real ids. New routes default to the Opus family, but moving a route does not change the
 provider or model it calls. The legacy apply flags `--static`, `--hybrid`, and `--discovery-only`
 remain available for existing scripts.

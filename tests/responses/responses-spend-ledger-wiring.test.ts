@@ -126,15 +126,16 @@ describe("the request path books every physical send on the durable ledger", () 
     const root = after.snapshot("root", "root-e");
     // Nothing stays reserved: a reservation with no owner would hold its tokens forever.
     expect(root?.reserved).toBe(0);
-    // The confirmed send may already have been billed, so it keeps its tokens as unresolved;
-    // the one still open never reached the wire and gives them back.
-    expect(root?.unresolved).toBe(500);
+    // Both keep their tokens as unresolved, including the one still open. A send can dispatch
+    // and die before its dispatch record lands, so "open" does not prove nothing was sent --
+    // and handing those tokens back would reset a ceiling that had already fired.
+    expect(root?.unresolved).toBe(1000);
     expect(root?.settled).toBe(0);
 
     // Replaying the same journal again is idempotent: the reconciliation was journaled, so a
     // second restart has nothing left to resolve and cannot double-book it.
     const third = createSpendReservationLedger({ journal });
-    expect(third.snapshot("root", "root-e")?.unresolved).toBe(500);
+    expect(third.snapshot("root", "root-e")?.unresolved).toBe(1000);
     expect(third.snapshot("root", "root-e")?.reserved).toBe(0);
   });
 });

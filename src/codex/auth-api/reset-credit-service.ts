@@ -153,7 +153,9 @@ export function createResetCreditWhamClient(config: OcxConfig, accountId: string
         signal: AbortSignal.timeout(10_000),
       });
       if (!resp.ok) { await resp.body?.cancel().catch(() => {}); throw new Error(`upstream ${resp.status}`); }
-      return safeResetCreditConsumeDto(await resp.json());
+      const parsed = await readResetCreditJson(resp, AbortSignal.timeout(10_000));
+      if (!parsed.ok) throw new Error("invalid upstream reset-credit consume response");
+      return safeResetCreditConsumeDto(parsed.value);
     }),
   };
 }
@@ -383,7 +385,14 @@ export async function consumeResetCredits(config: OcxConfig, accountId: string, 
         if (identity) markManualResetCreditOperationAmbiguous(identity);
         return jsonResponse({ error: `Upstream error ${resp.status}` }, resp.status);
       }
-      const result = safeResetCreditConsumeDto(await resp.json());
+      const consumed = await readResetCreditJson(resp, AbortSignal.timeout(10_000));
+      if (!consumed.ok) {
+        // The spend may already have landed upstream and its outcome code is unreadable,
+        // so this id must never come back as a new operation.
+        if (identity) markManualResetCreditOperationAmbiguous(identity);
+        return jsonResponse({ error: "Invalid upstream reset-credit consume response" }, 502);
+      }
+      const result = safeResetCreditConsumeDto(consumed.value);
       if (identity) {
         // Narrow explicitly rather than casting: `safeResetCreditConsumeDto`
         // normalizes anything unrecognized to "unknown", and settling that

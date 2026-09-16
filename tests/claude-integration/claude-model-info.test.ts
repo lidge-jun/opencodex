@@ -1,8 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import { buildAnthropicModelInfos, nativeEffectiveLadder } from "../../src/claude/model-info";
-import { nativeEffortClamp } from "../../src/codex/catalog";
+import { gatherRoutedModels, nativeEffortClamp } from "../../src/codex/catalog";
 
 describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => {
+  test.each(["anthropic", "anthropic-apikey"])("%s registry image inputs reach Claude discovery aliases", async (provider) => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: provider,
+      providers: {
+        [provider]: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: provider === "anthropic" ? "oauth" : "key",
+          liveModels: false,
+        },
+      },
+    });
+    const routed = models.filter(model => model.provider === provider);
+    expect(routed.length).toBeGreaterThan(0);
+    for (const idStyle of ["readable", "desktop3p"] as const) {
+      const infos = buildAnthropicModelInfos([], routed, undefined, idStyle);
+      expect(infos.length).toBeGreaterThanOrEqual(routed.length);
+      expect(infos.some(info => info.id.endsWith("[1m]"))).toBe(true);
+      for (const info of infos) {
+        expect(info.capabilities.image_input.supported).toBe(true);
+      }
+    }
+  });
+
   test("routed model with adapter-reported ladder advertises exactly those rungs", () => {
     const [info] = buildAnthropicModelInfos([], [{
       provider: "cursor", id: "gpt-5.6-luna",

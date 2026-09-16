@@ -217,7 +217,13 @@ export type RoutingCommentaryDecision =
   | { kind: "flush" }
   | { kind: "hallucination" };
 
-const ROUTING_NATIVE_TOOL_NAME = /\b(shell|read|grep|list|bash)\b/giu;
+// The Korean alternative is deliberately asymmetric: it has a left boundary and no right one.
+// Korean attaches particles directly to the noun, so the real sentences this detector exists to
+// catch read "네이티브 셸이 차단되어..." and "네이티브 셸과 Read가...". A mirrored
+// (?![\p{L}\p{M}\p{N}_]) lookahead would see the 이/과 particle as a letter and stop matching
+// every one of them, which is why the negative cases below only probe the left side. Adding the
+// right boundary looks like an obvious fix and disables the check; do not.
+const ROUTING_NATIVE_TOOL_NAME = /\b(shell|read|grep|list|bash)\b|(?<![\p{L}\p{M}\p{N}_])네이티브\s*(?:셸|쉘)/giu;
 const ROUTING_TOOL_HINT =
   /(?:\b(?:shell|read|grep|list|bash)\b|exec_command|shell_command|브리지|네이티브\s*(?:셸|쉘))/iu;
 const ROUTING_FAILURE_CLAIM =
@@ -276,7 +282,7 @@ export class CursorRoutingCommentarySniffer {
   private matchesHallucination(): boolean {
     if (!ROUTING_FAILURE_CLAIM.test(this.buffered)) return false;
     const nativeTools = new Set(
-      [...this.buffered.matchAll(ROUTING_NATIVE_TOOL_NAME)].map(match => match[1]?.toLowerCase()),
+      [...this.buffered.matchAll(ROUTING_NATIVE_TOOL_NAME)].map(match => match[1]?.toLowerCase() ?? "shell"),
     );
     if (nativeTools.size === 0) return false;
     return ROUTING_REDIRECT_CLAIM.test(this.buffered) || nativeTools.size >= 2;

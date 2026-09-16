@@ -65,12 +65,15 @@ describe("#4546 cost guard, end to end", () => {
     // The base allowance is gone. A repair leg may still draw the single shared reserve...
     const repair = budget.reserveDispatch({ sendClass: "repair", targetKey: "pool-a|m" });
     expect(repair.allowed).toBe(true);
-    // ...but an account move cannot ALSO have one. This is the intersection the incident lacked:
-    // each layer used to hold its own allowance, so a spent request still funded every one.
+    // ...and taking it is what spends the single shared reserve.
+    expect(budget.reserveSpent).toBe(true);
+    // An account move cannot ALSO have one. The ceiling is what refuses it, which is the
+    // intersection the incident lacked: each layer used to hold its own allowance, so a spent
+    // request still funded every one of them.
     const move = budget.reserveDispatch({ sendClass: "account-failover", targetKey: "pool-b|m" });
     expect(move.allowed).toBe(false);
     if (move.allowed) throw new Error("unreachable");
-    expect(move.reason).toBe("final-recovery-spent");
+    expect(move.reason).toBe("total-exhausted");
 
     expect(budget.used).toBe(CODEX_TEXT_GUARDED_BUDGET_POLICY.maxTotalModelSends);
     // The ledger saw exactly the sends the budget charged -- no more, and not one fewer.
@@ -99,7 +102,13 @@ describe("#4546 cost guard, end to end", () => {
     }
     // Separate request objects cannot mint private allowances: the limiter is process-wide.
     expect(limiter.state(now).recoveryDispatches).toBe(1);
-    expect(limiter.state(now).refusedTotal).toBeGreaterThan(0);
+    // The withheld result above short-circuits on the lease before it reaches the limiter, so
+    // it costs no allowance -- asserting a refusal there would claim a path the code never
+    // took. The shared bound is proved by asking the limiter directly: a third leg, with its
+    // own request object and its own send budget, finds the one allowance already spent.
+    expect(limiter.tryPermitRetryDispatch(now)).toBe(false);
+    expect(limiter.state(now).refusedTotal).toBe(1);
+    expect(limiter.state(now).recoveryDispatches).toBe(1);
   });
 
   test("a request that keeps its detour does not spend a probe on a failing account", () => {
@@ -158,8 +167,10 @@ describe("#4546 cost guard, end to end", () => {
     expect(settledAfter?.settled).toBe(150);
     expect(settledAfter?.unresolved).toBe(500);
     expect(settledAfter?.reserved).toBe(0);
-    // The send ids are still known, so a replayed request cannot authorise another dispatch.
+    // Settlement is keyed on the send id the ledger issued, not on the request. An id it never
+    // issued -- a caller guessing, or a replayed logical request id -- settles nothing.
     expect(after.settle("lr-restart", { inputTokens: 1, outputTokens: 1 })).toBe(false);
+    expect(after.snapshot("root", "root-restart")?.settled).toBe(150);
   });
 
   test("an account change drops continuation state and keeps the file reference intact", () => {
