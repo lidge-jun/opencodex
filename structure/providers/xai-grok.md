@@ -141,3 +141,7 @@ Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#a
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
+
+The opt-in [native mid-turn steering contract](../transports/streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
+authentication, routing and non-native behavior; its connection-local controls, replay journal
+and multi-response lifetime are owned by the native Responses transport.

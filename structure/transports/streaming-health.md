@@ -252,3 +252,49 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+## Experimental native mid-turn steering
+
+`codexNativeSteering: true` is an independent, default-off opt-in for the client-facing
+Responses WebSocket endpoint. It requires `websockets: true`, the canonical ChatGPT forward
+route, an eligible Bun runtime, and an upstream model/execution mode that supports steering.
+HTTP fallback and translated/provider/sidecar/Combo paths do not gain steering. Plaintext V2
+restoration is excluded because it is not a transparent native event stream.
+
+`src/server/responses/native-steering.ts` owns one downstream turn and one private physical
+upstream connection. The connection remains bound to the credential selected by the ordinary
+dispatch path and never enters the idle reuse pool. The normal authentication, admission,
+quota observation and pre-dispatch guard remain in force. `response.steer` accepts user-only
+input, preserves its target response ID, and cannot select another account or lane.
+
+An acceptance acknowledges queued input, not application. The parent terminal is relayed,
+but the native chain ends only after outstanding submissions settle and the last response
+ends. Automatic successors are relayed without an extra create. A pending event preserves
+its `required_input` stubs; exactly one explicit same-parent/lane continuation may provide
+the saved results. This initial implementation pins model/settings to the initial request
+and refuses unrelated input or changed settings on that continuation. Explicit continuations
+are paced and recheck the captured dispatch guard after waiting. No tools, accepted input
+or ambiguously delivered sends are automatically replayed.
+
+`src/server/responses/native-steering-replay.ts` journals only committed native input into
+the existing thread-scoped replay cache. Rejected/uncommitted steer text is excluded. Sparse
+terminal outputs are reconstructed from completed output-item events. Derived state inherits
+the original non-persistable-body restriction; the original request is never mutated. The
+bounded journal is discarded at teardown. This keeps subsequent ordinary delta-input turns
+working without inventing IDs or silently dropping the steering instruction.
+
+Native chains bypass single-response SSE repair/terminal truncation. Wire IDs, lane IDs and
+control events are preserved. A single bounded reader owns delivery; client cancellation,
+account invalidation and shutdown abort its upstream. Numeric usage is summed once per
+response; steering control frames (which can contain returned user input) are not log samples.
+
+Bounds: 32 outstanding submissions, 128 response IDs per chain, 32 MiB replay journal,
+256 KiB / 1,024 required-input stubs, existing WS frame/queue byte limits, a 90-second control
+wait, and a 30-minute saved-tool-result wait. Ordinary active-response silence uses the
+configured stall deadline. Unsupported routes return explicit errors rather than discarding
+steers. Unknown or mismatched protocol identities fail closed without replay.
+
+The regression fixture is derived from the pinned OpenAI Python SDK response-steering
+schemas at commit `98e1d24f4902ab58830adf0e2b6a729a5d5429b1`; it is not a live Astra
+compatibility certification. End-to-end live client/backend verification remains required
+before promoting this experimental option to a default.

@@ -395,3 +395,7 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 ## Renamed destination reasoning metadata
 
 `src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Identity, transport and other capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
+
+The opt-in [native mid-turn steering contract](transports/streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
+authentication, routing and non-native behavior; its connection-local controls, replay journal
+and multi-response lifetime are owned by the native Responses transport.

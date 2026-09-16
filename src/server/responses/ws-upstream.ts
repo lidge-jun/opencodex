@@ -1,3 +1,4 @@
+import type { NativeSteeringChannel } from "./native-steering";
 // Upstream WebSocket transport for the ChatGPT Codex backend.
 //
 // Why this exists: the Codex backend serves the responses_websockets path from
@@ -129,6 +130,8 @@ export function codexWsUpstreamFetch(
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
   onQuota?: CodexWsQuotaObserver,
   beforeDispatch?: (headers: Headers) => void,
+  nativeSteering?: NativeSteeringChannel,
+  beforeContinuation?: () => Promise<void>,
 ): Promise<Response> {
   const prepared = prepareCodexWsRequest(url, init);
   if (!prepared) return sseFallback(url, prepareCodexHttpInit(url, init));
@@ -169,7 +172,9 @@ export function codexWsUpstreamFetch(
   }
   let session: CodexWsSession;
   try {
-    const identity = codexWsReuseIdentity(url, headers, frameText, proxy);
+    // Steering keeps a private physical connection across successor responses; it
+    // must never enter the idle-socket pool or move to a different credential.
+    const identity = nativeSteering && prepared.canonical ? null : codexWsReuseIdentity(url, headers, frameText, proxy);
     session = (identity ? codexWsPool.acquire(identity, wsUrl, headers, proxy) : null)
       ?? new CodexWsSession(wsUrl, headers, false, undefined, proxy);
     if (!session.busy && !session.reserve()) {
@@ -181,6 +186,8 @@ export function codexWsUpstreamFetch(
   }
   return codexWsExchange({
     session, url, init, prepared, sseFallback, onQuota, beforeDispatch,
+    nativeSteering: prepared.canonical ? nativeSteering : undefined,
+    beforeContinuation,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
   });
 }

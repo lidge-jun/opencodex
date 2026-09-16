@@ -1,3 +1,5 @@
+import { NativeSteeringChannel, NativeSteeringError } from "../responses/native-steering";
+import { createNativeSteeringLogObserver } from "../responses/native-steering-log";
 import type { Server, ServerWebSocket } from "bun";
 import {
   LIVE_SIDEBAND_UPSTREAM_OPEN_TIMEOUT_MS,
@@ -187,11 +189,38 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
         } catch {
           return; // text-only contract; ignore unparseable frames
         }
+        if (frame.type === "response.steer" || (frame.type === "response.create" && ws.data.nativeSteering)) {
+          try {
+            if (frame.type === "response.steer") {
+              if (!ws.data.nativeSteering) throw new NativeSteeringError("steering_not_supported", "Native steering is disabled or unavailable on this route.");
+              ws.data.nativeSteering.steer(frame);
+              return;
+            }
+            if (ws.data.nativeSteering?.continue(frame)) return;
+          } catch (error) {
+            sendJsonFrame(ws, buildWsErrorFrame(400, {
+              type: "invalid_request_error",
+              code: error instanceof NativeSteeringError ? error.code : "native_steering_error",
+              message: error instanceof NativeSteeringError ? error.message : "Native steering transport failed; delivery may be unknown. Do not automatically replay input.",
+            }));
+            return;
+          }
+        }
         if (frame.type === "response.processed") return; // ack — no-op
         if (frame.type !== "response.create") return;
         markActivity("ws response.create");
 
         ws.data.cancel?.();
+        let nativeSteering: NativeSteeringChannel | undefined;
+        try {
+          const idleMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec)
+            ? Math.max(1, config.stallTimeoutSec) * 1000 : 300_000;
+          nativeSteering = config.codexNativeSteering === true ? new NativeSteeringChannel(frame, idleMs) : undefined;
+        } catch {
+          sendJsonFrame(ws, buildWsErrorFrame(400, { type: "invalid_request_error", message: "Invalid native steering request settings" }));
+          return;
+        }
+        ws.data.nativeSteering = nativeSteering;
         const turnId = (ws.data.turnId ?? 0) + 1;
         ws.data.turnId = turnId;
         const isCurrent = () => ws.data.turnId === turnId;
@@ -266,6 +295,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
               ...(wsAdmission ? { admission: wsAdmission } : {}),
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
+              nativeSteering,
               abortSignal: turnAbort.signal,
               turnAdmissionLease,
               onFirstOutput: () => recordFirstOutput(logCtx, start),
@@ -276,7 +306,10 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
               },
             });
             await sendResponseToWebSocket(ws, response, isCurrent, {
-              onSsePayload: payload => inspectResponseLogSsePayload(logCtx, payload),
+              untilEof: nativeSteering?.relayActive === true,
+              onSsePayload: nativeSteering?.relayActive
+                ? createNativeSteeringLogObserver(logCtx, () => recordFirstOutput(logCtx, start))
+                : payload => inspectResponseLogSsePayload(logCtx, payload),
               onTerminal: status => {
                 terminalRecorder?.(status, logCtx.terminalHttpStatus);
                 finalizeLog(httpStatusForRequestLogTerminal(status, logCtx), {
@@ -312,6 +345,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
             }
           } finally {
             turnAdmissionLease.release();
+            if (ws.data.nativeSteering === nativeSteering) ws.data.nativeSteering = undefined;
             if (!logged && turnAbort.signal.aborted) finalizeLog(499);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
           }

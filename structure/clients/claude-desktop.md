@@ -157,3 +157,7 @@ The [explicit model-capability contract](../config.md#explicit-per-model-capabil
 Exact [model input declarations](../config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+The opt-in [native mid-turn steering contract](../transports/streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
+authentication, routing and non-native behavior; its connection-local controls, replay journal
+and multi-response lifetime are owned by the native Responses transport.

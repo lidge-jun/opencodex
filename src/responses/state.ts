@@ -1256,6 +1256,10 @@ export function markBodyNonPersistable(body: unknown): void {
   if (body && typeof body === "object") nonPersistableBodies.add(body as object);
 }
 
+export function isBodyNonPersistable(body: unknown): boolean {
+  return !!body && typeof body === "object" && nonPersistableBodies.has(body);
+}
+
 export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },

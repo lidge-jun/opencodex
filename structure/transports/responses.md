@@ -702,3 +702,7 @@ What must not happen is a ladder that charges and then returns through a path th
 nor releases. That is not a lost send; it is a send the request never made, spending an allowance a
 later recovery in the same request then cannot have. `tests/lib/execution-budget-permits.test.ts`
 pins both ladder shapes against exactly that.
+
+The opt-in [native mid-turn steering contract](streaming-health.md#experimental-native-mid-turn-steering) preserves this area's ordinary
+authentication, routing and non-native behavior; its connection-local controls, replay journal
+and multi-response lifetime are owned by the native Responses transport.

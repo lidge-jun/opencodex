@@ -878,3 +878,38 @@ When an affected history store supports paginated records, a provider transition
 `ocx restore` and Codex config removal still refuse on `history_paginated_requires_native_writer`. Stripping the `[model_providers.opencodex]` definition while thread rows still reference it would make those conversations unresolvable, and the restore path has no way to keep a compatibility provider table. A home that is already paginated cannot currently be uninstalled through the product; that is known open work rather than intended behaviour.
 
 Do not rewrite an active paginated rollout or thread row to migrate those conversations yourself. Close the affected conversation before any recovery, and report the exact error and versions without uploading private history. A backup or a successful script alone does not prove the conversation is visible again. Check the restored conversation in Codex after reopening.
+
+## Experimental native mid-turn steering
+
+For a compatible native OpenAI model and a client that sends `response.steer`, enable both
+options in `~/.opencodex/config.json` and restart OpenCodex before starting a fresh turn:
+
+```json
+{
+  "websockets": true,
+  "codexNativeSteering": true
+}
+```
+
+Merge these keys into the existing configuration; do not replace your provider/account settings.
+This option is off by default. It forwards steering to the same native ChatGPT WebSocket
+connection and selected account, preserving automatic successor responses and pending
+saved-tool-result continuations. Acceptance means queued, not yet applied.
+
+For `response.steer.pending`, supply the reported required tool results or approval decisions
+**once per parent**, on the same lane. Do not rerun tools or resend accepted steering text.
+This first implementation accepts saved-result-only continuations with unchanged model and
+request settings. A changed model/settings requires an explicitly stopped or finished turn
+and normal new dispatch. Multiple independent conversations use independent connections.
+
+HTTP fallback, other providers, translated models, sidecars, Combo attempts and plaintext V2
+restoration do not support this option. It does not add steering capability to a model or
+a client that lacks it. Unsupported routes return a protocol error rather than silently
+ignoring input. Disconnected or timed-out delivery may be unknown: never automatically
+resubmit tools or steering text. Pending controls time out after 90 seconds of inactivity;
+saved-tool-result waits have a 30-minute cap.
+
+The implementation has synthetic protocol and regression coverage, not live Astra/client
+certification. Keep the option disabled for production work until your client/model path
+has been verified. Set `codexNativeSteering` to `false` and restart to restore the existing
+single-response relay; no account or conversation files need to be deleted.
