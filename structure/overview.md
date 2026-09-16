@@ -162,3 +162,6 @@ Provider-scoped approval reviewer settings are projected by the [catalog owner](
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Manual Codex compaction can select a request-local model through the
+[existing Responses handlers](transports/responses.md#manual-compaction-overrides), while subsequent turns keep their conversation settings.

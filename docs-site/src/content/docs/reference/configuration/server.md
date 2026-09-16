@@ -460,6 +460,40 @@ Auto auth selects subscription when stored Claude auth is found, proxy when none
 subscription with a warning when detection is inconclusive. See
 [Claude Code auth mode](/guides/claude-code/#auth-mode).
 
+## Manual compaction
+
+In **Dashboard → Overview → Manual compaction**, choose a model and optional reasoning effort,
+then click **Save**. Select **Use conversation model** and save to remove the override.
+Changes apply to the next manual `/compact` request without restarting the proxy.
+
+Set `manualCompaction` in OpenCodex `config.json` to override the model used by Codex's
+manual `/compact` command. The setting is disabled when omitted.
+
+```json
+{
+  "manualCompaction": {
+    "model": "provider/model-id",
+    "reasoningEffort": "low"
+  }
+}
+```
+
+`model` accepts native model IDs, provider-qualified model IDs, and configured combos.
+`reasoningEffort` is optional; omit it to preserve the incoming effort. Supported declarations
+are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`.
+Existing provider effort rules still apply. The native `/responses/compact` endpoint keeps
+its existing behavior and does not forward reasoning settings.
+
+OpenCodex changes only requests with explicit `request_kind: "compaction"` and
+`compaction.trigger: "manual"` metadata. Automatic compaction and later conversation turns
+keep their original routing and settings. Missing, malformed, or conflicting metadata does
+not activate the override, including on older clients without trigger metadata. WebSocket
+requests use each frame's metadata rather than the connection's earlier handshake metadata.
+
+The override reuses the existing compaction handlers and summary formats. The selected model
+must support the input size and content. This setting does not guarantee a cache hit for
+automatic compaction. Restart the proxy after editing `config.json` by hand. Dashboard saves apply immediately.
+
 ## Shadow calls
 
 Codex uses small helper models for tasks such as titles and commit messages. Enable

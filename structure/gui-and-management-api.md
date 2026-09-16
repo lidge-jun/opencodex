@@ -662,3 +662,9 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+`manualCompaction` is a persisted configuration setting. Its model and optional effort follow the
+[Responses trigger contract](transports/responses.md#manual-compaction-overrides). Dashboard Overview
+provides model and effort selectors with an explicit Save action. `GET /api/settings` returns
+the override or null; `PUT /api/settings` accepts a complete validated object or null to clear it.
+Save failure restores live settings and deletion provenance; the dashboard retains the draft for retry.

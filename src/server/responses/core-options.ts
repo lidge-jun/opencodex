@@ -105,6 +105,7 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  manualCompactionApplied?: boolean;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
   comboReplaySnapshot?: {
     sourceBody: unknown;

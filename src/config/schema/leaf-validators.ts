@@ -40,6 +40,11 @@ export function isUsableApiKeySecret(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
+export const manualCompactionSchema = z.object({
+  model: z.string().trim().min(1),
+  reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
+}).strict();
+
 /**
  * Bounds for the opt-in same-target 429 wait-and-retry policy. Single source of truth
  * shared by the config schema, the load-time sanitizer, and the management write

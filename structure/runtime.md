@@ -546,3 +546,6 @@ defines identity, unknown records, and aggregation boundaries.
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Manual Codex compaction uses a request-local model override when configured; the
+[Responses compaction contract](transports/responses.md#manual-compaction-overrides) owns its trigger and replay boundaries.

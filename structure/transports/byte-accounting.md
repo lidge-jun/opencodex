@@ -131,3 +131,5 @@ The same focused tests cover these lifecycle paths and Unicode code-unit limit b
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+The [manual compaction override](responses.md#manual-compaction-overrides) changes model and effort scalars on the already parsed request, within the existing body-reader budget.

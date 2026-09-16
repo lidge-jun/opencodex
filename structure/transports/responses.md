@@ -802,6 +802,25 @@ The [explicit model-capability contract](../config.md#explicit-per-model-capabil
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior. Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 
+## Manual compaction overrides
+
+`src/server/responses/manual-compaction.ts` applies `manualCompaction` before model routing in
+both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"`
+and `compaction.trigger: "manual"` in `x-codex-turn-metadata`, supplied as a header or embedded
+in Responses `client_metadata`. Every supplied metadata copy must agree; malformed, absent,
+automatic, and ordinary-turn metadata leave the request unchanged. WebSocket requests use
+only per-frame metadata; handshake headers can describe an earlier request.
+
+The override changes only the model and optional reasoning effort. Existing native forwarding,
+routed summaries, capability handling, and retry budgets remain authoritative; native compact
+still removes reasoning before sending. Internal handoffs carry a recursion guard so combo
+children and fallback attempts retain their selected targets. Manual overrides bypass shadow
+interception and conversation combo recall, and do not publish replacement combo/handoff recall.
+They never change the conversation's configured model or later automatic-compaction requests.
+
+`tests/responses/responses-manual-compaction.test.ts` covers trigger selection, config validation,
+native and routed handlers, summary replay, combo failover, and subsequent conversation settings.
+
 ## Core module ownership
 
 `src/server/responses/core.ts` is the public ingress and compatibility-export surface.

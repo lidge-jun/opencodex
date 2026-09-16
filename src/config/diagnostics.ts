@@ -58,6 +58,7 @@ import {
   quotaResetNotifySchema,
   remoteGuiConfigSchema,
   runtimeRoleSchema,
+  manualCompactionSchema,
 } from "./schema/leaf-validators";
 
 export type ConfigDiagnostics = {
@@ -542,6 +543,10 @@ function managementIngressConfigError(value: unknown): string | null {
 }
 
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
+  const manualCompaction = rawConfigRecord(value)?.manualCompaction;
+  if (manualCompaction !== undefined && !manualCompactionSchema.safeParse(manualCompaction).success) {
+    return { ok: false, error: "schema_invalid: manualCompaction: requires a nonblank model and an optional valid reasoningEffort" };
+  }
   const boundaryError = configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
