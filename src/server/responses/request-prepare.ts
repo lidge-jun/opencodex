@@ -366,6 +366,14 @@ export async function prepareResponsesRequest(
   }
   logCtx.requestedModel = parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
+  // What this request may spend beyond its input, for the durable spend reservation (#4707).
+  // Read from the caller rather than from the adapter's serialized body, because the
+  // reservation has to exist before the body does. A caller that omits it leaves the
+  // provider/model default in charge and reserves only the input estimate; settlement then
+  // books the real figure, so the gap is a looser bound up front, never a wrong one after.
+  if (typeof parsed.options.maxOutputTokens === "number" && parsed.options.maxOutputTokens > 0) {
+    logCtx.spendOutputCeilingTokens = Math.trunc(parsed.options.maxOutputTokens);
+  }
   logCtx.callerServiceTier = sanitizeLogMetadataString(parsed.options.serviceTier);
   logCtx.requestedServiceTier = parsed.options.serviceTier;
   logCtx.requestedSpeedLabel = requestLogSpeedLabel(parsed.options.serviceTier);
