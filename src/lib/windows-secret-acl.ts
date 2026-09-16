@@ -52,15 +52,21 @@ const timedOutPaths = new Map<string, boolean>();
 const ASYNC_ICACLS_BELT_MARGIN_MS = 250;
 
 /**
- * The memo value: `object:freshness` for a file a harden was actually attributed
- * to.
+ * The memo value: the `object` plus `freshness` of a file a harden was actually
+ * attributed to.
  *
  * There is deliberately no null member. An observation that cannot be read is
  * not stored at all — the entry is deleted — because a "recorded as unverifiable"
  * value was dead code the moment attribution became a before/after comparison,
  * and a branch nothing can reach is a branch no test can defend.
+ *
+ * It is the observation itself rather than a joined string so that the two
+ * questions stay separately askable after storage. `reattributeHardenedSecretPath`
+ * has to compare the object while deliberately ignoring the freshness, and
+ * recovering one half out of `dev:ino:ctimeNs` by counting colons would make that
+ * comparison depend on a format nothing declares.
  */
-type HardenedIdentity = string;
+type HardenedIdentity = PathObservation;
 
 /**
  * What a stat can tell us about WHICH OBJECT is at a path.
@@ -130,8 +136,8 @@ function observe(targetPath: string): PathObservation | null {
   }
 }
 
-function memoValue(seen: PathObservation): HardenedIdentity {
-  return `${seen.object}:${seen.freshness}`;
+function sameObservation(a: PathObservation, b: PathObservation): boolean {
+  return a.object === b.object && a.freshness === b.freshness;
 }
 
 /**
@@ -157,7 +163,7 @@ function memoSatisfied(cache: Map<string, HardenedIdentity>, targetPath: string)
   // without any ACL work. That needs exact-identity ABA to bite — outside the
   // proof bound this unit claims — but "the consequence is out of scope" is not a
   // reason to keep an entry we have just proven does not describe what is there.
-  if (current === null || memoValue(current) !== remembered) {
+  if (current === null || !sameObservation(current, remembered)) {
     cache.delete(targetPath);
     return false;
   }
@@ -205,7 +211,7 @@ function recordHarden(
     cache.delete(targetPath);
     return false;
   }
-  cache.set(targetPath, memoValue(after));
+  cache.set(targetPath, after);
   return true;
 }
 
@@ -427,6 +433,58 @@ export function resetHardenedStateForTests(): void {
 /** Forget a successful harden only after this exact ephemeral path is gone. */
 export function forgetHardenedSecretPath(targetPath: string): void {
   hardenedPaths.delete(targetPath);
+}
+
+/**
+ * Re-attribute an existing file memo to the SAME object after the caller wrote
+ * content to it through a descriptor whose identity it verified.
+ *
+ * This exists because `freshness` is `ctimeNs`, and on Windows libuv reports
+ * `st_ctim` from the NTFS ChangeTime, which moves when file DATA is written. An
+ * atomic writer therefore invalidated its own memo between the harden that
+ * protects the empty temp and the harden before the rename, and paid a second
+ * full `/grant:r` + `/inheritance:r` + `/remove:g` sequence to reapply the ACL
+ * that was already on the file. Every secret write on Windows paid it twice.
+ *
+ * Only the freshness moves, and only for an unchanged object: a different object
+ * retires the entry instead. A caller must have proven, immediately beforehand,
+ * that `targetPath` resolves to the object its own descriptor refers to.
+ *
+ * The cost of this is worth stating exactly, because `PathObservation` documents
+ * that freshness also moves when PERMISSIONS change, and this call cannot tell
+ * the two apart. So a DACL change landing between the harden and this call is
+ * absorbed instead of forcing a re-harden. That window is the caller's own
+ * content write; every permission change after this call still moves ctime
+ * again and still misses the memo, so the detection this memo provides is
+ * relocated, not removed.
+ *
+ * What makes the absorbed window acceptable is who can be in it. Once the harden
+ * has run, the DACL is an explicit owner-only ACE with inheritance removed, so
+ * no other principal can open the file for `WRITE_DAC` at all. The one principal
+ * who can still rewrite that DACL is one holding a handle opened BEFORE the
+ * harden, and Windows keeps the access granted to an open handle: that principal
+ * can equally rewrite the DACL after any later harden, and after the rename, on
+ * the same object. A second mutation pass never bounded that capability — it
+ * stripped an ACE the holder could immediately re-add — so declining to repeat
+ * it removes no guarantee anyone had.
+ *
+ * Refusal is cheap and safe in either direction: an unmoved memo simply means the
+ * caller's next harden runs in full.
+ *
+ * Returns whether the memo now describes what is at the path.
+ */
+export function reattributeHardenedSecretPath(targetPath: string): boolean {
+  const remembered = hardenedPaths.get(targetPath);
+  if (remembered === undefined) return false;
+  const current = observe(targetPath);
+  // Unreadable, or a different object: this is exactly the case the memo must
+  // not cover. Retire it so the next harden is a real one.
+  if (current === null || current.object !== remembered.object) {
+    hardenedPaths.delete(targetPath);
+    return false;
+  }
+  hardenedPaths.set(targetPath, current);
+  return true;
 }
 
 /**

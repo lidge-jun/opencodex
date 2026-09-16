@@ -1430,6 +1430,7 @@
     "web-search.test.ts": "web-search",
     "win-exec.test.ts": "windows",
     "win-paths.test.ts": "windows",
+    "windows-acl-start-cost.test.ts": "windows",
     "windows-atomic-replace.test.ts": "windows",
     "windows-deploy-close-regressions.test.ts": "windows",
     "windows-elevation-spawn.test.ts": "windows",
