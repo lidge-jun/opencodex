@@ -1,3 +1,5 @@
+import { isDeclaredReasoningEffort } from "../../reasoning-effort";
+import { recordAttemptRequestedEffort } from "../request-log";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
@@ -357,6 +359,26 @@ export async function executeComboResponses(
   // adoption below must never replace it with a concrete child route trace.
   logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
 
+  const originalReasoning = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { reasoning?: unknown }).reasoning
+    : undefined;
+  const originalRequestedEffortValue = originalReasoning && typeof originalReasoning === "object" && !Array.isArray(originalReasoning)
+    ? (originalReasoning as { effort?: unknown }).effort
+    : undefined;
+  const originalRequestedEffort = typeof originalRequestedEffortValue === "string"
+    && isDeclaredReasoningEffort(originalRequestedEffortValue)
+    ? originalRequestedEffortValue
+    : undefined;
+  const restoreOriginalRequestedEffort = (childLog: RequestLogContext): void => {
+    if (originalRequestedEffort === undefined) return;
+    const normalizedRequestedEffort = childLog.requestedEffort;
+    const transitionIndex = normalizedRequestedEffort?.indexOf("->") ?? -1;
+    childLog.requestedEffort = transitionIndex >= 0
+      ? `${originalRequestedEffort}${normalizedRequestedEffort!.slice(transitionIndex)}`
+      : originalRequestedEffort;
+    recordAttemptRequestedEffort(childLog);
+  };
+
   let lastFailure: Response | null = null;
   // Dispatched targets, not attempted picks: it indexes the declared target list so the clamp
   // below can tell how many targets are still entitled to a send.
@@ -407,6 +429,7 @@ export async function executeComboResponses(
       comboDefaultEffort(config, comboId),
       supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
       combo.reasoningEffortMode,
+      combo.defaultEffortMode,
     );
     const childHeaders = buildComboChildHeaders(req.headers);
     const childRequest = new Request(req.url, {
@@ -425,6 +448,10 @@ export async function executeComboResponses(
       config.providers[pick.target.provider]!.adapter,
     );
     childLog.activeAttempt = attempt;
+    if (originalRequestedEffort !== undefined) {
+      childLog.requestedEffort = originalRequestedEffort;
+      recordAttemptRequestedEffort(childLog);
+    }
     let attemptRetained = false;
     const retainCancelledAttempt = (): void => {
       if (attemptRetained) return;
@@ -499,6 +526,7 @@ export async function executeComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
+      restoreOriginalRequestedEffort(childLog);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {

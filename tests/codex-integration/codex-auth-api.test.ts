@@ -1,3 +1,5 @@
+import { registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
+import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
 import * as usageHistoryModule from "../../src/usage/log";
 import { getAccountQuotaHistory } from "../../src/codex/quota";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -2871,16 +2873,7 @@ describe("codex-auth API", () => {
     });
   });
 
-  test("reset-credit consume rejects invalid account ids before credential lookup", async () => {
-    const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ accountId: "../bad" }),
-    });
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
-    expect(resp!.status).toBe(400);
-    expect(await resp!.json()).toMatchObject({ error: "Invalid account id format" });
-  });
+  registerResetCreditConsumeValidationTests(makeConfig, seedPoolAccount);
 
   test("reset-credit consume returns remaining from refreshed quota, not the consume payload", async () => {
     const config = makeConfig();
@@ -5530,27 +5523,7 @@ describe("codex-auth API", () => {
     expect(getCodexAccountCredential("quota-unknown")).toBeNull();
   });
 
-  test("OAuth creation rejects a namespace claimed during warmup without persisting", async () => {
-    const config = makeConfig();
-    const result = await completeMockCodexOAuth({
-      config,
-      requestBody: { id: "oauth-race" },
-      oauthAccountId: "acct-oauth-race",
-      email: "oauth-race@example.test",
-      onWarmup: () => {
-        config.codexAccountNamespaces = { "oauth-race": "pool-a" };
-      },
-    });
-
-    expect(result.startStatus).toBe(200);
-    expect(result.state).toMatchObject({
-      status: "error",
-      error: "account id must not collide with a configured Codex account namespace",
-    });
-    expect(config.codexAccounts).toEqual([]);
-    expect(config.codexAccountNamespaces).toEqual({ "oauth-race": "pool-a" });
-    expect(getCodexAccountCredential("oauth-race")).toBeNull();
-  });
+  registerWarmupRateLimitCases(makeConfig, completeMockCodexOAuth);
 
   test("OAuth creation reports a durable add when catalog convergence is pending", async () => {
     const accountId = "oauth-picker-pending";

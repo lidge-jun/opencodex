@@ -1,7 +1,7 @@
 # Chat Provider Compatibility
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](cursor.md#cursor-native-exec).
 
 Native Codex Spark-specific request exceptions are absent. General Lite and namespace repair
 remain shared [Responses compatibility](../transports/responses.md#responses-httpsse), including

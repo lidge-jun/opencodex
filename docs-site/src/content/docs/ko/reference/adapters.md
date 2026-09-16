@@ -167,10 +167,12 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 
 ### Reasoning effort
 
-`gpt-5.6-sol`과 `claude-opus-5`는 네이티브 effort를 지원하며 요청 필드 이름이 다릅니다.
-`low` / `medium` / `high` / `xhigh` / `max` 값은 각각
-`additionalModelRequestFields.reasoning.effort`와 `output_config.effort`로 전송됩니다.
-
+GPT-5.6 계열은 `additionalModelRequestFields.reasoning.effort`를, `claude-opus-5`는
+`additionalModelRequestFields.output_config.effort`를 사용합니다. `gpt-5.6-luna`와
+`gpt-5.6-terra`는 검증된 `low`, `medium`, `high`, `max`만 네이티브 필드로 전송합니다.
+두 모델의 `xhigh`는 네이티브 동작이 검증되지 않아 기존의 제한된 thinking 지시문 방식을 유지합니다.
+`gpt-5.6-sol`과 `claude-opus-5`의 기존 네이티브 단계(`low`, `medium`, `high`, `xhigh`, `max`)는
+바뀌지 않습니다. 다른 Kiro 모델의 effort는 에뮬레이션이며, 조절 항목이 있다고 네이티브 지원을 뜻하지는 않습니다.
 
 ## `cursor`
 

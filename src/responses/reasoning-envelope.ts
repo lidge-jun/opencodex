@@ -28,9 +28,12 @@ export interface ReasoningEnvelope {
    */
   txt?: string;
   /**
-   * Kiro `reasoningContentEvent.redactedContent`: a KMS-encrypted reasoning blob that is opaque to
-   * the proxy. Kiro's own CLI replays it on the matching `assistantResponseMessage` to preserve
-   * model reasoning across turns, so it round-trips here the same way a signature does.
+   * Kiro's reasoning blob from `reasoningContentEvent`: a KMS-encrypted value that is opaque to the
+   * proxy (the GPT-5.6 family sends it as `signature`, other models as the base64
+   * `redactedContent`, and the value carries a tag naming which one — see
+   * src/adapters/kiro/reasoning.ts). Kiro's own CLI replays it on the matching
+   * `assistantResponseMessage` to preserve model reasoning across turns, so it round-trips here the
+   * same way a signature does.
    */
   krc?: string;
 }

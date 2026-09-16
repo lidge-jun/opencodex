@@ -17,8 +17,31 @@ import {
 } from "../../codex/routing";
 import type { OcxParsedRequest } from "../../types";
 import type { RequestLogContext } from "../request-log";
+import { formatErrorResponse } from "../../bridge/errors";
 
 export type ConversationStateScrubReason = "account-change";
+
+/**
+ * Cause AND remedy, because this refusal does not clear itself.
+ *
+ * Dropping a `previous_response_id` costs one cold turn and the conversation continues. This is
+ * not that. The file reference lives in the conversation's history, so once pool rotation has
+ * moved a conversation carrying an attachment, every following turn presents the same reference
+ * and is refused the same way. A caller told only that the reference is invalid will send the
+ * same request back and watch the conversation appear dead, which is the one outcome a refusal
+ * is supposed to prevent. So the text says what happened, that it will keep happening, and the
+ * two things that actually end it.
+ *
+ * Names no account id, no file id, and no conversation id.
+ */
+export const ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE =
+  "This conversation is now being served by a different account than the one its uploaded files "
+  + "were sent to, and an uploaded file can only be read by the account that received it. The "
+  + "request was not sent upstream, and no file was removed from it. Because the references stay "
+  + "in this conversation's history, later turns will be refused the same way until this is "
+  + "resolved: re-upload the files so they are issued by the account now serving this "
+  + "conversation, or start a new conversation for them. Sending the same request again "
+  + "unchanged will not clear it.";
 
 export type PortabilityDenial =
   | "previous-response-id"
@@ -144,6 +167,21 @@ export function collectConversationStateCarriers(body: unknown): ConversationSta
   };
 }
 
+/**
+ * Does this body reference an uploaded file?
+ *
+ * Answerable from the body alone, which is what lets an alternate-account path ask BEFORE it
+ * resolves an alternate: the answer cannot depend on which account is chosen, because an
+ * uploaded file is readable only by the account it was sent to (#4710).
+ *
+ * `fileIds` is optional on the carrier type, so the emptiness test lives here rather than being
+ * rewritten at each caller. One of those rewrites already dereferenced it directly.
+ */
+export function conversationCarriesUploadedFiles(body: unknown): boolean {
+  const fileIds = collectConversationStateCarriers(body).fileIds;
+  return fileIds !== undefined && fileIds.length > 0;
+}
+
 
 /**
  * Drop account-bound continuation from a request body in place. Readable user
@@ -230,4 +268,40 @@ export function applyAccountChangeConversationStateScrub(
     logCtx.conversationStateScrub = "account-change";
   }
   return true;
+}
+
+/**
+ * Refuse an account change that would carry an uploaded-file reference to an account that
+ * cannot read it (#4710).
+ *
+ * The classifier has always called `file_id` account-bound, and the scrubber has always removed
+ * only `previous_response_id` and `conversation`. A body whose ONLY account-bound state was an
+ * uploaded file therefore reported nothing scrubbed and was replayed unchanged against the new
+ * account, which is the one case the safety fix was supposed to cover.
+ *
+ * Deleting the references is not the fix. A file reference is not continuation state the model
+ * can do without: it is content the caller attached, and silently dropping it answers a
+ * different question than the one that was asked, with no way for the caller to tell. Pinning
+ * the request to the issuing account is not available either — every call site resolves and
+ * materialises its credential before reaching here, and the retry sites are reached precisely
+ * because the issuing account just refused the request.
+ *
+ * So the move is refused, before dispatch, and the caller is told exactly what to do about it.
+ * A 400 rather than a 409: re-uploading is required, and a retryable status would invite the
+ * same request back unchanged.
+ */
+export function accountChangeFileReferenceRefusal(
+  args: Pick<ApplyAccountChangeConversationStateScrubArgs, "body" | "bindingKey" | "servingAccountId" | "priorAccountId">,
+): Response | undefined {
+  const { body, bindingKey, servingAccountId, priorAccountId } = args;
+  if (!servingAccountId || !bindingKey) return undefined;
+  const issuer = peekConversationStateIssuer(bindingKey);
+  const accountChanged = (issuer != null && issuer !== servingAccountId)
+    || (priorAccountId != null && priorAccountId !== servingAccountId);
+  if (!accountChanged) return undefined;
+  // Checked against the carriers directly rather than through the portability verdict: that
+  // verdict reports the FIRST reason it finds, so a body carrying both a previous response id
+  // and a file reference reports only the former and the file would slip through the scrub.
+  if (!conversationCarriesUploadedFiles(body)) return undefined;
+  return formatErrorResponse(400, "invalid_request_error", ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE);
 }
