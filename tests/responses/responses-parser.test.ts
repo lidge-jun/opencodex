@@ -265,9 +265,9 @@ describe("Responses parser", () => {
     expect([...maps.toolNsMap.keys()]).toEqual(["mcp__functions__run_command", "mcp__functions.run_command", "run_command"]);
 
     // A code-mode helper spelling is the exception, and it is the spelling that decides -- not the
-    // namespace and not the fact that the caller selected it. Bare `exec` in the declared set is
-    // what turns nested-helper normalization on, so the selector grants canonical and dotted
-    // restoration and stops there. Selection itself is unaffected; only the bare alias is.
+    // namespace and not the fact that the caller selected it. Bare `exec` in the DECLARED set is
+    // what turns nested-helper normalization on, so the selector grants the identity alias that
+    // restores the call without granting the declaration that would rewrite helper names onto it.
     const helperSelector = parseRequest({
       model: "claude-opus-5",
       input: "run it",
@@ -282,8 +282,10 @@ describe("Responses parser", () => {
         tools: [{ type: "custom", name: "exec" }],
       },
     });
-    expect([...buildToolBridgeMaps(helperSelector).declaredToolNames])
-      .toEqual(["mcp__functions__exec", "mcp__functions.exec"]);
+    const helperMaps = buildToolBridgeMaps(helperSelector);
+    expect([...helperMaps.declaredToolNames]).toEqual(["mcp__functions__exec", "mcp__functions.exec"]);
+    expect(helperMaps.toolNsMap.get("exec"))
+      .toEqual({ namespace: "mcp__functions", name: "exec", freeform: true });
 
     expect(() => parseRequest({
       model: "claude-opus-5",

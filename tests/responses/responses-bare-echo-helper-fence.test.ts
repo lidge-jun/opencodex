@@ -17,10 +17,14 @@ import { normalizeDeclaredToolName, declaresCodeModeExec } from "../../src/types
  * open one level down: a bare `tool_choice` for a namespaced helper name added the same bare
  * spelling to the same set from a different loop.
  *
- * These cases pin the exclusion to the NAME across both paths, and pin the half that has to keep
- * working beside it: the namespaced tool stays reachable under the spellings that carry their
- * namespace, selection by bare shorthand still resolves, and non-helper names keep both their
- * #4679 echo fallback and their bare selector alias.
+ * These cases pin the exclusion to the NAME across both paths, and pin the halves that have to
+ * keep working beside it. The line the fence runs along is DECLARATION, not restoration: no
+ * declared-name set ever gains a manufactured bare helper spelling, while the `toolNsMap`
+ * identity entry an explicit selector creates survives, because passthrough restores an echoed
+ * bare name to its namespaced identity before authorizing it and would otherwise refuse a call
+ * the caller had both declared and selected. The namespaced tool also stays reachable under the
+ * spellings that carry its namespace, selection by bare shorthand still resolves, and non-helper
+ * names keep both their #4679 echo fallback and their bare selector alias.
  *
  * Kept out of `bare-echo-alias.test.ts` so the namespace-independence contract has a file of its
  * own rather than growing the file that pins the original collaboration-only behaviour.
@@ -45,7 +49,7 @@ function namespacedToolRequest(namespace: string, name: string, choiceNames?: st
 
 const HELPER_SPELLINGS = ["exec", "exec_command", "shell_command", "write_stdin", "apply_patch", "view_image"];
 
-describe("helper spellings are fenced from every bare alias, in every namespace", () => {
+describe("helper spellings are fenced from every declared-name set, in every namespace", () => {
   test("a foreign namespace donates no helper spelling", () => {
     const donated = HELPER_SPELLINGS.filter(name => {
       const maps = buildToolBridgeMaps(namespacedToolRequest("mcp__remote", name));
@@ -84,35 +88,44 @@ describe("helper spellings are fenced from every bare alias, in every namespace"
     expect(maps.toolNsMap.get("list_issues")).toMatchObject({ namespace: "mcp__remote", name: "list_issues" });
   });
 
-  test("an explicit bare tool_choice selector donates no helper spelling either", () => {
+  test("an explicit bare tool_choice selector declares no helper spelling", () => {
     // The bypass one level down: the echo path is fenced, so the selector loop was the remaining
-    // way to put bare `exec` in the declared set. It writes into the same set, so it is the same
-    // switch -- a narrower request shape, not a narrower consequence.
-    const donated = HELPER_SPELLINGS.filter(name => {
-      const maps = buildToolBridgeMaps(namespacedToolRequest("mcp__remote", name, [name]));
-      return maps.declaredToolNames.has(name) || maps.toolNsMap.has(name);
-    });
+    // way to put bare `exec` in the DECLARED set, which is the set that switches nested-helper
+    // normalization on.
+    const declared = HELPER_SPELLINGS.filter(
+      name => buildToolBridgeMaps(namespacedToolRequest("mcp__remote", name, [name])).declaredToolNames.has(name),
+    );
 
-    expect(donated).toEqual([]);
+    expect(declared).toEqual([]);
   });
 
-  test("a bare selector in the single-name form is fenced the same way", () => {
-    // `tool_choice: {name}` and `tool_choice: {allowedTools}` reach the selector loop through the
-    // same `bareChoiceNames` set, so both forms are pinned rather than only the one a fixture
-    // happened to build.
+  test("but it does keep the identity alias, which is what restores the call", () => {
+    // The half that must survive. Passthrough restores an echoed bare name to the namespaced
+    // identity BEFORE authorizing it (`authorizedBareNamespaceToolAliases` in
+    // passthrough-dispatch.ts reads exactly this map), and the guard then authorizes
+    // `ns__name`. Withholding the map entry too refused a call the caller had declared and
+    // explicitly selected.
+    for (const name of HELPER_SPELLINGS) {
+      const maps = buildToolBridgeMaps(namespacedToolRequest("mcp__remote", name, [name]));
+      expect([name, maps.toolNsMap.get(name)]).toEqual([name, { namespace: "mcp__remote", name }]);
+    }
+  });
+
+  test("both tool_choice forms behave the same way", () => {
+    // `{name}` and `{allowedTools}` reach the selector loop through the same `bareChoiceNames`
+    // set, so both forms are pinned rather than only the one a fixture happened to build.
     const parsed = namespacedToolRequest("mcp__remote", "exec", ["exec"]);
     parsed.options.toolChoice = { name: "exec" };
     const maps = buildToolBridgeMaps(parsed);
 
     expect(maps.declaredToolNames.has("exec")).toBe(false);
-    expect(maps.toolNsMap.has("exec")).toBe(false);
     expect(declaresCodeModeExec(maps.declaredToolNames)).toBe(false);
+    expect(maps.toolNsMap.get("exec")).toEqual({ namespace: "mcp__remote", name: "exec" });
   });
 
-  test("a bare selector still SELECTS the helper tool and restores under its own spellings", () => {
-    // The fence withdraws the bare restore alias, not the selection. `toolAllowedByChoice`
-    // resolves the bare shorthand against the request catalog, so the tool stays authorized and
-    // stays forced; it simply answers to the spellings that carry its namespace.
+  test("a bare selector still SELECTS the helper tool and declares its own spellings", () => {
+    // `toolAllowedByChoice` resolves the bare shorthand against the request catalog rather than
+    // against this map, so the tool stays authorized and stays forced.
     const maps = buildToolBridgeMaps(namespacedToolRequest("mcp__remote", "exec", ["exec"]));
 
     expect(maps.declaredToolNames.has("mcp__remote__exec")).toBe(true);

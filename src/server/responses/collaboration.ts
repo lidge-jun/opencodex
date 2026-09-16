@@ -255,14 +255,19 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   // name. Accept only selectors the client actually sent and only when the full request catalog
   // contains one tool with that logical name.
   //
-  // Under the same helper-spelling fence as the echo path above (#4813 review). An explicit bare
-  // selector is a narrower request than a bare echo, but the set it writes into is the same one,
-  // and bare `exec` there is the same single switch: `normalizeDeclaredToolName` would rewrite
-  // an undeclared `apply_patch`, `exec_command` or `write_stdin` onto the selected tool
-  // (src/types/tools.ts). Selection itself is unaffected — `toolAllowedByChoice` resolves the
-  // bare shorthand against the request catalog, not against this map — so the tool is still
-  // chosen, still forced, and still restores under `ns__name` and `ns.name`. What a helper
-  // spelling loses here is only the bare RESTORE alias, exactly as it does above.
+  // A helper spelling selected this way is split rather than refused (#4819). The two things a
+  // bare alias does are separable, and passthrough already relies on that: identity RESTORATION
+  // runs before authorization there, rewriting the echoed bare name to the namespaced identity
+  // the caller declared, and the guard then authorizes `ns__name`. DECLARATION is the part that
+  // is unsafe, because a declared-name set carrying bare `exec` is what makes
+  // `normalizeDeclaredToolName` rewrite an undeclared `apply_patch`, `exec_command` or
+  // `write_stdin` onto the selected tool (src/types/tools.ts).
+  //
+  // So a helper spelling gets the `toolNsMap` entry and not the `declaredToolNames` entry. The
+  // caller nominated exactly one tool by name, `bareNameCounts` proves nothing else answers to
+  // it, and restoring it authorizes nothing the request did not already declare. The echo path
+  // above withholds both, because a bare echo is a guess rather than a nomination and #4679
+  // pinned that shape (`tests/responses/bare-echo-alias.test.ts`).
   const choice = parsed.options.toolChoice;
   const bareChoiceNames = new Set(
     choice && typeof choice === "object"
@@ -275,9 +280,11 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   }
   for (const t of authorizedTools) {
     if (!t.namespace || !bareChoiceNames.has(t.name) || bareNameCounts.get(t.name) !== 1 || declaredToolNames.has(t.name)) continue;
-    if (NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES.has(t.name)) continue;
-    budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
-    declaredToolNames.add(t.name);
+    // Restore the identity; declare the name only when it is not a helper spelling.
+    if (!NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES.has(t.name)) {
+      budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+      declaredToolNames.add(t.name);
+    }
     budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([t.name, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
     toolNsMap.set(t.name, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
     if (t.parameters && typeof t.parameters === "object") {
