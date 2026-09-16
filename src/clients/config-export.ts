@@ -1395,7 +1395,9 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     id: "commandcode",
     filename: "providers.json",
     destination: env => commandCodeConfigPath(env),
-    apiKeyEnv: "OPENCODEX_COMMANDCODE_API_KEY",
+    // No env var exists behind this integration: buildCommandCodeClientConfig
+    // references the service token file (`!cat`) or the loopback placeholder.
+    apiKeyEnv: "",
     exportHint: "Command Code reads service token from serviceApiTokenFilePath or loopback placeholder.",
     build: buildCommandCodeClientConfig,
     format: "json",

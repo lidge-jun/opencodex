@@ -492,6 +492,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Alias of ocx integration client <sub> --client commandcode.",
       "enable writes the managed provider.opencodex block into ~/.commandcode/providers.json; disable removes only that block.",
       "Command Code reads providers on startup.",
+      "`restore --op <opId>` replays the exact previous managed block; take the id from `ocx commandcode history`.",
     ],
   },
   {
