@@ -201,7 +201,7 @@ describe("Responses parser", () => {
 
     parsed.options.toolChoice = { allowedTools: ["mcp__tools__safe"], mode: "required" };
     maps = buildToolBridgeMaps(parsed);
-    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__tools__safe", "mcp__tools.safe"]);
+    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__tools__safe", "mcp__tools.safe", "safe"]);
     expect([...maps.declaredToolNames]).toEqual(["mcp__tools__safe", "mcp__tools.safe"]);
     expect([...maps.freeformToolNames]).toEqual([]);
 
