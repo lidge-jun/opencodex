@@ -486,7 +486,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "commandcode",
-    usage: "ocx commandcode [status|show|list|enable|disable|history|restore] [--json]",
+    usage: "ocx commandcode [status|show|list|enable|disable|history|restore --op <opId>] [--json]",
     summary: "Connect Command Code CLI to the proxy via its managed provider.",
     details: [
       "Alias of ocx integration client <sub> --client commandcode.",
@@ -497,7 +497,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "cmd",
-    usage: "ocx cmd [status|show|list|enable|disable|history|restore] [--json]",
+    usage: "ocx cmd [status|show|list|enable|disable|history|restore --op <opId>] [--json]",
     summary: "Alias of ocx commandcode.",
   },
   {
