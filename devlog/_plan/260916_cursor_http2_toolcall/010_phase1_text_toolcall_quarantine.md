@@ -34,3 +34,8 @@ Host cutover, stall-resume, CLI spawn, new test-layout file.
 ## Verifier
 
 NOT RUN locally. Hosted `bun test tests/providers/cursor/cursor-protobuf-events.test.ts`.
+
+## Shipped
+
+https://github.com/lidge-jun/opencodex/pull/4815
+`dev` ← `cursor/l1-text-toolcall-quarantine` (`407bf3ce56`).
