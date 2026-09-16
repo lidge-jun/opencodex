@@ -3,6 +3,7 @@ import { stripBracketedModelSuffix } from "../openai-chat";
 import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import { Buffer } from "node:buffer";
+import { attachSideChatCache, prepareSideChatCache } from "../../codex/side-chat-cache";
 import type { IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
 import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
@@ -181,7 +182,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
 
     buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       const translatorBudget = incoming.translatorBudget;
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      let headers: Record<string, string> = { "Content-Type": "application/json" };
       let url: string;
 
       if (provider.authMode === "forward") {
@@ -403,7 +404,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed.modelId,
       );
       // Normalize the wire model before deriving model-dependent transport metadata.
-      const finalBody =
+      let finalBody =
         provider.modelSuffixBracketStrip
           && unnormalizedBody !== null
           && typeof unnormalizedBody === "object"
@@ -431,6 +432,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         actualServiceTier === null ? null : "service-tier",
         actualServiceTier,
       );
+      const cacheDecision = isCanonicalOpenAiForwardProvider(provider)
+        && !parsed.previousResponseId && parsed._compactionRequest !== true
+        ? prepareSideChatCache(finalBody, headers, provider.experimentalCodexSideChatCache === true) : undefined;
+      if (cacheDecision) {
+        finalBody = cacheDecision.body;
+        headers = cacheDecision.headers;
+      }
       // The Responses adapter is passthrough: it forwards `parsed._rawBody` rather than
       // rebuilding the body from `parsed.modelId`, and the router writes the routed id into
       // that raw body. So a provider whose upstream rejects bracketed ids has to be honoured
@@ -442,7 +450,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         "passthrough_serialization",
         Buffer.byteLength(body, "utf8"),
       );
-      return {
+      const request = {
         url,
         method: "POST",
         headers,
@@ -457,6 +465,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ...(convertedMuseToolNameAliases ? { convertedMuseToolNameAliases } : {}),
         ...(tierLog ? { tierLog } : {}),
       };
+      attachSideChatCache(request, cacheDecision);
+      return request;
     },
 
     // The passthrough normally relays the upstream stream verbatim and never parses.

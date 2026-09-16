@@ -1,3 +1,4 @@
+import { registerSideChatCacheManagementCases } from "../helpers/side-chat-cache-management-cases";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch, ManagementRequest as Request } from "../helpers/management-auth";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -948,26 +949,7 @@ describe("provider management validation", () => {
     })).toContain("not supported on forward-auth");
   });
 
-  test("provider management permits snapshot repair only on canonical OpenAI forward seeds", () => {
-    for (const mode of ["pool", "direct"] as const) {
-      expect(providerManagementConfigError("openai", {
-        ...canonicalDirect,
-        codexAccountMode: mode,
-        responsesSnapshotRepair: true,
-      })).toBeNull();
-    }
-
-    expect(providerManagementConfigError("openai", {
-      ...canonicalDirect,
-      responsesSnapshotRepair: { enabled: true },
-    })).toBe("provider openai responsesSnapshotRepair must be a boolean");
-
-    expect(providerManagementConfigError("openai", {
-      ...canonicalDirect,
-      responsesSnapshotRepair: true,
-      noVisionModels: ["gpt-5.6"],
-    })).toContain("canonical built-in provider seed");
-  });
+  registerSideChatCacheManagementCases(TEST_DIR, canonicalDirect);
 
   test("provider management validates retryOn429 bounds and unknown keys", () => {
     const base = { adapter: "openai-chat", baseUrl: "https://api.openai.com/v1" };

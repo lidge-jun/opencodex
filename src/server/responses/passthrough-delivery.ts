@@ -161,6 +161,7 @@ export async function deliverPassthroughResponse(
     upstreamResponse,
     codexSafetyBufferingOptions,
     upstream,
+    request,
     connectMs,
     imageGenCallAliases,
     selfNamedNamespaceScrubAuthorization,
@@ -538,6 +539,7 @@ export async function deliverPassthroughResponse(
           }
           : undefined;
         const inspector = createSseInspector({
+          completeBeforeTerminal: request.sideChatCache !== undefined,
           onTerminal: reportNativeTerminal,
           logCtx,
           onCompletedResponse: rememberPassthroughResponse && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
@@ -599,6 +601,7 @@ export async function deliverPassthroughResponse(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
+        completeBeforeTerminal: request.sideChatCache !== undefined,
         // Request abort can reject the fetch body before the response cancel hook runs.
         clientGoneSignal: options.abortSignal
           ? AbortSignal.any([clientGone.signal, options.abortSignal])

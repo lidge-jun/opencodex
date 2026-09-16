@@ -561,9 +561,8 @@ export const configSchema = z.object({
         message: toolReasoningOptOutError,
       });
     }
-    if (Object.hasOwn(provider, "codexAccountMode") && provider.codexAccountMode !== undefined) {
-      // Persisted account mode is valid ONLY on the canonical built-in `openai` forward provider.
-      // Old openai-multi rows stay parseable (they never carry a mode) so startup can migrate them.
+    for (const field of ["codexAccountMode", "experimentalCodexSideChatCache"] as const) {
+      if (!Object.hasOwn(provider, field) || provider[field] === undefined) continue;
       const canonicalOpenAiShape = name === "openai"
         && provider.adapter === "openai-responses"
         && (provider as { authMode?: unknown }).authMode === "forward"
@@ -572,8 +571,8 @@ export const configSchema = z.object({
       if (!canonicalOpenAiShape) {
         ctx.addIssue({
           code: "custom",
-          path: ["providers", redactSecretString(name), "codexAccountMode"],
-          message: "codexAccountMode is valid only on the canonical built-in openai provider",
+          path: ["providers", redactSecretString(name), field],
+          message: `${field} is valid only on the canonical built-in openai provider`,
         });
       }
     }

@@ -3,6 +3,7 @@ import type {
   ResponsesAdmissionState,
   PassthroughAdmissionState,
 } from "./core-options";
+import { completeSideChatCache } from "../../codex/side-chat-cache";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
@@ -59,6 +60,7 @@ import { restoreRoutedCustomCalls } from "../../responses/custom-tool-compat";
 import { restorePlaintextV2AgentMessageCalls } from "../../responses/plaintext-v2-agent-messages";
 import {
   recordAdapterReasoning,
+  recordAdapterSideChatCache,
   recordAdapterTier,
   noteAttemptSend,
   sealRequestAttemptIdentity,
@@ -560,6 +562,8 @@ export async function preparePassthroughExchange(
       const firstCompletion = !inspectedCompletionSeen;
       inspectedCompletionSeen = true;
       if (firstCompletion && (inspectedTerminal === null || firstTerminalAllowsRecall)) {
+        completeSideChatCache(request, response);
+        recordAdapterSideChatCache(logCtx, request);
         // A model-less first completion permanently declines recall; later terminal
         // frames are hidden by the client boundary and cannot supply its identity.
         // Native inspection sees the pre-rewrite model. Only an actual terminal

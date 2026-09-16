@@ -567,3 +567,14 @@ Two call sites need the rule — the live path in `reevaluateAffinityQuota` and 
 `previewReusableAffinityAccount` that subagent fallback reads — and they share one helper rather
 than restating it, because the suite asserts the two answer identically and a preview that
 disagreed would hand fallback a different account than the request actually uses.
+
+## Opt-in Desktop side-chat cache
+
+`src/codex/side-chat-cache.ts` owns bounded parent-prefix fingerprints and reuse decisions;
+`src/codex/exec-cache-reference.ts` normalizes the explicitly supported execution references.
+`experimentalCodexSideChatCache` is disabled by default and admitted only for the canonical
+OpenAI forward provider. Credential/account/model/settings/tool compatibility and explicit
+fork metadata remain required. Unknown shapes, continuations, compaction, incomplete
+responses and incompatible prefixes do not gain reuse eligibility. No cross-account cache
+sharing or guaranteed upstream hit rate is claimed. The setting is operator-controlled;
+this change does not enable it in an existing installation.
