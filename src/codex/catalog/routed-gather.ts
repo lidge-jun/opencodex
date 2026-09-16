@@ -420,6 +420,42 @@ async function gatherRoutedModelsUncached(
       if (!memberByKey.has(key)) memberByKey.set(key, synthetic);
     }
   }
+  // [Decision Log]
+  // - 목적과 의도: combo derivation must see the same explicit custom-model capabilities that the
+  //   final Models inventory publishes. Previously customModels were materialized only after this
+  //   map had already derived every combo, so one row could say image while its combo said text.
+  // - 기존 구현 및 제약 조건: provider/discovery rows remain the inheritance source, and native
+  //   OpenAI synthesis must run first so a sparse custom row cannot hide native hard limits.
+  // - 검토한 주요 대안: move the full custom-row materializer ahead of combos, or overlay only the
+  //   explicit custom fields onto this private derivation map after provider/native inheritance.
+  // - 선택한 방식: use the scoped post-inheritance overlay; the existing final materializer stays
+  //   the single owner of public custom-row construction and deduplication.
+  // - 다른 대안 대신 이 방식을 선택한 이유: moving the large materializer would reorder public
+  //   catalog production and warning behavior, while this map is already private to combo input.
+  // - 장점, 단점 및 영향: custom context/modality/reasoning/tool-mode declarations now constrain
+  //   their combos without widening unrelated rows; omitted fields retain provider/native limits.
+  for (const custom of config.customModels ?? []) {
+    const key = `${custom.provider}/${custom.modelId}`;
+    const inherited = memberByKey.get(key) ?? {
+      provider: custom.provider,
+      id: custom.modelId,
+      owned_by: custom.provider,
+    };
+    memberByKey.set(key, {
+      ...inherited,
+      catalogKind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
+      ...(typeof custom.contextWindow === "number" && custom.contextWindow > 0
+        ? { contextWindow: custom.contextWindow }
+        : {}),
+      ...(Array.isArray(custom.inputModalities)
+        ? { inputModalities: [...custom.inputModalities] }
+        : {}),
+      ...(Array.isArray(custom.reasoningEfforts)
+        ? { reasoningEfforts: [...custom.reasoningEfforts] }
+        : {}),
+      ...(custom.codexToolMode !== undefined ? { codexToolMode: custom.codexToolMode } : {}),
+    });
+  }
   // Enriched (registry-hydrated) provider clones — shared by combo member synthesis and
   // custom-model vision-sidecar inheritance so both see the same merged registry view.
   const enrichedByName = new Map(activeProviders.map(provider => [provider.name, provider.provider]));
@@ -480,7 +516,8 @@ async function gatherRoutedModelsUncached(
   // with the same slug below, so that row's provider capability metadata is the inheritance source.
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));
   const customModels = (config.customModels ?? []).map(cm => {
-    const rawProvider = config.providers[cm.provider];
+    const rawProvider = config.providers[cm.provider]?.disabled !== true
+      ? config.providers[cm.provider] : undefined;
     const effectiveProvider = enrichedByName.get(cm.provider) ?? rawProvider;
     // Registry routing backfills an omitted authMode on the built-in OpenAI provider to
     // forward. Keep the catalog projection on the same contract while still failing closed

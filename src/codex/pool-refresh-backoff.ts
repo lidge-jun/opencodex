@@ -43,6 +43,12 @@ const backoffByAccount = new Map<string, RefreshFailureBackoff>();
  * must not re-quarantine the credential that replaced it.
  */
 const fenceByAccount = new Map<string, number>();
+/**
+ * Invalidates every account fence without having to know which refresh flights are currently in
+ * progress. A bulk routing-state reset can race a first failure for an account that has no map
+ * entry yet, so iterating either map cannot close this boundary.
+ */
+let globalFence = 0;
 let nowOverride: number | undefined;
 
 export function setCodexPoolRefreshFailureNowForTests(now?: number): void {
@@ -52,12 +58,13 @@ export function setCodexPoolRefreshFailureNowForTests(now?: number): void {
 export function resetCodexPoolRefreshFailureBackoffForTests(): void {
   backoffByAccount.clear();
   fenceByAccount.clear();
+  globalFence = 0;
   nowOverride = undefined;
 }
 
 /** The value a refresh flight captures before it starts, to be handed back on failure. */
-export function codexPoolRefreshFence(accountId: string): number {
-  return fenceByAccount.get(accountId) ?? 0;
+export function codexPoolRefreshFence(accountId: string): string {
+  return `${globalFence}:${fenceByAccount.get(accountId) ?? 0}`;
 }
 
 export function clearCodexPoolRefreshFailure(accountId: string): void {
@@ -72,6 +79,8 @@ export function clearCodexPoolRefreshFailure(accountId: string): void {
  */
 export function clearAllCodexPoolRefreshFailures(): void {
   backoffByAccount.clear();
+  fenceByAccount.clear();
+  globalFence += 1;
 }
 
 function currentNow(now?: number): number {
@@ -115,7 +124,7 @@ export function noteCodexPoolRefreshFailure(
   accountId: string,
   reason: string,
   now = currentNow(),
-  fence?: number,
+  fence?: string,
 ): { consecutiveFailures: number; cooldownUntil: number; openedWindow: boolean } {
   const existing = backoffByAccount.get(accountId);
   // A flight that started before the account's failures were cleared is speaking for a grant

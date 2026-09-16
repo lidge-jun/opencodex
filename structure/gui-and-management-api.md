@@ -8,9 +8,11 @@ The shared server request path follows the Responses
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314). Generic Responses API-key failover follows the [bounded rotation contract](transports/responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches and OAuth replays, including budget-aware adapters, settle physical sends once; nested compact/combo scopes retain the prepaid recovery without enlarging its ceiling or charging twice. Terminal and budget-aware Kiro empty-completion repairs share that final reserve; prepaid native Responses and translated helper retries retain their remaining base allowance, and caller-owned continuation hops refund if no dispatch occurs.
 
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing). CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
+
 ## Dashboard serving
 
-The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui` starts
+Account refresh actions follow the [credential refresh-lock identity contract](catalog.md#accounts-namespaces-and-pool-rotation): a held unreadable lock is distinct from one this process may release, and path-probe errors preserve the callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction. The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui` starts
 the proxy when needed and opens `http://localhost:<port>`, or `http://127.0.0.1:<management port>` when `hub.managementIngress.enabled` is true — see [the hub management dashboard address](runtime.md#hub-management-dashboard-address).
 
 All ordinary HTTP responses (excluding successful WebSocket upgrades) include `X-Frame-Options: DENY` and
@@ -243,7 +245,7 @@ unvalidated Bun builds is unchanged (`src/lib/bun-stream-caps.ts`).
 sidebar entry: it is entered from the dashboard's startup-state row, which links there whether the
 current state needs remediation or merely reports how routing is protected. Its warning state is derived from active
 Codex routing plus the actual service and launcher-shim installation state; the
-`codexAutoStart` preference alone is never presented as proof of restart protection. The page shows
+`codexAutoStart` preference alone is never presented as proof of restart protection. Desktop restart target selection follows the [runtime membership contract](runtime.md#codex-desktop-process-membership); finding an installed app does not establish background-service protection. The page shows
 copyable repair commands (`ocx service repair` for an installed service or `ocx service install` when none is registered, `ocx codex-shim install`, and `ocx restore`). On
 Windows it can also install an owned, per-user system tray. The resident tray owns only its icon,
 home-scoped singleton, and HKCU Run registration; fixed proxy actions delegate to the CLI so drain,
@@ -460,7 +462,7 @@ estimated` split exists for, and why coverage is reported alongside totals. The 
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
-A row also carries what its logical request cost upstream. `logicalRequestId` names the turn
+A row also records the upstream cost of its logical request. `logicalRequestId` names the turn
 that a retry leg, a repair refetch and a combo child all belong to, and `spend` aggregates their
 physical sends: `sends` totals every attempt on the row, `settled` counts the sends whose attempt
 reached a terminal status, and `unresolved` holds the rest — an attempt abandoned in flight, or a
@@ -609,7 +611,7 @@ The provider editor field policy exposes `showThinkingSummary` as a boolean prov
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity. Codex account DTOs and cards expose the routing-plan exclusion separately from credential health; the [plan exclusion contract](providers/openai-tiers.md#automatic-pool-plan-exclusions) also governs CLI projection. Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 

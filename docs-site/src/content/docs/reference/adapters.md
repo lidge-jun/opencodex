@@ -123,6 +123,12 @@ body and response, with narrow compatibility rewrites for routed gateways.
 `forward` uses configured static headers without relaying caller authorization; `key` uses the
 configured provider key.
 
+The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
+some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
+An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;
+if the caller sends none, OpenCodex does not invent one. No other caller header is widened by this
+exception.
+
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
 WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses Bun's

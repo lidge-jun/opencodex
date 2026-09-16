@@ -1,3 +1,4 @@
+import { registerComboForcedEffortCases } from "../helpers/combo-forced-effort-cases";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
@@ -3059,19 +3060,8 @@ describe("server combo failover 030 activation matrix", () => {
     expect(bodies.map(row => row.body.reasoning_effort)).toEqual(["low", "low"]);
   });
 
-  test("backup noReasoningModels removes the fresh combo default", async () => {
-    const a = serve(() => Response.json({ error: { message: "retry" } }, { status: 503 }));
-    let backupBody: Record<string, unknown> | undefined;
-    const b = serve(async request => {
-      backupBody = await request.json() as Record<string, unknown>;
-      return chatSuccess("no reasoning", "m2");
-    });
-    const config = comboConfig({
-      a: provider("openai-chat", baseUrl(a), "key-a"),
-      b: provider("openai-chat", baseUrl(b), "key-b", { noReasoningModels: ["m2"] }),
-    }, undefined, { defaultEffort: "high" });
-    expect((await post(config)).status).toBe(200);
-    expect(backupBody).not.toHaveProperty("reasoning_effort");
+  registerComboForcedEffortCases({
+    serve, baseUrl, chatSuccess, chatStream, provider, comboConfig, post, latestAttemptReceipts,
   });
 
   test("bare third-party defaultModel keeps max off the native clamp path", async () => {

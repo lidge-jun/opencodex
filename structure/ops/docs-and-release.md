@@ -1,7 +1,13 @@
 # Docs And Release
 
+Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
+
+Refresh-lock validation covers fresh unreadable locks, descriptor-matched release, path-probe failures preserving callback outcomes, and confirmed-owner unlink error handling in `tests/codex-integration/codex-account-store.test.ts`; the [catalog contract](../catalog.md#accounts-namespaces-and-pool-rotation) explicitly does not promise atomic compare-and-delete. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Responses dispatch scopes share [reservation and settlement accounting](../transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local. Nested compact/combo recovery follows the [prepaid send-budget contract](../transports/responses.md#bounded-api-key-429-rotation).
+
+CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](../runtime.md#lifecycle).
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
@@ -10,6 +16,8 @@ Human-readable connect and sync-refresh diagnostics follow the [terminal renderi
 The CLI default dashboard address follows the [management ingress bind](../runtime.md#hub-management-dashboard-address), covered by `tests/cli/cli-dispatch.test.ts`.
 
 Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
+
+The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
 
 ## Public docs
 
@@ -278,6 +286,8 @@ preview has closed that stable patch line.
 
 ## Cross-platform CI
 
+The [desktop membership contract](../runtime.md#codex-desktop-process-membership) has adapter regression coverage on every host and real PowerShell prefilter regression coverage with synthetic CIM rows on Windows in `tests/clients/desktop-app-restart.test.ts`. A skipped Windows lane does not exercise that native filter; uid-dependent POSIX cases in `tests/clients/desktop-app-restart-posix.test.ts` are skipped on Windows.
+
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. Linux runs
 the suite in four shards with a separate `gates` job, and macOS runs it in two shards. Windows
 runs the full suite in six shards only on manual `workflow_dispatch` with `lane=all` (or an
@@ -353,7 +363,7 @@ Provider configuration documents distinguish actual summaries from raw reasoning
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
 Private pool credential metadata follows the [quota-history publication identity contract](../providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 

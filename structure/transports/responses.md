@@ -11,6 +11,11 @@ Plaintext collaboration restoration treats a null namespace as absent, rejects n
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../runtime.md#hosted-search-continuation-binding).
 
+The `openai-responses` adapter preserves the incoming `User-Agent` as a non-credential fallback in
+both key and forward modes. A configured provider header with that name wins case-insensitively;
+when the caller omits it, the adapter invents no client identity. This does not widen the canonical
+forward credential/metadata allowlist or copy any other caller header.
+
 Retired Codex Spark has no model-specific tool or Responses Lite override; general Lite handling and
 namespace scrubbing remain shared compatibility behavior. Codex quota/reset evidence follows the
 [shared/Reserve policy](../providers/openai-tiers.md#public-provider-contract), including suppression of retired model-derived evidence before shared recovery.
@@ -233,6 +238,10 @@ Native Responses participates in the same pre-stream OAuth HTTP-429 account rota
 bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
 the complete credential/transport/replay identity, and attributes usage to the serving account.
 Single-account installs do not retry; a missing alternate credential preserves the original error.
+Credential-refresh failures are fenced by both the account generation and a global routing-state
+generation. Reauthentication advances the account fence; replacing the whole routing roster
+advances the global fence. A late failure from either obsolete state is ignored, while failures
+captured after the reset still contribute to the bounded cooldown.
 
 Startup removes legacy Grok 4.5/4.6 Chat overrides once and persists the provider-owned
 `xaiResponsesDefaultVersion` marker. Later explicit Chat choices survive restarts. The migration

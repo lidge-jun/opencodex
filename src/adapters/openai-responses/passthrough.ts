@@ -64,6 +64,16 @@ export const FORWARD_HEADERS = [
   CODEX_RESPONSES_LITE_HEADER,
 ];
 
+/** Preserve the caller fingerprint unless the provider explicitly owns that header. */
+function applyCallerUserAgentFallback(
+  headers: Record<string, string>,
+  incoming: IncomingMeta,
+): void {
+  if (Object.keys(headers).some(name => name.toLowerCase() === "user-agent")) return;
+  const userAgent = incoming.headers.get("user-agent");
+  if (userAgent) headers["User-Agent"] = userAgent;
+}
+
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripInputImagesDeep);
@@ -221,6 +231,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
         if (provider.headers) Object.assign(headers, provider.headers);
       }
+      // Some Responses-compatible gateways select their Codex compatibility path from the real
+      // client fingerprint. This is a single non-credential fallback, not broader caller-header
+      // forwarding. Static provider headers remain authoritative in either auth mode.
+      applyCallerUserAgentFallback(headers, incoming);
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
