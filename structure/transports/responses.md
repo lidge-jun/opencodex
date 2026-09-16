@@ -964,8 +964,7 @@ both are non-replayable, but only one is ours to restate.
 Because the refusal now carries 429, a 429 is no longer sufficient evidence of a provider
 rate limit. Every same-target replay, key rotation, account rotation and pool-quota recorder
 that keys on 429 first asks `isNonReplayableResponse`:
-`src/server/responses/adapter-dispatch.ts` (at the top of its recovery loop, which also
-covers a reset reached by a 401/429/413 refetch), `src/server/responses/adapter-continuation.ts`,
+`src/server/responses/adapter-dispatch.ts`, `src/server/responses/adapter-continuation.ts`,
 `src/server/responses/passthrough-dispatch.ts`, `src/server/responses/compact.ts` and
 `src/server/chat-native.ts`. Compact additionally records the transport outcome rather than
 the client-facing status, so pool health sees exactly what it saw before the correction.
@@ -973,6 +972,31 @@ Rotating on a synthetic 429 would both re-send an inference that may already hav
 write a cooldown against a credential that refused nothing — a false signal that outlives the
 request, which is the same hazard `rotateRunTurnAdapterOnPreflight429` already guards for the
 send budget.
+
+In `adapter-dispatch.ts` the guard at the top of the recovery loop is necessary and was not
+sufficient. The refusal can also be produced by a refetch made INSIDE an arm, and that arm
+then still holds it: the same-target loop re-enters while `rateLimitRetries` is below the
+configured attempts, and the key, Anthropic-pool and generic-OAuth rotations re-enter while a
+credential is left to try. The key-401 arm is in the same class from the other direction — its
+refetch answers 429 and it falls through into the arms below. So every arm that reassigns
+`upstreamResponse` from `rebuildAndRefetch` re-enters the loop guard rather than continuing,
+which is what makes the top-of-loop check the single exit for this verdict.
+
+**A refusal this proxy made never acquires a `Retry-After` and never becomes quota evidence.**
+Guarding the ten call sites that READ 429 as a rate limit left the sites that WRITE evidence,
+synthesize a wait, or re-classify the status on the way out. `isNonReplayableResponse` is the
+wrong question for those, because it also covers the WebSocket post-send verdicts, which are
+genuine upstream observations; the question is whether any upstream produced this status at
+all. `isReplayRefusalResponse` in `src/lib/upstream-retry.ts` answers exactly that, applied
+where the refusal is synthesized and reapplied by `src/bridge/errors.ts` when the formatter
+re-wraps it after combo failure consumption. Three writers consult it or the code:
+`src/server/responses/passthrough-delivery.ts` skips `recordCodexUpstreamOutcome`, which would
+otherwise classify the synthetic 429 as quota exhaustion and cool the account;
+`src/server/responses/passthrough-error.ts` suppresses the retryable-429 default and drops any
+inherited header, reading the code off the body because it is handed bytes rather than the
+response; and `src/server/chat-native.ts` restores the code its own classifier overwrote —
+429 maps to `rate_limit_error`, which already carries a code, so the branch that copies an
+upstream code could never reach it — and suppresses the same synthetic wait.
 
 The existing provider HTTP-status policy and the shared physical-send budget remain
 independent: zero refuses dispatch, invalid counts fail, and a stopped send is counted once.
@@ -983,7 +1007,12 @@ client back a retryable status. Other upstream codes keep the existing classific
 cyber-policy hard blocks retain precedence. The helper, formatter and public Responses count
 regressions live in `tests/lib/upstream-retry.test.ts`,
 `tests/responses/responses-send-budget-counts.test.ts` and
-`tests/codex-integration/reserve-dispatch.test.ts`.
+`tests/codex-integration/reserve-dispatch.test.ts`. The three write-side paths are pinned
+separately: a second armed same-target attempt in
+`tests/responses/responses-send-budget-counts.test.ts`, the absent cooldown and absent
+`Retry-After` on a Codex pool account in `tests/responses/responses-account-label.test.ts`,
+the formatter in `tests/server/retry-after-429.test.ts`, and the native Chat classification in
+`tests/providers/upstream-transient-retry.test.ts`.
 
 ## Combo output headroom
 

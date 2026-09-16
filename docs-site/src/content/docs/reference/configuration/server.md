@@ -56,7 +56,8 @@ to send it again and answers HTTP 429 with `upstream_reset_replay_refused`. The 
 deliberate: a 5xx here is an instruction to most clients, including Codex, to send the whole
 turn again, which is the duplicate the refusal exists to prevent. No `Retry-After` is
 attached, and the proxy performs no key rotation, account failover or same-target replay on
-it. Tool-call side requests such as vision and web search are replayed normally, because
+it, nor does it record the refusal as rate-limit or quota evidence against the credential it
+was holding. Tool-call side requests such as vision and web search are replayed normally, because
 repeating them cannot duplicate a turn.
 
 `noProxy` accepts either a comma-separated string or an array. Both forms add entries without
