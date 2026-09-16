@@ -173,7 +173,7 @@ export async function deliverAdapterResponse(
       replayCacheScope: parsed._reasoningReplayScope,
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
-      declaredToolNames,
+      declaredToolNames: (options.inboundWire === "chat" || options.inboundWire === "anthropic") ? undefined : declaredToolNames,
       toolParameterSchemas,
       freeformToolNames,
       toolSearchToolNames,
