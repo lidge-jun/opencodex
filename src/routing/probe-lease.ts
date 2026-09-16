@@ -559,3 +559,55 @@ export function clearPoolRecoveryState(): void {
   probeStates.clear();
   sharedLimiter = undefined;
 }
+
+/**
+ * What one physical send IS, as far as the recovery window is concerned.
+ *
+ * The window measures recovery traffic against observed demand, so it needs the distinction
+ * made where the send happens -- and the transport wrapper cannot make it. That layer sees a
+ * URL and an init; whether this is a conversation's first attempt, its third retry, or the one
+ * trial admitted against a held account is knowledge only the caller has. So the caller names
+ * it, and the classification lives here with the window rather than in the transport, which
+ * owns no routing policy and has an enforced import boundary saying so.
+ *
+ * - `initial`: a new request's first send. Recorded, never refused -- it is the denominator,
+ *   and refusing it would make this a throughput cap rather than a recovery bound.
+ * - `retry`: a re-send of a request that already reached upstream once. Admitted only while
+ *   recovery traffic stays under its ratio of observed demand.
+ * - `probe`: the half-open trial against a held account. It ALREADY paid at selection, inside
+ *   {@link resolveHeldAccountDispatch}; charging it again would bill one send twice and shrink
+ *   the very budget it was admitted from.
+ */
+export type PoolRecoveryDispatchClass = "initial" | "retry" | "probe";
+
+export interface PoolRecoveryDispatchDecision {
+  readonly admitted: boolean;
+  /**
+   * Earliest moment another recovery dispatch could be admitted. `now` when the send was
+   * admitted; otherwise a real change point strictly in the future, so a refused caller has
+   * something to wait on instead of busy-looping against a pool that is already failing.
+   */
+  readonly retryAt: number;
+}
+
+/**
+ * Admit one physical send against the process-wide recovery window.
+ *
+ * Per-request send budgets cannot see a storm: thousands of requests each staying inside their
+ * own allowance still compose into an unbounded rate against one failing upstream. This is the
+ * layer above them, and it is shared by construction.
+ */
+export function classifyPoolRecoveryDispatch(
+  dispatchClass: PoolRecoveryDispatchClass,
+  now = Date.now(),
+  limiter: PoolBackpressureLimiter = sharedPoolBackpressure(),
+): PoolRecoveryDispatchDecision {
+  if (dispatchClass === "initial") {
+    limiter.recordInitialSend(now);
+    return { admitted: true, retryAt: now };
+  }
+  if (dispatchClass === "probe") return { admitted: true, retryAt: now };
+  return limiter.tryPermitRetryDispatch(now)
+    ? { admitted: true, retryAt: now }
+    : { admitted: false, retryAt: limiter.nextRecoveryAt(now) };
+}

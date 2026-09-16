@@ -79,8 +79,8 @@ import {
   providerFetch,
   safeHostLabel,
   storedPoolReplayDispatchNotifier,
-  classifyPoolRecoveryDispatch,
 } from "./fetch-helpers";
+import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { clientCancelledResponse } from "./core-errors";
 import {
   upstreamHostCircuitOpenResponse,

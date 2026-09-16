@@ -256,9 +256,11 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   travels on the auth context, is settled by `recordCodexUpstreamOutcome` under the credential
   generation the binding held, and is handed back by `releaseCodexAuthContextProbeLease` on
   every path that never sends. The pool window observes demand at the initial passthrough send
-  and gates the alternate-account replay through `classifyPoolRecoveryDispatch`
-  (`src/server/responses/fetch-helpers.ts`). Same-account transient retries remain bounded by
-  the per-request send budget alone: refusing inside the retry helper's thunk would surface a
+  and gates the alternate-account replay through `classifyPoolRecoveryDispatch`, which lives
+  with the window itself rather than in the transport: `src/server/responses/fetch-helpers.ts`
+  owns no routing policy and `tests/responses/responses-fetch-helpers-boundary.test.ts` pins
+  its runtime imports to three transport modules. Same-account transient retries remain bounded
+  by the per-request send budget alone: refusing inside the retry helper's thunk would surface a
   pool refusal as a 502 transport failure and record a transient outcome against an account
   that was never asked, which is worse than the gap.
 

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   canAcquireTransientProbe,
+  classifyPoolRecoveryDispatch,
   clearPoolRecoveryState,
   createPoolBackpressureLimiter,
   transientProbeDiagnostics,
@@ -10,7 +11,6 @@ import {
   TRANSIENT_PROBE_INTERVAL_MS,
   TRANSIENT_PROBE_LEASE_MS,
 } from "../../src/routing/probe-lease";
-import { classifyPoolRecoveryDispatch } from "../../src/server/responses/fetch-helpers";
 import {
   CodexRecoveryWithheldError,
   cooldownErrorMessage,
@@ -96,8 +96,12 @@ describe("recovery limiter wiring is reachable from production (#4701)", () => {
     expect(routing).toContain('from "./routing/transient-hold-dispatch"');
     expect(routing).toContain("resolveTransientHoldDispatch");
 
-    const fetchHelpers = readFileSync(repoPath("src", "server", "responses", "fetch-helpers.ts"), "utf8");
-    expect(fetchHelpers).toContain('from "../../routing/probe-lease"');
+    // The physical-send boundary itself owns no routing policy -- `responses-fetch-helpers-
+    // boundary.test.ts` pins its runtime imports to three transport modules -- so the dispatch
+    // call sites name their own class instead.
+    const passthrough = readFileSync(repoPath("src", "server", "responses", "passthrough-dispatch.ts"), "utf8");
+    expect(passthrough).toContain('from "../../routing/probe-lease"');
+    expect(passthrough).toContain('classifyPoolRecoveryDispatch("initial")');
 
     // Two modules are named probe-lease, one directory apart, and they are different domains.
     // The selector keeps importing the QUOTA one; merging them would make one settle the

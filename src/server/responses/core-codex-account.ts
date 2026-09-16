@@ -16,7 +16,8 @@ import {
   upstreamHostHealthKey,
   resetUpstreamHostHealth,
 } from "../../codex/upstream-host-health";
-import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch, classifyPoolRecoveryDispatch } from "./fetch-helpers";
+import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch } from "./fetch-helpers";
+import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { upstreamErrorMessageFromPayload, isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
