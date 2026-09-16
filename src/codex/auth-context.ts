@@ -787,6 +787,11 @@ export interface ResolveCodexAuthContextOptions {
   requestScopedMainCredential?: boolean;
   /** Test seam for a Direct request's own forwarded ChatGPT credential. */
   isDirectCallerEntitledToCodexModel?: (headers: Headers, modelId: string) => Promise<boolean>;
+  /**
+   * This request's conversation carries live uploaded-file references (#4778). Retains the bound
+   * account across a VOLUNTARY quota move; involuntary release is untouched.
+   */
+  retainAccountForUploadedFiles?: boolean;
 }
 
 export interface CodexAccountSelectionAdmission {
@@ -997,6 +1002,9 @@ export async function resolveCodexAuthContext(
         : options.isMainAccountTokenLive,
       modelEligibleAccountIds,
       deniedModelAccountIds,
+      // Request-scoped and deliberately absent from `sharedStateSelectionOptions`: one
+      // conversation's attachments say nothing about where unrelated threads should be served.
+      retainAccountForUploadedFiles: options.retainAccountForUploadedFiles === true,
     };
     // A pre-drain selector reserves the native identity while reconciliation and
     // routing inspect it. Selectors arriving after the fence skip reconciliation

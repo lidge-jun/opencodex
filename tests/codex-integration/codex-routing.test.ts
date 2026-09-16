@@ -2213,6 +2213,94 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("b");
   });
 
+  /**
+   * #4778. Uploaded files are scoped to the account that issued them, so moving a conversation
+   * that carries live references does not cost a cold prefix -- it orphans the reference, and
+   * because the reference stays in conversation history every later turn is refused with
+   * `409 account_change_file_scope` until the user re-uploads or restarts.
+   *
+   * `pool.cacheAffinity: false` is pinned here because that is the configuration where the
+   * voluntary move still happens; the flag trades cache locality for capacity, and it was never
+   * asking to trade correctness for capacity. Both halves are asserted against the same starting
+   * state, on separate thread ids so neither resolution disturbs the other's binding.
+   */
+  test("a conversation carrying uploaded files keeps its issuing account (#4778)", () => {
+    const config = makeConfig({ pool: { cacheAffinity: false } });
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("plain-thread", config, now)).toBe("a");
+    expect(resolveCodexAccountForThread("file-thread", config, now)).toBe("a");
+
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 5);
+    const later = now + 1_000;
+
+    // Control: without the evidence this is exactly the #584 move above.
+    expect(resolveCodexAccountForThreadDetailed("plain-thread", config, later))
+      .toMatchObject({ status: "selected", accountId: "b" });
+    expect(resolveCodexAccountForThreadDetailed(
+      "file-thread",
+      config,
+      later,
+      undefined,
+      { retainAccountForUploadedFiles: true },
+    )).toMatchObject({ status: "selected", accountId: "a" });
+  });
+
+  /**
+   * The negative case. Retention covers the VOLUNTARY move only: it must never wedge a
+   * conversation on an account that cannot serve it, because the issuing account can always
+   * become exhausted and the #4710 refusal is the correct answer in that corner rather than a
+   * pin that keeps sending at a dead account.
+   */
+  test("uploaded-file retention still yields to genuine exhaustion (#4778)", () => {
+    const config = makeConfig({ pool: { cacheAffinity: false } });
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("file-thread", config, now)).toBe("a");
+
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 5);
+    expect(resolveCodexAccountForThreadDetailed(
+      "file-thread",
+      config,
+      now + 1_000,
+      undefined,
+      { retainAccountForUploadedFiles: true },
+    )).toMatchObject({ status: "selected", accountId: "b" });
+  });
+
+  /**
+   * On the default configuration the retention is already implied by `pool.cacheAffinity`, so
+   * the evidence must be inert rather than a second, differently-shaped rule. This is the
+   * happy-path claim: an install that never attaches a file and an install that does resolve
+   * identically.
+   */
+  test("uploaded-file retention changes nothing under the default cache affinity (#4778)", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("plain-thread", config, now)).toBe("a");
+    expect(resolveCodexAccountForThread("file-thread", config, now)).toBe("a");
+
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 5);
+    const later = now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+
+    expect(resolveCodexAccountForThreadDetailed("plain-thread", config, later))
+      .toMatchObject({ status: "selected", accountId: "a" });
+    expect(resolveCodexAccountForThreadDetailed(
+      "file-thread",
+      config,
+      later,
+      undefined,
+      { retainAccountForUploadedFiles: true },
+    )).toMatchObject({ status: "selected", accountId: "a" });
+  });
+
   test("bound thread under threshold stays even if a lower account exists", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;

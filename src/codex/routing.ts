@@ -599,6 +599,20 @@ function previewReusableAffinityAccount(
  * With `pool.cacheAffinity: false` the historical rule comes back: a crossing of
  * `autoSwitchThreshold` is enough. That is capacity-first routing, and an operator who wants
  * it keeps it -- but it is no longer what an install gets by never having heard of the flag.
+ *
+ * A conversation carrying live uploaded-file references is the one case that does not get that
+ * choice (#4778). Uploaded files are scoped to the account that issued them, so a voluntary move
+ * does not cost a cold prefix -- it orphans the reference, and because the reference stays in
+ * conversation history EVERY later turn is refused with `409 account_change_file_scope` until
+ * the user re-uploads or restarts. That is a dead conversation rather than an expensive one, and
+ * it is a cost `pool.cacheAffinity: false` was never asking to accept: that flag trades cache
+ * locality for capacity, not correctness for capacity.
+ *
+ * The retention covers only the VOLUNTARY move. Exhaustion and an unusable account still release
+ * the binding here, and every involuntary release above this point -- quota refusal, failover
+ * streak, pause, cooldown, lost generation, expiry -- is untouched, so a pinned conversation can
+ * never be wedged on an account that cannot serve it. The refusal from #4710 stays exactly where
+ * it is for that corner.
  */
 function mayRebindAffinityForQuota(
   config: OcxConfig,
@@ -608,7 +622,9 @@ function mayRebindAffinityForQuota(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): boolean {
   const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
-  if (!isCacheAffinityEnabled(config)) return overThreshold;
+  if (!isCacheAffinityEnabled(config) && selectionOptions?.retainAccountForUploadedFiles !== true) {
+    return overThreshold;
+  }
   // The usable half is already guaranteed by both callers, which gate on
   // isCodexAccountSelectable; kept explicit so the predicate reads correctly on its own.
   return !isCodexAccountUsable(config, accountId, selectionOptions)

@@ -249,8 +249,10 @@ so both the Responses retry helper and the compact retry ask before resolving an
 send is reserved, the first response is never cancelled, and the caller returns the original
 upstream rejection. A same-account replay such as the gated-model 400 ladder is unaffected, and a
 single-account install never reaches any of this because serving and issuing accounts cannot
-differ. Pinning a file-carrying conversation to its issuing account is routing-affinity work and
-is tracked separately.
+differ. Pinning a file-carrying conversation to its issuing account is routing-affinity work and is
+specified in [uploaded-file account retention](../providers/openai-tiers.md#uploaded-file-account-retention);
+it reduces how often this refusal fires and does not replace it, because the issuing account can
+always become unable to serve.
 
 > Decision record: [ADR-0039](../decisions/ADR-0039-responses-http-sse.md)
 

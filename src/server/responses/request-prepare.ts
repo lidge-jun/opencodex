@@ -119,6 +119,7 @@ import {
   conversationStateBindingFromAuth,
   applyAccountChangeConversationStateScrub,
   accountChangeFileReferenceRefusal,
+  conversationCarriesUploadedFiles,
 } from "./account-change-state";
 
 /** Parses, selects, and admits one request without changing the dispatch policy. */
@@ -460,6 +461,10 @@ export async function prepareResponsesRequest(
   const previewSelectionOptions = {
     nativeMainSelectionOnly: !nativeMainRecoveryBlocked
       && previewSelectionAdmission?.mainProfileDraining === true,
+    // Preview must reach the same answer as the final resolution, including the uploaded-file
+    // retention (#4778): a preview that reported a quota move the request will not make would
+    // hand subagent fallback a different account than the one that actually serves.
+    retainAccountForUploadedFiles: conversationCarriesUploadedFiles(parsed._rawBody),
   };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
@@ -929,7 +934,18 @@ export async function prepareResponsesRequest(
   let substituteMainCredential = false;
   let callerAuthHeaders: Headers;
   {
-    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options, credentialDomainWasRewritten);
+    // #4778: uploaded files are scoped to the account that issued them, so a conversation
+    // carrying live references must retain its binding across a voluntary quota move. Answered
+    // from the body alone, by the same predicate the refusal guard uses, so the two can never
+    // disagree about which conversations are in scope.
+    const finalAuth = await resolveResponsesCodexAuth(
+      req,
+      config,
+      route,
+      options,
+      credentialDomainWasRewritten,
+      conversationCarriesUploadedFiles(parsed._rawBody),
+    );
     if (!finalAuth.ok) return finalAuth.response;
     admissionState.authCtx = finalAuth.authCtx;
     selectedForwardHeaders = withClaudeNativeSession(finalAuth.headers, route.provider, options.claudeNativeSessionId);

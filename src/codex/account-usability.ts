@@ -28,6 +28,17 @@ export interface CodexAccountUsabilityOptions {
    * flagships were deliberately taken out of.
    */
   deniedModelAccountIds?: ReadonlySet<string>;
+  /**
+   * This request's conversation carries live uploaded-file references (#4778).
+   *
+   * Also not read by this module, and for the same reason: it is a retention preference, never an
+   * eligibility boundary. Uploaded files are scoped to the account that issued them, so moving
+   * such a conversation orphans the reference and every later turn is refused with
+   * `409 account_change_file_scope` -- the reference stays in history, so the conversation is
+   * effectively dead. Retention makes that refusal rarer; it can never replace it, because an
+   * account can always become unable to serve.
+   */
+  retainAccountForUploadedFiles?: boolean;
 }
 
 /**
