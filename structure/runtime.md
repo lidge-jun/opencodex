@@ -297,6 +297,16 @@ upstream terminal is `response.failed` or `response.incomplete` runs no search a
 any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
 instruction.
 
+`src/web-search/passthrough-bridge.ts` withholds at most 1,000 client-tool events and
+8,388,608 UTF-16 code units of their SSE data payloads per leg; this is not a byte or total-heap
+measurement. The first over-budget event fails the leg before releasing any held tool call.
+Read failures and exhausted continuation budgets use the same cleanup: discard held calls and
+close every search cell opened by the current leg as failed before one failed terminal and DONE.
+Successful release serializes held events lazily rather than building another full frame array;
+release, discard, and the next leg reset the held payload counter and identity sets.
+`tests/web-search/web-search-progress-stream.test.ts` covers both bounds, identity-only deltas,
+upstream cancellation, cell closure, the exact event boundary, and mixed terminal controls.
+
 The bridge backend and the global `webSearchSidecar` block are configured independently, so the
 sidecar's `model` applies to a bridge search only when `resolveSidecarBackend(webSearchSidecar.backend)`
 equals that bridge backend; otherwise the bridge runs the backend's own default. An unset global

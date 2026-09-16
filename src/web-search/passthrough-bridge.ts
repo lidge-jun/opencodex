@@ -128,6 +128,10 @@ const MAX_QUERIES_PER_CALL = 3;
 const MAX_RETAINED_OUTPUT_ITEMS = 500;
 /** Refuse to buffer an unbounded partial SSE event from a misbehaving upstream. */
 const MAX_SSE_BUFFER_CHARS = 8 * 1024 * 1024;
+/** Bound both object overhead and serialized payloads withheld before a leg's fate is known. */
+const MAX_HELD_CALL_EVENTS = 1_000;
+/** UTF-16 code units in SSE data payloads, not a byte or total-heap measurement. */
+const MAX_HELD_CALL_CHARS = 8 * 1024 * 1024;
 
 /**
  * Retained for importers that pinned the first slice's contract: a leg mixing the search with
@@ -488,6 +492,7 @@ class BridgeStreamState {
    * failing the turn would let Codex start running a tool for a turn that never completes.
    */
   private heldCalls: HeldCallEvent[] = [];
+  private heldCallChars = 0;
   private heldIndexes = new Set<number>();
   private heldItemIds = new Set<string>();
   private terminalPayload: Record<string, unknown> | undefined;
@@ -497,14 +502,21 @@ class BridgeStreamState {
     this.suppressedSearches = new Map();
     this.suppressedItemIds = new Map();
     this.searches = [];
-    this.heldCalls = [];
-    this.heldIndexes = new Set();
-    this.heldItemIds = new Set();
+    this.dropHeldCalls();
     this.terminalPayload = undefined;
   }
 
   get sawClientExecutedCall(): boolean {
     return this.heldCalls.length > 0;
+  }
+
+  private holdCall(payload: Record<string, unknown>, dataChars: number, upstreamIndex?: number): void {
+    if (this.heldCalls.length >= MAX_HELD_CALL_EVENTS
+      || dataChars > MAX_HELD_CALL_CHARS - this.heldCallChars) {
+      throw new Error("upstream client tool events exceeded the web-search bridge buffer bound");
+    }
+    this.heldCalls.push({ payload, ...(upstreamIndex === undefined ? {} : { upstreamIndex }) });
+    this.heldCallChars += dataChars;
   }
 
   private clientIndexFor(upstreamIndex: number): number {
@@ -626,7 +638,7 @@ class BridgeStreamState {
       if (isClientExecutedItem(item)) {
         if (upstreamIndex !== undefined) this.heldIndexes.add(upstreamIndex);
         if (typeof item.id === "string") this.heldItemIds.add(item.id);
-        this.heldCalls.push({ payload, ...(upstreamIndex === undefined ? {} : { upstreamIndex }) });
+        this.holdCall(payload, data.length, upstreamIndex);
         return [];
       }
     }
@@ -648,7 +660,7 @@ class BridgeStreamState {
 
     if ((upstreamIndex !== undefined && this.heldIndexes.has(upstreamIndex))
       || (itemId !== undefined && this.heldItemIds.has(itemId))) {
-      this.heldCalls.push({ payload, ...(upstreamIndex === undefined ? {} : { upstreamIndex }) });
+      this.holdCall(payload, data.length, upstreamIndex);
       return [];
     }
 
@@ -658,19 +670,20 @@ class BridgeStreamState {
     return [this.render(payload.type, rewritten)];
   }
 
-  /** Release the withheld client tool calls once the turn is known to end here. */
-  flushHeldCalls(): string[] {
-    const blocks: string[] = [];
-    for (const held of this.heldCalls) {
-      const rewritten: Record<string, unknown> = { ...held.payload };
-      if (held.upstreamIndex !== undefined) {
-        rewritten.output_index = this.clientIndexFor(held.upstreamIndex);
+  /** Release lazily so flushing does not allocate a second full set of serialized events. */
+  *flushHeldCalls(): Generator<string> {
+    try {
+      for (const held of this.heldCalls) {
+        const rewritten: Record<string, unknown> = { ...held.payload };
+        if (held.upstreamIndex !== undefined) {
+          rewritten.output_index = this.clientIndexFor(held.upstreamIndex);
+        }
+        if (held.payload.type === "response.output_item.done") this.retain(held.payload.item);
+        yield this.render(String(held.payload.type), rewritten);
       }
-      if (held.payload.type === "response.output_item.done") this.retain(held.payload.item);
-      blocks.push(this.render(String(held.payload.type), rewritten));
+    } finally {
+      this.dropHeldCalls();
     }
-    this.heldCalls = [];
-    return blocks;
   }
 
   /**
@@ -680,6 +693,18 @@ class BridgeStreamState {
    */
   dropHeldCalls(): void {
     this.heldCalls = [];
+    this.heldCallChars = 0;
+    this.heldIndexes.clear();
+    this.heldItemIds.clear();
+  }
+
+  /** Fail before executing this leg's searches, closing every cell already shown to the client. */
+  *failLegFrames(code: string, message: string): Generator<string> {
+    this.dropHeldCalls();
+    for (const call of this.searches) {
+      yield* this.searchEndFrames(call, [], { text: "", sources: [], error: message });
+    }
+    yield* this.failureFrames(code, message);
   }
 
   /** Decide what the leg's terminal means once the whole leg has been read. */
@@ -979,7 +1004,7 @@ async function* bridgeStreamBlocks(
   // One continuation leg per allowed search, plus one final leg for the answer itself.
   let legsRemaining = options.plan.maxSearches + 1;
 
-  const emit = function* (blocks: readonly string[]): Generator<string> {
+  const emit = function* (blocks: Iterable<string>): Generator<string> {
     for (const block of blocks) yield block + "\n\n";
   };
 
@@ -991,8 +1016,9 @@ async function* bridgeStreamBlocks(
         if (aborted()) return;
       }
     } catch (error) {
+      if (aborted()) return;
       const message = error instanceof Error ? error.message : String(error);
-      yield* emit(state.failureFrames(
+      yield* emit(state.failLegFrames(
         WEB_SEARCH_BRIDGE_ERROR_CODE,
         "web-search bridge upstream read failed: " + message,
       ));
@@ -1003,18 +1029,7 @@ async function* bridgeStreamBlocks(
 
     const decision = state.decide(legsRemaining);
     if (decision.kind === "fail") {
-      // Close any cell this leg opened, or Codex keeps a "Searching the web" spinner running
-      // under a failed turn (the same reason src/bridge.ts closes a dangling search on teardown).
-      for (const call of decision.searches) {
-        yield* emit(state.searchEndFrames(call, [], {
-          text: "",
-          sources: [],
-          error: decision.message!,
-        }));
-      }
-      // The withheld client call is deliberately dropped: the turn is ending as failed, and
-      // releasing a tool call Codex would start executing is exactly what must not happen.
-      yield* emit(state.failureFrames(decision.code!, decision.message!));
+      yield* emit(state.failLegFrames(decision.code!, decision.message!));
       return;
     }
     if (decision.kind === "end") {
