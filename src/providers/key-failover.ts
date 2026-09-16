@@ -127,6 +127,26 @@ const QUOTA_RESET_SCAN_BYTES = 4_096;
  * back to `DEFAULT_COOLDOWN_MS`. Returns undefined for anything it cannot read
  * as a date, so an unparsable body keeps today's behaviour exactly.
  */
+/**
+ * Whether `YYYY-MM-DD…` names a day that exists.
+ *
+ * `Date.parse` does NOT reject an out-of-range day: measured on Bun,
+ * `2026-02-30T00:00:00Z` yields March 2 and `2026-04-31T00:00:00Z` yields
+ * May 1, so a malformed upstream body would park a key past the instant it
+ * actually named. Only the month is rejected outright (`2026-13-01` is NaN).
+ *
+ * Checked on the date text alone rather than by round-tripping the parsed
+ * instant, because a value carrying an explicit offset (`…T23:00+05:30`)
+ * legitimately lands on a different UTC day than the one written.
+ */
+function isRealCalendarDate(value: string): boolean {
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  if (month < 1 || month > 12 || day < 1) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const lengths = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day <= lengths[month - 1]!;
+}
+
 export function parseQuotaResetAt(body: string | null | undefined, now = Date.now()): number | undefined {
   const text = body?.slice(0, QUOTA_RESET_SCAN_BYTES);
   if (!text) return undefined;
@@ -148,6 +168,7 @@ export function parseQuotaResetAt(body: string | null | undefined, now = Date.no
   const raw = match[1].includes("T") || /(?:Z|[+-][0-9]{2}:?[0-9]{2})$/.test(match[1])
     ? match[1]
     : `${match[1].replace(" ", "T")}Z`;
+  if (!isRealCalendarDate(match[1])) return undefined;
   const at = Date.parse(raw);
   if (!Number.isFinite(at)) return undefined;
   // Already past, or beyond the cap: not usable as a park-until instant.

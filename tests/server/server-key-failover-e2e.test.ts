@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { readUsageEntries, resetUsageReadCacheForTests } from "../../src/usage/log";
 import { loadConfig, saveConfig } from "../../src/config";
-import { clearKeyCooldowns, rotateKeyOn429 } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { startServer } from "../../src/server";
@@ -495,6 +495,69 @@ describe("server 429 key failover (end-to-end)", () => {
     } finally { await server.stop(true); }
   });
   }
+
+  test("a 429 dated in the body parks the failed key until that instant, outranking Retry-After", async () => {
+    // #4024 regression, through the real dispatch path. The unit tests cover
+    // parseQuotaResetAt/readQuotaResetAt in isolation; nothing exercised
+    // adapter-dispatch actually READING the body and handing quotaResetAt to
+    // rotateProviderTransportOn429. Dropping it there would leave every unit
+    // test green while the key came back after the header's 30s and took the
+    // same 429 again — which is the bug.
+    const resetAt = new Date(Date.now() + 6 * 60 * 60_000);
+    const stamp = resetAt.toISOString().replace("T", " ").slice(0, 19); // bare form, read as UTC
+    const seenAuth: string[] = [];
+    upstream = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(req) {
+        seenAuth.push(req.headers.get("authorization") ?? "");
+        if (seenAuth.length === 1) {
+          return new Response(JSON.stringify({
+            error: { code: "rate_limit_error", message: `Weekly Limit Exhausted. Your limit will reset at ${stamp}` },
+          }), { status: 429, headers: { "retry-after": "30", "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({
+          id: "chatcmpl-dated", object: "chat.completion",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok after dated rotate" }, finish_reason: "stop" }],
+        }), { headers: { "content-type": "application/json" } });
+      },
+    });
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "dated",
+      providers: {
+        dated: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-dated-000111222333",
+          apiKeyPool: [
+            { id: "d1", key: "key-dated-000111222333", addedAt: 1 },
+            { id: "d2", key: "key-dated-444555666777", addedAt: 2 },
+          ],
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "dated/some-model", input: "hello", stream: false }),
+      });
+      expect(res.status).toBe(200);
+      await res.json();
+      expect(seenAuth[1]).toBe("Bearer key-dated-444555666777");
+
+      const cooldownUntil = getKeyCooldownUntil("dated", "d1");
+      expect(cooldownUntil).not.toBeNull();
+      // The body's instant, not the header's 30s. Compared with a wide window
+      // because the cooldown is anchored to the server's Date.now(), not ours.
+      expect(cooldownUntil!).toBeGreaterThan(Date.now() + 5 * 60 * 60_000);
+      expect(cooldownUntil!).toBeLessThanOrEqual(resetAt.getTime() + 60_000);
+    } finally {
+      await server.stop(true);
+    }
+  });
 
   test("reasoning replay misses after a 429 rotates to a different physical key", async () => {
     const model = "reasoning-model";

@@ -58,6 +58,29 @@ describe("parseQuotaResetAt", () => {
     expect(at).toBe(now + 32 * 24 * 60 * 60_000);
   });
 
+  test("a day the calendar does not have is refused, not rolled forward", () => {
+    // `Date.parse` does not reject an out-of-range DAY — measured on Bun,
+    // `2026-02-30T00:00:00Z` yields March 2 — so without this the key parks
+    // past the instant the upstream actually named. Only the month is caught
+    // by the parser itself.
+    const feb = Date.parse("2026-02-25T00:00:00Z");
+    expect(parseQuotaResetAt("resets at 2026-02-30T00:00:00Z", feb)).toBeUndefined();
+    expect(parseQuotaResetAt("resets at 2026-02-29T00:00:00Z", feb)).toBeUndefined();
+    expect(parseQuotaResetAt("resets at 2026-04-31T00:00:00Z", Date.parse("2026-04-25T00:00:00Z"))).toBeUndefined();
+    expect(parseQuotaResetAt("resets at 2026-13-01T00:00:00Z", feb)).toBeUndefined();
+  });
+
+  test("real leap days still park the key, including the century rule", () => {
+    // The guard above must not cost a legitimate Feb 29. 2024 is a leap year,
+    // 2000 is one (divisible by 400) and 2100 is not (divisible by 100).
+    expect(parseQuotaResetAt("resets at 2024-02-29T00:00:00Z", Date.parse("2024-02-25T00:00:00Z")))
+      .toBe(Date.parse("2024-02-29T00:00:00Z"));
+    expect(parseQuotaResetAt("resets at 2000-02-29T00:00:00Z", Date.parse("2000-02-25T00:00:00Z")))
+      .toBe(Date.parse("2000-02-29T00:00:00Z"));
+    expect(parseQuotaResetAt("resets at 2100-02-29T00:00:00Z", Date.parse("2100-02-25T00:00:00Z")))
+      .toBeUndefined();
+  });
+
   test("only the first 4KB is scanned, so a huge body cannot stall the rotation path", () => {
     const padded = "x".repeat(8_000) + " will reset at 2026-09-09 03:30:06";
     expect(parseQuotaResetAt(padded, now)).toBeUndefined();
