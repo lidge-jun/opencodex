@@ -66,9 +66,10 @@ describe("catalog slug uniqueness at the write boundary (#4730)", () => {
     // a test that stubbed all three would assert the stub rather than the boundary.
     const retained = readFileSync(repoPath("src", "codex", "catalog", "retained-sync.ts"), "utf8");
     const convergence = readFileSync(repoPath("src", "codex", "convergence.ts"), "utf8");
-    for (const [name, source] of [["retained-sync.ts", retained], ["convergence.ts", convergence]] as const) {
-      expect(source, `${name} must apply the #4730 uniqueness guard`).toContain("enforceCatalogSlugUniqueness(");
-    }
+    // Both writers must call the guard; a miss here is the #4730 rejection returning by the
+    // other route rather than a style violation.
+    expect(retained).toContain("enforceCatalogSlugUniqueness(");
+    expect(convergence).toContain("enforceCatalogSlugUniqueness(");
     // Ordering is load-bearing: the effort clamp splices whole rows out, so deduping first can
     // drop the row the clamp would have kept and then lose the slug entirely.
     const guardAt = retained.indexOf("enforceCatalogSlugUniqueness(");
