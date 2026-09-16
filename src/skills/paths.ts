@@ -118,7 +118,9 @@ export function resolveSkillTargetPath(
           error: `Parent directory "${ancestor}" resolves outside approved boundary: "${realAncestor}".`,
         };
       }
-    } catch {}
+    } catch (_realpathErr) {
+      // Ignore inspection failure if ancestor cannot be resolved
+    }
   }
 
   // If explicit allowed roots are provided (e.g. for remote nodes), verify target is within at least one
