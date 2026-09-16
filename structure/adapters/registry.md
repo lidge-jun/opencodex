@@ -1,5 +1,7 @@
 # Adapter Registry Authority
 
+Caller-owned Command Code and MiMo inference replays honor the supplied executor under the [hop confirmation contract](../transports/responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
+
 Request-local adapter bindings are separate from registry authority in the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 

@@ -151,7 +151,9 @@ export interface AdapterFetchContext {
   returnRawErrors?: boolean;
   /** Whether the upstream response will be consumed as a stream; adapters may select low-latency transport settings. */
   stream?: boolean;
-  /** Custom fetch executor to use for physical upstream network requests (defaults to globalThis.fetch). */
+  /** Caller-owned fetchResponse transports must use this for inference and replays when supplied.
+   * Retains hop confirmation and pacing; absent uses the adapter's default fetch.
+   * Separate credential/catalog discovery does not count as inference. */
   executor?: typeof globalThis.fetch;
   /**
    * The logical request's send budget (#4546). Optional and unlimited when absent, so an

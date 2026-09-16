@@ -319,7 +319,7 @@ describe("mimo-free auth retry predicate", () => {
     return createMimoFreeAdapter(provider);
   }
 
-  test("401 retries exactly once with a fresh JWT after draining the first body", async () => {
+  test.each([false, true])("401 retries once through the inference executor and keeps bootstrap separate (supplied=%s)", async supplied => {
     const fakeJwt = "h." + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64") + ".s";
     const calls: string[] = [];
     const originalFetch = globalThis.fetch;
@@ -338,10 +338,17 @@ describe("mimo-free auth retry predicate", () => {
     }) as unknown as typeof fetch;
     try {
       const adapter = adapterForRetry();
+      let suppliedCalls = 0;
+      const executor = (async (input, init) => {
+        expect(String(input)).toBe(MIMO_CHAT_URL);
+        suppliedCalls += 1;
+        return globalThis.fetch(input, init);
+      }) as typeof fetch;
       const res = await adapter.fetchResponse!(
         { url: MIMO_CHAT_URL, method: "POST", headers: { "Authorization": "Bearer stale" }, body: "{}" },
-        {} as never,
+        supplied ? { executor } : undefined,
       );
+      expect(suppliedCalls).toBe(supplied ? 2 : 0);
       expect(res.status).toBe(200);
       // Sequence: first chat with stale token -> 401 -> bootstrap -> retry with fresh JWT.
       expect(calls[0]).toBe("chat:Bearer stale");

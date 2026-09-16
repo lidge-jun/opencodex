@@ -1,5 +1,7 @@
 # Byte Accounting
 
+Caller-owned Command Code and MiMo inference replays honor the supplied executor under the [hop confirmation contract](responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
+
 Responses body-reader limits and lifetime handling follow the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 

@@ -1,5 +1,7 @@
 # Cursor Provider
 
+Caller-owned Command Code and MiMo inference replays honor the supplied executor under the [hop confirmation contract](../transports/responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
+
 HTTP adapters declare their own send-budget consumption under the [credential-hop contract](../transports/responses.md#credential-hop-reservations); Cursor's run-turn transport retains its existing ownership.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)

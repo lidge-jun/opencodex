@@ -701,6 +701,12 @@ Caller-owned continuation hops confirm on the first executor invocation, so an a
 throws before dispatch also refunds its booking. Google Vertex/Antigravity internal retries do
 not yet consume this physical-send budget; preserving their hop bookkeeping does not impose a
 new total cap on those adapters.
+Command Code and MiMo honor the supplied executor for every inference attempt, including
+reasoning-effort or fresh-JWT replays. Their model-catalog and credential discovery stay separate,
+so those auxiliary requests cannot confirm an inference hop. The real Command Code OAuth
+empty-completion regression in `tests/providers/command-code-provider.test.ts` bounds subsequent
+credential rotations after a dispatched hop; MiMo executor and bootstrap separation is covered
+in `tests/providers/mimo-free-provider.test.ts`.
 
 `tests/server/server-kiro-oauth-401-replay.test.ts` counts actual Kiro requests across three stored
 OAuth accounts, including an earlier connection reset and the third account's success or quota
