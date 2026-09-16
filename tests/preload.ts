@@ -26,6 +26,7 @@
  * what HOME says. `assertLiveServiceManagerAllowed` in `src/service.ts` is the guard for
  * that, armed by the same flag set below.
  */
+import { afterAll } from "bun:test";
 import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
 import { createIsolatedTestEnvironment } from "../scripts/test";
 import {
@@ -37,7 +38,6 @@ import {
   TEST_RUN_LOCK_PATH_ENV,
   TEST_RUN_LOCK_TOKEN_ENV,
 } from "../scripts/test-run-lock";
-import { rmSync } from "node:fs";
 
 // Under `bun run test` the wrapper already handed us a sandbox (and OCX_REAL_HOME so the
 // guard could still see the true home). Isolating again is harmless and deliberate: the
@@ -116,6 +116,17 @@ if (process.platform === "win32" && lockPath && runLock.owner) {
 }
 
 // Clean up only the root this preload created. The `bun run test` wrapper owns its own.
-process.on("exit", () => {
-  try { rmSync(isolated.root, { recursive: true, force: true }); } catch { /* best effort at exit */ }
-});
+// Bun test workers do not reliably run process `exit` handlers, so the test lifecycle hook
+// is primary; the process hook remains a best-effort fallback for setup failures.
+let cleanupComplete = false;
+const cleanupIsolatedRoot = () => {
+  if (cleanupComplete) return;
+  try {
+    isolated.cleanup();
+    cleanupComplete = true;
+  } catch {
+    // The wrapper contains this root, and a later bare run reclaims it after the grace period.
+  }
+};
+afterAll(cleanupIsolatedRoot);
+process.on("exit", cleanupIsolatedRoot);

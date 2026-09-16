@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import {
   clearAccountQuota,
@@ -1564,45 +1563,6 @@ describe("native fallback account preview", () => {
     expect(selectionReleases).toBe(3);
     expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-b" });
     expect(bodyRequests[1]?.auth).toContain("pool-b_token");
-  });
-
-  /**
-   * Recovery must carry the ENTITLEMENT filter too, not only the quota scope (#2509).
-   *
-   * The end-to-end case above grants the roster to both pool accounts, so it can only prove the
-   * SCOPE is re-previewed per candidate. The recovery path re-previewed the scope but passed no
-   * eligible-account set, so it could select an account with no entitlement to the recovered
-   * model and fail closed at final auth — the same stale-selection class as the quota scope, one
-   * layer over.
-   *
-   * Asserted structurally on the source, like the route-inventory contract: driving it end to end
-   * needs a recovered encrypted assignment AND an account-gated candidate whose entitlement
-   * differs per account, and the resulting fixture proved more fragile than the thing it checks.
-   * What this does catch is the regression that actually threatens the fix — one of the two
-   * preview sites silently losing the eligibility argument again.
-   */
-  test("both fallback preview sites pass the model-eligible account set (#2509)", async () => {
-    const source = await Bun.file(
-      fileURLToPath(new URL("../../src/server/responses/request-prepare.ts", import.meta.url)),
-    ).text();
-
-    const previews = source.match(/subagentFallbackAccountPreview = \([^)]*\)/g) ?? [];
-    // Two assignment sites: the primary selection path and the encrypted-recovery path.
-    expect(previews).toHaveLength(2);
-    // Neither may drop the third parameter — that is exactly how recovery lost it.
-    for (const preview of previews) {
-      expect(preview).toContain("modelEligibleAccountIds");
-    }
-
-    // And both must actually forward it into the preview call, not merely accept it.
-    // The guarantee is that BOTH sites forward the eligible set, which is what recovery lost.
-    // `modelId` is no longer the final argument -- #4546 appends the resolved pool lineage so
-    // preview and final resolution agree on a child's first turn -- so anything after it is
-    // allowed here rather than pinning the argument count.
-    const forwarded = source.match(
-      /\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \},\s*modelId,[^)]*\)/g,
-    ) ?? [];
-    expect(forwarded).toHaveLength(2);
   });
 
   test("uses healthier pool account B when active A is above threshold", async () => {

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { Database } from "bun:sqlite";
 
-import { historyBackupPathFor, setBeforeHistoryBackupConsumeForTests, setHistoryDbBusyTimeoutForTests } from "../../src/codex/history-provider";
+import { adoptHistoryDbBusyTimeout, currentHistoryDbBusyTimeoutMs, historyBackupPathFor, setBeforeHistoryBackupConsumeForTests, setHistoryDbBusyTimeoutForTests } from "../../src/codex/history-provider";
 import {
   isHistoryWorkerRunMessage,
   runHistoryUnitUnderLock,
@@ -127,6 +127,35 @@ test("the run message is structured-clone safe and fully explicit", () => {
 
   // An unknown operation is refused rather than coerced.
   expect(isHistoryWorkerRunMessage({ ...message, operation: "delete-everything" })).toBe(false);
+});
+
+/**
+ * The busy timeout travels with the message because a Worker is a separate realm: without it the
+ * Worker opens `state_5.sqlite` with its own module default and ignores a parent that resolved a
+ * shorter window, which is what forced a composed acceptance case to skip on Windows.
+ */
+test("the run message carries the parent's busy timeout and refuses a malformed one", () => {
+  const fixture = makeFixture("ocx-history-worker-busy-timeout-");
+  const message = runMessage(fixture);
+  const inherited = currentHistoryDbBusyTimeoutMs();
+
+  expect(isHistoryWorkerRunMessage({ ...message, busyTimeoutMs: 0 })).toBe(true);
+  expect(isHistoryWorkerRunMessage({ ...message, busyTimeoutMs: inherited })).toBe(true);
+  for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY, "250", null]) {
+    expect(isHistoryWorkerRunMessage({ ...message, busyTimeoutMs: bad })).toBe(false);
+  }
+
+  // Adoption refuses the same values rather than disabling the wait the app expects.
+  try {
+    for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      adoptHistoryDbBusyTimeout(bad);
+      expect(currentHistoryDbBusyTimeoutMs()).toBe(inherited);
+    }
+    adoptHistoryDbBusyTimeout(1_234);
+    expect(currentHistoryDbBusyTimeoutMs()).toBe(1_234);
+  } finally {
+    adoptHistoryDbBusyTimeout(inherited);
+  }
 });
 
 test("skip is a recorded outcome, not an absence, and writes nothing", () => {

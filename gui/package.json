@@ -11,7 +11,8 @@
     "lint:i18n": "oxlint src/pages src/components src/App.tsx src/main.tsx src/ui.tsx src/provider-workspace-data.ts",
     "doctor": "npx --yes react-doctor@0.9.11 --verbose --scope changed --base origin/main --no-telemetry",
     "doctor:full": "npx --yes react-doctor@0.9.11 --verbose --scope full --no-telemetry",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:sidebar-version": "bun tests/sidebar-version-browser.ts"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.9",

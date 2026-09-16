@@ -160,7 +160,11 @@ async function defaultAsyncWindowsPrincipalRunner(
     stderr: "ignore",
     windowsHide: true,
   });
-  const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs);
+  // No kill grace. The grace exists so a dying child releases a path someone is about to
+  // remove; this lookup holds no such path, and it runs during `ocx start`, where the composed
+  // acceptance cases already measure real startups at up to 38.8s against a bounded watchdog.
+  // Paying two extra seconds per timed-out resolution there buys nothing and costs margin.
+  const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs, 0);
   // `.bytes()` rather than `.text()`, for the same reason as the sync runner above.
   const stdout: string | Uint8Array = !timedOut && proc.stdout
     ? await new Response(proc.stdout).bytes().catch(() => new Uint8Array())

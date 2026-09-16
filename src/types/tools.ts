@@ -68,6 +68,30 @@ const CODE_MODE_HELPER_TOOL_NAMES = [
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 
 /**
+ * Spellings that may never be MANUFACTURED as a bare alias for a namespaced tool.
+ *
+ * A bare alias is an ordinary compatibility affordance -- providers echo a namespaced tool
+ * without its prefix, and restoring the identity needs the bare spelling registered. For these
+ * six it is also an authorization decision, because a declared-name set is what
+ * `normalizeDeclaredToolName` and `declaresCodeModeExec` read: bare `exec` turns nested-helper
+ * normalization on for a catalog that never declared the shell, bare `exec_command` or
+ * `shell_command` turns it off for one that did, and the rest are accepted as declared calls the
+ * caller only ever authorized under a namespace.
+ *
+ * This is a property of the SPELLING, not of the namespace that declared it and not of the reason
+ * the alias was being added. It lives here, beside the names it protects, because every site that
+ * builds a declared-name set has to apply the same list -- the two that kept their own copies each
+ * drifted, once to a single namespace and once to a single name.
+ *
+ * A genuine namespace-free declaration is NOT covered: that is the caller declaring the tool, not
+ * a namespace being discarded to synthesize a bare name.
+ */
+export const NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES: ReadonlySet<string> = new Set<string>([
+  CODE_MODE_EXEC_TOOL_NAME,
+  ...CODE_MODE_HELPER_TOOL_NAMES,
+]);
+
+/**
  * Normalizes provider-emitted tool names against declared tool catalogs.
  *
  * Rewrites invented `default.<name>` prefixes back to a declared bare tool when that bare tool

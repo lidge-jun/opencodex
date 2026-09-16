@@ -26,6 +26,7 @@ import {
   MAX_CLIENT_SSE_FRAME_BYTES,
 } from "./sse-frame-buffer";
 import { replaceSseDataPayload } from "./sse-payload-rewrite";
+import { createBoundedResponseLogBody } from "./response-log-body";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
@@ -718,25 +719,16 @@ export function responseWithDeferredRequestLog(
   }
   if (!response.body || !contentType.includes("text/event-stream")) {
     if (response.body && (contentType.includes("application/json") || response.status >= 400)) {
-      const finalizeJsonLog = async () => {
-        const text = await response.text();
-        // Non-JSON error bodies: inspect/log only a bounded prefix (the stored
-        // upstreamError is 500 chars anyway); the FULL text is still forwarded to the
-        // client below, unchanged. JSON bodies keep full inspection (usage parsing).
-        const isJson = contentType.includes("application/json");
-        inspectResponseLogJson(logCtx, isJson ? text : text.slice(0, 8192));
-        addFinalRequestLog(requestId, start, logCtx, response.status, { closeReason: "non_stream" }, addLog);
-        return text;
-      };
-      const body = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          try {
-            controller.enqueue(new TextEncoder().encode(await finalizeJsonLog()));
-            controller.close();
-          } catch (err) {
-            addFinalRequestLog(requestId, start, logCtx, 502, { closeReason: "non_stream" }, addLog);
-            try { controller.error(err); } catch { /* already torn down */ }
-          }
+      const body = createBoundedResponseLogBody(response.body, {
+        json: contentType.includes("application/json"),
+        inspect: text => inspectResponseLogJson(logCtx, text),
+        finalize: reason => {
+          // Preserve wire status; request history follows the adjacent SSE
+          // convention for a client cancellation or upstream read failure.
+          const status = reason === "cancel" ? 499 : reason === "read_error" ? 502 : response.status;
+          addFinalRequestLog(requestId, start, logCtx, status, {
+            closeReason: reason === "cancel" ? "client_cancel" : "non_stream",
+          }, addLog);
         },
       });
       return new Response(body, {
@@ -1338,6 +1330,9 @@ function startBoundedInspectionPump(options: InspectionPumpOptions): void {
     try {
       for (;;) {
         const { done, value } = await reader.read();
+        // Hard cancellation settles a pending read as EOF. Do not flush a
+        // partial terminal after the owner already finalized cancellation.
+        if (cancelled) break;
         if (clientGoneSignal?.aborted) markClientGone();
         if (drainStopped) {
           // stopDrain() cancelled the reader; the settled read is the wake-up.
