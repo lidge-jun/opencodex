@@ -51,7 +51,7 @@ import { bundledCatalogCacheState, loadBundledCodexCatalog } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
 import { clampCatalogModelsToCodexSupport } from "./effort";
 import { filterCatalogVisibleModels, gatherRoutedModels, type CatalogGatherProviderModelOutcome } from "./provider-fetch";
-import { exactComboCatalogSlugs, type ComboCatalogOmission } from "./aggregation";
+import { exactComboCatalogSlugs, safeCatalogWarningLabel, type ComboCatalogOmission } from "./aggregation";
 import {
   withCatalogWriteSerialization,
   type CatalogWritePermit,
@@ -522,8 +522,25 @@ function writeRetainedCatalogSync({
   });
   const dedupedCatalogModels = dedupeCatalogEntriesBySlug(catalog.models);
   if (dedupedCatalogModels.length !== catalog.models.length) {
+    // A dropped row that differs from the kept one means two emit paths disagree about
+    // the same slug's content. First-win still stands (the merge ranked the kept row),
+    // but the operator needs to see WHICH slugs diverged instead of silently losing data.
+    const keptBySlug = new Map(catalog.models.flatMap(entry => (
+      typeof entry.slug === "string" ? [[entry.slug, entry] as const] : []
+    )));
+    const divergentSlugs = new Set<string>();
+    for (const entry of catalog.models) {
+      if (typeof entry.slug !== "string") continue;
+      const kept = keptBySlug.get(entry.slug);
+      if (kept && kept !== entry && JSON.stringify(kept) !== JSON.stringify(entry)) {
+        divergentSlugs.add(entry.slug);
+      }
+    }
+    const divergentNote = divergentSlugs.size > 0
+      ? `; divergent content on: ${[...divergentSlugs].slice(0, 5).map(safeCatalogWarningLabel).join(", ")}${divergentSlugs.size > 5 ? ", …" : ""}`
+      : "";
     console.warn(
-      `[opencodex] catalog sync dropped ${catalog.models.length - dedupedCatalogModels.length} duplicate slug row(s); keeping the first occurrence of each slug (#4730).`,
+      `[opencodex] catalog sync dropped ${catalog.models.length - dedupedCatalogModels.length} duplicate slug row(s), keeping the first occurrence of each slug (#4730)${divergentNote}.`,
     );
     catalog.models = dedupedCatalogModels;
   }
