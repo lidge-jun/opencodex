@@ -3,6 +3,10 @@
 Responses admission and finalization are composed through the
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
+
+OAuth refresh coordination follows the [refresh-lock identity contract](catalog.md#accounts-namespaces-and-pool-rotation): a fresh unreadable lock remains held, and release requires matching descriptor identity. A failed path-identity probe preserves the refresh callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
@@ -20,9 +24,23 @@ Catalog-derived reasoning-level diagnostics are escaped only at the human-output
 
 `src/cli/account-main.ts` emits one JSON object to stdout when `ocx account main reauth --device --no-wait --json` succeeds. The human-readable `follow up:` line is emitted only without `--json`; `flowId` remains available for status polling. `tests/cli/cli-native-profile.test.ts` parses the complete captured stdout and preserves coverage of the human follow-up.
 
+## CLI Codex restart scope
+
+`ocx system codex-restart` requests a full Codex desktop-app restart and app-server restarts through the management endpoint. `src/cli/capabilities.ts` names that scope in its summary and `--yes` description; `src/cli/system-command.ts` explains the desktop interruption when confirmation is missing and sends no restart request. Human output says the restart was requested, while `--json` preserves the complete server result, including skipped or refused desktop outcomes.
+
 ## Hub management dashboard address
 
 When hub management ingress is enabled, `src/cli/dispatch.ts` opens the dashboard on the literal IPv4 loopback address and configured ingress port, matching the listener in `src/server/index.ts`. Other dashboard address selection is unchanged.
+
+## Codex desktop process membership
+
+`src/codex/desktop-app/windows.ts` discovers the installed package and limits process ownership to the current Windows user.
+Its PowerShell prefilter normalizes both the install root and candidate executable from `/` to `\` before a case-insensitive prefix comparison.
+The adapter then folds both slash forms onto the host separator before calling `isUnderRoot()` in `src/codex/desktop-app/types.ts`.
+That shared lexical boundary check rejects sibling prefixes such as `OpenAI.Codex-evil`; Windows path folding stays in the Windows adapter, so a POSIX backslash remains a filename character.
+The prefilter is only an optimization, not final process-membership authority.
+`tests/clients/desktop-app-restart.test.ts` covers both mixed-slash directions through the adapter and runs the real PowerShell filter against synthetic CIM rows on Windows.
+`tests/clients/desktop-app-restart-posix.test.ts` keeps the POSIX separator contract covered; uid-dependent macOS/Linux cases skip on Windows.
 
 ## Entrypoints
 
@@ -156,7 +174,11 @@ package-registry request and reads bounded provenance evidence for the configure
 package metadata, and shim binding. The proof-bound launcher snapshot does not attest successful Codex execution;
 environment and persisted candidates remain report-only and cannot produce a managed classification in this one-shot command.
 On Windows this first slice performs no candidate/configuration filesystem I/O: it preserves only proof-captured
-absolute environment candidates for lexical app-bundle/version-manager reporting and otherwise fails closed.
+absolute environment candidates for lexical app-bundle/version-manager reporting and otherwise fails closed. That
+fail-closed result records which observation was missing: a run with no proof-captured environment candidate reports
+`windows_inspection_deferred`, because persisted selection is never consulted there and the command cannot claim that
+no Codex CLI exists; a captured candidate whose path is not lexically eligible reports `candidate_path_unavailable`.
+POSIX keeps `candidate_unavailable` for an unobserved candidate.
 This check does not attest or admit a selected runtime. The command exposes no private mutation authority and does not query
 a registry, execute Codex/npm, install, repair, stop, restart, or change configuration/cache state.
 
@@ -375,7 +397,7 @@ Responses route normalization resolves provider summary defaults from the origin
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 

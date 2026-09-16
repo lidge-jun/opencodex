@@ -465,9 +465,9 @@ async function injectCodexConfigImpl(
    */
   /*
    * Re-observed inside the artifact transaction. A store that migrates to paginated history
-   * mid-write retires the relabel unit, because the config half writes no history and rolling
-   * it back is what left every paginated home with no OpenCodex models. Any other reason is
-   * still treated as a failed transition so compensation can restore the pre-images.
+   * mid-write can retire the relabel unit while its already-admitted candidate leaves
+   * existing provider references resolvable. Existing provider definitions are retained
+   * before the witness; no post-commit compensation may overwrite a newer native write.
    */
   const observeHistoryRefusalOrThrow = (known: string | null): string | null => {
     if (known) return known;
@@ -489,12 +489,12 @@ async function injectCodexConfigImpl(
 
   /*
    * Rows this home may have tagged `opencodex` resolve only through a provider table. Design B
-   * normally retires that table because the relabel migrates those rows back to `openai` in
-   * the same pass; with the relabel stood down, stripping it anyway would leave every such
-   * conversation pointing at a provider id that no longer exists. Keep what was already
-   * published, and keep it BEFORE the witness so the lock admits the bytes actually written.
+   * selects built-in `openai` for new work, but background relabel and native publication are
+   * not atomic. Codex can paginate after the final check or when the worker starts. Retain
+   * an existing definition BEFORE the witness regardless of preflight, so worker failure
+   * cannot orphan old references. Explicit restoration keeps its removal and history guards.
    */
-  if (historyRelabelRefusal && hadOcxProviderTableOnDisk && !providerTableMode) {
+  if (hadOcxProviderTableOnDisk && !providerTableMode) {
     content = applyEol(
       content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {})),
       eol,
@@ -787,6 +787,7 @@ async function injectCodexConfigImpl(
   // handed down fixed; the Worker never takes a direction from its caller.
   // A stood-down relabel unit spawns no Worker: the preflight it would run first has
   // already refused, and the config half is committed either way.
+  historyArtifactStageForTests?.("before-history-worker");
   const historyOutcome: CodexHistoryJobOutcome = historyRelabelRefusal
     ? { kind: "skipped" }
     : await runCodexHistoryJob({
@@ -984,4 +985,3 @@ export {
   setBeforeRestoreConfigForTests,
   skippedRestoreEnvelope,
 } from "./inject/restore";
-
