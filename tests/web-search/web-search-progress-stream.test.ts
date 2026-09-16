@@ -7,6 +7,7 @@ import {
 } from "../../src/web-search/progress-stream";
 import {
   createPassthroughWebSearchBridgeStream,
+  MAX_HELD_CALL_EVENTS,
   WEB_SEARCH_BRIDGE_ERROR_CODE,
 } from "../../src/web-search/passthrough-bridge";
 import type { AdapterEvent } from "../../src/types";
@@ -524,17 +525,26 @@ describe("web-search passthrough withheld-event stream lifecycle", () => {
     expect(result.output.map(event => event.sequence_number)).toEqual(result.output.map((_, index) => index));
   }
 
+  /** Overflow is the bridge's own admission bound, so it must not be blamed on the upstream. */
+  function expectBridgeOwnedOverflow(result: Awaited<ReturnType<typeof runLeg>>): void {
+    const message = result.output.at(-1)?.response?.error?.message ?? "";
+    expect(message).toContain("web-search bridge withheld more client tool events");
+    expect(message).not.toContain("upstream read failed");
+  }
+
   test.each([false, true])("bounds tiny delta events matched by item id only: %s", async itemIdOnly => {
-    const result = await runLeg(legEvents(1_000, "x", 0, itemIdOnly));
+    // Minimal delta frames are far below the derived 128-code-unit average, so the event
+    // count is what stops this leg, not the character budget.
+    const result = await runLeg(legEvents(MAX_HELD_CALL_EVENTS, "x", 0, itemIdOnly));
     expectFailedClosed(result);
-    expect(result.output.at(-1)?.response?.error?.message).toContain("client tool events exceeded");
-    expect(result.probe.reads).toBe(1_001);
+    expectBridgeOwnedOverflow(result);
+    expect(result.probe.reads).toBe(MAX_HELD_CALL_EVENTS + 1);
     expect(result.probe.cancelled).toBe(true);
   });
 
   test("bounds repeated client-call added events as well as deltas", async () => {
     function* additions(): Generator<Payload> {
-      for (let index = 0; index < 1_002; index++) {
+      for (let index = 0; index < MAX_HELD_CALL_EVENTS; index++) {
         yield {
           type: "response.output_item.added", output_index: index,
           item: { type: "function_call", id: "tool-" + index, call_id: "call-" + index, name: "exec", arguments: "" },
@@ -543,20 +553,23 @@ describe("web-search passthrough withheld-event stream lifecycle", () => {
     }
     const result = await runLeg(additions());
     expectFailedClosed(result);
-    expect(result.probe.reads).toBe(1_001);
+    // An added frame serializes well above the 128-code-unit average the event cap is derived
+    // from, so the character budget binds first here. Both bounds still fail the leg cleanly.
+    expect(result.probe.reads).toBeLessThan(MAX_HELD_CALL_EVENTS);
+    expect(result.probe.reads).toBeGreaterThan(1);
     expect(result.probe.cancelled).toBe(true);
   });
 
   test("bounds cumulative payload characters while individual frames and event count remain small", async () => {
     const result = await runLeg(legEvents(140, "x".repeat(64 * 1024), 0, true));
     expectFailedClosed(result);
-    expect(result.output.at(-1)?.response?.error?.message).toContain("client tool events exceeded");
+    expectBridgeOwnedOverflow(result);
     expect(result.probe.reads).toBeLessThan(140);
     expect(result.probe.cancelled).toBe(true);
   });
 
-  test("closes every opened search before failing a held-event overflow", async () => {
-    const result = await runLeg(legEvents(1_000, "x", 2));
+  test("closes every opened search before failing a withheld-event budget overflow", async () => {
+    const result = await runLeg(legEvents(140, "x".repeat(64 * 1024), 2));
     expectFailedClosed(result);
     const opened = result.output.filter(event => event.type === "response.output_item.added");
     const closed = result.output.filter(event => event.type === "response.output_item.done");
@@ -584,16 +597,17 @@ describe("web-search passthrough withheld-event stream lifecycle", () => {
     expect(result.output.at(-1)?.response?.error?.message).toContain("synthetic read failure");
   });
 
-  test("releases exactly 1000 held events without loss and preserves remapped order", async () => {
-    // added + 997 deltas + arguments.done + item.done = exactly 1000 withheld events.
-    const result = await runLeg(legEvents(997, "x", 1));
+  test("releases exactly the held-event limit without loss and preserves remapped order", async () => {
+    // added + deltas + arguments.done + item.done = exactly MAX_HELD_CALL_EVENTS withheld events.
+    const deltasAtLimit = MAX_HELD_CALL_EVENTS - 3;
+    const result = await runLeg(legEvents(deltasAtLimit, "x", 1));
     expect(result.output.some(event => event.type === "response.failed")).toBe(false);
     const deltas = result.output.filter(event => event.type === "response.function_call_arguments.delta");
-    expect(deltas).toHaveLength(997);
-    expect(deltas.map(event => event.delta).join("")).toBe("x".repeat(997));
+    expect(deltas).toHaveLength(deltasAtLimit);
+    expect(deltas.map(event => event.delta).join("")).toBe("x".repeat(deltasAtLimit));
     expect(deltas.every(event => event.output_index === 1)).toBe(true);
     const toolDone = result.output.find(event => event.type === "response.output_item.done" && event.item?.type === "function_call");
-    expect(toolDone?.item?.arguments).toBe("x".repeat(997));
+    expect(toolDone?.item?.arguments).toBe("x".repeat(deltasAtLimit));
     expect(result.output.at(-1)?.type).toBe("response.completed");
     expect(result.output.at(-1)?.response?.output).toHaveLength(2);
     expect(result.probe.executions).toBe(1);

@@ -297,9 +297,13 @@ upstream terminal is `response.failed` or `response.incomplete` runs no search a
 any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
 instruction.
 
-`src/web-search/passthrough-bridge.ts` withholds at most 1,000 client-tool events and
-8,388,608 UTF-16 code units of their SSE data payloads per leg; this is not a byte or total-heap
-measurement. The first over-budget event fails the leg before releasing any held tool call.
+`src/web-search/passthrough-bridge.ts` withholds at most 8,388,608 UTF-16 code units of
+SSE data payloads per leg; this is not a byte or total-heap measurement. A companion cap of
+65,536 events is derived from that budget at a realistic 128-code-unit serialized delta, so it
+only bounds per-event object overhead the character budget cannot see rather than refusing a
+large client-executed tool call streamed as fine-grained argument deltas. The first over-budget
+event fails the leg before releasing any held tool call, and reports that refusal as the
+bridge's own bound rather than as an upstream read failure.
 Read failures and exhausted continuation budgets use the same cleanup: discard held calls and
 close every search cell opened by the current leg as failed before one failed terminal and DONE.
 Successful release serializes held events lazily rather than building another full frame array;

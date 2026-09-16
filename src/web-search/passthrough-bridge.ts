@@ -128,10 +128,22 @@ const MAX_QUERIES_PER_CALL = 3;
 const MAX_RETAINED_OUTPUT_ITEMS = 500;
 /** Refuse to buffer an unbounded partial SSE event from a misbehaving upstream. */
 const MAX_SSE_BUFFER_CHARS = 8 * 1024 * 1024;
-/** Bound both object overhead and serialized payloads withheld before a leg's fate is known. */
-const MAX_HELD_CALL_EVENTS = 1_000;
 /** UTF-16 code units in SSE data payloads, not a byte or total-heap measurement. */
 const MAX_HELD_CALL_CHARS = 8 * 1024 * 1024;
+/**
+ * Derived from MAX_HELD_CALL_CHARS rather than picked, so the two bounds bind at the same
+ * scale. The character budget is the real memory guard; this count only adds the per-event
+ * object overhead the character budget cannot see. A fine-grained argument delta serializes
+ * to roughly 128 code units -- an envelope of about 110 characters carrying the item id and
+ * output index, plus a token-sized fragment -- so 8 MiB of them is 65,536 events. The count
+ * therefore bites only for events smaller than that average. A flat 1,000 discarded a
+ * legitimate client-executed tool call: a sizeable apply_patch streamed as fine-grained
+ * deltas is ordinary, not exotic, and failing its leg trades one failure for another.
+ */
+export const MAX_HELD_CALL_EVENTS = MAX_HELD_CALL_CHARS / 128;
+
+/** A proxy-side admission bound, never an upstream transport failure. */
+class HeldCallBudgetExceededError extends Error {}
 
 /**
  * Retained for importers that pinned the first slice's contract: a leg mixing the search with
@@ -513,7 +525,9 @@ class BridgeStreamState {
   private holdCall(payload: Record<string, unknown>, dataChars: number, upstreamIndex?: number): void {
     if (this.heldCalls.length >= MAX_HELD_CALL_EVENTS
       || dataChars > MAX_HELD_CALL_CHARS - this.heldCallChars) {
-      throw new Error("upstream client tool events exceeded the web-search bridge buffer bound");
+      throw new HeldCallBudgetExceededError(
+        "web-search bridge withheld more client tool events than its per-leg buffer bound allows",
+      );
     }
     this.heldCalls.push({ payload, ...(upstreamIndex === undefined ? {} : { upstreamIndex }) });
     this.heldCallChars += dataChars;
@@ -1018,9 +1032,13 @@ async function* bridgeStreamBlocks(
     } catch (error) {
       if (aborted()) return;
       const message = error instanceof Error ? error.message : String(error);
+      // A held-event overflow is this proxy's own bound. Attributing it to an upstream read
+      // failure would blame the provider for a refusal the bridge made.
       yield* emit(state.failLegFrames(
         WEB_SEARCH_BRIDGE_ERROR_CODE,
-        "web-search bridge upstream read failed: " + message,
+        error instanceof HeldCallBudgetExceededError
+          ? message
+          : "web-search bridge upstream read failed: " + message,
       ));
       return;
     }
