@@ -15,13 +15,13 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  SUBPROCESS_KILL_GRACE_MS,
+  flushRequiredSubprocessReapsForTests,
   waitForSubprocessExit,
   type KillableSubprocess,
 } from "../../src/lib/bounded-subprocess";
 
 const DEADLINE_MS = 10;
-const GRACE_MS = 40;
+const REAP_REQUIRED = 1;
 
 interface FakeSubprocess extends KillableSubprocess {
   readonly killCount: () => number;
@@ -52,27 +52,45 @@ function fakeSubprocess(): FakeSubprocess {
   };
 }
 
-/** Resolve once the pending promise settles, or report that it is still pending. */
-async function raceSettled<T>(promise: Promise<T>, afterMs: number): Promise<T | "pending"> {
-  return await Promise.race([
-    promise,
-    new Promise<"pending">(resolve => setTimeout(() => resolve("pending"), afterMs)),
-  ]);
+function manualDeadline() {
+  let callback: (() => void) | undefined;
+  let cancelled = false;
+  return {
+    schedule(next: () => void): () => void {
+      callback = next;
+      return () => { cancelled = true; };
+    },
+    fire(): void {
+      if (!callback) throw new Error("deadline was not scheduled");
+      callback();
+    },
+    cancelled: () => cancelled,
+  };
+}
+
+async function promiseSettled(promise: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  void promise.then(() => { settled = true; }, () => { settled = true; });
+  await Promise.resolve();
+  return settled;
 }
 
 describe("waitForSubprocessExit", () => {
   test("a child that exits before the deadline is never killed", async () => {
     const proc = fakeSubprocess();
-    const pending = waitForSubprocessExit(proc, 10_000, GRACE_MS);
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(proc, 10_000, REAP_REQUIRED, deadline.schedule);
     proc.settle(0);
     expect(await pending).toEqual({ exitCode: 0, timedOut: false });
     expect(proc.killCount()).toBe(0);
     expect(proc.unrefCount()).toBe(0);
+    expect(deadline.cancelled()).toBe(true);
   });
 
   test("a nonzero exit before the deadline is reported, not treated as a timeout", async () => {
     const proc = fakeSubprocess();
-    const pending = waitForSubprocessExit(proc, 10_000, GRACE_MS);
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(proc, 10_000, REAP_REQUIRED, deadline.schedule);
     proc.settle(5);
     expect(await pending).toEqual({ exitCode: 5, timedOut: false });
   });
@@ -80,64 +98,78 @@ describe("waitForSubprocessExit", () => {
   test("the deadline kills the child and then WAITS for it to actually die", async () => {
     // The regression. Before this, the promise resolved in the same tick as kill().
     const proc = fakeSubprocess();
-    const pending = waitForSubprocessExit(proc, DEADLINE_MS, GRACE_MS);
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(proc, DEADLINE_MS, REAP_REQUIRED, deadline.schedule);
 
-    expect(await raceSettled(pending, DEADLINE_MS * 3)).toBe("pending");
+    deadline.fire();
+    expect(await promiseSettled(pending)).toBe(false);
     expect(proc.killCount()).toBe(1);
-    // Still held: abandoning is the fallback, not the first move.
     expect(proc.unrefCount()).toBe(0);
 
     proc.settle(1);
     expect(await pending).toEqual({ exitCode: null, timedOut: true });
-    // Reaped within the grace, so it was never abandoned.
     expect(proc.unrefCount()).toBe(0);
   });
 
-  test("a child that dies during the grace is still classified as timed out", async () => {
+  test("a child that dies after the deadline is still classified as timed out", async () => {
     // The caller's classification must not move: it DID miss its deadline. Only the moment of
     // resolution changes, and `hardenSecretPath` keys its ETIMEDOUT memo on exactly this flag.
     const proc = fakeSubprocess();
-    const pending = waitForSubprocessExit(proc, DEADLINE_MS, GRACE_MS);
-    await new Promise(resolve => setTimeout(resolve, DEADLINE_MS * 2));
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(proc, DEADLINE_MS, REAP_REQUIRED, deadline.schedule);
+    deadline.fire();
     proc.settle(0);
     expect(await pending).toEqual({ exitCode: null, timedOut: true });
   });
 
-  test("a child that outlives its own kill is abandoned, bounded by the grace", async () => {
+  test("a child that outlives its kill keeps both the caller and teardown drain pending", async () => {
     const proc = fakeSubprocess();
-    const pending = waitForSubprocessExit(proc, DEADLINE_MS, GRACE_MS);
-    expect(await pending).toEqual({ exitCode: null, timedOut: true });
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(proc, DEADLINE_MS, REAP_REQUIRED, deadline.schedule);
+    deadline.fire();
+    const drain = flushRequiredSubprocessReapsForTests();
+
+    expect(await promiseSettled(pending)).toBe(false);
+    expect(await promiseSettled(drain)).toBe(false);
     expect(proc.killCount()).toBe(1);
-    expect(proc.unrefCount()).toBe(1);
+    expect(proc.unrefCount()).toBe(0);
+
+    proc.settle(1);
+    expect(await pending).toEqual({ exitCode: null, timedOut: true });
+    await drain;
   });
 
   test("a rejected exit before the deadline is not a timeout", async () => {
     const proc = fakeSubprocess();
-    const pending = waitForSubprocessExit(proc, 10_000, GRACE_MS);
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(proc, 10_000, REAP_REQUIRED, deadline.schedule);
     proc.fail(new Error("spawn lost"));
     expect(await pending).toEqual({ exitCode: null, timedOut: false });
   });
 
   test("a rejected exit after the deadline stays a timeout", async () => {
     const proc = fakeSubprocess();
-    const pending = waitForSubprocessExit(proc, DEADLINE_MS, GRACE_MS);
-    await new Promise(resolve => setTimeout(resolve, DEADLINE_MS * 2));
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(proc, DEADLINE_MS, REAP_REQUIRED, deadline.schedule);
+    deadline.fire();
     proc.fail(new Error("already gone"));
     expect(await pending).toEqual({ exitCode: null, timedOut: true });
   });
 
-  test("the default grace is long enough to be a real wait, and short enough to be bounded", () => {
-    // A grace under a few hundred milliseconds would not survive a loaded Windows runner, which is
-    // the only environment where this has ever mattered; one over a few seconds would turn a hung
-    // icacls into a hung shutdown, which is what abandonment exists to prevent.
-    expect(SUBPROCESS_KILL_GRACE_MS).toBeGreaterThanOrEqual(500);
-    expect(SUBPROCESS_KILL_GRACE_MS).toBeLessThanOrEqual(5_000);
-  });
-
-  test("a subprocess without unref is abandoned without throwing", async () => {
+  test("a subprocess without unref is still reaped", async () => {
     const base = fakeSubprocess();
     const withoutUnref: KillableSubprocess = { exited: base.exited, kill: base.kill };
-    expect(await waitForSubprocessExit(withoutUnref, DEADLINE_MS, GRACE_MS))
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(
+      withoutUnref,
+      DEADLINE_MS,
+      REAP_REQUIRED,
+      deadline.schedule,
+    );
+    deadline.fire();
+    expect(await promiseSettled(pending)).toBe(false);
+    base.settle(1);
+    expect(await pending)
       .toEqual({ exitCode: null, timedOut: true });
   });
 
@@ -147,7 +179,9 @@ describe("waitForSubprocessExit", () => {
     // is that caller -- its PowerShell lookup runs during `ocx start`, where the composed
     // acceptance cases measure real startups at up to 38.8s against a bounded watchdog.
     const proc = fakeSubprocess();
-    const pending = waitForSubprocessExit(proc, DEADLINE_MS, 0);
+    const deadline = manualDeadline();
+    const pending = waitForSubprocessExit(proc, DEADLINE_MS, 0, deadline.schedule);
+    deadline.fire();
     expect(await pending).toEqual({ exitCode: null, timedOut: true });
     expect(proc.killCount()).toBe(1);
     // Abandoned immediately rather than after a grace it was told not to take.

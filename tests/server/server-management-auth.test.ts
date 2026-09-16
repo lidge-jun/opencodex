@@ -89,6 +89,7 @@ import {
   consumeGuiPairingGrant,
   createGuiPairingGrant,
 } from "../../src/server/gui-session";
+import { flushRequiredSubprocessReapsForTests } from "../../src/lib/bounded-subprocess";
 import { setSystemRestartIoForTests } from "../../src/server/management/system-restart";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -208,6 +209,9 @@ afterEach(async () => {
   // hook moves OPENCODEX_HOME back to the developer's real home a few lines below, so a
   // directory-scoped flush here would settle the wrong tree and leave this one held.
   await flushConfigDirHardeningForTests();
+  // The ACL wrapper has its own watchdog, so its public flight can settle before a killed
+  // icacls.exe reports `exited`. Drain the subprocess owner's reap set before deleting the home.
+  await flushRequiredSubprocessReapsForTests();
   // And settle any native-main release nobody awaited. `server.stop` awaits its own, but a
   // startServer that THREW cannot: the rollback fires `void lifecycle.release()` and rethrows,
   // because startServer is synchronous by contract. That release closes the owner's SQLite lease
