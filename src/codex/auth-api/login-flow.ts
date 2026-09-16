@@ -10,7 +10,7 @@ import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth }
 import { clearCodexPoolRefreshFailure } from "../pool-refresh-backoff";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { emailMaskingEnabled, projectEmail } from "../../lib/privacy";
-import { codexWarmupFailureReason, isCodexWarmupProvisioningFailure, warmCodexAccount } from "../warmup";
+import { CodexWarmupError, codexWarmupFailureReason, isCodexWarmupProvisioningFailure, warmCodexAccount } from "../warmup";
 import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../../types";
 import type { CatalogDisposition } from "../convergence-types";
 import { isValidCodexAccountId } from "../account-id";
@@ -51,6 +51,17 @@ export async function verifyCodexAccountWarmup(
     return { ok: true, validatedAt: Date.now() };
   } catch (err) {
     const reason = codexWarmupFailureReason(err);
+    if (err instanceof CodexWarmupError && err.code === "http_status" && err.status === 429) {
+      return {
+        ok: false,
+        response: jsonResponse({
+          error: "Codex account warmup was rate limited. Retry later or after the account's usage limit resets.",
+          code: "codex_warmup_rate_limited",
+          reason,
+          accountId,
+        }, 429),
+      };
+    }
     return {
       ok: false,
       response: jsonResponse({
@@ -322,10 +333,11 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 ? { ok: true as const, validatedAt: undefined }
                 : await verifyCodexAccountWarmup(accountId, cred.access, oauthAccountId);
               if (!warmup.ok) {
-                const body = await warmup.response.json().catch(() => ({})) as { error?: string; reason?: string };
+                const body = await warmup.response.json().catch(() => ({})) as { error?: string; code?: string; reason?: string };
                 setCodexLoginState(flowId, {
                   status: "error",
                   error: body.reason ? `${body.error ?? "Codex account warmup failed"} (${body.reason})` : body.error ?? "Codex account warmup failed",
+                  code: body.code,
                   doneAt: Date.now(),
                 });
                 completed = true;

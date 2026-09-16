@@ -11,7 +11,13 @@ import {
   type WsData,
 } from "../ws-bridge";
 import type { Server, ServerWebSocket } from "bun";
-import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "../live";
+import {
+  handleLive,
+  logLiveSidebandFrame,
+  logLiveSidebandStage,
+  parseLiveSidebandTarget,
+  resolveLiveSidebandUpgrade,
+} from "../live";
 import { RESPONSE_TTL_MS } from "../../responses/state";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
@@ -125,8 +131,33 @@ export function sendUpstreamFrame(upstream: WebSocket, frame: string | Buffer): 
   upstream.send(Uint8Array.from(frame));
 }
 
+/**
+ * Translate the close a downstream client sent into one the upstream socket can carry.
+ *
+ * The client's code is the only evidence of WHY the call ended, and the upstream needs it:
+ * a user hanging up (1001) and a protocol fault (1002/1011) are different events on the
+ * account, and collapsing both into a bare 1000 erases that at the proxy. Two bounds make
+ * the relay safe anyway. Codes a WebSocket endpoint may never send — 1005 and 1006 are
+ * status codes the local runtime synthesizes for "no status" and "abnormal", 1015 is
+ * TLS-reserved, and anything outside the registered and private ranges is undefined — become
+ * 1000, because `upstream.close` throws on them and a throw here would strand the upstream
+ * socket. The reason is truncated to the 123-byte control-frame payload limit by bytes, not
+ * characters, so a multibyte reason cannot overrun the frame.
+ */
+export function clientCloseForUpstream(code: number, reason?: string): { code: number; reason: string } {
+  const sendable = code === 1000
+    || code === 1001
+    || code === 1003
+    || (code >= 1007 && code <= 1011)
+    || (code >= 3000 && code <= 4999);
+  let text = reason ?? "";
+  while (Buffer.byteLength(text) > 123) text = text.slice(0, -1);
+  return { code: sendable ? code : 1000, reason: text };
+}
+
 function finalizeLiveSideband(ws: ServerWebSocket<WsData>, upstream?: WebSocket): void {
   if (upstream && ws.data.liveUpstream !== upstream) return;
+  logLiveSidebandStage("relay-closed");
   if (ws.data.liveCloseFallback !== undefined) {
     clearTimeout(ws.data.liveCloseFallback);
     ws.data.liveCloseFallback = undefined;
@@ -281,6 +312,7 @@ export function openLiveSidebandUpstream(
     try {
       socket = createWebSocket(url, headers);
     } catch {
+      logLiveSidebandStage("upstream-failed", { status: 502, code: "upstream_error" });
       resolve({ ok: false, status: 502, code: "upstream_error", message: "voice upstream connect failed" });
       return;
     }
@@ -297,6 +329,8 @@ export function openLiveSidebandUpstream(
       settled = true;
       clearTimeout(timer);
       removeAbortListener();
+      if (result.ok) logLiveSidebandStage("upstream-open");
+      else logLiveSidebandStage("upstream-failed", { status: result.status, code: result.code });
       resolve(result);
     };
     const timer = setTimeout(() => {
@@ -505,6 +539,7 @@ export function attachLiveSidebandUpstream(
     // session, not the connect phase.
     if (ws.data.liveConnectTimer !== undefined) clearTimeout(ws.data.liveConnectTimer);
     ws.data.liveConnectTimer = undefined;
+    logLiveSidebandStage("relay-attached");
     for (const frame of takeover.frames) {
       try {
         // Mirror the live message listener exactly: same ceiling, same diagnostic
@@ -527,6 +562,7 @@ export function attachLiveSidebandUpstream(
     ws.data.liveOpened = true;
     if (ws.data.liveConnectTimer !== undefined) clearTimeout(ws.data.liveConnectTimer);
     ws.data.liveConnectTimer = undefined;
+    logLiveSidebandStage("relay-attached");
     // An accepted transport alone does not prove inference/quota recovery.
     // Keep healthy closes neutral; explicit transport failures are recorded below.
     const pending = ws.data.livePending ?? [];

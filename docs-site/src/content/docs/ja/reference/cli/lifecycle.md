@@ -172,6 +172,8 @@ Codex のローカル モデル ピッカー キャッシュを無効にし、�
 カタログは、ローカル書き込みの前に拒否されます。認証は任意で、環境変数参照 (`--auth-env`) から
 のみ読み取られ、argv からは読み取られません。
 
+`HTTP_PROXY` または `http_proxy` が適用され、`NO_PROXY` または `no_proxy` に一致する除外設定がない場合、ループバック HTTP リクエストは認証ヘッダーの付与や送信より前に拒否されます。`ALL_PROXY`/`all_proxy`、または `HTTPS_PROXY`/`https_proxy` だけの設定では、この HTTP 制限は適用されず、HTTPS によるカタログ取得は引き続き許可されます。拒否メッセージにプロキシのアドレスや認証トークンは含まれません。 空でない `http_proxy` と `no_proxy` は、それぞれ `HTTP_PROXY` と `NO_PROXY` より優先されます。Bun に対応する除外ルールには、ホスト名、一致する `host:port`、`[::1]` のように角括弧で囲んだ IPv6 アドレス、または `*` を使い、URL、パス、`*.` 接頭辞は使わないでください。
+
 カタログとキャッシュは共有の Codex カタログロックの下で書き込まれ、失敗時は last-known-good の
 ファイルが保持されます。バイトが同一の場合は mtime を保持する no-op です。`--restart-codex`、
 `--restart-app-server-only`、非推奨エイリアス `--restart-desktop-app` は、実際の書き込みの後に

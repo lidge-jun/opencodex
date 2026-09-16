@@ -62,12 +62,13 @@ The schema is carried verbatim. `sanitizeGeminiToolParameters` narrows a schema 
 the function-declaration subset and must never be applied to a caller-authored output
 schema. `compileGenerationConfig` in `google-wire-compiler.ts` is a whitelist, so
 both keys are listed there as well; setting them in the adapter alone would drop them
-before the wire.
+before the wire. On Cloud Code Assist, Gemini models carry these same keys inside
+`envelope.request.generationConfig`.
 
 Three cases refuse explicitly rather than dropping the constraint silently:
-cloud-code-assist, which opencodex does not implement or verify for this field
-(including Claude models served through that envelope — this is not a claim about
-what the upstream can do); an image-capable model, whose `responseModalities`
+non-Gemini models on Cloud Code Assist (such as Claude models served through that
+envelope), which opencodex does not implement or verify for this field (this is not
+a claim about what the upstream can do); an image-capable model, whose `responseModalities`
 configuration contradicts JSON-constrained text; and a `json_schema` format carrying
 no schema, which would otherwise downgrade to bare JSON mode. An image-capable model
 with no structured-output request keeps its existing `responseModalities` behavior.

@@ -4,6 +4,7 @@ import {
   MAX_WS_FRAME_BYTES,
   WEBSOCKET_IDLE_TIMEOUT_SECONDS,
   attachLiveSidebandUpstream,
+  clientCloseForUpstream,
   closeLiveSideband,
   closeLiveSidebandBeforeUpgrade,
   enqueueLiveSidebandPendingFrame,
@@ -317,13 +318,16 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           }
         })();
       },
-      close(ws: ServerWebSocket<WsData>) {
+      close(ws: ServerWebSocket<WsData>, code: number, reason: string) {
         if (ws.data.kind === "remote-workspace-agent") {
           ws.data.remoteWorkspaceClose?.();
           return;
         }
         if (ws.data.kind === "live-sideband") {
-          closeLiveSideband(ws);
+          // Carry the client's own close through to the upstream instead of reporting every
+          // hang-up as a plain 1000.
+          const forwarded = clientCloseForUpstream(code, reason);
+          closeLiveSideband(ws, forwarded.code, forwarded.reason);
           return;
         }
         unregisterCodexWebSocket(ws);
