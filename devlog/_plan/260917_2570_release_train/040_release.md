@@ -31,16 +31,16 @@ password hash. The reasoning is on #4829.
 
 ## Registry propagation
 
-`npm publish` succeeded and npm answered "Your package is being processed and may take a few
-minutes to become available." The workflow's own `Post-publish registry smoke` step then read the
-registry six times without confirming, recorded `verification=pending`, and said in its summary:
+`npm publish` succeeded at 18:34:37Z and npm answered "Your package is being processed and may take
+a few minutes to become available." The workflow's own `Post-publish registry smoke` step then read
+the registry six times without confirming, recorded `verification=pending`, and said in its summary:
 *inspect the registry before announcing availability; do not republish this version.*
 
-At the time of writing, `https://registry.npmjs.org/@bitkyc08%2fopencodex/2.57.0` still answers 404
-and `dist-tags.latest` still reads 2.56.0, roughly half an hour after the publish. npm's status page
-reports no open incident; the two publish-degradation incidents on its history are from
-2026-09-15. Nothing here is a reason to republish 2.57.0 — the version is claimed, the tarball is
-signed, and a second publish of the same version would fail anyway.
+It took about eight minutes. `https://registry.npmjs.org/@bitkyc08%2fopencodex/2.57.0` answered 404
+through 18:42 and then 200; the packument's `modified` moved to 2026-09-16T18:42:50.857Z and
+`dist-tags.latest` reads 2.57.0. `npm view @bitkyc08/opencodex version` agrees.
 
-The remaining action is observation: confirm the version and the `latest` dist-tag appear, and if
-they have not after several hours, open a registry support case rather than a new release.
+The step is doing its job and its bounded read window is simply shorter than npm's worst-case
+processing time. Nothing needs changing: the warning is accurate, it does not fail the release, and
+it tells the reader exactly what to do instead of republishing. A pending verification here means
+wait and re-read, not cut another version.
