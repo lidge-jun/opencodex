@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   symlinkSync,
   utimesSync,
@@ -338,31 +339,53 @@ describe("Windows test TEMP recovery", () => {
     utimesSync(path, date, date);
   };
 
-  test("automatically removes confirmed test roots older than 48 hours", () => {
+  /** Stamp a candidate the way `writeTestTempOwner` does, then age the marker and the directory. */
+  const ownRoot = (path: string, createdAtMs: number, pid = 4_294_967_295) => {
+    writeFileSync(join(path, TEST_TEMP_OWNER_FILE), JSON.stringify({
+      schemaVersion: 1,
+      kind: "opencodex-test-root",
+      root: realpathSync(path),
+      createdAtMs,
+      pid,
+    }) + "\n");
+    age(join(path, TEST_TEMP_OWNER_FILE), createdAtMs);
+    age(path, createdAtMs);
+  };
+
+  test("removes a root it can prove it owns and leaves an unstamped look-alike alone", () => {
+    // The distinction this pins is the whole safety property: reclamation is decided by the
+    // ownership marker, never by the name. The thousands of directories already sitting in a
+    // user's TEMP were written by versions that stamped nothing, so they are scanned, skipped,
+    // and left for the user to clear. This release changes future runs.
     const tempRoot = mkdtempSync(join(tmpdir(), "opencodex-recovery-fixture-"));
     const nowMs = Date.now();
-    const staleWrapped = join(tempRoot, "opencodex-test-Ab12Cd");
-    const staleDirect = join(tempRoot, "ocx-v2-Zx98Yw");
-    const young = join(tempRoot, "ocx-runtime-Qq11Ww");
-    const recentlyUsed = join(tempRoot, "ocx-runtime-Rr22Tt");
+    const stale = nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000;
+    const owned = join(tempRoot, "opencodex-test-Ab12Cd");
+    const unstamped = join(tempRoot, "opencodex-test-Zx98Yw");
+    const young = join(tempRoot, "opencodex-test-Qq11Ww");
+    const legacyName = join(tempRoot, "ocx-runtime-Rr22Tt");
     const unrelated = join(tempRoot, "application-cache-Ab12Cd");
-    for (const path of [staleWrapped, staleDirect, young, recentlyUsed, unrelated]) mkdirSync(path);
-    writeFileSync(join(staleDirect, "fixture.txt"), "test\n");
-    writeFileSync(join(recentlyUsed, "recent.txt"), "still active\n");
-    age(staleWrapped, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
-    age(join(staleDirect, "fixture.txt"), nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
-    age(staleDirect, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
-    age(young, nowMs - TEST_TEMP_RECOVERY_AGE_MS + 1_000);
-    age(recentlyUsed, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
-    age(unrelated, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    for (const path of [owned, unstamped, young, legacyName, unrelated]) mkdirSync(path);
+    ownRoot(owned, stale);
+    ownRoot(young, nowMs - TEST_TEMP_RECOVERY_AGE_MS + 60_000);
+    age(unstamped, stale);
+    age(legacyName, stale);
+    age(unrelated, stale);
 
     try {
-      const result = recoverStaleTestTempArtifacts({ tempRoot, platform: "win32", nowMs });
-      expect(result).toMatchObject({ scanned: 4, removed: 2, skipped: 2, errors: 0 });
-      expect(existsSync(staleWrapped)).toBe(false);
-      expect(existsSync(staleDirect)).toBe(false);
+      const result = recoverStaleTestTempArtifacts({
+        tempRoot,
+        platform: "win32",
+        nowMs,
+        processIsAlive: () => false,
+      });
+      // Only the three `opencodex-test-*` names are candidates at all; the legacy `ocx-*` shape
+      // never carried a marker, so widening the scan to it could only ever produce skips.
+      expect(result).toMatchObject({ scanned: 3, removed: 1, skipped: 2, errors: 0 });
+      expect(existsSync(owned)).toBe(false);
+      expect(existsSync(unstamped)).toBe(true);
       expect(existsSync(young)).toBe(true);
-      expect(existsSync(recentlyUsed)).toBe(true);
+      expect(existsSync(legacyName)).toBe(true);
       expect(existsSync(unrelated)).toBe(true);
     } finally {
       removeTreeWithRetry(tempRoot);
@@ -373,7 +396,7 @@ describe("Windows test TEMP recovery", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "opencodex-recovery-fixture-"));
     const nowMs = Date.now();
     const invalidOwner = join(tempRoot, "opencodex-test-Aa11Bb");
-    const linked = join(tempRoot, "ocx-v2-Cc22Dd");
+    const linked = join(tempRoot, "opencodex-test-Cc22Dd");
     const liveOwner = join(tempRoot, "opencodex-test-Ee33Ff");
     const linkTarget = join(tempRoot, "link-target");
     mkdirSync(invalidOwner);
@@ -384,18 +407,24 @@ describe("Windows test TEMP recovery", () => {
     writeFileSync(join(liveOwner, TEST_TEMP_OWNER_FILE), JSON.stringify({
       schemaVersion: 1,
       kind: "opencodex-test-root",
-      root: liveOwner,
+      root: realpathSync(liveOwner),
       createdAtMs: nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000,
       pid: process.pid,
     }));
     symlinkSync(linkTarget, join(linked, "redirect"), process.platform === "win32" ? "junction" : "dir");
+    // Stamped and long dead, so the only thing left to refuse it is the link in its tree.
+    ownRoot(linked, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
     age(invalidOwner, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
-    age(linked, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
     age(join(liveOwner, TEST_TEMP_OWNER_FILE), nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
     age(liveOwner, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
 
     try {
-      const result = recoverStaleTestTempArtifacts({ tempRoot, platform: "win32", nowMs });
+      const result = recoverStaleTestTempArtifacts({
+        tempRoot,
+        platform: "win32",
+        nowMs,
+        processIsAlive: pid => pid === process.pid,
+      });
       expect(result).toMatchObject({ scanned: 3, removed: 0, skipped: 3, errors: 0 });
       expect(existsSync(invalidOwner)).toBe(true);
       expect(existsSync(linked)).toBe(true);
@@ -406,13 +435,13 @@ describe("Windows test TEMP recovery", () => {
     }
   });
 
-  test("bounds legacy recovery and leaves remaining candidates for a later run", () => {
+  test("bounds recovery and leaves remaining candidates for a later run", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "opencodex-recovery-fixture-"));
     const nowMs = Date.now();
     for (const name of ["opencodex-test-Aa11Bb", "opencodex-test-Cc22Dd"]) {
       const path = join(tempRoot, name);
       mkdirSync(path);
-      age(path, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+      ownRoot(path, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
     }
 
     try {
@@ -421,6 +450,7 @@ describe("Windows test TEMP recovery", () => {
         platform: "win32",
         nowMs,
         maxCandidates: 1,
+        processIsAlive: () => false,
       });
       expect(result).toMatchObject({ scanned: 1, removed: 1, errors: 0, truncated: true });
       expect(readdirSync(tempRoot)).toHaveLength(1);

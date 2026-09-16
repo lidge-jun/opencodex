@@ -20,7 +20,6 @@ export const TEST_TEMP_RECOVERY_AGE_MS = 48 * 60 * 60 * 1000;
 const TEST_TEMP_OWNER_VERSION = 1;
 const TEST_TEMP_OWNER_KIND = "opencodex-test-root";
 const WRAPPED_TEST_ROOT = /^opencodex-test-[A-Za-z0-9]{6}$/;
-const LEGACY_OCX_TEST_ROOT = /^ocx-[A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9]{6}$/;
 const TRANSIENT_REMOVE_CODES = new Set(["EPERM", "EBUSY", "ENOTEMPTY"]);
 const DEFAULT_MAX_CANDIDATES = 10_000;
 const DEFAULT_MAX_TREE_ENTRIES = 250_000;
@@ -67,6 +66,8 @@ type RecoveryOptions = Readonly<{
   maxCandidates?: number;
   maxTreeEntries?: number;
   maxDurationMs?: number;
+  /** Liveness seam. A recovery test must not depend on which pids the host happens to have. */
+  processIsAlive?: (pid: number) => boolean;
 }>;
 
 let automaticRecoveryAttempted = false;
@@ -83,8 +84,16 @@ function samePath(left: string, right: string, platform: NodeJS.Platform): boole
     : normalizedLeft === normalizedRight;
 }
 
+/**
+ * The only name shape a reclaimable root can have.
+ *
+ * A broader `ocx-*` class was considered and dropped: those directories never carried an
+ * ownership marker, so under the marker requirement below they could only ever be scanned and
+ * skipped, and the regex wide enough to catch them was also wide enough to put an unrelated
+ * tool's directory on the candidate list.
+ */
 function isTestTempName(name: string): boolean {
-  return WRAPPED_TEST_ROOT.test(name) || LEGACY_OCX_TEST_ROOT.test(name);
+  return WRAPPED_TEST_ROOT.test(name);
 }
 
 function processIsAlive(pid: number): boolean {
@@ -208,9 +217,17 @@ export function writeTestTempOwner(root: string, runId?: string): void {
 }
 
 /**
- * Reclaim stale Windows test roots left by versions that wrote directly to the user TEMP tree.
- * Exact mkdtemp-shaped names, a 48-hour grace period, direct-parent containment, and a full
- * no-link walk are all required before removal. Invalid ownership metadata fails closed.
+ * Reclaim stale Windows test roots this tool can PROVE it owns.
+ *
+ * Ownership is the marker, not the name. A directory that merely looks like ours is scanned and
+ * skipped: the accumulation already on a user's machine was written by versions that stamped
+ * nothing, and deleting it on a name match would be this tool cleaning a TEMP tree it cannot
+ * show it created. This release therefore changes future runs -- a root stamped by the code
+ * below is reclaimable, everything older is left alone.
+ *
+ * On top of the marker: an exact mkdtemp-shaped name, a 48-hour grace period, direct-parent
+ * containment, a dead owning pid, and a full no-link walk are all required before removal.
+ * Invalid ownership metadata fails closed.
  */
 export function recoverStaleTestTempArtifacts(options: RecoveryOptions = {}): TestTempRecoveryResult {
   const result: TestTempRecoveryResult = {
@@ -224,6 +241,7 @@ export function recoverStaleTestTempArtifacts(options: RecoveryOptions = {}): Te
   if (platform !== "win32") return result;
 
   const nowMs = options.nowMs ?? Date.now();
+  const isAlive = options.processIsAlive ?? processIsAlive;
   const minimumAgeMs = options.minimumAgeMs ?? TEST_TEMP_RECOVERY_AGE_MS;
   const maxCandidates = options.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
   const deadlineMs = Date.now() + (options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS);
@@ -269,16 +287,19 @@ export function recoverStaleTestTempArtifacts(options: RecoveryOptions = {}): Te
         continue;
       }
 
+      // An absent marker is as disqualifying as a corrupt one. `undefined` used to mean "no
+      // evidence either way, proceed on the name", which is exactly the name match this must not
+      // be.
       const owner = parseOwner(candidate);
-      if (owner === null || (owner !== undefined && !samePath(owner.root, canonicalCandidate, platform))) {
+      if (!owner || !samePath(owner.root, canonicalCandidate, platform)) {
         result.skipped += 1;
         continue;
       }
-      if (owner && processIsAlive(owner.pid)) {
+      if (isAlive(owner.pid)) {
         result.skipped += 1;
         continue;
       }
-      const rootActivityMs = Math.max(statSync(candidate).mtimeMs, owner?.createdAtMs ?? 0);
+      const rootActivityMs = Math.max(statSync(candidate).mtimeMs, owner.createdAtMs);
       if (nowMs - rootActivityMs < minimumAgeMs) {
         result.skipped += 1;
         continue;
