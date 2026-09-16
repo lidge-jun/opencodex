@@ -34,10 +34,15 @@ export const SUBPROCESS_KILL_GRACE_MS = 2_000;
  * still threw `EPERM ... rm ocx-management-auth-fDchUb`, with two
  * `ACL hardening timed out (ETIMEDOUT) - transient icacls stall` lines logged beside it.
  *
- * The grace is bounded and abandonment is still the fallback, so a genuinely unkillable child
- * cannot hang shutdown. The classification does not move: a child that missed its deadline is
- * reported as timed out whether or not it dies during the grace, because it did time out. Only the
- * moment of resolution changes.
+* The grace is bounded and abandonment is still the fallback, so a genuinely unkillable child
+* cannot hang shutdown. The classification does not move: a child that missed its deadline is
+* reported as timed out whether or not it dies during the grace, because it did time out. Only the
+* moment of resolution changes.
+ *
+ * Pass `0` to opt out. The grace buys exactly one thing -- a handle released before somebody
+ * removes the path holding it -- so a caller whose child holds nothing anyone deletes should not
+ * pay for it. `windows-user-principal` is that caller: its PowerShell lookup sits on the startup
+ * critical path, where seconds are the scarce resource and no directory is waiting on the reap.
  */
 export function waitForSubprocessExit(
   proc: KillableSubprocess,
@@ -59,6 +64,11 @@ export function waitForSubprocessExit(
     timer = setTimeout(() => {
       deadlineFired = true;
       try { proc.kill(); } catch { /* already exited */ }
+      if (killGraceMs <= 0) {
+        try { proc.unref?.(); } catch { /* abandonment is still authoritative */ }
+        finish({ exitCode: null, timedOut: true });
+        return;
+      }
       graceTimer = setTimeout(() => {
         // The child outlived its own kill. Abandon it -- but only now, and only after having
         // given the OS a real chance to release what it holds.

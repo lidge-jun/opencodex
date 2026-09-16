@@ -140,4 +140,17 @@ describe("waitForSubprocessExit", () => {
     expect(await waitForSubprocessExit(withoutUnref, DEADLINE_MS, GRACE_MS))
       .toEqual({ exitCode: null, timedOut: true });
   });
+
+  test("a zero grace opts out and abandons in the same tick as the kill", async () => {
+    // The grace buys one thing: a handle released before somebody removes the path holding it.
+    // A caller whose child holds no such path should not pay for it, and `windows-user-principal`
+    // is that caller -- its PowerShell lookup runs during `ocx start`, where the composed
+    // acceptance cases measure real startups at up to 38.8s against a bounded watchdog.
+    const proc = fakeSubprocess();
+    const pending = waitForSubprocessExit(proc, DEADLINE_MS, 0);
+    expect(await pending).toEqual({ exitCode: null, timedOut: true });
+    expect(proc.killCount()).toBe(1);
+    // Abandoned immediately rather than after a grace it was told not to take.
+    expect(proc.unrefCount()).toBe(1);
+  });
 });

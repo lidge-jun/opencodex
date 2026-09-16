@@ -26,6 +26,27 @@ import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 
 import { watchdogMs } from "../helpers/ci-watchdog";
+
+/**
+ * How long a real `ocx start` child may take to publish runtime-port.json on CI.
+ *
+ * The repository CI floor is 45s on Windows, and that is not a margin here, it is the answer.
+ * Dispatch 35124906412 measured this file's own passing cases on one shard at 5.0s, 7.4s, 8.1s,
+ * 10.7s, 14.8s and 38.8s. The largest healthy startup consumed 86% of the budget meant to bound
+ * a hang, and B-reduced then spent the whole 45s with `child exit=null`, no pid record, no
+ * runtime record and not one byte on either stream — a child still starting, which is exactly
+ * what the diagnostics were added to distinguish from a wedged one.
+ *
+* 120s is roughly three times the slowest healthy start observed, so a hang is still bounded and
+* still reported with the diagnostics rather than by Bun's blunt per-test kill. The per-test
+ * budget already in place, CASE_TIMEOUT_MS at 150s on CI, still exceeds it, so the watchdog keeps
+ * reporting first and the diagnostics survive. That 150s ceiling was never the constraint here;
+ * this 45s floor was.
+ *
+ * Local runs keep the short watchdog: this is a property of the loaded six-shard Windows leg,
+ * not of the code, and waiting two minutes for a hang on a developer machine helps nobody.
+ */
+const CHILD_START_WATCHDOG_MS = process.env.CI === "true" ? 120_000 : watchdogMs(10_000);
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -133,7 +154,7 @@ async function waitFor<T>(
   // while the child was still alive and still working — `child exit=null` with both streams
   // open, which is a slow start, not a crash. The watchdog exists to bound a hung test, not
   // to assert startup latency, so it takes the repository's CI floor.
-  timeoutMs = watchdogMs(10_000),
+  timeoutMs = CHILD_START_WATCHDOG_MS,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
