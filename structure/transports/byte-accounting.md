@@ -56,3 +56,10 @@ continuation has fresh counters; unsupported adapters and exhausted continuation
 retain no content. Anthropic behavior and the caller's OpenAI Chat opt-in gate remain scoped as
 before. `tests/server/terminal-guard.test.ts` covers inclusive limits, split whitespace, passthrough,
 reasoning replay, analysis shutdown, usage aggregation, and unsuccessful or absent terminals.
+
+If creating a continuation throws or rejects, its error event carries usage already reported by
+completed legs. Unknown usage stays absent rather than becoming a measured zero. This does not
+invent usage for an unreported failed send, retry a failed factory, or turn failure into success.
+Source-iteration exceptions still propagate to the caller. Returning the guard iterator closes
+its active source; cancellation at an assistant boundary does not start the continuation callback.
+The same focused tests cover these lifecycle paths and Unicode code-unit limit boundaries.

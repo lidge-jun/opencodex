@@ -367,6 +367,13 @@ describe("terminal guard bounded retention", () => {
   const done: AdapterEvent = { type: "done", usage: { inputTokens: 10, outputTokens: 2 } };
   const contentLimit = 64 * 1_024;
 
+  /**
+   * Collect one guarded fixture and the continuation requests it actually makes.
+   * @param events Adapter events supplied in their original order.
+   * @param adapterName Adapter whose existing guard policy is exercised.
+   * @param maxAutoContinuations Allowed internal re-asks for this fixture.
+   * @returns Forwarded events and captured requests, without mutating the input events.
+   */
   async function run(events: AdapterEvent[], adapterName: string, maxAutoContinuations = 1) {
     const actual: AdapterEvent[] = [];
     const requests: OcxParsedRequest[] = [];
@@ -545,6 +552,166 @@ describe("terminal guard bounded retention", () => {
         expect(requests).toHaveLength(0);
         expect(actual[0]).toBe(probe);
       });
+    });
+  }
+});
+
+describe("terminal guard lifecycle and accounting", () => {
+  const announcement: AdapterEvent = { type: "text_delta", text: "Let me check." };
+
+  for (const adapterName of ["anthropic", "openai-chat"]) {
+    describe(adapterName, () => {
+      for (const asynchronous of [false, true]) {
+        test(`${asynchronous ? "async" : "sync"} continuation startup failure preserves reported usage`, async () => {
+          const usage = {
+            inputTokens: 10, outputTokens: 2, cachedInputTokens: 3,
+            cacheReadInputTokens: 3, cacheCreationInputTokens: 1,
+            reasoningOutputTokens: 1, estimated: true,
+          };
+          const failure = new Error("continuation setup failed");
+          const actual: AdapterEvent[] = [];
+          let calls = 0;
+          for await (const event of guardTerminalEventStream({
+            parsed: parsed("Check and fix this code"), adapterName,
+            firstEvents: (async function* (): AsyncGenerator<AdapterEvent> {
+              yield announcement;
+              yield { type: "done", usage };
+            })(),
+            continuation: () => {
+              calls += 1;
+              if (asynchronous) return Promise.reject(failure);
+              throw failure;
+            },
+          })) actual.push(event);
+          expect(calls).toBe(1);
+          expect(actual).toEqual([
+            announcement, { type: "assistant_boundary" },
+            { type: "error", message: failure.message, usage },
+          ]);
+        });
+      }
+
+      test("startup failure after two completed legs keeps their aggregate usage", async () => {
+        let calls = 0;
+        const actual: AdapterEvent[] = [];
+        const turn = async function* (): AsyncGenerator<AdapterEvent> {
+          yield announcement;
+          yield { type: "done", usage: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 3 } };
+        };
+        for await (const event of guardTerminalEventStream({
+          parsed: parsed("Check and fix this code"), adapterName, maxAutoContinuations: 2,
+          firstEvents: turn(),
+          continuation: () => {
+            calls += 1;
+            if (calls === 1) return turn();
+            throw new Error("second continuation setup failed");
+          },
+        })) actual.push(event);
+        expect(calls).toBe(2);
+        expect(actual.filter(event => event.type === "assistant_boundary")).toHaveLength(2);
+        expect(actual.filter(event => event.type === "done")).toHaveLength(0);
+        expect(actual.at(-1)).toEqual({
+          type: "error", message: "second continuation setup failed",
+          usage: { inputTokens: 20, outputTokens: 4, totalTokens: 24, cachedInputTokens: 6 },
+        });
+      });
+
+      test("startup failure does not fabricate unknown usage", async () => {
+        const actual: AdapterEvent[] = [];
+        for await (const event of guardTerminalEventStream({
+          parsed: parsed("Check and fix this code"), adapterName,
+          firstEvents: (async function* (): AsyncGenerator<AdapterEvent> {
+            yield announcement;
+            yield { type: "done" };
+          })(),
+          continuation: () => { throw "continuation unavailable"; },
+        })) actual.push(event);
+        expect(actual.at(-1)).toEqual({ type: "error", message: "continuation unavailable" });
+        expect(Object.hasOwn(actual.at(-1)!, "usage")).toBe(false);
+        expect(actual.filter(event => event.type === "done")).toHaveLength(0);
+      });
+
+      for (const atBoundary of [false, true]) {
+        test(`consumer cancellation ${atBoundary ? "at boundary" : "during content"} closes the source without a continuation`, async () => {
+          let closed = false;
+          let calls = 0;
+          const stream = guardTerminalEventStream({
+            parsed: parsed("Check and fix this code"), adapterName,
+            firstEvents: (async function* (): AsyncGenerator<AdapterEvent> {
+              try {
+                yield announcement;
+                yield { type: "done", usage: { inputTokens: 10, outputTokens: 2 } };
+              } finally {
+                closed = true;
+              }
+            })(),
+            continuation: () => {
+              calls += 1;
+              return (async function* (): AsyncGenerator<AdapterEvent> { yield { type: "done" }; })();
+            },
+          });
+          expect((await stream.next()).value).toBe(announcement);
+          if (atBoundary) expect((await stream.next()).value).toEqual({ type: "assistant_boundary" });
+          expect((await stream.return(undefined)).done).toBe(true);
+          expect(closed).toBe(true);
+          expect(calls).toBe(0);
+        });
+      }
+
+      test("source iteration exceptions propagate without manufacturing success", async () => {
+        const failure = new Error("source read failed");
+        const actual: AdapterEvent[] = [];
+        let caught: unknown;
+        let calls = 0;
+        let closed = false;
+        try {
+          for await (const event of guardTerminalEventStream({
+            parsed: parsed("Check and fix this code"), adapterName,
+            firstEvents: (async function* (): AsyncGenerator<AdapterEvent> {
+              try {
+                yield announcement;
+                throw failure;
+              } finally {
+                closed = true;
+              }
+            })(),
+            continuation: () => {
+              calls += 1;
+              return (async function* (): AsyncGenerator<AdapterEvent> { yield { type: "done" }; })();
+            },
+          })) actual.push(event);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBe(failure);
+        expect(actual).toEqual([announcement]);
+        expect(closed).toBe(true);
+        expect(calls).toBe(0);
+      });
+
+      for (const extra of [0, 1]) {
+        test(`Unicode content limit plus ${extra} counts code units rather than UTF-8 bytes`, async () => {
+          const length = 64 * 1_024 - "Let me check.".length + extra;
+          const thinking = "😀".repeat(Math.floor(length / 2)) + (length % 2 ? "x" : "");
+          let calls = 0;
+          for await (const _event of guardTerminalEventStream({
+            parsed: parsed("Check and fix this code"), adapterName,
+            firstEvents: (async function* (): AsyncGenerator<AdapterEvent> {
+              yield announcement;
+              yield { type: "thinking_delta", thinking };
+              yield { type: "done" };
+            })(),
+            continuation: () => {
+              calls += 1;
+              return (async function* (): AsyncGenerator<AdapterEvent> { yield { type: "done" }; })();
+            },
+          })) {
+            // Consume the stream without retaining its content in the test.
+          }
+          expect(thinking.length).toBe(length);
+          expect(calls).toBe(extra === 0 ? 1 : 0);
+        });
+      }
     });
   }
 });

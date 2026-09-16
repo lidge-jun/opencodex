@@ -198,7 +198,17 @@ function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): 
   };
 }
 
-/** Preserve normal terminals, but withhold one suspicious no-tool terminal for a bounded re-ask. */
+/**
+ * Forward adapter events and re-ask only short, suspicious no-tool completions.
+ * Retention is bounded per turn; tools or overflow disable analysis without truncating output.
+ * Reported usage from completed legs survives a continuation-factory failure. Unreported
+ * usage stays absent, and source-iteration failures propagate to the caller's transport handler.
+ *
+ * @param options Initial stream, parsed history, and continuation callback. The caller owns
+ * provider opt-in; the continuation limit defaults to one and is clamped to at most two.
+ * @yields Unchanged content events, internal assistant boundaries, and terminal events with
+ * accumulated reported usage when available. Returning the iterator closes its active source.
+ */
 export async function* guardTerminalEventStream(options: GuardedEventStreamOptions): AsyncGenerator<AdapterEvent> {
   const maxContinuations = Math.max(0, Math.min(2, Math.floor(options.maxAutoContinuations ?? 1)));
   let parsed = options.parsed;
@@ -237,7 +247,11 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
           try {
             source = await options.continuation(parsed);
           } catch (error) {
-            yield { type: "error", message: error instanceof Error ? error.message : String(error) };
+            yield {
+              type: "error",
+              message: error instanceof Error ? error.message : String(error),
+              ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
+            };
             return;
           }
           break;
