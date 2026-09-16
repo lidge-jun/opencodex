@@ -120,14 +120,14 @@ Cette commande crée l’entrée de configuration `providers.droid`. Dans le tab
 
 Les identifiants de modèle ne sont que des exemples. Ne conservez que les modèles utilisables par `droid exec` avec le compte Factory connecté. N’ajoutez pas d’en-têtes d’inférence propres à Factory à ce fournisseur : son service en amont est le pont local, et non un point de terminaison HTTP Factory.
 
-Après avoir enregistré un fournisseur ou modifié son catalogue statique, synchronisez puis redémarrez le serveur d’application Codex afin que les nouvelles sessions lisent le catalogue à jour :
+Après avoir enregistré un fournisseur ou modifié son catalogue statique, synchronisez puis redémarrez Codex afin que les nouvelles sessions lisent le catalogue à jour :
 
 ```bash
 ocx sync --restart-codex
 ocx doctor
 ```
 
-Le redémarrage des processus du serveur d’application Codex interrompt les travaux Codex actifs. Ne le lancez qu’après avoir terminé ou enregistré ces sessions.
+`--restart-codex` redémarre les app-servers correspondants et quitte puis relance entièrement l’application Codex Desktop, ce qui termine les conversations en cours. Utilisez `--restart-app-server-only` pour laisser l’application Desktop ouverte. Ne lancez le redémarrage qu’après avoir terminé ou enregistré ces sessions.
 
 ## Vérifier la route complète
 

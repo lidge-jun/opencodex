@@ -33,6 +33,7 @@ export type ReplacePublisher =
   | "claude-agents"
   | "lab-automation"
   | "lab-ledger"
+  | "remote-workspace"
   | "storage-cleanup"
   | "tray";
 

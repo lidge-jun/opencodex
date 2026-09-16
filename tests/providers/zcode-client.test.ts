@@ -43,7 +43,7 @@ describe("ZCode client config", () => {
     expect(Object.keys(document)).toEqual(["provider"]);
     const provider = document.provider[OPENCODE_PROVIDER_ID]!;
     expect(provider.name).toBe("OpenCodex");
-    expect(provider.kind).toBe("openai-compatible");
+    expect(provider.kind).toBe("openai");
     expect(provider.enabled).toBe(true);
     expect(provider.source).toBe("custom");
     expect(provider.options).toEqual({
@@ -51,6 +51,17 @@ describe("ZCode client config", () => {
       baseURL: "http://127.0.0.1:10100/v1",
       apiKeyRequired: true,
     });
+  });
+
+  test("the exported kind resolves to the proxy's native Responses route", () => {
+    const document = buildClientConfig("zcode", context()) as ZcodeGeneratedConfig;
+    const provider = document.provider[OPENCODE_PROVIDER_ID]!;
+    // ZCode 3.11.2 getDefaultModelProviderEndpointPathForKind sends `openai` to
+    // `/responses` and normalizeModelProviderBaseUrlForKind strips only that suffix,
+    // so the `/v1` root we serialize survives and the turn lands on the route
+    // src/server/index.ts registers as POST /v1/responses.
+    expect(provider.kind).toBe("openai");
+    expect(`${provider.options.baseURL}/responses`).toBe("http://127.0.0.1:10100/v1/responses");
   });
 
   test("models carry authoritative limits, text-floor modalities, and drop audio-only rows", () => {

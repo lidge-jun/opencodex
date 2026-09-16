@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../../../src/adapters/google";
 import { chatCompletionsToResponsesBody } from "../../../src/chat/inbound";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../../../src/bridge";
+import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 import { parseRequest } from "../../../src/responses/parser";
-import type { OcxParsedRequest } from "../../../src/types";
+import type { AdapterEvent, OcxParsedRequest } from "../../../src/types";
 
 const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
 
@@ -580,6 +582,137 @@ describe("google adapter — direct -tiered wire renames", () => {
       const systemText = body.systemInstruction?.parts?.[0]?.text ?? "";
       expect(systemText).toContain(`powered by the ${modelId}`);
       expect(systemText).not.toContain("-tiered");
+    }
+  });
+});
+
+describe("google adapter — Antigravity thought-text opt-in", () => {
+  // CCA keeps generating thinking either way (thoughtsTokenCount stays non-zero) but returns
+  // NO `thought` text unless the request sets generationConfig.thinkingConfig.includeThoughts.
+  // Probed 2026-09-12: gemini-3.8-flash-high answered with 0 thought parts and 321 thoughts
+  // tokens, then 358-652 chars of reasoning once the key was present.
+  const ccaProvider = {
+    adapter: "google",
+    googleMode: "cloud-code-assist",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    apiKey: "key",
+    project: "proj-123",
+  } as const;
+  const optedIn = { ...ccaProvider, showThinkingSummary: true } as const;
+
+  function thoughtParsed(modelId: string, effort?: string, hideThinkingSummary?: boolean): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: { ...(effort ? { reasoning: effort } : {}), ...(hideThinkingSummary ? { hideThinkingSummary } : {}) },
+      context: { messages: [{ role: "user", content: "hi" }], tools: [] },
+    } as unknown as OcxParsedRequest;
+  }
+
+  async function thinkingConfig(
+    providerConfig: Record<string, unknown>,
+    modelId: string,
+    effort?: string,
+    hideThinkingSummary?: boolean,
+  ): Promise<Record<string, unknown> | undefined> {
+    const { body } = await createGoogleAdapter(providerConfig as never)
+      .buildRequest(thoughtParsed(modelId, effort, hideThinkingSummary));
+    const envelope = JSON.parse(body) as {
+      request: { generationConfig?: { thinkingConfig?: Record<string, unknown> } };
+    };
+    return envelope.request.generationConfig?.thinkingConfig;
+  }
+
+  test("asks CCA for thought text on the Gemini wire families", async () => {
+    // Suffix tier ids deliberately state no level — the suffix IS the effort — so the opt-in
+    // has to stand on its own for those.
+    expect(await thinkingConfig(optedIn, "gemini-3.8-flash", "high")).toEqual({ includeThoughts: true });
+    expect(await thinkingConfig(optedIn, "gemini-3.8-flash-medium")).toEqual({ includeThoughts: true });
+    expect(await thinkingConfig(optedIn, "gemini-3.7-flash", "high"))
+      .toEqual({ thinkingLevel: "high", includeThoughts: true });
+    expect(await thinkingConfig(optedIn, "gemini-3.1-pro", "high"))
+      .toEqual({ thinkingLevel: "high", includeThoughts: true });
+  });
+
+  test("never sends the flag to models that reject or ignore it", async () => {
+    // gpt-oss answers 400 INVALID_ARGUMENT with the key present, so it would break the turn.
+    expect(await thinkingConfig(optedIn, "gpt-oss-120b-medium")).toBeUndefined();
+    // Claude-on-CCA accepts the key but returns no thought parts, so it stays off that wire.
+    expect(await thinkingConfig(optedIn, "claude-sonnet-4-6", "high")).toEqual({ thinkingLevel: "high" });
+  });
+
+  test("a provider without the opt-in keeps the CCA wire unchanged", async () => {
+    expect(await thinkingConfig(ccaProvider, "gemini-3.8-flash", "high")).toBeUndefined();
+    expect(await thinkingConfig(ccaProvider, "gemini-3.7-flash", "high")).toEqual({ thinkingLevel: "high" });
+  });
+
+  test("an explicit client opt-out stops the thought text at the source", async () => {
+    // Same per-request gate the response path uses: hideThinkingSummary is set for an explicit
+    // reasoning.summary "none", and paying upstream for text the client refused is waste.
+    expect(await thinkingConfig(optedIn, "gemini-3.8-flash", "high", true)).toBeUndefined();
+    expect(await thinkingConfig(optedIn, "gemini-3.7-flash", "high", true)).toEqual({ thinkingLevel: "high" });
+  });
+});
+
+
+describe("CCA thought summary provenance and replay", () => {
+  const cca = { adapter: "google", googleMode: "cloud-code-assist", baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    apiKey: "fixture-key", project: "fixture-project", showThinkingSummary: true } as const;
+  const signature = "CiQAx-summary-tool-signature-0123456789abcdef";
+  for (const stream of [false, true]) for (const hideThinkingSummary of [false, true]) test(`Gemini signature stream=${stream} hidden=${hideThinkingSummary}`, async () => {
+    const adapter = withTestTranslatorBudget(createGoogleAdapter(cca));
+    const parsed = parsedWith([{ role: "user", content: "lookup" }], [
+      { name: "lookup", description: "look up", parameters: { type: "object", properties: {} } },
+    ]);
+    parsed.modelId = "gemini-3.8-flash";
+    await adapter.buildRequest(parsed);
+    const payload = { response: { candidates: [{ content: { parts: [
+      { thought: true, text: "Provider summary", thoughtSignature: signature },
+      { functionCall: { name: "lookup", args: {} } },
+    ] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 2 } } };
+    const events: AdapterEvent[] = [];
+    if (stream) {
+      for await (const event of adapter.parseStream(new Response(`data: ${JSON.stringify(payload)}\n\n`,
+        { headers: { "content-type": "text/event-stream" } }))) events.push(event);
+    } else events.push(...await adapter.parseResponse!(Response.json(payload)));
+    expect(events[0]).toEqual({ type: "thinking_delta", thinking: "Provider summary" });
+    expect(events.some(event => event.type === "thinking_signature")).toBe(false);
+    const call = events.find(event => event.type === "tool_call_start");
+    expect(call?.type === "tool_call_start" && call.providerMetadata?.google?.thoughtSignature).toBe(signature);
+    expect(events.at(-1)?.type).toBe("done");
+    let output: Record<string, unknown>;
+    if (stream) {
+      async function* replay() { yield* events; }
+      const text = await new Response(bridgeToResponsesSSE(replay(), parsed.modelId,
+        undefined, undefined, undefined, undefined, undefined, { hideThinkingSummary })).text();
+      const payloads = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      output = payloads.find(frame => frame.type === "response.completed").response;
+      expect(text.includes("response.reasoning_summary_text.delta")).toBe(!hideThinkingSummary);
+    } else output = buildResponseJSON(events, parsed.modelId, { hideThinkingSummary });
+    expect(JSON.stringify(output).includes("Provider summary")).toBe(!hideThinkingSummary);
+    if (!Array.isArray(output.output)) throw new Error("missing Responses output");
+    const continuation = parseRequest({ model: parsed.modelId, input: [
+      ...output.output, { type: "function_call_output", call_id: call && "id" in call ? call.id : "", output: "result" },
+    ] });
+    const next = JSON.parse((await withTestTranslatorBudget(createGoogleAdapter(cca)).buildRequest(continuation)).body);
+    const parts = next.request.contents.flatMap((turn: { parts: unknown[] }) => turn.parts);
+    expect(parts).toContainEqual(expect.objectContaining({ functionCall: expect.objectContaining({ name: "lookup" }), thoughtSignature: signature }));
+    expect(parts).toContainEqual(expect.objectContaining({ functionResponse: expect.objectContaining({ name: "lookup", response: { result: "result" } }) }));
+    expect(JSON.stringify(next)).not.toContain("no tool result");
+  });
+
+  test("reused adapter resets Gemini summary provenance for a CCA non-Gemini model", async () => {
+    const adapter = withTestTranslatorBudget(createGoogleAdapter(cca));
+    for (const modelId of ["gemini-3.8-flash", "gpt-oss-120b-medium"]) {
+      const request = parsedWith([{ role: "user", content: "hi" }]);
+      request.modelId = modelId;
+      await adapter.buildRequest(request);
+      const events = await adapter.parseResponse!(Response.json({ response: { candidates: [{
+        content: { parts: [{ thought: true, text: "thinking" }] }, finishReason: "STOP",
+      }] } }));
+      expect(events[0]).toEqual(modelId.startsWith("gemini-")
+        ? { type: "thinking_delta", thinking: "thinking" }
+        : { type: "reasoning_raw_delta", text: "thinking" });
     }
   });
 });

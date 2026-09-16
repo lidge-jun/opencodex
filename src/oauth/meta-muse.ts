@@ -25,6 +25,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { sanitizeApiKeyValue } from "../providers/api-keys";
+import { MuseDeviceLoginError, loginMetaMuseDevice } from "./meta-muse-device";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const MUSE_POINTER_PATH = join(homedir(), ".config", "muse", "auth.json");
@@ -43,6 +44,7 @@ const KEYCHAIN_TIMEOUT_MS = 5_000;
  */
 const CONSENT_WARNING = [
   "Meta scopes the Muse Code credential to the Muse Code CLI.",
+  "A device login authenticates as Meta own Muse Code client, which is a stronger claim than reusing a key your CLI already minted, and that grant has not been exercised against Meta from OpenCodex.",
   "Using it here is UNSUPPORTED: Meta does not authorize subscription coverage outside its own CLI,",
   "how these calls settle is not observable from the API, and you should treat every call as billable.",
   "The key you import or paste is copied into OpenCodex's auth store (~/.opencodex/auth.json, 0600).",
@@ -65,6 +67,16 @@ export interface MuseImportDeps {
   readPointer?: () => Promise<string | null>;
   readKeychain?: (signal?: AbortSignal) => Promise<string | null>;
   fetchImpl?: typeof fetch;
+  /** Injected so login-order tests exercise the order without running a grant. */
+  loginDevice?: (ctrl: OAuthController) => Promise<OAuthCredentials>;
+  /** Forwarded into the device grant so no test can reach the network or a real timer. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  now?: () => number;
+}
+
+export interface MuseLoginOptions {
+  /** `"off"` skips the Keychain import; add-account and reauth pass it. */
+  importLocal?: "fallback" | "off";
 }
 
 async function defaultReadPointer(): Promise<string | null> {
@@ -110,9 +122,6 @@ async function defaultReadKeychain(signal?: AbortSignal): Promise<string | null>
     if (proc && proc.exitCode === null) { try { proc.kill(); } catch { /* already gone */ } }
   }
 }
-
-const INSTALL_HINT =
-  "Install it from https://dev.meta.ai/install.sh, run `muse login`, then retry.";
 
 /**
  * Where a user without the CLI gets a key by hand.
@@ -165,40 +174,62 @@ function normalizedEmail(value: unknown): string | undefined {
 export async function loginMetaMuse(
   ctrl: OAuthController = {},
   deps: MuseImportDeps = {},
+  options: MuseLoginOptions = {},
 ): Promise<OAuthCredentials> {
   // Before ANY read: the CLI has no other warning surface.
   ctrl.onProgress?.(CONSENT_WARNING);
 
   const platform = deps.platform ?? process.platform;
-  // Off darwin there is no store this importer can read: Meta ships no native Windows
-  // CLI, and the Linux credential shape has never been measured. That is a limitation
-  // of the IMPORT, not of the platform ??the same key is visible in Meta's console ??
-  // so these hosts get a paste field instead of a dead end. The pasted key then goes
-  // through the identical grammar check and live validation as an imported one.
-  if (platform !== "darwin") {
-    // The two platforms are unavailable for DIFFERENT reasons, and saying so matters:
-    // Meta ships no Windows build at all, while the Linux CLI exists and only its
-    // credential storage is unmeasured. Collapsing them into "no CLI here" would tell
-    // a Linux user something false about their own machine.
-    const reason = platform === "win32"
-      ? "Meta ships no native Windows Muse Code CLI, so there is no credential to import."
-      : "The Muse Code CLI runs here, but where it stores its credential has not been measured, "
-        + "so importing one is refused rather than guessed.";
-    const pasted = await manualKeyCredential(ctrl, reason);
-    if (pasted === null) {
-      throw new Error(
-        `${reason} This client cannot prompt for a key, so run \`ocx login meta-muse\` from the CLI `
-          + `or the dashboard and paste yours from ${MANUAL_KEY_URL}, `
-          + "or use the meta-model provider with your own key (META_MODEL_API_KEY).",
-      );
-    }
-    return await validatedMetaMuseCredential(pasted, ctrl, deps, undefined, "manual");
+
+  // Import first on darwin, and only for a plain login. A user who already ran `muse
+  // login` keeps the zero-interaction path, and a device grant ends in a mint against a
+  // rate-limited endpoint, so starting one while a working credential sits on disk spends
+  // a request to arrive at the same key. `forceLogin` maps to "off" upstream because
+  // reimporting is how an add-account silently re-adds the account the user already has.
+  if (platform === "darwin" && options.importLocal !== "off") {
+    const imported = await importFromKeychain(ctrl, deps);
+    if (imported) return imported;
   }
 
-  const pointerRaw = await (deps.readPointer ?? defaultReadPointer)();
-  if (pointerRaw === null) {
-    throw new Error(`Muse Code CLI credential not found at ${MUSE_POINTER_PATH}. ${INSTALL_HINT}`);
+  // fetchImpl/sleep/now are FORWARDED. Without this the device module would carry its own
+  // deps object and any test reaching this path would call auth.meta.com for real.
+  const device = deps.loginDevice
+    ?? (c => loginMetaMuseDevice(c, {
+      ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+      ...(deps.sleep ? { sleep: deps.sleep } : {}),
+      ...(deps.now ? { now: deps.now } : {}),
+    }));
+  try {
+    ctrl.onProgress?.("Starting the Meta device login...");
+    return await device(ctrl);
+  } catch (error) {
+    // A cancelled login must never be answered with a paste prompt.
+    if (isCancellation(error, ctrl)) throw error;
+    const reason = deviceFailureReason(error);
+    const pasted = await manualKeyCredential(ctrl, reason);
+    // No paste surface, or an empty paste. The refusal KEEPS the guidance the previous
+    // implementation gave; a device error must not replace it.
+    if (pasted === null) throw noPasteSurfaceError(platform, reason);
+    return await validatedMetaMuseCredential(pasted, ctrl, deps, undefined, "manual");
   }
+}
+
+/**
+ * Adopt the credential the Muse Code CLI already holds, or report that there is none.
+ *
+ * Returns null for the two conditions that genuinely mean "nothing here to import", so the
+ * caller can offer a device grant instead of a dead end. Everything else still throws: a
+ * corrupt file, an unmeasured storage backend, a Keychain read that times out, and a
+ * Keychain entry that is unreadable or carries no usable key are all cases where a
+ * credential probably EXISTS, and silently starting a browser grant would create a second
+ * login to work around a permissions dialog.
+ */
+async function importFromKeychain(
+  ctrl: OAuthController,
+  deps: MuseImportDeps,
+): Promise<OAuthCredentials | null> {
+  const pointerRaw = await (deps.readPointer ?? defaultReadPointer)();
+  if (pointerRaw === null) return null;
 
   let pointer: MusePointer;
   try {
@@ -208,9 +239,7 @@ export async function loginMetaMuse(
   }
 
   const meta = pointer.providers?.meta;
-  if (!meta || meta.mechanism !== "oauth") {
-    throw new Error("The Muse Code credential file has no signed-in Meta account. Run `muse login`, then retry.");
-  }
+  if (!meta || meta.mechanism !== "oauth") return null;
   // A different storage backend is a shape we have not measured; refuse rather than guess.
   if (meta.storage !== "keychain") {
     throw new Error(
@@ -218,10 +247,12 @@ export async function loginMetaMuse(
     );
   }
 
+  // ctrl.signal is handed to the reader, not dropped: the caller can cancel a Keychain
+  // prompt nobody is going to answer.
   const secretRaw = await (deps.readKeychain ?? defaultReadKeychain)(ctrl.signal);
   if (secretRaw === null) {
     throw new Error(
-      "Could not read the Muse Code credential from the macOS Keychain within 5s. Approve the Keychain prompt, or run `muse login` again.",
+      "Could not read the Muse Code credential from the macOS Keychain within 5s. Approve the Keychain prompt, or run `muse login` again, or add the account again to sign in with a browser code instead.",
     );
   }
 
@@ -239,6 +270,57 @@ export async function loginMetaMuse(
     deps,
     normalizedEmail(meta.user_email),
     "local-cli",
+  );
+}
+
+/** A cancelled login is not a failed login, and must not be answered with a prompt. */
+function isCancellation(error: unknown, ctrl: OAuthController): boolean {
+  if (ctrl.signal?.aborted) return true;
+  if (error instanceof MuseDeviceLoginError) return error.kind === "cancelled";
+  return error instanceof Error && error.name === "AbortError";
+}
+
+/** One line above the paste field saying why it appeared. Never includes a credential. */
+function deviceFailureReason(error: unknown): string {
+  if (error instanceof MuseDeviceLoginError) {
+    switch (error.kind) {
+      case "subscription-inactive":
+        return "This Meta account has no active Muse Code subscription.";
+      case "entitlement-required":
+        return error.message;
+      case "mint-rate-limited":
+        return "Meta rate-limited the Muse Code key request.";
+      case "device-denied":
+        return "The browser approval was denied.";
+      case "device-expired":
+        return "The device code expired before it was approved.";
+      default:
+        return "The Meta device login did not complete.";
+    }
+  }
+  return "The Meta device login did not complete.";
+}
+
+/**
+ * The refusal for a host that can neither finish a grant nor accept a paste.
+ *
+ * Composed, not substituted. A host in this position needs to be told where the key lives,
+ * which is what the previous implementation said and what three existing tests assert. The
+ * non-darwin clause is retained for the same reason: Meta ships no Windows CLI and the
+ * Linux credential shape has never been measured, and collapsing those into one message
+ * would tell a Linux user something false about their own machine.
+ */
+function noPasteSurfaceError(platform: string, reason: string): Error {
+  const platformClause = platform === "darwin"
+    ? ""
+    : platform === "win32"
+      ? " Meta ships no native Windows Muse Code CLI, so there is no credential to import."
+      : " The Muse Code CLI runs here, but where it stores its credential has not been measured, "
+        + "so importing one is refused rather than guessed.";
+  return new Error(
+    `${reason}${platformClause} This client cannot prompt for a key, so run \`ocx login meta-muse\` from the CLI `
+      + `or the dashboard and paste yours from ${MANUAL_KEY_URL}, `
+      + "or use the meta-model provider with your own key (META_MODEL_API_KEY).",
   );
 }
 
@@ -332,6 +414,15 @@ export async function refreshMetaMuseToken(
     access: apiKey,
     refresh: apiKey,
     expires: Number.MAX_SAFE_INTEGER,
-    source: credential?.source === "manual" ? "manual" : "local-cli",
+    // Preserve the provenance the slot already recorded. A device login is "oauth";
+    // relabelling it "local-cli" would misreport where the credential came from, the same
+    // failure this function comment already warns about for "manual".
+    source: credential?.source === "manual" || credential?.source === "oauth"
+      ? credential.source
+      : "local-cli",
+    // The account token is not re-derivable: Meta rejects refresh_token grants on this
+    // client (001 A). Dropping it here would silently cost the on-demand quota probe with
+    // no way back except a full re-login.
+    ...(credential?.muse ? { muse: credential.muse } : {}),
   };
 }

@@ -2,7 +2,7 @@
  * Best-effort chat/session correlation for Logs / usage.jsonl (#330).
  * Opaque ids only — never persist raw emails or Claude Desktop system-hash fallbacks.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 /** Reject absurdly long client strings before hashing (DoS / JSONL bloat). */
 export const LOG_CONVERSATION_ID_INPUT_MAX = 4096;
@@ -64,13 +64,16 @@ export function sessionIdHeaderFromRequest(headers: Headers): string | null {
 /**
  * Fixed-size logical turn lane (#820).
  *
- * A lane must be as SPECIFIC as the identity available, which is the opposite of what
- * `codexPoolAffinityKey` wants. Affinity deliberately prefers the parent thread so a whole
- * subagent fan-out pins to one account; a lane keyed that way would put every parallel
- * subagent of one parent into a single lane and reject all but the first with 503 — the
- * fan-out is the normal case, not an abuse.
+ * A lane must be as SPECIFIC as the identity available. `codexPoolAffinityKey` used to be the
+ * opposite: it preferred the parent thread, so a whole subagent fan-out shared one entry, and a
+ * lane keyed that way would have put every parallel subagent of one parent into a single lane
+ * and rejected all but the first with 503 — the fan-out is the normal case, not an abuse.
+ * Since #4546 affinity keys every thread as ITSELF and reads the parent only as a first-placement
+ * hint, so the two now agree on the unit. They still derive it differently: a lane is a digest an
+ * operator can match against what the client sent, while an affinity key is an opaque HMAC
+ * precisely so no caller-supplied identifier ends up in Pool state.
  *
- * So the parent is a QUALIFIER, never the lane on its own when a child thread exists: the
+ * The parent stays a QUALIFIER here, never the lane on its own when a child thread exists: the
  * pair separates siblings while still keeping one conversation's overlapping turns together.
  */
 export function sessionLaneIdFromRequest(headers: Headers): string | undefined {
@@ -216,4 +219,43 @@ export function summarizeConversationLogs(entries: readonly TotalsSource[]): Con
     unpricedRequests,
     unmeteredRequests,
   };
+}
+
+/**
+ * Request-scoped Go affinity for requests that carry no conversation identity.
+ *
+ * A sessionless request must still reach OpenCode Go with `x-opencode-session`, because the upstream
+ * began rejecting requests without it on 2026-09-06. It must not reuse one global value either, which
+ * would smear unrelated probes into a single conversation. So the lane is allocated once per admitted
+ * `Request` object and retained for that object's lifetime.
+ *
+ * The identity has to survive every place the proxy rebuilds a `Request`: translation to the internal
+ * Responses shape, compaction, and — the boundary that matters most — the policy fallback retry, where
+ * a second candidate would otherwise be handed a freshly minted lane after a retryable failure.
+ * `linkRequestSessionLane` carries the allocation across those boundaries.
+ */
+const requestAllocatedSessionLanes = new WeakMap<Request, string>();
+
+/**
+ * Resolve the session lane for a request: real conversation identity when the client supplied it,
+ * otherwise a per-request value allocated once and reused for retries on the same object.
+ */
+export function getOrAllocateRequestSessionLane(req: Request): string {
+  const explicit = sessionLaneIdFromRequest(req.headers)
+    ?? normalizeLogConversationId(req.headers.get("x-opencode-session"));
+  if (explicit) return explicit;
+
+  const existing = requestAllocatedSessionLanes.get(req);
+  if (existing) return existing;
+  const allocated = randomUUID();
+  requestAllocatedSessionLanes.set(req, allocated);
+  return allocated;
+}
+
+/**
+ * Carry a source request's lane onto a request the proxy built from it, so a rebuilt request keeps
+ * the conversation it belongs to instead of looking sessionless again.
+ */
+export function linkRequestSessionLane(sourceReq: Request, targetReq: Request): void {
+  requestAllocatedSessionLanes.set(targetReq, getOrAllocateRequestSessionLane(sourceReq));
 }

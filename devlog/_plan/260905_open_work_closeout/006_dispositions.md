@@ -96,3 +96,21 @@ LAND_AS_IS 7 · LAND_WITH_FIX 13 · REIMPLEMENT 5 · IMPLEMENT 2 · SUPERSEDED 6
 - Sandbox-red verifiers (EADDRINUSE on `Bun.serve({port:0})`, missing `gui/node_modules`) are
   hosted-CI-only and must not be read as regressions (020, 040).
 
+
+## Verifier rule tightened (2026-09-05, maintainer instruction "로컬스위트 돌리지 말라고")
+
+`bun run test:changed` is REMOVED from the local verifier set for this unit. On layers touching
+`src/server/responses/core.ts`, `src/providers/quota.ts`, or `src/config.ts` its import-graph
+selection reaches ~770 of ~850 files — a repository-wide run in all but name. Three lanes (wp2 B3,
+B4; wp4 layer 3) ran it before the rule was tightened; the wp4 runs were killed mid-flight. Local
+verifiers from here: `bun run typecheck` + explicitly named `bun test tests/<file>.test.ts` (the
+layer's own tests + `tests/test-layout.test.ts` + `tests/test-layout-tooling.test.ts`). Everything
+else is hosted exact-head CI. 020/040/050 verifier tables are read with this override.
+
+## Merge policy change (2026-09-05, maintainer instruction "걍 머지하고 최종 ci를 보자 전부")
+
+From wp4 onward the campaign no longer waits for exact-head CI per PR. Each remaining PR is
+admin-squash-merged in stack order once typecheck + focused tests are green locally, and the
+final `dev` tip's hosted CI run is the acceptance evidence for the whole batch. The 060 ledger
+records "CI: final-tip run <id>" for these rows instead of a per-PR run. This is a maintainer
+decision on maintainer-authored carries; it does not change the local-suite prohibition.

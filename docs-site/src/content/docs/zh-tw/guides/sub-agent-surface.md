@@ -215,7 +215,7 @@ opencodex 會將磁碟上的模型目錄與目前使用者擁有的每個 Codex 
 
 | 模型 | 線路上的 `max` | 選擇 `ultra` 後的線路值 |
 | --- | --- | --- |
-| gpt-5.5、gpt-5.4、gpt-5.4-mini | xhigh | xhigh（先轉為 max，再經 `nativeEffortClamp`） |
+| gpt-5.5 | xhigh | xhigh（先轉為 max，再經 `nativeEffortClamp`） |
 | gpt-5.6-sol、gpt-5.6-terra | max | max |
 | gpt-5.6-luna | max | 其精確上游階梯不提供該選項 |
 | 路由模型 | 由適配器對映或限制 | 先轉為 max，再由適配器對映或限制 |

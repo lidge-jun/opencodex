@@ -34,7 +34,6 @@ describe("Volcengine Ark providers", () => {
         "doubao-seed-2-1-pro-260628",
         "doubao-seed-2-1-turbo-260628",
         "doubao-seed-evolving",
-        "deepseek-v4-pro-260425",
         "deepseek-v4-flash-260425",
         "deepseek-v3-2-251201",
         "glm-5-2-260617",
@@ -57,7 +56,6 @@ describe("Volcengine Ark providers", () => {
       models: [
         "ark-code-latest",
         "doubao-seed-2.0-code",
-        "deepseek-v4-pro",
         "deepseek-v4-flash",
         "glm-5.3",
         "glm-5.3-flash",
@@ -73,14 +71,12 @@ describe("Volcengine Ark providers", () => {
       // #1057: per-model ladders. Since the V4 Pro GA (DeepSeek-V4-Pro-0813) the
       // vendor table is identical for both models; `xhigh` stays an unadvertised alias.
       modelReasoningEfforts: {
-        "deepseek-v4-pro": ["low", "high", "max"],
         "deepseek-v4-flash": ["low", "high", "max"],
       },
       modelReasoningEffortMap: {
-        "deepseek-v4-pro": { low: "low", medium: "high", high: "high", xhigh: "high", max: "max" },
         "deepseek-v4-flash": { low: "low", medium: "high", high: "high", xhigh: "high", max: "max" },
       },
-      preserveReasoningContentModels: ["deepseek-v4-pro", "deepseek-v4-flash"],
+      preserveReasoningContentModels: ["deepseek-v4-flash"],
     });
     expect(PROVIDER_REGISTRY.find(provider => provider.id === "volcengine-agent-plan")).toMatchObject({
       label: "Volcengine Ark Agent Plan",
@@ -89,9 +85,8 @@ describe("Volcengine Ark providers", () => {
       adapter: "openai-responses",
       authKind: "key",
       preserveCustomDestination: true,
-      defaultModel: "deepseek-v4-pro",
+      defaultModel: "deepseek-v4-flash",
       models: [
-        "deepseek-v4-pro",
         "deepseek-v4-flash",
         "glm-5.3",
         "glm-5.3-flash",
@@ -118,13 +113,13 @@ describe("Volcengine Ark providers", () => {
       baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
       defaultModel: "ark-code-latest",
       liveModels: false,
-      preserveReasoningContentModels: ["deepseek-v4-pro", "deepseek-v4-flash"],
+      preserveReasoningContentModels: ["deepseek-v4-flash"],
     });
     expect(KEY_LOGIN_PROVIDERS["volcengine-agent-plan"]).toMatchObject({
       baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
       responsesPath: "/responses",
       adapter: "openai-responses",
-      defaultModel: "deepseek-v4-pro",
+      defaultModel: "deepseek-v4-flash",
       liveModels: false,
     });
     for (const id of ["volcengine", "volcengine-coding-plan", "volcengine-agent-plan"]) {
@@ -147,7 +142,7 @@ describe("Volcengine Ark providers", () => {
         },
       },
     };
-    const route = routeModel(config, "volcengine-agent-plan/deepseek-v4-pro");
+    const route = routeModel(config, "volcengine-agent-plan/deepseek-v4-flash");
     expect(route.provider.responsesPath).toBe("/responses");
 
     const request = createResponsesPassthroughAdapter(route.provider).buildRequest({
@@ -215,7 +210,7 @@ describe("Volcengine Ark providers", () => {
     expect(body).not.toHaveProperty("reasoning_effort");
   });
 
-  test.each(["deepseek-v4-pro", "deepseek-v4-flash"])(
+  test.each(["deepseek-v4-flash"])(
     "preserves %s tool-call reasoning and maps Codex efforts on Coding Plan",
     modelId => {
       const config: OcxConfig = {
@@ -316,11 +311,11 @@ describe("Volcengine Ark providers", () => {
       },
     });
     const request = createResponsesPassthroughAdapter(postBody.provider).buildRequest({
-      modelId: "deepseek-v4-pro",
+      modelId: "deepseek-v4-flash",
       context: { messages: [] },
       stream: true,
       options: {},
-      _rawBody: { model: "deepseek-v4-pro", input: "ping", stream: true },
+      _rawBody: { model: "deepseek-v4-flash", input: "ping", stream: true },
     }, { headers: new Headers() });
     expect(request.url).toBe("https://ark.cn-beijing.volces.com/api/plan/v3/responses");
   });

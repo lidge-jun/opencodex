@@ -1134,7 +1134,7 @@ async function main(argv: string[]): Promise<void> {
       console.error("✗ polish --base-url must be https: or a loopback http: host (the API key must not travel in plaintext)");
       process.exit(1);
     }
-    const model = args.get("model") ?? process.env.OPENAI_MODEL ?? "gpt-5.4";
+    const model = args.get("model") ?? process.env.OPENAI_MODEL ?? "gpt-5.6-luna";
 
     if (!(await Bun.file(inputPath).exists())) {
       console.error(`✗ polish input not found: ${inputPath}`);

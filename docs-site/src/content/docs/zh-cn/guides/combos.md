@@ -139,6 +139,8 @@ ocx combo set balanced \
 
 `reset-window` 会将每个请求路由到合格目标中，其缓存的提供商额度快照显示下一个窗口最早重置者（五小时、每周、每月或自定义窗口）。这样会优先消耗最先刷新额度的提供商。没有最新额度数据的目标以及并列目标会保持配置顺序。`weight` 和 `stickyLimit` 不影响此策略。
 
+此排序和发送前的提供商排除，需要适用于当前单个 API 密钥全部模型推理的最新限额信息。OAuth／当前账户摘要、转发调用方凭据的路由、多密钥以及凭据或目标地址已改变的快照，在这项提前判断中仅供显示。通过 `Authorization`、`x-api-key` 或 `x-goog-api-key` 请求头覆盖凭据时也适用相同规则；仅用于搜索或 MCP 的窗口不参与判断。如果所有符合条件的目标都没有适用的重置时间，则按配置顺序选择。实际账户选择和重试仍执行正常限制。
+
 ## 目标失败时会发生什么
 
 combo 失败分为 **跳转** 失败和 **终止** 失败。
@@ -148,7 +150,8 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 | HTTP 401、403、404、408、429，或任何 5xx | 使该目标进入冷却，并跳转到下一个合格目标。 |
 | HTTP 410，并明确表明模型已到生命周期终点、retired、deprecated、sunset、decommissioned 或不再可用 | 仅冷却该目标并继续跳转。无关的 410 仍然是终止错误。 |
 | 被分类为认证、订阅、配额、速率限制、过载或上游服务器错误 | 即使仅凭状态码不足以判断，也会使该目标进入冷却并跳转。 |
-| 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、上下文溢出，或无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
+| 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、上下文溢出，或其他无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
+| 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值，或返回模型特定图像输入拒绝（`param: input`） | 在输出开始前跳转到下一个符合条件的目标，且不记录冷却时间；参见下方可选参数兼容性。 |
 | 任何其他未分类错误 | 停止并返回错误。 |
 
 未设置 `cooldownMs` 时，发生跳转的目标使用上游回退值：对于上游代码为 `1302` 或 `1305` 的请求速率限制 429，等待 5 秒；其他情况等待 60 秒。设置后，只要不存在可用的上游 `Retry-After` 或 Codex 重置信号，就会应用 `cooldownMs`，包括这些请求速率限制 429。接受数字形式的 `Retry-After` 秒数和 HTTP-date 值，每次冷却最多封顶 10 分钟。优先级从强到弱依次为：显式 `Retry-After` → Codex 重置标头（`x-codex-primary-reset-at`、`x-codex-secondary-reset-at` 或 `x-codex-tertiary-reset-at`）→ combo 的 `cooldownMs`（已设置时）→ 上游速率限制代码 `1302`/`1305` 的 5 秒请求速率限制回退值 → 60 秒默认值。有效的即时指令 `Retry-After: 0` 会保留为上游即时指令，不会被配置的冷却替换。
@@ -163,15 +166,16 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 
 ## 默认推理力度
 
-只有在以下所有条件都满足时，`defaultEffort` 才会提供 `reasoning.effort`：
+当 combo 配置了非 null 默认值且目标支持列表已知且非空时，`defaultEffort` 会填充省略的 `reasoning.effort`。目标支持配置值时保留该值，否则选择不高于配置值的最高支持档位；若不存在更低档位，则使用最低支持档位。未知或空列表不会注入默认值。
 
-1. combo 有一个非空默认值；
-2. 调用方没有设置 effort；并且
-3. 选中的目标目录明确声明了该精确的 effort。
+默认值注入保留已有 effort 和其他 reasoning 字段。下述能力归一化可单独移除不支持的 effort/thinking 控制。默认值支持 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`；省略字段或设为 `null` 可关闭注入。
 
-如果请求没有 `reasoning` 对象，opencodex 会创建一个。如果 `reasoning` 存在但没有 `effort` 属性，它会保留其他字段并添加默认值。调用方提供的 effort 永远不会被覆盖。
 
-当目标能力未知，或者不包含配置的 effort 时，opencodex 会省略默认值，并保持目标自身行为不变。支持的值是 `low`、`medium`、`high`、`xhigh`、`max` 和 `ultra`；省略该字段或将其设为 `null`，就会把 effort 完全交给调用方和目标。
+## 混合 reasoning 能力
+
+`reasoningEffortMode` 默认为 `"strict"`，发布所有目标 effort 列表的交集，包括显式空列表。`"adaptive"` 在计算交集时排除空列表，让混合 combo 保留选择器。未知列表在两种模式下都不限制目录交集。
+
+发送时，显式空列表在两种模式下都会移除 effort 和 thinking 控制；未知列表仅在 adaptive 下移除这些控制。`reasoning.summary` 和其他非 effort 字段保持不变，已知非空目标继续按现有规则解析 effort。strict 的未知目标及普通 native Chat 的未知声明保留调用方控制。默认值填充不会覆盖现有 effort，但能力归一化可移除不支持的控制。
 
 ## 图片 / 多模态能力
 
@@ -209,9 +213,7 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 
 打开本地 dashboard 并选择 **Models → Combos**。该工作区可以创建、编辑、重命名和删除 combo，其目标选择器会排除已禁用的模型和嵌套 combo。
 
-每个目标还会显示实时额度徽章：**可用**、**额度已用尽**或**额度未知**。只有当所有已启用目标都有最新、
-完整的额度耗尽证据时，保存和创建操作才会被禁用。缺失、过期、格式错误或聚合不完整的证据会保持为未知，
-绝不会锁定控件。额度恢复后，操作会自动重新启用。dashboard 编辑器目前还不能设置 `cooldownMs` 或 `waitForCooldownMs`；在后续 UI 完成前，请使用配置文件或管理 API。
+每个目标还会显示实时额度徽章：**可用**、**额度已用尽**或**额度未知**。只有当每个可用目标均有当前有效的服务器确认，表明其所配置凭据的推理限额已耗尽时，编辑器才会因额度而禁止保存和创建。仅供显示的账户、模型、搜索和 MCP 额度，以及缺失或已过期的路由依据，都不会触发此限制。此限制会在适用的重置时间或数据有效期结束时解除，并在页面变为活动或可见状态时重新检查；刷新会同时重新加载 Combo 数据和额度。dashboard 编辑器目前还不能设置 `cooldownMs` 或 `waitForCooldownMs`；在后续 UI 完成前，请使用配置文件或管理 API。
 
 ### CLI
 
@@ -266,6 +268,7 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | `cooldownMs` | 否 | 未设置 → 上游回退值（请求速率限制代码为 `1302`/`1305` 的 429 为 5 秒，否则为 60 秒） | 1 到 600000 的整数。设置后，只要没有可用的上游 `Retry-After` 或 Codex 重置信号，就会作为每个目标的冷却时间应用，包括请求速率限制 429；未设置时使用上游回退值。 |
 | `waitForCooldownMs` | 否 | `0` | 0 到 600000 的整数。在返回 `combo_unavailable` 前等待最早恢复资格的冷却中目标的最长时间；请求中止会取消等待。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；仅当调用方省略 effort 且目标声明支持时才会应用。 |
+| `reasoningEffortMode` | 否 | `"strict"` | `strict` 或 `adaptive`；选择混合能力交集和目标级控制归一化。 |
 | `imageInput` | 否 | `"auto"` | `"auto"` 或 `"disabled"`。`"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
 | `alias` | 否 | 无 | 可选的、已修剪的公开模型 id；使用上面的别名规则。空值会以“无别名”形式存储。 |
 | `nativeAlias` | 否 | `false` | 显式允许当前受支持的裸原生 alias 接管路由和 catalog 优先级；绝不会根据 alias 自动推断。 |
@@ -288,3 +291,9 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 ### 为什么故障切换在第一次错误后就停止了？
 
 该错误是终止性的，而不是针对目标的。修复无效输入、缩小过大的上下文、处理策略拒绝，或者纠正被拒绝的请求来源。对于这些情况，combo 不会继续跳转。
+
+## 可选参数兼容性
+
+一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值，或返回模型特定图像输入拒绝（`param: input`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
+
+[Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

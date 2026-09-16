@@ -24,7 +24,8 @@ src/
 ├── vision/             # vizyon sidecar'ı (açıklama + plan)
 ├── config.ts           # ~/.opencodex/config.json, varsayılanlar, PID, ortam çözümleme
 ├── router.ts           # model kimliği → sağlayıcı + adaptör
-├── bridge.ts           # AdapterEvent akışı → Responses SSE / JSON
+├── bridge.ts           # bridge/ üzerinde cephe
+├── bridge/             # AdapterEvent akışı → Responses SSE (sse.ts) / JSON (response-json.ts)
 ├── reasoning-effort.ts # akıl yürütme çabası çevirisi, sabitleme ve katalog seviyeleri
 ├── responses/
 │   ├── parser.ts       # Responses isteği → OcxParsedRequest
@@ -35,19 +36,22 @@ src/
 └── index.ts            # genel giriş noktası
 ```
 
-Eskiden büyük olan üç giriş dosyası artık cepheler (facades) olarak uyumluluğu
-korur: `codex/catalog.ts` odaklanmış yedi `codex/catalog/*.ts` modülünü dışa
-aktarır, `server/management-api.ts` dokuz `server/management/*.ts` modülüne
-dağıtır ve `server/responses.ts` beş `server/responses/*.ts` modülünü dışa
-aktarır.
+Eskiden büyük olan giriş dosyaları artık cepheler (facades) olarak uyumluluğu
+korur: `codex/catalog.ts` `codex/catalog/*.ts` modüllerini dışa aktarır,
+`server/management-api.ts` `server/management/*.ts` modüllerine dağıtır,
+`server/responses.ts` `server/responses/*.ts` modüllerini dışa aktarır ve `bridge.ts`
+`bridge/*.ts` modüllerini yeniden dışa aktarır. Cephe, uygulamanın kendisi değil
+kararlı içe aktarma yoludur: aşağıdaki her adım kodun sahibi olan modülü
+adlandırır ve Responses yüzeyinin tam sahiplik envanteri
+`structure/transports/responses.md` dosyasındadır.
 
 ## İstek akışı
 
-`server/index.ts` HTTP sınırına sahiptir ve Responses veri düzlemini
+`server/index/serve-options.ts` HTTP sınırına sahiptir ve Responses veri düzlemini
 `server/responses.ts` cephesine ve onun `server/responses/*.ts` modüllerine
 devreder:
 
-1. `server/index.ts` CORS ve API kimlik doğrulamasını uygular, boşaltma
+1. `server/index/serve-options.ts` CORS ve API kimlik doğrulamasını uygular, boşaltma
    sırasında yeni işleri reddeder ve istek yaşam döngüsü meta verilerini
    kaydeder. `GET /v1/models`, `POST /v1/responses`, `POST
    /v1/responses/compact`, `POST /v1/images/generations` / `POST
@@ -58,7 +62,7 @@ devreder:
    `/v1/live/{callId}` (ve `/v1/realtime?call_id=`) üzerindeki yan bant
    WebSocket katılımlarını ve `/v1/responses` üzerindeki isteğe bağlı WebSocket
    yükseltmesini sunar.
-2. `server/responses/core.ts` JSON'ı açar ve ayrıştırır, kullanılabilir
+2. `server/responses/request-prepare.ts` JSON'ı açar ve ayrıştırır, kullanılabilir
    olduğunda yerel olarak hatırlanan `previous_response_id` girdisini
    genişletir, ardından `responses/parser.ts`'yi çağırır.
 3. `router.ts` yalın veya `sağlayıcı/model` kimliğini çözer. Sunucu daha sonra
@@ -75,7 +79,7 @@ devreder:
    `web-search/` sentetik bir fonksiyon sunar, gerçek aramayı ChatGPT sidecar'ı
    aracılığıyla yürütür, sonuçları yönlendirilen modele geri besler ve
    yapılandırılmış döngü sınırı içinde tekrarlar.
-7. `bridge.ts` Responses SSE veya JSON üretir. `server/request-log.ts` ve
+7. `bridge/sse.ts` / `bridge/response-json.ts` Responses SSE veya JSON üretir. `server/request-log.ts` ve
    `usage/` yanıtı değiştirmeden uç durumu, gecikmeyi, sağlayıcı/model
    etiketlerini ve en iyi çaba belirteç kullanımını toplar.
 
@@ -102,7 +106,7 @@ ardından bir `OcxParsedRequest` oluşturur:
 
 ## Köprü (Bridge)
 
-`bridge.ts`, adaptörün dahili `AdapterEvent` akışını Codex'in anladığı Responses
+`bridge/sse.ts`, adaptörün dahili `AdapterEvent` akışını Codex'in anladığı Responses
 SSE'ye dönüştürür:
 
 | AdapterEvent | Yayınlanan Responses SSE |
@@ -164,16 +168,25 @@ tanılamaları için `usage/` tarafından toplanır.
 
 ## Aktarım ve sıkıştırma
 
-`server/index.ts` varsayılan olarak `/v1/responses` üzerinde HTTP/SSE sunar.
+`server/index/serve-options.ts` varsayılan olarak `/v1/responses` üzerinde HTTP/SSE sunar.
 Codex `websockets` `false` iken bir Responses WebSocket yükseltmesi denerse
 opencodex `426 upgrade_required` döndürür; Codex daha sonra bu oturum için
 HTTP'ye geri döner. `"websockets": true` ayarlandığında aynı uç nokta
 yükseltmeyi kabul eder ve WebSocket köprüsünü kullanır.
 
+Son gönderilen model `gpt-5.3-codex-spark` olduğunda, kanonik ChatGPT iletimi HTTP başlığında
+ve yerel WS çerçevesi meta verilerinde Responses Lite'ı açıkça kapatır; Spark bir takma adla
+seçildiğinde de bu geçerlidir — ancak yalnızca giden gövde boş olmayan `tools` dizisine sahip bir `additional_tools` grubu
+taşımıyorsa. Bu grup Lite'ın araç teslim biçiminin kendisidir; onu kullanan bir Spark gövdesi,
+çağıran veya yapılandırılmış başlık ne derse desin Lite'ı AÇIK tutar. Lite kimliği değişince eski soket kullanım dışı bırakılır;
+aynı kimliğe sahip sonraki uygun istekler yeni soketi yeniden kullanabilir. Diğer modeller ve
+ağ geçitleri mevcut Lite politikalarını korur. Bozuk yerel meta verilerde, istek gövdesi
+değiştirilmeden HTTP'ye geri dönülmeye devam edilir.
+
 Codex bağlam sıkıştırması yönlendirilen modeller için çalışır.
 `server/responses/compact.ts`, dahili bir yönlendirilen özetleme turu
 çalıştırarak ve sıkıştırılmış geçmişi döndürerek `POST /v1/responses/compact`'ı
-işlerken, `responses/parser.ts` ve `bridge.ts` tam olarak bir sentetik
+işlerken, `responses/parser.ts` ve `bridge/sse.ts` tam olarak bir sentetik
 `compaction` çıktı öğesi yayarak uzak sıkıştırma v2 `compaction_trigger`
 turlarını işler.
 
@@ -220,4 +233,3 @@ Dahili model `types.ts` içinde yer alır: `OcxParsedRequest`, `OcxContext`,
 `OcxProviderConfig`). İki yardımcı yaygın olarak kullanılır:
 `namespacedToolName()` ve `modelInList()` (`noVisionModels` /
 `noReasoningModels` için toleranslı `:size` etiketi eşleştirmesi).
-

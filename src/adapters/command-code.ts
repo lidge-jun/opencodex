@@ -469,7 +469,7 @@ async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContex
   const timer = setTimeout(() => timeout.abort(new DOMException("Timeout elapsed", "TimeoutError")), ctx?.timeoutMs ?? 200_000);
   const callerSignal = ctx?.abortSignal ?? new AbortController().signal;
   try {
-    return await executor(request.url, {
+    return await (ctx?.executor ?? executor)(request.url, {
       method: request.method,
       headers: request.headers,
       body: request.body,
@@ -495,7 +495,6 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
   let wire = requested;
   const lower = canonicalId.toLowerCase();
   const needsAlias =
-    lower === "deepseek/deepseek-v4-pro" ||
     lower === "deepseek/deepseek-v4-flash" ||
     lower === "zai-org/glm-5.2";
   if (requested === "xhigh" && !supported.includes("xhigh") && supported.includes("max")) {

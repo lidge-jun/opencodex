@@ -181,15 +181,17 @@ exit 0
     },
   );
 
-  test("Node launcher handles npm self-update before starting Bun", async () => {
+  test("Node launcher handles package-manager self-update before starting Bun", async () => {
     const launcher = await readText("bin/ocx.mjs");
 
     expect(launcher).toContain('process.argv[2] === "update"');
     expect(launcher).toContain('["install", "-g", `${PKG}@${tag}`]');
+    expect(launcher).toContain('["add", "-g", "--allow-build=bun", `${PKG}@${tag}`]');
     expect(launcher).toContain('return String(currentVersion).includes("-preview.") ? "preview" : "latest"');
     expect(launcher).toContain("!isBunGlobalInstall()");
-    expect(launcher).toContain("repairCodexShimIfNeeded()");
+    expect(launcher).toContain("repairCodexShimIfNeeded(postUpdateLauncher)");
     expect(launcher).toContain("runNpmSelfUpdate()");
+    expect(launcher).toContain("runPnpmSelfUpdate()");
   });
 
   test("release helper watches the workflow run it just dispatched", async () => {

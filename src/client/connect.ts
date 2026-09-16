@@ -67,6 +67,8 @@ import {
   readClientConnectionState,
   assertNoClientDisconnectPending, assertClientConnectionUnchanged, sameClientConnectionOwner,
 } from "./state";
+import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
+import { hubStateCachePath } from "./hub-state";
 
 class RotationRecoveryRequiredError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -89,6 +91,7 @@ export interface ClientConnectDeps {
   fetchImpl?: typeof fetch;
   now?: () => Date;
   lifecycleLockDeps?: ClientLifecycleLockDeps;
+  catalogCompatibility?: CatalogCompatibilityDeps;
 }
 
 export interface RotateClientOptions {
@@ -543,6 +546,12 @@ export async function connectClient(
       fetchImpl: deps.fetchImpl,
       timeoutMs: options.catalogTimeoutMs,
     });
+    // Fail closed BEFORE the write (#4207). The hub being reachable and the credential working
+    // does not mean the selected local Codex runtime can consume what arrived: an older CLI
+    // exits on an unknown reasoning level before making a single request, while connect
+    // reports success. Refusing here leaves the previous catalog in place untouched, rather
+    // than writing one and restoring it afterwards.
+    assertClientCatalogCompatible(catalog.body, deps.catalogCompatibility);
     writtenCatalogFingerprint = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
       assertConnectingState(persisted.fingerprint);
       atomicWriteFile(DEFAULT_CATALOG_PATH, catalog.body);
@@ -659,6 +668,10 @@ export async function syncConnectedClient(
     if (!transient) throw error;
     stale = true;
   }
+  // Same gate as connect (#4207): a sync must never replace a catalog the local CLI can parse
+  // with one it cannot. Refusing leaves the connection and the existing catalog exactly as
+  // they were, which is the known-good state.
+  if (downloaded) assertClientCatalogCompatible(downloaded.body, deps.catalogCompatibility);
   const next = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     assertClientConnectionUnchanged(initial.connection);
     const token = readServiceApiTokenState();
@@ -879,6 +892,7 @@ export async function disconnectClient(
     if (!disconnectAtLeast(receipt, "clearing_connection")) advance("clearing_connection");
     if (clearClientConnection(receipt.owner) === "conflict") throw new Error("client_disconnect_owner_changed");
     if (!disconnectAtLeast(receipt, "connection_cleared")) advance("connection_cleared");
+    removeHubStateCache();
     requireDesktopResult(finishRemoteDesktopCleanup(held, receipt.owner));
     if (receipt.phase !== "complete") advance("complete");
     return {
@@ -888,6 +902,23 @@ export async function disconnectClient(
       ...(desktop.restoration ? { desktopRestoration: desktop.restoration } : {}),
     };
   }), deps.lifecycleLockDeps);
+}
+
+/**
+ * Drop the cached hub-state document (#4236).
+ *
+ * It is derived data from a connection that no longer exists, and it is owner-stamped, so a
+ * reader would reject it anyway — but leaving it behind means `<OPENCODEX_HOME>/hub-state.json`
+ * keeps naming the previous hub's providers and logins on a machine that is no longer connected
+ * to anything, which is exactly the wrong artifact to leave where someone might read it.
+ *
+ * Best effort and unconditional on the phase: the disconnect has already succeeded by this point,
+ * and a cache file that cannot be removed must not fail it or block a retry.
+ */
+function removeHubStateCache(): void {
+  try {
+    unlinkSync(hubStateCachePath());
+  } catch { /* absent, or not ours to remove */ }
 }
 
 export async function revokeConnectedClientKey(

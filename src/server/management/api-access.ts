@@ -1,5 +1,22 @@
 import type { OcxConfig } from "../../types";
+import { isWildcardHostname } from "../../codex/loopback-target";
+import { localInferenceDestination } from "../../lib/local-destinations";
 import { probeHostname } from "../proxy-liveness";
+import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";
+import { LIVE_AUDIO_MODEL, TRANSCRIPTION_MODEL } from "../audio-upstream";
+
+export interface AudioApiAccess {
+  transcriptionEndpoint: string;
+  dictationStreamEndpoint: string;
+  liveEndpoint: string;
+  realtimeCallsEndpoint: string;
+  transcriptionModel: string;
+  liveModel: string;
+  /** Configuration only, not account health, entitlement or observed connectivity. */
+  transcriptionConfigured: boolean;
+  dictationConfigured: boolean;
+  liveConfigured: boolean;
+}
 
 export interface ApiAccessEndpoints {
   baseUrl: string;
@@ -8,6 +25,7 @@ export interface ApiAccessEndpoints {
   messagesEndpoint: string;
   modelsEndpoint: string;
   claudeCodeEnabled: boolean;
+  audio: AudioApiAccess;
   /** Back-compat alias for older GUI clients. */
   endpoint: string;
 }
@@ -21,9 +39,14 @@ export type BuildApiAccessEndpointsOptions = {
   requestOrigin?: string | null;
 };
 
+/**
+ * Wildcard bind scope, shared with `probeHostname` and the loopback-companion gate rather than
+ * re-spelled here: a third list of three spellings is how `0.0.0.0.` and `::0` ended up treated
+ * as specific bind addresses on one side and wildcards on the other.
+ */
 function isWildcardBindHost(hostname: string | undefined): boolean {
   const trimmed = (hostname ?? "").trim();
-  return !trimmed || trimmed === "0.0.0.0" || trimmed === "::" || trimmed === "[::]";
+  return !trimmed || isWildcardHostname(trimmed);
 }
 
 /** Bracket bare IPv6 literals for URL authority composition. */
@@ -66,7 +89,7 @@ function originBaseUrl(raw: string): string | null {
  * Falls back to loopback only when no usable request context is available.
  */
 export function resolveApiAccessBaseUrl(
-  config: Pick<OcxConfig, "hostname" | "port">,
+  config: Pick<OcxConfig, "hostname" | "port" | "unauthenticatedLoopbackListener">,
   opts: BuildApiAccessEndpointsOptions = {},
 ): string {
   const port = config.port ?? 10100;
@@ -104,7 +127,11 @@ export function resolveApiAccessBaseUrl(
     }
   }
 
-  return `http://127.0.0.1:${port}/v1`;
+  // Last resort: a wildcard bind with no usable request context, so the only address we can
+  // name is loopback — and on that address the unauthenticated loopback listener, when one is
+  // enabled, is the port a local caller should use (#4236). The branches above are unchanged:
+  // a specific bind or a real request host still describes the address the CLIENT reached.
+  return `${localInferenceDestination(config, port).origin}/v1`;
 }
 
 /** @deprecated Prefer resolveApiAccessBaseUrl; retained for focused host-format tests. */
@@ -129,6 +156,16 @@ export function buildApiAccessEndpoints(
 ): ApiAccessEndpoints {
   const baseUrl = resolveApiAccessBaseUrl(config, opts);
   const responsesEndpoint = `${baseUrl}/responses`;
+  const socketBase = new URL(baseUrl);
+  socketBase.protocol = socketBase.protocol === "https:" ? "wss:" : "ws:";
+  const forward = config.providers?.[OPENAI_CODEX_PROVIDER_ID];
+  const chatgptConfigured = !!forward && forward.disabled !== true
+    && isCanonicalOpenAiForwardProvider({ ...forward, authMode: forward.authMode ?? "forward" });
+  const keyed = config.providers?.[OPENAI_API_PROVIDER_ID];
+  // Do not resolve key references or inspect accounts on a management metadata read.
+  const apiConfigured = !!keyed && keyed.disabled !== true && keyed.adapter === "openai-responses"
+    && keyed.authMode !== "forward" && keyed.baseUrl.replace(/\/+$/, "") === "https://api.openai.com/v1"
+    && typeof keyed.apiKey === "string" && !!keyed.apiKey.trim();
   return {
     baseUrl,
     responsesEndpoint,
@@ -136,6 +173,17 @@ export function buildApiAccessEndpoints(
     messagesEndpoint: `${baseUrl}/messages`,
     modelsEndpoint: `${baseUrl}/models`,
     claudeCodeEnabled: config.claudeCode?.enabled !== false,
+    audio: {
+      transcriptionEndpoint: `${baseUrl}/audio/transcriptions`,
+      dictationStreamEndpoint: `${socketBase.href}/audio/transcriptions/stream`,
+      liveEndpoint: `${socketBase.href}/live`,
+      realtimeCallsEndpoint: `${baseUrl}/realtime/calls`,
+      transcriptionModel: TRANSCRIPTION_MODEL,
+      liveModel: LIVE_AUDIO_MODEL,
+      transcriptionConfigured: chatgptConfigured || apiConfigured,
+      dictationConfigured: chatgptConfigured,
+      liveConfigured: chatgptConfigured,
+    },
     endpoint: responsesEndpoint,
   };
 }

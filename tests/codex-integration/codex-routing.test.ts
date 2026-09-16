@@ -50,6 +50,7 @@ import {
 import { CODEX_UNKNOWN_USAGE_SCORE, isCodexQuotaExhausted } from "../../src/codex/quota";
 import { setCodexAccountPriority } from "../../src/codex/account-priority";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
+import { NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
 import { routeModel } from "../../src/router";
 import { consumeForInspection } from "../../src/server/relay";
 import type { OcxConfig } from "../../src/types";
@@ -948,6 +949,147 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("quota-next", config)).toBe("b");
   });
 
+  test("a bound thread does not return to the quota group that refused it once the capped cooldown lapses", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("reserve-refused", config, now, "reserve")).toBe("a");
+
+    // The refusal announces a window that reopens in four hours, but a reset-derived cooldown is
+    // capped at 15 minutes so the account is selectable again long before that window moves.
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      threadId: "reserve-refused",
+      modelId: NATIVE_RESERVE_MODEL,
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+
+    // Usage is still the lowest in the pool and well under the threshold, so nothing else would
+    // move this thread: without the refusal it rebinds to the account that just turned it away.
+    expect(resolveCodexAccountForThread("reserve-refused", config, now + 16 * 60_000, "reserve")).toBe("b");
+    // The shared lane never refused this thread, so a spent Reserve window leaves it alone.
+    expect(resolveCodexAccountForThread("reserve-refused", config, now + 16 * 60_000, "shared")).toBe("a");
+  });
+
+  test("the main login is passed over by the window its own refusal announced", () => {
+    // The main account is not in `config.codexAccounts`, so it reaches selection through a
+    // separate re-insertion branch. That branch is the only place an avoidance window can
+    // exclude it, and it is the case the pool filters above cannot cover.
+    writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-chatgpt-id" },
+    }));
+    const config = makeConfig({
+      codexAccounts: [{ id: "a", email: "a@test", isMain: false }],
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+    });
+    const now = 1_800_000_000_000;
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 10);
+    updateAccountQuota("a", 20);
+    expect(resolveCodexAccountForThread("main-reserve-first", config, now, "reserve")).toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    recordCodexUpstreamOutcome(config, MAIN_CODEX_ACCOUNT_ID, 429, {
+      now,
+      threadId: "main-reserve-first",
+      modelId: NATIVE_RESERVE_MODEL,
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+
+    // Selection has to actually reach the re-insertion branch for this to prove anything.
+    // Leaving the main login active would exclude it by id on the fallback instead, so move
+    // the active account and put it over the switch threshold: now a cooler candidate is
+    // wanted, and the only thing that can keep the main login out is its avoidance window.
+    config.activeCodexAccountId = "a";
+    updateAccountQuota("a", 85);
+
+    // The capped cooldown has lapsed and the weekly bar still reads coolest, so without the
+    // window this request goes straight back to the account that just refused one.
+    expect(resolveCodexAccountForThread("main-reserve-next", config, now + 16 * 60_000, "reserve")).toBe("a");
+  });
+
+  test("naming the account overrules an avoidance the refusal recorded on the scoped lane", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      threadId: "scoped-manual",
+      modelId: NATIVE_RESERVE_MODEL,
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+    expect(resolveCodexAccountForThread("scoped-avoided", config, now + 16 * 60_000, "reserve")).toBe("b");
+
+    // A reset-derived refusal writes only the scoped entry, so an operator naming the account
+    // has to reach that map. Stopping at the account-wide entry leaves the pick refused.
+    config.activeCodexAccountId = "a";
+    resetCodexRoutingForManualSelection("a");
+
+    expect(resolveCodexAccountForThread("scoped-named", config, now + 17 * 60_000, "reserve")).toBe("a");
+  });
+
+  test("clearing the cooldown also lifts the avoidance that refusal announced", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      modelId: NATIVE_RESERVE_MODEL,
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+    expect(resolveCodexAccountForThread("cleared-before", config, now + 16 * 60_000, "reserve")).toBe("b");
+
+    // The escape hatch has to escape. Automatic probe recovery already drops the window; an
+    // operator lifting the same cooldown by hand was leaving it in place for up to six hours.
+    expect(clearCodexAccountCooldown("a", now + 60_000)).toBe(true);
+
+    expect(resolveCodexAccountForThread("cleared-after", config, now + 61_000, "reserve")).toBe("a");
+  });
+
+  test("clearing a lapsed cooldown still lifts the avoidance it left behind", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      modelId: NATIVE_RESERVE_MODEL,
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+
+    // The capped cooldown is already gone and only the announced window is still holding the
+    // account out, which is exactly when an operator reaches for this button. Reading the
+    // cooldown alone made the call a no-op for the next several hours.
+    expect(isCodexAccountInCooldown("a", now + 16 * 60_000)).toBe(false);
+    expect(resolveCodexAccountForThread("lapsed-before", config, now + 16 * 60_000, "reserve")).toBe("b");
+
+    expect(clearCodexAccountCooldown("a", now + 16 * 60_000)).toBe(true);
+
+    expect(resolveCodexAccountForThread("lapsed-after", config, now + 17 * 60_000, "reserve")).toBe("a");
+  });
+
+  test("a request the account serves releases the threads its quota refusal moved", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("reserve-recovered", config, now, "reserve")).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      threadId: "reserve-recovered",
+      modelId: NATIVE_RESERVE_MODEL,
+      resetAt: Math.floor((now + 4 * 60 * 60_000) / 1_000),
+    });
+    expect(resolveCodexAccountForThread("reserve-recovered", config, now + 16 * 60_000, "reserve")).toBe("b");
+
+    // Selection never stopped offering the account to unbound requests, and the first one it
+    // serves is what ends the refusal — a rebound thread then keeps it across turns.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 17 * 60_000, modelId: NATIVE_RESERVE_MODEL });
+    expect(resolveCodexAccountForThread("reserve-rebound", config, now + 18 * 60_000, "reserve")).toBe("a");
+    expect(resolveCodexAccountForThread("reserve-rebound", config, now + 19 * 60_000, "reserve")).toBe("a");
+  });
+
   test("shared native reset cooldown clears affinity and rotates the active account", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
@@ -977,16 +1119,16 @@ describe("codex routing", () => {
     recordCodexUpstreamOutcome(config, "a", 429, {
       now: now + 1,
       resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
-      modelId: "gpt-5.3-codex-spark",
+      modelId: "gpt-reserve",
     });
 
-    // Spark sees its scoped cooldown and binds B without moving the global
+    // Reserve sees its scoped cooldown and binds B without moving the global
     // active account or the same thread's shared-scope affinity.
-    expect(resolveCodexAccountForThread("scoped-thread", config, now + 2, "spark")).toBe("b");
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 2, "reserve")).toBe("b");
     expect(config.activeCodexAccountId).toBe("a");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
     expect(resolveCodexAccountForThread("scoped-thread", config, now + 3, "shared")).toBe("a");
-    expect(resolveCodexAccountForThread("scoped-thread", config, now + 4, "spark")).toBe("b");
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 4, "reserve")).toBe("b");
   });
 
   test("429 fallback skips paused candidates", () => {
@@ -1171,7 +1313,7 @@ describe("codex routing", () => {
     recordCodexUpstreamOutcome(config, "a", 429, {
       now,
       resetAt,
-      modelId: "gpt-5.3-codex-spark",
+      modelId: "gpt-reserve",
     });
     recordCodexUpstreamOutcome(config, "a", 429, {
       now,
@@ -1179,10 +1321,10 @@ describe("codex routing", () => {
       modelId: "gpt-5.6-terra",
     });
 
-    expect(getCodexQuotaHealthSnapshot("a", "spark", now + 1)).not.toBeNull();
+    expect(getCodexQuotaHealthSnapshot("a", "reserve", now + 1)).not.toBeNull();
     expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).not.toBeNull();
     expect(clearCodexAccountCooldown("a", now + 1)).toBe(true);
-    expect(getCodexQuotaHealthSnapshot("a", "spark", now + 1)).toBeNull();
+    expect(getCodexQuotaHealthSnapshot("a", "reserve", now + 1)).toBeNull();
     expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).toBeNull();
   });
 
@@ -1548,13 +1690,13 @@ describe("codex routing", () => {
     updateAccountQuota("b", 10);
     const now = 1_800_000_000_000;
     expect(resolveCodexAccountForThreadDetailed("expired-detailed", config, now))
-      .toEqual({ status: "selected", accountId: "a" });
+      .toMatchObject({ status: "selected", accountId: "a" });
 
     expect(resolveCodexAccountForThreadDetailed(
       "expired-detailed",
       config,
       now + CODEX_THREAD_AFFINITY_IDLE_TTL_MS + 1,
-    )).toEqual({ status: "expired", accountId: "a" });
+    )).toMatchObject({ status: "expired", accountId: "a" });
   });
 
   test("thread affinity LRU cap evicts the oldest mapping", () => {
@@ -1583,15 +1725,15 @@ describe("codex routing", () => {
       const threadId = `scoped-lru-${i}`;
       expect(resolveCodexAccountForThread(threadId, config, now + i * 3)).toBe("a");
       expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 1, "shared")).toBe("a");
-      expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 2, "spark")).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 2, "reserve")).toBe("a");
     }
 
     // The oldest legacy entry was evicted, while the same thread's later
-    // shared and Spark entries remain independently affined to A.
+    // shared and Reserve entries remain independently affined to A.
     config.activeCodexAccountId = "b";
     const after = now + threads * 3;
     expect(resolveCodexAccountForThread("scoped-lru-0", config, after, "shared")).toBe("a");
-    expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 1, "spark")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 1, "reserve")).toBe("a");
     expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 2)).toBe("b");
   }, STORE_BUDGET_MS);
 
@@ -1746,7 +1888,32 @@ describe("codex routing", () => {
     });
   });
 
-  test("WHAM keeps general and Spark windows separate", () => {
+  test("retired reset outcomes preserve shared health, affinity and selection", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    recordCodexUpstreamOutcome(config, "a", 503, {
+      now: now - CODEX_TRANSIENT_SOFT_AVOID_MS - 1, fixedAccount: true,
+    });
+    expect(resolveCodexAccountForThread("retired-reset", config, now, "shared")).toBe("a");
+    const health = getCodexUpstreamHealth("a");
+    for (const modelId of ["gpt-5.3-codex-spark", "main/gpt-5.3-codex-spark", "openai/gpt-5.3-codex-spark"]) {
+      recordCodexUpstreamOutcome(config, "a", 429, { now: now + 1, resetAt: now + 60_000, modelId });
+      expect(getCodexUpstreamHealth("a")).toBe(health);
+      expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).toBeNull();
+      expect(getCodexQuotaHealthSnapshot("a", "reserve", now + 1)).toBeNull();
+    }
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    expect(previewCodexAccountForRequest("retired-reset", config, now + CODEX_TRANSIENT_SOFT_AVOID_MS + 1, "shared")).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now: now + 2, retryAfter: "60", resetAt: now + 60_000, modelId: "gpt-5.3-codex-spark",
+    });
+    expect(getCodexQuotaHealthSnapshot("a", "shared", now + 3)?.cooldownSource).toBe("retry-after");
+    recordCodexUpstreamOutcome(config, "a", 401, { now: now + 4, modelId: "gpt-5.3-codex-spark" });
+    expect(isAccountNeedsReauth("a")).toBe(true);
+  });
+
+  test("WHAM ignores retired Spark windows and retains ordinary quota", () => {
     expect(parseUsageQuota({
       plan_type: "pro",
       rate_limit: {
@@ -1767,10 +1934,6 @@ describe("codex routing", () => {
       shortWindowSeconds: 5 * 60 * 60,
       weeklyPercent: 22,
       weeklyResetAt: 2,
-      customWindows: [
-        { label: "GPT-5.3-Codex-Spark 5h", percent: 33, resetAt: 3 },
-        { label: "GPT-5.3-Codex-Spark Weekly", percent: 44, resetAt: 4 },
-      ],
     });
   });
 
@@ -1790,13 +1953,15 @@ describe("codex routing", () => {
       }],
     });
 
+    expect(sparkOnly).toBeNull();
+    const before = getAccountQuota("a");
     setAccountQuotaFromParsed("a", sparkOnly);
+    expect(getAccountQuota("a")).toBe(before);
 
     expect(getAccountQuota("a")).toMatchObject({
       monthlyPercent: 44,
       monthlyResetAt: 4,
       monthlyIsPrimaryWindow: true,
-      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 33, resetAt: 3 }],
     });
   });
 
@@ -2020,7 +2185,8 @@ describe("codex routing", () => {
 
   // Phase 40 (260630_wsl-account-autoswitch): bound-thread quota re-eval.
   test("bound thread over threshold switches after the re-eval interval", () => {
-    const config = makeConfig();
+    // Capacity-first is now opt-in, so this pins it explicitly (#4546).
+    const config = makeConfig({ pool: { cacheAffinity: false } });
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -2035,7 +2201,7 @@ describe("codex routing", () => {
   });
 
   test("bound thread over threshold switches immediately without waiting for re-eval (#584)", () => {
-    const config = makeConfig();
+    const config = makeConfig({ pool: { cacheAffinity: false } });
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -2076,7 +2242,7 @@ describe("codex routing", () => {
   });
 
   test("bound thread over threshold switches once and does not ping-pong", () => {
-    const config = makeConfig();
+    const config = makeConfig({ pool: { cacheAffinity: false } });
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -2303,7 +2469,7 @@ describe("codex account selection order", () => {
       now + 1,
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
 
     expect(config.activeCodexAccountId).toBe("b");
     expect(config.activeCodexAccountPinned).toBe("b");
@@ -2350,7 +2516,7 @@ describe("codex account selection order", () => {
       eligible,
       modelId,
     );
-    expect(first).toEqual({ status: "selected", accountId: firstPreview });
+    expect(first).toMatchObject({ status: "selected", accountId: firstPreview });
     expect(["a", "c"]).toContain(firstPreview);
 
     expect(previewCodexAccountForRequest(
@@ -2368,7 +2534,9 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       modelId,
-    )).toEqual(first);
+      // The resolution now also carries the affinity decision, which legitimately differs
+      // between a first placement and a later reuse. This case is about the account.
+    )).toMatchObject({ status: "selected", accountId: firstPreview });
 
     expect(config.activeCodexAccountId).toBe("b");
     expect(config.activeCodexAccountPinned).toBe("b");
@@ -2383,7 +2551,7 @@ describe("codex account selection order", () => {
       "shared",
       { modelEligibleAccountIds: new Set([other]) },
       modelId,
-    )).toEqual({ status: "selected", accountId: other });
+    )).toMatchObject({ status: "selected", accountId: other });
     expect(resolveCodexAccountForThreadDetailed(
       threadId,
       config,
@@ -2391,7 +2559,7 @@ describe("codex account selection order", () => {
       "shared",
       { modelEligibleAccountIds: new Set(["a", "b", "c"]) },
       modelId,
-    )).toEqual({ status: "selected", accountId: other });
+    )).toMatchObject({ status: "selected", accountId: other });
     expect(resolveCodexAccountForThread(threadId, config, now + 6, "shared")).toBe("b");
   });
 
@@ -2400,6 +2568,7 @@ describe("codex account selection order", () => {
     const threadId = "quota-detour-failover-candidate";
     const modelId = "gpt-daybreak-blue-latest";
     const config = makeConfig({
+      pool: { cacheAffinity: false },
       accountPoolStrategy: "quota",
       activeCodexAccountId: "c",
       codexAccounts: [
@@ -2421,7 +2590,7 @@ describe("codex account selection order", () => {
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
       modelId,
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     // B is the highest tier after the detour exists. Filtering only after tier
     // selection would drop B without ever exposing healthy C to the picker.
     config.codexAccountPriorities = { b: 2, c: 1 };
@@ -2451,7 +2620,7 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       modelId,
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
     expect(config.activeCodexAccountId).toBe("c");
     expect(config.activeCodexAccountPinned).toBeUndefined();
     expect(getEffectiveActiveCodexAccountId(config)).toBe("c");
@@ -2461,6 +2630,7 @@ describe("codex account selection order", () => {
     const now = 1_800_000_000_000;
     const threadId = "ordinary-quota-failover-candidate";
     const config = makeConfig({
+      pool: { cacheAffinity: false },
       accountPoolStrategy: "quota",
       activeCodexAccountId: "a",
       codexAccounts: [
@@ -2491,7 +2661,7 @@ describe("codex account selection order", () => {
       config,
       resolveAt,
       "shared",
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
     expect(config.activeCodexAccountId).toBe("c");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("c");
   });
@@ -2542,7 +2712,7 @@ describe("codex account selection order", () => {
         "shared",
         eligible,
         modelId,
-      )).toEqual(first);
+      )).toMatchObject({ status: "selected", accountId: first.accountId });
     }
     expect(config.activeCodexAccountPinned).toBe("b");
   });
@@ -2593,7 +2763,7 @@ describe("codex account selection order", () => {
         "shared",
         eligible,
         "gpt-daybreak-blue-latest",
-      )).toEqual(firstModel);
+      )).toMatchObject({ status: "selected", accountId: firstModel.accountId });
       expect(resolveCodexAccountForThreadDetailed(
         threadId,
         config,
@@ -2601,7 +2771,7 @@ describe("codex account selection order", () => {
         "shared",
         eligible,
         "gpt-other-account-gated",
-      )).toEqual(secondModel);
+      )).toMatchObject({ status: "selected", accountId: secondModel.accountId });
     }
     expect(resolveCodexAccountForThread(threadId, config, now + 5, "shared")).toBe("b");
   });
@@ -2633,7 +2803,7 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       "gated-model-0",
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     for (let index = 1; index <= CODEX_THREAD_AFFINITY_MAX_ENTRIES; index += 1) {
       expect(resolveCodexAccountForThreadDetailed(
         threadId,
@@ -2661,7 +2831,7 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       "gated-model-0",
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
     expect(resolveCodexAccountForThreadDetailed(
       threadId,
       config,
@@ -2669,7 +2839,7 @@ describe("codex account selection order", () => {
       "shared",
       eligible,
       "gated-model-0",
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
   }, STORE_BUDGET_MS);
 
   test("a gated first request binds its actual account without replacing global active", () => {
@@ -2684,7 +2854,7 @@ describe("codex account selection order", () => {
       now,
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("b");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
     expect(resolveCodexAccountForThread("gated-first-task", config, now + 1, "shared")).toBe("a");
@@ -2704,14 +2874,14 @@ describe("codex account selection order", () => {
       Date.now(),
       "shared",
       selectionOptions,
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(resolveCodexAccountForThreadDetailed(
       null,
       config,
       Date.now() + 1,
       "shared",
       selectionOptions,
-    )).toEqual({ status: "selected", accountId: "b" });
+    )).toMatchObject({ status: "selected", accountId: "b" });
     expect(config.activeCodexAccountId).toBe("b");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
   });
@@ -2738,7 +2908,7 @@ describe("codex account selection order", () => {
         now + 1,
         "shared",
         { modelEligibleAccountIds: new Set(["a"]) },
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
 
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBe("b");
@@ -2788,7 +2958,7 @@ describe("codex account selection order", () => {
         now + CODEX_TRANSIENT_SOFT_AVOID_MS + 4,
         "shared",
         selectionOptions,
-      )).toEqual({ status: "selected", accountId: "b" });
+      )).toMatchObject({ status: "selected", accountId: "b" });
       expect(config.activeCodexAccountId).toBe("c");
       expect(config.activeCodexAccountPinned).toBe("c");
       expect(getEffectiveActiveCodexAccountId(config)).toBe("c");
@@ -2818,7 +2988,7 @@ describe("codex account selection order", () => {
         now + 1,
         "shared",
         { modelEligibleAccountIds: new Set(["a"]) },
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
@@ -2856,7 +3026,7 @@ describe("codex account selection order", () => {
         resolveAt,
         "shared",
         { modelEligibleAccountIds: new Set(["a"]) },
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
@@ -2896,7 +3066,7 @@ describe("codex account selection order", () => {
         now,
         "shared",
         selectionOptions,
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
@@ -2939,7 +3109,7 @@ describe("codex account selection order", () => {
         resolveAt,
         "shared",
         selectionOptions,
-      )).toEqual({ status: "selected", accountId: "a" });
+      )).toMatchObject({ status: "selected", accountId: "a" });
       expect(config.activeCodexAccountId).toBe("b");
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
@@ -2962,7 +3132,7 @@ describe("codex account selection order", () => {
         nativeMainSelectionOnly: true,
         modelEligibleAccountIds: new Set(),
       },
-    )).toEqual({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
+    )).toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
 
@@ -2992,7 +3162,7 @@ describe("codex account selection order", () => {
       now + CODEX_TRANSIENT_SOFT_AVOID_MS + 3,
       "shared",
       { modelEligibleAccountIds: new Set(["a", "c"]) },
-    )).toEqual({ status: "selected", accountId: "c" });
+    )).toMatchObject({ status: "selected", accountId: "c" });
     expect(config.activeCodexAccountId).toBe("b");
     expect(config.activeCodexAccountPinned).toBe("b");
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
@@ -3012,7 +3182,7 @@ describe("codex account selection order", () => {
       Date.now(),
       "shared",
       { modelEligibleAccountIds: new Set(["a", "b"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
@@ -3037,7 +3207,7 @@ describe("codex account selection order", () => {
       now + CODEX_TRANSIENT_SOFT_AVOID_MS + 3,
       "shared",
       { modelEligibleAccountIds: new Set(["a", "b"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
@@ -3056,7 +3226,7 @@ describe("codex account selection order", () => {
       Date.now(),
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
@@ -3081,7 +3251,7 @@ describe("codex account selection order", () => {
       now + CODEX_TRANSIENT_SOFT_AVOID_MS + 3,
       "shared",
       { modelEligibleAccountIds: new Set(["a"]) },
-    )).toEqual({ status: "selected", accountId: "a" });
+    )).toMatchObject({ status: "selected", accountId: "a" });
     expect(config.activeCodexAccountId).toBe("a");
     expect(config.activeCodexAccountPinned).toBeUndefined();
   });
@@ -3252,7 +3422,7 @@ describe("codex account selection order", () => {
   });
 
   test("a bound thread over threshold moves to the highest tier with headroom", () => {
-    const config = makeConfig({ activeCodexAccountId: "b" });
+    const config = makeConfig({ activeCodexAccountId: "b", pool: { cacheAffinity: false } });
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
     expect(resolveCodexAccountForThread("thread-1", config)).toBe("b");

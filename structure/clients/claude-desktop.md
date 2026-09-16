@@ -1,0 +1,170 @@
+# Claude Desktop Integration
+
+Desktop callers retain their existing ingress through the Responses
+[core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
+The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+
+Codex-native model discovery follows the [shared retirement policy](../catalog.md#shared-catalog).
+That projection does not migrate existing user-selected Desktop configuration or usage history.
+
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
+
+Claude-only connections keep their existing non-failing readiness policy; displayed catalog reasons follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics) whether they surface at connect time or on a later refresh.
+
+The hub-side CLI dashboard uses the [management ingress address](../runtime.md#hub-management-dashboard-address); this does not change connected Desktop profile endpoints.
+
+Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
+
+The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
+
+## Connected Claude Desktop profiles
+
+The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership); general status hands its resolved command to this check instead of probing the version twice.
+It does not discover lower-priority alternatives after a valid selection or alter Desktop ownership.
+
+Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin
+and exact hub-issued IDs to the local Desktop configuration. Static/hybrid embed the entries;
+discovery-only keeps discovery on the hub. The hub owns family assignments and defaults; local
+show/edit/import/export operations do not manage that profile. After hub changes or historical
+client-only aliases, apply again and reselect the model. Connected `import --apply` is explicitly
+unsupported and refuses before saving the import.
+
+`src/claude/desktop-discovery-inputs.ts` owns the shared Desktop discovery projection used by
+startup registry initialization and server discovery. `src/server/index.ts` exposes the explicit
+`GET /v1/models?ids=desktop&format=desktop-config` snapshot, shaped as `{version:1,models:[...]}`
+and sent with `Cache-Control: no-store`. `src/client/hub-client.ts` downloads it with the existing
+data credential; `src/cli/claude-desktop.ts` selects connected apply, and `src/claude/desktop-3p.ts`
+writes the resulting local Desktop configuration. No admin token, hub-profile upload or local
+alias regeneration is part of this flow. Unsupported old hubs, invalid snapshots and unavailable
+Desktop models fail apply without a local-catalog or loopback fallback.
+
+Managed-namespace date aliases occupy `claude-opus-4-8-YYYYMMDD` slots across 2026-2035, not 2026
+alone. The original 2026-only design held 365 slots and failed with "all 365 encoded date slots are
+occupied" once a catalog exceeded 365 routes, because stale assignments are retained by design and
+the set only grows. 2026 is still allocated first, so existing assignments keep their ids, and
+2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
+`claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
+distinction. Every emitted suffix stays eight digits so `modelMap` date-stripping keeps working.
+`src/claude/desktop-profile.ts` owns this range.
+
+Date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
+mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed
+`desktop_model_mapping_unavailable` error rather than classifying it as invalid. Unknown legacy hash aliases
+remain HTTP 400; neither case reaches date-stripping or fallback routing. Known/registered IDs,
+exact operator mappings and recognized native IDs keep their existing handling. Discovery refresh
+or reapplying the connected hub profile may supply the missing mapping; retry alone does not
+guarantee resolution.
+
+The remote-alias slice does not change thinking/redacted-thinking replay or prompt-cache
+behavior. Those remain the separate request tracked in #3719; proxy admission alone does not
+establish native Anthropic passthrough or imply that translated Anthropic caching is disabled.
+
+### Desktop ownership across the connection lifecycle
+
+`src/claude/desktop-remote-store.ts` owns the first protected restoration baseline and the
+connection-owned Desktop fields. `src/cli/claude-desktop.ts` handles connected apply, while
+`src/client/connect.ts` coordinates key rotation/recovery and disconnect. Reapply and rotation retain the original
+baseline. Restoration merges into current user fields, preserves unrelated profiles, and restores
+the previous selection only while the managed profile is still selected. A later valid user
+selection is not changed. A newly created profile with user additions is retained in readable
+standard mode instead of deleting those additions.
+
+A proven legacy current-hub/recognized-key profile without an original baseline can be adopted
+by apply, rotation/recovery or direct disconnect without a new flag or prerequisite reapply.
+Its explicit standard-fallback outcome is distinct from original restoration: only owned gateway
+settings are removed, with user fields and independent valid selection preserved. Unknown keys,
+changed managed fields or damaged restoration records remain conflicts, not permission to capture
+new originals or overwrite user data.
+
+Rotation changes credentials without changing model IDs, family/default choices or selecting the
+managed profile again. The CLI reports `rotation: "committed"` only for the new active generation;
+`rotation: "rolled_back"` means the previous generation was retained/restored and must not claim
+revocation of that previous key. Incomplete recovery keeps the operation unresolved. Disconnect
+restores Desktop even with `--keep-catalog`; retries preserve the original catalog choice and must
+not clear a newer connection. Authorized uninstall completes or resumes owned Desktop cleanup
+before removing OpenCodex state, and preserves recovery state when cleanup conflicts or fails.
+
+These guarantees concern files on disk. Fully quitting and reopening Desktop is required after
+apply, rotation/recovery or restoration; there is no automatic process restart or guarantee that
+a running app discarded a key. Local disconnect does not revoke the hub key or remove arbitrary
+external copies. Model-list snapshot version 1 remains a read-only contract, not a new lifecycle
+or profile-upload API. Thinking replay and prompt caching remain separate in #3719.
+
+The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
+
+Connected `ocx status` diagnostics follow the shared
+[status credential binding](../runtime.md#remote-hub-status-credential-binding).
+
+## Claude Desktop config-library resolution
+
+The Desktop profile writer and the management status probe share
+`resolveDesktop3pConfigLibraryPath`. The resolver reproduces Desktop's own rule rather than a guess:
+an explicit `CLAUDE_USER_DATA_DIR` (or the opencodex override) wins; on Windows
+`%LOCALAPPDATA%\Claude-3p` wins; otherwise the Electron user-data path gains a `-3p` suffix if it
+does not already have one. `configLibrary` is appended to that root.
+
+`Claude-3p` is Desktop's real directory name, assembled at runtime from `"Claude" + "-3p"`, which is
+why searching the app bundle for the literal string finds nothing. It is not a legacy path to migrate
+away from. Resolution stays a pure function of (env, platform, home) so the Windows branch is
+testable on any host: stubbing `process.platform` does not propagate to `os.platform()` under Bun.
+
+> Decision record: [ADR-0046](../decisions/ADR-0046-claude-desktop-config-library-resolution.md)
+
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+
+Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+
+Client usage transport follows [the runtime contract](../runtime.md#lifecycle), independently of Desktop inference.
+
+The unregistered executor CLI module stores Remote Workspace state separately from client configuration; see [Remote Workspace](../remote-workspace.md).
+
+Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
+
+Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
+Chat helper admission in `src/server/responses/core.ts` follows the
+[deferred stored-main contract](../providers/openai-tiers.md): only a needed Direct OpenAI helper
+claims stored main, after terminal vision, routed vision and search exclusions.
+
+Desktop requests routed to the Codex pool use the shared [automatic plan exclusion contract](../providers/openai-tiers.md#automatic-pool-plan-exclusions); explicit account-qualified targets retain their selection semantics.
+
+The management quota DTO keeps Combo editing aligned with scoped inference evidence;
+see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+
+Optional Codex transport-hint suppression is scoped to canonical Responses client output;
+its defaults and exclusions are owned by [Responses transport](../transports/responses.md).
+
+Provider summary defaults are Responses-specific and do not rewrite connected Claude Desktop profiles. See [inbound compatibility](../data-planes/inbound-compat.md).
+
+Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
+privately to final dispatch; preliminary route selection does not inject Go-only headers.
+
+The explicit sync coordinator also accepts Cline CLI as a separate file integration. Its [paired-file recovery](integrations.md#cline-paired-files) is owned by the generic integration journal, independently of Desktop profile snapshots.
+
+`claudeCode.stabilizePromptCache` is a default-off operator setting for
+[translated instruction stabilization](../data-planes/inbound-compat.md#opt-in-claude-instruction-stabilization).
+Config JSON preserves the boolean; only literal true activates the role-changing transform.
+The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
+
+Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
+
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+
+The account history response can include a [low-confidence effective capacity estimate](../providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+
+Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
+
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+
+Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
+
+OpenCode is a separate launcher: its management catalog read retains local admin authority in the parent, while generated provider blocks reference only the child admission environment. It does not change Desktop configuration ownership.
+
+The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
+
+Exact [model input declarations](../config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
+
+Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.

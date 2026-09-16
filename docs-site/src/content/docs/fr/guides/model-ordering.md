@@ -124,7 +124,7 @@ au-delà de ce bloc mis en avant :
 ```json
 {
   "modelPickerOrder": [
-    "tyler/deepseek-v4-pro",
+    "tyler/deepseek-v4-flash",
     "jd-chat/kimi-k3",
     "jd-chat/glm-5.2"
   ]

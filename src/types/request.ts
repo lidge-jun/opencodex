@@ -79,6 +79,8 @@ export interface OcxParsedRequest {
    * prepareOpaqueBlobRecovery after an authoritative rejection; consumers strip replayed blobs.
    */
   _stripReasoningEncryptedContent?: boolean;
+  /** Final-route opt-in: emit v2 collaboration message arguments as plaintext on ChatGPT. */
+  _plaintextV2AgentMessages?: boolean;
   /**
    * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.
    * When absent (single-operator local proxy), derivation stays local-scoped.
@@ -100,7 +102,7 @@ export interface OcxParsedRequest {
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and
-   * executes searches via the gpt-5.4-mini sidecar (see src/web-search). Absent when not requested.
+   * executes searches via the gpt-5.6-luna sidecar (see src/web-search). Absent when not requested.
    */
   _webSearch?: Record<string, unknown>;
   /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */
@@ -152,9 +154,11 @@ export interface OcxAssistantMessage {
   model?: string;
   timestamp: number;
   /**
-   * Kiro `reasoningContent.redactedContent` for THIS assistant turn — an opaque encrypted blob
-   * Kiro replays to preserve model reasoning across turns. Provider-specific and unrenderable, so
-   * it rides the message rather than a content part: any other adapter simply ignores it.
+   * Kiro's encrypted reasoning blob for THIS assistant turn — the opaque value from the turn's
+   * `reasoningContentEvent` (`signature` for the GPT-5.6 family, `redactedContent` for the base64
+   * shape), tagged with the wire field it must be replayed on (see kiro/reasoning.ts). Kiro
+   * replays it to preserve model reasoning across turns. Provider-specific and unrenderable, so it
+   * rides the message rather than a content part: any other adapter simply ignores it.
    */
   kiroRedactedReasoning?: string;
 }
@@ -315,8 +319,9 @@ export type AdapterEvent =
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
   | { type: "thinking_signature"; signature: string }
   | { type: "redacted_thinking"; data: string }
-  // Kiro reasoning round-trip: the encrypted `redactedContent` blob for the CURRENT assistant turn.
-  // Never rendered — it only rides the reasoning item's envelope so the next request can replay it.
+  // Kiro reasoning round-trip: the encrypted reasoning blob for the CURRENT assistant turn, tagged
+  // with the wire field it arrived on. Never rendered — it only rides the reasoning item's envelope
+  // so the next request can replay it verbatim.
   | { type: "kiro_redacted_reasoning"; data: string }
   | { type: "reasoning_raw_delta"; text: string }
   | { type: "tool_call_start"; id: string; name: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata }

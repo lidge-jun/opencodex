@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir } from "../../src/config";
 import type { QuotaResetEvent } from "../../src/quota/reset-detector";
@@ -7,12 +8,43 @@ import {
   claimCountForTests,
   claimQuotaReset,
   forgetLastObservedWindows,
+  flushQuotaResetStoreForTests,
   hasSeenQuotaReset,
   listRecentQuotaResetEvents,
   recordQuotaResetEvent,
   resetQuotaResetStoreForTests,
   swapLastObservedWindows,
 } from "../../src/quota/reset-seen-store";
+
+/**
+ * This file owns its config directory instead of inheriting one.
+ *
+ * Every case here resolves the process-global config home, and one of them DELETES it to
+ * force a write failure. That is bounded only while OPENCODEX_HOME points at a sandbox, and
+ * the preload that normally guarantees it does not cover every way this file can be run: Bun
+ * resolves `bunfig.toml` — and therefore its `preload = ["./tests/preload.ts"]` — from the
+ * CURRENT WORKING DIRECTORY. A run started outside the repository loads no preload, leaves
+ * OPENCODEX_HOME unset and the guard disarmed, and `getConfigDir()` then resolves the
+ * developer's real `~/.opencodex`.
+ *
+ * On 2026-09-15 exactly that invocation ran this file and deleted a live home. auth.json,
+ * codex-accounts.json, the service tokens and a 372MB usage ledger went with it; every OAuth
+ * login on the machine was gone, and only an unrelated three-week-old copy made any of it
+ * recoverable. The write guard could not help: `assertNotRealHomeUnderTest` covers
+ * writers, and `rmSync` is not one.
+ *
+ * Pinning the home here is what makes the deletion below safe under EITHER invocation. The
+ * previous value is restored afterwards because Bun reuses one process for several files.
+ */
+const PREVIOUS_OPENCODEX_HOME = process.env.OPENCODEX_HOME;
+const ISOLATED_HOME = mkdtempSync(join(tmpdir(), "quota-reset-seen-store-"));
+process.env.OPENCODEX_HOME = ISOLATED_HOME;
+
+afterAll(() => {
+  if (PREVIOUS_OPENCODEX_HOME === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = PREVIOUS_OPENCODEX_HOME;
+  rmSync(ISOLATED_HOME, { recursive: true, force: true });
+});
 
 const DAY = 24 * 60 * 60_000;
 /**
@@ -39,6 +71,27 @@ beforeEach(() => {
   resetQuotaResetStoreForTests();
 });
 
+test("opted-in missing short history keeps its observation clock across persistence", () => {
+  const short = { window: "5h", percent: 96, resetAt: NOW + 60_000, observedAt: NOW };
+  const weekly = { window: "weekly", percent: 20, observedAt: NOW + 61_000 };
+  swapLastObservedWindows("codex", "retain00", [short], true);
+  swapLastObservedWindows("codex", "retain00", [weekly], true);
+  flushQuotaResetStoreForTests();
+  resetQuotaResetStoreForTests();
+  expect(swapLastObservedWindows("codex", "retain00", [weekly], true)).toContainEqual(short);
+  expect(swapLastObservedWindows("codex", "retain00", [weekly], true)).toContainEqual(short);
+  forgetLastObservedWindows("codex", "retain00");
+  expect(swapLastObservedWindows("codex", "retain00", [weekly], true)).toBeUndefined();
+});
+
+test("omitted windows are still replaced when retention is not requested", () => {
+  const short = { window: "5h", percent: 96, observedAt: NOW };
+  const weekly = { window: "weekly", percent: 20, observedAt: NOW + 61_000 };
+  swapLastObservedWindows("provider", "replace0", [short]);
+  swapLastObservedWindows("provider", "replace0", [weekly]);
+  expect(swapLastObservedWindows("provider", "replace0", [weekly])).toEqual([weekly]);
+});
+
 describe("quota reset claim store", () => {
   test("claimQuotaReset returns false when the claim is not durable", () => {
     // The caller reads true as "durably claimed, safe to dispatch". Two paths broke that.
@@ -53,7 +106,10 @@ describe("quota reset claim store", () => {
     //    still reported a durable claim and the next start re-notified.
     // atomicWriteFile writes a sibling temp file in the config dir, so replacing that
     // directory with a regular file makes the real write fail without touching the module.
-    const configDir = getConfigDir();
+    // This file's OWN directory, named directly: the store resolves the same path, and a
+    // destructive call must never be able to follow a config home it did not create.
+    const configDir = ISOLATED_HOME;
+    expect(getConfigDir()).toBe(configDir);
     rmSync(configDir, { recursive: true, force: true });
     writeFileSync(configDir, "not a directory");
     try {

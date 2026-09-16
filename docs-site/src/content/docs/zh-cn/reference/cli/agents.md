@@ -75,6 +75,8 @@ API key，且绝不会回退到 native alias。启用这组兼容选项前，请
 ocx observe usage --range 30d --json
 ```
 
+部分用量记录无法计入时，人类可读输出会显示警告，即使没有可读取的记录也是如此。显示的总数仅反映可读取的记录。如果筛选条件没有匹配到可读取的记录，输出将显示警告和提示，而不显示总数行；被跳过的记录可能包含匹配项。`--json` 原样保留响应中的 `usageIncomplete` 诊断及原因。
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 通过正在运行的代理的管理 API 读取或更改运行时调试覆盖项。
@@ -132,7 +134,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ## Client config export
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
 
 输出连接到正在运行代理的客户端配置。此命令会以所选客户端的原生格式序列化 `opencodex` provider 块，其中包含基础 URL、模型列表，以及该客户端适用的凭据引用或 `opencodex-loopback` 占位值。
 
@@ -140,7 +142,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 | 标志 | 动作 |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast>` | 必需。选择客户端配置格式。 |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | 必需。选择客户端配置格式。 |
 | `--json` | 仅在 stdout 打印配置 JSON，这样重定向即可捕获字节级精确输出。包括 `--out` 写入提示在内的所有诊断信息都会输出到 stderr。 |
 | `--out <path>` | 将配置写入 `<path>`。拒绝替换已存在的文件。 |
 | `--force` | 允许 `--out` 替换已存在的文件。 |
@@ -167,7 +169,9 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `mcode` | `~/.minimax/config.yaml` (设置后 `MINIMAX_DATA_DIR` 优先，其次是旧的 `MAVIS_DATA_DIR`；相对路径会被拒绝) | `mcode-config.yaml` | 无 — loopback placeholder |
 | `zcode` | `~/.zcode/v2/config.json` (设置后 `ZCODE_DATA_DIR` 优先；相对路径会被拒绝) | `config.json` | 无 — loopback placeholder |
 | `prime` | `~/.prime/agent/models.json` (设置后 `PRIME_AGENT_CODING_AGENT_DIR` 优先；相对路径会被拒绝) | `prime-models.json` | 无 — loopback placeholder |
+| `aside` | `~/.aside/u/<account>/models.json`，对应 Aside 自己的 `accounts.json` 指明的当前账户；清单不可读时会被拒绝，而不是退回到某个账户 | `aside-models.json` | 无 — loopback placeholder |
 | `raycast` | `~/.config/raycast/ai/providers.yaml`（macOS 与 Windows 相同；Raycast 不遵循 `XDG_CONFIG_HOME`） | `raycast-providers.yaml` | 无 — 仅限回环，不会写入 `api_keys` 条目 |
+| `omo` | `~/.omo/agent/models.json`（设置后依次由 `OMO_CODING_AGENT_DIR`、`SENPI_CODING_AGENT_DIR`、`PI_CODING_AGENT_DIR` 优先；相对路径会被拒绝） | `omo-models.json` | 无 — loopback placeholder |
 
 Raycast 导出是一份独立的 `providers.yaml` 文档，在 `providers` 序列中只有一个 `id: opencodex` 元素：`name: OpenCodex`、代理的 `/v1` 基础 URL，以及每个已路由模型及其 `abilities`（`tools` 与 `system_message` 始终支持，`vision` 取自目录的输入模态，`reasoning_effort` 在模型有 effort 阶梯时设置，`temperature` 对推理模型关闭）。Custom Providers 是 Raycast Pro 功能，且 Raycast 会监视该文件，因此保存后的更改无需重启即可生效。格式见 [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)。不会写入任何 `api_keys` 条目，所以该导出仅限回环，非回环绑定会被拒绝。
 
@@ -177,7 +181,7 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，请设置对应的 `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY` 或 `OPENCODEX_OPENCLAW_API_KEY`。`OPENCODEX_GAJAE_API_KEY` 只会从环境中提供 Gajae provider 凭据，不能发送远程准入 header，因此生成的 Gajae 集成仍仅支持环回。关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
+任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，请设置对应的 `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY` 或 `OPENCODEX_OPENCLAW_API_KEY`。`OPENCODEX_GAJAE_API_KEY` 只会从环境中提供 gjc provider 凭据，不能发送远程准入 header，因此生成的 gjc 集成仍仅支持环回。关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
 
 同一份负载会通过 `GET /api/client-config` 提供，并在仪表盘的 API 选项卡中渲染，因此 CLI、API 和 GUI 使用的是同一字节内容。
 
@@ -186,6 +190,8 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 ### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 管理无头运行时设置、启动、同步、诊断和更新。
+
+`ocx system codex-restart --yes` 通过与 `ocx sync --restart-codex` 相同的模块重启 Codex app-server，并完全退出再重新启动 Codex 桌面应用。若代理本身运行在 Codex 应用内部，该命令会给出可执行提示并拒绝，而不是承诺无法完成的移交。
 
 ```bash
 ocx system settings --stream-mode eager-relay
@@ -197,7 +203,9 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` 不会向软件包注册表发起请求，只会在限定范围内检查已配置候选项的来源证据，包括经过脱敏的可执行文件位置和所有权证据。受信任的已发布启动器上下文只能验证该候选项快照，并不证明 Codex 已成功运行。由于这条一次性命令绝不会运行 Codex，来自环境变量和持久化记录的候选项仅用于报告（`managed: false`，通常为 `selection_unattested`）；JSON 输出包含 `candidateAvailable`、`candidateVersion` 和 `candidateSource`，且 `selectionAttested` 始终为 `false`。检查已配置候选项需要受信任的已发布启动器上下文；直接使用 Bun 启动或从源码运行时没有这项证明，因此会忽略环境变量和持久化记录中的候选项状态，并可能报告 `candidate_unavailable`。在 Windows 上，这个首个切片不会对候选路径或配置路径执行任何文件系统 I/O。只有由受信任启动器捕获的绝对环境候选项可以获得应用捆绑或版本管理器的纯词法标签；其他所有 Windows 候选项都会以失败关闭方式处理。该命令不会运行 Codex 或软件包管理器，不会修复 shim，不会写入配置或缓存，不会停止进程，也不会安装任何内容。随应用捆绑的候选项、位于已识别版本管理器路径中的候选项、未经验证的独立候选项以及 shim 状态不明确的候选项，都会报告为 `unmanaged` 或 `unknown`，绝不会归类为 `managed`。
+`check` 不会向软件包注册表发起请求，只会在限定范围内检查已配置候选项的来源证据，包括经过脱敏的可执行文件位置和所有权证据。受信任的已发布启动器上下文只能验证该候选项快照，并不证明 Codex 已成功运行。由于这条一次性命令绝不会运行 Codex，来自环境变量和持久化记录的候选项仅用于报告（`managed: false`，通常为 `selection_unattested`）；JSON 输出包含 `candidateAvailable`、`candidateVersion` 和 `candidateSource`，且 `selectionAttested` 始终为 `false`。检查已配置候选项需要受信任的已发布启动器上下文；直接使用 Bun 启动或从源码运行时没有这项证明，因此会忽略环境变量和持久化记录中的候选项状态，并可能在 POSIX 系统上报告 `candidate_unavailable`。在 Windows 上，这个首个切片不会对候选路径或配置路径执行任何文件系统 I/O。只有由受信任启动器捕获的绝对环境候选项可以获得应用捆绑或版本管理器的纯词法标签；其他所有 Windows 候选项都会以失败关闭方式处理。由于这个切片完全不读取持久化的选择状态，在未捕获任何环境候选项的 Windows 运行中会报告 `windows_inspection_deferred` 而非 `candidate_unavailable`：该命令无法观测 Codex CLI 是否已安装，因此报告检查被推迟，而不是断言不存在候选项。该命令不会运行 Codex 或软件包管理器，不会修复 shim，不会写入配置或缓存，不会停止进程，也不会安装任何内容。随应用捆绑的候选项、位于已识别版本管理器路径中的候选项、未经验证的独立候选项以及 shim 状态不明确的候选项，都会报告为 `unmanaged` 或 `unknown`，绝不会归类为 `managed`。
+
+在 Windows 上，如果捕获到 `CODEX_CLI_PATH=codex` 这样的裸命令、远程路径或设备路径，则报告 `candidate_path_unavailable`。这些情况下候选项已被捕获，但其路径不适用于此检查。
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

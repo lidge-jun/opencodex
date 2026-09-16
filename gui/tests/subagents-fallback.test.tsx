@@ -99,7 +99,7 @@ beforeEach(() => {
           model: preferredModel,
           effort: null,
           available: [
-            { provider: "openai", model: "gpt-5.4", namespaced: "gpt-5.4" },
+            { provider: "openai", model: "gpt-5.5", namespaced: "gpt-5.5" },
             { provider: "anthropic", model: "claude-sonnet-4-6", namespaced: "anthropic/claude-sonnet-4-6" },
           ],
           efforts: [],
@@ -735,7 +735,7 @@ const compatibilityCases: Array<{
   keepNative: boolean;
   warning: boolean;
 }> = [
-  { name: "native preferred model", model: "gpt-5.4", enabled: true, mode: "v2", keepNative: false, warning: false },
+  { name: "native preferred model", model: "gpt-5.5", enabled: true, mode: "v2", keepNative: false, warning: false },
   { name: "routed preferred model on the default surface", model: "anthropic/claude-sonnet-4-6", enabled: false, mode: "default", keepNative: false, warning: true },
   { name: "routed preferred model on V1", model: "anthropic/claude-sonnet-4-6", enabled: false, mode: "v1", keepNative: false, warning: false },
   { name: "forced V2 preserving native V1 with global V2 disabled", model: "anthropic/claude-sonnet-4-6", enabled: false, mode: "v2", keepNative: true, warning: false },

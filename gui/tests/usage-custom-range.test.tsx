@@ -85,6 +85,25 @@ async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });
 }
 
+test("incomplete usage notice survives held cache and remains visible with no readable rows", async () => {
+  await mount();
+  const partial = { ...report(requests[0], "readable-model"), usageIncomplete: true, usageIncompleteReason: "oversized_rows" };
+  await act(async () => { requests[0].resolve(Response.json(partial)); });
+  expect(container.textContent).toContain("Some usage records could not be included");
+  expect(container.textContent).toContain("readable-model");
+  expect(sessionEntries().some(([, value]) => value?.includes('"usageIncomplete":true'))).toBe(true);
+  await act(async () => { root!.unmount(); });
+  root = undefined;
+  clearClientResourceStoresForTests();
+  await mount();
+  expect(container.textContent).toContain("Some usage records could not be included");
+  await act(async () => { requests[1].resolve(Response.json({ ...partial,
+    summary: { ...partial.summary, requests: 0, totalTokens: 0 }, days: [], models: [],
+  })); });
+  expect(container.textContent).toContain("Some usage records could not be included");
+  expect(container.textContent).not.toContain("readable-model");
+});
+
 const toggle = () => container.querySelector<HTMLButtonElement>(".usage-range-toggle")!;
 const form = () => container.querySelector<HTMLFormElement>('form[aria-label="Custom date range"]')!;
 const startInput = () => form().querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[0];
@@ -202,9 +221,9 @@ test("America/Santiago midnight DST retains final-day activity and tooltip", asy
   await act(async () => gate.resolve(Response.json(data)));
   const active = container.querySelector<HTMLElement>('.heatmap-grid .heatmap-cell:not(.heatmap-cell-0)');
   expect(active).not.toBeNull();
-  await act(async () => active!.dispatchEvent(new testWindow.MouseEvent("mouseover", { bubbles: true })));
-  expect(container.querySelector(".heatmap-tip-date")?.textContent).toBe("2026-09-07");
-  expect(container.querySelector(".heatmap-tip")?.textContent).toContain("700");
+  await act(async () => active!.dispatchEvent(new testWindow.PointerEvent("pointerover", { bubbles: true })));
+  expect(document.querySelector(".heatmap-tip-date")?.textContent).toBe("Sep 7, 2026");
+  expect(document.querySelector(".heatmap-tip")?.textContent).toContain("700");
   if (process.env.OCX_USAGE_SANTIAGO_CHILD === "1") console.log("OCX_SANTIAGO_CASE_COMPLETED");
 }, process.env.OCX_USAGE_SANTIAGO_CHILD === "1" ? 10000 : 15000);
 
@@ -235,8 +254,8 @@ test("Apply submits inclusive bounds once; Clear restores the held preset withou
   // A one-day historical window must not produce a year grid anchored to today's date.
   expect(container.querySelectorAll(".heatmap-grid .heatmap-cell")).toHaveLength(7);
   const activeCell = container.querySelector(".heatmap-grid .heatmap-cell-1")!;
-  await act(async () => { activeCell.dispatchEvent(new testWindow.MouseEvent("mouseover", { bubbles: true })); });
-  expect(container.querySelector('[role="tooltip"]')?.textContent).toContain("2020-09-15");
+  await act(async () => { activeCell.dispatchEvent(new testWindow.PointerEvent("pointerover", { bubbles: true })); });
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("Sep 15, 2020");
   await enter("2020-09-16T10:20", "2020-09-16T10:21");
   expect(interval()).toBe(appliedInterval);
   expect(requests).toHaveLength(2);

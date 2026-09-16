@@ -19,6 +19,7 @@ gui/eslint.config.*
 gui/bun.lock
 
 # misc
+native/remote-workspace-helper/target/
 *.test.ts
 *.map
 .DS_Store

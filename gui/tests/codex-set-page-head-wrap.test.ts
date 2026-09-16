@@ -3,12 +3,8 @@ import { expect, test } from "bun:test";
 /**
  * The Codex Set page head must be able to wrap.
  *
- * Its action cluster is four nowrap items — the Spark switch, two labelled
- * buttons, and the feedback slot. While the head was a single nowrap flex row,
- * a narrow viewport pushed the trailing button past its own container, and
- * `overflow-x: hidden` on html/body turned that into a clip rather than a
- * scrollbar: measured at 850px, "Refresh quotas" ran to x=944 against a
- * container ending at 804.
+ * The standalone head holds a title and feedback slot. Long translated feedback
+ * must wrap below the title without clipping; pause/refresh have a separate row.
  *
  * Source-text assertions, not measurements: happy-dom performs no layout, so a
  * getBoundingClientRect() here returns zeros and would prove nothing. The

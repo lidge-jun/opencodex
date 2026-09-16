@@ -12,7 +12,7 @@ opencodex 內建了一個由代理提供服務的本機 web 儀表板（`gui/` �
 ocx gui
 ```
 
-該命令會在瀏覽器中開啟 `http://localhost:<port>`；如果代理尚未執行，會先自動啟動。開發時也可
+該命令會在瀏覽器中開啟 `http://localhost:<port>`；在啟用管理 ingress 的 hub 上則開啟 `http://127.0.0.1:<管理埠>`；如果代理尚未執行，會先自動啟動。開發時也可
 讓 GUI dev server 單獨連線到正在執行的代理：
 
 ```bash
@@ -43,13 +43,15 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 | **Windows 托盤** | 安裝使用者登入托盤，一鍵控制代理啟動、停止、重啟、面板和狀態。托盤不是代理重啟服務。 |
 | **Codex 自動啟動** | 允許已安裝的 Codex launcher shim 執行 `ocx ensure`。此開關不會安裝 shim 或後臺服務。 |
 | **Providers** | 新增、編輯、啟用/停用、刪除 provider，並在支援時管理 OAuth 帳號池和 API key 池。 |
-| **Add provider** | 搜尋 registry preset，選擇帳號登入、API key 服務、本機伺服器或自訂 endpoint。 |
+| **Add provider** | 分頁上方的單一搜尋框可同時搜尋帳號、免費、本機、付費四個分頁。搜尋時選取的分頁不會跳轉，結果依分頁分組並顯示數量。本機執行環境（Ollama、vLLM、LM Studio、LiteLLM）有專屬分頁，過長的說明會截斷為兩行，點擊即可查看全文。 |
 | **Codex Auth** | 新增 ChatGPT/Codex 池帳號，選擇下一 session 的帳號，重新整理 5h / 每週 / 30d 配額，啟用或停用配額自動切換，設定其 1–100% 閾值和臨時故障 failover。 |
 | **Subagents** | 在 `spawn_agent` override 列表中置頂最多五個原生或路由模型。 |
 | **Models** | 開關原生 GPT 與路由模型，設定 provider allowlist、上下文上限、v1/base/v2 以及 v2 thread 數量。 |
 | **Logs** | 自動重新整理近期請求，顯示 token、請求強度、實際模型、provider、狀態、request id、耗時和錯誤詳情。 |
 | **Usage / Debug** | 檢視 token usage 覆蓋率與趨勢，或啟用可選的 provider transport 和 usage 提取診斷。 |
 | **Stop** | 優雅地停止代理和已安裝的後臺服務，恢復原生 Codex 並退出（`POST /api/stop`）。在使用工作排程器後端的 Windows 上，儀表板會拒絕並提示改用 `ocx stop`：工作結束後包裝程序仍可能重新啟動 Proxy，只有執行在 Proxy 之外的 stop 才能在還原用戶端設定前確認這個重啟視窗。被拒絕時不會做任何變更。 |
+
+用量、儀表板、供應商工作區、供應商目錄和 API 金鑰頁面會提示部分記錄被排除，即使沒有可讀取的記錄。次數、日期和使用排名僅反映可讀取的記錄。歷史不完整時，無法儲存模型的最常用排序；請選擇其他排序或修復歷史後重試。
 
 ### 篩選請求日誌
 
@@ -109,9 +111,10 @@ Dashboard 的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以
 
 - 手動選擇帳號會影響下一次新建的 Codex session；已經繫結帳號的 thread 不會因為這次手動切換而
   在中途轉移。
-- Thread affinity 可避免每個請求都來回切換帳號。啟用配額自動切換後，長時間執行的 thread 會被
-  定期重新評估；當相關 usage 達到閾值，並且存在使用率確實更低的可用帳號時，該 thread 可能會
-  重新繫結。
+- Thread affinity 可避免每個請求都來回切換帳號。預設開啟 `pool.cacheAffinity` 後，長時間執行的
+  thread 不會只因 usage 達到閾值就重新繫結；只有帳號耗盡或無法繼續服務時才會離開，並且只重新繫結到
+  確有額度餘裕且使用率確實更低的帳號。關閉該設定後，才會在存在使用率確實更低且確有額度餘裕的
+  可用帳號時依閾值重新繫結。
 - 新 session 可以選擇 usage 最低的可用帳號。付費計劃按已知 5h、每週、30d 視窗中的最高使用率
   評分；Go/Free 計劃只使用 30d 視窗。
 - **Refresh quotas** 會立即重新讀取帳號 usage，使路由邏輯與頁面上的帳號卡片使用同一份資料。

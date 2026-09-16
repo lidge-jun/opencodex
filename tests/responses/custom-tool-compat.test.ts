@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rewriteRoutedCustomToolsForUpstream } from "../../src/responses/custom-tool-compat";
+import { hasUnmappedRoutedCustomToolOutput, rewriteRoutedCustomToolsForUpstream } from "../../src/responses/custom-tool-compat";
 
 function convertedInputDescription(name: string): string | undefined {
   const result = rewriteRoutedCustomToolsForUpstream({
@@ -14,6 +14,51 @@ function convertedInputDescription(name: string): string | undefined {
 }
 
 describe("routed custom-tool compatibility", () => {
+  test("requires replay for ambiguous delta results without guessing their native or lowered type", () => {
+    const exec = { type: "custom", name: "exec", description: "Run JavaScript" };
+    const patch = { type: "custom", name: "apply_patch", description: "Apply a patch" };
+    const result = { type: "custom_tool_call_output", call_id: "call_sample", output: "done" };
+    const body = { tools: [exec, patch], input: [result] };
+    expect(hasUnmappedRoutedCustomToolOutput(body)).toBe(true);
+    expect(body.input).toEqual([result]);
+    // A native patch result with its known call remains native, even with exec declared.
+    const knownPatch = { ...body, input: [
+      { type: "custom_tool_call", name: "apply_patch", call_id: "call_sample", input: "patch" }, result,
+    ] };
+    expect(hasUnmappedRoutedCustomToolOutput(knownPatch)).toBe(false);
+    expect((rewriteRoutedCustomToolsForUpstream(knownPatch).body as typeof knownPatch).input[1]).toEqual(result);
+    // A complete lowered call/result pair can use the existing lossless conversion.
+    const knownExec = { ...body, input: [
+      { type: "custom_tool_call", name: "exec", call_id: "call_sample", input: "text(1)" }, result,
+    ] };
+    expect(hasUnmappedRoutedCustomToolOutput(knownExec)).toBe(false);
+    expect((rewriteRoutedCustomToolsForUpstream(knownExec).body as typeof knownExec).input[1]!.type).toBe("function_call_output");
+  });
+
+  test("preserves native-only continuations and follows explicit custom-tool lowering", () => {
+    const result = { type: "custom_tool_call_output", call_id: "call_sample", output: "done" };
+    const patchOnly = { tools: [{ type: "custom", name: "apply_patch" }], input: [result] };
+    expect(hasUnmappedRoutedCustomToolOutput(patchOnly)).toBe(false);
+    expect(hasUnmappedRoutedCustomToolOutput(patchOnly, true)).toBe(false);
+    expect(hasUnmappedRoutedCustomToolOutput(patchOnly, false)).toBe(true);
+    expect(hasUnmappedRoutedCustomToolOutput({ input: [result] })).toBe(false);
+    expect(hasUnmappedRoutedCustomToolOutput({
+      tools: [{ type: "custom", name: "exec" }],
+      input: [{ ...result, type: "function_call_output" }],
+    })).toBe(false);
+  });
+
+  test("detects lowered results when the current catalog is nested or supplied by additional_tools", () => {
+    const result = { type: "custom_tool_call_output", call_id: "call_sample", output: "done" };
+    const tool = { type: "custom", name: "exec", description: "Run JavaScript" };
+    expect(hasUnmappedRoutedCustomToolOutput({
+      tools: [{ type: "namespace", name: "functions", tools: [tool] }], input: [result],
+    })).toBe(true);
+    expect(hasUnmappedRoutedCustomToolOutput({
+      input: [{ type: "additional_tools", tools: [tool] }, result],
+    })).toBe(true);
+  });
+
   test.each([
     ["absent", undefined],
     ["true", true],

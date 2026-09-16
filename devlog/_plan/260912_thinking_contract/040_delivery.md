@@ -1,0 +1,7 @@
+# Final heads and handoff
+
+Class C3 delivery evidence. Depends on all dispositions. MODIFY branch-owned numbered completion docs and ignored .tmp/thinking/handoff.md. Read existing .github/PULL_REQUEST_TEMPLATE.md; write every section, credits and precise NOT RUN limitation. Publish only own codex/260912-60plus-thinking* branches with git push --no-verify; PR bases dev for independent units, ordinary parent branch only for actual dependencies. No merge/auto-merge/closures.
+
+NEW .tmp/thinking/*-ci.json captures gh run view JSON for final SHA plus all jobs. NEW .tmp/thinking/*-review.md captures independent implementation findings with accepted/rebutted disposition. Refresh head/base, native stack membership (unknown if API unsupported), current reviews and CI before handoff. Inspect .github/workflows/ci.yml and dispatch lane=all at each final branch where needed. Existing automatic runs stay untouched. If final-head CI fails, inspect failing logs, repair scoped source or fixtures, commit/push --no-verify and validate new final tip. Do not label skipped/cancelled/old-head runs passing.
+
+Final handoff fields: own worktree, branch per PR, source PR disposition, exact head, PR URL, dependency order, original author trailers, remaining acceptance, unresolved reviews, CI run id/url/head/result/job conclusions, own cycle records and local tests NOT RUN. Parent performs any subsequent integration. No evidence claims from peer commentary alone.

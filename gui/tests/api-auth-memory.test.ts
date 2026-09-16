@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { configureApiTargets, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
+import { configureApiTargets, fetchAudioUpload, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
 import { targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
@@ -84,6 +84,29 @@ test("installApiAuthFetch deletes legacy sessionStorage token without reading it
   } finally {
     storage.getItem = originalGetItem;
   }
+});
+
+test("audio uploads bypass connected management interception and 401 recovery", async () => {
+  injectSessionMeta("ocx_session_audio_machine", "audio-csrf", "http://localhost");
+  const seen: Array<{ url: string; headers: Headers }> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    seen.push({ url: String(input), headers: new Headers(init?.headers) });
+    return new Response("rejected", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+  configureApiTargets({
+    connected: true,
+    machine: { id: "machine", baseUrl: "http://localhost", serverOrigin: "http://localhost", bootstrapPath: "/opencodex-session", transport: "same-origin" },
+    shared: { id: "shared", baseUrl: "https://hub.example.test", serverOrigin: "https://hub.example.test", bootstrapPath: "https://hub.example.test/opencodex-session", transport: "relay" },
+  });
+  const key = "ocx_data_audio_wrapper_fixture";
+  const response = await fetchAudioUpload("https://hub.example.test/v1/audio/transcriptions", { method: "POST", headers: { "X-OpenCodex-API-Key": key }, body: new FormData() });
+  expect(response.status).toBe(401);
+  expect(seen).toHaveLength(1);
+  expect([...seen[0]!.headers]).toEqual([["x-opencodex-api-key", key]]);
+  expect(sessionStorage.length).toBe(0);
+  await expect(fetchAudioUpload("https://hub.example.test/api/config", { method: "POST" })).rejects.toThrow();
+  expect(seen).toHaveLength(1);
 });
 
 test("prompted API tokens stay memory-only and are not written to sessionStorage", async () => {

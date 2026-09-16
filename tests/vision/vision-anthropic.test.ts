@@ -416,7 +416,7 @@ describe("Anthropic vision planning and management config", () => {
       expect(clearBody.webSearch).toEqual({ enabled: true, model: "gpt-5.6-luna", streamRoutedModelOutput: false });
       expect(clearBody.vision).toEqual({
         enabled: true,
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-luna",
         reasoning: "low",
         maxDescriptionsPerTurn: 4,
         timeoutMs: 45_000,

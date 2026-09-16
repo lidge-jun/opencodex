@@ -68,6 +68,60 @@ and repeating the call produces the same error indefinitely.
 The rule behind all of it: retry contention, never retry a broken state. A loop that retries a
 credential conflict looks like progress and produces nothing.
 
+## Service and launchd semantics (macOS)
+
+Two states that read as failures and are not. Both come from the same change: a repair of a
+healthy job must not be an outage.
+
+**`ocx service repair` printing `service is already loaded from the current plist; nothing to
+do.` is success.** The repair renders the plist first and compares it. When the rendered
+bytes match the file, the token file is unchanged, and `launchctl print` reports the job
+loaded from that plist, launchd is not touched at all. Do not retry it, and do not escalate
+to `ocx service uninstall`.
+
+**`ocx service restart` is NOT an alias of `repair` — it always restarts.** It runs the same
+refresh, and when nothing was reloaded (the healthy, unchanged job above) it restarts the
+loaded job in place with `launchctl kickstart -k gui/<uid>/com.opencodex.proxy`, verifies the
+job with the same probe, and prints `service restarted (launchctl kickstart -k …)`. So when a
+restart is the actual requirement — after a change to `unauthenticatedLoopbackListener`,
+`hostname` or `port` — tell the operator `ocx service restart`, not a hand-written launchctl
+command. Linux restarts through `systemctl --user restart` and Windows stops then starts the
+task, on either verb.
+
+A bare `ocx service` still selects `repair`, so it will not bounce a healthy hub. Reserve
+`ocx service repair` for a job loaded from an older plist, or not loaded at all.
+`launchctl kickstart -k gui/$(id -u)/com.opencodex.proxy` is still a correct manual fallback
+and the failure path names it, but do not lead with it. `ocx restart` is a different verb
+entirely: it restarts a proxy process, not the service the manager supervises.
+
+`ocx service status` has four launchd verdicts, and only two of them call for a repair:
+
+| Summary | Meaning | Repair? |
+|---|---|---|
+| `installed and loaded` | A domain answers and runs the command this plist bakes | no |
+| `installed and loaded from an OLDER plist` | Running, from a definition that no longer matches | yes |
+| `installed, not loaded` | Every domain answered "absent" — proof the job is gone | yes |
+| `installed; launchd state could not be verified` | `launchctl` could not be asked | **no** |
+
+The last row is the one to get right. It is not evidence the service is down: the command
+itself recommends nothing, and a probe that could not run never marks a running proxy as
+dead. Reporting it as "not loaded" is what used to send operators to repair a serving hub.
+If the proxy answers `ocx ready`, the hub is up regardless of what the probe could see.
+
+## A hub-gated skip is not a failure
+
+`ocx sync`, `ocx sync-cache`, `ocx ensure` and `ocx restore back` on a `runtimeRole: "hub"`
+can exit 0 having deliberately written nothing:
+
+> This machine is a hub; it does not rewrite its own Codex/Grok/Claude configs unless
+> unauthenticatedLoopbackListener is enabled.
+
+That is the hub gate, not the operator's `clientIntegrations` toggle, and not a lock
+conflict — there is nothing to retry. Either enable the listener and restart the proxy
+(`ocx service restart` on a service install), or
+report that this hub leaves its own clients native. Details:
+[05_remote_hub.md](05_remote_hub.md#the-hub-gate-on-the-hubs-own-clients).
+
 ## Destructive verbs fail closed
 
 `storage trash restore` and `storage policy run` exit 2 without `--yes` and send no mutating

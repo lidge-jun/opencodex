@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Notice } from "../ui";
+import { readUsageMetadata, type UsageReadMetadata } from "../usage-summary-resource";
 import { useI18n, LOCALES } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
@@ -20,6 +21,7 @@ import {
   deriveApiEndpoints,
   isApiAuthMatrix,
   isApiKeyUsage,
+  isAudioApiInfo,
   type ApiEndpointInfo,
   type ApiAuthMatrixRow,
   type ApiKeyEntry,
@@ -27,7 +29,7 @@ import {
   type ModelTests,
 } from "./api-keys-utils";
 
-interface KeysResponse {
+interface KeysResponse extends UsageReadMetadata {
   // `usage` is optional on the wire only so a malformed payload lands in
   // fetchKeys' validator rather than at the type boundary. A row without it is
   // rejected, not defaulted: zeroes would assert "never used" about data we
@@ -43,6 +45,7 @@ interface KeysResponse {
   messagesEndpoint?: string;
   modelsEndpoint?: string;
   claudeCodeEnabled?: boolean;
+  audio?: unknown;
 }
 
 interface CreateKeyResponse {
@@ -53,7 +56,7 @@ interface StartRotationResponse extends CreateKeyResponse {
   rotationId?: unknown;
 }
 
-type CachedKeysShape = {
+type CachedKeysShape = UsageReadMetadata & {
   keys: ApiKeyEntry[];
   endpoints: ApiEndpointInfo;
   claudeCodeEnabled: boolean;
@@ -88,6 +91,10 @@ function seedEndpointsFromApiBase(apiBase: string): ApiEndpointInfo {
 function validCachedKeys(cached: CachedKeysShape | null): CachedKeysShape | null {
   if (!cached || !isApiAuthMatrix(cached.authMatrix)) return null;
   if (!Array.isArray(cached.keys) || cached.keys.some(key => !key || !isApiKeyUsage(key.usage) || !validPendingRotation(key.pendingRotation))) return null;
+  if (cached.endpoints?.audio !== undefined && !isAudioApiInfo(cached.endpoints.audio, cached.endpoints.baseUrl)) {
+    const { audio: _audio, ...endpoints } = cached.endpoints;
+    return { ...cached, endpoints };
+  }
   return cached;
 }
 
@@ -155,10 +162,12 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         chatCompletions: data.chatCompletionsEndpoint ?? derived.chatCompletions,
         messages: data.messagesEndpoint ?? derived.messages,
         models: data.modelsEndpoint ?? derived.models,
+        ...(isAudioApiInfo(data.audio, data.baseUrl ?? derived.baseUrl) ? { audio: data.audio } : {}),
       },
       claudeCodeEnabled: data.claudeCodeEnabled !== false,
       ...(data.attributionSince ? { attributionSince: data.attributionSince } : {}),
       ...(data.historyTruncated === true ? { historyTruncated: true } : {}),
+      ...readUsageMetadata(data),
       authMatrix: data.authMatrix,
     };
     // Prefixes only — never the secret key material.
@@ -496,10 +505,12 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       ) : (
         <>
           <ApiKeysWorkspace
+        active={active}
         keys={keys}
         apiBase={apiBase}
         attributionSince={attributionSince}
         historyTruncated={historyTruncated}
+        usageMetadata={readUsageMetadata(keysData)}
         authMatrix={authMatrix}
         keysLoading={false}
         keysLoadFailed={keysState.showError}

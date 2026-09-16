@@ -40,7 +40,7 @@ const OPENCODE_ENVELOPE_BASE = {
         npm: "@ai-sdk/openai-compatible",
         name: "OpenCodex",
         options: { baseURL: "http://127.0.0.1:10100/v1", apiKey: "{env:OPENCODEX_OPENCODE_API_KEY}" },
-        models: { "gpt-5.4": { name: "gpt-5.4 (native)" } },
+        models: { "gpt-5.5": { name: "gpt-5.5 (native)" } },
       },
     },
   },
@@ -57,7 +57,7 @@ const PI_ENVELOPE_BASE = {
   format: "json",
   mediaType: "application/json",
   // Pi keys its models as an ARRAY — the shape swap is what proves a real refetch.
-  config: { providers: { opencodex: { models: [{ id: "gpt-5.4" }, { id: "claude-sonnet-4-6" }] } } },
+  config: { providers: { opencodex: { models: [{ id: "gpt-5.5" }, { id: "claude-sonnet-4-6" }] } } },
 };
 
 /**
@@ -170,12 +170,13 @@ function rowButton(container: HTMLElement, name: string, label: string): HTMLBut
     .find(el => el.textContent?.trim() === label)!;
 }
 
-test("the API download surface includes DSH, MiniMax Code, Aside and Raycast as clients", () => {
-  expect(CLIENTS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast"]);
+test("the API download surface includes DSH, MiniMax Code, Aside, Raycast and omo as clients", () => {
+  expect(CLIENTS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"]);
   expect(CLIENT_LABEL_KEYS.dsh).toBe("api.clientConfig.clientDsh");
   expect(CLIENT_LABEL_KEYS.mcode).toBe("api.clientConfig.clientMcode");
   expect(CLIENT_LABEL_KEYS.zcode).toBe("api.clientConfig.clientZcode");
   expect(CLIENT_LABEL_KEYS.aside).toBe("api.clientConfig.clientAside");
+  expect(CLIENT_LABEL_KEYS.omo).toBe("api.clientConfig.clientOmo");
 });
 
 test("each row fetches its own client and its dialog renders that client's exact bytes", async () => {
@@ -216,6 +217,27 @@ test("the config bytes are not rendered at rest", async () => {
   await act(async () => { rowButton(container, "OpenCode", "Details").click(); });
   expect(container.querySelector(".awi-clientconfig-json")).not.toBeNull();
 
+  await act(async () => { root.unmount(); });
+});
+
+test("Cline details explain the two-file bundle instead of a single-file merge", async () => {
+  const config = { settings: { version: 1, providers: {} }, catalog: { version: 1, providers: {} } };
+  const envelope = {
+    ...OPENCODE_ENVELOPE,
+    client: "cline", filename: "cline-config-bundle.json",
+    destination: "/home/dev/.cline/data/settings/providers.json", apiKeyEnv: "",
+    exportHint: "Cline CLI bundle", config, text: JSON.stringify(config),
+  };
+  stubRoute(client => Response.json(client === "cline" ? envelope : OPENCODE_ENVELOPE));
+  const { root, container } = await mountPanel({ hasKeys: false });
+  await act(async () => { rowButton(container, "Cline CLI", "Details").click(); });
+  const dialog = container.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("two-file bundle");
+  expect(dialog.textContent).toContain("Stop Cline");
+  expect(dialog.textContent).not.toContain("Merge this into the destination file.");
+  expect(dialog.textContent).not.toContain("Set the key before launching");
+  expect(dialog.querySelector(".awi-clientconfig-nokey")).toBeNull();
+  expect(JSON.parse(dialog.querySelector("pre")!.textContent!)).toEqual(config);
   await act(async () => { root.unmount(); });
 });
 

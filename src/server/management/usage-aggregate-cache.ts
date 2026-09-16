@@ -23,6 +23,7 @@ import {
 
 interface RetainedUsageAggregate {
   accumulator: UsageSummaryAccumulator;
+  usageIncomplete: boolean;
   revision: UsageLogRevision | null;
   identityKey: string;
   revisionKey: string;
@@ -35,6 +36,7 @@ interface RetainedUsageAggregate {
 
 export interface UsageAggregateResult {
   accumulator: UsageSummaryAccumulator;
+  usageIncomplete: boolean;
   revision: UsageLogRevision | null;
   processedThroughBytes: number;
   overlayVersion: number;
@@ -75,6 +77,7 @@ function resultFrom(
 ): UsageAggregateResult {
   return {
     accumulator: state.accumulator,
+    usageIncomplete: state.usageIncomplete,
     revision: state.revision,
     processedThroughBytes: state.processedThroughBytes,
     overlayVersion: state.overlayVersion,
@@ -99,6 +102,7 @@ function makeRetainedAggregate(
 ): RetainedUsageAggregate {
   return {
     accumulator,
+    usageIncomplete: scan.oversizedRows > 0,
     revision: scan.revision,
     identityKey: usageLogIdentityKey(scan.revision),
     revisionKey: usageLogRevisionKey(scan.revision),
@@ -126,9 +130,6 @@ async function rebuildAggregate(options: UsageAggregateOptions): Promise<UsageAg
           apiKeyAccumulator?.add(entry);
         },
       });
-      if (scan.oversizedRows > 0) {
-        throw new Error("usage ledger contains an oversized row");
-      }
       if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
         lastError = new Error("usage aggregation inputs changed during rebuild");
         continue;
@@ -138,7 +139,10 @@ async function rebuildAggregate(options: UsageAggregateOptions): Promise<UsageAg
       const result = publishRetainedAggregate(state);
       if (apiKeyAccumulator && options.configuredApiKeyIds) {
         cacheApiKeyUsageFromRollup(
-          apiKeyAccumulator.snapshot(),
+          {
+            ...apiKeyAccumulator.snapshot(),
+            ...(state.usageIncomplete ? { usageIncomplete: true as const, usageIncompleteReason: "oversized_rows" as const } : {}),
+          },
           options.configuredApiKeyIds,
           state.identityKey,
           state.revision?.size ?? 0,
@@ -180,8 +184,8 @@ async function appendAggregate(
   let rebuildAfterUnpin = false;
   try {
     // Clone first and publish only after the scanner verifies the captured
-    // suffix. A callback error, mutation, or oversized row leaves retained
-    // state byte-for-byte untouched.
+    // suffix. A callback error or mutation leaves retained state untouched.
+    // Skipped oversized rows retain the normal rows with an explicit diagnostic.
     const candidate = state.accumulator.clone();
     const scan = await scanUsageLedgerCooperatively({
       startAtBytes: state.processedThroughBytes,
@@ -189,10 +193,6 @@ async function appendAggregate(
       expectedProcessedThroughDigest: state.processedThroughDigest,
       onEntry: entry => candidate.add(entry),
     });
-    if (scan.oversizedRows > 0) {
-      if (retainedAggregate === state) retainedAggregate = null;
-      throw new Error("usage ledger contains an oversized row");
-    }
     if (userCostOverlayVersion() !== state.overlayVersion || currentTimeZone() !== state.timeZone) {
       if (retainedAggregate === state) retainedAggregate = null;
       rebuildAfterUnpin = true;
@@ -200,6 +200,9 @@ async function appendAggregate(
       const next: RetainedUsageAggregate = {
         ...state,
         accumulator: candidate,
+        // A partial unterminated row can be scanned again on the next append.
+        // Preserve a boolean diagnostic rather than double-counting omissions.
+        usageIncomplete: state.usageIncomplete || scan.oversizedRows > 0,
         revision: scan.revision,
         identityKey: usageLogIdentityKey(scan.revision),
         revisionKey: usageLogRevisionKey(scan.revision),
@@ -329,7 +332,6 @@ async function rebuildFilteredAggregate(
     const accumulator = createUsageSummaryAccumulator({ filter, mode: "row-unique", window });
     try {
       const scan = await scanUsageLedgerCooperatively({ onEntry: entry => accumulator.add(entry) });
-      if (scan.oversizedRows > 0) throw new Error("usage ledger contains an oversized row");
       if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
         lastError = new Error("usage aggregation inputs changed during filtered scan");
         continue;
@@ -362,10 +364,6 @@ async function appendFilteredAggregate(
       expectedProcessedThroughDigest: state.processedThroughDigest,
       onEntry: entry => candidate.add(entry),
     });
-    if (scan.oversizedRows > 0) {
-      if (retainedFilteredAggregates.get(key) === state) retainedFilteredAggregates.delete(key);
-      throw new Error("usage ledger contains an oversized row");
-    }
     if (userCostOverlayVersion() !== state.overlayVersion || currentTimeZone() !== state.timeZone) {
       if (retainedFilteredAggregates.get(key) === state) retainedFilteredAggregates.delete(key);
       rebuildAfterUnpin = true;
@@ -373,6 +371,7 @@ async function appendFilteredAggregate(
       const next: RetainedUsageAggregate = {
         ...state,
         accumulator: candidate,
+        usageIncomplete: state.usageIncomplete || scan.oversizedRows > 0,
         revision: scan.revision,
         identityKey: usageLogIdentityKey(scan.revision),
         revisionKey: usageLogRevisionKey(scan.revision),

@@ -87,11 +87,11 @@ export interface RateLimitRetryPolicy {
 }
 
 /**
- * Backend ids admitted by `providers.<name>.webSearchBridge.backend`. Only `"ollama"` has a
- * shipped executor; every other id is explicit-only and inert, the same contract the top-level
- * `webSearchSidecar` uses for backends whose executor has not landed. Naming one of them keeps
- * the bridge disarmed rather than silently falling back to a different search provider — in
- * particular it never auto-selects a paid Luna or Exa search.
+ * Backend ids admitted by `providers.<name>.webSearchBridge.backend`. Each id is explicit-only:
+ * an omitted backend keeps the bridge disarmed rather than silently falling back to a paid
+ * Luna or Exa search. `ollama` spends this provider's API key on the search endpoint.
+ * `openai` / `anthropic` / `xai` / `gemini` / `exa` reuse the matching sidecar executor and
+ * that executor's own credential; a missing credential leaves the bridge disarmed.
  */
 export const PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS = [
   "ollama",
@@ -118,6 +118,7 @@ export type ProviderWebSearchBridgeBackend = typeof PROVIDER_WEB_SEARCH_BRIDGE_B
  *
  * Never armed for `authMode: "forward"` (ChatGPT) or for a provider that executes hosted search
  * upstream; see `planPassthroughWebSearchBridge` in `src/web-search/passthrough-bridge.ts`.
+ * A mixed `web_search` + client tool call still fails closed. Assistant text is not a search call.
  */
 export interface ProviderWebSearchBridgeConfig {
   /** Master switch. Absent or false keeps today's relay-and-fail behavior exactly. */
@@ -227,6 +228,14 @@ export type TierDecision =
  * One configured provider entry. `authMode` (default `"key"`) decides whether same-target 429
  * retries are allowed; OAuth/forward credentials and local runtimes are never replayed.
  */
+/** Explicit per-model operator declarations; absent axes keep legacy behavior. */
+export interface ModelCapabilities {
+  inputModalities?: Array<"text" | "image" | "audio" | "video">;
+  /** Requested tier only; does not imply an upstream window or activate an unverified wire. */
+  contextTier?: "default" | "long_context";
+  video?: { processing?: "static" | "agentic" };
+}
+
 export interface OcxProviderConfig {
   /** Optional short provider namespace used only at request/catalog presentation time. */
   alias?: string;
@@ -273,6 +282,17 @@ export interface OcxProviderConfig {
    */
   responsesPath?: string;
   /**
+   * Optional relative send path for the `openai-chat` wire, mirroring `responsesPath`.
+   * Same shape rules: must start with `/`, no URL scheme, query string, or fragment.
+   * When omitted the adapter keeps `openaiChatCompletionsUrl(baseUrl)`.
+   *
+   * This exists because a per-model wire override swaps `adapter` and leaves `baseUrl`
+   * alone, so an upstream that serves Chat Completions and Responses under different
+   * path prefixes cannot be reached by the adapter swap by itself. Z.AI is that case:
+   * `/api/v1/responses` and `/api/coding/paas/v4/chat/completions` on one host and one key.
+   */
+  chatCompletionsPath?: string;
+  /**
    * Command Code protocol version sent as `x-command-code-version` on /alpha/generate requests.
    * The internal endpoint's schema drifts with the CLI version; operators can pin a known-good
    * version here instead of waiting for a code change. Absent uses the adapter's current default.
@@ -281,8 +301,8 @@ export interface OcxProviderConfig {
   /**
    * Responses upstream that stores nothing server-side (DeepSeek documents "the API
    * is stateless"). Stateful request parameters are dropped, `store` is pinned false,
-   * and orphaned tool results left by a replay miss are repaired rather than
-   * forwarded to an upstream that cannot resolve their pair.
+   * and missing local continuation history returns previous_response_not_found so
+   * clients can resend full input. Explicit input still receives orphan-item repair.
    */
   statelessResponses?: boolean;
   /**
@@ -387,6 +407,16 @@ export interface OcxProviderConfig {
    * `apiKey` seeds a one-entry pool on first management touch.
    */
   apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number }>;
+  /**
+   * Optional proactive ordering for `apiKeyPool` when the committed key is already
+   * cooling. Deliberately NOT named like the OAuth `accountPoolStrategy`: an API key
+   * is a different identity from an OAuth account set, and key rotation is a
+   * rate-limit scheduling problem rather than a prompt-cache one.
+   *
+   * Absent means today's behaviour: no pre-dispatch pick at all, only the reactive
+   * 429/401 walk in `key-failover`.
+   */
+  apiKeyPoolStrategy?: "round-robin" | "fill-first" | "quota";
   /** Changes on manual selection (including re-selection) and committed automatic allocation. */
   apiKeySelectionRevision?: string;
   /** Runtime only. Never expose in management responses or persist a routed provider. */
@@ -457,6 +487,7 @@ export interface OcxProviderConfig {
   modelContextWindows?: Record<string, number>;
   /** Model-specific Codex catalog input modalities, e.g. ["text"] or ["text", "image"]. */
   modelInputModalities?: Record<string, string[]>;
+  modelCapabilities?: Record<string, ModelCapabilities>;
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
   /**
@@ -480,6 +511,28 @@ export interface OcxProviderConfig {
    * all-zero entry means "not billable here" and falls through to the catalogs.
    */
   modelCosts?: Record<string, ProviderCostOverlay>;
+  /**
+   * Provider-wide auto-review (approval) model for routed models of this provider.
+   *
+   * The value is a catalog selector: either a bare model id of this provider
+   * (for example `deepseek-v4-flash`) or a full public slug (for example
+   * `opencode-go/deepseek-v4-flash`). During catalog synchronization the
+   * selector is resolved against the final catalog and stamped as
+   * `auto_review_model_override` on each routed row of this provider that has
+   * no per-model override. The root Codex `auto_review_model` remains the
+   * fallback for every row without a provider stamp. Null or blank clears the
+   * provider-wide stamp; see `autoReviewModelOverrides` for per-model targets.
+   */
+  autoReviewModel?: string;
+  /**
+   * Per-model auto-review (approval) overrides for routed models of this
+   * provider. Keys are exact upstream model ids under this provider (either
+   * spelling of a slash-containing id is accepted). Each value is a catalog
+   * selector with the same meaning as `autoReviewModel`; an entry wins over
+   * the provider-wide value for its model. Null or blank entries remove the
+   * model from the map while preserving other entries.
+   */
+  autoReviewModelOverrides?: Record<string, string>;
   headers?: Record<string, string>;
   /** Default provider-routing preferences for models sent through the canonical OpenRouter API. */
   openRouterRouting?: OpenRouterProviderRouting;
@@ -511,11 +564,21 @@ export interface OcxProviderConfig {
     enabled?: boolean;
     /**
      * Generic OAuth pool selection strategy (#695). Persisted through the pool-settings
-     * contract; the selector does not consume it yet, so omitted keeps today's behavior.
+     * contract. Consumed by the selector only while `pool.kernel` is on; with the flag off
+     * it is still merely persisted, so omitted and set behave the same.
      */
     strategy?: "quota" | "round-robin" | "fill-first";
-    /** 0-100 usage percent at which a proactive switch may be considered (#695); inert today. */
+    /**
+     * 0-100 usage percent at which fill-first advances off the active account (#695).
+     * Read only under `pool.kernel` with `strategy: "fill-first"`; 80 when unset, matching
+     * the Codex and Anthropic pools.
+     */
     autoSwitchThreshold?: number;
+    /**
+     * Successful dispatches retained on one round-robin selection. Default 1; range 1..100.
+     * Read only under `pool.kernel` with `strategy: "round-robin"`.
+     */
+    stickyLimit?: number;
   };
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;
@@ -590,6 +653,12 @@ export interface OcxProviderConfig {
   /** One-time Grok subscription wire upgrade; later explicit Chat choices remain authoritative. */
   xaiResponsesDefaultVersion?: number;
   /**
+   * One-time Z.AI coding-plan wire upgrade. The router already canonicalizes the `zai` row onto the
+   * Responses destination at request time; the marker records that the saved row was rewritten to
+   * match, so a later explicit Chat choice is not re-migrated on the next boot.
+   */
+  zaiResponsesDefaultVersion?: number;
+  /**
    * Whether the Responses upstream accepts native custom tools and custom_tool_call items.
    * Set false only for a provider whose native contract rejects them; absence preserves
    * apply_patch passthrough compatibility for OpenAI and unclassified gateways.
@@ -641,6 +710,19 @@ export interface OcxProviderConfig {
    * per-model compatibility escape hatch for mixed-capability gateways.
    */
   noStructuredOutputModels?: string[];
+  /**
+   * Model ids whose Chat Completions endpoint rejects `response_format` of type
+   * `json_schema` specifically. Such a request is downgraded to
+   * `{ type: "json_object" }` instead of being dropped, so a client that asked for
+   * JSON still gets JSON rather than prose — at the cost of the schema itself, which
+   * the upstream would have rejected anyway.
+   *
+   * Deliberately narrower than `noStructuredOutputModels`: that field claims the
+   * endpoint rejects the whole `response_format` field, which is a strictly stronger
+   * claim than any reported upstream error supports for these gateways. When a model
+   * appears in both lists the stronger opt-out wins and the field is omitted entirely.
+   */
+  noJsonSchemaModels?: string[];
   /**
    * Model ids that accept a reasoning-effort field on an ordinary turn but reject it
    * once function tools are present. The model keeps its advertised effort ladder;
@@ -723,6 +805,12 @@ export interface OcxProviderConfig {
    * out explicitly (e.g. MiniMax, where low effort disables thinking).
    */
   requiresReasoningPlaceholderModels?: string[];
+  /**
+   * Default to displaying provider-authored summaries when Responses summary is omitted.
+   * Explicit wire summary:"none" wins; false disables a seeded provider default.
+   * Raw reasoning is never relabeled as a summary.
+   */
+  showThinkingSummary?: boolean;
   /**
    * Opt-in same-target 429 retry policy. Codex itself never retries 429 (it retries 5xx only,
    * openai/codex#30471), and single-key pools have no failover, so the proxy waits and replays

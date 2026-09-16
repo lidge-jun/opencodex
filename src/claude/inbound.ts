@@ -17,6 +17,7 @@ export { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, e
 import { AnthropicRequestError, isRec, type Rec } from "./inbound-records";
 import { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, formatFromOutputConfig } from "./inbound-model-options";
 import { systemToInstructions, toolsToResponses, toolChoiceToResponses } from "./inbound-content-options";
+import { stabilizeClaudeInstructionsForPromptCache } from "./inbound-cache-stabilize";
 import { decodeReasoningEnvelope, encodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { createTranslatorBudget, type TranslatorBudget } from "../lib/translator-budget";
 
@@ -298,7 +299,10 @@ export interface ClaudeInboundTranslation {
  * Translate an Anthropic Messages request body into a /v1/responses request body.
  * Throws AnthropicRequestError (-> 400 invalid_request_error) on malformed input.
  */
-export function anthropicToResponsesBody(raw: unknown, cc?: OcxClaudeCodeConfig): Rec {
+export function anthropicToResponsesBody(
+  raw: unknown,
+  cc?: OcxClaudeCodeConfig,
+): Rec {
   return anthropicToResponsesTranslation(raw, cc).body;
 }
 
@@ -307,7 +311,11 @@ export function anthropicToResponsesBody(raw: unknown, cc?: OcxClaudeCodeConfig)
  * OUT-OF-BODY tuple (audit 133 R3#1 — an in-body marker would leak upstream through
  * the native Responses forward and 400).
  */
-export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCodeConfig, budget?: TranslatorBudget): ClaudeInboundTranslation {
+export function anthropicToResponsesTranslation(
+  raw: unknown,
+  cc?: OcxClaudeCodeConfig,
+  budget?: TranslatorBudget,
+): ClaudeInboundTranslation {
   const activeBudget = budget ?? createTranslatorBudget();
   try {
     return translateAnthropicRequest(raw, cc, activeBudget);
@@ -316,7 +324,11 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
   }
 }
 
-function translateAnthropicRequest(raw: unknown, cc: OcxClaudeCodeConfig | undefined, budget: TranslatorBudget): ClaudeInboundTranslation {
+function translateAnthropicRequest(
+  raw: unknown,
+  cc: OcxClaudeCodeConfig | undefined,
+  budget: TranslatorBudget,
+): ClaudeInboundTranslation {
   if (!isRec(raw)) throw new AnthropicRequestError("request body must be a JSON object");
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     throw new AnthropicRequestError("model is required");
@@ -357,7 +369,32 @@ function translateAnthropicRequest(raw: unknown, cc: OcxClaudeCodeConfig | undef
     stream: raw.stream === true,
   };
 
-  if (systemParts.length > 0) body.instructions = systemParts.join("\n\n");
+  const joinedSystem = systemParts.length > 0 ? systemParts.join("\n\n") : "";
+  const stabilizePromptCache = cc?.stabilizePromptCache === true;
+  // Desktop fallback hashes raw systemParts unless the caller opted into
+  // harness cleanup. Opt-in then hashes the same string as body.instructions.
+  let cacheSystem: string | string[] = systemParts;
+  if (joinedSystem) {
+    if (stabilizePromptCache) {
+      // Claude Code appends growing <total_tokens>N tokens left</total_tokens>
+      // footers (and occasional TaskCreate nudges) into system text. That churn
+      // breaks Muse/Go prefix cache on the Responses instructions prefix even
+      // when tools stay stable. Relocation is caller-opted, not inferred from
+      // a matching suffix or metadata.user_id.
+      const stabilized = stabilizeClaudeInstructionsForPromptCache(joinedSystem);
+      if (stabilized.instructions) body.instructions = stabilized.instructions;
+      if (stabilized.dynamicNotice) {
+        input.push({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: stabilized.dynamicNotice }],
+        });
+      }
+      cacheSystem = stabilized.instructions;
+    } else {
+      body.instructions = joinedSystem;
+    }
+  }
 
   const tools = toolsToResponses(raw.tools);
   if (tools) body.tools = tools;
@@ -395,11 +432,14 @@ function translateAnthropicRequest(raw: unknown, cc: OcxClaudeCodeConfig | undef
     // Exact-prefix matching still isolates content; the key only steers routing
     // affinity. Callers must NOT synthesize a session_id header from this fallback
     // (audit 133 R2#3).
+    // Outside opt-in, hash the raw systemParts array (pre-stabilize Desktop
+    // key). Opt-in hashes the same string used for body.instructions so the
+    // key tracks the cacheable prefix after peel.
     body.prompt_cache_key = createHash("sha256")
       .update(canonicalJson({
         version: 2,
         model: body.model,
-        system: systemParts,
+        system: cacheSystem,
         tools: Array.isArray(body.tools) ? body.tools : [],
       }))
       .digest("hex").slice(0, 32);

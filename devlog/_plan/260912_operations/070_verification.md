@@ -1,0 +1,15 @@
+# Final tips and handoff
+
+Dependency: each implementation. No new behavior by default; append a separate PABCD repair cycle when actual final-tip CI failure identifies a necessary delta.
+
+For each independently mergeable branch: record git rev-parse HEAD, original source PR disposition, included commits, gh pr view headRefOid/baseRefName, successful native-membership read (or unknown), and gh run view for the exact Cross-platform CI run. Manual chains only when later work consumes earlier code; verify lower SHA ancestry at the final tip and record bottom-to-top order. Do not cancel auto-CI or change workflow/protection. No merge/auto-merge, closure, release or user service operation.
+
+A local receipt may run git diff --check and read-only hosted-result assertions; it is not a local test result. Local suites, typecheck/build/install are NOT RUN. Final behavior acceptance comes from GitHub-hosted test runs at the final SHA and independent review; author reports/old green CI are not substituted.
+
+Update ignored .tmp/operations/handoff.md as soon as each artifact exists. Include outstanding issue acceptance, original author trailers, unresolved maintainer objections, exact run links/conclusions and cycle ledger pointers. Publish template-complete PR bodies with truthful verification, screenshots for changed dashboard UI and no private investigation notes. Parent owns all integration decisions.
+
+P resume amendment: reconcile at pinned origin/dev db7062c37a84b12c4f59abc567d07241bf2a6042, which includes separately owned Cline/native-restore fixture repairs. No repeated rewrites. Fast-forward local lane refs to parent-published remote heads before edits; merge the pinned baseline into owned feature branches only where needed to incorporate failed-check repairs/conflicts. Never move dev/main/preview or merge PRs. Preserve shared changes and resolve only operations-owned conflicts; record any cross-lane source collision for parent.
+
+Listener4353 also has a documentation-only review requiring the plan to describe reuse of the already-existing managementIngressSchema. Correct020/090 wording, do not duplicate a schema. Totals4357 consumes baseline then child4373 receives that exact lower head; verify ancestry and original source patch parity. Pairing4378 incorporates baseline only once and retains all source repairs. Transport4402 is already based on repaireddev; do not rewrite its unchanged candidate for unrelated later commits.
+
+Final requested gate is hosted laneall on listener, cumulative usage child, pairing, and transport. Inspect live job outcomes and exacthead. New failures inside this lane become separately audited repaircycles; external owner failures are recorded without duplicate edits or baselinegreen claims. Read build artifacts from hosted GUI jobs, serve only those static files with fixture responses in isolated scratch for screenshot/interaction review, no product build/test/server locally. This is render observation, not a local suite. No liveuser service/config changes.

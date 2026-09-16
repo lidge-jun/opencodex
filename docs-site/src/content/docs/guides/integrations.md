@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside and Raycast from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo and Cline CLI from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Thirteen clients work this way, each with a switch:
+file, and removes it again. Fifteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -14,13 +14,15 @@ file, and removes it again. Thirteen clients work this way, each with a switch:
 | Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
-| Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
+| gjc | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
 | DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (default `~/.dsh/settings.yaml`) | YAML | hot reload | non-secret loopback bearer placeholder |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | new sessions, or after opening the model picker | loopback placeholder |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | new sessions | loopback placeholder |
 | ZCode | `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
+| omo | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
+| Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -175,7 +177,7 @@ than 1000 levels — which locks the switch instead, so nothing is silently chan
 **OMP, DSH and Hermes** are unaffected by sibling edits too, for a different reason: their writers
 patch only their own managed provider ranges byte-wise, so the rest of the
 file is never rewritten. For the remaining formats that can carry comments
-(OpenClaw, Kimi Code, Gajae Code, MiniMax Code, Raycast — JSON5 and TOML
+(OpenClaw, Kimi Code, gjc, MiniMax Code, Raycast — JSON5 and TOML
 written as whole documents, or generic YAML without source preservation), or
 whenever our own entries were edited, the switch locks and disable refuses rather
 than guessing which edits were yours.
@@ -211,7 +213,7 @@ typed values into quoted strings. This includes values inside arrays and inline
 tables. Quoted date strings remain supported; an unquoted date must be preserved
 by editing the configuration manually.
 
-**Pi, Kimi Code, Gajae Code, MiniMax Code, Prime Agent and the managed DSH integration only work against a loopback bind.**
+**Pi, Kimi Code, gjc, MiniMax Code, Prime Agent, Aside, Raycast, omo and the managed DSH integration only work against a loopback bind.**
 The first four have no config field for the `x-opencodex-api-key` header a non-loopback bind
 requires. DSH has a generic headers map, but rc.6 does not document that dedicated admission
 header as a supported integration contract, so the managed writer fails closed instead of
@@ -261,10 +263,11 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
-Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside, and
-Raycast catalogs with the current model selection, context windows, and reasoning-effort
-ladders. Proxy startup refreshes an owned Raycast catalog. Changes to model visibility,
-provider selection, or presets also refresh connected Pi, Aside, and Raycast catalogs.
+Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside,
+Raycast, and omo catalogs with the current model selection, context windows, and
+reasoning-effort ladders. Proxy startup refreshes an owned Raycast catalog. Changes to
+model visibility, provider selection, or presets also refresh connected Pi, Aside,
+Raycast, and omo catalogs.
 Missing, foreign-edited, or unsafe blocks stay untouched, as do previously owned blocks
 you removed manually.
 An enabled Aside profile is an exception to the usual owned-only refresh: if its account
@@ -342,3 +345,53 @@ the entire change failed. If saving those settings fails, no profile files are c
 Each profile has separate ownership and history. Existing user edits, unsafe paths and linked
 catalogs are refused; the existing explicit overwrite and drift-confirmation controls remain
 available. Fully quit and reopen Aside to load changed model files.
+
+
+## Cline CLI
+
+This integration targets Cline's current CLI/shared SDK provider store, whose native schema has
+`version: 1`. Legacy VS Code extension `globalState`/secret storage is not migrated or detected
+as this integration. Run Cline once to initialize its settings directory.
+
+**Stop Cline before enabling, syncing, disabling or restoring the integration.** OpenCodex writes
+`providers.opencodex` into both `providers.json` and sibling `models.json`. The first file holds
+the OpenAI Responses connection with a non-secret loopback placeholder; the second holds the
+filtered routed model catalog, including available context and image metadata. Existing provider
+entries and the default provider selection remain unchanged.
+
+```bash
+ocx integration client list --json
+ocx integration client enable --client cline
+ocx integration client history --client cline
+ocx integration client restore --op <operation-id>
+```
+
+After enabling, restart Cline and select OpenCodex, or launch with
+`cline --provider opencodex --model <provider/model>`. External catalog changes are read when
+Cline restarts. Cline is excluded from unattended catalog refresh; after changing the routed
+model selection, stop Cline and run `ocx sync` or enable the integration again to refresh it.
+A selected model is preserved while still routed and cleared if removed from the exported catalog.
+
+`CLINE_PROVIDER_SETTINGS_PATH` overrides the primary file. Otherwise `CLINE_DATA_DIR` selects the
+data directory, then `CLINE_DIR` selects the root, then `~/.cline` is used. The model file is always
+`models.json` beside the selected provider file. Overrides must be absolute or start with `~`.
+Mirror command-local Cline `--config` paths with `CLINE_PROVIDER_SETTINGS_PATH` when starting
+OpenCodex. A primary path named `models.json` is refused because the files must be distinct.
+
+Each file replacement is atomic, but no filesystem operation replaces both simultaneously.
+One journal operation snapshots both original files; a write or bookkeeping failure compensates
+both. An interrupted operation retains a private recovery record. Status reports incomplete
+recovery as unsafe, and the next explicit mutation recovers only if neither file nor its
+ownership has an unrelated edit. If recovery refuses, preserve the files and the recovery path
+reported by the operation; resolve the conflict before retrying.
+
+Undo restores **both original byte strings**, including a file that originally did not exist.
+Edits after the operation require the existing explicit `--confirm-drift`; the edited pair is
+backed up first. An occupied OpenCodex entry requires the existing `--overwrite-conflict` opt-in.
+Disable removes the two managed entries; it does not restore a prior foreign entry. Use Undo
+for that. Snapshot retention and expiration follow the same rules as other integrations.
+
+The download `cline-config-bundle.json` contains two native document members: `settings` for
+`providers.json`, and `catalog` for `models.json`. It is not itself a Cline settings file. Prefer
+the integration command for a journaled merge and rollback. Remote admission wiring is not
+supported by this generated integration; it requires unauthenticated loopback access.

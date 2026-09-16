@@ -1,3 +1,4 @@
+import { modelCapabilitiesConfigError } from "../config/provider-validation";
 import {
   CliUsageError,
   csv,
@@ -39,7 +40,7 @@ const USAGE = `Usage:
       [--auth-mode <key|forward|oauth|local|->] [--note <text|->]
       [--api-key-transport <x-api-key|bearer|->]
       [--headers <json>] [--enabled <on|off>] [--live-models <on|off>]
-      [--retain-models <id,id|->]
+      [--retain-models <id,id|->] [--model <id> --text-only]
       [--xai-chat <on|off>]
       [--allow-private-network <on|off>] [--json]
   ocx provider test <name> [--json]
@@ -72,7 +73,16 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const liveModels = takeBooleanOption(args, "--live-models");
   const allowPrivateNetwork = takeBooleanOption(args, "--allow-private-network");
   const xaiChat = takeBooleanOption(args, "--xai-chat");
+  const textOnly = takeFlag(args, "--text-only");
+  const capabilityModel = takeOption(args, "--model");
   rejectArgs(args, USAGE);
+  if (textOnly || capabilityModel !== undefined) {
+    if (!textOnly || capabilityModel === undefined) throw new CliUsageError("--text-only and --model must be supplied together", USAGE);
+    const declaration = { [capabilityModel]: { inputModalities: ["text"] } };
+    const error = modelCapabilitiesConfigError(declaration);
+    if (error) throw new CliUsageError(error, USAGE);
+    patch.modelCapabilities = declaration;
+  }
   if (xaiChat !== undefined) {
     if (name !== "xai") throw new CliUsageError("--xai-chat is valid only for provider xai", USAGE);
     patch.xaiResponsesOptIn = !xaiChat;

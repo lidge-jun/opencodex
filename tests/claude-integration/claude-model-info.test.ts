@@ -1,8 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import { buildAnthropicModelInfos, nativeEffectiveLadder } from "../../src/claude/model-info";
-import { nativeEffortClamp } from "../../src/codex/catalog";
+import { gatherRoutedModels, nativeEffortClamp } from "../../src/codex/catalog";
 
 describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => {
+  test.each(["anthropic", "anthropic-apikey"])("%s registry image inputs reach Claude discovery aliases", async (provider) => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: provider,
+      providers: {
+        [provider]: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: provider === "anthropic" ? "oauth" : "key",
+          liveModels: false,
+        },
+      },
+    });
+    const routed = models.filter(model => model.provider === provider);
+    expect(routed.length).toBeGreaterThan(0);
+    for (const idStyle of ["readable", "desktop3p"] as const) {
+      const infos = buildAnthropicModelInfos([], routed, undefined, idStyle);
+      expect(infos.length).toBeGreaterThanOrEqual(routed.length);
+      expect(infos.some(info => info.id.endsWith("[1m]"))).toBe(true);
+      for (const info of infos) {
+        expect(info.capabilities.image_input.supported).toBe(true);
+      }
+    }
+  });
+
   test("routed model with adapter-reported ladder advertises exactly those rungs", () => {
     const [info] = buildAnthropicModelInfos([], [{
       provider: "cursor", id: "gpt-5.6-luna",
@@ -61,7 +86,7 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
   });
 
   test("native effective ladder only advertises clamp-identity rungs (audit R4#1)", () => {
-    for (const slug of ["gpt-5.5", "gpt-5.4", "gpt-5.6-sol"]) {
+    for (const slug of ["gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol"]) {
       for (const rung of nativeEffectiveLadder(slug)) {
         expect(rung).not.toBe("ultra");
         const clamped = nativeEffortClamp(slug, rung);
@@ -96,13 +121,11 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(String(lunaBase)).toBeDefined();
   });
 
-  test("[1m] variants cover 1M NATIVES too (audit R1#1) — and skip sub-1M natives", () => {
-    // gpt-5.4 is the only authoritative 1M native. gpt-5.6-sol advertises 922k — a cap held
-    // under its measured ceiling — so it stays out, and so does gpt-5.5 at 272k.
-    const infos = buildAnthropicModelInfos(["gpt-5.4", "gpt-5.6-sol", "gpt-5.5"], []);
-    const variants = infos.filter(i => i.id.endsWith("[1m]"));
-    expect(variants).toHaveLength(1);
-    expect(variants[0]!.display_name.includes("gpt-5.4")).toBe(true);
+  test("[1m] variants skip natives — none have a >=1M window after gpt-5.4 retirement", () => {
+    // gpt-5.4 was the only authoritative 1M native; that override is gone. gpt-5.6-sol
+    // stays below 1M even with the long-window opt-in; gpt-5.5 and Astra default to 272k.
+    const infos = buildAnthropicModelInfos(["gpt-5.6-sol", "gpt-5.5", "gpt-6-astra"], []);
+    expect(infos.filter(i => i.id.endsWith("[1m]"))).toHaveLength(0);
   });
 
   test("native OpenAI rows carry max_input_tokens so Claude Code skips the 200k fallback (#1218)", () => {
@@ -146,17 +169,15 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
 
   test("no [1m] rows for sub-1M models, even with auto-context enabled (#854 contract)", () => {
     const auto = { enabled: true, compactWindow: 350_000 };
-    const infos = buildAnthropicModelInfos(["gpt-5.4", "gpt-5.5"], [
+    const infos = buildAnthropicModelInfos(["gpt-5.5", "gpt-5.6-sol"], [
       { provider: "mock", id: "small-model", contextWindow: 128_000 },
       { provider: "mock", id: "mid-model", contextWindow: 300_000 }, // < compact window: unsafe, no row
     ], auto);
     const variants = infos.filter(i => i.id.endsWith("[1m]"));
-    // The [1m] marker makes Claude Code account 1e6 tokens: only the
-    // authoritative 1M model may carry it — never the 272K gpt-5.5 route.
-    expect(variants).toHaveLength(1);
-    expect(variants[0]!.display_name.includes("gpt-5.4")).toBe(true);
-    expect(variants[0]!.display_name.endsWith("· 1M")).toBe(true);
-    expect(variants[0]!.max_input_tokens).toBe(1_000_000);
+    // The [1m] marker makes Claude Code account 1e6 tokens. No surviving native
+    // is >=1M, and auto-context must not mint the marker for 272k natives or
+    // sub-compact-window mocks (#854).
+    expect(variants).toHaveLength(0);
   });
 
   test("auto-context never widens anthropic passthrough rows (audit 021 #3)", () => {

@@ -1,3 +1,4 @@
+import { putCodexPoolStrategy } from "../pool-settings";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import {
@@ -6,7 +7,7 @@ import {
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimitDraft,
-  putCodexPoolStrategy,
+  
   type AccountPoolStrategy,
 } from "../account-pool-strategy";
 import AccountPoolStrategyControls from "./AccountPoolStrategyControls";
@@ -212,6 +213,7 @@ export default function CodexPoolStrategySetting({
       )}
       {!loadError && (
         <AccountPoolStrategyControls
+          codex
           strategy={strategy}
           stickyDraft={stickyDraft}
           disabled={controlsDisabled}

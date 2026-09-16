@@ -77,8 +77,9 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 有九个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
 opencodex 会把凭据存入 `~/.opencodex/auth.json`：可刷新的令牌会自动轮换；OrcaRouter
-这类持久密钥会复用到提供商撤销为止。登录 CLI 也接受 `chatgpt`：
-它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
+这类持久密钥会复用到提供商撤销为止。登录 CLI 也接受 `ocx login codex`，但它并不是上面这些提供商：
+它会转到 Codex 账号池登录（与 `ocx account login codex` 相同的流程）。该账号池有独立的账号台账，
+这条路径需要代理正在运行。`chatgpt` 和 `openai` 是同一条路径的别名。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -90,8 +91,9 @@ ocx login google-antigravity
 ocx login cursor       # 独立的 Cursor PKCE 登录
 ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
 ocx login orcarouter-oauth # OrcaRouter 浏览器授权 + PKCE
+ocx login devin       # Cognition/Devin：优先导入 Devin CLI 凭据，否则走 Auth0 浏览器登录
 ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
-ocx login chatgpt      # 独立的 ChatGPT OAuth 登录
+ocx login codex        # Codex 账号池（别名：chatgpt、openai；需要代理正在运行）
 ocx logout <provider>
 ```
 
@@ -105,6 +107,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、带可选 HTTP/1.1 兼容路径的 HTTP/2 传输，以及按账号筛选的模型发现。 |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | 浏览器授权与密钥交换走 `https://www.orcarouter.ai` + S256 PKCE。交换结果是用户自己的普通 `sk-orca-…` API key，保存在现有凭据库中并持续复用，直到被撤销。 |
+| `devin` | `devin` | `https://server.codeium.com` | 实验性的非官方 Cognition/Devin 桥接。登录会先导入已安装 Devin CLI 已持有的凭据（`devin auth login` 会把 `devin-session-token` 写入它自己的 `credentials.toml`）；没有则打开 Auth0 浏览器页面，再用 `RegisterUser` 把粘贴的令牌换成长期 API 密钥。`ocx login devin-cli` 仍作为已弃用别名可用。模型列表按账号通过 `GetCascadeModelConfigs` 实时获取，流式仅走 Connect-RPC 上的 `runTurn` 路径。默认不在仪表盘预设中，需要手动启用。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
 Google Antigravity 账户和提供方的配额查询（包括模型列表回退）使用固定的 Google 计量端点。这些目标支持透明 Fake-IP DNS，同时保留 TLS 验证、重定向拒绝和私有地址检查。自定义 base URL 仅改变模型请求，不改变配额目标；`NO_PROXY` 仍使用直连策略。
@@ -232,6 +235,10 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 内置 DeepSeek preset 同样会让 `deepseek-v4-flash` 使用原生 Responses 端点，并保留上游 SSE
 流式输出。如果该模型已经完成全部输出项却缺少最终 Responses 事件，opencodex 会应用模型级
 5 秒宽限修复；不完整或格式异常的流会以 incomplete 结束，不会被误报为成功。
+第一方 `deepseek-flash` 模型原生声明支持 `text` 和 `image` 输入，因此图像请求默认会直接发送给
+DeepSeek，不经过 vision sidecar。显式的 `noVisionModels` 或纯文本声明仍然优先。第一方
+`deepseek-chat`、`deepseek-reasoner` 和 `deepseek-v4-flash` 默认仍使用 sidecar；Zen 路由保持不变，
+本次更新未进行探测。
 
 > **三条火山方舟计费线路：**`volcengine` 是按量付费方舟 API，`volcengine-coding-plan`
 > 消耗 Coding Plan 额度，`volcengine-agent-plan` 消耗 Agent Plan 额度。密钥与端点需要属于
@@ -240,7 +247,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 > 视频和 3D 资源，Coding 网关也会返回这份宽泛目录，Agent Plan 网关没有 `/models` 资源。
 > 按量付费默认使用 `doubao-seed-2-1-pro-260628`，静态目录还包含当前 DeepSeek 和 GLM
 > 文本模型。Coding Plan 默认使用 `ark-code-latest`，Agent Plan 默认使用
-> `deepseek-v4-pro`。
+> `deepseek-v4-flash`。
 
 **Chutes 发现：**`chutes` 预设使用 Chutes 固定的共享 OpenAI 兼容 LLM gateway。它读取公开的
 `/v1/models` 目录，仅保留 `supported_features` 包含 `tools` 的记录，保留含 `/` 的原生 model id 与
@@ -437,7 +444,7 @@ Cursor OAuth 和 live model discovery 已在这个实验性 adapter 中启用；
 
 ### Ollama Cloud
 
-Ollama Cloud 是托管（而非本地）的 Ollama，配置地址为 `https://ollama.com/v1`，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 通过 Ollama 自身的 REST API（`POST /api/chat`）连接，而不是 OpenAI 兼容接口，并从提供方动态发现模型列表，因此新的 Ollama Cloud 模型无需改动配置即可出现。opencodex 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
+Ollama Cloud 是托管（而非本地）的 Ollama，配置地址为 `https://ollama.com/v1`，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 通过 Ollama 自身的 REST API（`POST /api/chat`）连接，而不是 OpenAI 兼容接口，并从提供方动态发现模型列表，因此新的 Ollama Cloud 模型无需改动配置即可出现。opencodex 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-flash`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
 
 Ollama 目前在文档中说明结构化输出在 Ollama Cloud 上不受支持。因此对正典 `ollama-cloud`，
 opencodex 会以明确的错误拒绝结构化输出请求（`text.format`），而不是悄悄返回不受约束的自由

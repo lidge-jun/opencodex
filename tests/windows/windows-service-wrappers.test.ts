@@ -116,7 +116,7 @@ describe("the generated script still implements that rule", () => {
 
 describe("both teardown paths use the shared killer", () => {
   test("neither file keeps a private matcher", () => {
-    for (const rel of ["src/service.ts", "src/update/job.ts"]) {
+    for (const rel of ["src/service/windows-ops.ts", "src/update/job.ts"]) {
       const src = read(rel);
       expect(src).toContain("killWindowsSchedulerWrappers");
       expect(src).not.toContain("-like ('*' + $p + '*')");

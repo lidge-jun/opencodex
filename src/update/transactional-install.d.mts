@@ -1,5 +1,6 @@
 export type InstallTreeVerification = { ok: boolean; failures: string[] };
 export function verifyInstallTree(packageDir: string, expectedVersion?: string): InstallTreeVerification;
+export function verifyPnpmInstallTree(packageDir: string, expectedVersion?: string): InstallTreeVerification;
 export function bootRestoreProbe(
   packageDir: string,
   deps?: { rename?: (from: string, to: string) => void },
@@ -19,4 +20,3 @@ export function transactionalNpmUpdate(args: {
   rolledBack?: boolean;
   backup?: string;
 };
-

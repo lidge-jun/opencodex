@@ -11,6 +11,7 @@ import {
   ChatCompletionsRequestError,
   chatCompletionsToResponsesBody,
 } from "../chat/inbound";
+import { normalizeChatImageParts } from "../chat/image-parts";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -26,7 +27,10 @@ import { NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel }
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../providers/opencode-go-transport";
-import { normalizeLogConversationId, sessionLaneIdFromRequest } from "./request-log-conversation";
+import {
+  getOrAllocateRequestSessionLane,
+  linkRequestSessionLane,
+} from "./request-log-conversation";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import {
@@ -108,7 +112,11 @@ async function handleChatCompletionsWithBudget(
   try {
     const rawBody = await readChatBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     assertChatCompletionsRoutingBody(rawBody);
-    chatBody = rawBody;
+    // Normalize foreign image shapes BEFORE routing. isNativeChatRouteEligible below
+    // decides the pipeline from the image parts it can see, and the native path then
+    // forwards this body as-is, so both must observe the same parts. A body with no
+    // foreign image part is returned by reference and stays byte-identical.
+    chatBody = normalizeChatImageParts(rawBody);
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
     const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;
@@ -142,8 +150,7 @@ async function handleChatCompletionsWithBudget(
   let chatNativeRoute: ReturnType<typeof routeModel> | null = null;
   try {
     const route = routeModel(config, chatBody.model as string, evidenceFromBody(chatBody));
-    route.provider = resolveOpenCodeGoTransport(route.provider,
-      sessionLaneIdFromRequest(req.headers) ?? normalizeLogConversationId(req.headers.get("x-opencode-session")));
+    route.provider = resolveOpenCodeGoTransport(route.provider, getOrAllocateRequestSessionLane(req));
     // Settle the wire once so every branch below reads the adapter this model will
     // actually use, not the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "chat");
@@ -163,7 +170,9 @@ async function handleChatCompletionsWithBudget(
       if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
       logCtx.usageLogInputTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
     }
-    if (!effortRow && isNativeChatRouteEligible(route, chatBody)) chatNativeRoute = route;
+    // Combos must enter the Responses routing path so child selection, forced default
+    // effort, failover, and per-attempt telemetry run before any native Chat send.
+    if (!route.combo && !effortRow && isNativeChatRouteEligible(route, chatBody, config)) chatNativeRoute = route;
   } catch (err) {
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;
@@ -219,13 +228,23 @@ async function handleChatCompletionsWithBudget(
   // for non-streaming clients. Native Chat uses the caller's original stream bit.
   internalBody.stream = true;
   if (settledRoute?.provider.adapter === "openai-responses") {
-    // ChatGPT backend rejects store:true and unsupported sampling knobs.
+    // The proxy never wants upstream-side retention for a translated Chat turn, so
+    // store stays pinned for every Responses route.
+    //
+    // The sampling and output-cap restrictions used to be applied here too, keyed on
+    // the adapter string. That was wrong twice over. Seven providers share this
+    // adapter (openai, openai-apikey, meta-model, meta-muse, zai,
+    // zhipu-bigmodel-responses, volcengine-agent-plan), so a generic key gateway lost
+    // controls it accepts. And settledRoute is the route settled at INGRESS: a combo
+    // or policy route resolves its concrete child later in the Responses pipeline, so
+    // deciding here mutates shared intent before the real target is known — a
+    // canonical-first combo that falls back to a key gateway had already lost the
+    // caller's controls, while a non-canonical-first combo that falls back to
+    // canonical still shipped them.
+    //
+    // Canonical-backend sanitization now happens at the final outgoing body in
+    // src/adapters/openai-responses.ts, where the concrete provider is known.
     internalBody.store = false;
-    delete internalBody.max_output_tokens;
-    delete internalBody.temperature;
-    delete internalBody.top_p;
-    delete internalBody.stop;
-    delete internalBody.user;
   } else if (internalBody.store === undefined) {
     internalBody.store = false;
   }
@@ -258,9 +277,9 @@ async function handleChatCompletionsWithBudget(
     const value = req.headers.get(name);
     if (value) headers.set(name, value);
   }
-  // A noncanonical caller-auth route can use stored main auth only through a sidecar snapshot.
-  // Later shadow/thread rewrites strip primary credentials at the actual Responses boundary.
-  if (!callerAuthorizationRoute || (settledRoute && !isCanonicalOpenAiForwardProvider(settledRoute.provider))) {
+  // Existing primary enrichment stays on non-caller-auth routes. Caller-auth routes defer
+  // optional stored sidecar auth until the final helper plan actually needs it.
+  if (!callerAuthorizationRoute) {
     // This enrichment is optional for routed/non-main providers. If native main
     // is fenced, omit it and let auth-context reject only a final physical-main
     // selection while healthy pool/provider routes continue.
@@ -286,7 +305,7 @@ async function handleChatCompletionsWithBudget(
   try {
     internalBodyJson = JSON.stringify(internalBody);
     translatorBudget.chargeRetained(
-      new TextEncoder().encode(internalBodyJson).byteLength,
+      Buffer.byteLength(internalBodyJson, "utf8"),
       { kind: "request_copies" },
     );
   } catch (err) {
@@ -305,6 +324,7 @@ async function handleChatCompletionsWithBudget(
     headers,
     body: internalBodyJson,
   });
+  linkRequestSessionLane(req, internalReq);
 
   let nativeLogged = false;
   const finalizeNativeLog = (status: number, meta: { terminalStatus?: RequestLogEntry["terminalStatus"]; closeReason: "terminal" | "client_cancel" | "non_stream" }) => {
@@ -314,6 +334,8 @@ async function handleChatCompletionsWithBudget(
   };
   const upstream = await handleResponses(internalReq, config, logCtx, {
     openAiSidecarAuth,
+    allowStoredOpenAiSidecarAuth: !!(callerAuthorizationRoute && settledRoute
+      && !isCanonicalOpenAiForwardProvider(settledRoute.provider)),
     nativeCallerAuth,
     callerDirectAuth,
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),

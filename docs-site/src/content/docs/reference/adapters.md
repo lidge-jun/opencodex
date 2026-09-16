@@ -123,6 +123,12 @@ body and response, with narrow compatibility rewrites for routed gateways.
 `forward` uses configured static headers without relaying caller authorization; `key` uses the
 configured provider key.
 
+The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
+some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
+An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;
+if the caller sends none, OpenCodex does not invent one. No other caller header is widened by this
+exception.
+
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
 WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses Bun's
@@ -364,13 +370,13 @@ important than cosmetic de-duplication. Tool-free requests retain normal text co
 
 ### Reasoning effort
 
-`gpt-5.6-sol` and `claude-opus-5` have verified native effort support, and each model family names
-the request field differently. A selected `low`, `medium`, `high`, `xhigh`, or `max` value is sent
-as `additionalModelRequestFields.reasoning.effort` for `gpt-5.6-sol` and as
-`additionalModelRequestFields.output_config.effort` for `claude-opus-5`. Other Kiro models currently
-use emulated reasoning: opencodex converts the selected level into bounded thinking instructions in
-the user content because their native effort field has not been verified. Do not interpret an
-advertised effort control on those models as proof of upstream-native reasoning support.
+The GPT-5.6 family uses `additionalModelRequestFields.reasoning.effort`; `claude-opus-5`
+uses `additionalModelRequestFields.output_config.effort`. For `gpt-5.6-luna` and
+`gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the verified native path.
+Their `xhigh` selection retains the previous bounded thinking instructions in user content
+because that native rung has not been verified. `gpt-5.6-sol` and `claude-opus-5` keep
+their existing native `low`, `medium`, `high`, `xhigh`, and `max` behavior. Other Kiro
+models use emulated reasoning; an advertised effort control is not proof of native support.
 
 ## `cursor`
 
@@ -414,6 +420,16 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+- The denial reply is a silent redirect whose wording follows the request catalog. A catalog that
+  carries `shell_command`/`exec_command` or a unified `exec` keeps the bridge wording; a catalog
+  that carries neither — an orchestrator client exposing only its own Responses tools, for example —
+  is redirected to the request's actual wire names, so the model is pointed at a tool that exists
+  rather than at an alias it cannot see.
+- A recognized Cursor data-policy gate is reported with its title, the action it requires, and the
+  Cursor Dashboard review URL instead of a bare `failed_precondition: Error`. Recognition is limited
+  to the known structured detail: unknown or malformed details keep the generic Connect error, no
+  upstream text, button, URL, or consent action is forwarded or executed, and the failure stays
+  non-retryable. Reviewing and accepting a data policy remains a user action in Cursor itself.
 
 Codex-compatible shell schemas retain sandbox permissions, justification, reusable
 prefix rules and login mode. Freeform tools expose one required string `input`
@@ -421,6 +437,57 @@ and preserve its tool-specific guidance, such as the required patch envelope;
 bare `exec_command` and `shell_command` names are reserved for non-freeform shell
 bridges. Namespace a custom freeform tool that uses either name. These schema
 declarations do not grant approval or change execution policy.
+
+## `devin`
+
+**Targets:** Cognition's `exa.api_server_pb.ApiServerService/GetChatMessage` over HTTPS Connect
+streaming at `server.codeium.com`.
+**Auth:** Devin/Cognition API key from `provider.apiKey` or the forwarded authorization header.
+Login first tries to import the credential the installed Devin CLI already holds: `devin auth
+login` completes the CLI's own PKCE sign-in and writes a `devin-session-token` to its
+`credentials.toml`, which is the same credential `SeatManagementService.RegisterUser` mints for a
+browser sign-in. When no usable CLI credential exists, login falls back to Auth0 browser sign-in
+and exchanges the pasted token via `RegisterUser` for a long-lived API key. `devin-cli` survives
+only as a deprecated alias — `ocx login devin-cli` still routes to `devin`, and a saved
+configuration that names the old id is rewritten at startup.
+
+- Uses `runTurn` rather than the ordinary fetch/parse path. Requests and server events are encoded
+  with manual protobuf framing in `devin/cloud-direct/wire.ts`; the ordinary `buildRequest` /
+  `parseStream` path is disabled.
+- Live model discovery via `GetCascadeModelConfigs`; the static seed is filtered against the
+  account's live roster so models not on the plan drop out instead of failing at request time.
+- Tool definitions are encoded in the request and tool-call events are decoded from the response
+  stream. Cognition enforces a per-tool-description length limit (6,998 chars) and an exact-phrase
+  blocklist; the adapter sanitizes known triggers and truncates over-long descriptions before
+  encoding.
+- Devin/Cognition API keys do not refresh. Run `ocx login devin` again when the key expires or is
+  revoked.
+- Only the credential is local when the CLI import path is used. The turn itself goes to
+  Cognition either way, so the import and browser login paths differ in nothing but where the
+  credential came from. Install the CLI with
+  `curl -fsSL https://cli.devin.ai/install.sh | bash` or `brew install --cask devin-cli`, run
+  `devin auth login` once, then add the provider.
+- An earlier build shipped a second adapter under the id `devin-cli` that ran the turn as an
+  Agent Client Protocol session against a local `devin acp` child process. It is gone. A saved
+  configuration that still names that adapter is rewritten to `devin` at startup, including a
+  custom-named row such as `"devin-acp"`.
+- The chat request is calibrated, not guessed. Three things gate it together: the credential is the
+  session token doubled and dash-joined in an `Authorization: Basic` header while the protobuf body
+  keeps one copy, the request envelope goes up uncompressed, and `Metadata` #31 carries a
+  732-character device fingerprint whose length — not value — the service checks. Inside
+  `CompletionConfiguration`, #2 is the output cap and #3 is the context window; swapping those two
+  makes every turn fail with an opaque `invalid_argument`. A temperature of exactly 0 is refused, so
+  it is clamped to the smallest accepted value.
+- Experimental unofficial bridge; not shown in the dashboard preset by default. See the
+  [provider guide](/guides/providers/) for login instructions.
+
+For SWE-2, an explicit reasoning effort overrides an effort suffix in the model
+id. For example, `swe-2-high` with `medium` selects the native `swe-2-medium` UID;
+`xhigh`, `ultra`, and `max` select `swe-2-max`. Values below Medium select Medium
+and do not disable SWE-2 reasoning. Without an explicit effort, a suffixed model
+id is preserved. This applies through the shared adapter to every Devin account,
+whichever login path minted the credential; other model families keep their
+existing suffix precedence.
 
 ## `azure-openai` (alias: `azure`)
 

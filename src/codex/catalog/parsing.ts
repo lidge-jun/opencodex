@@ -183,6 +183,23 @@ export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
   // Issue #2330: OpenCode Go models absent from current documentation or returning terminal HTTP 400 errors.
   "opencode-go/mimo-v2-omni",
   "opencode-go/mimo-v2-pro",
+  /*
+   * DeepSeek retired `deepseek-v4-pro` on 2026-09-14 04:00 UTC and routes its requests to
+   * V4.1-Flash (api-docs.deepseek.com/news/news260910). Deleting the registry rows removes
+   * the model on providers that publish a static roster, but every provider below discovers
+   * its models live — there, a deleted row does not remove anything, it only strips the
+   * context window, the effort ladder and the text-only hint, so the retired model would
+   * keep appearing with its capabilities broken. Excluding the slug is what actually takes
+   * it out of the routed catalog.
+   */
+  "command-code/deepseek-deepseek-v4-pro",
+  "commandcode/deepseek-deepseek-v4-pro",
+  "orcarouter/deepseek-deepseek-v4-pro",
+  "cline-pass/cline-pass-deepseek-v4-pro",
+  "baseten/deepseek-ai-DeepSeek-V4-Pro",
+  "digitalocean/deepseek-v4-pro",
+  "qoder/DeepSeek-V4-Pro",
+  "codebuddy/deepseek-v4-pro",
 ]);
 
 export function isRoutedModelCompatibilityExcluded(slug: string): boolean {
@@ -320,15 +337,6 @@ export function findSupportedNativeTemplate(catalog: RawCatalog | null): RawEntr
   ) ?? null;
 }
 
-/**
- * Native OpenAI slugs that do NOT support the Fast (priority) service tier.
- * Upstream may advertise service_tiers for these models, but the tier is not
- * actually available — strip it so the Codex UI does not offer a dead toggle.
- */
-const NO_FAST_TIER_NATIVE_SLUGS = new Set([
-  "gpt-5.3-codex-spark",
-]);
-
 /** Does this row already carry an `ultrafast` tier the operator put there themselves? */
 /**
  * Read the opt-in from the live config, ONCE per catalog build.
@@ -421,14 +429,6 @@ export function normalizeServiceTiers(entry: RawEntry): RawEntry {
         ? { ...tier, description: "2x speed, increased usage" } : tier,
     );
   }
-  // Strip service tiers for models that do not actually support the Fast tier.
-  if (typeof entry.slug === "string" && NO_FAST_TIER_NATIVE_SLUGS.has(entry.slug)) {
-    delete entry.service_tier;
-    delete entry.service_tiers;
-    delete entry.default_service_tier;
-    delete entry.additional_speed_tiers;
-    return entry;
-  }
   // Codex stores the user-facing config spelling as "fast", but the catalog/request
   // service tier id is "priority" in current codex-rs. Keep legacy catalogs working.
   if (entry.service_tier === "fast") entry.service_tier = "priority";
@@ -500,8 +500,8 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
     }
   }
   // providerContextCaps.openai is a ceiling for native OpenAI rows regardless of where the
-  // advertised window came from (#1430): preserved rows without a hardcoded override (e.g.
-  // gpt-5.4-mini) must stay under the cap too, and auto-compaction follows the capped window.
+  // advertised window came from (#1430): preserved rows without a hardcoded override
+  // must stay under the cap too, and auto-compaction follows the capped window.
   // The per-model window narrows the same rows for the same reason.
   const currentContext = typeof entry.context_window === "number" ? entry.context_window : undefined;
   const cappedContext = narrowNativeMaxContextWindow(nativeSlug, currentContext, limits);

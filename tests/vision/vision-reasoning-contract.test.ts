@@ -68,7 +68,7 @@ describe("vision reasoning capability contracts", () => {
       | { reasoningEfforts?: string[] }
       | undefined)?.reasoningEfforts;
 
-    expect(efforts("gpt-5.4-mini")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(efforts("gpt-5.5")).toEqual(["low", "medium", "high", "xhigh"]);
     expect(efforts("gpt-5.6-luna")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(efforts("gpt-5.6-sol")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(efforts("gpt-5.6-sol")).not.toContain("ultra");
@@ -85,7 +85,7 @@ describe("vision reasoning capability contracts", () => {
       const response = await getVision(config);
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        vision: { model: "gpt-5.4-mini", reasoning: "xhigh" },
+        vision: { model: "gpt-5.6-luna", reasoning: "max" },
       });
       // Reads report effective execution state without mutating a hand-edited config in memory.
       expect(config.visionSidecar?.reasoning).toBe("max");
@@ -99,10 +99,10 @@ describe("vision reasoning capability contracts", () => {
 
     try {
       const direct = { port: 10100, defaultProvider: "none", providers: {} } as OcxConfig;
-      let response = await putVision(direct, { model: "gpt-5.4-mini", reasoning: "max" });
+      let response = await putVision(direct, { model: "gpt-5.5", reasoning: "max" });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        vision: { model: "gpt-5.4-mini", reasoning: "xhigh" },
+        vision: { model: "gpt-5.5", reasoning: "xhigh" },
       });
       expect(direct.visionSidecar?.reasoning).toBe("xhigh");
 
@@ -110,7 +110,7 @@ describe("vision reasoning capability contracts", () => {
         port: 10100,
         defaultProvider: "none",
         providers: {},
-        visionSidecar: { model: "gpt-5.4-mini", reasoning: "low" },
+        visionSidecar: { model: "gpt-5.5", reasoning: "low" },
       } as OcxConfig;
       response = await putVision(reasoningOnly, { reasoning: "max" });
       expect(response.status).toBe(200);
@@ -125,10 +125,10 @@ describe("vision reasoning capability contracts", () => {
       response = await putVision(unsetModel, { reasoning: "max" });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        vision: { model: "gpt-5.4-mini", reasoning: "xhigh" },
+        vision: { model: "gpt-5.6-luna", reasoning: "max" },
       });
       expect(unsetModel.visionSidecar?.model).toBeUndefined();
-      expect(unsetModel.visionSidecar?.reasoning).toBe("xhigh");
+      expect(unsetModel.visionSidecar?.reasoning).toBe("max");
 
       const modelOnly = {
         port: 10100,
@@ -136,23 +136,23 @@ describe("vision reasoning capability contracts", () => {
         providers: {},
         visionSidecar: { model: "gpt-5.6-luna", reasoning: "max" },
       } as OcxConfig;
-      response = await putVision(modelOnly, { model: "gpt-5.4-mini" });
+      response = await putVision(modelOnly, { model: "gpt-5.5" });
       expect(response.status).toBe(200);
-      expect(modelOnly.visionSidecar).toMatchObject({ model: "gpt-5.4-mini", reasoning: "xhigh" });
+      expect(modelOnly.visionSidecar).toMatchObject({ model: "gpt-5.5", reasoning: "xhigh" });
 
       const reset = {
         port: 10100,
         defaultProvider: "none",
         providers: {},
-        visionSidecar: { model: "gpt-5.4-mini", reasoning: "max" },
+        visionSidecar: { model: "gpt-5.5", reasoning: "max" },
       } as OcxConfig;
       response = await putVision(reset, { model: "" });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        vision: { model: "gpt-5.4-mini", reasoning: "xhigh" },
+        vision: { model: "gpt-5.6-luna", reasoning: "max" },
       });
       expect(reset.visionSidecar?.model).toBeUndefined();
-      expect(reset.visionSidecar?.reasoning).toBe("xhigh");
+      expect(reset.visionSidecar?.reasoning).toBe("max");
 
       const custom = { port: 10100, defaultProvider: "none", providers: {} } as OcxConfig;
       response = await putVision(custom, { model: "custom-vision", reasoning: "max" });
@@ -175,14 +175,14 @@ describe("vision reasoning capability contracts", () => {
       writeFileSync(importPath, JSON.stringify(validCliConfig({ reasoning: "max" })));
       expect(await handleConfigCommand(["import", importPath, "--yes", "--json"])).toBe(0);
       let persisted = JSON.parse(readFileSync(join(isolatedHome, "config.json"), "utf8"));
-      expect(persisted.visionSidecar).toMatchObject({ reasoning: "xhigh" });
+      expect(persisted.visionSidecar).toMatchObject({ reasoning: "max" });
       expect(persisted.visionSidecar.model).toBeUndefined();
 
       writeFileSync(importPath, JSON.stringify(validCliConfig({ model: "", reasoning: "max" })));
       expect(await handleConfigCommand(["import", importPath, "--yes", "--json"])).toBe(0);
       persisted = JSON.parse(readFileSync(join(isolatedHome, "config.json"), "utf8"));
-      expect(persisted.visionSidecar).toMatchObject({ model: "", reasoning: "xhigh" });
-      expect(resolveOpenAiVisionModel({ visionSidecar: persisted.visionSidecar })).toBe("gpt-5.4-mini");
+      expect(persisted.visionSidecar).toMatchObject({ model: "", reasoning: "max" });
+      expect(resolveOpenAiVisionModel({ visionSidecar: persisted.visionSidecar })).toBe("gpt-5.6-luna");
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
@@ -198,18 +198,18 @@ describe("vision reasoning capability contracts", () => {
       port: 10100,
       defaultProvider: "none",
       providers: {},
-      visionSidecar: { model: "gpt-5.4-mini", reasoning: "high", maxDescriptionsPerTurn: 8 },
+      visionSidecar: { model: "gpt-5.6-luna", reasoning: "high", maxDescriptionsPerTurn: 8 },
     } as OcxConfig;
 
     try {
       let response = await putVision(config, { reasoning: "ultra" });
       expect(response.status).toBe(400);
-      expect(config.visionSidecar).toMatchObject({ model: "gpt-5.4-mini", reasoning: "high" });
+      expect(config.visionSidecar).toMatchObject({ model: "gpt-5.6-luna", reasoning: "high" });
 
       response = await putVision(config, { maxDescriptionsPerTurn: 4 });
       expect(response.status).toBe(200);
       expect(config.visionSidecar).toMatchObject({
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-luna",
         reasoning: "high",
         maxDescriptionsPerTurn: 4,
       });

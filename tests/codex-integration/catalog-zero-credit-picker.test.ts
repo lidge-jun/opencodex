@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { clearCachedProviderQuotas, setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
+import { clearCachedProviderQuotas, setCachedProviderQuotaForTests, replaceCachedProviderQuotas, providerQuotaRoutingBinding, type ProviderQuotaRoutingEvidence } from "../../src/providers/quota-routing-cache";
 import { quotaInactiveReason } from "../../src/combos/resolve";
 import { buildCatalogEntries, CATALOG_INACTIVE_REASON_FIELD, deriveEntry } from "../../src/codex/catalog/sync";
 import type { RawEntry } from "../../src/codex/catalog/parsing";
 import type { OcxConfig } from "../../src/types";
-import type { ProviderQuota } from "../../src/providers/quota";
+import type { ProviderQuotaReport, ProviderQuota } from "../../src/providers/quota";
 
 /**
  * Regression coverage for #1711 — zero-credit models and combos were still offered as ordinary
@@ -49,6 +49,32 @@ describe("quota-inactive catalog rows (#1711)", () => {
   test("a single provider out of credit marks the row no_credit", () => {
     setCachedProviderQuotaForTests("alpha", exhausted());
     expect(quotaInactiveReason(config(), [{ provider: "alpha" }], NOW)).toBe("no_credit");
+  });
+
+  test("display-only reports cannot mark a catalog row inactive", () => {
+    replaceCachedProviderQuotas([{ provider: "alpha", label: "Alpha", source: "display", quota: exhausted(), updatedAt: NOW }]);
+    expect(quotaInactiveReason(config(), [{ provider: "alpha" }], NOW)).toBeUndefined();
+  });
+
+  test.each(["apiKey", "baseUrl", "adapter"] as const)("bound evidence stops marking inactivity after %s changes", field => {
+    const current = config();
+    const provider = current.providers.alpha!;
+    const report: ProviderQuotaReport = { provider: "alpha", label: "Alpha", source: "inference", quota: exhausted(), updatedAt: NOW };
+    const binding = providerQuotaRoutingBinding("alpha", provider);
+    expect(binding).not.toBeNull();
+    const evidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
+    evidence.set(report, { quota: report.quota, binding: binding! });
+    replaceCachedProviderQuotas([report], evidence);
+    expect(quotaInactiveReason(current, [{ provider: "alpha" }], NOW)).toBe("no_credit");
+    if (field === "apiKey") provider.apiKey = "changed-key";
+    else if (field === "baseUrl") provider.baseUrl = "https://changed.example.test/v1";
+    else provider.adapter = "openai-responses";
+    expect(quotaInactiveReason(current, [{ provider: "alpha" }], NOW)).toBeUndefined();
+  });
+
+  test.each([NOW - 30 * 60_000, NOW + 1, -1, Number.NaN])("invalid or exactly expired evidence is unknown: %s", updatedAt => {
+    setCachedProviderQuotaForTests("alpha", exhausted(updatedAt));
+    expect(quotaInactiveReason(config(), [{ provider: "alpha" }], NOW)).toBeUndefined();
   });
 
   test("a refill clears the field", () => {

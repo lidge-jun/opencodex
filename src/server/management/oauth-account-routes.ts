@@ -39,6 +39,7 @@ import {
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimit,
   parseAccountPoolStrategy,
+  parseCodexAccountPoolStrategy,
 } from "../../codex/pool-rotation";
 import { normalizeAccountPoolQuotaWindow, parseAccountPoolQuotaWindow } from "../../oauth/anthropic-routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
@@ -78,6 +79,25 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, readManagementJsonBodyOr, rethrowManagementBodyTooLarge } from "./body";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
+
+/**
+ * Provider ids that share the Devin cloud-direct client, and therefore share its
+ * process-memory caches.
+ *
+ * `devin-cli` is a deprecated alias for the merged `devin` provider, but a
+ * config row the startup migration has not rekeyed yet can still arrive here —
+ * and its logout/removal must clear the same caches, because both ids hand the
+ * same api_key to the same client and one cache serves both.
+ */
+function isDevinCloudDirectProvider(provider: string): boolean {
+  return provider === "devin" || provider === "devin-cli";
+}
+
+async function clearDevinCloudDirectCaches(): Promise<void> {
+  const { clearCachedUserJwt, clearCachedCatalog } = await import("../../adapters/devin/cloud-direct");
+  clearCachedUserJwt();
+  clearCachedCatalog();
+}
 import { ACCOUNT_IMPORT_DEADLINE_MS, ACCOUNT_IMPORT_MAX_REQUEST_BYTES } from "../../oauth/account-import";
 import { readBoundedJsonRequestBody } from "../request-decompress";
 
@@ -255,6 +275,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     clearAccountQuotaCache(provider);
+    // The cached user_jwt's payload contains the api_key, and the catalog is
+    // keyed by that key. Without this they outlive the credential in process
+    // memory until the JWT's own ~24 minute expiry. `devin-cli` is a deprecated
+    // alias whose unmigrated rows share the one cache, so gating on `devin`
+    // alone left a CLI-imported key's JWT resident after its own logout.
+    if (isDevinCloudDirectProvider(provider)) await clearDevinCloudDirectCaches();
     return jsonResponse({ success: true });
   }
 
@@ -317,7 +343,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         return {
           ...account,
           quota: row.quota,
-          ...(quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true } : {}),
+          ...(quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true,
+            ...(row.unavailable && row.quotaFailure && row.quotaFailureIsCurrent?.() === true ? { quotaFailure: row.quotaFailure } : {}),
+          } : {}),
         };
       }),
     });
@@ -331,6 +359,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
     const { forgetGenericFailoverRoster } = await import("../../oauth/generic-account-failover");
     forgetGenericFailoverRoster(provider);
+    // Seed the rotation cursor on the operator's pick, or a sticky round-robin ring hands the
+    // very next dispatch back to whatever the pool had chosen. forgetGenericFailoverRoster
+    // only drops the presence count; it has never touched the cursor. Same defect the Codex
+    // side carries resetCodexRoutingForManualSelection for.
+    const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
+    seedPoolRotationAccount(genericPoolKey(provider), body.accountId);
     if (provider === "anthropic") {
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);
@@ -343,6 +377,93 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     clearProviderQuotaCache();
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
+
+  // The unified pool-settings contract (#695 wp5c). The three legacy paths keep working and
+  // keep their own shapes -- goldens pin them -- but this is the one an operator or a dashboard
+  // should read, because it answers with the same keys for every kind and DECLARES which of
+  // them that kind honours.
+  if (url.pathname === "/api/pool/settings" && (req.method === "GET" || req.method === "PUT" || req.method === "PATCH")) {
+    const {
+      poolSettingsCapability, parseGenericPoolStrategy, parseGenericAutoSwitchThreshold, parseGenericStickyLimit,
+      unifiedPoolSettingsDto,
+    } = await import("../../oauth/pool-settings-capability");
+    const rawBody = req.method === "GET" ? {} : await readManagementJsonBodyOr(req, {});
+    if (req.method !== "GET" && !isPlainRecord(rawBody)) {
+      return jsonResponse({ error: "body must be an object" }, 400);
+    }
+    const fields = rawBody as { provider?: unknown; enabled?: unknown; strategy?: unknown; stickyLimit?: unknown; autoSwitchThreshold?: unknown; quotaWindow?: unknown };
+    const provider = req.method === "GET"
+      ? (url.searchParams.get("provider") ?? "").trim().toLowerCase()
+      : (typeof fields.provider === "string" ? fields.provider.trim().toLowerCase() : "");
+    const kind = provider ? poolSettingsCapability(provider, config.providers?.[provider]) : null;
+    if (!provider || !kind) {
+      return jsonResponse({ error: "pool settings are only available for the codex, anthropic and generic OAuth pools" }, 400);
+    }
+    // Validated by the SHARED parsers before any kind-specific write, so a bad strategy or
+    // sticky limit is refused identically whichever pool is addressed.
+    let strategy: string | undefined;
+    if (fields.strategy !== undefined) {
+      const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy) : parseGenericPoolStrategy(fields.strategy);
+      if (parsed === null) return jsonResponse({ error: kind === "codex"
+        ? "strategy must be one of: quota, round-robin, fill-first, reset-first"
+        : "strategy must be one of: quota, round-robin, fill-first" }, 400);
+      strategy = parsed;
+    }
+    let stickyLimit: number | undefined;
+    if (fields.stickyLimit !== undefined) {
+      const parsed = parseGenericStickyLimit(fields.stickyLimit);
+      if (parsed === null) return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
+      stickyLimit = parsed;
+    }
+    let autoSwitchThreshold: number | undefined;
+    if (fields.autoSwitchThreshold !== undefined) {
+      const parsed = parseGenericAutoSwitchThreshold(fields.autoSwitchThreshold);
+      if (parsed === null) return jsonResponse({ error: "autoSwitchThreshold must be an integer 0-100" }, 400);
+      autoSwitchThreshold = parsed;
+    }
+    if (fields.quotaWindow !== undefined && kind !== "anthropic") {
+      return jsonResponse({ error: "quotaWindow is only part of the anthropic pool contract" }, 400);
+    }
+    let quotaWindow: string | undefined;
+    if (fields.quotaWindow !== undefined) {
+      const parsed = parseAccountPoolQuotaWindow(fields.quotaWindow);
+      if (parsed === null) return jsonResponse({ error: "quotaWindow must be one of: five-hour, weekly, max-utilization" }, 400);
+      quotaWindow = parsed;
+    }
+    if (fields.enabled !== undefined) {
+      if (kind === "codex") return jsonResponse({ error: "enabled is not part of the codex pool contract" }, 400);
+      if (typeof fields.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+    }
+
+    if (req.method !== "GET") {
+      if (kind === "codex") {
+        if (strategy !== undefined) config.accountPoolStrategy = strategy as never;
+        if (stickyLimit !== undefined) config.accountPoolStickyLimit = stickyLimit;
+        if (autoSwitchThreshold !== undefined) config.autoSwitchThreshold = autoSwitchThreshold;
+      } else if (kind === "anthropic") {
+        const pool = { ...(config.anthropicAccountPool ?? {}) };
+        if (fields.enabled !== undefined) pool.enabled = fields.enabled as boolean;
+        if (strategy !== undefined) pool.strategy = strategy as never;
+        if (stickyLimit !== undefined) pool.stickyLimit = stickyLimit;
+        if (autoSwitchThreshold !== undefined) pool.autoSwitchThreshold = autoSwitchThreshold;
+        if (quotaWindow !== undefined) pool.quotaWindow = quotaWindow as never;
+        config.anthropicAccountPool = pool;
+      } else {
+        const prov = config.providers[provider]!;
+        const next = { ...(prov.oauthAccountFailover ?? {}) };
+        if (fields.enabled !== undefined) next.enabled = fields.enabled as boolean;
+        if (strategy !== undefined) next.strategy = strategy as never;
+        if (stickyLimit !== undefined) next.stickyLimit = stickyLimit;
+        if (autoSwitchThreshold !== undefined) next.autoSwitchThreshold = autoSwitchThreshold;
+        if (Object.keys(next).length > 0) prov.oauthAccountFailover = next;
+        else delete prov.oauthAccountFailover;
+      }
+      saveConfigPreservingClaudeCode(config);
+      reconcileLiveStateStores();
+    }
+    return jsonResponse(unifiedPoolSettingsDto(config, provider, kind));
+  }
+
 
   // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
@@ -357,7 +478,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {
         return jsonResponse({ error: "pool config is only supported for anthropic and generic OAuth providers" }, 400);
       }
-      return jsonResponse(genericPoolSettingsDto(provider, prov));
+      return jsonResponse(genericPoolSettingsDto(provider, prov, config.pool?.kernel === true));
     }
     const pool = config.anthropicAccountPool ?? {};
     return jsonResponse({
@@ -387,13 +508,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (provider !== "anthropic") {
       const {
         poolSettingsCapability, genericPoolSettingsDto, parseGenericPoolStrategy, parseGenericAutoSwitchThreshold,
+        parseGenericStickyLimit,
       } = await import("../../oauth/pool-settings-capability");
       const prov = config.providers[provider];
       if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {
         return jsonResponse({ error: "pool config is only supported for anthropic and generic OAuth providers" }, 400);
       }
-      if (body.stickyLimit !== undefined || body.quotaWindow !== undefined) {
-        return jsonResponse({ error: "stickyLimit and quotaWindow are not part of the generic pool contract yet" }, 400);
+      if (body.quotaWindow !== undefined) {
+        return jsonResponse({ error: "quotaWindow is not part of the generic pool contract yet" }, 400);
       }
       const next = { ...(prov.oauthAccountFailover ?? {}) };
       if (body.enabled !== undefined) {
@@ -416,10 +538,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           next.autoSwitchThreshold = parsed;
         }
       }
+      if (body.stickyLimit !== undefined) {
+        if (body.stickyLimit === null) delete next.stickyLimit;
+        else {
+          const parsed = parseGenericStickyLimit(body.stickyLimit);
+          if (parsed === null) return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
+          next.stickyLimit = parsed;
+        }
+      }
       if (Object.keys(next).length > 0) prov.oauthAccountFailover = next;
       else delete prov.oauthAccountFailover;
       saveConfigPreservingClaudeCode(config);
-      return jsonResponse({ ok: true, ...genericPoolSettingsDto(provider, prov) });
+      return jsonResponse({ ok: true, ...genericPoolSettingsDto(provider, prov, config.pool?.kernel === true) });
     }
     let enabled = config.anthropicAccountPool?.enabled === true;
     if (body.enabled !== undefined) {
@@ -577,6 +707,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     clearAccountQuotaCache(provider);
+    // Same reasoning as logout. Removing the last account for a provider used to
+    // leave the JWT and catalog in memory, because only the logout route cleared
+    // them.
+    if (isDevinCloudDirectProvider(provider)) await clearDevinCloudDirectCaches();
     return jsonResponse({ ok: true });
   }
 
@@ -623,8 +757,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     clearModelCache(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
-    const { clearKeyCooldowns } = await import("../../providers/key-failover");
+    const { clearKeyCooldowns, forgetApiKeyRotationCursor } = await import("../../providers/key-failover");
     clearKeyCooldowns(name); // manual key management resets 429 cooldown state
+    // ...and the rotation cursor with it. A cursor that predates the operator's choice would
+    // hand the next proactive pick straight back to whichever key the pool had reached.
+    forgetApiKeyRotationCursor(name);
     return jsonResponse({ ok: true, id: result.id }, 201);
   }
   // Opt-in OS keychain storage (#1221): move the active key and pool into the OS credential
@@ -667,8 +804,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     clearModelCache(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
-    const { clearKeyCooldowns } = await import("../../providers/key-failover");
+    const { clearKeyCooldowns, forgetApiKeyRotationCursor } = await import("../../providers/key-failover");
     clearKeyCooldowns(name); // manual key management resets 429 cooldown state
+    // ...and the rotation cursor with it. A cursor that predates the operator's choice would
+    // hand the next proactive pick straight back to whichever key the pool had reached.
+    forgetApiKeyRotationCursor(name);
     return jsonResponse({ ok: true, name, activeId: body.id });
   }
   if (url.pathname === "/api/providers/keys/alias" && req.method === "PUT") {
@@ -696,8 +836,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     clearModelCache(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
-    const { clearKeyCooldowns } = await import("../../providers/key-failover");
+    const { clearKeyCooldowns, forgetApiKeyRotationCursor } = await import("../../providers/key-failover");
     clearKeyCooldowns(name); // manual key management resets 429 cooldown state
+    // ...and the rotation cursor with it. A cursor that predates the operator's choice would
+    // hand the next proactive pick straight back to whichever key the pool had reached.
+    forgetApiKeyRotationCursor(name);
     return jsonResponse({ ok: true });
   }
 
@@ -716,7 +859,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       requestOrigin: req.headers.get("origin"),
     });
     const { readApiKeyUsageRollup } = await import("./api-key-usage");
-    const { rollup, attributionSince, historyTruncated } = await readApiKeyUsageRollup(keys.map(k => k.id), config.managementUsageMaxReadBytes);
+    const { rollup, attributionSince, historyTruncated, usageIncomplete, usageIncompleteReason } = await readApiKeyUsageRollup(keys.map(k => k.id), config.managementUsageMaxReadBytes);
     return jsonResponse({
       // 8 random hex past the fixed `ocx_data_` literal: enough to tell two keys
       // apart in a list, with 128 bits of the tail still unrevealed. Masking only
@@ -736,6 +879,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       // Dataset-level and singular: it describes the usage log, not any one key.
       ...(attributionSince ? { attributionSince } : {}),
       ...(historyTruncated ? { historyTruncated: true } : {}),
+      ...(usageIncomplete ? { usageIncomplete: true, usageIncompleteReason } : {}),
       authMatrix: AUTH_MATRIX,
       ...endpoints,
     }, 200, req, config);

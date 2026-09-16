@@ -385,7 +385,7 @@ function prepareCatalog(
       ? supportedCodexReasoningEffortsFromObservedCatalog(source.runtimeSupport.catalog)
       : null,
   );
-  finalizeAutoReviewModelOverride(mergedModels, catalogModels);
+  finalizeAutoReviewModelOverride(mergedModels, catalogModels, config);
   catalog.models = mergedModels;
   return catalog;
 }

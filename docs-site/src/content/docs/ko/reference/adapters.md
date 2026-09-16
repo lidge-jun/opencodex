@@ -167,10 +167,12 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 
 ### Reasoning effort
 
-`gpt-5.6-sol`과 `claude-opus-5`는 네이티브 effort를 지원하며 요청 필드 이름이 다릅니다.
-`low` / `medium` / `high` / `xhigh` / `max` 값은 각각
-`additionalModelRequestFields.reasoning.effort`와 `output_config.effort`로 전송됩니다.
-
+GPT-5.6 계열은 `additionalModelRequestFields.reasoning.effort`를, `claude-opus-5`는
+`additionalModelRequestFields.output_config.effort`를 사용합니다. `gpt-5.6-luna`와
+`gpt-5.6-terra`는 검증된 `low`, `medium`, `high`, `max`만 네이티브 필드로 전송합니다.
+두 모델의 `xhigh`는 네이티브 동작이 검증되지 않아 기존의 제한된 thinking 지시문 방식을 유지합니다.
+`gpt-5.6-sol`과 `claude-opus-5`의 기존 네이티브 단계(`low`, `medium`, `high`, `xhigh`, `max`)는
+바뀌지 않습니다. 다른 Kiro 모델의 effort는 에뮬레이션이며, 조절 항목이 있다고 네이티브 지원을 뜻하지는 않습니다.
 
 ## `cursor`
 
@@ -209,6 +211,17 @@ discovery에 모두 적용됩니다.
   `mcpServers`와 `desktopExecutor` 통합은 각각 별도 opt-in입니다. `nativeLocalExec: "on"`은
   더 넓은 내장 executor를 켜며 Codex 승인/샌드박스 규칙을 우회합니다. 예전 설정인
   `unsafeAllowNativeLocalExec: true`는 `nativeLocalExec`을 지정하지 않았을 때만 같은 뜻입니다.
+
+## `devin`
+
+**대상:** Cognition의 `exa.api_server_pb.ApiServerService/GetChatMessage`(`server.codeium.com`, Connect 스트리밍).
+**인증:** `provider.apiKey` 또는 전달된 authorization 헤더의 Devin/Cognition API 키. 로그인은 먼저 설치된 Devin CLI가 이미 보유한 자격을 가져오려 시도합니다 — `devin auth login`이 CLI 자체의 PKCE 로그인을 완료하고 `devin-session-token`을 자기 `credentials.toml`에 쓰는데, 이는 `SeatManagementService.RegisterUser`가 브라우저 사인인에 발급하는 것과 같은 자격입니다. 쓸 수 있는 CLI 자격이 없으면 Auth0 브라우저 사인인으로 폴백해 붙여넣은 토큰을 `RegisterUser`로 장기 키에 교환합니다. `devin-cli`는 deprecated alias로만 남아 `ocx login devin-cli`도 `devin`으로 라우팅되며, 구 id로 저장된 설정은 스타트업에서 리라이트됩니다.
+
+- 일반 fetch/parse 대신 `runTurn`을 씁니다. 요청과 서버 이벤트는 `devin/cloud-direct/wire.ts`의 수동 protobuf 프레이밍으로 다룹니다.
+- `GetCascadeModelConfigs`로 계정별 모델을 조회하고, 플랜에 없는 모델은 요청 시점이 아니라 목록에서 걸러집니다.
+- Cognition은 도구 설명 길이 제한과 정확 문구 차단 목록을 적용합니다. 어댑터가 알려진 문구를 바꾸고 긴 설명을 잘라냅니다.
+- 키는 갱신되지 않습니다. 만료되거나 폐기되면 `ocx login devin`을 다시 실행하세요.
+- CLI 임포트 경로를 써도 로컬인 것은 자격뿐이며, 턴은 어느 경로든 Cognition으로 갑니다. 예전 빌드에는 `devin-cli` id 아래 로컬 `devin acp` 자식 프로세스에 Agent Client Protocol 세션으로 턴을 실행하는 두 번째 어댑터가 있었지만 제거됐습니다. 그 어댑터를 아직 가리키는 저장 설정은 스타트업에서 `devin`으로 리라이트되며, `"devin-acp"` 같은 커스텀 이름 행도 마찬가지입니다.
 
 ## `azure-openai` (별칭: `azure`)
 

@@ -235,8 +235,10 @@ describe("service backend CLI parsing", () => {
     expect(parseServiceArgs([])).toEqual({ sub: "install", backend: null, invalid: [] });
   });
 
-  test("restart aliases the existing no-admin repair path", () => {
-    expect(parseServiceArgs(["restart"])).toEqual({ sub: "repair", backend: null, invalid: [] });
+  test("restart is its own verb: parsed like repair, no backend flag, no admin path", () => {
+    // `restart` used to alias `repair`; since repair became a no-op on a healthy launchd job,
+    // `restart` carries its own verb so the darwin path can kickstart the unchanged job.
+    expect(parseServiceArgs(["restart"])).toEqual({ sub: "restart", backend: null, invalid: [] });
   });
 
   test("--scheduler and unknown flags are recognized separately", () => {

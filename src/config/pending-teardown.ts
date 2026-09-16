@@ -175,7 +175,7 @@ export function listPendingTeardowns(): OutstandingTeardown[] {
   }
   const out: OutstandingTeardown[] = [];
   for (const name of names) {
-    // One naming rule, shared with the npm launcher: the two lanes drifting apart is
+    // One naming rule, shared with the package launcher: the two lanes drifting apart is
     // exactly how the Node updater stopped seeing receipts at all.
     if (!isPendingTeardownFileName(name)) continue;
     const nonce = pendingTeardownNonceFromFileName(name)!;
@@ -200,6 +200,37 @@ export function pendingTeardownOutstanding(): boolean {
     // and reporting "none" would unblock an update over a teardown that never ran.
     return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
+}
+
+/**
+ * Are the outstanding obligations EXACTLY the ones this stop chose to keep?
+ *
+ * `ocx stop` can preserve its own obligations deliberately — the Codex history preflight
+ * refuses before anything is restored, so the receipt has to survive for a later stop
+ * (#4718). That is safe for an update to continue past, because the stop knows those
+ * receipts describe a proxy it just proved down.
+ *
+ * Nothing else is. A quarantined receipt is waiting on a human, and a receipt belonging
+ * to a live owner means another stop is in flight; letting either ride along would turn
+ * "we deliberately kept ours" into "we ignored everyone's". So membership is the test,
+ * not a count of ours: an unrecognized obligation of any kind answers false and the
+ * caller falls back to the ordinary failure code.
+ *
+ * Quarantined names are included in the scan on purpose. They do not correspond to any
+ * nonce this run preserved, so their presence always answers false.
+ */
+export function pendingTeardownsAreExactly(nonces: readonly string[]): boolean {
+  const expected = new Set(nonces.map(nonce => `${PREFIX}${nonce}${SUFFIX}`));
+  let names: string[];
+  try {
+    names = readdirSync(getConfigDir());
+  } catch (error) {
+    // A home that does not exist holds nothing, which matches only an empty expectation.
+    // Any other scan failure may be hiding an obligation and must not answer "exactly".
+    return (error as NodeJS.ErrnoException).code === "ENOENT" && expected.size === 0;
+  }
+  const found = names.filter(isAnyTeardownObligationFileName);
+  return found.length === expected.size && found.every(name => expected.has(name));
 }
 
 /** Paths of quarantined obligations awaiting a human. */

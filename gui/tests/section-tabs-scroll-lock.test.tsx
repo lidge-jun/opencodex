@@ -9,7 +9,7 @@ const globals = ["document", "window", "navigator", "IS_REACT_ACT_ENVIRONMENT"] 
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 
-const observers: Array<{ callback: IntersectionObserverCallback; nodes: Element[] }> = [];
+const observers: Array<{ callback: IntersectionObserverCallback; nodes: Element[]; rootMargin?: string }> = [];
 const OriginalIntersectionObserver = globalThis.IntersectionObserver;
 
 function emitIntersecting(id: string) {
@@ -42,9 +42,9 @@ beforeEach(() => {
     #callback: IntersectionObserverCallback;
     #nodes: Element[] = [];
 
-    constructor(callback: IntersectionObserverCallback) {
+    constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
       this.#callback = callback;
-      observers.push({ callback: this.#callback.bind(this), nodes: this.#nodes });
+      observers.push({ callback: this.#callback.bind(this), nodes: this.#nodes, rootMargin: options?.rootMargin });
     }
 
     observe(node: Element) {
@@ -68,6 +68,26 @@ beforeEach(() => {
     configurable: true,
     value: MockIntersectionObserver,
   });
+});
+
+test("a mobile shell offset updates the observer without changing default section behavior", async () => {
+  const original = window.matchMedia;
+  let listener: (() => void) | undefined;
+  const query = { matches: true, addEventListener: (_name: string, callback: () => void) => { listener = callback; }, removeEventListener: () => { listener = undefined; } };
+  window.matchMedia = (() => query) as unknown as typeof window.matchMedia;
+  const container = document.createElement("div"); document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<><SectionTabs scope="audio" items={[{ id: "dictation", label: "Dictation" }]} ariaLabel="Audio" mobileReadingLine={108} /><div id={sectionAnchorId("audio", "dictation")} /></>));
+    expect(observers.at(-1)?.rootMargin).toBe("-108px 0px -60% 0px");
+    await act(async () => { query.matches = false; listener?.(); });
+    expect(observers.at(-1)?.rootMargin).toBe("-72px 0px -60% 0px");
+  } finally {
+    await act(async () => root.unmount());
+    expect(listener).toBeUndefined();
+    window.matchMedia = original; container.remove();
+  }
 });
 
 afterEach(() => {

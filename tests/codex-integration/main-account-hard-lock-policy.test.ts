@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getMainAccountHardLockStatus, isMainAccountHardLocked } from "../../src/codex/main-account-hard-lock";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
-import { clearAccountQuota, setAccountQuotaFromParsed, type StoredAccountQuota } from "../../src/codex/quota";
+import { clearAccountQuota, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed, type StoredAccountQuota } from "../../src/codex/quota";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const now = Date.UTC(2026, 8, 5);
@@ -65,6 +65,28 @@ describe("identity-bound main-account hard-lock policy", () => {
     expect(getMainAccountHardLockStatus(enabled, now + 120_000)).toEqual({ enabled: true, state: "blocked" });
     observe({ shortPercent: 0 });
     expect(getMainAccountHardLockStatus(enabled, now + 120_000)).toEqual({ enabled: true, state: "ready" });
+  });
+
+  test.each([
+    { resetCredits: 2 },
+    { weeklyPercent: 20 },
+    { shortWindowSeconds: 18_000, shortResetAt: 4_000_000_000 },
+  ])("partial update %j preserves expired main blocking evidence", partial => {
+    const elapsed = Math.floor(Date.now() / 1000) - 60;
+    observe({ shortPercent: 99, shortWindowSeconds: 18_000, shortResetAt: elapsed, weeklyPercent: 20 });
+    expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
+    const before = getMainPolicyQuota();
+    observe(partial);
+    expect(getMainPolicyQuota()).toMatchObject({
+      shortPercent: 99,
+      shortResetAt: elapsed,
+      shortWindowSeconds: 18_000,
+      shortObservedAt: before?.shortObservedAt,
+    });
+    expect(getAccountQuota("__main__")?.shortPercent).toBeUndefined();
+    expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
+    observe({ shortPercent: 0 });
+    expect(getMainAccountHardLockStatus(enabled).state).toBe("ready");
   });
 
   test("one missing reset prevents a false scheduled-unlock promise", () => {

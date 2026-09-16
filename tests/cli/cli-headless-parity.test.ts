@@ -20,6 +20,40 @@ import { repoPath } from "../helpers/repo-root";
 type Recorded = { path: string; method: string; body: unknown };
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
+describe("ocx system codex-restart confirmation", () => {
+  test("names the desktop interruption before any unconfirmed request", async () => {
+    const { requests, deps } = fakeRuntime();
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["codex-restart"], deps)).toBe(2);
+      expect(requests).toHaveLength(0);
+      const warning = errors.mock.calls.flat().join(" ");
+      expect(warning).toContain("requires --yes");
+      expect(warning).toContain("fully quits and relaunches the Codex desktop app");
+    } finally { errors.mockRestore(); }
+  });
+
+  test.each([false, true])("preserves requested versus completed outcomes (json=%s)", async wantsJson => {
+    // A skipped Desktop outcome must survive JSON output; this fixture cannot restart processes.
+    const result = { success: true, code: "nothing_running", requested: [], stopped: [],
+      desktopApp: { attempted: false, relaunch: "skipped", reason: "self_ancestry" } };
+    const { requests, deps } = fakeRuntime(() => result);
+    const output = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const argv = ["codex-restart", "--yes", ...(wantsJson ? ["--json"] : [])];
+      expect(await handleSystemCommand(argv, deps)).toBe(0);
+      expect(requests).toEqual([{ path: "/api/system/codex-restart", method: "POST", body: null }]);
+      const text = output.mock.calls.flat().join("\n");
+      if (wantsJson) expect(JSON.parse(text)).toEqual(result);
+      else {
+        expect(text).toContain("Codex desktop app");
+        expect(text).toContain("restart requested.");
+        expect(text).not.toContain("restarted");
+      }
+    } finally { output.mockRestore(); }
+  });
+});
+
 describe("ocx system settings client compaction", () => {
   test("persists the explicit boolean through the shared settings endpoint", async () => {
     const { requests, deps } = fakeRuntime((_req, body) => ({ ok: true, ...body }));
@@ -250,6 +284,11 @@ describe("headless GUI parity CLI", () => {
       // skipping the endpoint.
       ["/api/github/star", "(none — GUI-only)"],
       ["/api/oauth", "ocx account"],
+      // The unified pool-settings route (#695 wp5c). One path answers for every pool
+      // kind, and `ocx account strategy` / `ocx account sticky` / `ocx account auto-switch`
+      // are what drive it headlessly — they declare it in src/cli/capabilities.ts rather
+      // than the retired per-namespace paths.
+      ["/api/pool/settings", "ocx account strategy/sticky/auto-switch"],
       ["/api/accounts/events", "(none — dashboard invalidation; ocx account reads current selection)"],
       ["/api/providers/keys", "ocx account"],
       ["/api/providers", "ocx provider"],
@@ -302,6 +341,12 @@ describe("headless GUI parity CLI", () => {
       // history remains available through observe/index tooling.
       ["/api/routing-profiles", "ocx route policy"],
       ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
+      // Remote Workspace is one product family in both surfaces. The current CLI owns
+      // executor pairing, presence, and local status; Hub/device/session inspection is
+      // intentionally dashboard-only until the deferred Hub-status verbs documented in
+      // the management route registry land. Naming the family here does not claim those
+      // local and Hub status payloads are equivalent.
+      ["/api/remote-workspace", "ocx remote-workspace"],
       ["/api/shadow", "ocx models"],
       ["/api/sidecar", "ocx agent"],
       ["/api/startup", "ocx system"],
@@ -513,6 +558,48 @@ describe("headless GUI parity CLI", () => {
         ],
       },
     });
+  });
+
+  test("combo set exposes the opt-in force-default policy", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleComboCommand([
+      "set", "deep", "--targets", "ark/model-a", "--effort", "max", "--effort-mode", "force", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(runtime.requests.find(request => request.method === "PUT")?.body).toMatchObject({
+      id: "deep",
+      combo: { defaultEffort: "max", defaultEffortMode: "force" },
+    });
+  });
+
+  test("combo set sends fallback when clearing an existing forced default effort", async () => {
+    const runtime = fakeRuntime(req => req.method === "GET" ? {
+      combos: [{
+        id: "deep",
+        defaultEffort: "max",
+        defaultEffortMode: "force",
+        targets: [{ provider: "ark", model: "old-model" }],
+      }],
+    } : undefined);
+    expect(await handleComboCommand([
+      "set", "deep", "--targets", "ark/model-a", "--effort", "-", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(runtime.requests).toEqual([
+      { path: "/api/combos", method: "GET", body: null },
+      {
+        path: "/api/combos",
+        method: "PUT",
+        body: {
+          id: "deep",
+          combo: {
+            strategy: "failover",
+            stickyLimit: 1,
+            targets: [{ provider: "ark", model: "model-a" }],
+            defaultEffort: null,
+            defaultEffortMode: "fallback",
+          },
+        },
+      },
+    ]);
   });
 
   test("combo set rejects --sticky outside round-robin instead of dropping it", async () => {
@@ -1107,4 +1194,26 @@ describe("Aside CLI recovery metadata", () => {
       error.mockRestore();
     }
   });
+});
+
+
+test("provider edit sends a model-scoped text-only capability patch", async () => {
+  const { requests, deps } = fakeRuntime();
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleProviderRuntimeCommand("edit", ["mine", "--model", "ModelA", "--text-only", "--json"], deps)).toBe(0);
+    expect(requests).toEqual([{ path: "/api/providers?name=mine", method: "PATCH", body: { modelCapabilities: { ModelA: { inputModalities: ["text"] } } } }]);
+  } finally { log.mockRestore(); }
+});
+
+
+test("provider edit rejects incomplete text-only targeting before contacting the server", async () => {
+  const { requests, deps } = fakeRuntime();
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    for (const flags of [["--text-only"], ["--model", "ModelA"], ["--model", " ModelA ", "--text-only"]]) {
+      expect(await handleProviderRuntimeCommand("edit", ["mine", ...flags], deps)).toBe(2);
+    }
+    expect(requests).toHaveLength(0);
+  } finally { error.mockRestore(); }
 });

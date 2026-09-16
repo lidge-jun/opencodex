@@ -191,6 +191,18 @@ function bareReLooksLikeOverflow(context?: CursorSizeContext): boolean {
   return estimatedInputTokens >= OVERFLOW_MIN_FRACTION * contextWindow;
 }
 
+/**
+ * True when a transport error is the bare 0-token resource_exhausted overflow shape
+ * (not quota/rate) that should surface for Codex compact or remint on later hits.
+ */
+export function isCursorOverflowRemintCandidate(err: unknown, sizeContext?: CursorSizeContext): boolean {
+  const message = errorMessage(err);
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  if (!isCursorZeroTokenResourceExhausted(lower)) return false;
+  return classifyCursorError(message, sizeContext) === "Cursor context limit exceeded";
+}
+
 export function isCursorZeroTokenResourceExhausted(lowerMessage: string): boolean {
   if (!lowerMessage.includes("resource_exhausted") && !lowerMessage.includes("resource exhausted")) return false;
   // Any explicit quota/rate cue wins: this is a real 429.
@@ -286,7 +298,7 @@ export function classifyCursorError(message: string, sizeContext?: CursorSizeCon
   ) return "Cursor authentication failed";
 
   // gRPC FAILED_PRECONDITION is deterministic and non-retryable (unlike UNAVAILABLE):
-  // the backend rejected the call because the account/plan state does not allow it —
+  // the backend rejected the call because account/plan or policy-consent state does not allow it —
   // seen live when a plan-gated model (e.g. claude-fable-5) runs on a plan without it.
   // Leaving it as "Cursor upstream error" (502) made clients retry it as overload.
   //

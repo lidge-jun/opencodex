@@ -78,10 +78,19 @@ route-specific results rather than repeating this table.
 | `GET /api/grok` | Read Grok managed-config status and candidate models | 400 status read failure |
 | `PUT /api/grok/selection` | Persist the excluded Grok models | 400 invalid or oversized selection |
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
+| `GET /api/grok/reset-coupons?accountId=...` | Read remaining Grok billing reset tokens and validity windows for the active or specified xAI account | 400 missing account; 401 unauthenticated; 502 upstream gRPC-Web error |
+| `POST /api/grok/reset-coupons/consume` | Redeem an eligible reset coupon. Body `{ accountId?, tokenId?, operationId? }`. Optional `operationId` (UUIDv4) makes redemption idempotent: repeating the same ID replays the durable result without double-redemption. | 400 invalid JSON/UUID; 401 unauthenticated; 409 `identity_mismatch`; 502 upstream error; 503 ledger capacity |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
 | `GET, PUT /api/claude-code` | Read or update Claude Code gateway, auth-mode, model-map, context, agent, and sidecar settings | 400 invalid field or shape |
+
+The dashboard drives both coupon paths from **Providers > xAI Grok > Accounts**: each
+signed-in account row carries a ticket badge with its remaining coupon count, and the
+badge opens a dialog that lists validity windows and redeems the coupon closest to
+expiry. The dialog sends a client-minted `operationId`, and it stops sending after a
+timeout instead of retrying, because a redemption whose journal record is still open
+would execute again. `ocx account grok-reset-coupons` remains the terminal equivalent.
 
 For the concepts behind the model roster and encrypted worker-task behavior, see
 [Sub-agent Surface](/guides/sub-agent-surface/).
@@ -136,6 +145,34 @@ should use the dedicated paths above so an older proxy cannot ignore a profile s
 See [Aside profile controls](/guides/integrations/#aside-profile-controls) for CLI commands and
 the proxy upgrade, restart, and retry sequence.
 
+### Remote Workspace
+
+Requires Hub mode and `OCX_REMOTE_WORKSPACE_ENABLED=1` on the Hub process. Disabled status is
+readable; mutations refuse without initializing workspace services.
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/remote-workspace` | Read paired computers, current capabilities, Hub runtimes, and session snapshots | Disabled status when Hub role or explicit opt-in is absent |
+| `POST /api/remote-workspace/pairing` | Create a ten-minute one-use Executor enrollment code | GUI session only; 429 pairing capacity |
+| `GET /api/remote-workspace/runtimes` | Read Codex, Claude Code, and Pi availability on the Hub | — |
+| `GET, POST /api/remote-workspace/sessions` | List sessions or start one bound to a device, root, runtime, and access mode | POST is GUI session only; 409 offline/unavailable/invalid target |
+| `POST /api/remote-workspace/sessions/{id}/prompt` | Continue the bound model session | GUI session only; 409 active turn, offline Executor, or resume failure |
+| `DELETE /api/remote-workspace/sessions/{id}` | Stop the model runtime and encrypted Executor session | GUI session only; 404 unknown session |
+| `DELETE /api/remote-workspace/devices/{id}` | Revoke one computer and stop its sessions | GUI session only; 404 unknown device |
+
+Executor enrollment exchanges a one-use code at `POST /remote-workspace/pair` and then opens
+`/remote-workspace/agent` as a bearer-authenticated outbound WebSocket. Those two machine endpoints
+are not general management API authority. The bearer is device-scoped, and each work session adds a
+signed E2EE handshake. Ten failed pairing codes from one kernel-observed peer return `429` with
+`Retry-After` for the remainder of the fixed ten-minute window. Tailscale Serve clients share the
+management listener's loopback peer bucket; the identity header is not used for throttling because
+a direct local process could forge it. See [Remote Workspace](/guides/remote-workspace/) for the
+end-user flow and trust boundaries.
+
+Session snapshots include `resumable`. It becomes true only after the selected coding-agent runtime
+has durable history; notably, a new Claude Code session remains false until its first prompt
+completes.
+
 ### Combos
 
 | Method and path | Purpose | Notable errors |
@@ -182,7 +219,7 @@ by the current window size.
 | `GET /api/debug/usage-logs` | Read bounded usage-debug entries | — |
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
-| `GET /api/usage` | Stream the complete usage ledger into compact aggregates, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; returns an `error: "read_failed"` summary if storage cannot be read |
+| `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; returns an `error: "read_failed"` summary if storage cannot be read |
 | `GET /api/storage` | Scan Codex storage usage by bucket | Returns an `error: "scan_failed"` payload on scan failure |
 | `POST /api/storage/cleanup/preview` | Preview archived-session cleanup and return a binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Quarantine or permanently remove the previewed archived set | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
@@ -193,6 +230,14 @@ by the current window size.
 | `POST /api/storage/cleanup-policy/run` | Start a manual cleanup-policy run | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Test-only policy stream hook | 404 `not_found` when unavailable |
 
+If a scanned row exceeds the existing parser size limit, `GET /api/usage` and `GET /api/keys`
+keep the readable-row aggregates and add `usageIncomplete: true` with
+`usageIncompleteReason: "oversized_rows"` at response level. This diagnostic survives cached
+responses and incremental appends, including empty or unmatched results; a rebuild recalculates it.
+No provider, model, or API-key identifier is shortened to make a row fit. An absent flag is not proof
+that every ledger record was valid. This is separate from `historyTruncated`, `entriesTruncated`,
+and token measurement coverage.
+
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
 for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
 transport. This fixed label contains no credential or account identifier. It belongs to
@@ -201,11 +246,27 @@ final provider. Custom destinations and historic rows omit the field; consumers 
 infer subscription usage from the current configuration, model name, or inbound API key.
 The log reports usage, not subscription invoice amounts.
 
+API-key attempts also record `accountLogLabel` as `k` followed by 32 lowercase hex digits.
+The label is the first 128 bits of SHA-256 over
+`JSON.stringify(["ocx-key-account-v1", providerName, entryId ?? null, reference])`.
+The reference is the configured key value captured for the physical request, before environment
+or keychain resolution. Raw keys, references, and pool IDs are not written to the label field.
+A consumer can derive the same label from its local configuration without resolving secrets.
+Changing a literal key or reference changes the label; replacing the secret behind an unchanged
+reference keeps the same logical account. Older unlabeled records cannot be attributed reliably.
+
+Key selection is recorded after queued requests have been rebuilt for the current selection.
+When a retry changes keys, `attempts` retains a separate record for the preceding key, including
+reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals
+are observed before image/search loops or continuation guards combine their usage. Consumers
+sum the flat attempts by provider/account and do not add the parent combo total again. These
+records identify usage; provider quota percentages remain separate upstream observations.
+
 `GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather
 than every normalized request row. Later refreshes validate the previous line boundary and fold only
 newly appended complete rows. Concurrent callers share the same refresh. Range and surface predicates
-are applied to the complete aggregate, so the former read-byte window and parsed-row cap cannot omit
+are applied to the readable-row aggregate, so the former read-byte window and parsed-row cap cannot omit
 an earlier file prefix from 7-day, 30-day, or all-history totals. `managementUsageMaxReadBytes` remains
 accepted for compatibility with bounded legacy readers, but changing it no longer expands or reduces
 the history summarized by this endpoint.
@@ -329,7 +390,8 @@ outcome fields from an older server do not establish successful recovery.
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | List masked accounts or remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Read or update Anthropic OAuth pool policy | 400 non-Anthropic provider or invalid policy |
+| `GET, PUT, PATCH /api/pool/settings` | Read or update pool policy for any kind (codex, anthropic, generic); answers with the same keys for all three and declares in `supported` which the kind honours | 400 unknown provider, a field the kind does not support, or an invalid value |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Legacy per-pool policy for Anthropic and generic OAuth providers; superseded by `/api/pool/settings` and kept for existing clients | 400 codex or api-key provider, or invalid policy |
 | `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider/account |
 | `PUT /api/oauth/accounts/alias` | Set or clear an OAuth account alias | 400 invalid provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |
@@ -391,7 +453,7 @@ whether to star the repository.
 | `POST /api/system/restart` | Begin a drain-aware process restart without removing client injection | Returns 202; repeated calls report the existing drain |
 | `POST /api/stop` | Stop the service, restore native Codex, remove managed Grok injection, and drain the proxy | 409 service ownership conflict; 409 `respawnable_service` when a Windows Task Scheduler wrapper could respawn the proxy and the caller is not `ocx stop` (nothing is changed); 409 `self_unload_service` when this proxy is running as the installed launchd/systemd service, because stopping the manager from inside it would end the process before native Codex is restored — run `ocx stop` instead (nothing is changed); 409 when the installed manager refuses to stop; 409 `service_state_unknown` when the Task Scheduler state cannot be read (nothing is changed; repair the query and retry) |
 | `GET /api/system/codex-app-server` | Report whether running Codex app-servers predate the current model catalog | — |
-| `POST /api/system/codex-restart` | Refresh the catalog, then ask stale Codex app-servers to exit so the model picker reloads | Returns 200 with `code: partially_stopped` when a target survives |
+| `POST /api/system/codex-restart` | Refresh the catalog, then restart stale Codex app-servers and fully quit and relaunch the Codex desktop app so the model picker reloads. When the proxy itself is running inside the Codex app, the desktop restart is refused rather than handed off. | Returns 200 with `code: partially_stopped` when a target survives |
 
 ### Codex authentication delegation
 
@@ -442,7 +504,7 @@ started before the reset, incomplete or exhausted usage, a changed account, and 
 quota failure do not qualify. Older main-account usage responses cannot replace a newer
 published observation. If usage needs credential refresh, recovery requires that refresh's
 confirmed lineage; an externally replaced credential does not qualify merely because it
-belongs to the same account. Explicit `Retry-After`, Spark/Reserve cooldowns, pause
+belongs to the same account. Explicit `Retry-After`, Reserve cooldowns, pause
 settings, pins and the selected account are preserved. `already_redeemed` and durable
 replay do not prove a new reset and do not gain this recovery behavior.
 

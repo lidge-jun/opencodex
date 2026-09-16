@@ -1,5 +1,6 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
+import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
@@ -350,6 +351,49 @@ const PROVIDER_SCOPED_FAILURE_CODES = new Set([
   "insufficient_balance",
 ]);
 
+/**
+ * Precise target-local request incompatibilities are request-local, not terminal for a combo.
+ * Require a bounded, intact provider envelope; never infer compatibility from echoed prompt text.
+ * Only OpenCodex's exact error wrapper may be unwrapped, with a fixed depth budget. Unknown or
+ * conflicting codes fail closed. No fields are removed here and no same-target replay is added.
+ * Image rejection requires `param: input` and an exact model-scoped prefix.
+ */
+function isRequestLocalTargetIncompatibility(status: number, message: string, code?: string | null): boolean {
+  if (status !== 400 || message.length > 16_384) return false;
+  const genericCodes = new Set(["", "invalid_request_error", "unsupported_parameter", "unsupported_value"]);
+  if (!genericCodes.has(normalizedFailureCode(code))) return false;
+  let text = message.trim();
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length);
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { return false; }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const error = (payload as Record<string, unknown>).error;
+    if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+    const e = error as Record<string, unknown>;
+    if (e.code !== undefined && e.code !== null && typeof e.code !== "string") return false;
+    const errorCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
+    if (!genericCodes.has(errorCode) || typeof e.message !== "string") return false;
+    if (e.type !== "invalid_request_error" && e.type !== "upstream_error") return false;
+    if (e.message.startsWith("Provider error 400: ") && e.param === undefined
+      && (errorCode === "" || errorCode === "invalid_request_error")) {
+      text = e.message;
+      continue;
+    }
+    if (e.type !== "invalid_request_error") return false;
+    if (e.message === "Unsupported parameter: user") {
+      return (e.param === undefined || e.param === "user") && errorCode !== "unsupported_value";
+    }
+    if (errorCode === "unsupported_value"
+      && (e.param === "reasoning.effort" || e.param === "reasoning_effort")
+      && e.message.startsWith("Unsupported value:") && e.message.includes("not supported")) return true;
+    return e.param === "input"
+      && (errorCode === "" || errorCode === "invalid_request_error")
+      && /^Model '[^']{1,256}' does not support image inputs\./.test(e.message);
+  }
+  return false;
+}
+
 export function comboFailureCooldownScope(
   status: number,
   message: string,
@@ -357,11 +401,16 @@ export function comboFailureCooldownScope(
 ): ComboFailureCooldownScope {
   const code = normalizedFailureCode(options?.code);
   // Request-shape refusals first: an oversized request must not cool a healthy target.
+  // A native transport can surface a zero-output model overflow as a generic
+  // upstream_server_error carrying precise context-window prose, so consult the bounded
+  // message classifier too: that target is healthy, the turn was simply too large for it.
   if (
     status === 413
     || REQUEST_SHAPE_FAILURE_CODES.has(code)
     || isRequestLocalFreePromptCap(status, message, options?.code)
     || isProviderTargetContextOverflow(status, message, options?.code)
+    || isDefiniteContextOverflow(status, message)
+    || isRequestLocalTargetIncompatibility(status, message, options?.code)
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, options?.code)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
@@ -406,6 +455,74 @@ function isProviderTargetContextOverflow(
     && /\bprompt\s+\d+\s*>\s*\d+\s+maximum context length\b/i.test(message);
 }
 
+/** A status can carry a verdict about the REQUEST; 401/403/429 speak about the credential. */
+const CONTEXT_VERDICT_STATUSES: ReadonlySet<number> = new Set([400, 413, 422]);
+
+/**
+ * Phrases a provider emits when the INPUT does not fit this model's context window. Matched
+ * against the innermost provider message only, so an unrelated refusal that merely quotes one
+ * of these tokens in a code field cannot authorize a replay.
+ */
+const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
+  "exceeds the context window",
+  "exceed the context window",
+  "context window exceeded",
+  "context length exceeded",
+  "maximum context length",
+  "maximum context window",
+  "too many tokens",
+];
+
+/** Wrapper envelopes unwrapped before the leaf message is read. */
+const MAX_CONTEXT_OVERFLOW_ENVELOPES = 4;
+
+function isDefiniteContextOverflowMessage(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return normalized === "context_length_exceeded"
+    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase));
+}
+
+/**
+ * Confirm a context overflow from the provider MESSAGE rather than from a code token that
+ * merely appears somewhere in the envelope. An upstream controls both fields and can emit a
+ * contradictory pair -- `context_length_exceeded` beside `Unsupported parameter: user` -- and
+ * that is not evidence the turn is too large for this model. `classifyError` reads the whole
+ * blob, which is exactly the looseness this must not inherit.
+ *
+ * A JSON-shaped body that fails to parse is truncated or corrupt, not prose: `classificationText`
+ * is capped at 500 characters by `normalizeUpstreamErrorText` before it reaches this function, so
+ * a long envelope arrives here as a JSON prefix. Reading that prefix as plain text would let an
+ * arbitrary field that happens to sit in the first 500 bytes authorize a hop, so it fails closed.
+ *
+ * Only the exact proxy wrapper is unwrapped, within a fixed envelope budget and 16,384 characters.
+ */
+function isDefiniteContextOverflow(status: number, message: string): boolean {
+  if (!CONTEXT_VERDICT_STATUSES.has(status) && status < 500) return false;
+  if (message.length > 16_384) return false;
+  let text = message.trim();
+  // One pass per unwrapped envelope, plus one for the leaf the last envelope yields.
+  for (let unwrapped = 0; unwrapped <= MAX_CONTEXT_OVERFLOW_ENVELOPES; unwrapped += 1) {
+    const providerPrefix = /^Provider error \d{3}:\s*/.exec(text);
+    if (providerPrefix) text = text.slice(providerPrefix[0].length).trim();
+    if (!text.startsWith("{")) return isDefiniteContextOverflowMessage(text);
+    if (unwrapped === MAX_CONTEXT_OVERFLOW_ENVELOPES) return false;
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { return false; }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const record = payload as Record<string, unknown>;
+    const response = record.response && typeof record.response === "object" && !Array.isArray(record.response)
+      ? record.response as Record<string, unknown>
+      : undefined;
+    const source = [record.error, response?.error, response?.last_error, record.last_error, record]
+      .find((candidate): candidate is Record<string, unknown> =>
+        !!candidate && typeof candidate === "object" && !Array.isArray(candidate)
+        && typeof (candidate as Record<string, unknown>).message === "string");
+    if (!source) return false;
+    text = (source.message as string).trim();
+  }
+  return false;
+}
+
 export function comboFailureDecision(
   status: number,
   message: string,
@@ -413,6 +530,14 @@ export function comboFailureDecision(
 ): ComboFailureDecision {
   if (status === 499) return "stop";
   if (message.toLowerCase().includes("origin_rejected")) return "stop";
+  // Structured form of the same hard refusal. The prose test above misses it when the origin
+  // reports the code out of band, and every hop rule below -- including the context-overflow
+  // one -- must stay subordinate to it.
+  if (normalizedFailureCode(options?.code) === "origin_rejected") return "stop";
+  // The origin may already be executing this turn (the Codex WebSocket relay sent the create
+  // frame and never saw a response event). Hopping would send the same request to a second
+  // target while the first may still be generating; the honest status goes to the client.
+  if (isNonReplayableUpstreamCode(options?.code)) return "stop";
   // Cyber policy is a hard non-retryable refusal — honor structured code even when
   // classificationText was truncated before the JSON code field.
   if (isCyberPolicyCode(options?.code)) return "stop";
@@ -427,6 +552,15 @@ export function comboFailureDecision(
   // (for example 5059 + invalid_request_prompt_too_long). That is evidence that this
   // target is too small, not that every later combo target is incapable of serving it.
   if (isProviderTargetContextOverflow(status, message, options?.code)) return "hop";
+  // A definite context-window refusal is target-local inside a heterogeneous combo: this model
+  // cannot hold the turn, but a later target may have a larger window. Two boundaries keep this
+  // safe. It is reached only after cancellation, structured origin/cyber refusals and
+  // non-replayable post-send codes have already stopped. And it only ever classifies a failure
+  // the combo stream preflight already proved emitted no output: `comboStreamPayloadCommitsOutput`
+  // commits the child on any text, tool call or unknown event, and only a zero-output terminal
+  // becomes a failure response at all, so a turn whose text the client already saw is never
+  // reclassified here.
+  if (isDefiniteContextOverflow(status, message)) return "hop";
   // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
   // not "the request is impossible": the next candidate may have a larger context window.
   //
@@ -460,6 +594,7 @@ export function comboFailureDecision(
   // `free_rate_limited` no longer routes through `isProviderScopedQuotaCap` (it is a
   // per-request cap, not provider-wide evidence), so keep its hop verdict explicit here.
   if (failureCode === "free_rate_limited") return "hop";
+  if (isRequestLocalTargetIncompatibility(status, message, options?.code)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

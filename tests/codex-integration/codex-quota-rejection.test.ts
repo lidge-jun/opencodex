@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { classifyCodexPreStreamRejection } from "../../src/codex/quota-rejection";
 import { BOUNDED_BODY_MAX_BYTES } from "../../src/lib/bounded-body";
-import { consumeComboFailure, shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core";
+import {
+  consumeComboFailure,
+  shouldRetryCodexPoolAccountQuota,
+  shouldRetryCodexPoolAccountTransient,
+} from "../../src/server/responses/core";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 
 function jsonRejection(status: number, error: Record<string, unknown>): Response {
   return Response.json({ error }, { status });
@@ -89,6 +94,38 @@ describe("Codex pre-stream quota rejection classification", () => {
       request: { input: "Explain the usage limit" },
     }, { status: 502 });
     await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(false);
+  });
+
+  test.each([
+    [500, true],
+    [502, true],
+    [503, true],
+    [504, true],
+    [520, true],
+    [507, false],
+    [429, false],
+    [400, false],
+    [200, false],
+  ])("selects transient pool-account retries by HTTP %i", (status, expected) => {
+    expect(shouldRetryCodexPoolAccountTransient(new Response(null, { status }))).toBe(expected);
+  });
+
+  test("a server_is_overloaded 503 moves to another account even though it carries no quota evidence", () => {
+    // The shape that wedged a live pool: the backend refuses in under a second, the body says
+    // nothing about quota, and the account keeps winning selection because nothing recorded a
+    // failure against it.
+    const response = Response.json({
+      error: { type: "server_error", code: "server_is_overloaded", message: "server is overloaded" },
+    }, { status: 503 });
+    expect(shouldRetryCodexPoolAccountTransient(response)).toBe(true);
+  });
+
+  test("a non-replayable gateway status is never sent from a second account", () => {
+    // The body already reached the origin, so a second send could duplicate a turn it may
+    // still be running. This is the one 5xx that stays put.
+    const response = new Response(null, { status: 502 });
+    markResponseNonReplayable(response);
+    expect(shouldRetryCodexPoolAccountTransient(response)).toBe(false);
   });
 
   test.each([
@@ -447,5 +484,102 @@ describe("Codex pre-stream quota rejection classification", () => {
       alternateRetryEligible: true,
       resetCreditEligible: false,
     });
+  });
+});
+
+/**
+ * Rotating inside the limit that refused is the send amplification #4546 exists to stop.
+ *
+ * openai/codex #44492 and #45602 reclassified exactly these HTTP 429 codes as terminal quota
+ * exhaustion while deliberately keeping `rate_limit_exceeded` and `slow_down` retryable, and
+ * the platform documentation states the rule for the whole class: "It does not mean that quota,
+ * billing, or other errors that require user action can be resolved by retrying."
+ *
+ * Both directions are pinned here on purpose. The suppression is worth nothing if the ordinary
+ * user-level rate limit stops failing over, and that regression would be invisible until a pool
+ * stopped rotating in production.
+ */
+describe("organization-scoped quota exhaustion withholds the account rotation (#4546)", () => {
+  const SCOPED_CODES = [
+    "credit_balance_exhausted",
+    "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded",
+    "organization_usage_limit_exceeded",
+  ] as const;
+
+  test.each(SCOPED_CODES)("%s classifies as terminal scoped exhaustion", async code => {
+    const result = await classifyCodexPreStreamRejection(jsonRejection(429, { code }));
+    expect(result).toEqual({
+      kind: "scoped-quota-exhaustion",
+      status: 429,
+      alternateRetryEligible: false,
+      resetCreditEligible: false,
+      scopedExhaustionCode: code,
+    });
+    // A reset credit reconciles a ChatGPT plan window; it cannot pay an organization's bill.
+    expect(result).not.toHaveProperty("semanticCode");
+  });
+
+  test.each(SCOPED_CODES)("%s withholds the alternate-account send", async code => {
+    await expect(shouldRetryCodexPoolAccountQuota(jsonRejection(429, { code })))
+      .resolves.toBe(false);
+  });
+
+  test("a root-level code and a 402 are read the same way", async () => {
+    await expect(shouldRetryCodexPoolAccountQuota(
+      jsonPayload(429, { code: "organization_spend_limit_exceeded" }),
+    )).resolves.toBe(false);
+    await expect(shouldRetryCodexPoolAccountQuota(
+      jsonRejection(402, { code: "credit_balance_exhausted" }),
+    )).resolves.toBe(false);
+  });
+
+  test.each([
+    ["rate_limit_exceeded", "the user-level rate limit upstream keeps retryable"],
+    ["slow_down", "the throttle upstream keeps retryable"],
+    ["usage_limit_exceeded", "a plan window another account does not share"],
+    ["insufficient_quota", "reset-credit eligible exhaustion"],
+  ] as const)("%s still rotates (%s)", async code => {
+    await expect(shouldRetryCodexPoolAccountQuota(jsonRejection(429, { code })))
+      .resolves.toBe(true);
+  });
+
+  test.each([
+    ["an empty body", new Response(null, { status: 429 })],
+    ["an unparseable body", new Response("{not json", { status: 429 })],
+    ["a duplicate-keyed body", new Response(
+      '{"error":{"code":"organization_spend_limit_exceeded","code":"rate_limit_exceeded"}}',
+      { status: 429 },
+    )],
+    ["a disagreeing code/type pair", Response.json(
+      { error: { code: "organization_spend_limit_exceeded", type: "rate_limit_exceeded" } },
+      { status: 429 },
+    )],
+    ["an uppercase near-miss", Response.json(
+      { error: { code: "ORGANIZATION_SPEND_LIMIT_EXCEEDED" } },
+      { status: 429 },
+    )],
+    ["a padded near-miss", Response.json(
+      { error: { code: " organization_spend_limit_exceeded " } },
+      { status: 429 },
+    )],
+  ])("fails closed and still rotates on %s", async (_case, response) => {
+    // Only positive evidence may withhold a rotation: anything ambiguous keeps #584 behaviour.
+    await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(true);
+  });
+
+  test("an aborted body read still rotates", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(shouldRetryCodexPoolAccountQuota(
+      jsonRejection(429, { code: "organization_spend_limit_exceeded" }),
+      controller.signal,
+    )).resolves.toBe(true);
+  });
+
+  test("a non-replayable gateway response is refused before the body is consulted", async () => {
+    const response = jsonRejection(429, { code: "rate_limit_exceeded" });
+    markResponseNonReplayable(response);
+    await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(false);
   });
 });

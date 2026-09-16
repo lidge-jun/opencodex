@@ -65,7 +65,7 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 
 ## Sub-agent 모델 선택(선택 사항)
 
-새 구성에는 Codex의 sub-agent 선택기에 네이티브 모델 다섯 개인 `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini`가 표시됩니다. `ocx gui`를 열어 네이티브 또는 라우팅 모델을 최대 다섯 개까지 바꾸거나 순서를 다시 정할 수 있습니다. 대시보드에서는 선호하는 sub-agent 모델과 추론 강도도 설정할 수 있습니다. [Sub-agent Surface](/guides/sub-agent-surface/)에서 v1/base/v2를 고르고, guidance, 네이티브 기본값, fallback이 언제 적용되는지 확인합니다.
+새 구성에는 Codex의 sub-agent 선택기에 네이티브 모델 다섯 개인 `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`가 표시됩니다. `ocx gui`를 열어 네이티브 또는 라우팅 모델을 최대 다섯 개까지 바꾸거나 순서를 다시 정할 수 있습니다. 대시보드에서는 선호하는 sub-agent 모델과 추론 강도도 설정할 수 있습니다. [Sub-agent Surface](/guides/sub-agent-surface/)에서 v1/base/v2를 고르고, guidance, 네이티브 기본값, fallback이 언제 적용되는지 확인합니다.
 
 ## 키를 붙여넣는 대신 로그인하기
 

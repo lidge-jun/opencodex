@@ -87,27 +87,26 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(firstOutputs).toBe(1);
   });
 
-  test("streaming raw reasoning is routed through the expandable summary channel", async () => {
+  test("streaming raw reasoning rides the content channel like native gpt-oss", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "reasoning_raw_delta", text: "raw detail" },
       { type: "done", usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 3, reasoningOutputTokens: 2 } },
     ]), "routed/model"));
 
-    // Chat-completions providers (DeepSeek-style) deliver thinking as raw
-    // reasoning_content. Codex renders the expandable reasoning trace from the
-    // Responses summary channel only, so raw reasoning is routed through the
-    // summary channel (issue #45) instead of the content channel.
-    expect(frames.find(f => f.event === "response.reasoning_summary_text.delta")?.data)
-      .toMatchObject({ summary_index: 0, delta: "raw detail" });
-    expect(frames.some(f => f.event === "response.reasoning_text.delta")).toBe(false);
+    // Raw reasoning_content rides the content channel so Codex applies its own display
+    // policy: the desktop band shows the "Thinking…" placeholder, and raw text appears
+    // only when show_raw_agent_reasoning is enabled — never as a fake summary.
+    expect(frames.find(f => f.event === "response.reasoning_text.delta")?.data)
+      .toMatchObject({ content_index: 0, delta: "raw detail" });
+    expect(frames.some(f => f.event === "response.reasoning_summary_text.delta")).toBe(false);
 
     const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
     const output = completed.output as Record<string, unknown>[];
     expect(output[0]).toMatchObject({
       type: "reasoning",
-      summary: [{ type: "summary_text", text: "raw detail" }],
+      summary: [],
+      content: [{ type: "reasoning_text", text: "raw detail" }],
     });
-    expect((output[0] as { content?: unknown }).content).toBeUndefined();
     expect(completed.usage).toMatchObject({
       input_tokens: 10,
       input_tokens_details: { cached_tokens: 3 },
@@ -502,9 +501,9 @@ describe("Responses bridge reasoning and usage parity", () => {
     const output = json.output as Record<string, unknown>[];
     expect(output.map(item => item.type)).toEqual(["reasoning", "message"]);
     expect(output[0]).toMatchObject({
-      summary: [{ type: "summary_text", text: "raw json" }],
+      summary: [],
+      content: [{ type: "reasoning_text", text: "raw json" }],
     });
-    expect((output[0] as { content?: unknown }).content).toBeUndefined();
     expect(json.usage).toMatchObject({
       input_tokens: 6,
       input_tokens_details: { cached_tokens: 1, cache_write_tokens: 2 },
@@ -1499,6 +1498,114 @@ describe("bridgeToResponsesSSE owned default budget lifecycle", () => {
       expect(translatorLiveBudgetCountForTests()).toBe(before);
     } finally {
       setOwnedBudgetAbandonedMsForTests(null);
+    }
+  });
+});
+describe("array-backed string accumulation", () => {
+  test("1000 text deltas produce identical output to direct concatenation", async () => {
+    const fragments = Array.from({ length: 1000 }, (_, i) => `chunk-${i} `);
+    const expected = fragments.join("");
+
+    const events: AdapterEvent[] = [
+      ...fragments.map(text => ({ type: "text_delta" as const, text })),
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const budget = createTranslatorBudget();
+    try {
+      const frames = await collectSse(bridgeToResponsesSSE(
+        replay(events),
+        "routed/model",
+        undefined, undefined, undefined, undefined, undefined,
+        { translatorBudget: budget },
+      ));
+
+      const doneFrame = frames.find(f => f.event === "response.output_text.done");
+      expect(doneFrame).toBeDefined();
+      expect(doneFrame!.data.text).toBe(expected);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("batch mode: 1000 text deltas produce correct output", () => {
+    const fragments = Array.from({ length: 1000 }, (_, i) => `chunk-${i} `);
+    const expected = fragments.join("");
+
+    const events: AdapterEvent[] = [
+      ...fragments.map(text => ({ type: "text_delta" as const, text })),
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const budget = createTranslatorBudget();
+    try {
+      const result = buildResponseJSON(events, "routed/model", { translatorBudget: budget });
+      const output = result.output as Record<string, unknown>[];
+      const message = output.find(item => item.type === "message") as Record<string, unknown>;
+      expect(message).toBeDefined();
+      const content = message.content as Record<string, unknown>[];
+      const textContent = content.find(c => c.type === "output_text") as Record<string, unknown>;
+      expect(textContent.text).toBe(expected);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("budget limit rejection releases reservation cleanly without corrupting previous state", async () => {
+    const tightBudget = createTranslatorBudget({ maxTurnBytes: 100 });
+    try {
+      const events: AdapterEvent[] = [
+        { type: "text_delta", text: "short " },
+        { type: "text_delta", text: "x".repeat(500) },
+        { type: "done", stopReason: "end_turn" },
+      ];
+
+      const frames = await collectSse(bridgeToResponsesSSE(
+        replay(events),
+        "routed/model",
+        undefined, undefined, undefined, undefined, undefined,
+        { translatorBudget: tightBudget },
+      ));
+
+      const failedFrame = frames.find(f => f.event === "response.failed");
+      expect(failedFrame).toBeDefined();
+      const errorPayload = typeof failedFrame!.data === "string" ? JSON.parse(failedFrame!.data) : failedFrame!.data;
+      const errorCode = errorPayload.response?.error?.code ?? errorPayload.error?.code;
+      expect(errorCode).toBe("translation_buffer_limit");
+    } finally {
+      tightBudget.dispose();
+    }
+  });
+  test("empty text deltas do not accumulate in StringChunks arrays", async () => {
+    const events: AdapterEvent[] = [
+      { type: "text_delta", text: "hello" },
+      { type: "text_delta", text: "" },
+      { type: "text_delta", text: "" },
+      { type: "text_delta", text: " world" },
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const frames = await collectSse(bridgeToResponsesSSE(
+      replay(events),
+      "routed/model",
+    ));
+
+    const doneFrame = frames.find(f => f.event === "response.output_text.done");
+    expect(doneFrame).toBeDefined();
+    expect(doneFrame!.data.text).toBe("hello world");
+
+    // Also verify batch mode
+    const budget = createTranslatorBudget();
+    try {
+      const result = buildResponseJSON(events, "routed/model", { translatorBudget: budget });
+      const output = result.output as Record<string, unknown>[];
+      const message = output.find(item => item.type === "message") as Record<string, unknown>;
+      expect(message).toBeDefined();
+      const content = message.content as Record<string, unknown>[];
+      const textContent = content.find(c => c.type === "output_text") as Record<string, unknown>;
+      expect(textContent.text).toBe("hello world");
+    } finally {
+      budget.dispose();
     }
   });
 });

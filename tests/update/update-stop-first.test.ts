@@ -258,7 +258,13 @@ function instrumentRecoveryLauncher(source: string, directory: string): string {
 }
 const updateSource = readFileSync(join(repoRoot, "src", "update", "index.ts"), "utf8");
 const launcherSource = readFileSync(join(repoRoot, "bin", "ocx.mjs"), "utf8");
-const serverSource = readFileSync(join(repoRoot, "src", "server", "index.ts"), "utf8");
+// The three /healthz identity assertions below read the route handler, which moved into the
+// serve-options leaf when src/server/index.ts became a facade. Reading the facade alone would
+// find none of them. This is the only place in this file that reads server source.
+const serverSource = [
+  readFileSync(join(repoRoot, "src", "server", "index.ts"), "utf8"),
+  readFileSync(join(repoRoot, "src", "server", "index", "serve-options.ts"), "utf8"),
+].join("\n");
 const dispatchSource = readFileSync(join(repoRoot, "src", "cli", "dispatch.ts"), "utf8");
 
 describe("bounded recovery diagnostics", () => {
@@ -524,7 +530,7 @@ describe("update stops the running proxy before replacing files", () => {
   test("bun/source update path gates on the pid file and spawns 'stop' before the package manager", () => {
     expect(updateSource).toContain('spawnSync(process.execPath, selfLaunchArgv(["stop"])');
     const stopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
-    const updateAt = updateSource.indexOf("spawnSync(target.bin, target.args");
+    const updateAt = updateSource.indexOf("spawnSync(target.bin, target.args", stopAt);
     expect(stopAt).toBeGreaterThan(-1);
     expect(updateAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(updateAt);
@@ -532,7 +538,7 @@ describe("update stops the running proxy before replacing files", () => {
   });
 
   test("integrity pre-flight runs BEFORE the stop so anomalous metadata never unloads the proxy", () => {
-    const gateAt = updateSource.indexOf("const integrity = checkUpdatePackageIntegrity(latest);");
+    const gateAt = updateSource.indexOf("const integrity = checkUpdatePackageIntegrity(latest, spawnSync, installer, owner);");
     const abortAt = updateSource.indexOf("aborting the update before stopping the proxy");
     const stopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
     expect(gateAt).toBeGreaterThan(-1);
@@ -568,14 +574,16 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain('existsSync(join(configDir(), "runtime-port.json"))');
   });
 
-  test("Windows npm paths resolve safely before stop and never use shell:true", () => {
-    const updateResolveAt = updateSource.indexOf("const target = updateSpawnTarget(bin, cmdArgs);");
+  test("Windows package-manager paths resolve safely before stop and never use shell:true", () => {
+    const updateResolveAt = updateSource.indexOf("const target = installer === \"pnpm\" && owner");
     const updateStopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
-    const launcherResolveAt = launcherSource.indexOf("const installInvocation = npmInvocation(");
+    const launcherResolveAt = launcherSource.indexOf("const installInvocation = managerInvocation(installArgs);");
     const launcherStopAt = launcherSource.indexOf('[launcher, "stop"]');
 
     expect(updateResolveAt).toBeGreaterThan(-1);
     expect(launcherResolveAt).toBeGreaterThan(-1);
+    expect(launcherSource).toContain("resolvePnpmGlobalOwner");
+    expect(launcherSource).toContain("pnpmOwnerInvocation(owner, args)");
     expect(updateResolveAt).toBeLessThan(updateStopAt);
     expect(launcherResolveAt).toBeLessThan(launcherStopAt);
     expect(updateSource).not.toContain("shell: true");
@@ -653,7 +661,9 @@ describe("update stops the running proxy before replacing files", () => {
         writeFileSync(join(opencodexHome, "runtime-port.json"), JSON.stringify({ port, pid: 999_999_999 }));
         writeFileSync(fakeNpm, `#!/bin/sh
 case "$1" in
-  view) printf '2.0.0\\n' ;;
+  view)
+    if [ "$3" = "dist.integrity" ]; then printf 'sha512-testfixturevalue000000000\\n'; else printf '2.0.0\\n'; fi
+    ;;
   config) printf '%s\\n' "$OCX_FAKE_NPM_CACHE" ;;
   install) exit 1 ;;
   *) exit 1 ;;

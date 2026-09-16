@@ -184,6 +184,43 @@ export function cursorCheckpointRefHash(ref: string): string {
   return createHash("sha256").update("ocx:cursor:ckpt-ref:").update(ref).digest("hex").slice(0, 16);
 }
 
+/**
+ * Counts only — never content. Diagnostics about a checkpoint have so far reported its size in
+ * bytes, which says nothing about what is in it, and that gap is exactly what left #4245's native
+ * half undecidable: `capturedAfterClientTool` proves a snapshot ARRIVED after the tool call, and
+ * only `pendingToolCalls` says whether the snapshot actually knows about one.
+ *
+ * `pendingToolCalls` is documented upstream as raw JSON tool-call parts awaiting execution, so a
+ * non-zero count on a suspended turn is the coverage evidence. The strings themselves are request
+ * content and are never read here.
+ *
+ * If you extend this, keep it counts-only. `ConversationStateStructure` also carries
+ * `readPaths`, `previousWorkspaceUris`, and the `fileStates`/`fileStatesV2` keys — all of which
+ * are user paths or workspace identity, and all of which would turn a diagnostic into a privacy
+ * leak the moment someone returns them as values instead of lengths.
+ */
+export function cursorCheckpointShape(checkpointBytes: Uint8Array | undefined): {
+  turns: number;
+  turnsOld: number;
+  rootPromptMessages: number;
+  todos: number;
+  pendingToolCalls: number;
+} | undefined {
+  if (!checkpointBytes || checkpointBytes.byteLength === 0) return undefined;
+  try {
+    const state = fromBinary(ConversationStateStructureSchema, checkpointBytes);
+    return {
+      turns: state.turns.length,
+      turnsOld: state.turnsOld.length,
+      rootPromptMessages: state.rootPromptMessagesJson.length,
+      todos: state.todos.length,
+      pendingToolCalls: state.pendingToolCalls.length,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function commitCursorCheckpoint(input: {
   conversationId: string;
   identityScope?: string;

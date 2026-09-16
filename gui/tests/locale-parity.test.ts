@@ -99,6 +99,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "nav.grok",
   // Other short identifiers, commands, and product names kept in English
   "api.clientConfig.clientOpencode",
+  // Cline CLI is a product name, not untranslated interface copy.
+  "integrations.tab.cline",
+  "api.clientConfig.clientCline",
   "api.clientConfig.clientPi",
   "api.clientConfig.clientOmp",
   "api.clientConfig.clientHermes",
@@ -109,6 +112,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "codexAuth.codexApp",
   "codexAuth.creditNextBadge",
   "common.github",
+  // Windows PowerShell is a product name, not an untranslated prose placeholder.
+  "remote.pairingCommandWindows",
   "grok.title",
   // Integration tabs: client/product proper nouns kept in English
   "integrations.tab.codex",
@@ -132,6 +137,12 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.clientConfig.clientAside",
   "integrations.tab.raycast",
   "api.clientConfig.clientRaycast",
+  // "omo" is the product's own lowercase spelling, identical in every locale.
+  "integrations.tab.omo",
+  "api.clientConfig.clientOmo",
+  // Cline product name and CLI acronym are intentionally preserved.
+  "integrations.tab.cline",
+  "api.clientConfig.clientCline",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",
@@ -170,6 +181,26 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // Control plane agent product names, protocol labels, and technical identifiers
+  "skills.editorDefaultMarkdown",
+  "skills.agent.codex",
+  "skills.agent.claudeCode",
+  "skills.agent.opencode",
+  "skills.agent.universal",
+  "skills.agent.openaiCodex",
+  "skills.vpsMain",
+  "skills.system",
+  "security.status.posting",
+  "security.status.ok",
+  "security.tab.mcp",
+  "security.col.id",
+  "security.col.sha256",
+  "security.reconLab",
+  "credentials.status.posting",
+  "credentials.status.ok",
+  "credentials.tab.oauth",
+  "credentials.col.id",
+  "credentials.col.oauth",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {

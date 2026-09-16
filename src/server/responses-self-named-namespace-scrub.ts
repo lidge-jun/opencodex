@@ -115,10 +115,8 @@ export function collectSelfNamedNamespaceScrubAuthorization(
  * `None | "" | "functions"` as the default namespace; anything else is concatenated into a flat
  * name before routing. A backend answer of `{ name: "exec", namespace: "exec" }` therefore
  * becomes `execexec`, which no client tool matches, and Codex re-issues the same call forever.
- * The malformed Spark shape is scrubbed only when the current turn authorized a bare custom tool
+ * The malformed shape is scrubbed only when the current turn authorized a bare custom tool
  * with that name. A genuine namespaced tool may intentionally use the same namespace and name.
- * The adapter fix that stops provoking the answer lives in `stripSparkCompatibility`; this is the
- * belt to that suspender.
  */
 export function scrubSelfNamedToolCallNamespace(
   value: unknown,
