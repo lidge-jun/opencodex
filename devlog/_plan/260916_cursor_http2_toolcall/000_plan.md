@@ -18,6 +18,9 @@ renamed the display alias. That leak is the first stacked PR. Observed
 - Stop: both PRs exist with parent/child bases.
 - Memory artifact: this directory.
 - Terminal: DONE (PRs opened) / BLOCKED (push/template) / UNSAFE (exec default-on).
+- Shipped (2026-09-16, `gh pr view` bases):
+  - L1 https://github.com/lidge-jun/opencodex/pull/4815 `dev` ← `cursor/l1-text-toolcall-quarantine`
+  - L2 https://github.com/lidge-jun/opencodex/pull/4816 `cursor/l1-text-toolcall-quarantine` ← `cursor/l2-observed-max-tokens`
 - Escalation: live `api2` vs `agentn.global.api5` host cutover.
 
 ## Work-phase map
