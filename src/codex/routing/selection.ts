@@ -123,6 +123,31 @@ export function codexAccountBlockReason(
   return undefined;
 }
 
+/**
+ * Drop accounts a confirmed roster says cannot serve this model, unless that leaves nothing.
+ *
+ * The restore-on-empty is the whole safety argument, not a defensive afterthought. Roster
+ * evidence can be wrong in the direction that matters: a shard that has not caught up reports a
+ * denial for a model the account genuinely owns, and #3022 is what happens when absence is
+ * allowed to remove a model outright. Because this can only ever return a non-empty subset of a
+ * list the caller already computed, no pool that would have found a working account can be left
+ * without one — the worst case is the selection that ships today.
+ *
+ * It is an ordering rule rather than an eligibility one for the same reason. Nothing below
+ * reports `model_not_entitled`, nothing refuses before dispatch, and the existing bounded
+ * alternate-account retry on an exact unsupported-model 400 stays exactly where it is as the
+ * safety net. This only stops the pool from CHOOSING an account that has already told us it
+ * cannot serve the model (#4768).
+ */
+export function withoutModelDeniedAccounts(
+  ids: readonly string[],
+  denied: ReadonlySet<string> | undefined,
+): readonly string[] {
+  if (denied === undefined || ids.length === 0) return ids;
+  const remaining = ids.filter(id => !denied.has(id));
+  return remaining.length > 0 ? remaining : ids;
+}
+
 export function getEligiblePoolAccounts(
   config: OcxConfig,
   excludeId?: string,
@@ -168,8 +193,12 @@ export function getEligiblePoolAccounts(
   // Single choke point for selection order: every strategy, failover, and preview
   // reaches the pool through here, so tiering applies once rather than per picker.
   // Eligibility above is unchanged — this only narrows an already-eligible list.
+  //
+  // Model entitlement is applied BEFORE the priority tier, because a tier is a quota-ordering
+  // question and an account that cannot serve the model at all should not be the reason a tier
+  // is selected. Both steps narrow an already-eligible list and neither can empty it.
   return selectPriorityTier(
-    ids,
+    withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds),
     codexAccountPriorityLookup(config),
     id => hasCodexQuotaHeadroom(config, id, selectionOptions, now),
     pinnedCodexAccountId(config),

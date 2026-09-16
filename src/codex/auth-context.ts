@@ -52,6 +52,7 @@ import {
   type CodexThreadLineage,
 } from "./lineage";
 import {
+  cachedDeniedCodexAccountIdsForModel,
   entitledCodexAccountIdsForModel,
   isDirectCallerEntitledToCodexModel,
   resolveCodexModelEntitlements,
@@ -978,6 +979,12 @@ export async function resolveCodexAuthContext(
     const modelEligibleAccountIds = entitledAccountIds
       ? new Set([...entitledAccountIds].filter(candidate => !excludeAccountIds?.has(candidate)))
       : undefined;
+    // #4768: the flagships stay visible and never fail closed, so this is evidence routing may
+    // ORDER by, not evidence it may refuse on. Read synchronously from rosters discovery has
+    // already gathered -- no upstream fetch joins the request path for the most commonly
+    // requested models in the product -- and passed to selection as a preference that is dropped
+    // whenever honouring it would leave no candidate.
+    const deniedModelAccountIds = cachedDeniedCodexAccountIdsForModel(options.modelId);
     const selectionOptions = {
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
@@ -989,6 +996,7 @@ export async function resolveCodexAuthContext(
         ? () => preserveRequestOwnedMainPin
         : options.isMainAccountTokenLive,
       modelEligibleAccountIds,
+      deniedModelAccountIds,
     };
     // A pre-drain selector reserves the native identity while reconciliation and
     // routing inspect it. Selectors arriving after the fence skip reconciliation

@@ -18,6 +18,16 @@ export interface CodexAccountUsabilityOptions {
   isMainAccountTokenLive?: typeof isMainAccountTokenLive;
   /** Confirmed account ids for an account-gated model; omitted for ordinary native models. */
   modelEligibleAccountIds?: ReadonlySet<string>;
+  /**
+   * Accounts whose own confirmed roster definitively omits the requested model (#4768).
+   *
+   * Deliberately NOT read by this module. `modelEligibleAccountIds` is an eligibility boundary and
+   * produces `model_not_entitled`; this is an ORDERING preference applied once, in
+   * `getEligiblePoolAccounts`, and dropped whenever honouring it would leave no candidate. Reading
+   * it here would turn a preference into a refusal and re-create the fail-closed behaviour the
+   * flagships were deliberately taken out of.
+   */
+  deniedModelAccountIds?: ReadonlySet<string>;
 }
 
 /**

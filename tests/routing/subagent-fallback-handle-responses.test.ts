@@ -1599,8 +1599,12 @@ describe("native fallback account preview", () => {
     // `modelId` is no longer the final argument -- #4546 appends the resolved pool lineage so
     // preview and final resolution agree on a child's first turn -- so anything after it is
     // allowed here rather than pinning the argument count.
+    // For the same reason the options object is no longer pinned to exactly one property:
+    // #4768 adds a per-candidate `deniedModelAccountIds` preference alongside the eligible set.
+    // What this still asserts is the thing recovery actually lost -- that both sites forward
+    // `modelEligibleAccountIds` into the selection options they build.
     const forwarded = source.match(
-      /\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \},\s*modelId,[^)]*\)/g,
+      /\{\s*\.\.\.(previewSelectionOptions|recoverySelectionOptions),[^}]*\bmodelEligibleAccountIds\b[^}]*\},\s*modelId,[^)]*\)/g,
     ) ?? [];
     expect(forwarded).toHaveLength(2);
   });

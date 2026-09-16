@@ -2446,6 +2446,78 @@ describe("codex account selection order", () => {
     expect(resolveCodexAccountForThread(null, config)).toBe("a");
   });
 
+  /**
+   * #4768: a pool holding a Plus account and a Free account handed Sol/Astra to whichever
+   * account rotation reached first, and the Free account answered with the upstream
+   * unsupported-model 400. The roster evidence to avoid that already existed; selection simply
+   * never consulted it for a model outside the account-gated set.
+   *
+   * Ordering, not eligibility. `a` is the higher priority tier here and still loses the pick,
+   * which is the point: an account that cannot serve the model at all should not be the reason
+   * a tier is selected.
+   */
+  test("a confirmed roster denial removes an account from selection (#4768)", () => {
+    const config = orderedConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+
+    expect(resolveCodexAccountForThread(null, config)).toBe("a");
+    expect(resolveCodexAccountForThreadDetailed(
+      null,
+      config,
+      Date.now(),
+      "shared",
+      { deniedModelAccountIds: new Set(["a"]) },
+    )).toMatchObject({ status: "selected", accountId: "b" });
+  });
+
+  /**
+   * The negative case, and the one that decides whether this rule is safe to ship.
+   *
+   * Roster evidence can be wrong in the direction that matters -- a shard that has not caught up
+   * reports a denial for a model the account genuinely owns -- so a rule that let evidence empty
+   * the candidate set would turn a stale shard into a total outage for the model. Honouring the
+   * denial is a preference; having somewhere to send the request is not.
+   *
+   * Unlike `modelEligibleAccountIds`, which is an eligibility boundary and legitimately
+   * resolves to nothing, this may never reach `status: "none"`.
+   */
+  test("denials never empty the candidate set (#4768)", () => {
+    const config = orderedConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+
+    const resolution = resolveCodexAccountForThreadDetailed(
+      null,
+      config,
+      Date.now(),
+      "shared",
+      { deniedModelAccountIds: new Set(["a", "b", MAIN_CODEX_ACCOUNT_ID]) },
+    );
+
+    expect(resolution.status).toBe("selected");
+    expect(["a", "b", MAIN_CODEX_ACCOUNT_ID])
+      .toContain((resolution as { accountId: string }).accountId);
+  });
+
+  /**
+   * Evidence about an account this pool does not hold must not perturb the pick. Same
+   * configuration and the same expectation as the tier test above, which selects `a`.
+   */
+  test("a denial naming an account outside the pool changes nothing (#4768)", () => {
+    const config = orderedConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+
+    expect(resolveCodexAccountForThreadDetailed(
+      null,
+      config,
+      Date.now(),
+      "shared",
+      { deniedModelAccountIds: new Set(["not-in-this-pool"]) },
+    )).toMatchObject({ status: "selected", accountId: "a" });
+  });
+
   test("preemption keeps the operator's persisted selection intact", () => {
     const config = orderedConfig();
     updateAccountQuota("a", 10);

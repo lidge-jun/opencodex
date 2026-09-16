@@ -84,7 +84,10 @@ import {
   canPassThroughEncryptedV2AgentTask,
   applyFinalRouteRequestNormalization,
 } from "./core-normalize";
-import { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
+import {
+  cachedDeniedCodexAccountIdsForModel,
+  resolveCodexModelEntitlements,
+} from "../../codex/model-entitlements";
 import {
   previewCodexAccountForRequest,
   codexQuotaScopeForModel,
@@ -528,7 +531,14 @@ export async function prepareResponsesRequest(
       config,
       previewNow,
       codexQuotaScopeForModel(modelId),
-      { ...previewSelectionOptions, modelEligibleAccountIds },
+      {
+        ...previewSelectionOptions,
+        modelEligibleAccountIds,
+        // Per CANDIDATE model, like the scope and the eligible set above: the preference is
+        // model-specific, so hoisting it out of the closure would score every fallback
+        // candidate against the requested model's evidence and diverge from final auth (#4768).
+        deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow),
+      },
       modelId,
       poolLineage,
     );
@@ -674,7 +684,11 @@ export async function prepareResponsesRequest(
                 config,
                 previewNow,
                 codexQuotaScopeForModel(modelId),
-                { ...recoverySelectionOptions, modelEligibleAccountIds },
+                {
+                  ...recoverySelectionOptions,
+                  modelEligibleAccountIds,
+                  deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow),
+                },
                 modelId,
                 poolLineage,
               );
