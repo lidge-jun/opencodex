@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DICTS, I18nContext, LOCALES, detectInitial, interpolate, setActiveLocale, type Locale, type TFn, type TKey, type Vars } from "./shared";
+import { en } from "./en";
 import { useI18n } from "./shared";
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
@@ -21,7 +22,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   }, [locale]);
 
   const t: TFn = useCallback(
-    (key, vars) => interpolate(DICTS[locale][key] ?? DICTS.en[key] ?? key, vars),
+    (key, vars) => interpolate(DICTS[locale][key] ?? en[key] ?? key, vars),
     [locale],
   );
   const value = useMemo(() => ({ locale, setLocale, t }), [locale, t]);

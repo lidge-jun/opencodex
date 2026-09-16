@@ -6,9 +6,10 @@ description: Manage stored native Codex login profiles separately from OpenCodex
 ## Native login is not Pool selection
 
 In **Codex Set → Multi-auth**, open **Manage main login** in the separate
-**Native main login** panel beside the account area. It manages the physical
-Codex login, not the account selected for the next Pool request. The panel does
-not add an Integrations tab or change the existing Pool controls.
+**Native main login** panel immediately below the main account card. The same
+panel appears beside the main card in the Providers account workspace. It
+manages the physical Codex login, not the account selected for the next Pool
+request. It does not add an Integrations tab or replace existing Pool controls.
 
 The displayed **Effective CODEX_HOME** belongs to the OpenCodex server. When
 using a remote dashboard, this may be a different computer from the browser.
@@ -24,7 +25,8 @@ already registered active login this updates its label; it does not enroll a new
 account. Profile switching requires the supported file credential store and an
 available operating-system key store. Diagnostic codes explain why controls are
 unavailable; do not work around a key-store or ownership error by copying Pool
-credentials into the native login file.
+credentials into the native login file. The panel is disabled while the main
+card's existing native device-reauthentication operation is active.
 
 Choose **Switch** beside a stored inactive profile. Review the target label and
 server-side home, stop native Codex using that home, then check the stopped
@@ -49,19 +51,18 @@ These are different operations:
   require a separate stopped confirmation. These controls remain available when
   a damaged profile list cannot be read but diagnostics report pending recovery.
 - **Return to previously displayed** after a successful switch selects the profile
-  shown before your switch using
-  the normal, confirmed switch workflow. This shortcut is held only in page
-  memory, is scoped to the home and expected active owner, and disappears when
-  the page reloads or the proxy/owner changes. The API does not return the transaction source, so this is not a
-  server-verified undo log: another operator could have changed the login between
-  the preflight read and your switch.
-  After reloading, select the desired saved profile directly.
+  shown before your switch using the normal, confirmed switch workflow. This
+  shortcut is held only in page memory, scoped to the home and expected active
+  owner, and disappears when the page reloads or the proxy/owner changes. The API
+  does not return the transaction source, so this is not a server-verified undo
+  log: another operator could have changed the login between the preflight read
+  and your switch. After reloading, select the desired saved profile directly.
 
 A network error does not establish that a write failed or rolled back. The panel
 rereads server state after a dispatched mutation, including a lost response, and
 never automatically retries it. If refresh fails, a successful change is not
 reported as undone. Refresh and inspect diagnostics before another operation.
-The existing `ocx account main doctor` command can provide server-side diagnostics.
+The existing `ocx account main doctor` command provides server-side diagnostics.
 
 ## Scope of this phase
 
@@ -77,11 +78,3 @@ fields, displays allowlisted error codes rather than raw server messages, and
 uses the application's existing authenticated fetch wrapper. The backend's
 management authentication, GUI-session/CSRF and route-admission checks are
 unchanged.
-
-### Component preview
-
-The image below is the actual presentational component rendered with synthetic
-profiles in an isolated browser fixture. Its surrounding styles are fixture
-styles, not a full-dashboard screenshot or evidence of a production build.
-
-![Native login confirmation with an explicit home and stopped checkbox](/images/native-main-profiles.png)

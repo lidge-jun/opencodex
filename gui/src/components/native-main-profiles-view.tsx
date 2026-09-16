@@ -1,9 +1,9 @@
 import type { RefObject } from "react";
-import type { TFn } from "../i18n/shared";
+import type { NativeMainTFn } from "../i18n/native-main-copy";
 import { canApplyNativeMain, canRegisterNativeMain, nativeMainUnavailableCode, type NativeMainAction, type NativeMainErrorCode, type NativeMainSnapshot } from "../native-main-profiles";
 
 export interface NativeMainProfilesViewProps {
-  t: TFn;
+  t: NativeMainTFn;
   id: string;
   open: boolean;
   busy: boolean;
@@ -27,7 +27,9 @@ export interface NativeMainProfilesViewProps {
   onConfirm: () => void;
 }
 
-/** Pure view also used by the hermetic browser fixture. No credential state lives here. */
+const DOCTOR_CMD = "ocx account main doctor";
+
+/** Pure view; credentials and response/error objects never enter its props. */
 export function NativeMainProfilesView(p: NativeMainProfilesViewProps) {
   const { t, snapshot: s, action, busy, blocked } = p;
   const disabled = busy || blocked;
@@ -48,14 +50,16 @@ export function NativeMainProfilesView(p: NativeMainProfilesViewProps) {
       <p className="card-sub">{t("nativeMain.separate")}</p>
       {s && <dl>
         <dt>{t("nativeMain.home")}</dt><dd style={{ marginLeft: 0, overflowWrap: "anywhere" }}><code>{s.doctor.effectiveCodexHome}</code></dd>
-        <dt>{t("nativeMain.current")}</dt><dd style={{ marginLeft: 0 }}>{active?.label ?? t("nativeMain.unregistered")}</dd>
+        {s.list && <>
+          <dt>{t("nativeMain.current")}</dt><dd style={{ marginLeft: 0, overflowWrap: "anywhere" }}>{active?.label ?? t("nativeMain.unregistered")}</dd>
+        </>}
       </dl>}
       <p className="card-sub">{t("nativeMain.physicalHint")}</p>
       {blocked && <p role="status" className="notice notice-warn">{t("nativeMain.busyOther")}</p>}
       {busy && <p role="status">{t("nativeMain.working")}</p>}
       {p.error && <div role="alert" className="notice notice-err">
         <p>{t(p.error === "STATE_CHANGED" ? "nativeMain.changed" : "nativeMain.error")}</p>
-        <code>{p.error}</code> <code>ocx account main doctor</code>
+        <code>{p.error}</code> <code>{DOCTOR_CMD}</code>
       </div>}
       {p.result && <p role="status" className="notice">{t(p.result === "saved" ? "nativeMain.saved"
         : p.result === "restart" ? "nativeMain.restart" : "nativeMain.done")}</p>}
@@ -78,19 +82,21 @@ export function NativeMainProfilesView(p: NativeMainProfilesViewProps) {
         {profiles.length === 0 && <p>{t("nativeMain.empty")}</p>}
         <ul style={{ listStyle: "none", padding: 0 }}>
           {profiles.map(item => <li key={item.id} className="row" style={{ padding: "8px 0", flexWrap: "wrap" }}>
-            <strong>{item.label}</strong> <code>{item.identityHint}</code>
+            <strong style={{ overflowWrap: "anywhere", minWidth: 0 }}>{item.label}</strong> <code style={{ overflowWrap: "anywhere", minWidth: 0 }}>{item.identityHint}</code>
             {item.state === "active" ? <span className="badge badge-green">{t("nativeMain.active")}</span>
               : <button type="button" className="btn btn-sm" disabled={mutationDisabled || !!action || !canApplyNativeMain(s, { kind: "switch", target: item.id, label: item.label })}
                 aria-label={t("nativeMain.switchTo", { label: item.label })}
                 onClick={() => p.onSelect({ kind: "switch", target: item.id, label: item.label })}>{t("nativeMain.switch")}</button>}
           </li>)}
         </ul>
-        {previous && <button type="button" className="btn btn-sm" disabled={mutationDisabled || !!action
-          || !canApplyNativeMain(s, { kind: "switch", target: previous.id, label: previous.label })}
-          onClick={() => p.onSelect({ kind: "switch", target: previous.id, label: previous.label })}>
-          {t("nativeMain.restore", { label: previous.label })}
-        </button>}
-        <p className="card-sub">{t("nativeMain.restoreHint")}</p>
+        {previous && <>
+          <button type="button" className="btn btn-sm" disabled={mutationDisabled || !!action
+            || !canApplyNativeMain(s, { kind: "switch", target: previous.id, label: previous.label })}
+            onClick={() => p.onSelect({ kind: "switch", target: previous.id, label: previous.label })}>
+            {t("nativeMain.restore", { label: previous.label })}
+          </button>
+          <p className="card-sub">{t("nativeMain.restoreHint")}</p>
+        </>}
         <form onSubmit={event => { event.preventDefault(); p.onRegister(); }}>
           <label htmlFor={`${p.id}-label`}>{t("nativeMain.label")}</label>
           <div className="row" style={{ flexWrap: "wrap" }}>
@@ -104,8 +110,11 @@ export function NativeMainProfilesView(p: NativeMainProfilesViewProps) {
         </form>
       </>}
       {action && s && <div ref={p.confirmationRef} role="group" tabIndex={-1} aria-labelledby={`${p.id}-confirm-title`}
-        className="notice notice-warn" style={{ marginTop: 12 }}>
-        <h3 id={`${p.id}-confirm-title`}>{t(action.kind === "switch" ? "nativeMain.switchTo"
+        className="notice notice-warn" style={{ marginTop: 12 }}
+        onKeyDown={event => {
+          if (event.key === "Escape" && !busy) { event.preventDefault(); p.onSelect(null); }
+        }}>
+        <h3 id={`${p.id}-confirm-title`} style={{ overflowWrap: "anywhere" }}>{t(action.kind === "switch" ? "nativeMain.switchTo"
           : action.rollback ? "nativeMain.rollback" : "nativeMain.recover", { label: action.kind === "switch" ? action.label : "" })}</h3>
         <p>{t("nativeMain.confirmHint")}</p>
         <code style={{ overflowWrap: "anywhere" }}>{s.doctor.effectiveCodexHome}</code>

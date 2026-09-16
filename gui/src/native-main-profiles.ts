@@ -1,4 +1,4 @@
-/** Browser-side allowlist for the existing native-main management boundary. */
+/** Public, allowlisted browser boundary for the existing native-main API. */
 export interface NativeMainProfile {
   id: string;
   label: string;
@@ -91,14 +91,16 @@ export function parseNativeMainDoctor(value: unknown): NativeMainDoctor {
   };
 }
 async function request(apiBase: string, suffix: string, signal: AbortSignal, body?: object): Promise<unknown> {
-  // Use the application's installed fetch wrapper: it owns GUI session/CSRF/auth.
-  // Never persist responses or expose server error bodies, even on non-JSON errors.
+  signal.throwIfAborted();
+  // Use the installed fetch wrapper, which owns GUI-session/CSRF/auth. Do not
+  // add tokens or display response/error bodies. Never persist profile state.
   const response = await fetch(`${apiBase}/api/native-main-profiles${suffix}`, {
     method: body ? "POST" : "GET", signal, cache: "no-store",
     ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
   });
   let value: unknown;
   try { value = await response.json(); } catch { throw new NativeMainError("INVALID_RESPONSE"); }
+  signal.throwIfAborted();
   if (!response.ok) {
     const code = value && typeof value === "object" ? (value as Record<string, unknown>).code : undefined;
     throw new NativeMainError(typeof code === "string" && codes.includes(code as NativeMainErrorCode)
@@ -167,8 +169,9 @@ export async function applyNativeMain(
     const active = profile(v.activeProfile);
     if (active.id !== action.target || active.state !== "active") return invalid();
   }
-  // A no-op recovery has no restartRequired field in the existing API.
-  const restartRequired = action.kind === "recover" && v.restartRequired === undefined && v.recovered === false ? false : bool(v.restartRequired);
+  // The existing API omits restartRequired for a no-op recovery.
+  const restartRequired = action.kind === "recover" && v.restartRequired === undefined && v.recovered === false
+    ? false : bool(v.restartRequired);
   return { effectiveCodexHome: text(v.effectiveCodexHome), restartRequired,
     ...(typeof v.recovered === "boolean" ? { recovered: v.recovered } : {}) };
 }

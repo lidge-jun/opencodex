@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import CodexAccountPool from "../components/CodexAccountPool";
-import NativeMainProfiles from "../components/NativeMainProfiles";
 import DefaultModeRequestUserInputSetting from "../components/DefaultModeRequestUserInputSetting";
 import UltraFastTierSetting from "../components/UltraFastTierSetting";
 import MainAccountHardLockSetting from "../components/MainAccountHardLockSetting";
@@ -205,10 +204,6 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
       onEnable={() => { void enableOpenAi(); }}
     />
     {enableError && <div className="notice notice-err" role="alert">{enableError}</div>}
-    <NativeMainProfiles
-      apiBase={apiBase}
-      onChanged={() => ownerMountedRef.current ? loadAccounts(false) : Promise.resolve(false)}
-    />
   </>;
 
   return (

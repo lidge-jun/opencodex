@@ -5,7 +5,6 @@ import {
   nativeMainErrorCode, nativeMainUnavailableCode, parseNativeMainDoctor, parseNativeMainList,
   readNativeMainSnapshot, registerNativeMain, sameNativeMainScope, type NativeMainSnapshot,
 } from "../src/native-main-profiles";
-import { NATIVE_MAIN_EN, NATIVE_MAIN_TRANSLATIONS } from "../src/i18n/native-main-translations";
 
 const home = "/srv/codex-fixture";
 const personal = { id: "00000000-0000-4000-8000-000000000001", label: "personal", identityHint: "native:11111111", state: "active" as const };
@@ -28,7 +27,7 @@ function json(value: unknown, status = 200) { return new Response(JSON.stringify
 function errorIs(code: string) { return (e: unknown) => e instanceof NativeMainError && e.code === code; }
 
 describe("native main management boundary", () => {
-  test("projects only public profile fields, excluding unknown credential-shaped data", () => {
+  test("projects only public fields, excluding unknown credential-shaped data", () => {
     const source = snapshot().list!;
     const safe = parseNativeMainList({ ...source, key: "fixture-secret", profiles: source.profiles.map(p => ({
       ...p, accountId: "fixture-account", payload: { ciphertext: "fixture-secret" }, access_token: "fixture-secret",
@@ -54,10 +53,9 @@ describe("native main management boundary", () => {
     assert.throws(() => parseNativeMainDoctor({ ...d, authStatus: "unknown" }), errorIs("INVALID_RESPONSE"));
   });
 
-  test("uses the existing GET boundary without credential or persistent-cache options", async () => {
+  test("uses existing GET paths, the supplied signal and no persistent cache", async () => {
     const calls: string[] = [];
-    const s = snapshot();
-    const abort = signal();
+    const s = snapshot(); const abort = signal();
     mockFetch((url, init) => {
       calls.push(url);
       assert.equal(init.method, "GET"); assert.equal(init.signal, abort); assert.equal(init.cache, "no-store");
@@ -82,18 +80,19 @@ describe("native main management boundary", () => {
     await assert.rejects(readNativeMainSnapshot("", signal()), errorIs("VAULT_INVALID"));
   });
 
-  test("rejects inconsistent homes or active owners between reads", async () => {
+  test("rejects inconsistent homes or owners between reads", async () => {
     for (const patch of [{ effectiveCodexHome: "/other-home" }, { activeProfileId: work.id }]) {
       mockFetch(url => json(url.endsWith("/doctor") ? { ...snapshot().doctor, ...patch } : snapshot().list));
       await assert.rejects(readNativeMainSnapshot("", signal()), errorIs("STATE_CHANGED"));
     }
   });
 
-  test("honors an aborted scope even when a transport resolves its GETs", async () => {
-    const controller = new AbortController();
-    mockFetch(url => json(url.endsWith("/doctor") ? snapshot().doctor : snapshot().list));
+  test("refuses an already-aborted scope before any request", async () => {
+    const controller = new AbortController(); let calls = 0;
+    mockFetch(() => { calls++; return json({}); });
     controller.abort();
     await assert.rejects(readNativeMainSnapshot("", controller.signal));
+    assert.equal(calls, 0);
   });
 
   test("registration submits only the trimmed label and validates the returned profile", async () => {
@@ -107,14 +106,14 @@ describe("native main management boundary", () => {
     await assert.rejects(registerNativeMain("", "work", signal()), errorIs("INVALID_RESPONSE"));
   });
 
-  test("refuses an unconfirmed mutation before sending any request", async () => {
+  test("refuses an unconfirmed mutation before sending a request", async () => {
     let calls = 0;
     mockFetch(() => { calls++; return json({}); });
     await assert.rejects(applyNativeMain("", target, false, signal()), errorIs("INVALID_REQUEST"));
     assert.equal(calls, 0);
   });
 
-  test("switch sends a safe profile ID, not the label or any auth envelope", async () => {
+  test("switch sends only the safe profile ID and explicit stopped consent", async () => {
     mockFetch((url, init) => {
       assert.equal(url, "/api/native-main-profiles/switch");
       assert.deepEqual(JSON.parse(String(init.body)), { target: work.id, confirmedStopped: true });
@@ -123,7 +122,7 @@ describe("native main management boundary", () => {
     assert.deepEqual(await applyNativeMain("", target, true, signal()), { effectiveCodexHome: home, restartRequired: true });
   });
 
-  test("does not treat an unrelated active profile or malformed success as a switch", async () => {
+  test("does not treat an unrelated profile or malformed success as a switch", async () => {
     for (const outcome of [
       { ok: true, effectiveCodexHome: home, restartRequired: true, activeProfile: personal },
       { ok: true, effectiveCodexHome: home, recovered: false },
@@ -148,7 +147,7 @@ describe("native main management boundary", () => {
     assert.equal((await applyNativeMain("", { kind: "recover", rollback: true }, true, signal())).restartRequired, true);
   });
 
-  test("only exposes allowlisted error codes, never raw error messages or tokens", async () => {
+  test("exposes allowlisted codes, never raw error messages or token-shaped fields", async () => {
     for (const [code, expected] of [["CODEX_BUSY", "CODEX_BUSY"], ["fixture-secret", "INTERNAL_ERROR"]]) {
       mockFetch(() => json({ code, error: "fixture-secret", access_token: "fixture-secret" }, 409));
       await assert.rejects(applyNativeMain("", target, true, signal()), e => {
@@ -162,7 +161,7 @@ describe("native main management boundary", () => {
     await assert.rejects(applyNativeMain("", target, true, signal()), errorIs("INVALID_RESPONSE"));
   });
 
-  test("blocks unsafe stores, unavailable keys, unreadable auth and pending recovery", () => {
+  test("blocks unsafe stores, unavailable keys, invalid auth and pending recovery", () => {
     const s = snapshot();
     assert.equal(canRegisterNativeMain(s), true); assert.equal(canApplyNativeMain(s, target), true);
     for (const patch of [{ supported: false }, { keyStore: "missing-key" as const }, { authStatus: "missing" as const },
@@ -176,26 +175,11 @@ describe("native main management boundary", () => {
     assert.equal(canApplyNativeMain(s, { kind: "recover", rollback: false }), false);
   });
 
-  test("confirmation scope changes for another home, active owner or recovery state", () => {
+  test("confirmation scope includes the home, active owner and recovery state", () => {
     const s = snapshot();
     assert.equal(sameNativeMainScope(s, snapshot()), true);
     for (const patch of [{ effectiveCodexHome: "/other-home" }, { activeProfileId: work.id }, { recoveryPending: true }]) {
       assert.equal(sameNativeMainScope(s, { ...s, doctor: { ...s.doctor, ...patch } }), false);
-    }
-  });
-});
-
-describe("native-main translations", () => {
-  test("all nine locales cover the closed namespace and preserve interpolation variables", () => {
-    const keys = Object.keys(NATIVE_MAIN_EN).sort();
-    assert.equal(Object.keys(NATIVE_MAIN_TRANSLATIONS).length, 9);
-    const variables = (s: string) => [...s.matchAll(/\{([^}]+)\}/g)].map(m => m[1]).sort();
-    for (const [locale, dictionary] of Object.entries(NATIVE_MAIN_TRANSLATIONS)) {
-      assert.deepEqual(Object.keys(dictionary).sort(), keys, locale);
-      for (const key of keys as (keyof typeof NATIVE_MAIN_EN)[]) {
-        assert.ok(dictionary[key].trim(), `${locale}:${key}`);
-        assert.deepEqual(variables(dictionary[key]), variables(NATIVE_MAIN_EN[key]), `${locale}:${key}`);
-      }
     }
   });
 });

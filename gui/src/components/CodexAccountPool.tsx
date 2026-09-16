@@ -5,6 +5,7 @@ import { EmptyState, type NoticeTone } from "../ui";
 import AddCodexAccountModal from "./AddCodexAccountModal";
 import { useCodexAccountPool, type CodexAccountPoolController } from "../hooks/useCodexAccountPool";
 import { useMainDeviceReauth } from "./use-main-device-reauth";
+import NativeMainProfiles from "./NativeMainProfiles";
 import type { ReactNode } from "react";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import CodexAutoSwitchSetting from "./CodexAutoSwitchSetting";
@@ -501,6 +502,12 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
             onManageMainHardLock={hasMainHardLockSetting ? manageMainHardLock : undefined}
             mainReauth={mainReauth}
+          />
+
+          <NativeMainProfiles
+            apiBase={apiBase}
+            disabled={mainReauthActive}
+            onChanged={() => load(false)}
           />
 
           <div className="section-sep">
