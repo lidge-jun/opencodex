@@ -15,7 +15,10 @@ let reservedInboundBodyBytes = 0;
 // Match the HTTP routes whose JSON readers use maxInboundBodyBytes. Keep the
 // current image/search/count_tokens support; management, audio, context relay,
 // and WebSocket frames have separate limits and are not part of this gate.
-const configurableJsonRoutes = new Set([
+// Exported so the contract tests classify the dispatcher's own route list
+// instead of copying it: a new loopback route has to land in one of these two
+// sets, or `tests/server/server-request-body-size.test.ts` fails.
+export const CONFIGURABLE_JSON_BODY_ROUTES: ReadonlySet<string> = new Set([
   "/v1/responses",
   "/v1/responses/compact",
   "/v1/chat/completions",
@@ -24,6 +27,20 @@ const configurableJsonRoutes = new Set([
   "/v1/images/generations",
   "/v1/images/edits",
   "/v1/alpha/search",
+]);
+
+/**
+ * Loopback routes deliberately outside this gate. Audio uploads, realtime/live
+ * control and the model list do not read JSON under `maxInboundBodyBytes`, so
+ * reserving that allowance for them would refuse traffic the limit never covered.
+ */
+export const UNGATED_LOOPBACK_ROUTES: ReadonlySet<string> = new Set([
+  "/v1/audio/transcriptions",
+  "/v1/audio/transcriptions/stream",
+  "/v1/models",
+  "/v1/realtime",
+  "/v1/realtime/calls",
+  "/v1/live",
 ]);
 
 export class InboundBodyCapacityError extends Error {
@@ -114,7 +131,7 @@ export async function withRaisedInboundBodyAdmission(
   onRefusal: (response: Response) => Response = response => response,
 ): Promise<Response> {
   const maxBytes = resolveInboundBodyLimitBytes(configuredLimit);
-  if (req.method !== "POST" || !configurableJsonRoutes.has(pathname)
+  if (req.method !== "POST" || !CONFIGURABLE_JSON_BODY_ROUTES.has(pathname)
     || maxBytes <= MAX_DECOMPRESSED_BODY_BYTES || req.signal.aborted) {
     return work();
   }

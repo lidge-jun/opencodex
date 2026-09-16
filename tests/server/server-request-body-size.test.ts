@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { MAX_DECOMPRESSED_BODY_BYTES, MAX_CONFIGURABLE_INBOUND_BODY_BYTES, readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../../src/server/request-decompress";
-import { withRaisedInboundBodyAdmission, InboundBodyCapacityError } from "../../src/server/inbound-body-admission";
+import {
+  withRaisedInboundBodyAdmission,
+  InboundBodyCapacityError,
+  CONFIGURABLE_JSON_BODY_ROUTES,
+  UNGATED_LOOPBACK_ROUTES,
+} from "../../src/server/inbound-body-admission";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -107,11 +112,9 @@ describe("configurable listener body size (Issue #3573)", () => {
 
 // BEGIN raised-body admission regressions: these cases use Web streams and tiny payloads.
 const RAISED_BODY_LIMIT = MAX_CONFIGURABLE_INBOUND_BODY_BYTES;
-const raisedBodyPaths = [
-  "/v1/responses", "/v1/responses/compact", "/v1/chat/completions",
-  "/v1/messages", "/v1/messages/count_tokens", "/v1/images/generations",
-  "/v1/images/edits", "/v1/alpha/search",
-];
+// Read the gate's own set rather than a second copy: a route added to admission
+// without protocol coverage, or covered here but never admitted, must not pass.
+const raisedBodyPaths = [...CONFIGURABLE_JSON_BODY_ROUTES];
 function bodyDeferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
@@ -224,6 +227,29 @@ describe("raised inbound body admission lifetime", () => {
       const get = new Request("http://localhost/v1/responses");
       assert.equal((await admittedBodyWork(async () => new Response(null, { status: 204 }), get)).status, 204);
     } finally { await holder.text(); }
+  });
+
+  // The dispatcher is the source of truth for what the loopback listener accepts.
+  // A new `/v1` route must be admitted or explicitly exempted; leaving it out of
+  // both sets is how a raised `maxInboundBodyBytes` route would skip the
+  // process-wide reservation while every admission test still passed.
+  test("every loopback /v1 route is classified for inbound body admission", async () => {
+    const source = await Bun.file(join(import.meta.dir, "../../src/server/index.ts")).text();
+    const start = source.indexOf("function loopbackRouteAllowed");
+    assert.notEqual(start, -1);
+    const end = source.indexOf("\n  }", start);
+    assert.notEqual(end, -1);
+    const routes = [...source.slice(start, end).matchAll(/path === "(\/v1\/[^"]+)"/g)].map(match => match[1]);
+    assert.ok(routes.length >= 8, `expected the dispatcher to list /v1 routes, saw ${routes.length}`);
+    for (const route of routes) {
+      assert.ok(
+        CONFIGURABLE_JSON_BODY_ROUTES.has(route) || UNGATED_LOOPBACK_ROUTES.has(route),
+        `${route} is neither admitted nor explicitly exempt in inbound-body-admission.ts`,
+      );
+    }
+    for (const route of CONFIGURABLE_JSON_BODY_ROUTES) {
+      assert.ok(routes.includes(route), `${route} is admitted but the dispatcher no longer serves it`);
+    }
   });
 
   test("keeps an aborted request charged until its pending work actually returns", async () => {
