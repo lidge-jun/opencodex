@@ -442,7 +442,7 @@ export async function preparePassthroughExchange(
         declaredWireToolNames.size > 0
         || clientDeclaredNamelessCallTypes.size > 0
         || clientExplicitWireToolCatalog
-      ) && route.provider.authMode !== "forward" && inboundWire !== "chat" && inboundWire !== "anthropic";
+      ) && route.provider.authMode !== "forward";
     };
     refreshUndeclaredToolGuard(request);
     // A refused turn must not seed `previous_response_id` replay. The inspection branch reads the
