@@ -122,6 +122,15 @@ describe("formatPassthroughUpstreamError Retry-After (#507)", () => {
     expect(await withUpstreamHeader.text()).toBe(body);
   });
 
+  test("a refusal whose body did not survive the read still gets no Retry-After", () => {
+    // The bounded reader answers "" for anything not display-safe, and the empty-body branch
+    // is the one that invents the default. Caller provenance is what covers this case.
+    expect(formatPassthroughUpstreamError(429, "").headers.get("Retry-After"))
+      .toBe(DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC);
+    expect(formatPassthroughUpstreamError(429, "", { replayRefusal: true }).headers.get("Retry-After"))
+      .toBeNull();
+  });
+
   test("empty-body retryable 429 gets a default Retry-After", async () => {
     const response = formatPassthroughUpstreamError(429, "");
     expect(response.status).toBe(429);

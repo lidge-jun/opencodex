@@ -70,6 +70,13 @@ export function formatPassthroughUpstreamError(
     statusText?: string;
     headers?: Headers;
     now?: number;
+    /**
+     * Provenance from the caller that still holds the response: this body is a refusal this
+     * proxy synthesized. The body check below is the fallback for a re-wrapped body, and it
+     * cannot answer at all when the bounded read returned nothing display-safe -- which is
+     * precisely when the empty-body branch would invent the retryable-429 default.
+     */
+    replayRefusal?: boolean;
   },
 ): Response {
   const trimmed = bodyText.trim();
@@ -79,7 +86,9 @@ export function formatPassthroughUpstreamError(
   const cyberPolicyFailure = isCyberPolicyBody(trimmed);
   // Two different reasons to answer with no wait at all, handled the same way: a hard policy
   // block will not become servable, and a refusal we made was never a rate limit.
-  const suppressRetryAfter = cyberPolicyFailure || isReplayRefusalBody(trimmed);
+  const suppressRetryAfter = cyberPolicyFailure
+    || options?.replayRefusal === true
+    || isReplayRefusalBody(trimmed);
   const resolved = suppressRetryAfter
     ? undefined
     : resolveClientRetryAfter({

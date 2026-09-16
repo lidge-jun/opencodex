@@ -993,8 +993,10 @@ re-wraps it after combo failure consumption. Three writers consult it or the cod
 `src/server/responses/passthrough-delivery.ts` skips `recordCodexUpstreamOutcome`, which would
 otherwise classify the synthetic 429 as quota exhaustion and cool the account;
 `src/server/responses/passthrough-error.ts` suppresses the retryable-429 default and drops any
-inherited header, reading the code off the body because it is handed bytes rather than the
-response; and `src/server/chat-native.ts` restores the code its own classifier overwrote —
+inherited header, taking provenance from the caller that still holds the response and falling
+back to the code in the body — provenance is not optional there, because the bounded read
+answers with an empty string for anything not display-safe and an empty body is exactly what
+the default fires on; and `src/server/chat-native.ts` restores the code its own classifier overwrote —
 429 maps to `rate_limit_error`, which already carries a code, so the branch that copies an
 upstream code could never reach it — and suppresses the same synthetic wait.
 
