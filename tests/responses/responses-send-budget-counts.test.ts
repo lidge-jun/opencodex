@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses/core";
+import { COMBO_TARGET_BASE_SENDS, comboExecutionBudgetPolicy } from "../../src/server/responses/core-combo";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 
@@ -120,7 +121,7 @@ describe("upstream sends per logical request", () => {
     expect(sendCounts(logCtx)).toEqual([3]);
   });
 
-  test("a three-target combo fan-out gives every declared target a send and totals six", async () => {
+  test("a three-target combo fan-out gives every declared target a send and stays bounded", async () => {
     const upstream = alwaysFailing(502, "upstream busy");
     const logCtx: RequestLogContext = { model: "", provider: "" };
 
@@ -128,34 +129,44 @@ describe("upstream sends per logical request", () => {
 
     expect(response.status).toBe(502);
     await response.text();
-    // The measured shape in #4546 was twelve: four sends per target, because each child took a
-    // fresh full allowance. Sharing one counter alone was not the answer either -- it starved
-    // the later targets to zero. The first target runs its own ladder, each later target draws
-    // what is left, and the clamp holds back one send for every target still declared, so the
-    // last target is still reached.
-    // Asserted as the INVARIANT the derived policy guarantees rather than as a fixture count.
-    // An exact per-target vector pins how this harness happens to distribute the ladder, which
-    // is not what the layer promises and not something this branch can observe: the local suite
-    // is not run here, so a number guessed from reading is a number nobody checked.
+    // Asserted as the INVARIANT the derived policy guarantees, not as a fixture vector. An exact
+    // per-target count also pins how far this harness's adapter happens to climb its own ladder
+    // inside each allowance, which is not what this layer promises; and the local suite is not
+    // run on this branch, so a vector guessed from reading is a vector nobody checked.
     const bearers = upstream.authorizations;
-    // Every declared target is still reached. Starving the last target is the failure mode that
-    // sharing one counter WITHOUT a per-target policy produces.
+    // Every declared target is reached. Starving the last one is the failure mode that sharing a
+    // counter WITHOUT a per-target policy produces, and #4546 measured the opposite failure --
+    // twelve sends, four per target, because each child drew a fresh full allowance.
     expect(new Set(bearers).size).toBe(3);
-    expect(bearers).toContain("Bearer sk-t2");
-    // The first target keeps its full ladder, so the first sends are all its own.
     expect(bearers[0]).toBe("Bearer sk-t0");
-    // Bounded by the derived total: the first target's ladder, one send per further declared
-    // target, and the single shared final-recovery reserve. The measured regression in #4546 was
-    // twelve, four per target, because each child drew a fresh full allowance.
-    // The measured bound is NINE, and saying six here would be describing an intention rather
-    // than the code. #4546 measured twelve -- four sends per target, each child drawing a fresh
-    // full allowance -- so sharing one counter removes the per-target reserve and takes it to
-    // nine. The clamp that was meant to hold back one send for every target still declared is
-    // NOT yet effective; that is stated in the pull request as the open item rather than hidden
-    // behind an assertion that passes for the wrong reason.
-    expect(bearers.length).toBeLessThanOrEqual(9);
-    expect(bearers.length).toBeLessThan(12);
-    expect(bearers.length).toBeGreaterThanOrEqual(3);
+    expect(bearers).toContain("Bearer sk-t2");
+    // The first target keeps a whole ladder to itself.
+    expect(sendCounts(logCtx)[0]).toBe(COMBO_TARGET_BASE_SENDS);
+    // And the request total is the declared policy total, which is what the derived scope can
+    // now actually enforce: before the shared ledger, each scope admitted against a counter that
+    // had only ever seen its own reservations.
+    expect(totalSends(logCtx)).toBeLessThanOrEqual(comboExecutionBudgetPolicy(3).maxTotalModelSends);
+    expect(totalSends(logCtx)).toBe(bearers.length);
+  });
+
+  test("a thirteen-target combo still reaches every declared fallback", async () => {
+    // The reported shape: a long failover combo exhausted the allowance after a few providers
+    // and returned the last 502 while later declared targets were never attempted at all.
+    const upstream = alwaysFailing(502, "upstream busy");
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(responsesRequest("combo/fan"), comboOverTargets(13), logCtx);
+
+    expect(response.status).toBe(502);
+    await response.text();
+    const bearers = upstream.authorizations;
+    expect(new Set(bearers).size).toBe(13);
+    for (let index = 0; index < 13; index += 1) {
+      expect(bearers).toContain(`Bearer sk-t${index}`);
+    }
+    expect(bearers[0]).toBe("Bearer sk-t0");
+    expect(sendCounts(logCtx)[0]).toBe(COMBO_TARGET_BASE_SENDS);
+    expect(totalSends(logCtx)).toBeLessThanOrEqual(comboExecutionBudgetPolicy(13).maxTotalModelSends);
   });
 
   // REMOVED: "a 401 before the 5xx streak spends one of the same three sends".

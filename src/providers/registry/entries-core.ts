@@ -423,6 +423,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // or the one the Claude /v1/messages inbound derives); the adapter itself never invents one.
     // Evidence: https://platform.kimi.com/docs/api/chat
     promptCacheKey: true,
+    // Kimi's Responses endpoint rejects hook-provided context between a tool call and
+    // its matching result (#4726), the same strict shape DeepSeek exposed in #1292.
+    // The flag is inert while this preset uses the Chat wire.
+    requiresAdjacentResponsesToolResults: true,
     featured: true,
     oauthId: "kimi",
     jawcodeBundle: "moonshot",

@@ -4,6 +4,8 @@ import { retainedUtf8Bytes } from "../../lib/admission";
 import { clearAllCodexPoolRefreshFailures } from "../pool-refresh-backoff";
 import type { CodexThreadLineage } from "../lineage";
 import type { CodexQuotaScope } from "./health-store";
+import type { TransientProbeLease } from "../../routing/probe-lease";
+import { clearPoolRecoveryState } from "../../routing/probe-lease";
 
 export type ThreadAffinityEntry = {
   accountId: string;
@@ -25,10 +27,51 @@ export type ThreadAffinityEntry = {
   transientDetourAccountId?: string;
 };
 
+/**
+ * The half-open trial this request was granted against its own held account (#4701).
+ *
+ * The lease alone is not enough to settle safely. Its generation is an account-local PROBE
+ * epoch, while {@link ThreadAffinityEntry.generation} is the selected CREDENTIAL generation,
+ * and the two move independently: a credential replaced while the probe is in flight leaves
+ * the probe epoch untouched, so a settle that checked only the lease would write an answer
+ * about a credential that no longer exists. Capturing the affinity generation here is what
+ * lets the settle refuse that case.
+ */
+export interface TransientProbeGrant {
+  readonly lease: TransientProbeLease;
+  /** Credential generation the binding held when the probe was granted. */
+  readonly affinityGeneration: number;
+}
+
 export type CodexThreadResolution =
-  | { status: "selected"; accountId: string; affinity?: CodexAffinityDecision }
+  | {
+    status: "selected";
+    accountId: string;
+    affinity?: CodexAffinityDecision;
+    /**
+     * Present only when this request is the single admitted probe of a held account. The
+     * holder owes the lease a settle or a release; nothing else may act on it.
+     */
+    transientProbe?: TransientProbeGrant;
+  }
   | { status: "none"; affinity?: CodexAffinityDecision }
-  | { status: "expired"; accountId: string; affinity?: CodexAffinityDecision };
+  | { status: "expired"; accountId: string; affinity?: CodexAffinityDecision }
+  /**
+   * Every candidate for this binding is held and no detour is left, so there is no account
+   * this request may be sent to. Distinct from `none`: the binding is REMEMBERED and the
+   * caller is told when to come back, rather than being handed the account already known to
+   * be failing. Returning `selected` here is the "must not send, sends anyway" defect
+   * (#4701); the caller must refuse before any upstream I/O.
+   */
+  | {
+    status: "withheld";
+    accountId: string;
+    /** Earliest moment a recovery dispatch could be admitted. Always strictly in the future. */
+    retryAt: number;
+    /** The remembered detour, when one exists but is itself unusable right now. */
+    detourAccountId?: string;
+    affinity?: CodexAffinityDecision;
+  };
 
 /** What happened to this thread's binding on this request (#4546). */
 export type CodexAffinityMove =
@@ -163,6 +206,11 @@ export function clearThreadAccountMap(): void {
   // A refresh cooldown is per-account runtime state learned alongside these bindings. Leaving it
   // behind here keeps an account out of selection after the roster it belonged to is gone.
   clearAllCodexPoolRefreshFailures();
+  // Same argument for recovery state (#4701): probe pacing is keyed on account ids this reset
+  // may have just retired, and the recovery window counts sends made by the roster that is
+  // going away. A held account nobody may probe because of a lease issued against the previous
+  // roster is a recovery that never starts.
+  clearPoolRecoveryState();
   conversationStateIssuerMap.clear();
 }
 

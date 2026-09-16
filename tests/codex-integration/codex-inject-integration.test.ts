@@ -131,6 +131,15 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.defaultEntries).toBe(1);
     expect(result.result.success).toBe(false);
     expect(result.result.message).toContain("history_paginated_requires_native_writer");
+    // #4718: the refusal also has to be legible without reading the message. `ocx stop`
+    // decides whether an obligation was discharged from this envelope, and every artifact
+    // comes back "skipped" here — the same shape an ownership refusal and a desired-state
+    // skip produce. Without the structured reason the caller could only match prose, and
+    // the stop misread this as a generic teardown failure and aborted the update.
+    expect(result.result.historyPreflightRefusal).toBe("history_paginated_requires_native_writer");
+    expect(result.result.artifacts.config.state).toBe("skipped");
+    expect(result.result.artifacts.catalog.state).toBe("skipped");
+    expect(result.result.artifacts.history.state).toBe("skipped");
     expect(result.preserved).toBe(true);
   });
 
