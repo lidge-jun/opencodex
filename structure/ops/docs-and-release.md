@@ -85,7 +85,7 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs six shards only on manual dispatch with `lane=all` (or empty), not on push events. Aggregate `ci` accepts an intentional Windows skip, so release evidence must inspect all six actual job results on the exact publish SHA. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
+| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs six shards only on manual dispatch with `lane=all` (or empty), not on push events. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires six concrete successful `windows N/6` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch with an intended version and `pre-move` or `repair` mode | Opens the reviewed pull request that moves `dev` past a release target. The default `pre-move` mode runs before promotion and publication; explicit `repair` mode retains the post-publish catch-up path. It is neither called by `release.yml` nor triggered by publication. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires successful Cross-platform CI for the exact `GITHUB_SHA`, requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
@@ -289,9 +289,19 @@ The [desktop membership contract](../runtime.md#codex-desktop-process-membership
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. Linux runs
 the suite in four shards with a separate `gates` job, and macOS runs it in two shards. Windows
 runs the full suite in six shards only on manual `workflow_dispatch` with `lane=all` (or an
-empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix. A
-release that requires Windows proof must dispatch it for the exact publish SHA and inspect
-all six successful jobs; an aggregate green `ci` check can include a deliberate Windows skip.
+empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix, and an
+aggregate green `ci` check on those events legitimately includes a deliberate Windows skip.
+
+Nothing in the workflow retries. A test failure, a process timeout and a Bun runtime crash each
+fail their job on the first occurrence; `scripts/ci/run-bun-test-batches.sh` still sweeps a
+crashed or timed-out batch one file per process, but only to attribute a failure the shard has
+already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
+jobs this run actually requested, then requires `success` from every one of them and `skipped`
+from every job the event did not request — so a job that was requested and never started can no
+longer report as a deliberate skip. On a `lane=all` dispatch the gate additionally reads the
+run's own job list through the Actions API and requires six concrete successful `windows N/6`
+results, because a matrix rollup reports `success` for five successes and one skipped leg. A
+release that requires Windows proof still dispatches it for the exact publish SHA.
 Across the jobs, the workflow runs:
 
 ```bash
