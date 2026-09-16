@@ -39,3 +39,20 @@ These optimizations do not add request queues, retry policies, or RSS-based admi
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+## Terminal-continuation retention
+
+`src/server/responses/terminal-guard.ts` retains at most 1,024 text/thinking/signature/redacted
+content events and 65,536 aggregate JavaScript string code units per guarded turn. These are
+semantic-retention limits, not UTF-8 byte accounting or a process-wide memory cap. Heartbeats,
+tool-argument fragments, and events unused by continuation analysis/rebuilding pass through
+without being retained or spending that allowance.
+
+A real tool start, a limit overflow, or text exceeding 280 characters after trimming disables
+analysis for the rest of the turn and clears the retained history. Overflow never produces a
+continuation from truncated reasoning. Consumer events, terminal reasons, and usage still pass
+through unchanged except for existing cross-continuation usage aggregation. Each permitted
+continuation has fresh counters; unsupported adapters and exhausted continuation allowances
+retain no content. Anthropic behavior and the caller's OpenAI Chat opt-in gate remain scoped as
+before. `tests/server/terminal-guard.test.ts` covers inclusive limits, split whitespace, passthrough,
+reasoning replay, analysis shutdown, usage aggregation, and unsuccessful or absent terminals.

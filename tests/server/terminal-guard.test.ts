@@ -361,3 +361,190 @@ describe("terminal guard", () => {
     expect((response.output as { type: string }[]).map(item => item.type)).toEqual(["message", "function_call"]);
   });
 });
+
+describe("terminal guard bounded retention", () => {
+  const announcement: AdapterEvent = { type: "text_delta", text: "Let me check." };
+  const done: AdapterEvent = { type: "done", usage: { inputTokens: 10, outputTokens: 2 } };
+  const contentLimit = 64 * 1_024;
+
+  async function run(events: AdapterEvent[], adapterName: string, maxAutoContinuations = 1) {
+    const actual: AdapterEvent[] = [];
+    const requests: OcxParsedRequest[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("Check and fix this code"),
+      adapterName,
+      maxAutoContinuations,
+      firstEvents: (async function* () { yield* events; })(),
+      continuation: next => {
+        requests.push(next);
+        return (async function* (): AsyncGenerator<AdapterEvent> {
+          yield { type: "done", usage: { inputTokens: 20, outputTokens: 3 } };
+        })();
+      },
+    })) actual.push(event);
+    return { actual, requests };
+  }
+
+  for (const adapterName of ["anthropic", "openai-chat"]) {
+    describe(adapterName, () => {
+      for (const count of [1_024, 1_025]) {
+        test(`retained event count ${count} respects the inclusive limit`, async () => {
+          const events: AdapterEvent[] = [announcement];
+          for (let i = 1; i < count; i += 1) events.push({ type: "text_delta", text: "" });
+          events.push(done);
+          const { actual, requests } = await run(events, adapterName);
+          expect(requests).toHaveLength(count === 1_024 ? 1 : 0);
+          // Each input content event reaches the consumer unchanged, even beyond the cap.
+          for (let i = 0; i < count; i += 1) expect(actual[i]).toBe(events[i]);
+          expect(actual.filter(event => event.type === "done")).toHaveLength(1);
+        });
+      }
+
+      const reasoningEvents: Array<[string, (content: string) => AdapterEvent]> = [
+        ["thinking", thinking => ({ type: "thinking_delta", thinking })],
+        ["signature", signature => ({ type: "thinking_signature", signature })],
+        ["redacted", data => ({ type: "redacted_thinking", data })],
+      ];
+      for (const [name, makeEvent] of reasoningEvents) {
+        for (const extra of [0, 1]) {
+          test(`${name} content limit plus ${extra} never replays a truncated prefix`, async () => {
+            const payload = makeEvent("x".repeat(contentLimit - "Let me check.".length + extra));
+            const { actual, requests } = await run([announcement, payload, done], adapterName);
+            expect(requests).toHaveLength(extra === 0 ? 1 : 0);
+            expect(actual[0]).toBe(announcement);
+            expect(actual[1]).toBe(payload);
+            expect(actual.at(-1)).toMatchObject({
+              type: "done", usage: extra === 0
+                ? { inputTokens: 30, outputTokens: 5, totalTokens: 35 }
+                : { inputTokens: 10, outputTokens: 2 },
+            });
+          });
+        }
+      }
+
+      test("content accounting adds different reasoning kinds together", async () => {
+        const { actual, requests } = await run([
+          announcement,
+          { type: "thinking_delta", thinking: "x".repeat(32 * 1_024) },
+          { type: "thinking_signature", signature: "s".repeat(16 * 1_024) },
+          { type: "redacted_thinking", data: "r".repeat(16 * 1_024) },
+          done,
+        ], adapterName);
+        expect(requests).toHaveLength(0);
+        expect(actual).toHaveLength(5);
+      });
+
+      test("text length follows trimmed announcement semantics across split whitespace", async () => {
+        for (const length of [280, 281]) {
+          const { requests } = await run([
+            { type: "text_delta", text: " \n".repeat(200) },
+            { type: "text_delta", text: "Let me check. " + "x".repeat(length - 14) },
+            { type: "text_delta", text: "\t ".repeat(200) },
+            done,
+          ], adapterName);
+          expect(requests).toHaveLength(length === 280 ? 1 : 0);
+        }
+      });
+
+      test("passthrough-only events do not spend the retention allowance", async () => {
+        const events: AdapterEvent[] = [announcement];
+        for (let i = 0; i < 1_100; i += 1) {
+          events.push({ type: "heartbeat" });
+          events.push({ type: "tool_call_delta", arguments: "x".repeat(100) });
+        }
+        events.push(done);
+        const { actual, requests } = await run(events, adapterName);
+        expect(requests).toHaveLength(1);
+        for (let i = 0; i < events.length - 1; i += 1) expect(actual[i]).toBe(events[i]);
+      });
+
+      const disablingEvents: Array<[string, AdapterEvent]> = [
+        ["tool start", { type: "tool_call_start", id: "call_1", name: "exec_command" }],
+        ["long text", { type: "text_delta", text: "x".repeat(281) }],
+        ["oversized reasoning", { type: "thinking_delta", thinking: "x".repeat(contentLimit + 1) }],
+      ];
+      for (const [name, disablingEvent] of disablingEvents) {
+        test(`${name} permanently stops payload analysis while forwarding later events`, async () => {
+          let reads = 0;
+          const probe: AdapterEvent = {
+            type: "text_delta",
+            get text() { reads += 1; return "Let me check again."; },
+          };
+          const events: AdapterEvent[] = [announcement, disablingEvent];
+          for (let i = 0; i < 2_000; i += 1) events.push(probe);
+          events.push(done);
+          const { actual, requests } = await run(events, adapterName);
+          expect(reads).toBe(0);
+          expect(requests).toHaveLength(0);
+          expect(actual).toHaveLength(events.length);
+          for (let i = 0; i < events.length - 1; i += 1) expect(actual[i]).toBe(events[i]);
+          // Terminal usage is preserved through the existing shallow-copy path.
+          expect(actual.at(-1)).toEqual(done);
+        });
+      }
+
+      const terminals: Array<[string, AdapterEvent | undefined]> = [
+        ["EOF", undefined],
+        ["max tokens", { type: "done", stopReason: "max_tokens" }],
+        ["content filter", { type: "done", stopReason: "content_filter" }],
+        ["incomplete", { type: "incomplete", reason: "content_filter", retryable: false }],
+        ["error", { type: "error", message: "upstream failed", retryable: false }],
+      ];
+      for (const [name, terminal] of terminals) {
+        test(`overflow preserves ${name} without manufacturing a successful terminal`, async () => {
+          const events: AdapterEvent[] = [announcement, { type: "thinking_delta", thinking: "x".repeat(contentLimit) }];
+          if (terminal) events.push(terminal);
+          const { actual, requests } = await run(events, adapterName);
+          expect(requests).toHaveLength(0);
+          expect(actual).toHaveLength(events.length);
+          for (let i = 0; i < events.length; i += 1) expect(actual[i]).toBe(events[i]);
+        });
+      }
+
+      test("bounded continuation replays complete thinking, signature and redacted data", async () => {
+        const { requests } = await run([
+          { type: "thinking_delta", thinking: "reasoning" },
+          { type: "thinking_signature", signature: "signature" },
+          { type: "redacted_thinking", data: "redacted" },
+          announcement, done,
+        ], adapterName);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.context.messages.at(-2)).toMatchObject({
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "reasoning", signature: "signature", redacted: ["redacted"] },
+            { type: "text", text: "Let me check." },
+          ],
+        });
+      });
+
+      test("each allowed continuation gets fresh retention counters and preserves usage", async () => {
+        let continuations = 0;
+        const actual: AdapterEvent[] = [];
+        const turn = async function* (): AsyncGenerator<AdapterEvent> {
+          yield announcement;
+          yield { type: "thinking_delta", thinking: "x".repeat(40 * 1_024) };
+          for (let i = 0; i < 600; i += 1) yield { type: "text_delta", text: "" };
+          yield done;
+        };
+        for await (const event of guardTerminalEventStream({
+          parsed: parsed("Check and fix this code"), adapterName, maxAutoContinuations: 2,
+          firstEvents: turn(), continuation: () => { continuations += 1; return turn(); },
+        })) actual.push(event);
+        expect(continuations).toBe(2);
+        expect(actual.filter(event => event.type === "assistant_boundary")).toHaveLength(2);
+        expect(actual.filter(event => event.type === "done")).toHaveLength(1);
+        expect(actual.at(-1)).toMatchObject({ usage: { inputTokens: 30, outputTokens: 6, totalTokens: 36 } });
+      });
+
+      test("an exhausted continuation allowance does not inspect content", async () => {
+        let reads = 0;
+        const probe: AdapterEvent = { type: "text_delta", get text() { reads += 1; return "Let me check."; } };
+        const { actual, requests } = await run([probe, done], adapterName, 0);
+        expect(reads).toBe(0);
+        expect(requests).toHaveLength(0);
+        expect(actual[0]).toBe(probe);
+      });
+    });
+  }
+});
