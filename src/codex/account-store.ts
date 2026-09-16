@@ -268,6 +268,23 @@ export function readCodexAccountRecord(id: string): CodexAccountCredentialRecord
   return loadCodexAccountRecordStore()[id] ?? null;
 }
 
+/**
+ * One store load, every record, for a caller that resolves MANY ids in a single synchronous pass.
+ *
+ * `readCodexAccountRecord` reloads, reparses and renormalizes the whole file per id. That is the
+ * right shape for one lookup and the wrong shape for a loop: the entitlement denial reader holds
+ * up to 64 accounts with four client versions each, so scoring one warm flagship request could
+ * perform up to 256 full-store reads on the request path.
+ *
+ * These are the same normalized records `readCodexAccountRecord` hands out, tombstones included,
+ * so the caller keeps its own `deletedAt` and `generation` checks instead of trusting a filtered
+ * view. That is the difference from `loadCodexAccountStore`, which drops both and cannot answer a
+ * question about credential generation.
+ */
+export function loadCodexAccountRecordSnapshot(): Readonly<CodexAccountStore> {
+  return loadCodexAccountRecordStore();
+}
+
 const QUOTA_HISTORY_IDENTITY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function validQuotaHistoryIdentity(value: unknown): value is string {
