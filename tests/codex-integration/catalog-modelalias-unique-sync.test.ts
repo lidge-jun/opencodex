@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -45,8 +45,18 @@ function createCodexCatalogFixture(dir: string): string {
     `  process.stdout.write(${JSON.stringify(bundled)});`,
     '}',
   ].join("\n"), "utf8");
+  // Without the executable bit the spawn fails and the loader silently falls back to another
+  // candidate (src/codex/catalog/bundled.ts), so the test would pass while reading whatever Codex
+  // the host has installed. Windows rejects an extensionless launcher outright, hence the .cmd
+  // branch — same shape as tests/codex-integration/codex-catalog-sync-hardening.test.ts.
+  if (process.platform === "win32") {
+    const commandPath = join(dir, "codex-catalog-fixture.cmd");
+    writeFileSync(commandPath, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, "utf8");
+    return commandPath;
+  }
   const commandPath = join(dir, "codex-catalog-fixture");
   writeFileSync(commandPath, `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, "utf8");
+  chmodSync(commandPath, 0o755);
   return commandPath;
 }
 
