@@ -8,6 +8,7 @@ import {
   buildClientConfig,
   buildClientConfigText,
   buildClientContribution,
+  buildCommandCodeClientConfig,
   commandCodeConfigPath,
   commandCodeHomeDir,
   type CommandCodeGeneratedConfig,
@@ -94,5 +95,63 @@ describe("Command Code client config", () => {
     expect(spec.filename).toBe("providers.json");
     expect(spec.format).toBe("json");
     expect(spec.loopbackOnly).toBe(true);
+  });
+});
+
+// A routed model reaches this exporter under ONE canonical selector, but the proxy
+// publishes it under two interchangeable spellings: the raw selector with inner
+// slashes (what /v1/models emits) and the Codex-facing encoded form where inner
+// slashes became dashes (what ~/.codex/config.toml stores). Command Code addresses
+// models by exact key, so a client that resolves the active model from one surface
+// and looks it up in the other writes a config whose own active model is absent
+// from its catalog.
+describe("Command Code model-key spelling", () => {
+  test("keys every model by the spelling the client can actually call", () => {
+    const document = buildCommandCodeClientConfig({
+      ...context(),
+      models: [
+        { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+      ],
+    }) as CommandCodeGeneratedConfig;
+    const keys = Object.keys(document.provider[OPENCODE_PROVIDER_ID]!.models);
+    expect(keys).toContain("command-code/deepseek/deepseek-v4.1-flash");
+  });
+
+  test("never emits two keys that differ only by slash-versus-dash encoding", () => {
+    const document = buildCommandCodeClientConfig({
+      ...context(),
+      models: [
+        { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+        { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+      ],
+    }) as CommandCodeGeneratedConfig;
+    const keys = Object.keys(document.provider[OPENCODE_PROVIDER_ID]!.models);
+    const encoded = keys.map(key => key.replaceAll("/", "-"));
+    expect(new Set(encoded).size).toBe(encoded.length);
+  });
+
+  test("collapses a duplicate pair to one entry instead of shipping both", () => {
+    const document = buildCommandCodeClientConfig({
+      ...context(),
+      models: [
+        { namespaced: "command-code/meta/muse-spark-1.3-contributor", provider: "command-code", id: "meta/muse-spark-1.3-contributor", contextWindow: 1_048_576 },
+        { namespaced: "command-code/meta-muse-spark-1.3-contributor", provider: "command-code", id: "meta/muse-spark-1.3-contributor", contextWindow: 1_048_576 },
+      ],
+    }) as CommandCodeGeneratedConfig;
+    const models = document.provider[OPENCODE_PROVIDER_ID]!.models;
+    const matching = Object.keys(models).filter(key => key.includes("muse-spark-1.3-contributor"));
+    expect(matching.length).toBe(1);
+    expect(models[matching[0]!]?.contextWindow).toBe(1_048_576);
+  });
+
+  test("keeps genuinely distinct models apart", () => {
+    const document = buildCommandCodeClientConfig({
+      ...context(),
+      models: [
+        { namespaced: "command-code/deepseek/deepseek-v4-pro", provider: "command-code", id: "deepseek/deepseek-v4-pro", contextWindow: 1_000_000 },
+        { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+      ],
+    }) as CommandCodeGeneratedConfig;
+    expect(Object.keys(document.provider[OPENCODE_PROVIDER_ID]!.models).length).toBe(2);
   });
 });

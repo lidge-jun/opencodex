@@ -23,9 +23,42 @@ export interface CommandCodeGeneratedConfig {
   provider: Record<string, CommandCodeProviderBlock>;
 }
 
+/**
+ * Spelling-independent identity of a routed selector.
+ *
+ * One provider model reaches this exporter under interchangeable spellings: the raw
+ * selector keeps inner slashes (`command-code/deepseek/deepseek-v4.1-flash`, what
+ * `/v1/models` publishes) while the Codex-facing form encodes them as dashes
+ * (`command-code/deepseek-deepseek-v4.1-flash`, what `~/.codex/config.toml` stores and
+ * what an operator typing `--model` copies). Command Code addresses models by exact key,
+ * so a catalog that carries both spellings can resolve the active model against one and
+ * miss it in the other.
+ *
+ * The slash is meaningful, not decoration: it separates the provider from the model id,
+ * and a provider id never contains one. Splitting on the FIRST slash and normalizing the
+ * remainder is therefore exact, and it is the same lossy-but-consistent relation the rest
+ * of the codebase already uses for this pair (see `slugEquivalenceKey` in
+ * src/providers/slug-codec.ts, which collapses `p/a/b` and `p/a-b` onto one key).
+ * Keeping a single implementation of that rule here avoids inventing a second, divergent
+ * notion of "same model".
+ */
+function canonicalSpellingOf(namespaced: string): string {
+  const slash = namespaced.indexOf("/");
+  if (slash <= 0) return namespaced;
+  return namespaced.slice(0, slash) + "/" + namespaced.slice(slash + 1).replaceAll("/", "-");
+}
+
 export function buildCommandCodeClientConfig(ctx: ExportContext): CommandCodeGeneratedConfig {
   const models: Record<string, CommandCodeModelEntry> = {};
+  // Fold interchangeable spellings of one model onto a single key. The first
+  // occurrence wins; normalizeExportModels has already sorted, so the surviving key
+  // is deterministic across runs.
+  const emittedKeys = new Set<string>();
   for (const model of normalizeExportModels(ctx.models)) {
+    const emittedKey = model.namespaced;
+    const collisionKey = canonicalSpellingOf(model.namespaced);
+    if (emittedKeys.has(collisionKey)) continue;
+    emittedKeys.add(collisionKey);
     const entry: CommandCodeModelEntry = {};
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
@@ -36,7 +69,7 @@ export function buildCommandCodeClientConfig(ctx: ExportContext): CommandCodeGen
     if (efforts && efforts.length > 0) {
       entry.reasoningEfforts = efforts;
     }
-    models[model.namespaced] = entry;
+    models[emittedKey] = entry;
   }
   const tokenPath = serviceApiTokenFilePath();
   const apiKey = existsSync(tokenPath) ? `!cat ${tokenPath}` : LOOPBACK_API_KEY_PLACEHOLDER;
