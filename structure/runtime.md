@@ -16,6 +16,8 @@ OAuth refresh coordination follows the [refresh-lock identity contract](catalog.
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Generic Responses API-key failover follows the [bounded rotation contract](transports/responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches and OAuth replays, including budget-aware adapters, settle physical sends once; nested compact/combo scopes retain the prepaid recovery without enlarging its ceiling or charging twice. Terminal and budget-aware Kiro empty-completion repairs share that final reserve; prepaid native Responses and translated helper retries retain their remaining base allowance, and caller-owned continuation hops refund if no dispatch occurs.
 
+Cursor's localized native-shell names follow the [routing-commentary guard contract](providers/cursor.md#cursor-native-exec).
+
 Chat request serialization owns the destination-scoped
 [OpenCode Go instruction ordering](providers/chat-compat.md#opencode-go-chronological-instructions);
 it requires no runtime lifecycle change or new configuration option.
@@ -440,6 +442,12 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 
 ## Capability-aware image admission
 
+The `anthropic` OAuth and `anthropic-apikey` presets in `src/providers/registry/entries-core.ts`
+declare `modelInputModalities: ["text", "image"]` per model for the nine Claude seeds in
+`src/providers/registry/model-seeds.ts`. Existing enrichment fills missing entries while preserving
+explicit operator overrides; unknown models receive no new declaration. Client eligibility filters
+and Anthropic image wire handling remain unchanged.
+
 `src/vision/plan.ts` prevents raw image bytes from reaching any target whose effective capability is positively known to exclude image input. Evidence from the resolved runtime provider and explicit operator declarations takes precedence, followed by backend-specific/registry/vendor metadata. A proven text-only target is preprocessed through the configured Vision Sidecar; a positively image-capable target receives the image directly. Genuinely unknown custom models retain the existing compatibility path rather than being guessed text-only.
 
 Canonical ChatGPT Codex forwarding uses the generated `openai-codex` capability bundle rather than the public `openai` bundle. This matters when the two backends differ: for example, the vendored metadata records `gpt-5.3-codex-spark` as text-only on `openai-codex` while the public OpenAI row lists image input. The native Chat fast path and web-search image verbalization consume the same effective-capability decision.
@@ -459,9 +467,13 @@ Translated audio/file admission follows the [final-adapter input contract](adapt
 
 `src/combos/failover.ts` treats three intact HTTP 400 invalid-request envelopes as request-local incompatibilities: exactly `Unsupported parameter: user`; `unsupported_value` naming `reasoning.effort` or `reasoning_effort` with an explicit unsupported-value message; and `param: input` with a bounded model-scoped `does not support image inputs` message. A null provider code is accepted only for that observed image envelope. Only the exact proxy wrapper is unwrapped, within three envelopes and 16,384 characters; conflicting codes, malformed/truncated envelopes and reflected JSON do not gain hop permission.
 
-The combo may advance to its next eligible unattempted target before output commitment. It records no target/provider cooldown for these request-local mismatches and does not silently drop reasoning controls or raise `none` to a supported rung. Cancellation, origin/cyber-policy rejection, non-replayable post-send errors and the existing streaming commit boundary stay authoritative. Other invalid requests remain terminal.
+The combo may advance to its next eligible unattempted target before output commitment. It records no target/provider cooldown for these request-local mismatches and does not silently drop reasoning controls or raise `none` to a supported rung. Cancellation, origin/cyber-policy rejection, non-replayable post-send errors and the existing streaming commit boundary stay authoritative. Apart from the definite context overflow below, other invalid requests remain terminal.
 
-Regression coverage: `tests/responses/responses-forward-prompt-envelope.test.ts`, `tests/routing/router-combo-failover-classification.test.ts`, and `tests/server/server-combo-failover-e2e.test.ts`.
+A definite context-window overflow is the fourth request-local verdict. A heterogeneous combo mixes windows, so "this turn does not fit THIS model" is not "this turn is impossible", and stopping at the first undersized target burned the ladder on turns a later target could hold. Evidence must come from the innermost provider message: `classifyError` remaps any occurrence of `context window`, `context length`, `maximum context` or `too many tokens` anywhere in the blob, and inheriting that looseness would let a `context_length_exceeded` token sitting in a `code` field beside `Unsupported parameter: user` authorize a replay. `src/combos/failover.ts` therefore unwraps only the exact proxy wrapper, within four envelopes and 16,384 characters, and reads the leaf message. A JSON-shaped body that does not parse fails closed, because `normalizeUpstreamErrorText` caps `classificationText` at 500 characters and a long envelope arrives here as a prefix. The verdict is admitted only for statuses that speak about the request — 400, 413, 422 and 5xx — so a 401/403 body that merely quotes context prose keeps its provider-wide cooldown instead of being rescored as request-shaped. Structured `origin_rejected`, cyber policy and the non-replayable post-send codes are all tested before it.
+
+This is also why the classifier cannot duplicate visible output. A streaming child reaches combo classification only through `preflightComboStreamResponse`, which commits the child on any text, tool call or unknown event and synthesizes a failure envelope only for a zero-output terminal, so a turn whose text or tool call the client already saw is never reclassified as a hop.
+
+Regression coverage: `tests/responses/responses-forward-prompt-envelope.test.ts`, `tests/routing/router-combo-failover-classification.test.ts`, `tests/routing/routing-policy-fallback.test.ts`, `tests/helpers/combo-context-overflow-cases.ts`, and `tests/server/server-combo-failover-e2e.test.ts`.
 
 ## Combo default effort precedence
 

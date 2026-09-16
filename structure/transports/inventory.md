@@ -12,10 +12,14 @@ The existing Responses transport is divided by responsibility in the
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Generic Responses API-key failover follows the [bounded rotation contract](responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches and OAuth replays, including budget-aware adapters, settle physical sends once; nested compact/combo scopes retain the prepaid recovery without enlarging its ceiling or charging twice. Terminal and budget-aware Kiro empty-completion repairs share that final reserve; prepaid native Responses and translated helper retries retain their remaining base allowance, and caller-owned continuation hops refund if no dispatch occurs.
 
+Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
+
 The Chat adapter's [OpenCode Go instruction ordering](../providers/chat-compat.md#opencode-go-chronological-instructions)
 changes translated message placement only; endpoint selection and transport stay with their existing owners.
 
 Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314).
+
+[Anthropic seed image metadata](../runtime.md#capability-aware-image-admission) supplies missing capability evidence; transport selection and image wire handling remain unchanged.
 
 ## Transport inventory
 

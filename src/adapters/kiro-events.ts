@@ -3,7 +3,7 @@ import { kiroTruncationReason } from "./kiro-truncation";
 
 export type ParsedKiroEvent =
   | { type: "content"; data?: string; modelId?: string }
-  | { type: "reasoning"; data?: string; redactedContent?: string }
+  | { type: "reasoning"; data?: string; signature?: string; redactedContent?: string }
   | { type: "context_usage"; contextUsagePercentage: number }
   | { type: "tool"; name?: string; toolUseId?: string; input?: string; stop?: boolean }
   | { type: "truncation"; data: string }
@@ -138,18 +138,26 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
           : {}),
       };
     case "reasoningContentEvent":
-      // `text` is plaintext reasoning; `redactedContent` is the encrypted blob the GPT-5.6 family
-      // (sol/terra/luna) actually returns — they never send `text`. Keyed off the wire field, not
-      // the model id. Both may be absent on a bare event.
-      return {
-        type: "reasoning",
-        ...(optionalString(eventType, parsed, "text") !== undefined
-          ? { data: optionalString(eventType, parsed, "text") }
-          : {}),
-        ...(optionalString(eventType, parsed, "redactedContent") !== undefined
-          ? { redactedContent: optionalString(eventType, parsed, "redactedContent") }
-          : {}),
-      };
+      // `text` is plaintext reasoning; the GPT-5.6 family (sol/terra/luna) instead returns an
+      // encrypted blob, and the field it arrives on has to be replayed unchanged (see
+      // kiro/reasoning.ts): `signature` carries the `.KTR~~…` value verbatim and is what every
+      // capture of those models sent, while `redactedContent` — the base64 shape a capture has
+      // never shown — stays accepted for any model that sends it. Keyed off the wire field, not the
+      // model id. Any of the three may be absent on a bare event.
+      {
+        const text = optionalString(eventType, parsed, "text");
+        const signature = optionalString(eventType, parsed, "signature");
+        const redacted = optionalString(eventType, parsed, "redactedContent");
+        return {
+          type: "reasoning",
+          ...(text !== undefined ? { data: text } : {}),
+          ...(signature !== undefined
+            ? { signature }
+            : redacted !== undefined
+              ? { redactedContent: redacted }
+              : {}),
+        };
+      }
     case "toolUseEvent":
       return {
         type: "tool",

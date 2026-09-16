@@ -13,6 +13,8 @@ How opencodex measures request and stream bytes without allocating copies solely
 them. These contracts are shared by request parsing, SSE rewriting, the provider adapters and
 the translator budget, which is why so many documents link here rather than restating them. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314). Generic Responses API-key failover follows the [bounded rotation contract](responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches and OAuth replays, including budget-aware adapters, settle physical sends once; nested compact/combo scopes retain the prepaid recovery without enlarging its ceiling or charging twice. Terminal and budget-aware Kiro empty-completion repairs share that final reserve; prepaid native Responses and translated helper retries retain their remaining base allowance, and caller-owned continuation hops refund if no dispatch occurs.
 
+Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
+
 ## Request-copy accounting
 
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
