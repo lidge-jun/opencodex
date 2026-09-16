@@ -1193,6 +1193,44 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
+  test("nested error object with refresh_token_expired classifies as expired", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential, TokenRefreshError } =
+      await import("../../src/codex/account-store");
+    saveCodexAccountCredential("expired-grant", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("expired-grant")!.generation;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      Response.json(
+        {
+          error: {
+            message: "The refresh token has expired.",
+            type: "invalid_request_error",
+            param: null,
+            code: "refresh_token_expired",
+          },
+        },
+        { status: 401 },
+      )) as typeof fetch;
+
+    try {
+      await forceRefreshCodexPoolToken("expired-grant", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+      throw new Error("expected a TokenRefreshError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TokenRefreshError);
+      expect((error as InstanceType<typeof TokenRefreshError>).reason).toBe("expired");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("a replacement landing mid-refresh is not reported as this call's own lineage (#2887 review)", async () => {
     // `selfRefreshed` is what gates the affinity handoff. An external replacement must not
     // set it: that credential may be a different upstream identity, so inheriting the

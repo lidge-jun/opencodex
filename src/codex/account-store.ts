@@ -1162,9 +1162,9 @@ async function resolveCodexToken(
       // retire a healthy account, which is the failure this whole change exists to remove.
       const reason = errCodeExact === "invalid_grant"
           || errCodeExact === "refresh_token_invalidated"
-          || errCodeExact === "refresh_token_expired"
           || errDesc.includes("invalidated") || errDesc.includes("revoked") ? "revoked" as const
-        : errDesc.includes("expired") ? "expired" as const
+        : errCodeExact === "refresh_token_expired"
+          || errDesc.includes("expired") ? "expired" as const
         : "unknown" as const;
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
     }
