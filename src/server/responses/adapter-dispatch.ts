@@ -1,4 +1,3 @@
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -527,12 +526,6 @@ export async function prepareAdapterExchange(
     };
     // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
     recovery: for (;;) {
-      // Preserve the terminal verdict through adapter and combo error formatting.
-      // This also covers a reset reached by a 401/429/413 recovery refetch.
-      if (isNonReplayableResponse(upstreamResponse)) {
-        cleanupUpstreamAbort();
-        return upstreamResponse;
-      }
       if (
         upstreamResponse.status === 401
         && isOAuth401ReplayProvider
@@ -621,11 +614,6 @@ export async function prepareAdapterExchange(
         const result = await rebuildAndRefetch("key-401");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
-        // A recovery refetch can itself die on an ambiguous pre-header reset, and the refusal
-        // that answers it is a 429. Every arm below keys on 429, so letting it fall through
-        // hands the marked refusal to the next waiting arm and replays the send it exists to
-        // stop. Re-enter the loop guard instead, which returns it unchanged.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
       }
 
       // Same-target 429 wait-and-retry (opt-in `retryOn429`, issue #487). Codex never retries
@@ -666,9 +654,6 @@ export async function prepareAdapterExchange(
         const result = await rebuildAndRefetch("rate-limit-429");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
-        // The refusal is a 429 too: without this the while condition is still true and the
-        // next configured attempt replays it on the same target.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
       }
 
       // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
@@ -700,9 +685,6 @@ export async function prepareAdapterExchange(
         const result = await rebuildAndRefetch("key-429");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
-        // Rotating on the refusal would also write a cooldown against a key that rate-limited
-        // nothing, which outlives the request.
-        if (isNonReplayableResponse(upstreamResponse)) continue recovery;
       }
 
       // Opt-in Anthropic OAuth account pool (#294): cool the failed account and retry
@@ -739,7 +721,6 @@ export async function prepareAdapterExchange(
           const result = await rebuildAndRefetch("anthropic-oauth-429");
           if ("failed" in result) return result.failed;
           upstreamResponse = result;
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
         } catch {
           break;
         }
@@ -786,6 +767,8 @@ export async function prepareAdapterExchange(
           route.providerName,
           transportState.genericFailoverAccountId,
           upstreamResponse.headers.get("retry-after"),
+          Date.now(),
+          route.modelId,
         );
         if (!nextAccountId) {
           hop.permit?.release();
@@ -833,9 +816,6 @@ export async function prepareAdapterExchange(
             return result.failed;
           }
           upstreamResponse = result;
-          // The hop's permit is already settled by the dispatch boundary above; continuing
-          // only skips the remaining arms, it does not abandon a reservation.
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
         } catch {
           // A throw before the send — snapshot fetch, credential application, adapter
           // resolution — must hand the reservation back. Without this the ladder charges the

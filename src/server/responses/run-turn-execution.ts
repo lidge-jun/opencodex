@@ -237,6 +237,8 @@ export async function executeResponsesRunTurn(
         route.providerName,
         transportState.genericFailoverAccountId,
         null,
+        Date.now(),
+        route.modelId,
       );
       if (!nextAccountId) {
         hop.permit?.release();
@@ -374,7 +376,6 @@ export async function executeResponsesRunTurn(
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           declaredToolNames,
-          enforceDeclaredToolNames: inboundWire !== "chat" && inboundWire !== "anthropic",
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
@@ -445,7 +446,6 @@ export async function executeResponsesRunTurn(
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       declaredToolNames,
-      enforceDeclaredToolNames: inboundWire !== "chat" && inboundWire !== "anthropic",
       toolParameterSchemas,
       freeformToolNames,
       toolSearchToolNames,

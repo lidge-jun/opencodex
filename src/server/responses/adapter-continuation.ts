@@ -25,7 +25,6 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
-  isNonReplayableResponse,
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
 import { redactSecretString } from "../../lib/redact";
@@ -265,9 +264,6 @@ export function createAdapterContinuations(
       // loop; only after the attempts are exhausted does the continuation fail over.
       while (
         response.status === 429
-        // A synthesized replay refusal is not a rate limit; replaying the continuation on
-        // it would re-send a turn whose first send may already have been processed.
-        && !isNonReplayableResponse(response)
         && rateLimitPolicy !== null
         && adapterExchange.rateLimitRetries < rateLimitPolicy.attempts
         // The main recovery loop and the passthrough ladder both consult the shared remainder
@@ -315,7 +311,7 @@ export function createAdapterContinuations(
         }
       }
 
-      if (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(route.provider)) {
+      if (response.status === 429 && hasKeyPoolFailover(route.provider)) {
         const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
@@ -350,7 +346,6 @@ export function createAdapterContinuations(
       }
       if (
         response.status === 429
-        && !isNonReplayableResponse(response)
         && transportState.anthropicPoolAccountId
         && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
@@ -392,7 +387,6 @@ export function createAdapterContinuations(
       // the per-request bound cannot be silently re-armed by reaching a different loop.
       if (
         response.status === 429
-        && !isNonReplayableResponse(response)
         && transportState.genericFailoverAccountId
         && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
         && isGenericOAuthFailoverEnabled(config, route.providerName)
@@ -416,6 +410,8 @@ export function createAdapterContinuations(
             route.providerName,
             transportState.genericFailoverAccountId,
             response.headers.get("retry-after"),
+            Date.now(),
+            route.modelId,
           )
           : null;
         if (!nextAccountId) hop.permit?.release();
