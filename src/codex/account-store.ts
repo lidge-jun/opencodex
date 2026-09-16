@@ -1137,9 +1137,20 @@ async function resolveCodexToken(
       let errDesc: string;
       let errCodeExact: string | undefined;
       try {
-        const parsed = JSON.parse(errText) as { error?: string; error_description?: string };
-        errCodeExact = typeof parsed.error === "string" ? parsed.error.trim() : undefined;
-        errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ") || `HTTP ${res.status}`;
+        const parsed = JSON.parse(errText) as {
+          error?: string | { code?: string; message?: string };
+          error_description?: string;
+        };
+        if (typeof parsed.error === "string") {
+          errCodeExact = parsed.error.trim();
+          errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ");
+        } else if (parsed.error && typeof parsed.error === "object") {
+          errCodeExact = typeof parsed.error.code === "string" ? parsed.error.code.trim() : undefined;
+          errDesc = [parsed.error.code, parsed.error.message, parsed.error_description].filter(Boolean).join(": ");
+        } else {
+          errDesc = parsed.error_description || `HTTP ${res.status}`;
+        }
+        if (!errDesc) errDesc = `HTTP ${res.status}`;
       } catch { errDesc = `HTTP ${res.status}`; }
       // `invalid_grant` is the standard OAuth code for a refresh token that is no longer
       // usable, and upstream sends it bare with no description. Without it here the dead
@@ -1150,6 +1161,8 @@ async function resolveCodexToken(
       // `server_error` whose description happens to mention invalid_grant would otherwise
       // retire a healthy account, which is the failure this whole change exists to remove.
       const reason = errCodeExact === "invalid_grant"
+          || errCodeExact === "refresh_token_invalidated"
+          || errCodeExact === "refresh_token_expired"
           || errDesc.includes("invalidated") || errDesc.includes("revoked") ? "revoked" as const
         : errDesc.includes("expired") ? "expired" as const
         : "unknown" as const;
