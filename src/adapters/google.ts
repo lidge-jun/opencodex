@@ -781,6 +781,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     // 429 rotation and raw error formatting.
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
       ? {
+          fetchResponseUsesSendBudget: true,
           fetchResponse: (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> =>
             (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(request, ctx),
           formatErrorBody: (status: number, _headers: Headers, payloadText: string): string =>

@@ -229,8 +229,11 @@ For translated Responses requests using a multi-key pool with `authMode: "key"` 
 
 When `emptyCompletionRetry` is enabled, Kiro can use the request's remaining final-recovery send
 after its three base sends finish without visible output. That recovery shares any existing
-credential-hop reservation and is charged once. Google Vertex/Antigravity retain their existing
-internal retry policy; hop bookkeeping does not impose a new physical-send cap on those adapters.
+credential-hop reservation and is charged once. Command Code, MiMo and Google Vertex/Antigravity
+also charge each inference attempt, including internal retries, to the shared request budget.
+When no retry fits, they retain the prior HTTP failure instead of sending again. JWT bootstrap and
+model-catalog lookup are separate from inference accounting. Ordinary Google AI Studio continues
+to use the server's existing retry helper.
 
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
 served the first request. Changing the selected key, its reference or resolved value, authentication

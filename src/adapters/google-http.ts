@@ -1,4 +1,7 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
+import { createAdapterPhysicalSend } from "./physical-send";
+import type { SendClass } from "../lib/request-execution-budget";
+import type { AttemptRecoveryKind } from "../usage/log";
 import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
 import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
@@ -8,6 +11,8 @@ import {
   fetchWithAttemptDeadline,
   retryBackoffDelayMs,
   sleepWithAbort,
+  SendBudgetExhaustedError,
+  isConnectionResetError,
 } from "../lib/upstream-retry";
 
 const GOOGLE_RETRY_ATTEMPTS = 3;
@@ -41,18 +46,30 @@ export async function fetchGoogleWithRetry(
 ): Promise<Response> {
   const repairInvalid400 = opts.repairInvalid400 ?? true;
   const timeoutMs = ctx.timeoutMs ?? 200_000;
-  const executor = ctx.executor ?? globalThis.fetch;
+  const send = createAdapterPhysicalSend(ctx);
   let lastError: unknown;
   let activeRequest = request;
   let compatibilityReplayUsed = false;
+  let pendingResponse: Response | undefined;
+  let retryDelayMs = 0;
+  let sendClass: SendClass = "transient";
+  let recovery: AttemptRecoveryKind | undefined;
   for (let attempt = 0; attempt < GOOGLE_RETRY_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     try {
-      const res = await fetchWithAttemptDeadline(activeRequest.url, {
-        method: activeRequest.method,
-        headers: activeRequest.headers,
-        body: activeRequest.body,
-      }, timeoutMs, ctx.abortSignal, ctx.stream, executor);
+      const res = await send({ url: activeRequest.url, sendClass, recovery,
+        beforeDispatch: async () => {
+          if (retryDelayMs > 0) await sleepWithAbort(retryDelayMs, ctx.abortSignal);
+          if (pendingResponse) cancelResponseBodyBestEffort(pendingResponse);
+          pendingResponse = undefined;
+        },
+        dispatch: executor => fetchWithAttemptDeadline(activeRequest.url, {
+          method: activeRequest.method, headers: activeRequest.headers, body: activeRequest.body,
+        }, timeoutMs, ctx.abortSignal, ctx.stream, executor),
+      });
+      retryDelayMs = 0;
+      sendClass = "transient";
+      recovery = undefined;
       if (res.status === 400 && repairInvalid400 && !compatibilityReplayUsed) {
         let payloadText = "";
         try {
@@ -64,7 +81,8 @@ export async function fetchGoogleWithRetry(
         if (repairedBody !== undefined) {
           compatibilityReplayUsed = true;
           activeRequest = { ...activeRequest, body: repairedBody };
-          cancelResponseBodyBestEffort(res);
+          pendingResponse = res;
+          sendClass = "repair";
           attempt--; // The changed-request replay is separate from transient retry accounting.
           continue;
         }
@@ -75,7 +93,7 @@ export async function fetchGoogleWithRetry(
       // A 429 may be a transient rate limit (retry) or hard quota exhaustion (do NOT retry —
       // it won't recover for hours and burns retries). Peek the body to tell them apart.
       if (res.status === 429) {
-        const peekTarget = ctx.returnRawErrors ? res.clone() : res;
+        const peekTarget = res.clone();
         const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
         if (isQuotaExhaustedBody(peek)) {
           return ctx.returnRawErrors ? res : normalizeUpstreamHttpErrorResponse(res, {
@@ -84,20 +102,27 @@ export async function fetchGoogleWithRetry(
           });
         }
       }
-      cancelResponseBodyBestEffort(res);
-      await sleepWithAbort(retryBackoffDelayMs(attempt, {
+      pendingResponse = res;
+      recovery = res.status === 429 ? "rate-limit-429" : "transient-5xx";
+      retryDelayMs = retryBackoffDelayMs(attempt, {
         baseDelayMs: GOOGLE_RETRY_BASE_MS,
         maxDelayMs: GOOGLE_RETRY_MAX_MS,
         headers: res.headers,
-      }), ctx.abortSignal);
+      });
     } catch (err) {
       if (ctx.abortSignal?.aborted) throw err;
+      if (err instanceof SendBudgetExhaustedError) {
+        if (pendingResponse) return ctx.returnRawErrors ? pendingResponse : normalizeFinalGoogleError(label, pendingResponse, ctx.abortSignal);
+        throw err;
+      }
       lastError = err;
       if (attempt === GOOGLE_RETRY_ATTEMPTS - 1) throw err;
-      await sleepWithAbort(retryBackoffDelayMs(attempt, {
+      sendClass = "transient";
+      recovery = isConnectionResetError(err) ? "connection-reset" : undefined;
+      retryDelayMs = retryBackoffDelayMs(attempt, {
         baseDelayMs: GOOGLE_RETRY_BASE_MS,
         maxDelayMs: GOOGLE_RETRY_MAX_MS,
-      }), ctx.abortSignal);
+      });
     }
   }
   throw lastError ?? new Error(`${label} fetch failed`);

@@ -1,6 +1,6 @@
 # Chat Provider Compatibility
 
-Caller-owned Command Code and MiMo inference replays honor the supplied executor under the [hop confirmation contract](../transports/responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
+Command Code, MiMo and Google Vertex/Antigravity admit each inference attempt against the shared budget under the [hop confirmation contract](../transports/responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
 
 HTTP adapters declare their own send-budget consumption under the [credential-hop contract](../transports/responses.md#credential-hop-reservations); ordinary Chat retry helpers retain external-send settlement.
 

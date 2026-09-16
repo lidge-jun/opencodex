@@ -1,6 +1,6 @@
 # Transport Inventory
 
-Caller-owned Command Code and MiMo inference replays honor the supplied executor under the [hop confirmation contract](responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
+Command Code, MiMo and Google Vertex/Antigravity admit each inference attempt against the shared budget under the [hop confirmation contract](responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
 
 The existing Responses transport is divided by responsibility in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.

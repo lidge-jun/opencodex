@@ -48,7 +48,7 @@ async function builtRequest(...args: Parameters<ReturnType<typeof createCommandC
 afterEach(() => resetCommandCodeReasoningEffortsForTest());
 
 describe("Command Code provider", () => {
-  test("empty-completion OAuth continuation keeps a dispatched caller-owned hop charged", async () => {
+  test("empty-completion OAuth continuation counts initial sends and keeps its prepaid hop charged", async () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const fixtureHome = mkdtempSync(join(tmpdir(), "ocx-command-hop-"));
     process.env.OPENCODEX_HOME = fixtureHome;
@@ -60,9 +60,9 @@ describe("Command Code provider", () => {
         expires: Date.now() + 3_600_000, accountId: `fixture-${index}`, source: "oauth",
       }, { addAccount: true });
       await setActiveAccount("command-code", getAccountSet("command-code")!.accounts[0]!.id);
-      // Caller-owned initial/internal sends retain their existing policy; bound credential hops.
+      // Every physical inference send, including the initial and continuation, shares this cap.
       const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
-        maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0 });
+        maxTotalModelSends: 3, baseSendAllowance: 3, finalRecoveryAllowance: 0 });
       const authorizations: string[] = [];
       globalThis.fetch = (async (input, init) => {
         const url = input instanceof Request ? input.url : String(input);
@@ -81,7 +81,7 @@ describe("Command Code provider", () => {
       }), cfg, { model: "", provider: "" }, { sendBudget: budget });
       await response.text();
       expect(authorizations).toEqual(["Bearer synthetic-command-0", "Bearer synthetic-command-0", "Bearer synthetic-command-1"]);
-      expect(budget.used).toBe(1);
+      expect(budget.used).toBe(3);
       expect(getAccountSet("command-code")!.activeAccountId).toBe(getAccountSet("command-code")!.accounts[1]!.id);
     } finally {
       globalThis.fetch = originalFetch;
@@ -703,7 +703,8 @@ describe("Command Code provider", () => {
     expect(JSON.parse(bareBuilt.body).params.tools).toEqual(tools);
   });
 
-  test.each([false, true])("refreshes stale effort metadata separately from inference executor (supplied=%s)", async supplied => {
+  test.each(["fallback", "supplied", "prepaid"] as const)("refreshes stale effort metadata separately from inference executor (%s)", async mode => {
+    const supplied = mode !== "fallback";
     const requests: Array<{ url: string; body?: string }> = [];
     const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const href = String(url);
@@ -723,12 +724,24 @@ describe("Command Code provider", () => {
       suppliedCalls += 1;
       return fetch(input, init);
     }) as typeof globalThis.fetch;
-    const response = await adapter.fetchResponse!(request, supplied ? { executor } : undefined);
-    expect(suppliedCalls).toBe(supplied ? 2 : 0);
-    expect(response.ok).toBe(true);
+    const budget = createRequestExecutionBudget();
+    if (mode === "prepaid") budget.used = 3;
+    const hop = mode === "prepaid" ? budget.reserveDispatch({ sendClass: "auth-recovery", targetKey: request.url, countedExternally: true }) : undefined;
+    if (hop && !hop.allowed) throw new Error("Expected final prepaid send");
+    const scope = hop?.allowed ? budget.deriveScope({ ...budget.policy, finalRecoveryAllowance: 0 }, hop.permit) : budget;
+    const observed: number[] = [];
+    const response = await adapter.fetchResponse!(request, { ...(supplied ? { executor } : {}), sendBudget: scope,
+      onPhysicalSend: send => observed.push(send.ordinal) });
+    if (hop?.allowed) hop.permit.release();
+    expect(suppliedCalls).toBe(supplied ? mode === "prepaid" ? 1 : 2 : 0);
+    expect(response.ok).toBe(mode !== "prepaid");
+    expect(budget.used).toBe(mode === "prepaid" ? 4 : 2);
+    expect(observed).toEqual(mode === "prepaid" ? [1] : [1, 2]);
     expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["high"]);
     const generated = requests.filter(request => request.url.endsWith("/alpha/generate"));
-    expect(JSON.parse(generated[1]!.body!).params).not.toHaveProperty("reasoning_effort");
+    expect(generated).toHaveLength(mode === "prepaid" ? 1 : 2);
+    if (mode === "prepaid") expect(await response.text()).toContain("unsupported reasoning_effort");
+    else expect(JSON.parse(generated[1]!.body!).params).not.toHaveProperty("reasoning_effort");
   });
 
   // Pins the profileUrl of each id added for #2647 — nothing more.

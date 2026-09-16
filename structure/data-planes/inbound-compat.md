@@ -1,6 +1,6 @@
 # Inbound Compatibility Surfaces
 
-Caller-owned Command Code and MiMo inference replays honor the supplied executor under the [hop confirmation contract](../transports/responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
+Command Code, MiMo and Google Vertex/Antigravity admit each inference attempt against the shared budget under the [hop confirmation contract](../transports/responses.md#credential-hop-reservations); credential and catalog discovery remain separate.
 
 Compatibility callers retain the public Responses ingress described by the
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.

@@ -6,6 +6,8 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { OcxProviderConfig, OcxParsedRequest } from "../types";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import type { ProviderAdapter, AdapterRequest, IncomingMeta } from "./base";
+import { createAdapterPhysicalSend } from "./physical-send";
+import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 
 const BOOTSTRAP_URL = "https://api.xiaomimimo.com/api/free-ai/bootstrap";
 export const MIMO_CHAT_URL = "https://api.xiaomimimo.com/api/free-ai/openai/chat";
@@ -247,35 +249,41 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
       };
     },
 
+    fetchResponseUsesSendBudget: true,
     async fetchResponse(request: AdapterRequest, ctx): Promise<Response> {
-      const executor = ctx?.executor ?? fetch;
-      const response = await executor(request.url, {
+      const send = createAdapterPhysicalSend(ctx);
+      const response = await send({ url: request.url, dispatch: executor => executor(request.url, {
         method: request.method,
         redirect: "manual",
         headers: request.headers as Record<string, string>,
         body: request.body,
         signal: ctx?.abortSignal,
-      });
+      }) });
 
       // Retry predicate: 401 (expired/invalid JWT) retries ONCE with a fresh token.
       // 403 is NOT retried — Xiaomi uses it for anti-abuse "Illegal access" and there is
       // no documented token-expiry signature that would mark a 403 as retryable.
       if (response.status === 401) {
-        // Drain the first response body before issuing the retry.
-        try { await response.body?.cancel(); } catch { /* already consumed */ }
-        resetMimoJwtCache();
-        const freshJwt = await getMimoJwt(ctx?.abortSignal);
-        const retryHeaders = {
-          ...(request.headers as Record<string, string>),
-          "Authorization": `Bearer ${freshJwt}`,
-        };
-        return executor(request.url, {
+        let retryHeaders = request.headers;
+        try {
+          return await send({ url: request.url, sendClass: "auth-recovery", recovery: "oauth-401",
+            beforeDispatch: async () => {
+              resetMimoJwtCache();
+              const freshJwt = await getMimoJwt(ctx?.abortSignal);
+              retryHeaders = { ...request.headers, "Authorization": `Bearer ${freshJwt}` };
+              try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
+            },
+            dispatch: executor => executor(request.url, {
           method: request.method,
           redirect: "manual",
           headers: retryHeaders,
           body: request.body,
           signal: ctx?.abortSignal,
-        });
+            }) });
+        } catch (error) {
+          if (error instanceof SendBudgetExhaustedError) return response;
+          throw error;
+        }
       }
 
       return response;

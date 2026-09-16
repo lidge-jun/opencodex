@@ -688,7 +688,8 @@ OpenAI Chat, no-reserve refusal, and a final continuation 429 without an unfunde
 
 Caller-counted adapter dispatch confirms its hop after request shaping and pacing. Retry-helper
 dispatch reserves with `countedExternally: true` and passes the booking through `pendingHopPermit`.
-An adapter declaring `fetchResponseUsesSendBudget`, currently Kiro, also receives an externally
+An adapter declaring `fetchResponseUsesSendBudget` (Kiro, Command Code, MiMo and Google
+Vertex/Antigravity) also receives an externally
 counted booking, but adopts it through a derived budget at its own physical-send boundary.
 An initial Kiro empty-completion repair reserves the same final send when no credential hop is
 pending. Its derived scope shares the request ceiling and adds no recovery reserve. Native Responses
@@ -697,16 +698,19 @@ only on their first dispatch. Other `fetchResponse`
 implementations retain caller-owned confirmation; having that method alone does not establish
 that the adapter consumes budget permits. A queued continuation carries an unused booking into
 its next dispatch and releases it if shaping, pacing or admission fails before a send.
-Caller-owned continuation hops confirm on the first executor invocation, so an adapter that
-throws before dispatch also refunds its booking. Google Vertex/Antigravity internal retries do
-not yet consume this physical-send budget; preserving their hop bookkeeping does not impose a
-new total cap on those adapters.
-Command Code and MiMo honor the supplied executor for every inference attempt, including
-reasoning-effort or fresh-JWT replays. Their model-catalog and credential discovery stay separate,
-so those auxiliary requests cannot confirm an inference hop. The real Command Code OAuth
+Caller-owned fallback continuation hops confirm on the first executor invocation. Budget-aware
+Command Code, MiMo and Google use `src/adapters/physical-send.ts` to admit every inference
+attempt, including effort removal, JWT retry and Google reset/5xx/400-repair paths. An unused
+reservation refunds on helper pacing, abort, backoff or adapter setup failure. Consumption starts
+at the underlying executor invocation: its own subsequent preflight can still reject, conservatively
+consuming that attempt. Budget refusal preserves an available prior HTTP response and performs
+no retry backoff. Model-catalog and credential discovery stay separate from inference accounting.
+Ordinary Google AI Studio remains on the canonical server retry-helper path. The real Command Code OAuth
 empty-completion regression in `tests/providers/command-code-provider.test.ts` bounds subsequent
 credential rotations after a dispatched hop; MiMo executor and bootstrap separation is covered
 in `tests/providers/mimo-free-provider.test.ts`.
+`tests/adapters/physical-send.test.ts` verifies prepaid adoption, refusal and refund;
+`tests/adapters/google/google-vertex-http.test.ts` bounds Google repair and retry sends.
 
 `tests/server/server-kiro-oauth-401-replay.test.ts` counts actual Kiro requests across three stored
 OAuth accounts, including an earlier connection reset and the third account's success or quota
