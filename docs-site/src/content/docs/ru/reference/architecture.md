@@ -24,7 +24,8 @@ src/
 ├── vision/             # vision sidecar (describe + plan)
 ├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
-├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
+├── bridge.ts           # facade over bridge/
+├── bridge/             # AdapterEvent stream → Responses SSE (sse.ts) / JSON (response-json.ts)
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
 │   ├── parser.ts       # Responses request → OcxParsedRequest
@@ -35,17 +36,20 @@ src/
 └── index.ts            # public entry
 ```
 
-Три прежних крупных входных файла теперь служат фасадами совместимости: `codex/catalog.ts`
-экспортирует семь модулей `codex/catalog/*.ts`, `server/management-api.ts` направляет запросы в
-девять модулей `server/management/*.ts`, а `server/responses.ts` экспортирует пять модулей
-`server/responses/*.ts`.
+Прежние крупные входные файлы теперь служат фасадами совместимости: `codex/catalog.ts`
+экспортирует модули `codex/catalog/*.ts`, `server/management-api.ts` направляет запросы в
+модули `server/management/*.ts`, `server/responses.ts` экспортирует модули
+`server/responses/*.ts`, а `bridge.ts` реэкспортирует модули `bridge/*.ts`. Фасад — это
+стабильный путь импорта, а не реализация: каждый шаг ниже называет модуль, которому
+принадлежит код, а полный перечень владельцев поверхности Responses находится в
+`structure/transports/responses.md`.
 
 ## Поток запроса
 
-`server/index.ts` владеет HTTP-границей и делегирует плоскость данных Responses в
+`server/index/serve-options.ts` владеет HTTP-границей и делегирует плоскость данных Responses в
 фасад `server/responses.ts` и его модули `server/responses/*.ts`:
 
-1. `server/index.ts` применяет CORS и аутентификацию API, отклоняет новую работу во время
+1. `server/index/serve-options.ts` применяет CORS и аутентификацию API, отклоняет новую работу во время
    завершения (drain) и записывает метаданные жизненного цикла запроса. Он обслуживает
    `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
@@ -54,7 +58,7 @@ src/
    (создание голосового/Realtime-вызова ChatGPT / Codex App, ретранслируется `server/live.ts`),
    sideband WebSocket на `/v1/live/{callId}`, а также необязательный WebSocket-апгрейд на
    `/v1/responses`.
-2. `server/responses/core.ts` распаковывает и парсит JSON, разворачивает локально запомненный вход
+2. `server/responses/request-prepare.ts` распаковывает и парсит JSON, разворачивает локально запомненный вход
    `previous_response_id`, когда он доступен, затем вызывает `responses/parser.ts`.
 3. `router.ts` разрешает «голый» id или id вида `provider/model`. Затем сервер определяет
    привязку (affinity) аккаунта Codex, при необходимости обновляет OAuth провайдера и применяет
@@ -70,7 +74,7 @@ src/
    предоставляет синтетическую функцию, выполняет настоящий поиск через сайдкар ChatGPT,
    возвращает результаты маршрутизируемой модели и повторяет это в пределах настроенного лимита
    цикла.
-7. `bridge.ts` формирует Responses SSE или JSON. `server/request-log.ts` и `usage/` собирают
+7. `bridge/sse.ts` / `bridge/response-json.ts` формирует Responses SSE или JSON. `server/request-log.ts` и `usage/` собирают
    итоговый статус, задержку, метки провайдера/модели и оценку использования токенов, не изменяя
    ответ.
 
@@ -95,7 +99,7 @@ src/
 
 ## Мост
 
-`bridge.ts` превращает поток внутренних событий `AdapterEvent` адаптера обратно в Responses SSE,
+`bridge/sse.ts` превращает поток внутренних событий `AdapterEvent` адаптера обратно в Responses SSE,
 понятный Codex:
 
 | AdapterEvent | Responses SSE emitted |
@@ -146,7 +150,7 @@ loopback; настроенные записи `corsAllowOrigins` расширя�
 
 ## Транспорт и compaction
 
-`server/index.ts` по умолчанию обслуживает HTTP/SSE на `/v1/responses`. Если Codex пытается
+`server/index/serve-options.ts` по умолчанию обслуживает HTTP/SSE на `/v1/responses`. Если Codex пытается
 выполнить WebSocket-апгрейд Responses, пока `websockets` равно `false`, opencodex возвращает
 `426 upgrade_required`; Codex тогда откатывается на HTTP для этой сессии. Когда установлено
 `"websockets": true`, та же конечная точка принимает апгрейд и использует WebSocket-мост.
@@ -162,7 +166,7 @@ loopback; настроенные записи `corsAllowOrigins` расширя�
 
 Compaction контекста Codex работает для маршрутизируемых моделей. `server/responses/compact.ts`
 обрабатывает `POST /v1/responses/compact`, выполняя внутренний маршрутизируемый ход суммаризации
-и возвращая сжатую историю, а `responses/parser.ts` и `bridge.ts` обрабатывают ходы
+и возвращая сжатую историю, а `responses/parser.ts` и `bridge/sse.ts` обрабатывают ходы
 `compaction_trigger` из remote compaction v2, генерируя ровно один синтетический выходной элемент
 `compaction`.
 

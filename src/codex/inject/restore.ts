@@ -89,6 +89,18 @@ export interface CodexNativeRestoreResult {
   success: boolean;
   message: string;
   externalProvider?: string;
+  /**
+   * Set when the restore refused at the Codex history preflight (#4718).
+   *
+   * The preflight runs before the config half, so a refusal leaves config, catalog,
+   * history and provenance exactly as they were. That is a different outcome from a
+   * restore that ran and failed, and callers that decide whether an obligation was
+   * discharged need to tell them apart. Reading the artifact states alone cannot: a
+   * refusal reports every artifact as `skipped`, which is also what an ownership refusal
+   * and a desired-state skip report. Matching the human-readable message instead would
+   * make a safety decision depend on prose.
+   */
+  historyPreflightRefusal?: string;
   artifacts: {
     config: CodexRestoreConfigResult;
     catalog: CodexRestoreCatalogResult;
@@ -213,6 +225,21 @@ export function skippedRestoreEnvelope(success: boolean, message: string): Codex
 function failedConfigRestoreEnvelope(config: CodexRestoreConfigResult): CodexNativeRestoreResult {
   const result = skippedRestoreEnvelope(false, config.message);
   result.artifacts.config = config;
+  return result;
+}
+
+/**
+ * The history preflight refused, so nothing was attempted at all (#4718).
+ *
+ * The message is unchanged from what this path has always printed; the structured reason
+ * is added beside it so a caller can act on the refusal without reading the prose.
+ */
+function historyPreflightRefusalEnvelope(historyError: string): CodexNativeRestoreResult {
+  const result = skippedRestoreEnvelope(
+    false,
+    `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`,
+  );
+  result.historyPreflightRefusal = historyError;
   return result;
 }
 
@@ -342,7 +369,7 @@ async function restoreNativeCodexAsyncImpl(
   }
 
   const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
+  if (historyError) return historyPreflightRefusalEnvelope(historyError);
 
   const eligibility = codexWriteCoordinationEligibility({
     coordinatorPath: () =>
@@ -490,7 +517,7 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
     return desiredEnabledRestoreSkip();
   }
   const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return skippedRestoreEnvelope(false, `Native restore refused: ${historyError}. Config, catalog, history and provenance were preserved.`);
+  if (historyError) return historyPreflightRefusalEnvelope(historyError);
   // Captured before the config half: a successful journal restore DELETES the journal, and
   // restoring the config can drop `model_catalog_json`. Either one would hide the routed
   // catalog we actually wrote (#1798).

@@ -1,7 +1,6 @@
 {
-  "generated": [
-    "scripts/model-metadata.source.json",
-    "src/adapters/cursor/gen/agent_pb.ts",
+  "exempt": [
+    "docs-site/src/data/frontier-benchmarks.json",
     "gui/src/i18n/de.ts",
     "gui/src/i18n/en.ts",
     "gui/src/i18n/fr.ts",
@@ -9,9 +8,10 @@
     "gui/src/i18n/ko.ts",
     "gui/src/i18n/ru.ts",
     "gui/src/i18n/tr.ts",
-    "gui/src/i18n/zh.ts",
     "gui/src/i18n/zh-TW.ts",
-    "docs-site/src/data/frontier-benchmarks.json"
+    "gui/src/i18n/zh.ts",
+    "scripts/model-metadata.source.json",
+    "src/adapters/cursor/gen/agent_pb.ts"
   ],
   "files": {
     ".github/scripts/issue-quality.test.cjs": 2143,
