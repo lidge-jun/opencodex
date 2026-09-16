@@ -279,12 +279,21 @@ describe("test runner isolation", () => {
       expect(existsSync(isolated.env.CODEX_HOME!)).toBe(true);
       expect(existsSync(isolated.env.TEMP!)).toBe(true);
       const owner = JSON.parse(readFileSync(join(isolated.root, TEST_TEMP_OWNER_FILE), "utf8"));
+      // The marker stores the CANONICAL root, and this assertion has to spell it the same way.
+      // Both halves of the ownership check resolve: `writeTestTempOwner` stamps
+      // `realpathSync(root)` and recovery compares it against `realpathSync(candidate)`. That
+      // agreement is what the reclamation decision rests on, so it is worth pinning rather than
+      // assuming -- on macOS `tmpdir()` hands back a /var path that resolves to /private/var,
+      // and a marker written with one spelling and read with the other would make a run fail to
+      // recognise the root it just created.
+      expect(owner.root).toBe(realpathSync(isolated.root));
       expect(owner).toMatchObject({
         schemaVersion: 1,
         kind: "opencodex-test-root",
-        root: isolated.root,
+        root: realpathSync(isolated.root),
         pid: process.pid,
       });
+      expect(typeof owner.createdAtMs).toBe("number");
     } finally {
       isolated.cleanup();
     }
