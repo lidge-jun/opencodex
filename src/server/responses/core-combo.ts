@@ -2,7 +2,7 @@ import { isDeclaredReasoningEffort } from "../../reasoning-effort";
 import { recordAttemptRequestedEffort } from "../request-log";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
-  createRequestExecutionBudget,
+  deriveRequestExecutionBudget,
   isRequestExecutionBudget,
 } from "../../lib/request-execution-budget";
 import type {
@@ -107,25 +107,27 @@ export function comboExecutionBudgetPolicy(declaredTargets: number): RequestExec
 /**
  * A budget scope that keeps its own recovery ledgers but spends the SAME request-wide counter.
  *
- * `used` is redefined as an accessor onto the parent because the factory reads it back off this
- * object -- `remainingBaseSends` and the total check both do -- so a copied number would let a
- * combo target run its ladder against a stale total, which is precisely the per-layer counting
- * this work exists to remove. The reserve, alternate-target and transition ledgers stay
- * per-scope on purpose: a combo target's account failover is its own recovery decision, while
- * the request total still bounds every target together.
+ * The sharing has to happen inside the factory. Redefining `used` as an accessor onto the parent
+ * only shared what callers read from the outside: `remainingBaseSends`, the total check and the
+ * reserve test all consult the factory's own private counter, which an overridden property
+ * cannot reach. Each derived scope therefore admitted dispatches as though the request had spent
+ * nothing, and the per-target holdback below -- expressed against `maxTotalModelSends` -- had
+ * nothing to hold back from.
+ *
+ * `deriveRequestExecutionBudget` binds the scope to the parent's real ledger, including pending
+ * externally-counted bookings and the durable-spend observer, all of which must travel together.
+ * A pending booking is a send already counted in the total and waiting for its reporter, and the
+ * observer books by watching that same counter move (#4707) -- so a scope that spent the counter
+ * without carrying the observer would move it without booking, and this combo's child sends
+ * would go missing from the spend ledger. The reserve, alternate-target and transition ledgers
+ * stay per-scope on purpose: a combo target's account failover is its own recovery decision,
+ * while the request total still bounds every target together.
  */
 export function deriveSendBudgetScope(
   parent: RequestExecutionBudget,
   policy: RequestExecutionBudgetPolicy,
 ): RequestExecutionBudget {
-  const scope = createRequestExecutionBudget(policy, parent.logicalRequestId);
-  Object.defineProperty(scope, "used", {
-    get: () => parent.used,
-    set: (value: number) => { parent.used = value; },
-    enumerable: true,
-    configurable: true,
-  });
-  return scope;
+  return deriveRequestExecutionBudget(parent, policy);
 }
 
 

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
+  deriveRequestExecutionBudget,
   type RequestExecutionBudgetPolicy,
 } from "../../src/lib/request-execution-budget";
 
@@ -346,5 +347,163 @@ describe("a credential hop is settled by whichever layer dispatches its replay",
     for (const name of ["adapter-dispatch.ts", "adapter-continuation.ts", "run-turn-execution.ts"]) {
       expect(responses(name)).not.toContain("sendBudget: adapterSendBudget");
     }
+  });
+});
+
+describe("derived policy scopes", () => {
+  const wide: RequestExecutionBudgetPolicy = {
+    maxTotalModelSends: 8, baseSendAllowance: 7, finalRecoveryAllowance: 1,
+    maxAlternateTargetSends: 7, maxTargetTransitions: 7,
+  };
+
+  test("a derived scope admits against what the REQUEST has spent, not its own history", () => {
+    // The defect this closes. Aliasing the public `used` property shared only what callers read
+    // from outside; `remainingBaseSends`, the total check and the reserve test all consulted the
+    // factory's own private counter, so each derived scope believed the request had spent
+    // nothing and a per-target holdback had nothing to hold back from.
+    const parent = createRequestExecutionBudget(wide);
+    const first = deriveRequestExecutionBudget(parent, { ...wide, maxTotalModelSends: 2 });
+    expect(first.reserveDispatch({ sendClass: "initial", targetKey: "a/m" }).allowed).toBe(true);
+    expect(first.reserveDispatch({ sendClass: "transient", targetKey: "a/m" }).allowed).toBe(true);
+    expect(parent.used).toBe(2);
+
+    const second = deriveRequestExecutionBudget(parent, { ...wide, maxTotalModelSends: 2 });
+    expect(second.used).toBe(2);
+    expect(second.remainingBaseSends(99)).toBe(5);
+    expect(second.reserveDispatch({ sendClass: "combo-failover", targetKey: "b/m" }))
+      .toEqual({ allowed: false, reason: "total-exhausted" });
+  });
+
+  test("recovery ledgers stay per-scope while the send ledger is shared", () => {
+    // A later target's account failover is its own recovery decision; only the physical-send
+    // total binds the targets together.
+    const parent = createRequestExecutionBudget(wide);
+    const a = deriveRequestExecutionBudget(parent, { ...wide, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+    const b = deriveRequestExecutionBudget(parent, { ...wide, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+    expect(a.reserveDispatch({ sendClass: "account-failover", targetKey: "a/m" }).allowed).toBe(true);
+    expect(a.alternateTargetSends).toBe(1);
+    expect(b.alternateTargetSends).toBe(0);
+    expect(b.reserveDispatch({ sendClass: "account-failover", targetKey: "b/m" }).allowed).toBe(true);
+    expect(parent.used).toBe(2);
+  });
+
+  test("a pending external booking travels with the shared ledger", () => {
+    // A pending booking is a send already counted in the total and waiting for its reporter, so
+    // sharing the spend without it would charge that send twice.
+    const parent = createRequestExecutionBudget(wide);
+    const scope = deriveRequestExecutionBudget(parent, wide);
+    const hop = scope.reserveDispatch({ sendClass: "initial", targetKey: "a/m", countedExternally: true });
+    expect(hop.allowed).toBe(true);
+    expect(parent.used).toBe(1);
+
+    const target = deriveRequestExecutionBudget(scope, wide);
+    // The reporter names the send that the booking above already paid for.
+    target.used += 1;
+    expect(parent.used).toBe(1);
+    // Anything beyond it is a genuinely new send.
+    target.used += 2;
+    expect(parent.used).toBe(3);
+  });
+
+  test("assumeCharge on a derived scope closes the booking on the shared ledger", () => {
+    // bl1's adapter handoff and this shared ledger have to agree: an adapter that takes over a
+    // counted-externally reservation must close the booking the whole request can see, or the
+    // next report would settle against it and one real send would go uncharged.
+    const parent = createRequestExecutionBudget(wide);
+    const scope = deriveRequestExecutionBudget(parent, wide);
+    const hop = scope.reserveDispatch({ sendClass: "auth-recovery", targetKey: "a/m", countedExternally: true });
+    expect(hop.allowed).toBe(true);
+    expect(hop.allowed && hop.permit.assumeCharge()).toBe(true);
+    expect(parent.used).toBe(1);
+    parent.used += 1;
+    expect(parent.used).toBe(2);
+  });
+
+  test("a scope derived from a foreign budget bridges instead of throwing", () => {
+    // `isRequestExecutionBudget` is a shape test, so a stub can reach the derivation. Turning
+    // that into a thrown error would convert a routing request into a 500 to report a condition
+    // production never produces.
+    let used = 4;
+    const foreign = {
+      get used() { return used; },
+      set used(next: number) { used = next; },
+      logicalRequestId: "foreign",
+      policyVersion: "guarded-v1",
+      policy: wide,
+      reserveSpent: false,
+      alternateTargetSends: 0,
+      targetTransitions: 0,
+      lastTargetKey: undefined,
+      remainingBaseSends: () => 0,
+      reserveDispatch: () => ({ allowed: false, reason: "total-exhausted" }),
+    } as unknown as Parameters<typeof deriveRequestExecutionBudget>[0];
+    const scope = deriveRequestExecutionBudget(foreign, wide);
+    expect(scope.used).toBe(4);
+    expect(scope.reserveDispatch({ sendClass: "initial", targetKey: "a/m" }).allowed).toBe(true);
+    expect(used).toBe(5);
+  });
+});
+
+describe("derived scopes and the durable spend observer", () => {
+  const wide: RequestExecutionBudgetPolicy = {
+    maxTotalModelSends: 8, baseSendAllowance: 7, finalRecoveryAllowance: 1,
+    maxAlternateTargetSends: 7, maxTargetTransitions: 7,
+  };
+  const recordingObserver = () => {
+    const events: string[] = [];
+    let allow = true;
+    return {
+      events,
+      deny: () => { allow = false; },
+      observer: {
+        charge: () => { events.push(allow ? "charge" : "refused"); return allow; },
+        refund: () => { events.push("refund"); },
+      },
+    };
+  };
+
+  test("a derived scope books its sends on the parent's ledger", () => {
+    // The observer books by watching the send counter move. A derived scope that spent the
+    // shared counter without carrying the observer would move it without booking, and every
+    // combo child send would be missing from the durable ledger.
+    const spy = recordingObserver();
+    const parent = createRequestExecutionBudget(wide, "lr-observer", spy.observer);
+    const scope = deriveRequestExecutionBudget(parent, wide);
+    expect(scope.reserveDispatch({ sendClass: "combo-failover", targetKey: "b/m" }).allowed).toBe(true);
+    expect(spy.events).toEqual(["charge"]);
+    expect(parent.used).toBe(1);
+  });
+
+  test("one physical send is booked exactly once across the derivation", () => {
+    // A combo hop reserves with countedExternally and the child reports the same send. The
+    // pending booking settles that report, so the ledger must see one entry, not two.
+    const spy = recordingObserver();
+    const parent = createRequestExecutionBudget(wide, "lr-once", spy.observer);
+    const scope = deriveRequestExecutionBudget(parent, wide);
+    expect(scope.reserveDispatch({ sendClass: "initial", targetKey: "a/m", countedExternally: true }).allowed).toBe(true);
+    deriveRequestExecutionBudget(scope, wide).used += 1;
+    expect(spy.events).toEqual(["charge"]);
+    expect(parent.used).toBe(1);
+  });
+
+  test("a released derivation refunds on the parent's ledger", () => {
+    const spy = recordingObserver();
+    const parent = createRequestExecutionBudget(wide, "lr-refund", spy.observer);
+    const scope = deriveRequestExecutionBudget(parent, wide);
+    const leg = scope.reserveDispatch({ sendClass: "auth-recovery", targetKey: "a/m" });
+    expect(leg.allowed).toBe(true);
+    if (leg.allowed) leg.permit.release();
+    expect(spy.events).toEqual(["charge", "refund"]);
+    expect(parent.used).toBe(0);
+  });
+
+  test("a ledger ceiling refuses a derived dispatch rather than describing it afterwards", () => {
+    const spy = recordingObserver();
+    const parent = createRequestExecutionBudget(wide, "lr-ceiling", spy.observer);
+    const scope = deriveRequestExecutionBudget(parent, wide);
+    spy.deny();
+    expect(scope.reserveDispatch({ sendClass: "combo-failover", targetKey: "b/m" }))
+      .toEqual({ allowed: false, reason: "spend-exhausted" });
+    expect(parent.used).toBe(0);
   });
 });

@@ -779,6 +779,27 @@ later recovery in the same request then cannot have. `tests/lib/execution-budget
 pins the settlement rule and every ladder shape against exactly that, and
 `tests/responses/responses-core-modules.test.ts` pins the adapter view's live delegation.
 
+A combo derives a policy scope per target, and that derivation has to happen inside the budget
+factory. Overriding the public `used` property shares only what callers read from outside:
+`remainingBaseSends`, the total check and the reserve test all consult the factory's own private
+counter, which an overridden property cannot reach. Each derived scope therefore admitted
+dispatches as though the request had spent nothing, and the per-target holdback in
+`comboTargetSendBudget` — expressed against `maxTotalModelSends` — had nothing to hold back from,
+so a long failover combo could exhaust the allowance before its later declared targets were ever
+attempted. `deriveRequestExecutionBudget` binds the scope to the parent's real ledger instead.
+
+Three things travel on that shared ledger and have to travel together. The spend and the pending
+externally-counted bookings, because a pending booking is a send already counted in the total and
+waiting for its reporter, so sharing one without the other would either charge that send twice or
+never charge it. And the durable-spend observer below, because it books by watching this counter
+move: a derived scope that spent the counter without carrying the observer would move it without
+booking, and a combo child's sends would go missing from the ledger. `permit.assumeCharge()`
+closes its booking on the same shared ledger, so the adapter handoff above and the combo
+derivation agree rather than each settling against a counter the other cannot see.
+
+What stays per-scope is deliberate: the reserve, alternate-target and transition ledgers are each
+target's own recovery decision, while the physical-send total is what binds every target together.
+
 ## Durable spend reservations
 
 The request's send budget bounds how many times it may reach upstream; the spend ledger bounds
