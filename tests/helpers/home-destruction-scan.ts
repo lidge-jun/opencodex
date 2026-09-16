@@ -27,7 +27,7 @@ export const HOME_ROOT_RESOLVERS = ["getConfigDir", "getCodexHome"] as const;
 export const DESTRUCTIVE_CALLS = [
   "rmSync", "rmdirSync", "unlinkSync", "renameSync", "cpSync", "truncateSync",
   "rm", "rmdir", "unlink", "rename", "cp", "truncate",
-  "removeTreeWithRetry",
+  "removeTreeWithRetry", "removeTestTempTree",
 ] as const;
 
 export type HomeRemovalTier = "home-root" | "inside-home";

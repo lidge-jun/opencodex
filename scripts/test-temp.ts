@@ -22,11 +22,18 @@ const TEST_TEMP_OWNER_KIND = "opencodex-test-root";
 const WRAPPED_TEST_ROOT = /^opencodex-test-[A-Za-z0-9]{6}$/;
 const LEGACY_OCX_TEST_ROOT = /^ocx-[A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9]{6}$/;
 const TRANSIENT_REMOVE_CODES = new Set(["EPERM", "EBUSY", "ENOTEMPTY"]);
-const DEFAULT_REMOVE_ATTEMPTS = 50;
-const DEFAULT_REMOVE_RETRY_DELAY_MS = 50;
 const DEFAULT_MAX_CANDIDATES = 10_000;
 const DEFAULT_MAX_TREE_ENTRIES = 250_000;
 const DEFAULT_MAX_DURATION_MS = 30_000;
+
+/** The first wait after a transient failure. Most release races clear on the first retry. */
+export const REMOVE_RETRY_BASE_DELAY_MS = 50;
+/** The ceiling for a single wait, so a long tail never becomes a long stall between attempts. */
+export const REMOVE_RETRY_MAX_DELAY_MS = 250;
+/** The total time the schedule may spend waiting on one tree. */
+export const REMOVE_RETRY_BUDGET_MS = 15_000;
+/** Reclaiming a stale root is opportunistic: a root that resists briefly is left for a later run. */
+export const RECOVERY_REMOVE_BUDGET_MS = 150;
 
 interface TestTempOwner {
   schemaVersion: 1;
@@ -46,8 +53,8 @@ export interface TestTempRecoveryResult {
 }
 
 type RemoveTreeOptions = Readonly<{
-  attempts?: number;
-  retryDelayMs?: number;
+  budgetMs?: number;
+  delays?: readonly number[];
   remove?: (path: string) => void;
   sleep?: (milliseconds: number) => void;
 }>;
@@ -146,20 +153,41 @@ function inspectTree(
   return { safe: true, latestMtimeMs };
 }
 
+/**
+ * The waits between removal attempts: exponential from the base delay, capped, bounded by budget.
+ *
+ * The predecessor was flat -- 50 attempts at 50ms, so 2.5 seconds total. That budget was tuned on
+ * a lightly loaded machine and six concurrent Windows shards exceed it, at which point the helper
+ * rethrows the EPERM it exists to absorb and fails a test that had already finished asserting
+ * (#4789). Growing the wait instead of the attempt count is what buys a long tail without paying
+ * for it in the common case: the first retry still lands at 50ms, and a removal that succeeds on
+ * its first attempt never sleeps at all, so nothing on the passing path gets slower.
+ */
+export function removeRetrySchedule(budgetMs: number = REMOVE_RETRY_BUDGET_MS): number[] {
+  const delays: number[] = [];
+  let spent = 0;
+  let delay = REMOVE_RETRY_BASE_DELAY_MS;
+  while (spent + delay <= budgetMs) {
+    delays.push(delay);
+    spent += delay;
+    delay = Math.min(delay * 2, REMOVE_RETRY_MAX_DELAY_MS);
+  }
+  return delays;
+}
+
 /** Remove a test-owned tree while tolerating only transient Windows release races. */
 export function removeTestTempTree(path: string, options: RemoveTreeOptions = {}): void {
-  const attempts = options.attempts ?? DEFAULT_REMOVE_ATTEMPTS;
-  const retryDelayMs = options.retryDelayMs ?? DEFAULT_REMOVE_RETRY_DELAY_MS;
+  const delays = options.delays ?? removeRetrySchedule(options.budgetMs);
   const remove = options.remove ?? (target => rmSync(target, { recursive: true, force: true }));
   const sleep = options.sleep ?? Bun.sleepSync;
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
     try {
       remove(path);
       return;
     } catch (error) {
-      if (!TRANSIENT_REMOVE_CODES.has(errorCode(error)) || attempt === attempts) throw error;
-      sleep(retryDelayMs);
+      if (!TRANSIENT_REMOVE_CODES.has(errorCode(error)) || attempt === delays.length) throw error;
+      sleep(delays[attempt]!);
     }
   }
 }
@@ -266,7 +294,7 @@ export function recoverStaleTestTempArtifacts(options: RecoveryOptions = {}): Te
         continue;
       }
 
-      removeTestTempTree(candidate, { attempts: 3 });
+      removeTestTempTree(candidate, { budgetMs: RECOVERY_REMOVE_BUDGET_MS });
       result.removed += 1;
     } catch (error) {
       if (errorCode(error) !== "ENOENT") result.errors += 1;

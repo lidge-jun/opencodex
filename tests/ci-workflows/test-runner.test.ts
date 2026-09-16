@@ -433,8 +433,7 @@ describe("Windows test TEMP recovery", () => {
     let attempts = 0;
     const sleeps: number[] = [];
     removeTestTempTree("fixture", {
-      attempts: 3,
-      retryDelayMs: 7,
+      delays: [7, 7],
       remove: () => {
         attempts += 1;
         if (attempts < 3) throw Object.assign(new Error("busy"), { code: "EBUSY" });
