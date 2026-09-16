@@ -1526,7 +1526,7 @@ export function queryRequestLogs(
     filtered = logs;
   } else {
     const isStatusPattern = status ? /^[1-5]xx$/.test(status) : false;
-    const statusCentury = isStatusPattern ? Number(status![0]) : 0;
+    const statusCentury = isStatusPattern && status ? Number(status.charAt(0)) : 0;
 
     filtered = [];
     for (let i = 0; i < logs.length; i++) {
