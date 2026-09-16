@@ -685,6 +685,8 @@ jobs:
   macos-control:
     name: macos control
     needs: changes
+    # Diagnostic-only lanes stay off the ordinary release gates: list every lane
+    # that should run this job, so a new lane defaults to skipping the diagnostic.
     if: >-
       github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
     runs-on: macos-latest
