@@ -85,6 +85,7 @@ import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
+  isNonReplayableResponse,
   SendBudgetExhaustedError,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   type UpstreamSendRecovery,
@@ -1079,6 +1080,10 @@ export async function handleResponsesCompact(
     // — reporting exhausted retries while another pool account sat idle (#913).
     if (
       (upstream.status === 429 || upstream.status === 402)
+      // A replay refusal this proxy synthesized carries 429 for the client's benefit only.
+      // It is not pool quota evidence, and the alternate account below is another send of a
+      // compact turn that may already have been processed.
+      && !isNonReplayableResponse(upstream)
       && !storedPool401ReplayAttempted
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
@@ -1211,8 +1216,14 @@ export async function handleResponsesCompact(
     const bufferedErrorText = buffered.ok
       ? ""
       : await buffered.clone().text().catch(() => "");
-    const explicitQuotaStatus = buffered.status === 429 || buffered.status === 402;
-    const bodyInferredQuota = !buffered.ok
+    // The client-facing 429 of a synthesized replay refusal says nothing about this
+    // account's quota. Pool accounting keeps reading it as the transport failure it is,
+    // which is also what it recorded before the status was corrected for the client.
+    const replayRefused = isNonReplayableResponse(upstream);
+    const explicitQuotaStatus = !replayRefused
+      && (buffered.status === 429 || buffered.status === 402);
+    const bodyInferredQuota = !replayRefused
+      && !buffered.ok
       && !explicitQuotaStatus
       && isRateLimitOrQuotaFailureMessage(bufferedErrorText);
     const quotaFailure = explicitQuotaStatus || bodyInferredQuota;
@@ -1225,7 +1236,11 @@ export async function handleResponsesCompact(
     // A body-confirmed quota failure can arrive behind a generic 5xx. Record it as
     // quota evidence; otherwise preserve the real upstream status so a local buffering
     // failure after a 200 cannot soft-avoid a healthy account or rotate a thread.
-    recordCompactPoolOutcome(outcomeCtx, bodyInferredQuota ? 429 : upstream.status, { retryAfter, resetAt });
+    recordCompactPoolOutcome(
+      outcomeCtx,
+      bodyInferredQuota ? 429 : replayRefused ? 502 : upstream.status,
+      { retryAfter, resetAt },
+    );
     // Lift usage and response metadata from the buffered upstream JSON into the
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.

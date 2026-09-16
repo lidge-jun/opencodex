@@ -299,6 +299,20 @@ upstream terminal is `response.failed` or `response.incomplete` runs no search a
 any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
 instruction.
 
+`src/web-search/passthrough-bridge.ts` withholds at most 8,388,608 UTF-16 code units of
+SSE data payloads per leg; this is not a byte or total-heap measurement. A companion cap of
+65,536 events is derived from that budget at a realistic 128-code-unit serialized delta, so it
+only bounds per-event object overhead the character budget cannot see rather than refusing a
+large client-executed tool call streamed as fine-grained argument deltas. The first over-budget
+event fails the leg before releasing any held tool call, and reports that refusal as the
+bridge's own bound rather than as an upstream read failure.
+Read failures and exhausted continuation budgets use the same cleanup: discard held calls and
+close every search cell opened by the current leg as failed before one failed terminal and DONE.
+Successful release serializes held events lazily rather than building another full frame array;
+release, discard, and the next leg reset the held payload counter and identity sets.
+`tests/web-search/web-search-progress-stream.test.ts` covers both bounds, identity-only deltas,
+upstream cancellation, cell closure, the exact event boundary, and mixed terminal controls.
+
 The bridge backend and the global `webSearchSidecar` block are configured independently, so the
 sidecar's `model` applies to a bridge search only when `resolveSidecarBackend(webSearchSidecar.backend)`
 equals that bridge backend; otherwise the bridge runs the backend's own default. An unset global
@@ -487,6 +501,9 @@ change target selection. `src/server/responses/core-combo.ts` applies the policy
 and preserves the original requested effort separately from effective wire telemetry.
 `src/server/chat-completions.ts` routes combos through that same child pipeline while
 retaining the current config-aware native-Chat eligibility check for non-combo routes.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
 ## Upstream key usage identity
 
 `src/codex/account-label.ts` owns the provider/selection digest and `src/providers/label.ts`

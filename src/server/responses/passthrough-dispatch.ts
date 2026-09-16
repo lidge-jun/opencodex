@@ -103,6 +103,7 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
+  isNonReplayableResponse,
   prepareSameTarget429Wait,
   sleepWithAbort,
 } from "../../lib/upstream-retry";
@@ -1139,6 +1140,10 @@ export async function preparePassthroughExchange(
     // the same quorum, cooldown and request budget here, before any client bytes flow.
     if (
       upstreamResponse.status === 429
+      // Not a provider rate limit when this proxy synthesized it for a refused reset
+      // replay; rotating accounts on it would re-send an inference that may already
+      // have run and would cool down an account that refused nothing.
+      && !isNonReplayableResponse(upstreamResponse)
       && transportState.genericFailoverAccountId
       && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
       && isGenericOAuthFailoverEnabled(config, route.providerName)
@@ -1193,6 +1198,7 @@ export async function preparePassthroughExchange(
     // keep their pool logic below (rateLimitRetryPolicyFor returns null for them).
     while (
       upstreamResponse.status === 429
+      && !isNonReplayableResponse(upstreamResponse)
       && rateLimitPolicy !== null
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429

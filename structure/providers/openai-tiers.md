@@ -288,7 +288,9 @@ drains a tier, and every tier drained leaves the eligible list untouched. Orderi
 account that pause, cooldown, health, or reauth already excluded, and never overrides those
 exclusions. It adds no new rebind cause for a bound thread, which still moves only for the reasons it
 already had: a quota-strategy re-evaluation when `pool.cacheAffinity` is off (threshold) or the bound
-account cannot serve (the default), an account that stopped being selectable, or affinity expiry.
+account cannot serve (the default), an account that stopped being selectable, or affinity expiry. A
+conversation carrying live uploaded-file references raises that bar to the default one regardless of
+`pool.cacheAffinity`; see [uploaded-file account retention](#uploaded-file-account-retention).
 A transient-failure streak does not delete a live binding. A bound move requires genuine quota
 headroom and strictly lower usage on the destination. The stable `__main__` alias carries an order on
 equal terms with added accounts, which is what lets the Desktop login be ordered last. An absent or
@@ -390,6 +392,26 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   that account's roster and permits at most seven additional same-account sends, re-confirming the
   exact rejection and fresh grant before each later send; otherwise ordinary eligible-account
   failover applies.
+
+- The always-visible flagships (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`)
+  use the same rosters with the opposite polarity, and are never gated on them. Only a CONFIRMED
+  DENIAL counts: `cachedDeniedCodexAccountIdsForModel` reads rosters discovery already gathered,
+  synchronously and with no upstream fetch on the request path, and `getEligiblePoolAccounts` drops
+  those accounts ahead of the priority tier. If that would leave no candidate the full list is
+  restored, so evidence can never remove a model the way a fail-closed gate would (#3022). Unknown,
+  unconfirmed, expired and too-old-client rosters stay unknown and change nothing; a grant under any
+  client version clears a denial recorded under another. Nothing refuses before dispatch, and the
+  bounded alternate-account retry on an exact unsupported-model 400 remains the safety net (#4768).
+  `getEligiblePoolAccounts` is not the only door, so `preferModelEntitledAccount` applies the same
+  evidence to an already-active shared cursor: the replacement is drawn from the eligible list, the
+  active account is returned unchanged when no entitled alternative exists, and the correction is
+  request-scoped and never persisted, so the operator's cursor is unchanged for the next request.
+  An operator's manual pin is exempt: evidence orders the pool's own discretion and never overrules
+  an explicit selection, and because `selectPriorityTier` reads the pin to lower the tier ceiling,
+  filtering it out beforehand would re-enable the tiers the operator excluded rather than merely
+  demote the account. Eligibility itself is untouched — `isCodexAccountSelectable` remains the sole
+  authority for pause, plan exclusion, quota cooldown and avoidance, soft avoidance, refresh cooling
+  and usability, and `codexAccountBlockReason` still reports which of those guards fired.
 
 - `gpt-daybreak-blue-latest` remains the catalog and entitlement identity, but the canonical
   ChatGPT wire uses `gpt-5.6-sol`, the serving id reported by successful Daybreak responses.
@@ -562,7 +584,7 @@ The history read API reports a median effective token estimate and interval samp
 
 `src/codex/routing/selection.ts` supports Codex-only `accountPoolStrategy: "reset-first"`. For new shared-quota assignments it chooses the earliest future short/weekly reset after existing eligibility, priority and usage-threshold filtering; ties and absent/elapsed deadlines use the existing usage order. Seconds and milliseconds are normalized with `resetAtToMs`. Threshold zero disables usage filtering while retaining reset ordering. Monthly deadlines do not order this strategy.
 
-Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on by default, so threshold crossing alone retains a healthy account. A bound thread that does leave may move only onto an account with genuine quota headroom and strictly lower usage. Manual preference, scoped health and shared-cursor guards remain authoritative. Set the flag false to restore threshold rebinding of bound tasks. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
+Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on by default, so threshold crossing alone retains a healthy account. A bound thread that does leave may move only onto an account with genuine quota headroom and strictly lower usage. Manual preference, scoped health and shared-cursor guards remain authoritative. Set the flag false to restore threshold rebinding of bound tasks, except for a conversation carrying live uploaded-file references. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
 
 The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic and Anthropic parsers reject reset-first. The dashboard offers it only for Codex; API, CLI and translated guides preserve the same contract.
 
@@ -592,6 +614,31 @@ Two call sites need the rule — the live path in `reevaluateAffinityQuota` and 
 `previewReusableAffinityAccount` that subagent fallback reads — and they share one helper rather
 than restating it, because the suite asserts the two answer identically and a preview that
 disagreed would hand fallback a different account than the request actually uses.
+
+## Uploaded-file account retention
+
+Uploaded files are scoped to the account that issued them, so a conversation carrying live
+`file_id` references is the one case where a voluntary move is not merely expensive. It orphans the
+reference, and because the reference stays in conversation history every later turn is refused with
+`409 account_change_file_scope` until the user re-uploads under the serving account or restarts the
+conversation. Pool rotation is automatic, so any conversation with an attachment is otherwise one
+rotation away from being permanently blocked (#4778).
+
+`conversationCarriesUploadedFiles` answers that question from the request body alone — the same
+predicate the refusal guard uses, so routing and refusal can never disagree about which
+conversations are in scope — and `resolveResponsesCodexAuth` carries the answer into
+`CodexAccountUsabilityOptions.retainAccountForUploadedFiles`. `src/codex/routing/cache-affinity.ts`
+owns the rule: `retainsBoundAccountForQuota` names every reason a healthy bound account is kept,
+and `mayRebindAffinityForQuota` applies the default cache-affinity bar whenever one of them holds,
+even with `pool.cacheAffinity` false. That flag trades cache locality for capacity, not
+correctness for capacity.
+
+The retention is a preference over the VOLUNTARY move only, and it is not an eligibility boundary.
+Genuine exhaustion and an unusable account still release the binding, and every involuntary release
+that runs earlier in `resolveCodexAccountForThreadDetailed` — quota refusal, failover streak, pause,
+cooldown, lost generation, affinity expiry — is untouched. A pinned conversation therefore cannot be
+wedged on an account that cannot serve it, which is why the refusal remains required: it reduces how
+often that refusal fires and can never replace it.
 
 Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 `src/codex/auth-api/login-flow.ts` distinguishes HTTP 429 from an attempted warmup as `codex_warmup_rate_limited` and preserves that code in OAuth status. Failed attempted warmup does not persist replacement credentials; quota-confirmed deferred registration and HTTP 401/403 handling remain separate. `src/codex/warmup.ts` retains a known 429 when bounded error-body draining times out.

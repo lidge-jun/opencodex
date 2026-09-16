@@ -9,7 +9,10 @@ import {
   MAIN_CODEX_ACCOUNT_ID,
   type NativeMainRefreshDependencies,
 } from "./main-account";
-import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
+import {
+  ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
+  NATIVE_GPT6_ASTRA_MODEL,
+} from "./catalog/native-models";
 import { loadPersistedCodexRuntime } from "./runtime";
 import { codexRuntimeStateEpoch } from "./runtime";
 import upstreamModelsSnapshot from "./data/upstream-models.json";
@@ -1157,6 +1160,89 @@ export function availableAccountGatedNativeModels(
       && codexModelEntitlementStateForAccount(snapshot, accountId, modelId) === "granted"
     ))
   )));
+}
+
+/**
+ * Native models that stay unconditionally VISIBLE while their per-account availability still
+ * varies.
+ *
+ * This is deliberately not `ACCOUNT_GATED_NATIVE_OPENAI_MODELS` and must never become it. That set
+ * fails closed on ABSENCE of evidence: membership hides the row from the catalog and refuses the
+ * request before dispatch, which is exactly what the owner decision of 2026-09-04 removed the
+ * flagships from. A timed-out fetch or a shard that has not caught up would make the model vanish
+ * from the picker, and "opencodex lost my model" is a worse failure than one upstream 400.
+ *
+ * This set carries the opposite polarity. It admits only a CONFIRMED DENIAL as evidence, and it
+ * feeds an ordering preference rather than a refusal, so absent or stale evidence changes nothing.
+ * That is the distinction #4768 asked for: a pool holding a Plus account and a Free account should
+ * stop handing Sol/Astra to the Free account whose own authenticated roster already says it cannot
+ * serve them, without gating the model on evidence that may never arrive.
+ */
+export const ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  NATIVE_GPT6_ASTRA_MODEL,
+]);
+
+/**
+ * Accounts whose OWN authenticated roster definitively omits `modelId`, read synchronously from
+ * evidence discovery has already gathered.
+ *
+ * Synchronous and cache-only by contract. The gated path may await `resolveCodexModelEntitlements`
+ * because a gated model is rare and already pays a bounded discovery call; the flagships are the
+ * most commonly requested models in the product, and putting an authenticated upstream fetch per
+ * account on that request path would trade one occasional 400 for latency on every turn. The cache
+ * this reads is warmed anyway: `modelsForCredential` stores each account's FULL roster, and
+ * background catalog sync (`src/codex/catalog/retained-sync.ts`) and convergence already resolve
+ * entitlements for every pool account.
+ *
+ * Returns `undefined` rather than an empty set when nothing is denied, so a caller cannot confuse
+ * "no account is denied" with "no evidence exists" — both mean the same thing here, which is that
+ * selection must be left exactly as it was.
+ *
+ * Only `denied` counts. `unknown` covers an unconfirmed account, a roster fetched under a client
+ * version too old to return the model, and an expired or credential-stale entry; none of those is
+ * proof that the account lacks the model, and treating them as proof is how 2.36.0 removed
+ * sol/terra/luna from accounts that owned them (#3022).
+ */
+export function cachedDeniedCodexAccountIdsForModel(
+  modelId: string | undefined,
+  now = Date.now(),
+): ReadonlySet<string> | undefined {
+  if (!modelId || !ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) return undefined;
+  const denied = new Set<string>();
+  const granted = new Set<string>();
+  for (const [key, entry] of accountModelsCache) {
+    const accountId = accountIdOfCacheKey(key);
+    // A forwarded Direct credential is one request's caller, never a pool candidate.
+    if (accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)) continue;
+    if (entry.expiresAt <= now) continue;
+    // A credential we can currently read AND that differs is proof the entry answers for a
+    // different account than this id now names, so its denial is not evidence about the current
+    // one. An UNREADABLE credential is not proof of anything, and the same unknown-is-not-denied
+    // discipline that governs rosters governs identities: it leaves the entry in place rather
+    // than manufacturing a reason to ignore it.
+    const identity = currentCredentialIdentity(accountId);
+    if (identity !== undefined && identity !== entry.credentialIdentity) continue;
+    const state = codexModelEntitlementStateForRoster(
+      entry.models,
+      entry.confirmed,
+      entry.clientVersion,
+      modelId,
+    );
+    if (state === "granted") granted.add(accountId);
+    else if (state === "denied") denied.add(accountId);
+  }
+  // One account holds one entry per client version, and upstream filters the roster by that
+  // version. So the same account can legitimately carry a granted entry under a current client
+  // and a denied one under an older client that predates the model. Positive evidence is
+  // authoritative regardless of which version asked for it -- the same rule
+  // `codexModelEntitlementStateForRoster` applies within a single entry -- so a grant anywhere
+  // clears the denial rather than being outvoted by whichever entry the map happened to yield
+  // last.
+  for (const accountId of granted) denied.delete(accountId);
+  return denied.size > 0 ? denied : undefined;
 }
 
 /** Synchronous projection for management/catalog readers after a discovery pass. */

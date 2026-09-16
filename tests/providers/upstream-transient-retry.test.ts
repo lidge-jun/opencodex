@@ -83,9 +83,10 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(504);
   });
 
-  test("the structured codes name exactly the two post-send verdicts", () => {
+  test("the structured codes name the post-send verdicts and the proxy's own refusal", () => {
     expect(isNonReplayableUpstreamCode("upstream_no_response")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_closed_before_response")).toBe(true);
+    expect(isNonReplayableUpstreamCode("upstream_reset_replay_refused")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_error")).toBe(false);
     expect(isNonReplayableUpstreamCode(undefined)).toBe(false);
   });
@@ -149,7 +150,7 @@ describe("fetchWithTransientRetry", () => {
       const err = new Error("socket hang up") as Error & { code?: string };
       err.code = "ECONNRESET";
       throw err;
-    }, { attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) })).rejects.toThrow();
+    }, { replaySafe: true, attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) })).rejects.toThrow();
     expect(reported.length).toBe(1);
     expect(reported[0]!).toBeGreaterThan(0);
   });
@@ -166,7 +167,7 @@ describe("fetchWithTransientRetry", () => {
         throw err;
       }
       return bodyResponse(sends === 3 ? 200 : 503);
-    }, { attempts: 3, slowAttemptMs: 60_000 });
+    }, { replaySafe: true, attempts: 3, slowAttemptMs: 60_000 });
 
     expect(sends).toBe(3);
     expect(res.status).toBe(200);

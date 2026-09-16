@@ -46,6 +46,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     const coreSource = await readSource("src/server/responses/passthrough-delivery.ts");
     const relaySource = await readSource("src/server/relay.ts");
     const capsSource = await readSource("src/lib/bun-stream-caps.ts");
+    const inspectionTeeSource = await readSource("src/server/inspection-tee.ts");
     const sseBranch = coreSource.slice(
       coreSource.indexOf("if (isEventStream && upstreamResponse.body)"),
       coreSource.indexOf("const body = relayWithAbort(upstreamResponse.body, upstream);"),
@@ -61,7 +62,11 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("const terminalRepairPolicy = providerModelResponsesTerminalRepair(");
     expect(sseBranch).toContain("const passthroughSseBody = terminalRepairPolicy");
     expect(sseBranch).toContain(": upstreamResponse.body;");
-    expect(sseBranch).toContain("passthroughSseBody.tee()");
+    // Native tee stays inside the bounded observer. The production owner passes
+    // the raw stream and disconnect signal before any client-side rewrite.
+    expect(sseBranch).toMatch(/const \[nativeBody, inspectBody\] = teeWithBoundedInspection\(passthroughSseBody, \{ clientGoneSignal \}\)/);
+    expect(inspectionTeeSource).toContain("const [client, inspection] = source.tee();");
+    expect(sseBranch.indexOf("teeWithBoundedInspection(")).toBeLessThan(sseBranch.indexOf("const rewrittenBody ="));
     // Rewrite traffic is derived from the finalized block chain so every
     // provider-specific transform participates in the platform gate.
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");

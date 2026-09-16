@@ -25,6 +25,7 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
+  isNonReplayableResponse,
   prepareSameTarget429Wait,
   type UpstreamSendRecovery,
 } from "../lib/upstream-retry";
@@ -379,6 +380,11 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     let retries = 0;
     while (
       response.status === 429
+      // A 429 this proxy synthesized for a refused reset replay is not a provider rate
+      // limit: waiting and re-sending here is exactly the duplicate inference the refusal
+      // exists to stop. It kept the same shape under the old 502 only because 502 never
+      // matched this branch.
+      && !isNonReplayableResponse(response)
       && retryPolicy
       && retries < retryPolicy.attempts
       && transientSendAvailable()
@@ -392,7 +398,9 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       if (upstream.signal.aborted) throw upstream.signal.reason;
       response = await send(activeRequest, "rate-limit-429");
     }
-    while (response.status === 429 && hasKeyPoolFailover(activeProvider)) {
+    // Same reason as above, plus a second one: rotating here would write a cooldown against
+    // a key that rate-limited nothing, and that false signal outlives the request.
+    while (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
       const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
         retryAfter: response.headers.get("retry-after"),
         now: Date.now(),

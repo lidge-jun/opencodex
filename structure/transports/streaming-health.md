@@ -306,3 +306,5 @@ The regression fixture is derived from the pinned OpenAI Python SDK response-ste
 schemas at commit `98e1d24f4902ab58830adf0e2b6a729a5d5429b1`; it is not a live Astra
 compatibility certification. End-to-end live client/backend verification remains required
 before promoting this experimental option to a default.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.

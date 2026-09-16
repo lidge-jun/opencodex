@@ -57,7 +57,7 @@ export async function runOllamaWebSearch(
         // Bun forwards custom headers across redirects, so a redirect would leak the key.
         redirect: "manual",
       }, recovery)),
-      { abortSignal: linkedSignal.signal, label: "ollama-web-search-bridge" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "ollama-web-search-bridge" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
