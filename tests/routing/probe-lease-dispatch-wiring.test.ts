@@ -85,15 +85,23 @@ describe("recovery limiter wiring is reachable from production (#4701)", () => {
     // production callers, so the suite was green while nothing in a running proxy was bounded.
     // If a refactor ever detaches it again, that is the symptom to catch -- the behaviour tests
     // below would keep passing against primitives nobody calls.
+    const holdDispatch = readFileSync(
+      repoPath("src", "codex", "routing", "transient-hold-dispatch.ts"), "utf8",
+    );
+    expect(holdDispatch).toContain('from "../../routing/probe-lease"');
+    expect(holdDispatch).toContain("resolveHeldAccountDispatch");
+
+    // The selector reaches the bound through that seam, on the production path.
     const routing = readFileSync(repoPath("src", "codex", "routing.ts"), "utf8");
-    expect(routing).toContain('from "../routing/probe-lease"');
-    expect(routing).toContain("resolveHeldAccountDispatch");
+    expect(routing).toContain('from "./routing/transient-hold-dispatch"');
+    expect(routing).toContain("resolveTransientHoldDispatch");
 
     const fetchHelpers = readFileSync(repoPath("src", "server", "responses", "fetch-helpers.ts"), "utf8");
     expect(fetchHelpers).toContain('from "../../routing/probe-lease"');
 
-    // The two modules named probe-lease are different domains one directory apart. The selector
-    // must keep importing BOTH: merging them would make one settle the other's probe.
+    // Two modules are named probe-lease, one directory apart, and they are different domains.
+    // The selector keeps importing the QUOTA one; merging them would make one settle the
+    // other's probe.
     expect(routing).toContain('from "./routing/probe-lease"');
   });
 });
@@ -345,4 +353,3 @@ describe("the pool-wide window classifies one physical send", () => {
     expect(classifyPoolRecoveryDispatch("retry", now, limiter).admitted).toBe(false);
   });
 });
-

@@ -39,6 +39,7 @@ import {
   pickAlternateCodexAccount,
   resolveCodexAccountForThreadDetailed,
   type CodexAffinityDecision,
+  type CodexThreadResolution,
   type TransientProbeGrant,
 } from "./routing";
 // The half-open TRANSIENT-HOLD lease (#4701). Not the quota-cooldown probe lease imported from
@@ -994,7 +995,11 @@ export async function resolveCodexAuthContext(
     // and may still route to non-main pool accounts without touching switch state.
     if (reserve && !nativeMainReadsForbidden && !selectionAdmission) throw new CodexMainProfileDrainingError();
     if (!nativeMainReadsForbidden) reconcileMainCodexAccountRuntimeState();
-    const resolution = fixedAccountId !== undefined
+    // Annotated, not inferred. The two literals below carry neither `affinity` nor
+    // `transientProbe`, so an inferred union makes `"k" in resolution` widen those reads to
+    // `unknown` and a discriminant narrowing fail outright. Contextually typing every branch to
+    // the resolver's own union is what lets the reads below stay total.
+    const resolution: CodexThreadResolution = fixedAccountId !== undefined
       ? { status: "selected" as const, accountId: fixedAccountId }
       : options.excludeAccountId
       ? (() => {
@@ -1028,10 +1033,8 @@ export async function resolveCodexAuthContext(
       throw new CodexRecoveryWithheldError(resolution.accountId, resolution.retryAt, resolution.detourAccountId);
     }
     const selected = resolution.status === "selected" ? resolution.accountId : null;
-    affinityDecision = "affinity" in resolution ? resolution.affinity : undefined;
-    // Same `in` narrowing as `affinity` above: the fixed-account and exclude-account branches
-    // build their own selected literals, which carry neither field.
-    transientProbe = "transientProbe" in resolution ? resolution.transientProbe : undefined;
+    affinityDecision = resolution.affinity;
+    transientProbe = resolution.status === "selected" ? resolution.transientProbe : undefined;
     if (!selected) {
       // A retry that excluded a failed Pool account may still use the validated caller-owned
       // main credential. Treating every exclusion as if main itself had failed strands a healthy
