@@ -71,7 +71,9 @@ export class OpenPostHttpClient implements SocialPublishingProvider {
           if (errBody.message) errMessage = String(errBody.message);
           if (errBody.error) errMessage = String(errBody.error);
           if (errBody.code) errCode = String(errBody.code);
-        } catch {}
+        } catch (_parseErr) {
+          // Non-JSON response body; keep the default HTTP status message
+        }
 
         throw new OpenPostApiError(errMessage, {
           statusCode: res.status,
