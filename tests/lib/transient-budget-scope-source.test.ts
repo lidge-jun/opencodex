@@ -19,9 +19,103 @@ import { readResponsesCoreSource } from "../helpers/responses-core-source";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
+import { createScanner, SyntaxKind } from "typescript/unstable/ast";
 
 const source = (relative: string): string =>
   readFileSync(repoPath("src", ...relative.split("/")), "utf8");
+
+/** Check balanced option objects and their local allowance declarations, ignoring textual decoys. */
+function retryBudgetWiring(text: string): { reporters: number; invalid: string[] } {
+  // TypeScript 7's lexical scanner is in-process: no compiler server or fixture files.
+  const scanner = createScanner(true, undefined, text);
+  const tokens: string[] = [];
+  const skipTemplate = (): void => {
+    let depth = 0;
+    for (let kind = scanner.scan(); kind !== SyntaxKind.EndOfFile; kind = scanner.scan()) {
+      if (kind === SyntaxKind.TemplateHead) skipTemplate();
+      else if (kind === SyntaxKind.OpenBraceToken) depth++;
+      else if (kind === SyntaxKind.CloseBraceToken) {
+        if (depth) depth--;
+        else if (scanner.reScanTemplateToken(false) === SyntaxKind.TemplateTail) return;
+      }
+    }
+  };
+  for (let kind = scanner.scan(); kind !== SyntaxKind.EndOfFile; kind = scanner.scan()) {
+    if (kind === SyntaxKind.TemplateHead) { skipTemplate(); tokens.push("#literal"); }
+    else if (kind === SyntaxKind.StringLiteral) tokens.push(JSON.stringify(scanner.getTokenValue()));
+    else if (kind === SyntaxKind.NoSubstitutionTemplateLiteral) tokens.push("#literal");
+    else tokens.push(scanner.getTokenText());
+  }
+  const close = new Map<number, number>();
+  const parent = new Map<number, number>();
+  const scopeAt: number[] = [];
+  const stack: number[] = [];
+  let scope = -1;
+  tokens.forEach((token, index) => {
+    scopeAt[index] = scope;
+    if (["(", "[", "{"].includes(token)) {
+      stack.push(index);
+      if (token === "{") { parent.set(index, scope); scope = index; }
+    } else if ([")", "]", "}"].includes(token)) {
+      const start = stack.pop();
+      if (start !== undefined) close.set(start, index);
+      if (token === "}") scope = parent.get(scope) ?? -1;
+    }
+  });
+  const bindings = new Map<number, Map<string, number>>();
+  tokens.forEach((token, index) => {
+    if ((token === "const" || token === "let") && tokens[index + 2] === "=") {
+      const scope = scopeAt[index]!;
+      if (!bindings.has(scope)) bindings.set(scope, new Map());
+      bindings.get(scope)!.set(tokens[index + 1]!, index + 3);
+    }
+  });
+  const unwrap = (start: number, end: number): [number, number] => {
+    while (tokens[start] === "(" && close.get(start) === end - 1) { start++; end--; }
+    return [start, end];
+  };
+  const shared = (start: number, end: number, scope: number): boolean => {
+    [start, end] = unwrap(start, end);
+    if (tokens[start] === "remainingTransientSendBudget" && tokens[start + 1] === "("
+      && close.get(start + 1) === end - 1) return true;
+    if (end - start !== 3 || tokens[start + 1] !== "." || tokens[start + 2] !== "attempts") return false;
+    while (scope >= -1) {
+      const declaration = bindings.get(scope)?.get(tokens[start]!);
+      if (declaration !== undefined) {
+        const callEnd = close.get(declaration + 1);
+        return tokens[declaration] === "recoverySendAllowance" && tokens[declaration + 1] === "("
+          && callEnd !== undefined && [";", ","].includes(tokens[callEnd + 1]!);
+      }
+      if (scope === -1) break;
+      scope = parent.get(scope) ?? -1;
+    }
+    return false;
+  };
+  let reporters = 0;
+  const invalid: string[] = [];
+  for (const [object, end] of close) {
+    if (tokens[object] !== "{") continue;
+    const properties = new Map<string, [number, number][]>();
+    for (let index = object + 1; index < end; index++) {
+      if (tokens[index + 1] === ":") {
+        const name = tokens[index]!.replace(/^"|"$/g, "");
+        const start = index + 2;
+        index = start;
+        while (index < end && tokens[index] !== ",") index = (close.get(index) ?? index) + 1;
+        if (!properties.has(name)) properties.set(name, []);
+        properties.get(name)!.push(unwrap(start, index));
+      } else if (close.has(index)) index = close.get(index)!;
+    }
+    if (properties.get("onSendsConsumed")?.some(([start, end]) => end - start === 1 && tokens[start] === "noteTransientSends")) {
+      reporters++;
+      const attempts = properties.get("attempts") ?? [];
+      if (attempts.length !== 1 || !shared(...attempts[0]!, object)) {
+        invalid.push(`reporter ${reporters}: unchecked attempts`);
+      }
+    }
+  }
+  return { reporters, invalid };
+}
 
 /**
  * `transientRetryOn5xx.attempts` is ONE request-wide total-send budget, not a per-leg
@@ -61,24 +155,14 @@ describe("transient send budget stays request-scoped", () => {
     // rebuild refetch, OAuth 401 replay, rate-limit 429 replay). The passthrough four were added
     // for #4546: the owner used to be declared BELOW that branch, which put it in the temporal
     // dead zone there, so each of those legs silently took the helper's fresh default of 3.
-    expect(core.match(/onSendsConsumed: noteTransientSends/g)).toHaveLength(7);
-
-    // EVERY leg asks for the remainder now, including the adapter initial send. That one used
-    // to pass the raw policy on the argument that nothing had been spent yet -- true for a first
-    // turn, false for a combo child, which inherits the parent's holder and then took a fresh
-    // full allowance on its own first send. Five sites spell it directly; rebuild and recovery legs
-    // go through recoverySendAllowance, which spends the base allowance first and only then
-    // draws the single shared final-recovery reserve.
-    expect(core.match(/attempts: remainingTransientSendBudget\(/g)).toHaveLength(5);
-    expect(core).toContain("attempts: remainingTransientSendBudget(transientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS)");
-    expect(core).toContain("attempts: remainingTransientSendBudget(continuationCap)");
-    // The reserve path: an account move and a validated rebuild share ONE final send, so a
-    // request cannot take both and reach five.
-    expect(core.match(/recoverySendAllowance\(/g)).toHaveLength(3);
+    // Every reporter must draw either directly from the remainder or from the recovery
+    // allowance declared in its own lexical scope. The split between these forms may change:
+    // the first terminal repair now draws the final reserve without an explicit recovery label.
+    // A whole-tree substring count could pass while one site took a fresh policy allowance.
+    const wiring = retryBudgetWiring(core);
+    expect(wiring.reporters).toBe(7);
+    expect(wiring.invalid).toEqual([]);
     expect(core).toContain("countedExternally: true");
-    // The passthrough legs have no adapter policy to draw from, so they name the helper's own
-    // ceiling rather than re-spelling the number.
-    expect(core).toContain("attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS)");
     // The trap that would make the passthrough wiring a silent no-op: transientRetryPolicyFor
     // returns null for Codex forward auth, so gating these sites on it would restore a fresh 3.
     expect(core).not.toContain("transientPolicy ? { attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS)");
@@ -87,6 +171,34 @@ describe("transient send budget stays request-scoped", () => {
     expect(core).not.toContain("attempts: continuationTransientPolicy.attempts }");
     expect(core).not.toContain("attempts: refetchTransientPolicy.attempts }");
     expect(core).not.toContain("attempts: transientPolicy.attempts,");
+  });
+
+  test("the wiring oracle ignores formatting and decoy text but rejects fresh allowances", () => {
+    const options = (attempts: string): string => `retry(fetch, {
+      "onSendsConsumed": (noteTransientSends),
+      /* a comment between the property and its value is not a different budget */
+      attempts: (${attempts}),
+    });`;
+    const decoy = `// attempts: remainingTransientSendBudget(3), onSendsConsumed: noteTransientSends
+      const text = "attempts: remainingTransientSendBudget(3), onSendsConsumed: noteTransientSends";`;
+    const valid = `${decoy}
+      ${options("remainingTransientSendBudget /* format */ (policy.attempts)")}
+      const allowance = recoverySendAllowance(cap, "repair", target);
+      ${options("allowance.attempts")}`;
+    expect(retryBudgetWiring(valid)).toEqual({ reporters: 2, invalid: [] });
+    expect(retryBudgetWiring(valid.replaceAll("\n", "\r\n\t").replaceAll(": (", ":\n (")))
+      .toEqual({ reporters: 2, invalid: [] });
+    for (const fresh of ["3", "policy.attempts"]) {
+      expect(retryBudgetWiring(`${decoy}\n${options(fresh)}`).invalid).toHaveLength(1);
+      // An unrelated valid allowance, even with the same name, cannot hide a fresh local one.
+      const shadowed = `const allowance = recoverySendAllowance(cap, "repair", target);
+        function continuation() { const allowance = { attempts: ${fresh} }; ${options("allowance.attempts")} }`;
+      expect(retryBudgetWiring(shadowed).invalid).toHaveLength(1);
+    }
+    expect(retryBudgetWiring(`const allowance = recoverySendAllowance(cap) || policy;
+      ${options("allowance.attempts")}`).invalid).toHaveLength(1);
+    expect(retryBudgetWiring("retry(fetch, { onSendsConsumed: noteTransientSends });").invalid)
+      .toHaveLength(1);
   });
 
   test("the helper still exposes the seam those call sites depend on", () => {
