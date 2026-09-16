@@ -88,6 +88,7 @@ import {
   cachedDeniedCodexAccountIdsForModel,
   resolveCodexModelEntitlements,
 } from "../../codex/model-entitlements";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import {
   previewCodexAccountForRequest,
   codexQuotaScopeForModel,
@@ -542,7 +543,13 @@ export async function prepareResponsesRequest(
         // Per CANDIDATE model, like the scope and the eligible set above: the preference is
         // model-specific, so hoisting it out of the closure would score every fallback
         // candidate against the requested model's evidence and diverge from final auth (#4768).
-        deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow),
+        // Under the same native-main read fence final auth applies: the reader validates each
+        // cached roster against the account's current credential, and for main that is a
+        // synchronous read of the stored token. A preview that read it would both cross the
+        // fence and score main differently than the resolution it is supposed to predict.
+        deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow, {
+          excludeAccountIds: nativeMainReadsForbidden ? new Set([MAIN_CODEX_ACCOUNT_ID]) : undefined,
+        }),
       },
       modelId,
       poolLineage,
@@ -699,7 +706,14 @@ export async function prepareResponsesRequest(
                 {
                   ...recoverySelectionOptions,
                   modelEligibleAccountIds,
-                  deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow),
+                  // Same read fence as the first preview, evaluated against recovery's own view
+                  // of the drain rather than the one captured before decryption.
+                  deniedModelAccountIds: cachedDeniedCodexAccountIdsForModel(modelId, previewNow, {
+                    excludeAccountIds: recoveryNativeMainBlocked
+                      || recoverySelectionAdmission?.mainProfileDraining === true
+                      ? new Set([MAIN_CODEX_ACCOUNT_ID])
+                      : undefined,
+                  }),
                 },
                 modelId,
                 poolLineage,

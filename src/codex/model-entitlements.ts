@@ -1209,6 +1209,7 @@ export const ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = n
 export function cachedDeniedCodexAccountIdsForModel(
   modelId: string | undefined,
   now = Date.now(),
+  options: { excludeAccountIds?: ReadonlySet<string> } = {},
 ): ReadonlySet<string> | undefined {
   if (!modelId || !ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) return undefined;
   const denied = new Set<string>();
@@ -1217,6 +1218,13 @@ export function cachedDeniedCodexAccountIdsForModel(
     const accountId = accountIdOfCacheKey(key);
     // A forwarded Direct credential is one request's caller, never a pool candidate.
     if (accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)) continue;
+    // The caller's read fence, honoured BEFORE `currentCredentialIdentity` below, because that
+    // is the read: for native main it resolves the physical stored token, once per cached client
+    // version. A request that is forbidden to read main -- a profile switch draining it, or a
+    // request-owned credential that owns no main state -- must not reread account storage just to
+    // score an ordering preference. Dropping the account leaves it UNKNOWN rather than denied,
+    // which is the same outcome as having no cached roster for it and changes no selection.
+    if (options.excludeAccountIds?.has(accountId)) continue;
     if (entry.expiresAt <= now) continue;
     // A credential we can currently read AND that differs is proof the entry answers for a
     // different account than this id now names, so its denial is not evidence about the current
