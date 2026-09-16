@@ -23,7 +23,7 @@ import type {
   CodexHistoryWorkerOperation,
   HistoryWorkerResult,
 } from "./history-worker";
-import { historyBackupPathFor } from "./history-provider";
+import { currentHistoryDbBusyTimeoutMs, historyBackupPathFor } from "./history-provider";
 import type { CodexHistoryFailureReason, CodexHistoryVerifiedNoopProof } from "./history-provider";
 import { getCodexHome, resolveCodexStateDbPath } from "./paths";
 
@@ -437,6 +437,10 @@ export async function runCodexHistoryJob(
       canonicalStateDbPath: request.canonicalStateDbPath,
       canonicalBackupPath: request.canonicalBackupPath,
       ...(request.expectedDesiredEnabled === undefined ? {} : { expectedDesiredEnabled: request.expectedDesiredEnabled }),
+      // A Worker is a fresh module realm: it would otherwise open state_5.sqlite with this
+      // module's default rather than the timeout this process resolved. Production sends the
+      // same codex-rs-matching 5s the Worker would have used on its own.
+      busyTimeoutMs: currentHistoryDbBusyTimeoutMs(),
       env: {
         ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
         ...(process.env.OPENCODEX_HOME ? { OPENCODEX_HOME: process.env.OPENCODEX_HOME } : {}),

@@ -7,6 +7,17 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const roots: string[] = [];
 
+/**
+ * The reclaim case builds a real SQLite log, fragments it, and incrementally vacuums it, and the
+ * cost of that is set by the disk it lands on rather than by anything the test controls. Measured
+ * on three Windows shard runs: 1.6s, 20.2s, and 67.0s. The last one exceeded the suite-wide 60s
+ * per-test ceiling in dispatch 35124906412 while the other cases in the same file finished in 0.4s
+ * to 5.0s, so the work itself varies by more than an order of magnitude with contention on the
+ * six-shard Windows leg. Give this one case room for that spread rather than letting the shared
+ * default decide, and keep it bounded well inside the 30-minute job ceiling.
+ */
+const RECLAIM_CASE_TIMEOUT_MS = process.env.CI === "true" ? 180_000 : 60_000;
+
 function makeRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "ocx-log-guard-reclaim-"));
   roots.push(root);
@@ -143,7 +154,7 @@ describe("Codex Log Guard reclaim", () => {
     expect(result.report.after.databaseBytes).toBeLessThanOrEqual(beforeBytes);
     expect(result.report.integrity).toEqual({ before: "ok", after: "ok" });
     expect(logicalSnapshot(databasePath)).toEqual(beforeLogical);
-  });
+  }, RECLAIM_CASE_TIMEOUT_MS);
 
   test("is a safe no-op when there is nothing reclaimable", async () => {
     const mod = await import("../../src/codex/log-guard/maintenance").catch(() => null);

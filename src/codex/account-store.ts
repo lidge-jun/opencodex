@@ -268,6 +268,23 @@ export function readCodexAccountRecord(id: string): CodexAccountCredentialRecord
   return loadCodexAccountRecordStore()[id] ?? null;
 }
 
+/**
+ * One store load, every record, for a caller that resolves MANY ids in a single synchronous pass.
+ *
+ * `readCodexAccountRecord` reloads, reparses and renormalizes the whole file per id. That is the
+ * right shape for one lookup and the wrong shape for a loop: the entitlement denial reader holds
+ * up to 64 accounts with four client versions each, so scoring one warm flagship request could
+ * perform up to 256 full-store reads on the request path.
+ *
+ * These are the same normalized records `readCodexAccountRecord` hands out, tombstones included,
+ * so the caller keeps its own `deletedAt` and `generation` checks instead of trusting a filtered
+ * view. That is the difference from `loadCodexAccountStore`, which drops both and cannot answer a
+ * question about credential generation.
+ */
+export function loadCodexAccountRecordSnapshot(): Readonly<Record<string, CodexAccountCredentialRecord>> {
+  return loadCodexAccountRecordStore();
+}
+
 const QUOTA_HISTORY_IDENTITY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function validQuotaHistoryIdentity(value: unknown): value is string {
@@ -1205,11 +1222,23 @@ async function resolveCodexToken(
       // Matched on the exact `error` CODE, not anywhere in the combined text: a transient
       // `server_error` whose description happens to mention invalid_grant would otherwise
       // retire a healthy account, which is the failure this whole change exists to remove.
-      const reason = errCodeExact === "invalid_grant"
-          || errCodeExact === "refresh_token_invalidated"
-          || errDesc.includes("invalidated") || errDesc.includes("revoked") ? "revoked" as const
-        : errCodeExact === "refresh_token_expired"
-          || errDesc.includes("expired") ? "expired" as const
+      //
+      // That rule binds the DESCRIPTION words too. "invalidated", "revoked" and "expired" read
+      // as terminal prose, but upstream puts arbitrary text there: a `server_error` whose
+      // description says "token was revoked" or "session expired" is still a 5xx blip, and
+      // retiring the account on it is exactly the false quarantine #2887 exists to prevent.
+      // So a body that carries a structured code is classified by that code ALONE. The
+      // substring fallback survives only where there is no structured code to read at all --
+      // a description-only body, or one this parser could not decode -- because there the
+      // prose is the only signal upstream gave us.
+      const structuredCode = errCodeExact ? errCodeExact : undefined;
+      const proseIsOnlySignal = structuredCode === undefined;
+      const reason = structuredCode === "invalid_grant"
+          || structuredCode === "refresh_token_invalidated"
+          || (proseIsOnlySignal
+            && (errDesc.includes("invalidated") || errDesc.includes("revoked"))) ? "revoked" as const
+        : structuredCode === "refresh_token_expired"
+          || (proseIsOnlySignal && errDesc.includes("expired")) ? "expired" as const
         : "unknown" as const;
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
     }

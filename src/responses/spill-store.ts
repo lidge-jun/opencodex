@@ -159,6 +159,23 @@ function spillNow(): number {
   return spillNowOverride?.() ?? Date.now();
 }
 
+/**
+ * The spill deadline clock, shared with the shutdown drain in `state/spill-queue.ts`.
+ *
+ * Every deadline the shutdown path enforces has to read the same clock the work it
+ * budgets reads. When the drain measured its reserve on `Date.now()` while the ACL
+ * harden it was budgeting ran on this injected clock, a test could freeze the clock,
+ * believe it had removed wall time from the case, and still lose an 80 ms reserve to
+ * real elapsed time on a loaded runner — which is what turned
+ * `shutdown fallback prices the job-owned superseded generation before publishing`
+ * red on macOS 2/2 in run 35137850114 while the assertion it was written for never ran.
+ *
+ * Production is unchanged: with no override installed this is `Date.now()`.
+ */
+export function responseSpillNow(): number {
+  return spillNow();
+}
+
 function record(event: "write" | "fsync" | "close" | "harden" | "publish" | "dir-fsync" | "stub-swap"): void {
   spillIoForTest?.record?.(event);
 }

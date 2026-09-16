@@ -31,7 +31,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import { env, platform } from "node:process";
-import { waitForSubprocessExit } from "./bounded-subprocess";
+import { SUBPROCESS_KILL_GRACE_MS, waitForSubprocessExit } from "./bounded-subprocess";
 import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
 import {
   cachedCurrentWindowsIdentity,
@@ -48,6 +48,8 @@ const hardenedPaths = new Map<string, HardenedIdentity>();
  * that attempt was consumed. Ordinary callers never consume it.
  */
 const timedOutPaths = new Map<string, boolean>();
+/** Slack above the kill grace so the outer belt can never fire before the runner settles. */
+const ASYNC_ICACLS_BELT_MARGIN_MS = 250;
 
 /**
  * The memo value: `object:freshness` for a file a harden was actually attributed
@@ -366,9 +368,13 @@ function awaitAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<Icac
       if (timer !== undefined) clearTimeout(timer);
       resolve(result);
     };
+    // The belt has to outlast the runner it is guarding, or it is not a belt -- it is the
+    // deadline. At exactly `timeoutMs` this used to resolve while `waitForSubprocessExit` was
+    // still killing the child, which reintroduced the abandonment that helper now avoids: the
+    // caller saw a settled flight and started removing a directory `icacls.exe` still held.
     timer = setTimeout(
       () => finish({ success: false, exitCode: null, timedOut: true, stdout: "" }),
-      Math.max(1, timeoutMs),
+      Math.max(1, timeoutMs) + SUBPROCESS_KILL_GRACE_MS + ASYNC_ICACLS_BELT_MARGIN_MS,
     );
     void asyncIcaclsRunner(args, timeoutMs).then(finish, () => finish(spawnFailedResult()));
   });
