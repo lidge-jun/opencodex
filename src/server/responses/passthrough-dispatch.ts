@@ -888,98 +888,106 @@ export async function preparePassthroughExchange(
       && usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)
       && codex401ReplayKind === null
     ) {
-      codex401ReplayKind = admissionState.authCtx.kind === "pool" ? "stored" : "main";
-      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
-      const poolAuthCtx = admissionState.authCtx.kind === "pool" ? admissionState.authCtx : undefined;
-      const poolReplay = poolAuthCtx
-        ? await refreshPoolForwardAuth({ req, config, route, authCtx: poolAuthCtx, substituteMainCredential, options, logCtx })
-        : undefined;
-      const replay = poolReplay
-        ?? await refreshNativeMainForwardAuth({ req, config, route, authCtx: admissionState.authCtx, substituteMainCredential, options });
-      if (!replay.ok) {
-        // Compact already records this; core historically returned without recording,
-        // so a dead grant stayed selectable and every request repeated the same doomed
-        // refresh. Fenced by the generation the 401 belongs to (#2887).
-        if (poolAuthCtx && poolReplay && !poolReplay.ok && poolReplay.quarantine) {
-          recordCodexUpstreamOutcome(config, poolAuthCtx.accountId, 401, {
-            threadId: poolAuthCtx.affinityKey,
-            fixedAccount: poolAuthCtx.fixedAccount,
-            modelId: route.modelId,
-            writerGeneration: poolAuthCtx.writerGeneration,
-            credentialGeneration: poolReplay.quarantineGeneration ?? poolAuthCtx.generation,
-          });
-        }
-        upstream.abort();
-        releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return replay.response;
-      }
-      admissionState.authCtx = replay.authCtx;
-      route.provider = replay.provider;
-      requestState.selectedForwardHeaders = withClaudeNativeSession(replay.headers, replay.provider, options.claudeNativeSessionId);
-      const replayAdapter = resolveSelectionAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire),
-        config.cacheRetention,
-      );
-      if (!("passthrough" in replayAdapter) || !replayAdapter.passthrough) {
-        upstream.abort();
-        return formatErrorResponse(502, "upstream_error", "Native main refresh changed the provider wire unexpectedly");
-      }
-      bindRouteReasoningReplayScope({
-        parsed,
-        providerName: route.providerName,
-        provider: replay.provider,
-        adapterName: replayAdapter.name,
-        codexAuthContext: admissionState.authCtx,
-        forwardHeaders: requestState.selectedForwardHeaders,
-      });
-      logCtx.providerAdapter = replayAdapter.name;
-      sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, replayAdapter.name, logCtx.accountLogLabel);
-      recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, replayAdapter.name);
+      const nativeHop = reserveCredentialHop("auth-recovery", request.url);
+      if (!nativeHop.allowed || (!nativeHop.permit && sendBudgetExhausted())) break passthroughRecovery;
       try {
-        request = await replayAdapter.buildRequest(parsed, {
-          headers: requestState.selectedForwardHeaders,
-          translatorBudget,
-        });
-        refreshRequestToolAliases(request);
-        recordAdapterReasoning(logCtx, request);
-        recordAdapterTier(logCtx, request);
-        refreshUndeclaredToolGuard(request);
-        // The 401 replay rebuilds the body before sending, so it needs the same ceiling as
-        // every other build site; a replay is exactly when a grown payload reappears.
-        const replayBodyRefusal = refuseOversizedOutboundBody(request);
-        if (replayBodyRefusal) return replayBodyRefusal;
-        noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, "oauth-401");
-        upstreamResponse = await fetchWithHeaderTimeout(
-          request.url,
-          { method: request.method, headers: request.headers, body: request.body },
-          upstream.signal,
-          connectMs,
-          parsed.stream,
-          // The replay-dispatched signal is what bounds the rest of this logical request, so it
-          // has to describe a send that actually happened. fetchWithHeaderTimeout awaits pacing
-          // admission BEFORE calling the executor, so signalling at the call site would spend the
-          // budget even when a rejected pacing wait means nothing reaches the network. Wrapping
-          // the executor moves the signal to the last moment before the send, where a throw from
-          // here on is a genuine transport attempt.
-          storedPoolReplayDispatchNotifier(
-            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(request),
-              providerName: route.providerName,
+        codex401ReplayKind = admissionState.authCtx.kind === "pool" ? "stored" : "main";
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
+        const poolAuthCtx = admissionState.authCtx.kind === "pool" ? admissionState.authCtx : undefined;
+        const poolReplay = poolAuthCtx
+          ? await refreshPoolForwardAuth({ req, config, route, authCtx: poolAuthCtx, substituteMainCredential, options, logCtx })
+          : undefined;
+        const replay = poolReplay
+          ?? await refreshNativeMainForwardAuth({ req, config, route, authCtx: admissionState.authCtx, substituteMainCredential, options });
+        if (!replay.ok) {
+          // Compact already records this; core historically returned without recording,
+          // so a dead grant stayed selectable and every request repeated the same doomed
+          // refresh. Fenced by the generation the 401 belongs to (#2887).
+          if (poolAuthCtx && poolReplay && !poolReplay.ok && poolReplay.quarantine) {
+            recordCodexUpstreamOutcome(config, poolAuthCtx.accountId, 401, {
+              threadId: poolAuthCtx.affinityKey,
+              fixedAccount: poolAuthCtx.fixedAccount,
               modelId: route.modelId,
-              onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
-              beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-                ? createCodexReserveDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
-            }),
-            codex401ReplayKind === "stored" ? options.onStoredPool401ReplayDispatched : undefined,
-          ),
-          route.provider.authMode === "forward",
-        ).then(adoptObservedResponse);
-      } catch (err) {
-        return transportFailureResponse(err);
-      } finally {
-        request.releaseBodyObservation?.();
-      }
-      continue passthroughRecovery;
+              writerGeneration: poolAuthCtx.writerGeneration,
+              credentialGeneration: poolReplay.quarantineGeneration ?? poolAuthCtx.generation,
+            });
+          }
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return replay.response;
+        }
+        admissionState.authCtx = replay.authCtx;
+        route.provider = replay.provider;
+        requestState.selectedForwardHeaders = withClaudeNativeSession(replay.headers, replay.provider, options.claudeNativeSessionId);
+        const replayAdapter = resolveSelectionAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire),
+          config.cacheRetention,
+        );
+        if (!("passthrough" in replayAdapter) || !replayAdapter.passthrough) {
+          upstream.abort();
+          return formatErrorResponse(502, "upstream_error", "Native main refresh changed the provider wire unexpectedly");
+        }
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: replay.provider,
+          adapterName: replayAdapter.name,
+          codexAuthContext: admissionState.authCtx,
+          forwardHeaders: requestState.selectedForwardHeaders,
+        });
+        logCtx.providerAdapter = replayAdapter.name;
+        sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, replayAdapter.name, logCtx.accountLogLabel);
+        recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, replayAdapter.name);
+        try {
+          request = await replayAdapter.buildRequest(parsed, {
+            headers: requestState.selectedForwardHeaders,
+            translatorBudget,
+          });
+          refreshRequestToolAliases(request);
+          recordAdapterReasoning(logCtx, request);
+          recordAdapterTier(logCtx, request);
+          refreshUndeclaredToolGuard(request);
+          // The 401 replay rebuilds the body before sending, so it needs the same ceiling as
+          // every other build site; a replay is exactly when a grown payload reappears.
+          const replayBodyRefusal = refuseOversizedOutboundBody(request);
+          if (replayBodyRefusal) return replayBodyRefusal;
+          noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, "oauth-401");
+          upstreamResponse = await fetchWithHeaderTimeout(
+            request.url,
+            { method: request.method, headers: request.headers, body: request.body },
+            upstream.signal,
+            connectMs,
+            parsed.stream,
+            // The replay-dispatched signal is what bounds the rest of this logical request, so it
+            // has to describe a send that actually happened. fetchWithHeaderTimeout awaits pacing
+            // admission BEFORE calling the executor, so signalling at the call site would spend the
+            // budget even when a rejected pacing wait means nothing reaches the network. Wrapping
+            // the executor moves the signal to the last moment before the send, where a throw from
+            // here on is a genuine transport attempt.
+            storedPoolReplayDispatchNotifier(
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                dispatchOverride: oauthDispatch(request),
+                providerName: route.providerName,
+                modelId: route.modelId,
+                onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
+                beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                  ? createCodexReserveDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+              }),
+              () => {
+                if (nativeHop.permit && !nativeHop.permit.use()) throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+                if (!nativeHop.permit) noteTransientSends(1); // Legacy holders did not pre-charge a permit.
+                if (codex401ReplayKind === "stored") options.onStoredPool401ReplayDispatched?.();
+              },
+            ),
+            route.provider.authMode === "forward",
+          ).then(adoptObservedResponse);
+        } catch (err) {
+          return transportFailureResponse(err);
+        } finally {
+          request.releaseBodyObservation?.();
+        }
+        continue passthroughRecovery;
+      } finally { nativeHop.permit?.release(); }
     }
 
     if (codex401ReplayKind !== null && upstreamResponse.status === 401) break;
@@ -993,113 +1001,76 @@ export async function preparePassthroughExchange(
       && isOAuth401ReplayProvider
       && transportState.sentOAuthSnapshot
       && !oauth401ReplayAttempted
-      // Refused here, before the 401 body is cancelled: once it is gone the request can only
-      // answer with a synthetic 502, which would report a proxy budget decision as an upstream
-      // fault and throw away the credential evidence the client needs.
-      && !sendBudgetExhausted()
     ) {
-      oauth401ReplayAttempted = true;
-      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-      let refreshed: OAuthAccessSnapshot;
+      const hop = reserveCredentialHop("auth-recovery", request.url, true);
+      if (!hop.allowed || (!hop.permit && sendBudgetExhausted())) break passthroughRecovery;
       try {
-        refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
-      } catch (err) {
-        upstream.abort();
-        releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
-      }
-      if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
-        upstream.abort();
-        releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
-      }
-      transportState.sentOAuthSnapshot = refreshed;
-      transportState.replayOAuthCredentialSnapshot = {
-        accountId: refreshed.accountId,
-        generation: refreshed.generation,
-      };
-      if (route.providerName === "kiro") {
-        parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
-      }
-      const refreshedProvider = resolveProviderTransport(
-        route.providerName,
-        {
-          ...route.provider,
-          apiKey: refreshed.accessToken,
-          ...(refreshed.projectId ? { project: refreshed.projectId } : {}),
-        },
-        parsed.options.promptCacheKey,
-        route.providerName === "github-copilot"
-          ? resolveCopilotApiBaseUrl(refreshed.apiBaseUrl)
-          : undefined,
-      );
-      route.provider = refreshedProvider;
-      const refreshedAdapter = resolveSelectionAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
-        config.cacheRetention,
-      );
-      if (!("passthrough" in refreshedAdapter) || !refreshedAdapter.passthrough) {
-        upstream.abort();
-        return formatErrorResponse(502, "upstream_error", "OAuth refresh changed the provider wire unexpectedly");
-      }
-      bindRouteReasoningReplayScope({
-        parsed,
-        providerName: route.providerName,
-        provider: refreshedProvider,
-        adapterName: refreshedAdapter.name,
-        oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
-      });
-      logCtx.providerAdapter = refreshedAdapter.name;
-      sealRequestAttemptIdentity(
-        logCtx.activeAttempt,
-        logCtx.provider,
-        refreshedAdapter.name,
-        logCtx.accountLogLabel,
-      );
-      recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, refreshedAdapter.name);
-      try {
-        request = await refreshedAdapter.buildRequest(parsed, {
-          headers: requestState.selectedForwardHeaders,
-          translatorBudget,
-        });
-        refreshRequestToolAliases(request);
-        recordAdapterReasoning(logCtx, request);
-        recordAdapterTier(logCtx, request);
-      } catch (err) {
-        upstream.abort();
-        if (options.abortSignal?.aborted) return clientCancelledResponse();
-        const msg = err instanceof Error ? err.message : String(err);
-        return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
-      }
-      refreshUndeclaredToolGuard(request);
-      const refreshedBodyRefusal = refuseOversizedOutboundBody(request);
-      if (refreshedBodyRefusal) return refreshedBodyRefusal;
-      try {
-        upstreamResponse = await fetchWithTransientRetry(
-          recovery => {
-            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "oauth-401");
-            return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
-              method: request.method,
-              headers: request.headers,
-              body: request.body,
-            }, recovery), upstream.signal, connectMs, parsed.stream,
-              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(request),
-                providerName: route.providerName,
-                modelId: route.modelId,
-                onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
-                beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-                  ? createCodexReserveDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
-              }),
-              route.provider.authMode === "forward")
-              .then(adoptObservedResponse);
+        oauth401ReplayAttempted = true;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        let refreshed: OAuthAccessSnapshot;
+        try {
+          refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
+        } catch (err) {
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
+        }
+        if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
+        }
+        transportState.sentOAuthSnapshot = refreshed;
+        transportState.replayOAuthCredentialSnapshot = {
+          accountId: refreshed.accountId,
+          generation: refreshed.generation,
+        };
+        if (route.providerName === "kiro") {
+          parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
+        }
+        const refreshedProvider = resolveProviderTransport(
+          route.providerName,
+          {
+            ...route.provider,
+            apiKey: refreshed.accessToken,
+            ...(refreshed.projectId ? { project: refreshed.projectId } : {}),
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
+          parsed.options.promptCacheKey,
+          route.providerName === "github-copilot"
+            ? resolveCopilotApiBaseUrl(refreshed.apiBaseUrl)
+            : undefined,
         );
-      } catch (err) {
-        return transportFailureResponse(err);
+        route.provider = refreshedProvider;
+        const refreshedAdapter = resolveSelectionAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
+          config.cacheRetention,
+        );
+        if (!("passthrough" in refreshedAdapter) || !refreshedAdapter.passthrough) {
+          upstream.abort();
+          return formatErrorResponse(502, "upstream_error", "OAuth refresh changed the provider wire unexpectedly");
+        }
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: refreshedProvider,
+          adapterName: refreshedAdapter.name,
+          oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+        });
+        logCtx.providerAdapter = refreshedAdapter.name;
+        sealRequestAttemptIdentity(
+          logCtx.activeAttempt,
+          logCtx.provider,
+          refreshedAdapter.name,
+          logCtx.accountLogLabel,
+        );
+        recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, refreshedAdapter.name);
+        sendBudgetState.pendingHopPermit = hop.permit;
+        const result = await rebuildAndRefetch("oauth-401");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
       } finally {
-        request.releaseBodyObservation?.();
+        sendBudgetState.pendingHopPermit = undefined;
+        hop.permit?.release();
       }
     }
 

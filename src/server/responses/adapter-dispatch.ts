@@ -514,6 +514,16 @@ export async function prepareAdapterExchange(
         return { failed: formatErrorResponse(502, "upstream_error", msg) };
       }
     };
+    const rebuildWithCredentialHop = (recovery: AttemptRecoveryKind, permit: ReturnType<typeof reserveCredentialHop>["permit"]) => {
+      const adapterSettlesHop = transportState.activeAdapter.fetchResponseUsesSendBudget === true;
+      sendBudgetState.pendingHopPermit = transportState.activeAdapter.fetchResponse ? undefined : permit;
+      const replayBudget = adapterSettlesHop && adapterSendBudget && permit
+        ? adapterSendBudget.deriveScope({ ...adapterSendBudget.policy, finalRecoveryAllowance: 0 }, permit)
+        : adapterSendBudget;
+      return rebuildAndRefetch(recovery,
+        transportState.activeAdapter.fetchResponse && !adapterSettlesHop ? () => { permit?.use(); } : undefined,
+        replayBudget);
+    };
     // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
     recovery: for (;;) {
       if (
@@ -521,58 +531,65 @@ export async function prepareAdapterExchange(
         && isOAuth401ReplayProvider
         && transportState.sentOAuthSnapshot
         && !oauth401ReplayAttempted
-        && !sendBudgetExhausted()
       ) {
-        oauth401ReplayAttempted = true;
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        let refreshed: OAuthAccessSnapshot;
+        const hop = reserveCredentialHop("auth-recovery", transportState.sameTargetRequest?.url ?? builtInitialRequest.url,
+          !transportState.activeAdapter.fetchResponse || transportState.activeAdapter.fetchResponseUsesSendBudget === true);
+        if (!hop.allowed || (!hop.permit && sendBudgetExhausted())) break recovery;
         try {
-          refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
-        } catch (err) {
-          cleanupUpstreamAbort();
-          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
+          oauth401ReplayAttempted = true;
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          let refreshed: OAuthAccessSnapshot;
+          try {
+            refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
+          } catch (err) {
+            cleanupUpstreamAbort();
+            return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
+          }
+          if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
+            cleanupUpstreamAbort();
+            return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
+          }
+          transportState.sentOAuthSnapshot = refreshed;
+          transportState.replayOAuthCredentialSnapshot = {
+            accountId: refreshed.accountId,
+            generation: refreshed.generation,
+          };
+          if (route.providerName === "kiro") {
+            parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
+          }
+          const refreshedProvider = resolveProviderTransport(
+            route.providerName,
+            {
+              ...route.provider,
+              apiKey: refreshed.accessToken,
+              ...(refreshed.projectId ? { project: refreshed.projectId } : {}),
+            },
+            parsed.options.promptCacheKey,
+            route.providerName === "github-copilot"
+              ? resolveCopilotApiBaseUrl(refreshed.apiBaseUrl)
+              : undefined,
+          );
+          route.provider = refreshedProvider;
+          invalidateSameTargetRequest();
+          transportState.activeAdapter = resolveSelectionAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: refreshedProvider,
+            adapterName: transportState.activeAdapter.name,
+            oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+          });
+          const result = await rebuildWithCredentialHop("oauth-401", hop.permit);
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+          continue recovery;
+        } finally {
+          sendBudgetState.pendingHopPermit = undefined;
+          hop.permit?.release();
         }
-        if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
-          cleanupUpstreamAbort();
-          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
-        }
-        transportState.sentOAuthSnapshot = refreshed;
-        transportState.replayOAuthCredentialSnapshot = {
-          accountId: refreshed.accountId,
-          generation: refreshed.generation,
-        };
-        if (route.providerName === "kiro") {
-          parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
-        }
-        const refreshedProvider = resolveProviderTransport(
-          route.providerName,
-          {
-            ...route.provider,
-            apiKey: refreshed.accessToken,
-            ...(refreshed.projectId ? { project: refreshed.projectId } : {}),
-          },
-          parsed.options.promptCacheKey,
-          route.providerName === "github-copilot"
-            ? resolveCopilotApiBaseUrl(refreshed.apiBaseUrl)
-            : undefined,
-        );
-        route.provider = refreshedProvider;
-        invalidateSameTargetRequest();
-        transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
-          config.cacheRetention,
-        );
-        bindRouteReasoningReplayScope({
-          parsed,
-          providerName: route.providerName,
-          provider: refreshedProvider,
-          adapterName: transportState.activeAdapter.name,
-          oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
-        });
-        const result = await rebuildAndRefetch("oauth-401");
-        if ("failed" in result) return result.failed;
-        upstreamResponse = result;
-        continue recovery;
       }
 
       // Static API-key pools can recover a credential-scoped 401 without abandoning the
@@ -580,30 +597,38 @@ export async function prepareAdapterExchange(
       // refresh above and never enter here — `hasKeyPoolFailover` rejects oauth/forward modes.
       // Runs after the OAuth replay so a refreshable token is never treated as a dead key.
       while (upstreamResponse.status === 401 && hasKeyPoolFailover(route.provider)) {
-        const rotated = rotateProviderTransportOn401(config, route.providerName, route.provider, {
-          now: Date.now(),
-          attemptedKey: route.provider.apiKey,
-          promptCacheKey: parsed.options.promptCacheKey,
-        });
-        if (!rotated) break;
-        // Release the failed response's socket before retrying; unread bodies otherwise linger
-        // until runtime cleanup (one per rotated key).
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        route.provider = rotated;
-        invalidateSameTargetRequest();
-        transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
-          config.cacheRetention,
-        );
-        bindRouteReasoningReplayScope({
-          parsed,
-          providerName: route.providerName,
-          provider: route.provider,
-          adapterName: transportState.activeAdapter.name,
-        });
-        const result = await rebuildAndRefetch("key-401");
-        if ("failed" in result) return result.failed;
-        upstreamResponse = result;
+        const hop = reserveCredentialHop("auth-recovery", transportState.sameTargetRequest?.url ?? builtInitialRequest.url,
+          !transportState.activeAdapter.fetchResponse || transportState.activeAdapter.fetchResponseUsesSendBudget === true);
+        if (!hop.allowed || (!hop.permit && sendBudgetExhausted())) break;
+        try {
+          const rotated = rotateProviderTransportOn401(config, route.providerName, route.provider, {
+            now: Date.now(),
+            attemptedKey: route.provider.apiKey,
+            promptCacheKey: parsed.options.promptCacheKey,
+          });
+          if (!rotated) break;
+          // Release the failed response's socket before retrying; unread bodies otherwise linger
+          // until runtime cleanup (one per rotated key).
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          route.provider = rotated;
+          invalidateSameTargetRequest();
+          transportState.activeAdapter = resolveSelectionAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: transportState.activeAdapter.name,
+          });
+          const result = await rebuildWithCredentialHop("key-401", hop.permit);
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } finally {
+          sendBudgetState.pendingHopPermit = undefined;
+          hop.permit?.release();
+        }
       }
 
       // Same-target 429 wait-and-retry (opt-in `retryOn429`, issue #487). Codex never retries

@@ -47,6 +47,57 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test("static-key 401 refunds a reserved hop when no alternate credential remains", async () => {
+    const cfg = { defaultProvider: "key401-no-alternate", providers: {
+      "key401-no-alternate": { adapter: "openai-chat", baseUrl: "https://key401-no-alternate.invalid/v1", authMode: "key",
+        apiKey: "fixture-key-a", models: ["fixture"], apiKeyPool: [{ id: "a", key: "fixture-key-a" }, { id: "b", key: "fixture-key-b" }],
+      },
+    } } as OcxConfig;
+    saveConfig(cfg);
+    const budget = createRequestExecutionBudget();
+    const originalFetch = globalThis.fetch;
+    let sends = 0;
+    globalThis.fetch = (async () => { sends += 1; return Response.json({ error: { message: "no-alternate-401" } }, { status: 401 }); }) as typeof fetch;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "key401-no-alternate/fixture", input: "hello", stream: false }),
+      }), cfg, { model: "", provider: "" }, { sendBudget: budget });
+      expect({ status: response.status, selected: loadConfig().providers["key401-no-alternate"]!.apiKey, sends, used: budget.used })
+        .toEqual({ status: 401, selected: "fixture-key-b", sends: 2, used: 2 });
+      expect(await response.text()).toContain("no-alternate-401");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test.each([0, 1])("static-key 401 admits replay before selecting another credential (reserve=%i)", async reserve => {
+    const cfg = { defaultProvider: "key401-reserve", providers: {
+      "key401-reserve": { adapter: "openai-chat", baseUrl: "https://key401-reserve.invalid/v1", authMode: "key",
+        apiKey: "fixture-key-a", models: ["fixture"], apiKeyPool: [
+          { id: "a", key: "fixture-key-a" }, { id: "b", key: "fixture-key-b" }, { id: "c", key: "fixture-key-c" },
+        ],
+      },
+    } } as OcxConfig;
+    saveConfig(cfg);
+    const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY, finalRecoveryAllowance: reserve });
+    const originalFetch = globalThis.fetch;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends <= 2) throw Object.assign(new Error("fixture ECONNRESET"), { code: "ECONNRESET" });
+      return Response.json({ error: { message: "static401-evidence" } }, { status: 401 });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "key401-reserve/fixture", input: "hello", stream: false }),
+      }), cfg, { model: "", provider: "" }, { sendBudget: budget });
+      const body = await response.text();
+      expect({ status: response.status, selected: loadConfig().providers["key401-reserve"]!.apiKey, sends, used: budget.used })
+        .toEqual({ status: 401, selected: reserve ? "fixture-key-b" : "fixture-key-a", sends: 3 + reserve, used: 3 + reserve });
+      expect(body).toContain("static401-evidence");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   test.each(["initial-success", "retry-success", "initial-429", "initial-401", "continuation-429", "reserve-refused"] as const)(
     "Vertex budget-aware recovery uses its final send and one pacing slot per inference (%s)", async mode => {
       let now = 0, timerId = 0;

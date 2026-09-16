@@ -729,6 +729,15 @@ per internal retry. It reserves before pacing, so a refused internal retry takes
 or backoff; this does not remove the outer entry-point pacing wait.
 `tests/server/server-key-failover-e2e.test.ts` checks Vertex key-401/key-429 and empty continuations,
 unchanged selection without a reserve, and one pacing interval per actual inference.
+Pre-stream 401 recovery reserves its inference send before token refresh, static-key selection
+or response-body cancellation. This applies to translated OAuth, generic Responses passthrough,
+and the native main/stored-pool one-shot replay. Refusal retains the original 401 and selection;
+refresh/build/pacing failure or an absent alternate refunds the unused reservation. Native pool
+replay retains its existing refresh, quarantine, lease and callback rules, confirms its already
+charged permit at executor dispatch, and does not report that send a second time. Legacy numeric
+holders instead report that direct send once because they did not receive a charged permit.
+The native prepaid-child boundary is covered by `tests/responses/responses-native-main-refresh.test.ts`;
+generic translated/passthrough parity is covered by `tests/server/server-google-antigravity-oauth-401-replay.test.ts`.
 
 `tests/server/server-kiro-oauth-401-replay.test.ts` counts actual Kiro requests across three stored
 OAuth accounts, including an earlier connection reset and the third account's success or quota

@@ -13,6 +13,7 @@ import { handleResponses, handleResponsesCompact } from "../../src/server/respon
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 
 const originalFetch = globalThis.fetch;
 let home = "";
@@ -109,6 +110,35 @@ function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] 
 }
 
 describe("native main 401 refresh and replay", () => {
+  for (const account of ["main", "stored"] as const) test.each(["fresh", "prepaid"] as const)(
+    `native ${account} 401 replay requires a separately admitted send (%s)`, async mode => {
+      const cfg = config({ secondAccount: account === "stored" });
+      if (account === "stored") {
+        cfg.activeCodexAccountId = OTHER_ACCOUNT_ID;
+        saveCodexAccountCredential(OTHER_ACCOUNT_ID, { accessToken: "rejected-access", refreshToken: "other-refresh",
+          expiresAt: Date.now() + 3_600_000, chatgptAccountId: "account-other" });
+      }
+      const harness = install401ThenRefreshHarness();
+      const budget = createRequestExecutionBudget();
+      if (mode === "prepaid") budget.used = 3;
+      const hop = mode === "prepaid" ? budget.reserveDispatch({ sendClass: "combo-failover", targetKey: "native", countedExternally: true }) : undefined;
+      if (hop && !hop.allowed) throw new Error("Expected prepaid initial send");
+      const scope = hop?.allowed ? budget.deriveScope({ ...budget.policy, finalRecoveryAllowance: 0 }, hop.permit) : budget;
+      let storedReplays = 0;
+      const response = await handleResponses(request("/v1/responses"), cfg, { model: "", provider: "" }, {
+        sendBudget: scope, onStoredPool401ReplayDispatched: () => { storedReplays += 1; },
+      });
+      const body = await response.text();
+      if (hop?.allowed) hop.permit.release();
+      expect(response.status).toBe(mode === "prepaid" ? 401 : 200);
+      expect(harness.sends).toEqual(mode === "prepaid" ? ["Bearer rejected-access"] : ["Bearer rejected-access", "Bearer refreshed-access"]);
+      expect(harness.refreshes).toEqual(mode === "prepaid" ? [] : [account === "stored" ? "other-refresh" : "refresh-grant"]);
+      expect(budget.used).toBe(mode === "prepaid" ? 4 : 2);
+      expect(storedReplays).toBe(account === "stored" && mode === "fresh" ? 1 : 0);
+      if (mode === "prepaid") expect(body).toContain("expired bearer");
+    }, 20_000,
+  );
+
   test("refreshes a refresh-only native main credential before upstream I/O", async () => {
     writeFileSync(join(home, "auth.json"), JSON.stringify({
       tokens: { refresh_token: "refresh-grant", account_id: "account-main" },

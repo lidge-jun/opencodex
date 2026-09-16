@@ -1,5 +1,7 @@
 # Streaming Health And WebSocket
 
+401 recovery admits its inference before credential mutation or body disposal under the [recovery contract](responses.md#credential-hop-reservations), including native main/stored-account replay.
+
 Budget-aware rebuilds reuse or fund a recovery reservation; the first helper send reuses the outer pacing slot under the [recovery and pacing contract](responses.md#credential-hop-reservations).
 
 Native and translated delivery now have separate owners in the

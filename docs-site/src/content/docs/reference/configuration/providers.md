@@ -234,6 +234,9 @@ also charge each inference attempt, including internal retries, to the shared re
 After base sends are exhausted, a key or OAuth recovery can still use the one available final
 reserve. These transports reuse the server's pacing slot for their first attempt; each internal
 retry takes one new slot, while a budget-refused internal retry takes none.
+401 recovery reserves its next inference before refreshing a token or selecting another key.
+If no send remains, the original 401 is returned and no replacement credential is selected.
+Native Codex main/stored-account one-shot refreshes also honor the shared send ceiling.
 When no retry fits, they retain the prior HTTP failure instead of sending again. JWT bootstrap and
 model-catalog lookup are separate from inference accounting. Ordinary Google AI Studio continues
 to use the server's existing retry helper.

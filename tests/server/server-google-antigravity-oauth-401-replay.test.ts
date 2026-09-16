@@ -9,6 +9,8 @@ import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { handleResponses } from "../../src/server/responses";
+import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
 
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const PROD_API_BASE = "https://cloudcode-pa.googleapis.com";
@@ -274,6 +276,28 @@ function installOAuthFetch(
 }
 
 describe("Google Antigravity OAuth upstream 401 replay", () => {
+  for (const native of [false, true]) test.each(["allowed", "denied", "refresh-failed"] as const)(
+    `OAuth401 after base exhaustion reserves before refresh (native=${native}, %s)`, async mode => {
+      await seedOAuth();
+      const cfg = native ? antigravityPassthroughConfig() : antigravityConfig();
+      const observed = installOAuthFetch([503, 503, 401, 200], mode === "refresh-failed" ? { tokenErrorDescription: "fixture invalid grant" } : {});
+      const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
+        finalRecoveryAllowance: mode === "denied" ? 0 : 1 });
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-antigravity/gemini-3.8-flash", input: "hello", stream: false }),
+      }), cfg, { model: "", provider: "" }, { sendBudget: budget });
+      const body = await response.text();
+      const succeeds = mode === "allowed";
+      expect({ status: response.status, refreshes: observed.counts.refresh, sends: observed.chatAuth.length, used: budget.used })
+        .toEqual({ status: succeeds ? 200 : 401, refreshes: mode === "denied" ? 0 : 1, sends: succeeds ? 4 : 3, used: succeeds ? 4 : 3 });
+      expect(budget.reserveSpent).toBe(succeeds);
+      expect(body).not.toContain("budget exhausted");
+      if (succeeds) expect(observed.chatAuth[3]).toBe("Bearer fresh-access");
+      else expect(getAccountSet("google-antigravity")!.accounts[0]!.credential.access).toBe("rejected-access");
+    }, 20_000,
+  );
+
   test.each([200, 401])("native passthrough replays once and returns the second HTTP %i", async secondStatus => {
     await seedOAuth();
     saveConfig(antigravityPassthroughConfig());

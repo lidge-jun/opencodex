@@ -160,7 +160,8 @@ describe("transient send budget stays request-scoped", () => {
     // the first terminal repair now draws the final reserve without an explicit recovery label.
     // A whole-tree substring count could pass while one site took a fresh policy allowance.
     const wiring = retryBudgetWiring(core);
-    expect(wiring.reporters).toBe(7);
+    // Generic OAuth401 now shares rebuildAndRefetch instead of duplicating a retry reporter.
+    expect(wiring.reporters).toBe(6);
     expect(wiring.invalid).toEqual([]);
     expect(core).toContain("countedExternally: true");
     // The trap that would make the passthrough wiring a silent no-op: transientRetryPolicyFor
@@ -260,11 +261,9 @@ describe("every dispatch path reports into the shared budget", () => {
 
   test("credential hops keep their roster cap AND reserve from the shared budget", () => {
     const core = readResponsesCoreSource();
-    // Six hop sites: the native passthrough 429, the shared sidecar hook's generic and
-    // Anthropic arms, the runTurn preflight 429, the adapter recovery loop, and the
-    // continuation loop. The last two were the arms that actually iterate the roster, so
-    // leaving them out meant the claim held everywhere except where it mattered most.
-    expect(core.match(/reserveCredentialHop\(/g)).toHaveLength(6);
+    // Existing six roster-hop sites plus native main/pool401, generic passthrough OAuth401,
+    // translated OAuth401 and static-key401 all admit before credential mutation/body disposal.
+    expect(core.match(/reserveCredentialHop\(/g)).toHaveLength(10);
     // The per-roster caps are NOT replaced. The effective allowance is the intersection, so
     // removing either half is a behaviour change that has to be argued for.
     expect(core).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
