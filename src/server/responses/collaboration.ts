@@ -210,12 +210,13 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
       // the flattened wire name, so a provider that drops the namespace prefix still
       // restores against this entry. Ambiguous bare names were resolved to null above;
       // skipping them falls back to the spellings every provider can still echo.
-      // Code-mode helper spellings never gain a bare alias: admitting bare `exec` into the
-      // declared set would let normalizeDeclaredToolName authorize the unrelated helper
-      // names, the exact surface the CODE_MODE_EXEC exception exists to contain.
+      // Code-mode helper spellings on the collaboration surface never gain a bare alias:
+      // admitting bare `exec` there would let normalizeDeclaredToolName authorize unrelated
+      // helper names. A namespaced custom `exec` from another catalog (for example
+      // `mcp__functions.exec`) remains an ordinary caller-declared tool.
       if (
         bareAliasOwners.get(t.name) === JSON.stringify([t.namespace, t.name])
-        && !BARE_ECHO_EXCLUDED_NAMES.has(t.name)
+        && !(t.namespace === "collaboration" && BARE_ECHO_EXCLUDED_NAMES.has(t.name))
       ) {
         budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
         declaredToolNames.add(t.name);
