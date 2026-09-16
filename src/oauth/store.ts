@@ -439,7 +439,9 @@ function backupLegacyOnce(): void {
     try { chmodSync(backup, 0o600); } catch { /* best-effort */ }
     try {
       // Register only the copy we just created. An unowned home still needs downgrade recovery.
-      recordOwnedConfigPath(getConfigDir(), backup);
+      if (!recordOwnedConfigPath(getConfigDir(), backup)) {
+        console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
+      }
     } catch {
       console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
     }

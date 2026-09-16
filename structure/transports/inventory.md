@@ -1,5 +1,8 @@
 # Transport Inventory
 
+The shared OAuth store warns on recovery-copy ownership refusal or exceptions without losing
+the copy; see [backup ownership](../config.md#restore).
+
 The existing Responses transport is divided by responsibility in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 

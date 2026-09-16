@@ -1,5 +1,8 @@
 # Runtime
 
+OAuth recovery-copy registration warns on both refusal and exceptions while preserving the copy;
+see the [backup ownership contract](config.md#restore).
+
 Responses admission and finalization are composed through the
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
