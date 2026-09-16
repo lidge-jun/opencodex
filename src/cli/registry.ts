@@ -108,6 +108,22 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Alias of ocx credentials.",
   },
   {
+    name: "social",
+    aliases: ["openpost"],
+    usage: "ocx social <command> [options]",
+    summary: "Social Publishing Control Plane (Pao-hubPro × OpenPost).",
+    details: [
+      "Cross-platform publication orchestration, rendition planning, approval gates, durable scheduling, and analytics.",
+      "Integrates with external OpenPost service without exposing provider OAuth secrets to agents.",
+    ],
+  },
+  {
+    name: "openpost",
+    aliases: [],
+    usage: "ocx openpost <command> [options]",
+    summary: "Alias of ocx social.",
+  },
+  {
     name: "service",
     usage: "ocx service [install|repair|restart|start|stop|status|uninstall|remove]",
     summary: "Run as a background service.",

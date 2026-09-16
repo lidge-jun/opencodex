@@ -911,6 +911,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { runCredentials } = await import("./credentials");
     return await runCredentials(deps.args.slice(1));
   },
+  social: async deps => {
+    const { runSocial } = await import("./social");
+    return await runSocial(deps.args.slice(1));
+  },
   help: async () => {
     printUsage();
     return 0;

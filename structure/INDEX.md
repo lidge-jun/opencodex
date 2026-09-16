@@ -73,6 +73,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`skill-control.md`](skill-control.md) | Universal skill registry, visual marketplace, static scanning, cross-agent deployment, remote sync, and drift governance. |
 | [`security-control.md`](security-control.md) | Authorization-first scope registry, policy engine, human-approval gate, fixture recon, validation, evidence, and audit. |
 | [`credential-runtime.md`](credential-runtime.md) | Encrypted credential lifecycle, OAuth session gateway, health-checked token pool, and policy-governed leases. |
+| [`social-publishing.md`](social-publishing.md) | External OpenPost instance integration, cross-platform publication orchestration, rendition planning, approval gates, and durable scheduling. |
 
 ### Tier 6 — Operations and process
 
@@ -131,6 +132,7 @@ for it; see [`AGENTS.md`](AGENTS.md).
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/service/` | [`runtime.md`](runtime.md) |
 | `src/skills/` | [`skill-control.md`](skill-control.md) |
+| `src/social/` | [`social-publishing.md`](social-publishing.md) |
 | `src/stall-timeout.ts` | [`runtime.md`](runtime.md) |
 | `src/storage/` | [`runtime.md`](runtime.md) |
 | `src/tray/` | [`runtime.md`](runtime.md) |

@@ -201,6 +201,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "credentials.tab.oauth",
   "credentials.col.id",
   "credentials.col.oauth",
+  "social.col.id",
+  "social.status.posting",
+  "social.status.ok",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {

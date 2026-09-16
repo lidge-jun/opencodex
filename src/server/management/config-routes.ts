@@ -274,6 +274,10 @@ function ownsCredentialNamespace(pathname: string): boolean {
   return pathInControlPlaneNamespace(pathname, "/api/credentials");
 }
 
+function ownsSocialNamespace(pathname: string): boolean {
+  return pathInControlPlaneNamespace(pathname, "/api/social");
+}
+
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   const pathname = url.pathname;
@@ -288,6 +292,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   if (ownsCredentialNamespace(pathname)) {
     const { handleCredentialRoutes } = await import("./credential-routes");
     return handleCredentialRoutes(ctx);
+  }
+  if (ownsSocialNamespace(pathname)) {
+    const { handleSocialRoutes } = await import("./social-routes");
+    return handleSocialRoutes(ctx);
   }
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
   if (url.pathname === "/api/config" && req.method === "GET") {

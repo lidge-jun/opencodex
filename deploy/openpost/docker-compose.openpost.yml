@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  openpost:
+    image: getopenpost/openpost:v4.12.0
+    container_name: openpost-publishing
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DATABASE_URL=sqlite:///data/openpost.db
+      - SECRET_KEY=${OPENPOST_SECRET_KEY:-changeme-production-secret-key-32chars}
+      - API_TOKEN=${OPENPOST_API_TOKEN:-changeme-openpost-api-token}
+      - STORAGE_PATH=/data/media
+      - MCP_ENABLED=true
+      - MCP_PORT=8081
+    volumes:
+      - openpost-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  openpost-data:
+    driver: local
+

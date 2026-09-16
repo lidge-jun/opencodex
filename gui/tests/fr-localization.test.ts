@@ -236,6 +236,16 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "credentials.col.session",
   "credentials.col.budget",
   "credentials.col.action",
+  "social.tab.publications",
+  "social.card.instances",
+  "social.card.publications",
+  "social.col.id",
+  "social.col.actions",
+  "social.col.version",
+  "social.col.pubId",
+  "social.col.action",
+  "social.status.posting",
+  "social.status.ok",
 ]);
 
 function placeholders(value: string): string[] {

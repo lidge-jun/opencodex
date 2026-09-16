@@ -409,6 +409,15 @@
       "documents": [
         "src/credentials/"
       ]
+    },
+    {
+      "path": "social-publishing.md",
+      "tier": 5,
+      "title": "Social Publishing Control Plane",
+      "scope": "External OpenPost instance integration, cross-platform publication orchestration, rendition planning, approval gates, and durable scheduling.",
+      "documents": [
+        "src/social/"
+      ]
     }
   ],
   "grace": {
