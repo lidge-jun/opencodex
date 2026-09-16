@@ -65,6 +65,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "../../src/codex/user-identity";
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/owned-service-home";
+import { HISTORY_BUSY_TIMEOUT_ENV } from "../helpers/history-busy-timeout-preload";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 
@@ -80,6 +81,8 @@ const HELD_REQUEST_BUDGET_MS = SERVER_BUDGET_MS + INTERNAL_DEADLINE_MS;
 
 const repoRoot = resolveRepoRoot();
 const cliPath = resolve(repoRoot, "src/cli/index.ts");
+/** Preload that shortens only a spawned child's SQLite busy wait; see the helper's header. */
+const historyBusyTimeoutPreload = resolve(repoRoot, "tests/helpers/history-busy-timeout-preload.ts");
 const lockChildPath = resolve(repoRoot, "tests/helpers/codex-write-lock-child.ts");
 const roots: Fixture[] = [];
 
@@ -245,6 +248,7 @@ class Fixture {
     home = this.homeA,
     userprofile = this.userprofileA,
     includeServiceProbe = false,
+    extra: Record<string, string> = {},
   ): Record<string, string> {
     // Do not inherit ambient homes or proxy configuration.  `process.execPath`
     // is absolute, so a PATH is intentionally unnecessary for CLI children.
@@ -270,6 +274,7 @@ class Fixture {
       // lookup timed out" while powershell.exe is still starting.
       ...(process.env.CI === "true" ? { CI: "true" } : {}),
       ...(includeServiceProbe ? this.serviceManagerEnv : {}),
+      ...extra,
     };
   }
 
@@ -294,10 +299,18 @@ class Fixture {
     }, null, 2));
   }
 
-  spawnCli(argv: string[], home = this.homeA, userprofile = this.userprofileA) {
-    const child = Bun.spawn([process.execPath, ...withOwnedServiceHomePreload([cliPath, ...argv], this.serviceManagerPreloadPath)], {
+  spawnCli(
+    argv: string[],
+    home = this.homeA,
+    userprofile = this.userprofileA,
+    options: { readonly preloadPaths?: readonly string[]; readonly env?: Record<string, string> } = {},
+  ) {
+    // Extra preloads go ahead of the service-probe wiring so each stays a separate argv pair,
+    // which is what keeps a checkout path containing spaces safe on Windows.
+    const preloadArgs = (options.preloadPaths ?? []).flatMap(path => ["--preload", path]);
+    const child = Bun.spawn([process.execPath, ...preloadArgs, ...withOwnedServiceHomePreload([cliPath, ...argv], this.serviceManagerPreloadPath)], {
       cwd: this.root,
-      env: this.env(home, userprofile, true),
+      env: this.env(home, userprofile, true, options.env ?? {}),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -310,8 +323,9 @@ class Fixture {
     home = this.homeA,
     userprofile = this.userprofileA,
     timeoutMs = watchdogMs(15_000),
+    options: { readonly preloadPaths?: readonly string[]; readonly env?: Record<string, string> } = {},
   ): Promise<CliResult> {
-    const child = this.spawnCli(argv, home, userprofile);
+    const child = this.spawnCli(argv, home, userprofile, options);
     const completed = await Promise.race([
       Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`CLI watchdog: ocx ${argv.join(" ")}`)), timeoutMs)),
@@ -822,9 +836,16 @@ describe("WP13 composed toggle acceptance", () => {
   }, CASE_TIMEOUT_MS);
 
   /** RED: report restore success after a blocked history worker; config recovery must not hide history contention. */
-  // This verifies a platform-independent busy-envelope contract. Its deliberate SQLite
-  // contention plus real CLI startup is not a Windows latency assertion.
-  test.skipIf(process.platform === "win32")("Restore truth: JSON distinguishes a busy history restore from native artifact recovery", async () => {
+  // This verifies a platform-independent busy-envelope contract, and it now runs everywhere.
+  // It was skipped on win32 after run 32344670867 killed it at the 45 s CLI watchdog
+  // (45197 ms, "CLI watchdog: ocx restore --json") on a shard where neighbouring cases took
+  // 54-106 s. Nothing about the contract failed there: no envelope, no SQLite error, no
+  // assertion — the child was still waiting. The waiting was production's own busy budget
+  // (5 s per attempt, two attempts, 500 ms apart) paid inside a real CLI child, and that wait
+  // is not the assertion. The child now gets the same shortened busy timeout the in-process
+  // history tests use, so the contended phase costs ~1 s instead of ~10.5 s while the lock,
+  // the retry count, and every assertion below stay exactly as they were.
+  test("Restore truth: JSON distinguishes a busy history restore from native artifact recovery", async () => {
     const fx = fixture();
     fx.writeConfig({ clientIntegrations: { codex: false } });
     const original = 'model = "gpt-5"\n';
@@ -879,13 +900,16 @@ describe("WP13 composed toggle acceptance", () => {
     `], { cwd: repoRoot, env: fx.env(), stdout: "pipe", stderr: "pipe" });
     fx.children.push(holder);
     await waitFor(() => existsSync(held) ? true : null, "history BEGIN IMMEDIATE");
-    // The contended restore deliberately waits out PRODUCTION's retry budget:
-    // a 5 s SQLite busy timeout per attempt, two attempts, plus the delay
-    // between them — ~11 s of intentional waiting before it can report `busy`.
-    // A 15 s watchdog left almost no margin and fired on a loaded macOS runner
-    // (dev CI run 31105071651). Give the wait its budget plus real headroom;
-    // the case's own 45 s test timeout still bounds it.
-    const blocked = await fx.runCli(["restore", "--json"], fx.homeA, fx.userprofileA, watchdogMs(30_000));
+    // The contended restore still exhausts PRODUCTION's retry budget — two attempts against a
+    // lock that never releases — but each attempt's SQLite busy timeout is shortened from 5 s
+    // to 250 ms in this child only. What is being proven is the envelope, not the length of
+    // the wait, and the full-length wait is what fired the watchdog on Windows (run
+    // 32344670867) and earlier on a loaded macOS runner (run 31105071651). The child's history
+    // Worker inherits the value through its run message, since a Worker is a separate realm.
+    const blocked = await fx.runCli(["restore", "--json"], fx.homeA, fx.userprofileA, watchdogMs(30_000), {
+      preloadPaths: [historyBusyTimeoutPreload],
+      env: { [HISTORY_BUSY_TIMEOUT_ENV]: "250" },
+    });
     expect(blocked.exitCode, JSON.stringify(blocked)).toBe(1);
     const envelope = JSON.parse(blocked.stdout) as { success: boolean; artifacts: { history: { state: string; reason?: string } } };
     expect(envelope).toMatchObject({ success: false, artifacts: { history: { state: "failed", reason: "busy" } } });
