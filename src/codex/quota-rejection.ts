@@ -8,8 +8,41 @@ const RESET_ELIGIBLE_CODE_VALUES = [
 export type CodexResetEligibleExhaustionCode =
   (typeof RESET_ELIGIBLE_CODE_VALUES)[number];
 
+/**
+ * Upstream codes that name an ORGANIZATION- or PROJECT-scoped exhaustion (#4546).
+ *
+ * These are a different animal from the reset-eligible codes above, and the difference is the
+ * whole point. `usage_limit_exceeded` describes the account that was asked; another pool account
+ * carries its own plan allowance, so rotating to it is a real move. Every code here describes a
+ * limit the CREDENTIAL does not own -- a balance, a spend cap, or a usage cap held by the
+ * organization or project the credential belongs to. Two credentials inside that organization
+ * are refused by the same counter, so rotating between them pays a cold prompt prefix for zero
+ * new capacity, which is the send amplification this unit exists to stop.
+ *
+ * openai/codex reached the same classification from the client side: #44492 maps exactly these
+ * HTTP 429 codes to a terminal `QuotaExceeded` instead of a retry-limit failure, and #45602
+ * extends it to the SSE path while deliberately KEEPING `rate_limit_exceeded` and `slow_down`
+ * retryable. The platform documentation states the same rule for the whole class: "It does not
+ * mean that quota, billing, or other errors that require user action can be resolved by
+ * retrying."
+ *
+ * Membership here says nothing about reset credits. A reset credit reconciles a ChatGPT plan
+ * window; it cannot pay an organization's bill, so these codes are deliberately absent from
+ * {@link RESET_ELIGIBLE_CODE_VALUES} and never set `resetCreditEligible`.
+ */
+const SCOPED_EXHAUSTION_CODE_VALUES = [
+  "credit_balance_exhausted",
+  "organization_spend_limit_exceeded",
+  "project_spend_limit_exceeded",
+  "organization_usage_limit_exceeded",
+] as const;
+
+export type CodexScopedExhaustionCode =
+  (typeof SCOPED_EXHAUSTION_CODE_VALUES)[number];
+
 export type CodexPreStreamRejectionKind =
   | "reset-eligible-exhaustion"
+  | "scoped-quota-exhaustion"
   | "generic-rate-limit"
   | "unverified-billing-or-quota"
   | "transient-server-error"
@@ -23,6 +56,12 @@ export interface CodexPreStreamRejection {
   alternateRetryEligible: boolean;
   resetCreditEligible: boolean;
   semanticCode?: CodexResetEligibleExhaustionCode;
+  /**
+   * The organization- or project-scoped exhaustion code the upstream body named, when it named
+   * one. Never accompanied by `semanticCode`: the two sets are disjoint, and only `semanticCode`
+   * may authorize a reset credit.
+   */
+  scopedExhaustionCode?: CodexScopedExhaustionCode;
   /**
    * Structured denial evidence for a 403. Present only when the upstream body names a
    * workspace/entitlement denial, which proves the CREDENTIAL is valid and the account
@@ -97,6 +136,7 @@ function structuredDenialCode(payload: unknown): string | undefined {
 }
 
 const RESET_ELIGIBLE_CODES: ReadonlySet<string> = new Set(RESET_ELIGIBLE_CODE_VALUES);
+const SCOPED_EXHAUSTION_CODES: ReadonlySet<string> = new Set(SCOPED_EXHAUSTION_CODE_VALUES);
 
 const TRANSIENT_SERVER_STATUSES = new Set([500, 502, 503, 504, 520, 521, 522]);
 const JSON_NUMBER_PATTERN = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
@@ -107,6 +147,7 @@ function rejection(
   options: {
     alternateRetryEligible?: boolean;
     semanticCode?: CodexResetEligibleExhaustionCode;
+    scopedExhaustionCode?: CodexScopedExhaustionCode;
   } = {},
 ): CodexPreStreamRejection {
   return {
@@ -115,6 +156,7 @@ function rejection(
     alternateRetryEligible: options.alternateRetryEligible === true,
     resetCreditEligible: options.semanticCode !== undefined,
     ...(options.semanticCode ? { semanticCode: options.semanticCode } : {}),
+    ...(options.scopedExhaustionCode ? { scopedExhaustionCode: options.scopedExhaustionCode } : {}),
   };
 }
 
@@ -210,9 +252,19 @@ function isUnsafeJsonDocument(text: string): boolean {
   }
 }
 
-function exactResetEligibleCode(
+/**
+ * Read the one exact, unambiguous code a container declares, and only if it is in `allowed`.
+ *
+ * Generic over the allowed set so the reset-eligible and organization-scoped classifications
+ * share one parser. They must: the strictness here -- a `code`/`type` pair that disagrees is
+ * rejected rather than resolved, and no trimming or case folding is applied -- is what keeps a
+ * near-miss from being read as an exact upstream code, and a second hand-written copy would
+ * drift away from that.
+ */
+function exactAllowedCode(
   container: Record<string, unknown>,
-): CodexResetEligibleExhaustionCode | undefined {
+  allowed: ReadonlySet<string>,
+): string | undefined {
   const hasCode = hasOwnField(container, "code");
   const hasType = hasOwnField(container, "type");
   if (!hasCode && !hasType) return undefined;
@@ -226,41 +278,68 @@ function exactResetEligibleCode(
 
   const value = hasCode ? code : type;
   if (typeof value !== "string") return undefined;
-  return RESET_ELIGIBLE_CODES.has(value as CodexResetEligibleExhaustionCode)
-    ? value as CodexResetEligibleExhaustionCode
-    : undefined;
+  return allowed.has(value) ? value : undefined;
 }
 
-function structuredResetEligibleCode(payload: unknown): CodexResetEligibleExhaustionCode | undefined {
+function structuredAllowedCode(payload: unknown, allowed: ReadonlySet<string>): string | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const root = payload as Record<string, unknown>;
   const hasRootDiscriminator = hasOwnField(root, "code") || hasOwnField(root, "type");
 
-  if (!hasOwnField(root, "error")) return exactResetEligibleCode(root);
+  if (!hasOwnField(root, "error")) return exactAllowedCode(root, allowed);
   if (hasRootDiscriminator) return undefined;
 
   const nested = root.error;
   if (!nested || typeof nested !== "object" || Array.isArray(nested)) return undefined;
-  return exactResetEligibleCode(nested as Record<string, unknown>);
+  return exactAllowedCode(nested as Record<string, unknown>, allowed);
 }
 
-async function resetEligibleCodeFromResponse(
+/**
+ * Parse one bounded body and classify its structured code against both sets at once.
+ *
+ * One read, because the caller holds a `Response` whose body may only be consumed once per
+ * clone and the two questions are asked about the same bytes.
+ */
+async function exhaustionCodeFromResponse(
   response: Response,
   signal?: AbortSignal,
-): Promise<CodexResetEligibleExhaustionCode | undefined> {
+): Promise<{
+  resetEligible?: CodexResetEligibleExhaustionCode;
+  scoped?: CodexScopedExhaustionCode;
+}> {
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal, fatalUtf8: true });
-    if (!body.displaySafe || body.truncated || !body.text.trim()) return undefined;
+    if (!body.displaySafe || body.truncated || !body.text.trim()) return {};
     const payload = JSON.parse(body.text) as unknown;
     // JSON.parse silently keeps the last duplicate key, making contradictory
     // payloads order-dependent. Reject any duplicate at any object depth.
-    if (isUnsafeJsonDocument(body.text)) return undefined;
-    return structuredResetEligibleCode(payload);
+    if (isUnsafeJsonDocument(body.text)) return {};
+    const resetEligible = structuredAllowedCode(payload, RESET_ELIGIBLE_CODES);
+    if (resetEligible !== undefined) {
+      return { resetEligible: resetEligible as CodexResetEligibleExhaustionCode };
+    }
+    const scoped = structuredAllowedCode(payload, SCOPED_EXHAUSTION_CODES);
+    return scoped === undefined ? {} : { scoped: scoped as CodexScopedExhaustionCode };
   } catch {
     // Classification must fail closed. A malformed, oversized, consumed, or
     // cancelled body cannot authorize an irreversible reset-credit operation.
-    return undefined;
+    return {};
   }
+}
+
+/**
+ * The organization- or project-scoped exhaustion code this rejection names, if any.
+ *
+ * Exported for the account-rotation gate, which has to answer "may another pool account serve
+ * this?" before it has any reason to build a full classification. Fails closed to `undefined`:
+ * an unreadable, truncated, duplicate-keyed or aborted body leaves the caller's existing
+ * behaviour untouched, so only positive evidence can ever withhold a rotation.
+ */
+export async function codexScopedExhaustionCode(
+  response: Response,
+  options: { signal?: AbortSignal } = {},
+): Promise<CodexScopedExhaustionCode | undefined> {
+  return (await exhaustionCodeFromResponse(response, options.signal)).scoped;
 }
 
 /**
@@ -269,6 +348,10 @@ async function resetEligibleCodeFromResponse(
  * Only an exact structured exhaustion code on HTTP 429/402 is reset-eligible.
  * Status alone and message text are intentionally insufficient. The broad
  * alternate-account retry remains eligible for 429/402 to preserve #584.
+ *
+ * The one carve-out from that breadth is an organization- or project-scoped exhaustion
+ * ({@link SCOPED_EXHAUSTION_CODE_VALUES}), which reports `alternateRetryEligible: false`
+ * because every credential inside the refusing limit would be refused by the same counter.
  */
 export async function classifyCodexPreStreamRejection(
   response: Response,
@@ -283,12 +366,18 @@ export async function classifyCodexPreStreamRejection(
   if (TRANSIENT_SERVER_STATUSES.has(status)) return rejection(status, "transient-server-error");
   if (status !== 429 && status !== 402) return rejection(status, "other");
 
-  const semanticCode = await resetEligibleCodeFromResponse(response, options.signal);
+  const { resetEligible: semanticCode, scoped } = await exhaustionCodeFromResponse(
+    response,
+    options.signal,
+  );
   if (semanticCode) {
     return rejection(status, "reset-eligible-exhaustion", {
       alternateRetryEligible: true,
       semanticCode,
     });
+  }
+  if (scoped) {
+    return rejection(status, "scoped-quota-exhaustion", { scopedExhaustionCode: scoped });
   }
   return rejection(
     status,

@@ -17,6 +17,7 @@ import type { ProviderRegistryEntry } from "./types";
 import {
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
+  ANTHROPIC_MODEL_INPUT_MODALITIES,
   ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
   ANTHROPIC_MODEL_REASONING_EFFORTS,
   ZAI_GLM_52_REASONING_EFFORTS,
@@ -383,6 +384,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     note: "Log in with your Claude account",
     models: [...ANTHROPIC_MODELS],
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
     // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
@@ -403,6 +405,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     models: [...ANTHROPIC_MODELS],
     liveModels: true,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     defaultModel: "claude-sonnet-5",

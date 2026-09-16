@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   ADMISSION_TOLERANCE,
+  checkComboTargetInputAdmission,
   checkInputAdmission,
   estimateInputTokens,
   resolveInputCeiling,
+  resolveOutputCeiling,
 } from "../../src/server/responses/input-admission";
 import { modelRecordValue } from "../../src/reasoning-effort";
 import type { OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
@@ -255,5 +257,88 @@ describe("checkInputAdmission", () => {
       for (const [name, fn] of originals) fs[name] = fn;
     }
     expect(calls).toBe(0);
+  });
+});
+
+describe("combo target input admission", () => {
+  const capped: OcxProviderConfig = {
+    adapter: "openai-chat",
+    baseUrl: "https://example.test/v1",
+    modelContextWindows: { m: 128_000 },
+    modelMaxOutputTokens: { m: 32_000 },
+  };
+
+  const withMaxOutput = (inputTokens: number, maxOutputTokens = 64_000): OcxParsedRequest => ({
+    ...request([userText(asciiTokens(inputTokens))]),
+    modelId: "m",
+    options: { maxOutputTokens },
+  });
+  // A separate builder, because passing `undefined` to the one above would silently take its
+  // default and the row below would assert the opposite of what it claims to cover.
+  const withoutMaxOutput = (inputTokens: number): OcxParsedRequest => ({
+    ...request([userText(asciiTokens(inputTokens))]),
+    modelId: "m",
+    options: {},
+  });
+
+  test("skips a target that cannot hold the turn plus its own output ceiling", () => {
+    // 100k input + 32k of reachable output does not fit 128k, so this target would have
+    // answered 200, emitted a few hundred tokens and stopped on finish_reason: length.
+    const result = checkComboTargetInputAdmission(withMaxOutput(100_000), capped, "custom", "m");
+    expect(result.admitted).toBe(false);
+    expect(result.ceiling).toBe(128_000);
+    expect(result.requiredOutputHeadroom).toBe(32_000);
+  });
+
+  test("reserves no more than the target can actually emit", () => {
+    // The caller asked for 64k, but this model tops out at 32k, so reserving the caller's
+    // number would skip a target that fits.
+    const result = checkComboTargetInputAdmission(withMaxOutput(90_000), capped, "custom", "m");
+    expect(result.admitted).toBe(true);
+    expect(result.requiredOutputHeadroom).toBe(32_000);
+  });
+
+  test("an input-only cap is not charged the output reserve twice", () => {
+    // modelMaxInputTokens tightens the admissible INPUT; the output reserve belongs against
+    // the window. Charging both against the tightened number would refuse a turn that fits.
+    const inputCapped: OcxProviderConfig = { ...capped, modelMaxInputTokens: { m: 90_000 } };
+    const fits = checkComboTargetInputAdmission(withMaxOutput(85_000), inputCapped, "custom", "m");
+    expect(fits.admitted).toBe(true);
+    expect(fits.ceiling).toBe(90_000);
+    // The input cap itself still refuses on its own terms.
+    expect(checkComboTargetInputAdmission(withMaxOutput(95_000), inputCapped, "custom", "m").admitted).toBe(false);
+  });
+
+  test("unknown context stays fail-open", () => {
+    const unknown: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
+    const result = checkComboTargetInputAdmission(withMaxOutput(2_000_000), unknown, "custom", "m");
+    expect(result.admitted).toBe(true);
+    expect(result.ceiling).toBeNull();
+  });
+
+  test("no declared output allowance keeps the loose direct contract", () => {
+    const result = checkComboTargetInputAdmission(withoutMaxOutput(150_000), capped, "custom", "m");
+    expect(result.admitted).toBe(true); // still inside the existing 2.5x pathological gate
+    expect(result.requiredOutputHeadroom).toBeUndefined();
+  });
+
+  test("a canonical native slug missing from the override table resolves from generated metadata", () => {
+    // Spark carries 128k/32k in the generated bundle but is absent from the narrower pinned
+    // native table, which left the gate completely blind on exactly this route. It is retired
+    // from the picker and still dispatchable when an operator names it in a combo target.
+    expect(resolveInputCeiling(CANONICAL_NATIVE, "openai", "gpt-5.3-codex-spark")).toBe(128_000);
+    expect(resolveOutputCeiling(CANONICAL_NATIVE, "openai", "gpt-5.3-codex-spark")).toBe(32_000);
+    // The native Codex catalog is consulted first, and it is keyed "openai-codex" — which is NOT
+    // the routing provider id, because that one is the string "openai". `gpt-5-codex-mini` exists
+    // only in the native catalog, so resolving it proves the right key is being read.
+    expect(resolveInputCeiling(CANONICAL_NATIVE, "openai", "gpt-5-codex-mini")).toBe(272_000);
+    // A slug the override table does know keeps its own pinned window.
+    expect(resolveInputCeiling(CANONICAL_NATIVE, "openai", "gpt-5.6-sol")).toBe(272_000);
+    // An operator cap may only narrow the generated value, never widen it.
+    expect(resolveInputCeiling(CANONICAL_NATIVE, "openai", "gpt-5.3-codex-spark", 64_000)).toBe(64_000);
+    // A provider merely named openai still inherits nothing.
+    const impostor: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://impostor.test/v1", authMode: "key" };
+    expect(resolveInputCeiling(impostor, "openai", "gpt-5.3-codex-spark")).toBeNull();
+    expect(resolveOutputCeiling(impostor, "openai", "gpt-5.3-codex-spark")).toBeNull();
   });
 });

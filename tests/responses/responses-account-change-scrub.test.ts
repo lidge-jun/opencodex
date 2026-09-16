@@ -3,6 +3,9 @@ import {
   applyAccountChangeConversationStateScrub,
   canPortConversationState,
   collectConversationStateCarriers,
+  accountChangeFileReferenceRefusal,
+  conversationCarriesUploadedFiles,
+  ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE,
 } from "../../src/server/responses/account-change-state";
 import {
   clearConversationStateIssuerMap,
@@ -37,6 +40,84 @@ function turnBody(text = "keep this user turn") {
     input: [userMessage(text), reasoningBlob()],
   };
 }
+
+/**
+ * An uploaded file is content the caller attached, not continuation state (#4710).
+ *
+ * The classifier has always called `file_id` account-bound and the scrubber has always removed
+ * only `previous_response_id` and `conversation`, so a body whose only account-bound state was
+ * a file reference reported nothing scrubbed and went to the new account unchanged. Deleting
+ * the reference instead would answer a different question than the one that was asked, with no
+ * way for the caller to tell, so the move is refused before dispatch.
+ */
+function fileOnlyBody() {
+  return {
+    model: "gpt-5.4",
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_file", file_id: "file_abc123" }] },
+    ],
+  };
+}
+
+describe("an account change refuses uploaded-file references instead of dropping them", () => {
+  afterEach(() => { clearConversationStateIssuerMap(); });
+
+  test("a file-only body is refused when the serving account is not the issuer", () => {
+    rememberConversationStateIssuer(BINDING_KEY, "account-a");
+    const body = fileOnlyBody();
+    // The gap this closes: the scrub reports nothing to do, which used to mean "carry on".
+    expect(applyAccountChangeConversationStateScrub({
+      body, bindingKey: BINDING_KEY, servingAccountId: "account-b",
+    })).toBe(false);
+
+    const refusal = accountChangeFileReferenceRefusal({
+      body, bindingKey: BINDING_KEY, servingAccountId: "account-b",
+    });
+    expect(refusal?.status).toBe(400);
+    // The reference is left byte-for-byte intact: refusing is the contract, not scrubbing.
+    expect(collectConversationStateCarriers(body).fileIds).toEqual(["file_abc123"]);
+  });
+
+  test("the same body is served without complaint by its own issuer", () => {
+    rememberConversationStateIssuer(BINDING_KEY, "account-a");
+    expect(accountChangeFileReferenceRefusal({
+      body: fileOnlyBody(), bindingKey: BINDING_KEY, servingAccountId: "account-a",
+    })).toBeUndefined();
+  });
+
+  test("an in-request move is refused on the prior account alone, with no remembered issuer", () => {
+    expect(accountChangeFileReferenceRefusal({
+      body: fileOnlyBody(),
+      bindingKey: BINDING_KEY,
+      servingAccountId: "account-b",
+      priorAccountId: "account-a",
+    })?.status).toBe(400);
+  });
+
+  test("a file reference behind a previous_response_id is still found", () => {
+    rememberConversationStateIssuer(BINDING_KEY, "account-a");
+    const body = { ...turnBody(), input: [...fileOnlyBody().input] } as Record<string, unknown>;
+    body.previous_response_id = "resp_account_a";
+    // The portability verdict reports only the FIRST reason it finds, so a body carrying both
+    // would have reported the response id and let the file through the scrub untouched.
+    expect(canPortConversationState(collectConversationStateCarriers(body)))
+      .toMatchObject({ portable: false, reason: "previous-response-id" });
+    expect(accountChangeFileReferenceRefusal({
+      body, bindingKey: BINDING_KEY, servingAccountId: "account-b",
+    })?.status).toBe(400);
+  });
+
+  test("a body with no file reference keeps the existing scrub-and-continue contract", () => {
+    rememberConversationStateIssuer(BINDING_KEY, "account-a");
+    const body = turnBody() as Record<string, unknown>;
+    expect(accountChangeFileReferenceRefusal({
+      body, bindingKey: BINDING_KEY, servingAccountId: "account-b",
+    })).toBeUndefined();
+    expect(applyAccountChangeConversationStateScrub({
+      body, bindingKey: BINDING_KEY, servingAccountId: "account-b",
+    })).toBe(true);
+  });
+});
 
 function compactTurnBody(text = "keep this compact user turn") {
   return {
@@ -152,3 +233,75 @@ describe("Codex pool account-change conversation-state scrub", () => {
   });
 });
 
+/**
+ * The alternate-account paths ask this question BEFORE they resolve an alternate (#4710).
+ *
+ * They cannot answer with a status the way the initial dispatch does, because an earlier
+ * response already exists and is what the caller returns. So they refuse the move instead, and
+ * the predicate they refuse on has to be answerable from the body alone -- no binding, no
+ * serving account, no issuer -- since none of those are known yet at that point.
+ */
+describe("uploaded-file detection answers before an alternate account is chosen (#4710)", () => {
+  function fileAttachment(id = "file_account_a") {
+    return {
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "what does this say?" },
+        { type: "input_file", file_id: id },
+      ],
+    };
+  }
+
+  test("a file-only body is detected from the body alone", () => {
+    expect(conversationCarriesUploadedFiles({ model: "gpt-5.4", input: [fileAttachment()] })).toBe(true);
+  });
+
+  test("a file behind a previous_response_id is still detected", () => {
+    // The portability verdict reports only the first reason it finds, so a predicate built on it
+    // would miss this body and let the retry sites move a file reference they already refused
+    // to move when it appeared alone.
+    expect(conversationCarriesUploadedFiles({
+      model: "gpt-5.4",
+      previous_response_id: "resp_account_a",
+      input: [fileAttachment()],
+    })).toBe(true);
+  });
+
+  test("top-level file_id and file_ids shapes are both detected", () => {
+    expect(conversationCarriesUploadedFiles({
+      input: [{ type: "message", role: "user", file_id: "file_1" }],
+    })).toBe(true);
+    expect(conversationCarriesUploadedFiles({
+      input: [{ type: "message", role: "user", file_ids: ["file_2"] }],
+    })).toBe(true);
+  });
+
+  test("a body with no uploaded file lets the move proceed", () => {
+    // The retry sites must keep failing over for every ordinary body; a predicate that answered
+    // true too often would silently disable alternate-account recovery.
+    expect(conversationCarriesUploadedFiles(turnBody())).toBe(false);
+    expect(conversationCarriesUploadedFiles(compactTurnBody())).toBe(false);
+    expect(conversationCarriesUploadedFiles({ model: "gpt-5.4", input: [] })).toBe(false);
+    expect(conversationCarriesUploadedFiles({})).toBe(false);
+    expect(conversationCarriesUploadedFiles(undefined)).toBe(false);
+    expect(conversationCarriesUploadedFiles("not a body")).toBe(false);
+  });
+
+  test("an empty file_ids array is not a file reference", () => {
+    // fileIds is optional on the carrier type and always materialised as an array here, so the
+    // emptiness test has to live in one place rather than being rewritten per caller.
+    expect(conversationCarriesUploadedFiles({
+      input: [{ type: "message", role: "user", file_ids: [] }],
+    })).toBe(false);
+  });
+
+  test("the refusal message names the cause, the persistence, and both remedies", () => {
+    // This refusal does not clear itself: the reference stays in history, so every later turn is
+    // refused again. A caller told only that the reference is invalid would resend unchanged.
+    expect(ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE).toContain("later turns will be refused");
+    expect(ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE).toContain("re-upload the files");
+    expect(ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE).toContain("start a new conversation");
+    expect(ACCOUNT_CHANGE_FILE_SCOPE_MESSAGE).toContain("no file was removed");
+  });
+});
