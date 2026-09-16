@@ -43,6 +43,7 @@ function controlledSource() {
       cancel(reason) { cancelReasons.push(reason); },
     }, { highWaterMark: 0 }),
     push(bytes: Uint8Array) { controller.enqueue(bytes); },
+    close() { controller.close(); },
     error(reason: unknown) { controller.error(reason); },
     cancelReasons,
   };
@@ -294,6 +295,91 @@ describe("inspection pacing boundary", () => {
 });
 
 describe("non-stream inspection boundary", () => {
+  test.each(["eof", "read_error", "cancel", "cancel_rejected"] as const)("releases its source reader after %s", async outcome => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const source = new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+      cancel() { if (outcome === "cancel_rejected") return Promise.reject(new Error("fixture cancel rejection")); },
+    }, { highWaterMark: 0 });
+    const ended: string[] = [];
+    const reader = createBoundedResponseLogBody(source, {
+      json: false, inspect() {}, finalize: reason => ended.push(reason),
+    }).getReader();
+    const pending = reader.read();
+    if (outcome === "eof") { controller.close(); await bounded(pending); }
+    else if (outcome === "read_error") {
+      const failure = new Error("fixture reader failure");
+      controller.error(failure);
+      await expect(pending).rejects.toBe(failure);
+    } else { await bounded(reader.cancel("fixture cancellation")); await bounded(pending); }
+    expect(source.locked).toBe(false);
+    expect(ended).toEqual([outcome === "cancel_rejected" ? "cancel" : outcome]);
+  });
+
+  test("a bounded body can cancel one native tee branch without waiting for or truncating its sibling", async () => {
+    const source = controlledSource();
+    const [left, right] = source.body.tee();
+    const ended: string[] = [];
+    const reader = createBoundedResponseLogBody(left, {
+      json: false, inspect() {}, finalize: reason => ended.push(reason),
+    }).getReader();
+    const sibling = right.getReader();
+    const first = reader.read(), siblingFirst = sibling.read();
+    source.push(encoder.encode("first"));
+    await bounded(Promise.all([first, siblingFirst]));
+    await bounded(reader.cancel("inspection finished"));
+    expect(left.locked).toBe(false);
+    expect(ended).toEqual(["cancel"]);
+    expect(source.cancelReasons).toEqual([]);
+    const next = sibling.read();
+    source.push(encoder.encode("second"));
+    expect((await bounded(next)).value).toEqual(encoder.encode("second"));
+    source.close();
+    expect((await bounded(sibling.read())).done).toBe(true);
+    sibling.releaseLock();
+  });
+
+  test("diagnostic bytes do not alias mutable chunks delivered to the client", async () => {
+    const source = controlledSource();
+    const inspected: string[] = [];
+    const reader = createBoundedResponseLogBody(source.body, {
+      json: false, inspect: text => inspected.push(text), finalize() {},
+    }).getReader();
+    const original = encoder.encode("original");
+    const pending = reader.read();
+    source.push(original);
+    await bounded(pending);
+    original.fill(120);
+    source.close();
+    await bounded(reader.read());
+    expect(inspected).toEqual(["original"]);
+  });
+
+  test("multibyte error inspection ends at the byte prefix while delivery remains whole", async () => {
+    const payload = "한".repeat(10_000);
+    const inspected: string[] = [];
+    const body = createBoundedResponseLogBody(new Response(payload).body!, {
+      json: false, inspect: text => inspected.push(text), finalize() {},
+    });
+    expect(await new Response(body).text()).toBe(payload);
+    expect(inspected).toEqual([new TextDecoder().decode(encoder.encode(payload).subarray(0, 8_192))]);
+  });
+
+  test("cancel wins a racing source error without finalizing twice", async () => {
+    const source = controlledSource();
+    const ended: string[] = [];
+    const reader = createBoundedResponseLogBody(source.body, {
+      json: true, inspect() { throw new Error("partial JSON must not be inspected"); }, finalize: reason => ended.push(reason),
+    }).getReader();
+    const pending = reader.read();
+    await Promise.resolve();
+    source.error(new Error("fixture source failure"));
+    await bounded(reader.cancel("fixture cancellation"));
+    await bounded(pending);
+    expect(ended).toEqual(["cancel"]);
+    expect(source.body.locked).toBe(false);
+  });
+
   test("JSON over its inspection allowance is delivered intact but never inspected", async () => {
     const inspected: string[] = [];
     const ended: string[] = [];
