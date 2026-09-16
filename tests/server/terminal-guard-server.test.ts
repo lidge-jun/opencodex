@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -99,6 +100,7 @@ describe("server terminal guard integration", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    clearKeyCooldowns("claude-se");
   });
 
   test("re-asks Claude once inside the same Responses turn and forwards the tool call", async () => {
@@ -121,6 +123,57 @@ describe("server terminal guard integration", () => {
     const messages = requestBodies[1]?.messages as Array<{ role?: string; content?: Array<{ text?: string }> }>;
     expect(messages.at(-1)?.role).toBe("user");
     expect(messages.at(-1)?.content?.[0]?.text).toContain("你刚才只描述了计划");
+  });
+
+  test.each([
+    { adapter: "anthropic", reserve: 1, rateLimited: false },
+    { adapter: "openai-chat", reserve: 1, rateLimited: false },
+    { adapter: "anthropic", reserve: 0, rateLimited: false },
+    { adapter: "anthropic", reserve: 1, rateLimited: true },
+  ] as const)("terminal repair after reset exhaustion uses only the available reserve: %j", async ({ adapter, reserve, rateLimited }) => {
+    const isChat = adapter === "openai-chat";
+    const requestConfig = isChat ? openAiChatConfig(true) : structuredClone(config);
+    if (rateLimited) requestConfig.providers["claude-se"]!.apiKeyPool = [
+      { id: "k1", key: "sk-test", addedAt: 1 },
+      { id: "k2", key: "sk-test-2", addedAt: 2 },
+    ];
+    const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY, finalRecoveryAllowance: reserve });
+    let sends = 0;
+    const keys: Array<string | null> = [];
+    globalThis.fetch = (async (_input, init) => {
+      sends += 1;
+      keys.push(new Headers(init?.headers).get("x-api-key"));
+      if (sends <= 2) throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+      if (sends > 3 && rateLimited) return new Response("rate limited", { status: 429 });
+      return isChat
+        ? chatSse(sends === 3 ? chatFirstTurn : chatContinuationTurn)
+        : anthropicSse(sends === 3 ? firstTurn : continuationTurn);
+    }) as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: isChat ? "glm-gw/glm-5.2" : "se-claude-opus-4.8",
+        input: "请检查这个问题并修复代码",
+        stream: true,
+        tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }],
+      }),
+    }), requestConfig, { model: "", provider: "" }, { sendBudget: budget });
+    const text = await response.text();
+    expect(sends).toBe(3 + reserve);
+    expect(budget.used).toBe(sends);
+    expect(budget.reserveSpent).toBe(reserve === 1);
+    if (rateLimited) {
+      expect(text).toContain("Provider continuation error 429");
+      expect(keys).toEqual(["sk-test", "sk-test", "sk-test", "sk-test"]);
+      expect(budget.alternateTargetSends).toBe(0);
+    } else if (reserve) {
+      expect(text).toContain("response.function_call_arguments.done");
+      expect(text).not.toContain("Provider continuation failed");
+    } else {
+      expect(text).toContain("Provider continuation failed");
+      expect(text).not.toContain("response.function_call_arguments.done");
+    }
   });
 
   test("terminal-guard continuation 429 replays on the same key before surfacing", async () => {

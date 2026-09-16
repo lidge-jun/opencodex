@@ -86,7 +86,6 @@ export function createAdapterContinuations(
     ResponsesSendBudget,
     | "adapterSendBudget"
     | "noteAdapterPhysicalSend"
-    | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "reserveCredentialHop"
     | "pendingHopPermit"
@@ -120,7 +119,6 @@ export function createAdapterContinuations(
   const {
     adapterSendBudget,
     noteAdapterPhysicalSend,
-    remainingTransientSendBudget,
     noteTransientSends,
     reserveCredentialHop,
     recoverySendAllowance,
@@ -219,10 +217,11 @@ export function createAdapterContinuations(
           ? fetchWithTransientRetry
           : fetchWithResetRetry;
         const continuationCap = continuationTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
-        const allowance = replayKind
-          ? recoverySendAllowance(continuationCap, recoveryClassFor(replayKind),
-            `${route.providerName}|${route.modelId}|${replayKind}`)
-          : { attempts: remainingTransientSendBudget(continuationCap), permit: undefined };
+        // The first terminal-guard re-ask repairs a no-tool completion even without a
+        // recovery log label. It shares the one final reserve with subsequent recovery.
+        const allowance = recoverySendAllowance(continuationCap,
+          replayKind ? recoveryClassFor(replayKind) : "repair",
+          `${route.providerName}|${route.modelId}|${replayKind ?? "terminal-continuation"}`);
         try {
           return await fetchContinuationWithRetryPolicy(
           recovery => {

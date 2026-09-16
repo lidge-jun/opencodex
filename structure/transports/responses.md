@@ -680,6 +680,12 @@ budget before it knows whether a rotation is even possible, because the reservat
 `reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
 idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
 
+An initial terminal-guard continuation repairs a no-tool completion, even without a recovery
+log label. It may spend the shared final reserve after base sends are exhausted. The retry helper
+settles that permit once; a missing or spent reserve prevents another dispatch or credential hop.
+`tests/server/terminal-guard-server.test.ts` verifies reset exhaustion on Anthropic and opted-in
+OpenAI Chat, no-reserve refusal, and a final continuation 429 without an unfunded key change.
+
 Caller-counted adapter dispatch confirms its hop after request shaping and pacing. Retry-helper
 dispatch reserves with `countedExternally: true` and passes the booking through `pendingHopPermit`.
 An adapter declaring `fetchResponseUsesSendBudget`, currently Kiro, also receives an externally

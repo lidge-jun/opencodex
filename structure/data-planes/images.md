@@ -4,7 +4,7 @@ Vision preprocessing and image/video/search execution use the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Generic Responses API-key failover follows the [bounded rotation contract](../transports/responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](../transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches and OAuth replays, including budget-aware adapters, settle physical sends once; nested compact/combo scopes retain the prepaid recovery without enlarging its ceiling or charging twice.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Generic Responses API-key failover follows the [bounded rotation contract](../transports/responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](../transports/responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches and OAuth replays, including budget-aware adapters, settle physical sends once; nested compact/combo scopes retain the prepaid recovery without enlarging its ceiling or charging twice. Initial terminal-guard repairs use that same shared final reserve.
 
 Hosted Responses image-tool eligibility uses the shared compatibility policy without a
 Codex Spark exception; standalone Images retain the separate relay contract below. See
