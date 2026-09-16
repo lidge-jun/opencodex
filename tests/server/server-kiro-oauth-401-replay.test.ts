@@ -9,6 +9,8 @@ import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { resetKiroThrottleStateForTests } from "../../src/adapters/kiro-retry";
 import { startServer } from "../../src/server";
+import { handleResponses } from "../../src/server/responses";
+import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -144,6 +146,35 @@ function installFetch(chatStatuses: number[]): { chatAuth: string[]; refreshCall
 }
 
 describe("Kiro OAuth upstream 401 replay", () => {
+  test.each([1, 0])("Kiro empty completion after two resets uses only its available repair reserve (%i)", async reserve => {
+    resetKiroThrottleStateForTests();
+    await seedOAuth();
+    const cfg = { ...config(), emptyCompletionRetry: true };
+    const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY, finalRecoveryAllowance: reserve });
+    let sends = 0;
+    globalThis.fetch = (async input => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== CHAT_ENDPOINT) throw new Error(`Unexpected fixture request: ${url}`);
+      sends += 1;
+      if (sends <= 2) throw Object.assign(new Error("fixture ECONNRESET"), { code: "ECONNRESET" });
+      return new Response(sends === 3 ? reasoningStream("Thinking without an answer") : eventStream("repair completed"), {
+        headers: { "content-type": "application/vnd.amazon.eventstream" },
+      });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "kiro/claude-sonnet-4.5", input: "hello", stream: false }),
+      }), cfg, { model: "", provider: "" }, { sendBudget: budget });
+      const text = await response.text();
+      expect(sends).toBe(3 + reserve);
+      expect(budget.used).toBe(sends);
+      expect(budget.reserveSpent).toBe(reserve === 1);
+      if (reserve) expect(text).toContain("repair completed");
+      else expect(text).not.toContain("repair completed");
+    } finally { resetKiroThrottleStateForTests(); }
+  }, 20_000);
+
   test.each(["quota", "success", "reset-success", "empty-retry"] as const)("Kiro OAuth hops charge adapter-owned physical sends once (%s)", async mode => {
     const authorizations: string[] = [];
     clearGenericFailoverHealth();

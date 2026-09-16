@@ -15,7 +15,7 @@ import {
   recordAttemptCredentialSource,
 } from "../request-log";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
-import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
+import { providerFetch, fetchWithHeaderTimeout, safeHostLabel, storedPoolReplayDispatchNotifier } from "./fetch-helpers";
 import {
   transientRetryPolicyFor,
   rateLimitRetryDelayMs,
@@ -193,22 +193,35 @@ export function createAdapterContinuations(
         if (transportState.activeAdapter.fetchResponse) {
           noteAttemptSend(logCtx.activeAttempt, continuationEstimate, replayKind);
           await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
-          const hop = sendBudgetState.pendingHopPermit;
-          const replaySendBudget = transportState.activeAdapter.fetchResponseUsesSendBudget && adapterSendBudget && hop
-            ? adapterSendBudget.deriveScope({ ...adapterSendBudget.policy, finalRecoveryAllowance: 0 }, hop)
-            : adapterSendBudget;
-          return await transportState.activeAdapter.fetchResponse(builtContinuationRequest, {
-            abortSignal: upstream.signal,
-            timeoutMs: connectMs,
-            sendBudget: replaySendBudget,
-            onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
-            stream: nextParsed.stream,
-            executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
-              providerName: route.providerName,
-              modelId: nextParsed.modelId,
-            }),
-          });
+          // An adapter-owned repair needs the same prepaid reserve as a credential hop.
+          // Acquire after shaping/pacing, reuse an existing hop, and refund only if unused.
+          const ownedPermit = transportState.activeAdapter.fetchResponseUsesSendBudget && adapterSendBudget
+            ? sendBudgetState.pendingHopPermit ?? recoverySendAllowance(adapterSendBudget.policy.baseSendAllowance,
+              replayKind ? recoveryClassFor(replayKind) : "repair", builtContinuationRequest.url).permit
+            : undefined;
+          const callerHop = transportState.activeAdapter.fetchResponseUsesSendBudget
+            ? undefined : sendBudgetState.pendingHopPermit;
+          try {
+            const replaySendBudget = adapterSendBudget && ownedPermit
+              ? adapterSendBudget.deriveScope({ ...adapterSendBudget.policy, finalRecoveryAllowance: 0 }, ownedPermit)
+              : adapterSendBudget;
+            return await transportState.activeAdapter.fetchResponse(builtContinuationRequest, {
+              abortSignal: upstream.signal,
+              timeoutMs: connectMs,
+              sendBudget: replaySendBudget,
+              onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
+              stream: nextParsed.stream,
+              executor: storedPoolReplayDispatchNotifier(providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
+                providerName: route.providerName,
+                modelId: nextParsed.modelId,
+              }), callerHop ? () => {
+                if (!callerHop.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtContinuationRequest.url));
+              } : undefined),
+            });
+          } finally {
+            ownedPermit?.release();
+          }
         }
         // Same #1851 scope guard as the initial send: transient-5xx retry only for direct
         // Google AI Studio; every other adapter keeps reset-only semantics here.
@@ -222,10 +235,13 @@ export function createAdapterContinuations(
         const allowance = recoverySendAllowance(continuationCap,
           replayKind ? recoveryClassFor(replayKind) : "repair",
           `${route.providerName}|${route.modelId}|${replayKind ?? "terminal-continuation"}`);
+        let firstPermit = allowance.permit;
         try {
           return await fetchContinuationWithRetryPolicy(
           recovery => {
-            if (allowance.permit && !allowance.permit.use()) {
+            const permit = firstPermit;
+            firstPermit = undefined;
+            if (permit && !permit.use()) {
               throw new SendBudgetExhaustedError(safeHostLabel(builtContinuationRequest.url));
             }
             noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind);
@@ -448,8 +464,7 @@ export function createAdapterContinuations(
               sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
               nextContinuationRecoveryKind = "oauth-account-429";
-              sendBudgetState.pendingHopPermit = !transportState.activeAdapter.fetchResponse
-                || transportState.activeAdapter.fetchResponseUsesSendBudget ? hop.permit : undefined;
+              sendBudgetState.pendingHopPermit = hop.permit;
               continue;
             }
           } catch {

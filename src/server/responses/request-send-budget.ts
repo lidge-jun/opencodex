@@ -100,12 +100,13 @@ export function createResponsesSendBudget(
     targetKey: string,
   ): { attempts: number; permit?: SingleUseDispatchPermit } => {
     const base = remainingTransientSendBudget(cap);
-    if (base > 0) return { attempts: base };
     if (pendingHopPermit) {
       const hopPermit = pendingHopPermit;
       pendingHopPermit = undefined;
-      return { attempts: 1, permit: hopPermit };
+      // The prepaid first send already reduced base; retain the unspent ordinary retries.
+      return { attempts: Math.min(cap, base + 1), permit: hopPermit };
     }
+    if (base > 0) return { attempts: base };
     if (!isRequestExecutionBudget(sendBudget)) return { attempts: 0 };
     const decision = sendBudget.reserveDispatch({ sendClass, targetKey, countedExternally: true });
     return decision.allowed ? { attempts: 1, permit: decision.permit } : { attempts: 0 };

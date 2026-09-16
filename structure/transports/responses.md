@@ -690,10 +690,17 @@ Caller-counted adapter dispatch confirms its hop after request shaping and pacin
 dispatch reserves with `countedExternally: true` and passes the booking through `pendingHopPermit`.
 An adapter declaring `fetchResponseUsesSendBudget`, currently Kiro, also receives an externally
 counted booking, but adopts it through a derived budget at its own physical-send boundary.
-That scope shares the request ceiling and adds no recovery reserve. Other `fetchResponse`
+An initial Kiro empty-completion repair reserves the same final send when no credential hop is
+pending. Its derived scope shares the request ceiling and adds no recovery reserve. Retry-helper
+replays include the prepaid first send alongside remaining base retries, confirming that permit
+only on their first dispatch. Other `fetchResponse`
 implementations retain caller-owned confirmation; having that method alone does not establish
 that the adapter consumes budget permits. A queued continuation carries an unused booking into
 its next dispatch and releases it if shaping, pacing or admission fails before a send.
+Caller-owned continuation hops confirm on the first executor invocation, so an adapter that
+throws before dispatch also refunds its booking. Google Vertex/Antigravity internal retries do
+not yet consume this physical-send budget; preserving their hop bookkeeping does not impose a
+new total cap on those adapters.
 
 `tests/server/server-kiro-oauth-401-replay.test.ts` counts actual Kiro requests across three stored
 OAuth accounts, including an earlier connection reset and the third account's success or quota

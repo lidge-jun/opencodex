@@ -453,10 +453,13 @@ export async function prepareAdapterExchange(
             recoveryClassFor(recovery),
             `${route.providerName}|${route.modelId}|${recovery}`,
           );
+          let firstPermit = refetchAllowance.permit;
           try {
             return await refetchWithPolicy(
               recoveryKind => {
-                if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
+                const permit = firstPermit;
+                firstPermit = undefined;
+                if (permit && !permit.use()) {
                   throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
                 }
                 // Same boundary on the helper path: the thunk is what reaches the wire, and it

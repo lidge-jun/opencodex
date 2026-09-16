@@ -6,6 +6,8 @@ import {
   readResponsesCoreModule,
 } from "../helpers/responses-core-source";
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { createAdapterContinuations } from "../../src/server/responses/adapter-continuation";
+import type { AdapterFetchContext, AdapterRequest } from "../../src/adapters/base";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { TransientSendBudget } from "../../src/lib/upstream-retry";
@@ -129,6 +131,109 @@ function budgetOwner(sendBudget: TransientSendBudget) {
 }
 
 describe("Responses request-owned send budget after extraction", () => {
+  test("a prepaid retry-helper continuation retains the remaining base retry after a reset", async () => {
+    const holder = createRequestExecutionBudget();
+    holder.used = 1;
+    const { owner, dispose } = budgetOwner(holder);
+    const hop = owner.reserveCredentialHop("auth-recovery", "fixture", true);
+    expect(hop.allowed).toBe(true);
+    owner.pendingHopPermit = hop.permit;
+    const translatorBudget = createTranslatorBudget();
+    const parsed = { modelId: "fixture", stream: false };
+    let sends = 0;
+    const adapter = {
+      name: "openai-chat",
+      async buildRequest() { return { url: "https://fixture.invalid/", method: "POST", headers: {}, body: "{}" }; },
+      async parseResponse() { return []; },
+    };
+    type Args = Parameters<typeof createAdapterContinuations>;
+    const continuation = createAdapterContinuations(
+      { options: {}, config: {}, logCtx: { model: "fixture", provider: "fixture" } } as Args[0],
+      { route: { providerName: "fixture", modelId: "fixture", provider: {
+        adapter: "openai-chat", baseUrl: "https://fixture.invalid/",
+      } }, parsed, translatorBudget } as Args[1],
+      { activeAdapter: adapter, oauthDispatch: () => async () => {
+        sends += 1;
+        if (sends === 1) throw Object.assign(new Error("fixture ECONNRESET"), { code: "ECONNRESET" });
+        return new Response("{}");
+      } } as unknown as Args[2],
+      { routedCompaction: false }, owner,
+      { upstream: new AbortController(), connectMs: 100, rateLimitPolicy: null, rateLimitRetries: 0,
+        stallTimeoutMs: 100, keyPool429RetryAllowed: () => false },
+    );
+    try {
+      const events = [];
+      for await (const event of continuation.fetchTerminalGuardContinuation(parsed as Args[1]["parsed"], "oauth-account-429")) events.push(event);
+      expect(sends).toBe(2);
+      expect(holder.used).toBe(3);
+      expect(holder.reserveSpent).toBe(false);
+      expect(owner.pendingHopPermit).toBeUndefined();
+      expect(events).toEqual([]);
+      hop.permit?.release();
+      expect(holder.used).toBe(3);
+    } finally { translatorBudget.dispose(); dispose(); }
+  });
+
+  for (const [adapterOwned, prepaid] of [[true, false], [true, true], [false, true]]) {
+    test.each(["build", "pacing", "adapter", "sent"] as const)(`continuation refunds only unused permits (adapterOwned=${adapterOwned}, prepaid=${prepaid}, %s)`, async failure => {
+      const holder = createRequestExecutionBudget();
+      holder.used = 3;
+      const { owner, dispose } = budgetOwner(holder);
+      if (prepaid) {
+        const hop = owner.reserveCredentialHop("auth-recovery", "fixture", adapterOwned);
+        expect(hop.allowed).toBe(true);
+        owner.pendingHopPermit = hop.permit;
+      }
+      const translatorBudget = createTranslatorBudget();
+      const upstream = new AbortController();
+      if (failure === "pacing") upstream.abort();
+      let sends = 0;
+      const parsed = { modelId: "fixture", stream: false };
+      const adapter = {
+        name: adapterOwned ? "kiro" : "google", fetchResponseUsesSendBudget: adapterOwned,
+        async buildRequest() {
+          if (failure === "build") throw new Error("fixture build failure");
+          return { url: "https://fixture.invalid/", method: "POST", headers: {}, body: "{}" };
+        },
+        async fetchResponse(request: AdapterRequest, ctx: AdapterFetchContext) {
+          if (failure === "adapter") throw new Error("fixture before physical send");
+          if (adapterOwned) {
+            const send = ctx.sendBudget!.reserveDispatch({ sendClass: "transient", targetKey: request.url });
+            expect(send.allowed).toBe(true);
+            if (!send.allowed) throw new Error("Expected funded physical send");
+            expect(send.permit.use()).toBe(true);
+          } else {
+            await ctx.executor!(request.url, { method: request.method, body: request.body });
+          }
+          sends += 1;
+          return new Response("{}");
+        },
+        async parseResponse() { return []; },
+      };
+      type Args = Parameters<typeof createAdapterContinuations>;
+      const continuation = createAdapterContinuations(
+        { options: {}, config: {}, logCtx: { model: "fixture", provider: "fixture" } } as Args[0],
+        { route: { providerName: "fixture", modelId: "fixture", provider: {
+          adapter: "kiro", baseUrl: "https://fixture.invalid/",
+          requestPacing: { enabled: true, minIntervalMs: failure === "pacing" ? 1 : 0 },
+        } }, parsed, translatorBudget } as Args[1],
+        { activeAdapter: adapter, oauthDispatch: () => async () => new Response("{}") } as unknown as Args[2],
+        { routedCompaction: false }, owner,
+        { upstream, connectMs: 100, rateLimitPolicy: null, rateLimitRetries: 0, stallTimeoutMs: 100,
+          keyPool429RetryAllowed: () => false },
+      );
+      try {
+        const events = [];
+        for await (const event of continuation.fetchTerminalGuardContinuation(parsed as Args[1]["parsed"], "empty-completion")) events.push(event);
+        expect(sends).toBe(failure === "sent" ? 1 : 0);
+        expect(holder.used).toBe(failure === "sent" ? 4 : 3);
+        expect(holder.reserveSpent).toBe(failure === "sent");
+        expect(owner.pendingHopPermit).toBeUndefined();
+        expect(events.some(event => event.type === "error")).toBe(failure !== "sent");
+      } finally { translatorBudget.dispose(); dispose(); }
+    });
+  }
+
   test("legacy holders retain identity and an exhausted remainder stays zero", () => {
     const holder = { used: 2 };
     const { owner, dispose } = budgetOwner(holder);
