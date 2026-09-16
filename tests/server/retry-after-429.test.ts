@@ -6,6 +6,7 @@ import {
 } from "../../src/lib/retry-after";
 import { formatPassthroughUpstreamError } from "../../src/server/responses/passthrough-error";
 import { consumeComboFailure } from "../../src/server/responses/core";
+import { fetchWithResetRetry } from "../../src/lib/upstream-retry";
 
 describe("resolveClientRetryAfter (#507)", () => {
   test("prefers a validated upstream Retry-After header", () => {
@@ -101,6 +102,35 @@ describe("formatErrorResponse Retry-After (#507)", () => {
 });
 
 describe("formatPassthroughUpstreamError Retry-After (#507)", () => {
+  // The refusal shares the status of a retryable rate limit, so the default below would have
+  // handed it a "Retry-After: 2" -- an instruction to send a turn that may already be running.
+  // The bytes come from the helper rather than a literal so the recognition is pinned against
+  // the shape the proxy actually emits.
+  test("a replay refusal gets no Retry-After and keeps none it is handed", async () => {
+    const refusal = await fetchWithResetRetry(async () => {
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    });
+    const body = await refusal.text();
+
+    const bare = formatPassthroughUpstreamError(429, body);
+    expect(bare.status).toBe(429);
+    expect(bare.headers.get("Retry-After")).toBeNull();
+
+    const headers = new Headers({ "retry-after": "30", "content-type": "application/json" });
+    const withUpstreamHeader = formatPassthroughUpstreamError(429, body, { headers });
+    expect(withUpstreamHeader.headers.get("Retry-After")).toBeNull();
+    expect(await withUpstreamHeader.text()).toBe(body);
+  });
+
+  test("a refusal whose body did not survive the read still gets no Retry-After", () => {
+    // The bounded reader answers "" for anything not display-safe, and the empty-body branch
+    // is the one that invents the default. Caller provenance is what covers this case.
+    expect(formatPassthroughUpstreamError(429, "").headers.get("Retry-After"))
+      .toBe(DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC);
+    expect(formatPassthroughUpstreamError(429, "", { replayRefusal: true }).headers.get("Retry-After"))
+      .toBeNull();
+  });
+
   test("empty-body retryable 429 gets a default Retry-After", async () => {
     const response = formatPassthroughUpstreamError(429, "");
     expect(response.status).toBe(429);

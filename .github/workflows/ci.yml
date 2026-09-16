@@ -535,9 +535,10 @@ jobs:
       # (`is_bun_runtime_crash`). The unsharded macOS control had no equivalent,
       # so the same crash that Linux absorbs failed the whole promotion here.
       #
-    # Keep the signature list in sync with `is_bun_runtime_crash` in
-    # scripts/ci/run-bun-test-batches.sh. An assertion failure still fails on
-    # the first attempt — only the crash signature is retried, exactly once.
+    # The classifier is `is_bun_runtime_crash` from scripts/ci/bun-crash-signatures.sh, which
+    # this leg, the Windows leg, the macOS control and the Linux batch runner all source. It used
+    # to be four inline copies kept in sync by a test; one definition cannot drift. An assertion
+    # failure still fails on the first attempt — only a crash is retried, exactly once.
       - name: Test
         env:
           MACOS_TEST_SHARD: ${{ matrix.shard }}
@@ -546,6 +547,8 @@ jobs:
           # errexit so a Bun crash reaches PIPESTATUS and the bounded retry.
           set +e
           set -uo pipefail
+          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
+          source scripts/ci/bun-crash-signatures.sh
 
           run_macos_suite() {
             local suite_log suite_status attempt
@@ -559,7 +562,7 @@ jobs:
                 rm -f "$suite_log"
                 return 0
               fi
-              if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
+              if ! is_bun_runtime_crash "$suite_status" "$suite_log"; then
                 echo "::error::macOS suite failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
                 rm -f "$suite_log"
                 return "$suite_status"
@@ -685,15 +688,17 @@ jobs:
       # (`is_bun_runtime_crash`). The unsharded macOS control had no equivalent,
       # so the same crash that Linux absorbs failed the whole promotion here.
       #
-    # Keep the signature list in sync with `is_bun_runtime_crash` in
-    # scripts/ci/run-bun-test-batches.sh. An assertion failure still fails on
-    # the first attempt — only the crash signature is retried, exactly once.
+    # The classifier is `is_bun_runtime_crash` from scripts/ci/bun-crash-signatures.sh, shared
+    # with every other lane. An assertion failure still fails on the first attempt — only a
+    # crash is retried, exactly once.
       - name: Test
         run: |
           # GitHub Actions starts bash `run:` blocks with `-e`. Disable
           # errexit so a Bun crash reaches PIPESTATUS and the bounded retry.
           set +e
           set -uo pipefail
+          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
+          source scripts/ci/bun-crash-signatures.sh
           suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)"
           for attempt in 1 2; do
             # --timeout: Bun's default 5s per-test ceiling is the recurring flake
@@ -708,7 +713,7 @@ jobs:
             if [ "$suite_status" -eq 0 ]; then
               exit 0
             fi
-            if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
+            if ! is_bun_runtime_crash "$suite_status" "$suite_log"; then
               echo "::error::macOS suite failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
               exit "$suite_status"
             fi
@@ -834,6 +839,8 @@ jobs:
         run: |
           set +e
           set -uo pipefail
+          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
+          source scripts/ci/bun-crash-signatures.sh
           suite_log="$(mktemp -t ocx-windows-suite.XXXXXX)"
           for attempt in 1 2; do
             bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/6 2>&1 | tee "$suite_log"
@@ -841,7 +848,7 @@ jobs:
             if [ "$suite_status" -eq 0 ]; then
               exit 0
             fi
-            if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
+            if ! is_bun_runtime_crash "$suite_status" "$suite_log"; then
               echo "::error::Windows shard ${{ matrix.shard }}/6 failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
               exit "$suite_status"
             fi

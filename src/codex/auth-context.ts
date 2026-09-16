@@ -52,6 +52,7 @@ import {
   type CodexThreadLineage,
 } from "./lineage";
 import {
+  cachedDeniedCodexAccountIdsForModel,
   entitledCodexAccountIdsForModel,
   isDirectCallerEntitledToCodexModel,
   resolveCodexModelEntitlements,
@@ -786,6 +787,11 @@ export interface ResolveCodexAuthContextOptions {
   requestScopedMainCredential?: boolean;
   /** Test seam for a Direct request's own forwarded ChatGPT credential. */
   isDirectCallerEntitledToCodexModel?: (headers: Headers, modelId: string) => Promise<boolean>;
+  /**
+   * This request's conversation carries live uploaded-file references (#4778). Retains the bound
+   * account across a VOLUNTARY quota move; involuntary release is untouched.
+   */
+  retainAccountForUploadedFiles?: boolean;
 }
 
 export interface CodexAccountSelectionAdmission {
@@ -978,6 +984,23 @@ export async function resolveCodexAuthContext(
     const modelEligibleAccountIds = entitledAccountIds
       ? new Set([...entitledAccountIds].filter(candidate => !excludeAccountIds?.has(candidate)))
       : undefined;
+    // #4768: the flagships stay visible and never fail closed, so this is evidence routing may
+    // ORDER by, not evidence it may refuse on. Read synchronously from rosters discovery has
+    // already gathered -- no upstream fetch joins the request path for the most commonly
+    // requested models in the product -- and passed to selection as a preference that is dropped
+    // whenever honouring it would leave no candidate.
+    //
+    // Under the SAME exclusion the entitlement snapshot above uses. The reader validates each
+    // cached roster against the account's current credential, and for native main that is a
+    // synchronous read of the physical stored token -- exactly what this request is forbidden to
+    // touch while a profile switch drains it or while it is served by a request-owned credential.
+    // Excluding main here costs nothing: the preference is an ordering hint, so main becomes
+    // unknown rather than denied, and unknown leaves selection exactly as it was.
+    const deniedModelAccountIds = cachedDeniedCodexAccountIdsForModel(
+      options.modelId,
+      undefined,
+      { excludeAccountIds },
+    );
     const selectionOptions = {
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
@@ -989,6 +1012,10 @@ export async function resolveCodexAuthContext(
         ? () => preserveRequestOwnedMainPin
         : options.isMainAccountTokenLive,
       modelEligibleAccountIds,
+      deniedModelAccountIds,
+      // Request-scoped and deliberately absent from `sharedStateSelectionOptions`: one
+      // conversation's attachments say nothing about where unrelated threads should be served.
+      retainAccountForUploadedFiles: options.retainAccountForUploadedFiles === true,
     };
     // A pre-drain selector reserves the native identity while reconciliation and
     // routing inspect it. Selectors arriving after the fence skip reconciliation

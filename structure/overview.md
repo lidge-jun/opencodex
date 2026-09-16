@@ -150,4 +150,6 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
 Native-main reauthentication retains the same flow and its Cancel control from the cancellation click, including an unresolved DELETE racing with a GET HTTP failure; retryable failure keeps cancellation available, and a trusted terminal result releases ownership.

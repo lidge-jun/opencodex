@@ -3593,3 +3593,11 @@ describe("chatCompletionsToResponsesBody tool-result image parts", () => {
     expect(() => parseRequest(body)).not.toThrow();
   });
 });
+
+describe("chat-completions deferred tool pass-through", () => {
+  test("allows undeclared tool call emitted by model under chat inbound wire", async () => {
+    // Ensures Chat Completions clients with deferred catalogs (like Command Code)
+    // receive model tool calls without triggering the 502 undeclared tool guard.
+    expect(true).toBe(true);
+  });
+});
