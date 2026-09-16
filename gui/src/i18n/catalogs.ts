@@ -1,4 +1,4 @@
-import { en, type TKey } from "./en";
+import { en, type TKey as BaseTKey } from "./en";
 import { de } from "./de";
 import { fr } from "./fr";
 import { ko } from "./ko";
@@ -8,18 +8,21 @@ import { ru } from "./ru";
 import { ja } from "./ja";
 import { tr } from "./tr";
 import { LAB_CATALOG_OVERRIDES, type LabLocale } from "./lab-translations";
+import { NATIVE_MAIN_TRANSLATIONS, type NativeMainTKey } from "./native-main-translations";
 
 /** React-free locale catalog registry for formatters and other shared helpers. */
 export type Locale = LabLocale;
+export type TKey = BaseTKey | NativeMainTKey;
 
-function withLabTranslations(locale: Locale, catalog: Record<TKey, string>): Record<TKey, string> {
-  return { ...catalog, ...LAB_CATALOG_OVERRIDES[locale] };
+function withLabTranslations(locale: Locale, catalog: Record<BaseTKey, string>): Record<TKey, string> {
+  return { ...catalog, ...LAB_CATALOG_OVERRIDES[locale], ...NATIVE_MAIN_TRANSLATIONS[locale] };
 }
 
 /**
  * CL-05 translations are overlaid centrally so the compatibility surface cannot regress to
  * copied English values in a locale catalog. The locale parity test still validates the base
  * catalogs; this overlay is deliberately limited to the closed `lab.*` namespace.
+ * Native-main copy is a separate, compile-checked namespace with all supported locales.
  */
 export const DICTS: Record<Locale, Record<TKey, string>> = {
   en: withLabTranslations("en", en),
@@ -41,5 +44,3 @@ export function localeDisplayName(locale: Locale): string {
 export function catalogValue(locale: Locale, key: TKey): string {
   return DICTS[locale][key];
 }
-
-export type { TKey };
