@@ -76,7 +76,7 @@ both execution paths.
 Provider connection tests and live model discovery share the GET-only provider outbound wrapper.
 Direct HTTP(S) resolves once and pins the validated address; HTTPS preserves the original Host/SNI
 and always verifies certificates. Proxy-configured requests stay on Bun fetch so HTTP(S)_PROXY,
-ALL_PROXY, and NO_PROXY semantics remain authoritative. The wrapper classifies successful local DNS answers, but
+ALL_PROXY, and NO_PROXY semantics remain authoritative when no explicit provider proxy is configured. The wrapper classifies successful local DNS answers, but
 only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
@@ -150,3 +150,21 @@ Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#r
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+## Provider-scoped HTTP proxy
+
+`src/lib/provider-egress.ts` resolves an explicit provider HTTP(S) proxy before
+pacing or dispatch. `src/server/responses/fetch-helpers.ts` carries it on HTTP/SSE
+requests, retaining physical-send admission, dispatch override and redirect
+blocking; this explicit route does not enter the native WebSocket fast path.
+Prebuilt Request inputs and caller-owned fetch executors reject rather than
+silently ignoring the requested proxy.
+
+`src/lib/provider-outbound.ts` applies the same override to its discovery and
+quota requests. Explicit proxy selection overrides inherited NO_PROXY routing,
+but does not relax literal or resolved-destination checks. A private destination
+that would require direct, peer-pinned transport is still rejected on an explicit
+proxy route. Proxy-selected peers remain unpinnable by the local process.
+The regression cases live in `tests/lib/provider-egress.test.ts`,
+`tests/providers/provider-egress-outbound.test.ts` and
+`tests/responses/provider-egress-fetch.test.ts`.
