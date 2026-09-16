@@ -1595,14 +1595,10 @@ describe("native fallback account preview", () => {
     }
 
     // And both must actually forward it into the preview call, not merely accept it.
-    // The guarantee is that BOTH sites forward the eligible set, which is what recovery lost.
-    // `modelId` is no longer the final argument -- #4546 appends the resolved pool lineage so
-    // preview and final resolution agree on a child's first turn -- so anything after it is
-    // allowed here rather than pinning the argument count.
-    // For the same reason the options object is no longer pinned to exactly one property:
-    // #4768 adds a per-candidate `deniedModelAccountIds` preference alongside the eligible set.
-    // What this still asserts is the thing recovery actually lost -- that both sites forward
-    // `modelEligibleAccountIds` into the selection options they build.
+    // Neither the argument list nor the options object is pinned to an exact shape: #4546
+    // appended the pool lineage after `modelId`, #4768 added `deniedModelAccountIds` beside the
+    // eligible set, and pinning either would fail on unrelated growth while still not catching
+    // the regression this exists for -- a site dropping `modelEligibleAccountIds` on the way in.
     const forwarded = source.match(
       /\{\s*\.\.\.(previewSelectionOptions|recoverySelectionOptions),[^}]*\bmodelEligibleAccountIds\b[^}]*\},\s*modelId,[^)]*\)/g,
     ) ?? [];
