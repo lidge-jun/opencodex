@@ -1,3 +1,4 @@
+import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -505,6 +506,12 @@ export async function prepareAdapterExchange(
     };
     // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
     recovery: for (;;) {
+      // Preserve the terminal verdict through adapter and combo error formatting.
+      // This also covers a reset reached by a 401/429/413 recovery refetch.
+      if (isNonReplayableResponse(upstreamResponse)) {
+        cleanupUpstreamAbort();
+        return upstreamResponse;
+      }
       if (
         upstreamResponse.status === 401
         && isOAuth401ReplayProvider

@@ -2,10 +2,10 @@
  * Retry guard for upstream fetches that die on stale pooled keep-alive sockets.
  *
  * chatgpt.com (Cloudflare) closes idle keep-alive connections server-side; Bun's fetch pool
- * reuses the half-closed socket and the request write fails with ECONNRESET before any
- * response bytes arrive. Retrying on a fresh connection is safe for our replayable
- * (string-body) upstream requests, because fetch() rejects only before response headers —
- * a caught error here means no response was ever received.
+ * reuses the half-closed socket and a request can fail before response headers arrive.
+ * A pre-header rejection does not prove that the origin did not process the request.
+ * Mechanically reusable bytes do not make a model POST idempotent: an ambiguous reset
+ * becomes a terminal, non-replayable response unless the operation is explicitly safe.
  *
  * Deliberately narrow: timeouts, aborts, ECONNREFUSED/DNS/TLS failures, and HTTP error
  * statuses (returned as Response, never thrown) are NOT retried. Mid-stream SSE resets are
@@ -352,6 +352,12 @@ export async function fetchWithAttemptDeadline(
 }
 
 export interface ResetRetryOptions {
+  /**
+   * Opt in only when repeating this operation cannot duplicate upstream effects.
+   * This permits reset retries, not extra sends: attempts and onSendsConsumed still
+   * bound and count every physical send. A string body is not replay-safety proof.
+   */
+  replaySafe?: boolean;
   abortSignal?: AbortSignal;
   /** Short host/path label for the retry warn log (no secrets/query strings). */
   label?: string;
@@ -442,9 +448,9 @@ export function applyUpstreamRecoveryInit<T extends RequestInit>(
 }
 
 /**
- * Run `doFetch`, retrying only connection-reset-shaped rejections (see
- * isConnectionResetError) with jittered backoff. The caller's thunk must be replay-safe
- * (string body); every retry is logged so persistent resets stay visible.
+ * Run `doFetch` within one send budget. Connection-reset-shaped rejections are
+ * terminal by default; only an explicitly replay-safe operation receives reset retries
+ * with jittered backoff. HTTP responses retain the caller's existing retry policy.
  */
 export async function fetchWithResetRetry(
   doFetch: ReplayableFetch,
@@ -475,6 +481,19 @@ export async function fetchWithResetRetry(
         if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
         throw err;
       }
+      if (opts.replaySafe !== true) {
+        // Return evidence instead of throwing a generic transport error: outer catches
+        // otherwise turn it into a replayable 502 and a combo/account recovery resends it.
+        // The WeakSet protects in-process recovery; the code survives JSON re-wrapping.
+        // Never expose the raw exception, which can contain credentials or request data.
+        const response = new Response(JSON.stringify({ error: {
+          type: "upstream_error",
+          code: UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+          message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
+        } }), { status: 502, headers: { "content-type": "application/json" } });
+        markResponseNonReplayable(response);
+        return response;
+      }
       if (attempt === attempts - 1) throw err;
       sawReset = true;
       lastError = err;
@@ -491,9 +510,9 @@ export async function fetchWithResetRetry(
 }
 
 /**
- * fetchWithResetRetry plus a transient-5xx status retry layer, PRE-STREAM only: a
- * returned Response has by definition not been relayed to the client yet, so replaying
- * the (string-body) request is safe. The failed attempt's body is cancelled before the
+ * fetchWithResetRetry plus the caller-selected transient-5xx policy, PRE-STREAM only.
+ * A received HTTP error follows that policy; an ambiguous reset's non-replayable
+ * verdict always stops it. The failed attempt's body is cancelled before the
  * retry; every returned response (ok, non-transient, aborted, slow, exhausted) keeps
  * its body intact. Honors Retry-After via retryBackoffDelayMs.
  *
