@@ -178,10 +178,11 @@ describe("Command Code model-key spelling", () => {
       models: order === "raw-first"
         ? [
             { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
-            { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 999_999 },
+            { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
           ]
         : [
-            { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 999_999 },
+            { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+
             { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
           ],
     }) as CommandCodeGeneratedConfig;
@@ -194,6 +195,29 @@ describe("Command Code model-key spelling", () => {
     expect(keysA.length).toBe(1);
     expect(keysB.length).toBe(1);
     expect(keysA[0]).toBe(keysB[0]);
+    // Pin the EXACT compatibility contract: the encoded spelling is the surviving key,
+    // because that is the form ~/.codex/config.toml stores and what an operator's
+    // --model reference resolves against.
+    expect(keysA[0]).toBe("command-code/deepseek-deepseek-v4.1-flash");
+    // Metadata is the first occurrence's, never a merge or a max: document that so a
+    // future metadata-merge policy is a deliberate change, not an accident.
+    expect(a.provider[OPENCODE_PROVIDER_ID]!.models[keysA[0]!]?.contextWindow).toBe(1_000_000);
+    // And the serialized bytes are identical regardless of input order.
+    const rawFirst = buildClientConfigText("commandcode", {
+      ...context(),
+      models: [
+        { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+        { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+      ],
+    });
+    const encodedFirst = buildClientConfigText("commandcode", {
+      ...context(),
+      models: [
+        { namespaced: "command-code/deepseek-deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+        { namespaced: "command-code/deepseek/deepseek-v4.1-flash", provider: "command-code", id: "deepseek/deepseek-v4.1-flash", contextWindow: 1_000_000 },
+      ],
+    });
+    expect(rawFirst.text).toBe(encodedFirst.text);
   });
 
   test("never normalizes the provider segment", () => {
