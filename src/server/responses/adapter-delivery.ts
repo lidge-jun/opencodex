@@ -98,7 +98,7 @@ export async function deliverAdapterResponse(
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
-        declaredToolNames,
+        declaredToolNames: (options.inboundWire === "chat" || options.inboundWire === "anthropic") ? undefined : declaredToolNames,
       toolParameterSchemas,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
