@@ -1,4 +1,9 @@
-import { isNonReplayableUpstreamCode, markResponseNonReplayable } from "../lib/upstream-retry";
+import {
+  isNonReplayableUpstreamCode,
+  isReplayRefusalCode,
+  markResponseNonReplayable,
+  REPLAY_REFUSED_STATUS,
+} from "../lib/upstream-retry";
 import {
   adapterFailureFromMessage,
   classifyError,
@@ -24,7 +29,12 @@ export function formatErrorResponse(
   const replayBlocked = error.code !== CYBER_POLICY_ERROR_CODE
     && isNonReplayableUpstreamCode(options?.code);
   if (replayBlocked) error.code = options!.code!;
-  const finalStatus = error.code === CYBER_POLICY_ERROR_CODE ? 400 : status;
+  // The replay refusal owns its status as well as its code. A combo or adapter formatter
+  // reaches here holding the upstream-shaped status it was about to report, and inheriting
+  // that would hand the client a 5xx it is configured to retry four times.
+  const finalStatus = error.code === CYBER_POLICY_ERROR_CODE
+    ? 400
+    : isReplayRefusalCode(error.code) ? REPLAY_REFUSED_STATUS : status;
   const headers = new Headers({ "Content-Type": "application/json" });
   const retryAfter = options?.retryAfter?.trim();
   if (error.code !== CYBER_POLICY_ERROR_CODE

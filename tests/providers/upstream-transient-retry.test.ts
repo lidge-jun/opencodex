@@ -83,9 +83,10 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(504);
   });
 
-  test("the structured codes name exactly the two post-send verdicts", () => {
+  test("the structured codes name the post-send verdicts and the proxy's own refusal", () => {
     expect(isNonReplayableUpstreamCode("upstream_no_response")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_closed_before_response")).toBe(true);
+    expect(isNonReplayableUpstreamCode("upstream_reset_replay_refused")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_error")).toBe(false);
     expect(isNonReplayableUpstreamCode(undefined)).toBe(false);
   });

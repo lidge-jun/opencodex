@@ -40,14 +40,39 @@ export function isNonReplayableResponse(response: Response): boolean {
 export const UPSTREAM_NO_RESPONSE_CODE = "upstream_no_response";
 /** Transport closed after the send, before any response event. */
 export const UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE = "upstream_closed_before_response";
+/**
+ * This proxy refused to replay a pre-header fetch rejection.
+ *
+ * Distinct from {@link UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE}, which the Codex WebSocket
+ * transport settles as a 502 after the create frame was already sent. Both are ambiguous,
+ * but only this one is a refusal this process made before any response existed, so it
+ * follows the send-budget precedent and answers 429: the Codex client is configured with
+ * `retry_429: false` and `retry_5xx: true` over four attempts, so a 5xx here multiplies
+ * the duplicate send the refusal exists to prevent. See
+ * structure/transports/responses.md#ambiguous-connection-reset-replay-boundary.
+ */
+export const UPSTREAM_RESET_REPLAY_REFUSED_CODE = "upstream_reset_replay_refused";
 const NON_REPLAYABLE_UPSTREAM_CODES: ReadonlySet<string> = new Set([
   UPSTREAM_NO_RESPONSE_CODE,
   UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 ]);
 
 export function isNonReplayableUpstreamCode(code: unknown): boolean {
   return typeof code === "string" && NON_REPLAYABLE_UPSTREAM_CODES.has(code);
 }
+
+/**
+ * True for the one non-replayable code this proxy owns end to end. The status it carries is
+ * a local decision, so a re-wrapping formatter must restate it rather than inherit the
+ * caller's upstream-shaped status.
+ */
+export function isReplayRefusalCode(code: unknown): boolean {
+  return code === UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+}
+
+/** Client-facing status for {@link UPSTREAM_RESET_REPLAY_REFUSED_CODE}. */
+export const REPLAY_REFUSED_STATUS = 429;
 
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
 const RESET_RETRY_MAX_ATTEMPTS = 3;
@@ -488,9 +513,9 @@ export async function fetchWithResetRetry(
         // Never expose the raw exception, which can contain credentials or request data.
         const response = new Response(JSON.stringify({ error: {
           type: "upstream_error",
-          code: UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+          code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
           message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
-        } }), { status: 502, headers: { "content-type": "application/json" } });
+        } }), { status: REPLAY_REFUSED_STATUS, headers: { "content-type": "application/json" } });
         markResponseNonReplayable(response);
         return response;
       }

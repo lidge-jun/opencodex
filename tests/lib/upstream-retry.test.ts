@@ -5,7 +5,7 @@ import {
   fetchWithTransientRetry,
   isConnectionResetError,
   isNonReplayableResponse,
-  UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   prepareSameTarget429Wait,
   releaseResponseBodyBestEffort,
   retryBackoffDelayMs,
@@ -439,9 +439,11 @@ describe("ambiguous reset safety", () => {
     const response = await fetchWithResetRetry(mock.doFetch, {
       attempts: 3, onSendsConsumed: count => reports.push(count),
     });
-    expect(response.status).toBe(502);
+    // 429, not 502: the Codex client is configured retry_5xx / no-retry-429, so a 5xx here
+    // would be re-sent four times by the caller this refusal exists to protect.
+    expect(response.status).toBe(429);
     expect(isNonReplayableResponse(response)).toBe(true);
-    expect((await response.json()).error.code).toBe(UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
     expect(mock.calls).toHaveLength(1);
     expect(reports).toEqual([1]);
   });
@@ -455,9 +457,9 @@ describe("ambiguous reset safety", () => {
     const response = await fetchWithTransientRetry(mock.doFetch, {
       attempts: 3, onSendsConsumed: count => reports.push(count),
     });
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(429);
     expect(isNonReplayableResponse(response)).toBe(true);
-    expect((await response.json()).error.code).toBe(UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
     expect(mock.calls).toHaveLength(2);
     expect(reports).toEqual([2]);
   });
@@ -508,12 +510,25 @@ describe("ambiguous reset safety", () => {
 });
 
 describe("ambiguous reset safety through error formatting", () => {
-  test("both terminal codes survive formatting without advertising Retry-After", async () => {
-    for (const code of ["upstream_no_response", "upstream_closed_before_response"]) {
+  test("every terminal code survives formatting without advertising Retry-After", async () => {
+    for (const code of ["upstream_no_response", "upstream_closed_before_response", "upstream_reset_replay_refused"]) {
       const response = formatReplaySafetyError(502, "upstream_error", "closed", { code, retryAfter: "2" });
       expect(isNonReplayableResponse(response)).toBe(true);
       expect(response.headers.get("retry-after")).toBeNull();
       expect((await response.json()).error.code).toBe(code);
+    }
+  });
+
+  test("only the proxy-owned refusal restates the status; upstream verdicts keep theirs", async () => {
+    // The formatter is reached from combo and adapter paths holding an upstream-shaped 502.
+    // The two transport verdicts describe something upstream did and keep it; the refusal is
+    // this proxy's own decision and carries its own status wherever it is re-wrapped.
+    const refused = formatReplaySafetyError(502, "upstream_error", "closed", {
+      code: "upstream_reset_replay_refused",
+    });
+    expect(refused.status).toBe(429);
+    for (const code of ["upstream_no_response", "upstream_closed_before_response"]) {
+      expect(formatReplaySafetyError(502, "upstream_error", "closed", { code }).status).toBe(502);
     }
   });
 

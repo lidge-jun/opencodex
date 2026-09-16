@@ -198,9 +198,9 @@ describe("ambiguous reset safety across Responses recovery", () => {
         const response = await handleResponses(
           responsesRequest(combo ? "combo/fan" : "t0/model-t0"), config, logCtx,
         );
-        expect(response.status).toBe(502);
+        expect(response.status).toBe(429);
         const payload = await response.json();
-        expect(payload.error.code).toBe("upstream_closed_before_response");
+        expect(payload.error.code).toBe("upstream_reset_replay_refused");
         expect(authorizations).toEqual(["Bearer sk-t0"]);
         expect(totalSends(logCtx)).toBe(1);
       });
@@ -220,8 +220,8 @@ describe("ambiguous reset safety across Responses recovery", () => {
     }) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const response = await handleResponses(responsesRequest("combo/fan"), comboOverTargets(2), logCtx);
-    expect(response.status).toBe(502);
-    expect((await response.json()).error.code).toBe("upstream_closed_before_response");
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
     expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
     expect(totalSends(logCtx)).toBe(2);
   });
@@ -235,8 +235,8 @@ describe("ambiguous reset safety across Responses recovery", () => {
       throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
     }) as typeof fetch;
     const response = await handleResponses(responsesRequest("combo/fan"), config, { model: "", provider: "" });
-    expect(response.status).toBe(502);
-    expect((await response.json()).error.code).toBe("upstream_closed_before_response");
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
     expect(sends).toBe(1);
   });
 });
@@ -255,8 +255,8 @@ describe("ambiguous reset safety after outer recovery", () => {
     }) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const response = await handleResponses(responsesRequest("combo/fan"), config, logCtx);
-    expect(response.status).toBe(502);
-    expect((await response.json()).error.code).toBe("upstream_closed_before_response");
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
     expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
     expect(totalSends(logCtx)).toBe(2);
   });
@@ -268,11 +268,11 @@ describe("ambiguous reset safety after outer recovery", () => {
     expect(shouldRetryCodexPoolAccountTransient(response)).toBe(false);
     expect(await shouldRetryCodexPoolAccountQuota(response)).toBe(false);
     const failure = await consumeComboFailure(response);
-    expect(failure.upstreamCode).toBe("upstream_closed_before_response");
+    expect(failure.upstreamCode).toBe("upstream_reset_replay_refused");
     expect(isNonReplayableResponse(failure.response)).toBe(true);
     expect(shouldRetryCodexPoolAccountTransient(failure.response)).toBe(false);
     expect(await shouldRetryCodexPoolAccountQuota(failure.response)).toBe(false);
     expect(failure.response.headers.get("retry-after")).toBeNull();
-    expect((await failure.response.json()).error.code).toBe("upstream_closed_before_response");
+    expect((await failure.response.json()).error.code).toBe("upstream_reset_replay_refused");
   });
 });

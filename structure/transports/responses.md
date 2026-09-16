@@ -489,7 +489,10 @@ is unchanged; only the native recovery caller supplies the exact error predicate
 
 Both shapes carry the inbound caller-abort signal separately from the turn/shutdown
 controller. A caller-driven read rejection is 499/client_cancel without pool penalty;
-a genuine upstream reset remains synthetic 502. An already received terminal, including
+a genuine upstream reset seen while reading the stream remains synthetic 502; the
+pre-header case is a different verdict and is covered by
+[ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary).
+An already received terminal, including
 one completed by the error-path parser flush, retains its real outcome. Eager relays
 remove the caller listener when done and close signal-cancelled downstream streams even
 when the response-body cancel hook has not run.
@@ -591,13 +594,21 @@ with the same item id. The batch/non-streaming bridge follows the same rule.
 
 `src/lib/upstream-retry.ts` guards upstream fetches against stale pooled keep-alive sockets
 (Cloudflare closes idle connections; Bun's fetch reuses the dead socket and rejects with
-`ECONNRESET` before any response bytes). `fetchWithResetRetry` retries only
-connection-reset-shaped rejections (up to 3 total attempts, jittered backoff, warn-logged);
-timeouts, aborts, `ECONNREFUSED`, HTTP error statuses, and mid-stream SSE failures are never
-retried. Guarded paths: the ChatGPT passthrough and generic adapter fetch in
-`src/server/responses.ts`, the vision/web-search sidecars, and the web-search loop's direct-fetch
-fallback. Adapters with their own `fetchResponse` (kiro, cursor, google) keep their own retry
-policies; kiro imports the shared abort/sleep helpers from this module.
+`ECONNRESET` before any response bytes). `fetchWithResetRetry` never retries on its own
+account. A reset-shaped rejection is replayed only when the caller passes `replaySafe: true`,
+and then up to 3 total attempts with jittered backoff, warn-logged. Without it the rejection
+becomes the terminal refusal described in
+[ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary).
+Reusable request bytes were never the test: a string body makes a send mechanically
+repeatable, not idempotent, and a model POST is not idempotent. Timeouts, aborts,
+`ECONNREFUSED`, HTTP error statuses, and mid-stream SSE failures are never retried at all.
+
+The opted-in callers are the sidecars, whose work is a tool call rather than a turn: the
+vision describers, the web-search executors and loop, and the image loop. The model-POST
+paths — native Responses passthrough, the generic adapter dispatch and its continuation loop,
+compact, and native Chat — are deliberately not opted in. Adapters with their own
+`fetchResponse` (kiro, cursor, google) keep their own retry policies; kiro imports the shared
+abort/sleep helpers from this module.
 
 ## Console upload rejection recovery
 
@@ -881,22 +892,55 @@ transient recovery reason when present and otherwise the outer recovery reason.
 
 ## Ambiguous connection-reset replay boundary
 
-`src/lib/upstream-retry.ts` returns a marked 502 with
-`upstream_closed_before_response` when a fetch rejects with an ambiguous connection
-reset. No response headers is not evidence that a model POST was never processed.
-Only an explicitly replay-safe operation opts into reset retries. The existing
-provider HTTP-status policy and the shared physical-send budget remain independent:
-zero refuses dispatch, invalid counts fail, and a stopped send is counted once.
-`src/server/responses/adapter-dispatch.ts` preserves this verdict instead of formatting
-it as a generic replayable upstream error. The existing account and combo guards stop
-on the marker or structured code. The helper and public Responses count regressions
-live in `tests/lib/upstream-retry.test.ts` and
-`tests/responses/responses-send-budget-counts.test.ts`.
+Three failures look alike from the outside — the turn may have executed and we cannot
+prove otherwise — and they are answered differently, because the status is an instruction
+to the client and the client obeys it. Codex builds its retry policy from
+`ApiRetryConfig { retry_429: false, retry_5xx: true, max_attempts: request_max_retries() }`
+with `DEFAULT_REQUEST_MAX_RETRIES = 4`. A 5xx is therefore an invitation to send the whole
+turn up to four more times, and a 429 is where the client stops.
 
-`src/bridge/errors.ts` retains only the two allowlisted non-replayable transport
-codes, reapplies the in-process marker, and does not attach `Retry-After` to them.
-Other upstream codes keep the existing classification; cyber-policy hard blocks
-retain precedence. The combo, 429-refetch, and account-guard tests cover this boundary.
+**A pre-header fetch rejection this proxy refuses to replay is a refusal this proxy made.**
+`src/lib/upstream-retry.ts` returns a marked **429** carrying its own code,
+`upstream_reset_replay_refused`. No response headers is not evidence that the model POST
+was never processed, so the decision not to replay is ours, made before any response
+existed — the same shape as `request_send_budget_exhausted`, and it takes the same status
+for the same reason. Only an explicitly replay-safe operation opts into reset retries.
+
+**An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
+The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the
+Codex WebSocket transport still settles `upstream_closed_before_response` (socket closed
+after the create frame) and `upstream_no_response` (origin never produced an event) as 502
+and 504. Those describe something the upstream did after our send, they are the contract the
+public server reference already documents, and this release does not move them.
+
+This reclassification is the recorded behaviour change: before it, the pre-header refusal
+borrowed `upstream_closed_before_response` and its 502, which multiplied the duplicate send
+the refusal exists to prevent. The distinct code is what keeps the two separable afterwards —
+both are non-replayable, but only one is ours to restate.
+
+Because the refusal now carries 429, a 429 is no longer sufficient evidence of a provider
+rate limit. Every same-target replay, key rotation, account rotation and pool-quota recorder
+that keys on 429 first asks `isNonReplayableResponse`:
+`src/server/responses/adapter-dispatch.ts` (at the top of its recovery loop, which also
+covers a reset reached by a 401/429/413 refetch), `src/server/responses/adapter-continuation.ts`,
+`src/server/responses/passthrough-dispatch.ts`, `src/server/responses/compact.ts` and
+`src/server/chat-native.ts`. Compact additionally records the transport outcome rather than
+the client-facing status, so pool health sees exactly what it saw before the correction.
+Rotating on a synthetic 429 would both re-send an inference that may already have run and
+write a cooldown against a credential that refused nothing — a false signal that outlives the
+request, which is the same hazard `rotateRunTurnAdapterOnPreflight429` already guards for the
+send budget.
+
+The existing provider HTTP-status policy and the shared physical-send budget remain
+independent: zero refuses dispatch, invalid counts fail, and a stopped send is counted once.
+`src/bridge/errors.ts` retains only the allowlisted non-replayable transport codes,
+reapplies the in-process marker, attaches no `Retry-After`, and restates 429 for the refusal
+code alone so a combo or adapter formatter holding an upstream-shaped 502 cannot hand the
+client back a retryable status. Other upstream codes keep the existing classification;
+cyber-policy hard blocks retain precedence. The helper, formatter and public Responses count
+regressions live in `tests/lib/upstream-retry.test.ts`,
+`tests/responses/responses-send-budget-counts.test.ts` and
+`tests/codex-integration/reserve-dispatch.test.ts`.
 
 ## Combo output headroom
 
