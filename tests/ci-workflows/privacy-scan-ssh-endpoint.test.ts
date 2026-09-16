@@ -12,15 +12,18 @@ import { scanText } from "../../scripts/privacy-scan";
 describe("privacy-scan — ssh-endpoint", () => {
   const kinds = (text: string) => scanText("devlog/x.md", text).map(f => f.kind);
 
-  test("catches the block that actually shipped", () => {
+  test("catches a Host block of the shape that shipped", () => {
+    // Shaped like the block #4623 is removing, with a synthetic endpoint. Using
+    // the real one would reintroduce it here permanently and undo that cleanup;
+    // the regex cannot tell the difference, so there is nothing to be gained.
     const block = [
-      "Host macmini-cf",
-      "    HostName ssh-macmini.lidgeai.com",
+      "Host runner-cf",
+      "    HostName ssh-runner.internal-buildfarm.net",
       "    ProxyCommand /opt/homebrew/bin/cloudflared access ssh --hostname %h",
     ].join("\n");
     const k = kinds(block);
-    expect(k).toContain("ssh-endpoint");        // HostName — shown, it locates the leak
-    expect(k).toContain("ssh-proxy-command");   // redacted in the report, see REDACTED_FINDING_KINDS
+    expect(k).toContain("ssh-endpoint");        // redacted in the report; file:line locates it
+    expect(k).toContain("ssh-proxy-command");   // redacted too, see REDACTED_FINDING_KINDS
   });
 
   test("a templated or reserved host is documentation, not infrastructure", () => {

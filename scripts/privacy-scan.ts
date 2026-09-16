@@ -271,9 +271,10 @@ export function scanText(file: string, text: string): Finding[] {
    *
    * `privacy-scan` knew about tokens, emails and home paths, but nothing about
    * infrastructure — so a devlog could publish a working `Host` block and this
-   * scan passed. That is how `ssh-macmini.lidgeai.com`, `User junny` and the
-   * Cloudflare `ProxyCommand` shipped in `260731_pr_merge_round/022` and had to
-   * be removed by hand in #4623.
+   * scan passed. That is how a runner's hostname, login and Cloudflare
+   * `ProxyCommand` shipped in `260731_pr_merge_round/022`; #4623 removes them by
+   * hand. The values are deliberately not repeated here — this file is the fix,
+   * and restating them would outlive the cleanup.
    *
    * Anchored to the SSH config grammar — directive at the start of a line, with
    * optional indent — because `User` is an ordinary English word and matching it
@@ -341,6 +342,11 @@ const REDACTED_FINDING_KINDS = new Set([
   "token-looking",
   "meta-api-key",
   "ssh-proxy-command",
+  // Redacted for the same reason as the ProxyCommand: this scan runs in CI on a
+  // public repository, so printing the value would republish the endpoint into a
+  // public log — the scanner leaking what it was written to catch. `file:line`
+  // already locates it for whoever has to remove it.
+  "ssh-endpoint",
 ]);
 
 /**
