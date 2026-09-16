@@ -81,6 +81,45 @@ function report(gate: RequestGate, marker: string, date = "2020-09-15") {
   };
 }
 
+test("Usage model table renders cache breakdown and marks unavailable telemetry", async () => {
+  await mount();
+  const data = report(requests[0], "cache-model");
+  data.models = [
+    {
+      ...data.models[0]!,
+      model: "cache-model",
+      totalTokens: 1_120,
+      inputTokens: 1_000,
+      outputTokens: 120,
+      cachedInputTokens: 600,
+      cacheReadInputTokens: 600,
+      cacheCreationInputTokens: 100,
+      cacheHitRate: 0.6,
+    },
+    {
+      ...data.models[0]!,
+      model: "unknown-cache-model",
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+    },
+  ];
+  await act(async () => { requests[0]!.resolve(Response.json(data)); });
+
+  const table = container.querySelector<HTMLElement>("#usage-section-models table");
+  expect(table).not.toBeNull();
+  expect([...table!.querySelectorAll("thead th")].map(cell => cell.textContent?.trim())).toEqual([
+    "Model", "Provider", "Requests", "Measured", "Input tokens", "Output tokens",
+    "Cache hits", "Cache writes", "Hit rate", "Tokens", "Share",
+  ]);
+  const rows = table!.querySelectorAll("tbody tr");
+  expect(rows).toHaveLength(2);
+  const measured = [...rows[0]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  expect(measured?.slice(4, 9)).toEqual(["1000", "120", "600", "100", "60%"]);
+  const unavailable = [...rows[1]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  expect(unavailable?.slice(6, 9)).toEqual(["—", "—", "—"]);
+});
+
 async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });
 }

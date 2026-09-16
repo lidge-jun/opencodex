@@ -67,6 +67,10 @@ interface UsageModel {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheHitRate?: number | null;
   /** API list-price estimate for the priced portion of this row. */
   estimatedCostUsd?: number;
   /** Requests included in the API list-price estimate. */
@@ -158,6 +162,14 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
       )}
     </>
   );
+}
+
+function formatOptionalTokens(value: number | undefined, locale: Locale): string {
+  return typeof value === "number" ? formatTokens(value, locale) : "—";
+}
+
+function formatOptionalPct(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? formatPct(value) : "—";
 }
 
 // Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
@@ -713,6 +725,11 @@ function UsageModelsTable({
             <th>{t("logs.col.provider")}</th>
             <th className="num">{t("usage.col.requests")}</th>
             <th className="num">{t("usage.col.measured")}</th>
+            <th className="num">{t("usage.col.inputTokens")}</th>
+            <th className="num">{t("usage.col.outputTokens")}</th>
+            <th className="num">{t("usage.col.cacheHits")}</th>
+            <th className="num">{t("usage.col.cacheWrites")}</th>
+            <th className="num">{t("usage.col.cacheHitRate")}</th>
             <th className="num">{t("usage.col.tokens")}</th>
             <th className="num" aria-describedby={listPriceDisclaimerId}>{t("usage.col.apiListPrice")}</th>
             <th>{t("usage.col.share")}</th>
@@ -725,6 +742,11 @@ function UsageModelsTable({
               <td className="muted">{formatProviderDisplayName(model.provider, t)}</td>
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
+              <td className="num mono">{formatTokens(model.inputTokens, locale)}</td>
+              <td className="num mono">{formatTokens(model.outputTokens, locale)}</td>
+              <td className="num mono">{formatOptionalTokens(model.cacheReadInputTokens ?? model.cachedInputTokens, locale)}</td>
+              <td className="num mono">{formatOptionalTokens(model.cacheCreationInputTokens, locale)}</td>
+              <td className="num mono">{formatOptionalPct(model.cacheHitRate)}</td>
               <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
               <td className="num"><UsageListPrice row={model} locale={locale} t={t} /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
