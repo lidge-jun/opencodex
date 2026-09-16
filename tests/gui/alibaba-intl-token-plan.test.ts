@@ -40,12 +40,14 @@ describe("alibaba-token-plan-intl registry entry", () => {
     expect(entry!.models).toContain("qwen3.8-flash");
     expect(entry!.models).toContain("deepseek-v4-pro-0813");
     expect(entry!.models).toContain("deepseek-v4-flash-0731");
+    // DeepSeek's 260910 rename row: listed on /models from 260915 on both tiers.
+    expect(entry!.models).toContain("deepseek-v4.1-flash");
     // GLM-5.3 and GLM-5.3-flash exist on Z.AI endpoints but NOT on Token Plan: the
     // 260826 seed commit propagated them across every GLM-carrying catalog. Either
     // row 404s here (probed 260907 and 260909, both regions and both tiers).
     expect(entry!.models).not.toContain("glm-5.3");
     expect(entry!.models).not.toContain("glm-5.3-flash");
-    expect(entry!.models!.length).toBe(18);
+    expect(entry!.models!.length).toBe(19);
   });
 
   test("MiniMax case-insensitive normalization is set", () => {
@@ -172,8 +174,18 @@ describe("alibaba-token-plan-intl registry entry", () => {
     const cnModels = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan")!.models;
     expect(cnModels).toEqual([
       "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-      "deepseek-v4-pro", "deepseek-v4-flash-0731", "glm-5.2",
+      "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2",
     ]);
+    // The 260910 DeepSeek rename row is wired: vision-capable, effort ladder, and the
+    // json_schema downgrade the plan gateway needs (probed 260915).
+    const v41 = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan-intl")!;
+    expect(v41.modelInputModalities?.["deepseek-v4.1-flash"]).toEqual(["text", "image"]);
+    expect(v41.modelReasoningEfforts?.["deepseek-v4.1-flash"]).toEqual(["low", "high", "max"]);
+    expect(v41.noJsonSchemaModels).toContain("deepseek-v4.1-flash");
+    expect(v41.modelMaxOutputTokens?.["deepseek-v4.1-flash"]).toBe(393_216);
+    expect(v41.modelContextWindows?.["deepseek-v4.1-flash"]).toBe(1_000_000);
+    expect(v41.preserveReasoningContentModels).toContain("deepseek-v4.1-flash");
+    expect(v41.noVisionModels).not.toContain("deepseek-v4.1-flash");
     expect(cnModels).not.toContain("glm-5.3");
     expect(cnModels).not.toContain("glm-5.3-flash");
     // providerConfigSeed and enrichProviderFromRegistry are the two paths that carry

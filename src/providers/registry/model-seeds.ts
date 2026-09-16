@@ -445,7 +445,10 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // The Beijing preset keeps the Personal Edition subset; non-chat ids (audio/image/
 // video families) stay out: they answer only on async endpoints openai-chat cannot
 // reach. deepseek-v4-pro-0813 is callable but NOT listed by /models, which is the
-// reason liveModels must stay false for this provider.
+// reason liveModels must stay false for this provider. deepseek-v4.1-flash is the
+// 260910 DeepSeek rename row: listed on /models on both tiers and regions from 260915,
+// hybrid thinking, vision via user message and tool result, json_object but not
+// json_schema (see noJsonSchemaModels on the entries).
 // Beijing serves the Personal Edition, so this is the Personal-tier roster probed
 // 260909 (a strict subset of Team). deepseek-v4-pro-0813 stays out of the Beijing
 // entry: its callability is only proven on Team keys, and no Personal key has been
@@ -454,7 +457,7 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // drifting ones.
 export const ALIBABA_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-flash-0731", "glm-5.2",
+  "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2",
 ];
 export const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
@@ -468,6 +471,8 @@ export const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "deepseek-v4-pro": ["text"],
   "deepseek-v4-pro-0813": ["text"],
   "deepseek-v4-flash-0731": ["text"],
+  // Vision probed on the plan gateway 260915 (user message and tool result, both 200).
+  "deepseek-v4.1-flash": ["text", "image"],
   "glm-5.2": ["text"],
 };
 
@@ -480,7 +485,7 @@ export const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 // listed on /models on both regions) after being dropped as "retired" upstream.
 export const ALIBABA_INTL_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731", "deepseek-v3.2",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v3.2",
   "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
   "glm-5.2", "glm-5.1", "glm-5",
   "MiniMax-M2.5",
@@ -582,7 +587,7 @@ export const ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS: Record<string, number> = {
   "qwen3.8-max": 1_000_000, "qwen3.8-flash": 1_000_000, "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000,
   "qwen3.6-plus": 1_000_000, "qwen3.6-flash": 1_000_000,
   "deepseek-v4-pro": 1_000_000, "deepseek-v4-pro-0813": 1_000_000, "deepseek-v4-flash": 1_000_000,
-  "deepseek-v4-flash-0731": 1_000_000, "deepseek-v3.2": 131_072,
+  "deepseek-v4-flash-0731": 1_000_000, "deepseek-v4.1-flash": 1_000_000, "deepseek-v3.2": 131_072,
   "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 262_144,
   "glm-5.2": 1_000_000, "glm-5.1": 202_752, "glm-5": 202_752,
   "MiniMax-M2.5": 196_608,
@@ -591,7 +596,7 @@ export const ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "qwen3.8-max": 131_072, "qwen3.8-flash": 131_072, "qwen3.7-max": 131_072, "qwen3.7-plus": 131_072,
   "qwen3.6-plus": 65_536, "qwen3.6-flash": 65_536,
   "deepseek-v4-pro": 393_216, "deepseek-v4-pro-0813": 393_216, "deepseek-v4-flash": 393_216,
-  "deepseek-v4-flash-0731": 393_216, "deepseek-v3.2": 65_536,
+  "deepseek-v4-flash-0731": 393_216, "deepseek-v4.1-flash": 393_216, "deepseek-v3.2": 65_536,
   "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 98_304,
   "glm-5.2": 131_072, "glm-5.1": 128_000, "glm-5": 16_384,
   "MiniMax-M2.5": 32_768,
@@ -602,7 +607,8 @@ export const ALIBABA_TOKEN_PLAN_NO_VISION = [
 ];
 export const ALIBABA_TOKEN_PLAN_PRESERVE_REASONING = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731", "glm-5.2",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731",
+  "deepseek-v4.1-flash", "glm-5.2",
 ];
 
 // 260717 Kimi K3: the subscription endpoint uses one upstream id (`k3`) for both

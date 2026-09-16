@@ -738,12 +738,19 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
       "deepseek-v4-pro-0813": deepseekThinkingEffortsFor("deepseek-v4-pro-0813"),
       "deepseek-v4-flash-0731": deepseekThinkingEffortsFor("deepseek-v4-flash-0731"),
+      "deepseek-v4.1-flash": deepseekThinkingEffortsFor("deepseek-v4.1-flash"),
     },
     modelReasoningEffortMap: {
       "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro"),
       "deepseek-v4-pro-0813": deepseekReasoningMapFor("deepseek-v4-pro-0813"),
       "deepseek-v4-flash-0731": deepseekReasoningMapFor("deepseek-v4-flash-0731"),
+      "deepseek-v4.1-flash": deepseekReasoningMapFor("deepseek-v4.1-flash"),
     },
+    // Probed 260915 on the plan gateway: json_object returns valid JSON, strict
+    // json_schema is rejected 400 ("This response_format type is unavailable now")
+    // in both thinking modes, so requests downgrade to json_object rather than
+    // sending a schema the gateway refuses.
+    noJsonSchemaModels: ["deepseek-v4.1-flash"],
     modelDefaultReasoningEfforts: Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])),
     directReasoningEffortModels: QWEN38_FAMILY,
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS.filter(id => !QWEN38_FAMILY.includes(id)),
@@ -777,13 +784,17 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "deepseek-v4-pro-0813": deepseekThinkingEffortsFor("deepseek-v4-pro-0813"),
       "deepseek-v4-flash": deepseekThinkingEffortsFor("deepseek-v4-flash"),
       "deepseek-v4-flash-0731": deepseekThinkingEffortsFor("deepseek-v4-flash-0731"),
+      "deepseek-v4.1-flash": deepseekThinkingEffortsFor("deepseek-v4.1-flash"),
     },
     modelReasoningEffortMap: {
       "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro"),
       "deepseek-v4-pro-0813": deepseekReasoningMapFor("deepseek-v4-pro-0813"),
       "deepseek-v4-flash": deepseekReasoningMapFor("deepseek-v4-flash"),
       "deepseek-v4-flash-0731": deepseekReasoningMapFor("deepseek-v4-flash-0731"),
+      "deepseek-v4.1-flash": deepseekReasoningMapFor("deepseek-v4.1-flash"),
     },
+    // Same 260915 json_schema rejection probe as the Beijing entry.
+    noJsonSchemaModels: ["deepseek-v4.1-flash"],
     directReasoningEffortModels: QWEN38_FAMILY,
     thinkingBudgetModels: ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS.filter(id => !QWEN38_FAMILY.includes(id)),
     preserveReasoningContentModels: ALIBABA_TOKEN_PLAN_PRESERVE_REASONING,
