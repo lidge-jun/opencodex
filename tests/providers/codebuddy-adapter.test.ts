@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { buildArgs, buildChildEnv, createCodeBuddyAdapter, type SpawnFn } from "../../src/adapters/codebuddy/adapter";
+import { guardCodeBuddyScaffolding } from "../../src/adapters/codebuddy/scaffold-guard";
 import { CODEBUDDY_CN_PROFILE, CODEBUDDY_GLOBAL_PROFILE, clearCodeBuddyBinaryCache } from "../../src/adapters/codebuddy/profiles";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
@@ -219,6 +220,236 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe("Hello");
     expect(events.at(-1)).toMatchObject({ type: "done", usage: { inputTokens: 7, outputTokens: 2, totalTokens: 9 } });
     expect(child.written.join("")).toContain('"text":"hello"');
+  });
+
+  test("refuses a full-message DSML calls-and-invoke scaffold", async () => {
+    const leaked = "I'll inspect it.\n<｜｜DSML｜｜ calls>\n"
+      + "<｜｜DSML｜｜ invoke name=\"functions.exec\">\nsecret-command";
+    const stdout = [
+      enc.encode(`${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: leaked }] },
+      })}\n`),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(stdout) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+      killGraceMs: 20,
+    });
+
+    const events = await run(adapter, parsed());
+    expect(events.filter(event => event.type === "text_delta"))
+      .toEqual([{ type: "text_delta", text: "I'll inspect it.\n" }]);
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "vendor_scaffold_detected",
+      retryable: false,
+      status: 502,
+    });
+    expect(JSON.stringify(events)).not.toContain("secret-command");
+  });
+
+  test("detects a DSML control sequence split across streamed text deltas", async () => {
+    const frame = (text: string) => `${JSON.stringify({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+    })}\n`;
+    const stdout = [
+      enc.encode(frame("Safe prefix.\n<｜｜DS")),
+      enc.encode(frame("ML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"funct")),
+      enc.encode(frame("ions.exec\">private-body")),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(stdout) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+      killGraceMs: 20,
+    });
+
+    const events = await run(adapter, parsed());
+    expect(events.filter(event => event.type === "text_delta"))
+      .toEqual([{ type: "text_delta", text: "Safe prefix.\n" }]);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "vendor_scaffold_detected" });
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("refuses DSML calls-and-invoke scaffolding from reasoning independently", async () => {
+    const stdout = [
+      enc.encode(`${JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: {
+            type: "thinking_delta",
+            thinking: "Safe thought.\n<｜｜DSML｜｜ calls>\n"
+              + "<｜｜DSML｜｜ invoke name=\"functions.exec\">private-body",
+          },
+        },
+      })}\n`),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(stdout) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+      killGraceMs: 20,
+    });
+
+    const events = await run(adapter, parsed());
+    expect(events.filter(event => event.type === "thinking_delta"))
+      .toEqual([{ type: "thinking_delta", thinking: "Safe thought.\n" }]);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "vendor_scaffold_detected",
+      retryable: false,
+    });
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("delivers a lone discussed DSML calls tag unchanged", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "The string <｜｜DSML｜｜ calls> names the calls container.";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("delivers quoted and inline-code DSML literals unchanged", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "\"<｜｜DSML｜｜ calls>\"\n"
+      + "\"<｜｜DSML｜｜ invoke name=\\\"functions.exec\\\">\"\n"
+      + "Use `<｜｜DSML｜｜ calls>` when discussing the literal.\n"
+      + "> <｜｜DSML｜｜ calls>\n> <｜｜DSML｜｜ invoke name=\"functions.exec\">";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("delivers a fenced DSML source example unchanged across deltas", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const first = "```text\n<｜｜DSML｜｜ calls>\n";
+    const second = "<｜｜DSML｜｜ invoke name=\"functions.exec\">\n```";
+
+    guarded({ type: "text_delta", text: first });
+    guarded({ type: "text_delta", text: second });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: first },
+      { type: "text_delta", text: second },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("delivers source strings containing both DSML literals unchanged", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "const calls = '<｜｜DSML｜｜ calls>';\n"
+      + "const invoke = '<｜｜DSML｜｜ invoke name=\"functions.exec\">';";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("delivers an unquoted invoke line when no calls container precedes it", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "<｜｜DSML｜｜ invoke name=\"functions.exec\">";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("releases a lone control-line candidate at the terminal", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "text_delta", text: "<｜｜DSML｜｜ calls>" });
+    expect(events).toEqual([]);
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: "<｜｜DSML｜｜ calls>" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("queues later events behind an unresolved marker prefix", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "Hello" });
+    guarded({ type: "tool_call_start", id: "call_1", name: "exec" });
+    expect(events).toEqual([]);
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "Hello" },
+      { type: "tool_call_start", id: "call_1", name: "exec" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("keeps an existing pending slot when its channel receives an empty delta", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "Hello" });
+    guarded({ type: "thinking_delta", thinking: "" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "Hello" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("moves a replaced pending marker prefix to its new arrival position", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "<" });
+    guarded({ type: "thinking_delta", thinking: "not marker\n<" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "<" },
+      { type: "thinking_delta", thinking: "not marker\n" },
+      { type: "thinking_delta", thinking: "<" },
+      { type: "done", stopReason: "stop" },
+    ]);
   });
 
   test("region isolation: the global adapter never spawns with the CN environment", async () => {

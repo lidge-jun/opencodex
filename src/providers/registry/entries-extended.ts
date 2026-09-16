@@ -890,6 +890,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelSuffixBracketStrip: true,
     // API-key form of the same Kimi Code Plan transport; keep cache affinity identical to OAuth.
     promptCacheKey: true,
+    // Keep Responses tool-result adjacency aligned with the OAuth preset (#4726).
+    requiresAdjacentResponsesToolResults: true,
     models: KIMI_CODING_MODELS,
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,

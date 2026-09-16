@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { stopProxyGracefully } from "../../src/lib/process-control";
 import { performStopTeardown } from "../../src/server/stop-teardown";
 import type { CodexNativeRestoreResult } from "../../src/codex/inject";
-import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../../src/update/stop-contract.mjs";
+import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../../src/update/stop-contract.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 
@@ -113,6 +113,65 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.calls).toMatchObject({ killed: 0, native: 1, grok: 1, cleared: 1 });
     expect(outcome.exitCode).toBe(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
     expect(outcome.receiptExists).toBe(false);
+  });
+
+  /**
+   * #4718: a refusal that happens BEFORE anything is restored.
+   *
+   * A paginated Codex history store makes the preflight refuse ahead of the config half,
+   * so every artifact comes back untouched rather than failed. `handleStop` had no branch
+   * for that shape and fell through to the generic failure, which exited 1 — and the
+   * updater reads 1 as "the proxy would not stop" and aborts with the service already
+   * down. The obligation really is still owed, so the receipt has to stay; what was wrong
+   * was calling it a stop failure.
+   */
+  test("a history-preflight refusal keeps its receipt and reports the deferred code", async () => {
+    const restore = {
+      success: false,
+      message: "Native restore refused: history_paginated_requires_native_writer. Config, catalog, history and provenance were preserved.",
+      historyPreflightRefusal: "history_paginated_requires_native_writer",
+      artifacts: { config: { state: "skipped" }, catalog: { state: "skipped" }, history: { state: "skipped" } },
+    } as unknown as CodexNativeRestoreResult;
+    const outcome = await runParentStop({ receipt: true,
+      response: { success: true, sharedTeardown: "deferred" }, restore });
+    // Both halves were attempted; neither was discharged, because neither ran.
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 1, grok: 1, cleared: 0 });
+    expect(outcome.exitCode).toBe(STOP_HISTORY_DEFERRED_EXIT_CODE);
+    // The receipt is the whole point: the client config still points at a proxy that is
+    // gone, and only this file says so. Discharging it here loses that permanently.
+    expect(outcome.receiptExists).toBe(true);
+  });
+
+  test("an all-skipped restore without the structured refusal stays an ordinary failure", async () => {
+    // The artifact states alone cannot carry this decision: an ownership refusal and a
+    // desired-state skip produce the same three "skipped" values. Treating the shape as
+    // benign would let an update proceed past a teardown nobody classified.
+    const restore = {
+      success: false,
+      message: "Native restore skipped for an unrelated reason.",
+      artifacts: { config: { state: "skipped" }, catalog: { state: "skipped" }, history: { state: "skipped" } },
+    } as unknown as CodexNativeRestoreResult;
+    const outcome = await runParentStop({ receipt: true,
+      response: { success: true, sharedTeardown: "deferred" }, restore });
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.calls).toMatchObject({ native: 1, grok: 1, cleared: 0 });
+    expect(outcome.receiptExists).toBe(true);
+  });
+
+  test("a refusal that also failed config is a real teardown failure, not a deferral", async () => {
+    // The structured reason is not a licence on its own. Config is state a client reads,
+    // so a run that damaged it must keep failing the stop however it got there.
+    const restore = {
+      success: false,
+      message: "Native restore refused: history_paginated_requires_native_writer.",
+      historyPreflightRefusal: "history_paginated_requires_native_writer",
+      artifacts: { config: { state: "failed" }, catalog: { state: "skipped" }, history: { state: "skipped" } },
+    } as unknown as CodexNativeRestoreResult;
+    const outcome = await runParentStop({ receipt: true,
+      response: { success: true, sharedTeardown: "deferred" }, restore });
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.calls).toMatchObject({ cleared: 0 });
+    expect(outcome.receiptExists).toBe(true);
   });
 
   test("a refused stop keeps the parent from restoring or discharging its receipt", async () => {
@@ -471,6 +530,43 @@ describe("pending teardown receipts", () => {
     expect(mod.listPendingTeardowns()).toHaveLength(0);
     expect(mod.pendingTeardownOutstanding()).toBe(true);
     expect(readdirSync(home).some(n => n.endsWith(".unreadable.json"))).toBe(true);
+  });
+
+  /**
+   * #4718: "the only obligations left are the ones I chose to keep".
+   *
+   * `ocx stop` makes that claim across a process boundary, and an updater replaces
+   * package files on the strength of it. Membership is the test rather than a count:
+   * anything the stop did not name — a quarantined receipt waiting on a human, a
+   * concurrent stop's claim — has to answer false, or a deliberate deferral turns into a
+   * blanket exemption for every obligation in the home.
+   */
+  test("an exact-obligation check accepts only the receipts it was given", async () => {
+    const mod = await import("../../src/config/pending-teardown");
+    // Nothing owed matches nothing expected.
+    expect(mod.pendingTeardownsAreExactly([])).toBe(true);
+
+    const kept = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
+    expect(mod.pendingTeardownsAreExactly([kept.nonce])).toBe(true);
+    // The same receipt, unnamed, is an obligation nobody classified.
+    expect(mod.pendingTeardownsAreExactly([])).toBe(false);
+    // A nonce with no file behind it is not proof of anything either.
+    expect(mod.pendingTeardownsAreExactly([FOREIGN_NONCE])).toBe(false);
+
+    // A second claim this stop never saw — another stop in flight — disqualifies it.
+    const other = mod.claimPendingTeardown(ENDPOINT, "exact", 1235);
+    expect(mod.pendingTeardownsAreExactly([kept.nonce])).toBe(false);
+    expect(mod.pendingTeardownsAreExactly([kept.nonce, other.nonce])).toBe(true);
+    expect(mod.clearPendingTeardown(other.nonce)).toBe(true);
+
+    // A quarantined receipt is still outstanding and still counts here, which is the
+    // whole reason this cannot be built on listPendingTeardowns: that listing skips it.
+    const filed = mod.claimPendingTeardown(ENDPOINT, "exact", 1236);
+    writeFileSync(mod.pendingTeardownPathFor(filed.nonce), "{not json");
+    expect(mod.quarantinePendingTeardown(filed.nonce)).toBeTruthy();
+    expect(mod.listPendingTeardowns().map(read => read.state)).not.toContain("invalid");
+    expect(mod.pendingTeardownOutstanding()).toBe(true);
+    expect(mod.pendingTeardownsAreExactly([kept.nonce])).toBe(false);
   });
 
   test("a directory where a receipt belongs is invalid, not missing", async () => {
