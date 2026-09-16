@@ -1,15 +1,46 @@
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 
 import { NativeProfileManager } from "../../src/codex/native-profile-manager";
 import { isCodexAccountUsable } from "../../src/codex/account-usability";
 import { isMainAccountTokenLive, MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
-import { atomicWriteFile, loadConfig } from "../../src/config";
+import { loadConfig } from "../../src/config";
 import {
   nativeMainStartupGateSnapshot,
   waitForNativeMainStartupGate,
 } from "../../src/codex/native-profile-startup";
 import type { NativeProfileKey, NativeProfileKeyProvider } from "../../src/codex/native-profile-types";
 import { startServer } from "../../src/server";
+
+const launchedAt = Number(process.env.NATIVE_STARTUP_LAUNCHED_AT ?? Date.now());
+
+/**
+ * When this child is slow, the parent only learns that it was slow. Name each phase so the
+ * next slow run says WHERE — module load, `startServer`, or publication — instead of costing
+ * another forensic round. Run 35118018849 reported a single elapsedMs=50728 with no way to
+ * tell which of the three it was.
+ */
+const phase = (name: string): void => {
+  console.info(`[native-startup] ${name} elapsedMs=${Date.now() - launchedAt}`);
+};
+
+phase("child-entry");
+
+/**
+ * A disposable port number is not a secret, so it must not travel through the production
+ * secret writer. On Windows `atomicWriteFile` runs `hardenSecretPath(..., required: true)`
+ * twice (`src/config/atomic-write.ts`), each of which can spawn PowerShell for SID resolution
+ * and several `icacls` passes budgeted at 30s apiece — an ACL ceremony performed inside the
+ * window the parent measures as "time to reach a port".
+ *
+ * The parent's actual contract is narrower (#1061): it treats existence as readiness and parses
+ * immediately, so it must never observe the file between create and write. A rename within the
+ * same directory gives exactly that — a reader sees either nothing or the whole document.
+ */
+function publishFixtureFile(path: string, content: string): void {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, content, "utf8");
+  renameSync(tmp, path);
+}
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -61,6 +92,7 @@ if (process.env.OCX_TEST_NATIVE_STARTUP_FAIL_BEFORE_LISTEN === "1") {
   throw new Error("injected native startup failure before listen");
 }
 
+phase("start-server-begin");
 const server = startServer(0, {
   inspectNativeCodexOwnership: () => ({
     ownership: "owned",
@@ -74,9 +106,8 @@ const server = startServer(0, {
   },
   managementApi: { nativeProfileApi: { manager } },
 });
+phase("start-server-end");
 
-// The parent treats existence as readiness and parses the port immediately. Publish
-// through a rename so it can never observe the file between create and write.
 // Test-only causal probe, normally disabled: a healthy process can publish later
 // than the old generic deadline without changing recovery/admission behavior.
 const portDelayMs = Number(process.env.OCX_TEST_NATIVE_STARTUP_DELAY_PORT_MS ?? 0);
@@ -84,19 +115,17 @@ if (!Number.isFinite(portDelayMs) || portDelayMs < 0 || portDelayMs > 60_000) {
   throw new Error("invalid native startup port delay fault");
 }
 if (portDelayMs > 0) await Bun.sleep(portDelayMs);
-atomicWriteFile(portPath, String(server.port));
-console.info(`[native-startup] port-published elapsedMs=${Date.now() - Number(process.env.NATIVE_STARTUP_LAUNCHED_AT ?? Date.now())}`);
-// #1061: the parent parses this file as soon as it exists, so a partial write
-// surfaces as `Unexpected EOF`. atomicWriteFile publishes through a rename, so a
-// reader sees either nothing or the whole document.
+phase("port-publish-begin");
+publishFixtureFile(portPath, String(server.port));
+phase("port-published");
 void waitForNativeMainStartupGate().then(() => {
-  atomicWriteFile(settledPath, JSON.stringify({
+  publishFixtureFile(settledPath, JSON.stringify({
     gate: nativeMainStartupGateSnapshot(),
     mainTokenLive: isMainAccountTokenLive(),
     mainUsable: isCodexAccountUsable(loadConfig(), MAIN_CODEX_ACCOUNT_ID),
   }));
 }).catch((error: unknown) => {
-  atomicWriteFile(settledPath, JSON.stringify({
+  publishFixtureFile(settledPath, JSON.stringify({
     error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error),
   }));
 });

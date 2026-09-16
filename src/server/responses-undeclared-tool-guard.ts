@@ -1,7 +1,7 @@
 import { collectAmbiguousDottedAliases, dottedAliasIsUnambiguous, wireToolInnerName } from "../responses/tool-name-aliases";
 import {
-  CODE_MODE_EXEC_TOOL_NAME,
   dottedToolName,
+  NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES,
   namespacedToolName,
   normalizeDeclaredToolName,
 } from "../types";
@@ -104,10 +104,14 @@ function addWireToolName(
   if (dottedAliasIsUnambiguous(namespace, name) && !ambiguousDottedAliases?.has(dotted)) {
     names.add(dotted);
   }
-  // `exec` is the one name that also switches on nested-helper normalization, so a bare alias
-  // for a namespaced MCP tool would silently authorize `exec_command`/`shell_command`/
-  // `apply_patch`/`view_image` the request never declared. Every other inner name keeps the bare alias.
-  if (name !== CODE_MODE_EXEC_TOOL_NAME) names.add(name);
+  // The code-mode helper spellings do not get a bare alias for a namespaced tool. Bare `exec`
+  // switches nested-helper normalization on for a catalog that never declared the shell; bare
+  // `exec_command`/`shell_command` switch it off for one that did; bare `write_stdin`/
+  // `apply_patch`/`view_image` are simply accepted as declared under a name the caller only ever
+  // authorized inside a namespace. This guard named only `exec` and let the other five through,
+  // which is the same drift the bridge-side copy had; both now read one list
+  // (src/types/tools.ts). Every other inner name keeps the bare alias.
+  if (!NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES.has(name)) names.add(name);
 }
 
 /**
