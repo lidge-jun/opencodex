@@ -144,7 +144,7 @@ function installFetch(chatStatuses: number[]): { chatAuth: string[]; refreshCall
 }
 
 describe("Kiro OAuth upstream 401 replay", () => {
-  test.each(["quota", "success", "reset-success"] as const)("Kiro OAuth hops charge adapter-owned physical sends once (%s)", async mode => {
+  test.each(["quota", "success", "reset-success", "empty-retry"] as const)("Kiro OAuth hops charge adapter-owned physical sends once (%s)", async mode => {
     const authorizations: string[] = [];
     clearGenericFailoverHealth();
     resetKiroThrottleStateForTests();
@@ -156,12 +156,18 @@ describe("Kiro OAuth upstream 401 replay", () => {
     }
     await setActiveAccount("kiro", getAccountSet("kiro")!.accounts[0]!.id);
     expect(getAccountSet("kiro")!.accounts).toHaveLength(3);
-    saveConfig(config());
+    saveConfig({ ...config(), ...(mode === "empty-retry" ? { emptyCompletionRetry: true } : {}) });
     globalThis.fetch = (async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       if (url !== CHAT_ENDPOINT) throw new Error(`Unexpected fixture request: ${url}`);
       const bearer = new Headers(init?.headers).get("authorization") ?? "";
       authorizations.push(bearer);
+      if (mode === "empty-retry" && authorizations.length === 1) {
+        // Reasoning-only ends with done but no user content; a truly empty Kiro stream is incomplete.
+        return new Response(reasoningStream("Thinking without an answer"), {
+          headers: { "content-type": "application/vnd.amazon.eventstream" },
+        });
+      }
       if (mode === "reset-success" && authorizations.length === 1) {
         throw Object.assign(new Error("fixture ECONNRESET"), { code: "ECONNRESET" });
       }
@@ -178,7 +184,7 @@ describe("Kiro OAuth upstream 401 replay", () => {
       const response = await post(server);
       const body = await response.text();
       expect(authorizations).toEqual([
-        ...(mode === "reset-success" ? ["Bearer synthetic-kiro-0"] : []),
+        ...(mode === "reset-success" || mode === "empty-retry" ? ["Bearer synthetic-kiro-0"] : []),
         "Bearer synthetic-kiro-0", "Bearer synthetic-kiro-1", "Bearer synthetic-kiro-2",
       ]);
       expect(response.status).toBe(mode === "quota" ? 429 : 200);
