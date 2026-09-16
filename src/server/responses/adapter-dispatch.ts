@@ -375,6 +375,7 @@ export async function prepareAdapterExchange(
        * a permit confirmed earlier would keep the charge for a send that never happened.
        */
       onDispatch?: () => void,
+      replaySendBudget = adapterSendBudget,
     ): Promise<Response | { failed: Response }> => {
       let retryRequest: AdapterRequest;
       if (transportState.sameTargetRequest !== undefined && transportState.sameTargetParsed === parsed && transportState.sameTargetToken === transportState.transportToken) {
@@ -424,7 +425,7 @@ export async function prepareAdapterExchange(
             return await transportState.activeAdapter.fetchResponse(retryRequest, {
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
-            sendBudget: adapterSendBudget,
+              sendBudget: replaySendBudget,
               onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
@@ -724,7 +725,7 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
-          !transportState.activeAdapter.fetchResponse,
+          !transportState.activeAdapter.fetchResponse || transportState.activeAdapter.fetchResponseUsesSendBudget === true,
         );
         if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOn429(
@@ -755,12 +756,17 @@ export async function prepareAdapterExchange(
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-          // Retry helpers settle the externally counted hop themselves. Adapter-owned
-          // sends confirm only after pacing, preserving the release-on-rebuild-failure fix.
+          // Budget-aware adapters spend this same booking at their physical-send boundary.
+          // Other fetchResponse implementations retain caller-owned confirmation after pacing.
           sendBudgetState.pendingHopPermit = transportState.activeAdapter.fetchResponse ? undefined : hop.permit;
+          const adapterSettlesHop = transportState.activeAdapter.fetchResponseUsesSendBudget === true;
+          const replaySendBudget = adapterSettlesHop && adapterSendBudget && hop.permit
+            ? adapterSendBudget.deriveScope({ ...adapterSendBudget.policy, finalRecoveryAllowance: 0 }, hop.permit)
+            : adapterSendBudget;
           try {
             const result = await rebuildAndRefetch("oauth-account-429",
-              transportState.activeAdapter.fetchResponse ? () => { hop.permit?.use(); } : undefined);
+              transportState.activeAdapter.fetchResponse && !adapterSettlesHop ? () => { hop.permit?.use(); } : undefined,
+              replaySendBudget);
             if ("failed" in result) return result.failed;
             upstreamResponse = result;
           } finally {

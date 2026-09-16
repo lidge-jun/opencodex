@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { KIRO_COMPLETION_TOOL_NAME } from "../../src/adapters/kiro-constants";
 import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { saveConfig } from "../../src/config";
-import { saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { resetKiroThrottleStateForTests } from "../../src/adapters/kiro-retry";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -142,6 +144,53 @@ function installFetch(chatStatuses: number[]): { chatAuth: string[]; refreshCall
 }
 
 describe("Kiro OAuth upstream 401 replay", () => {
+  test.each(["quota", "success", "reset-success"] as const)("Kiro OAuth hops charge adapter-owned physical sends once (%s)", async mode => {
+    const authorizations: string[] = [];
+    clearGenericFailoverHealth();
+    resetKiroThrottleStateForTests();
+    for (let index = 0; index < 3; index++) {
+      await saveCredential("kiro", {
+        access: `synthetic-kiro-${index}`, refresh: `synthetic-refresh-${index}`,
+        expires: Date.now() + 3_600_000, accountId: `kiro-fixture-${index}`, source: "oauth",
+      }, { addAccount: true });
+    }
+    await setActiveAccount("kiro", getAccountSet("kiro")!.accounts[0]!.id);
+    expect(getAccountSet("kiro")!.accounts).toHaveLength(3);
+    saveConfig(config());
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== CHAT_ENDPOINT) throw new Error(`Unexpected fixture request: ${url}`);
+      const bearer = new Headers(init?.headers).get("authorization") ?? "";
+      authorizations.push(bearer);
+      if (mode === "reset-success" && authorizations.length === 1) {
+        throw Object.assign(new Error("fixture ECONNRESET"), { code: "ECONNRESET" });
+      }
+      if (mode !== "quota" && bearer === "Bearer synthetic-kiro-2") {
+        return new Response(eventStream("third Kiro account works"), {
+          headers: { "content-type": "application/vnd.amazon.eventstream" },
+        });
+      }
+      // Exhausted quota bypasses Kiro's same-account throttle ladder and reaches OAuth rotation.
+      return Response.json({ message: "insufficient_quota", code: "insufficient_quota" }, { status: 429 });
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const response = await post(server);
+      const body = await response.text();
+      expect(authorizations).toEqual([
+        ...(mode === "reset-success" ? ["Bearer synthetic-kiro-0"] : []),
+        "Bearer synthetic-kiro-0", "Bearer synthetic-kiro-1", "Bearer synthetic-kiro-2",
+      ]);
+      expect(response.status).toBe(mode === "quota" ? 429 : 200);
+      expect(body).toContain(mode === "quota" ? "insufficient_quota" : "third Kiro account works");
+    } finally {
+      globalThis.fetch = originalFetch;
+      await server.stop(true);
+      clearGenericFailoverHealth();
+      resetKiroThrottleStateForTests();
+    }
+  }, 20_000);
+
   test("selected OAuth account supplies its own Kiro runtime region and profile", async () => {
     const profileArn = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/account-b";
     await saveCredential("kiro", {

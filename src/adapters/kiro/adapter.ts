@@ -312,6 +312,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       );
     },
 
+    fetchResponseUsesSendBudget: true,
     fetchResponse(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> {
       // The normal Responses path supplies cancellation at fetch time rather than build time.
       // Keep it for the adapter-owned bounded continuation so cancelling the client turn aborts

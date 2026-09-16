@@ -1,5 +1,7 @@
 # Chat Provider Compatibility
 
+HTTP adapters declare their own send-budget consumption under the [credential-hop contract](../transports/responses.md#credential-hop-reservations); ordinary Chat retry helpers retain external-send settlement.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 

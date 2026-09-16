@@ -5,7 +5,7 @@ Responses body-reader limits and lifetime handling follow the
 
 How opencodex measures request and stream bytes without allocating copies solely to count
 them. These contracts are shared by request parsing, SSE rewriting, the provider adapters and
-the translator budget, which is why so many documents link here rather than restating them. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314). Generic Responses API-key failover follows the [bounded rotation contract](responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches and OAuth replays settle physical sends once; nested compact/combo scopes retain the prepaid recovery without enlarging its ceiling or charging twice.
+the translator budget, which is why so many documents link here rather than restating them. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314). Generic Responses API-key failover follows the [bounded rotation contract](responses.md#bounded-api-key-429-rotation). Responses dispatch scopes share [reservation and settlement accounting](responses.md#bounded-api-key-429-rotation) while keeping recovery ledgers local; generic reset-only fetches and OAuth replays, including budget-aware adapters, settle physical sends once; nested compact/combo scopes retain the prepaid recovery without enlarging its ceiling or charging twice.
 
 ## Request-copy accounting
 

@@ -195,10 +195,14 @@ export function createAdapterContinuations(
         if (transportState.activeAdapter.fetchResponse) {
           noteAttemptSend(logCtx.activeAttempt, continuationEstimate, replayKind);
           await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
+          const hop = sendBudgetState.pendingHopPermit;
+          const replaySendBudget = transportState.activeAdapter.fetchResponseUsesSendBudget && adapterSendBudget && hop
+            ? adapterSendBudget.deriveScope({ ...adapterSendBudget.policy, finalRecoveryAllowance: 0 }, hop)
+            : adapterSendBudget;
           return await transportState.activeAdapter.fetchResponse(builtContinuationRequest, {
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
-              sendBudget: adapterSendBudget,
+            sendBudget: replaySendBudget,
             onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
@@ -414,7 +418,7 @@ export function createAdapterContinuations(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|continuation-oauth-429`,
-          !transportState.activeAdapter.fetchResponse,
+          !transportState.activeAdapter.fetchResponse || transportState.activeAdapter.fetchResponseUsesSendBudget === true,
         );
         const nextAccountId = hop.allowed
           ? rotateGenericOAuthAccountOn429(
@@ -445,7 +449,8 @@ export function createAdapterContinuations(
               sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
               nextContinuationRecoveryKind = "oauth-account-429";
-              sendBudgetState.pendingHopPermit = transportState.activeAdapter.fetchResponse ? undefined : hop.permit;
+              sendBudgetState.pendingHopPermit = !transportState.activeAdapter.fetchResponse
+                || transportState.activeAdapter.fetchResponseUsesSendBudget ? hop.permit : undefined;
               continue;
             }
           } catch {

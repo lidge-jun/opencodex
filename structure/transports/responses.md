@@ -680,13 +680,18 @@ budget before it knows whether a rotation is even possible, because the reservat
 `reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
 idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
 
-Two shapes are correct and both are in the tree. Where the ladder dispatches inside its own `try`
-— `adapter-dispatch.ts`, `run-turn-execution.ts` — it confirms with `use()` immediately before the
-send and releases in its `catch`, so one catch covers a pre-dispatch throw and a throw from the
-send alike. Where the replay happens after the loop continues — `adapter-continuation.ts` — it must
-not confirm, because the send has not happened yet; it only releases. The passthrough ladder is a
-third shape: it reserves with `countedExternally: true` and hands the permit to the rebuild through
-`pendingHopPermit`, because there the retry helper reports the same physical send.
+Caller-counted adapter dispatch confirms its hop after request shaping and pacing. Retry-helper
+dispatch reserves with `countedExternally: true` and passes the booking through `pendingHopPermit`.
+An adapter declaring `fetchResponseUsesSendBudget`, currently Kiro, also receives an externally
+counted booking, but adopts it through a derived budget at its own physical-send boundary.
+That scope shares the request ceiling and adds no recovery reserve. Other `fetchResponse`
+implementations retain caller-owned confirmation; having that method alone does not establish
+that the adapter consumes budget permits. A queued continuation carries an unused booking into
+its next dispatch and releases it if shaping, pacing or admission fails before a send.
+
+`tests/server/server-kiro-oauth-401-replay.test.ts` counts actual Kiro requests across three stored
+OAuth accounts, including an earlier connection reset and the third account's success or quota
+response. Hop booking and adapter dispatch charge one physical send, not two.
 
 What must not happen is a ladder that charges and then returns through a path that neither confirms
 nor releases. That is not a lost send; it is a send the request never made, spending an allowance a

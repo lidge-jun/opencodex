@@ -65,6 +65,8 @@ export interface ProviderAdapter {
   localTerminal?(parsed: OcxParsedRequest): AdapterLocalTerminal | undefined;
 
   fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
+  /** fetchResponse admits every physical send through ctx.sendBudget when supplied. */
+  fetchResponseUsesSendBudget?: boolean;
 
   /**
    * Parse one upstream response. `tierMetadata` is the same live observer returned on the
