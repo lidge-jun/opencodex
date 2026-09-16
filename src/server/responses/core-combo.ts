@@ -753,6 +753,12 @@ export async function executeComboResponses(
         eligible: targetEligible,
         now: failureNow,
       });
+      if (!pick && combo.targets.length === 1 && combo.waitForCooldownMs > 0 && !options.abortSignal?.aborted) {
+        pick = await pickWithWait({
+          eligible: targetEligible,
+          now: failureNow,
+        });
+      }
     }
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
