@@ -852,18 +852,27 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   };
 }
 
+let ensuredUsageLogDir: string | null = null;
+let ensuredUsageLogFile: string | null = null;
+
 function ensureUsageLogDir(): void {
   const dir = getConfigDir();
+  if (ensuredUsageLogDir === dir) return;
   recordOwnedConfigPath(dir, usageLogPath());
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { chmodSync(dir, 0o700); } catch { /* best-effort on platforms that ignore chmod */ }
+  ensuredUsageLogDir = dir;
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
   ensureUsageLogDir();
   const path = usageLogPath();
+  const fileAlreadyEnsured = ensuredUsageLogFile === path;
   appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+  if (!fileAlreadyEnsured) {
+    try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+    ensuredUsageLogFile = path;
+  }
 }
 
 export type UsageLogRevision = {
@@ -1057,6 +1066,8 @@ export function resetUsageReadCacheForTests(): void {
   managementUsageReadInflight?.abort.abort();
   managementUsageReadInflight = null;
   retainedUsageSnapshot = null;
+  ensuredUsageLogDir = null;
+  ensuredUsageLogFile = null;
 }
 
 function readExactly(fd: number, length: number, position: number): Buffer | null {
