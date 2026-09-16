@@ -14,6 +14,12 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
 import { adapterResponseReachedServingTerminal } from "./core-replay";
+import {
+  readResponseBodyWithInactivity,
+  readResponseStreamWithInactivity,
+  ResponseBodyInactivityError,
+} from "../../lib/response-body-inactivity";
+import { resolveStallTimeoutSec } from "../../stall-timeout";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -61,13 +67,15 @@ export async function deliverAdapterResponse(
     notifyResponseComplete,
   } = responseEffects;
   const { routedCompaction } = sidecarState;
+  const bodyInactivityMs = resolveStallTimeoutSec(config.stallTimeoutSec) * 1000;
 
 
   if (parsed.stream) {
-    const initialEventStream = transportState.activeAdapter.parseStream(
+    const initialEventStream = readResponseStreamWithInactivity(
       upstreamResponse,
-      translatorBudget,
-      logCtx.activeTierMetadata,
+      upstream.signal,
+      bodyInactivityMs,
+      response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
     );
     const eventStream = terminalGuardEnabled
       ? guardTerminalEventStream({
@@ -137,10 +145,11 @@ export async function deliverAdapterResponse(
   if (transportState.activeAdapter.parseResponse) {
     let events: AdapterEvent[];
     try {
-      const initialEvents = await transportState.activeAdapter.parseResponse(
+      const initialEvents = await readResponseBodyWithInactivity(
         upstreamResponse,
-        translatorBudget,
-        logCtx.activeTierMetadata,
+        upstream.signal,
+        bodyInactivityMs,
+        response => transportState.activeAdapter.parseResponse!(response, translatorBudget, logCtx.activeTierMetadata),
       );
       let guardedEvents: AdapterEvent[];
       if (terminalGuardEnabled) {
@@ -164,6 +173,11 @@ export async function deliverAdapterResponse(
       } else {
         events = guardedEvents;
       }
+    } catch (error) {
+      if (error instanceof ResponseBodyInactivityError) {
+        return formatErrorResponse(504, "upstream_error", "Upstream response body stalled before completing");
+      }
+      throw error;
     } finally {
       cleanupUpstreamAbort();
     }

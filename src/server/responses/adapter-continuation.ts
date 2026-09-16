@@ -46,7 +46,12 @@ import {
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { isCyberPolicyCode, CYBER_POLICY_FALLBACK_MESSAGE, CYBER_POLICY_ERROR_CODE } from "../../lib/errors";
-import { cancelBodyOnAbort } from "../../lib/abort";
+import {
+  readResponseBodyWithInactivity,
+  readResponseStreamWithInactivity,
+  ResponseBodyInactivityError,
+} from "../../lib/response-body-inactivity";
+import { resolveStallTimeoutSec } from "../../stall-timeout";
 import { guardTerminalEventStream } from "./terminal-guard";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -113,6 +118,7 @@ export function createAdapterContinuations(
   const { route, translatorBudget, inboundWire, parsed } = requestState;
   const { routedCompaction } = sidecarState;
   const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs } = adapterExchange;
+  const bodyInactivityMs = resolveStallTimeoutSec(config.stallTimeoutSec) * 1000;
   const {
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
@@ -512,24 +518,33 @@ export function createAdapterContinuations(
     }
 
     try {
-      // Protect the continuation body against a client abort landing between fetch resolution and
-      // reader attach, exactly as the initial response is guarded above (#390/366e3053). Without
-      // this, a client cancel during the continuation reopens the Bun fetch-to-reader abort race.
-      const detachContinuationBodyGuard = cancelBodyOnAbort(response.body, upstream.signal);
-      try {
-        if (nextParsed.stream) {
-          yield* transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata);
-        } else if (transportState.activeAdapter.parseResponse) {
-          yield* await transportState.activeAdapter.parseResponse(response, translatorBudget, logCtx.activeTierMetadata);
-        } else {
-          yield { type: "error", message: "Provider continuation does not support response parsing" };
-        }
-      } finally {
-        detachContinuationBodyGuard();
+      // Each successful continuation owns a fresh pending-read deadline and an abort
+      // listener that can cancel its reader even while the parser holds the body lock.
+      // The shared signal is not aborted on timeout: this generator must still emit
+      // the error that the already-live Responses bridge turns into a terminal.
+      if (nextParsed.stream) {
+        yield* readResponseStreamWithInactivity(
+          response,
+          upstream.signal,
+          bodyInactivityMs,
+          guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata),
+        );
+      } else if (transportState.activeAdapter.parseResponse) {
+        yield* await readResponseBodyWithInactivity(
+          response,
+          upstream.signal,
+          bodyInactivityMs,
+          guarded => transportState.activeAdapter.parseResponse!(guarded, translatorBudget, logCtx.activeTierMetadata),
+        );
+      } else {
+        try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        yield { type: "error", message: "Provider continuation does not support response parsing" };
       }
     } catch (error) {
-      if (options.abortSignal?.aborted) {
+      if (options.abortSignal?.aborted || upstream.signal.aborted) {
         yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
+      } else if (error instanceof ResponseBodyInactivityError) {
+        yield { type: "error", message: "Provider continuation response body stalled before completing", status: 504 };
       } else {
         yield { type: "error", message: `Provider continuation parse failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
       }
