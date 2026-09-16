@@ -18,7 +18,9 @@ describe("privacy-scan — ssh-endpoint", () => {
       "    HostName ssh-macmini.lidgeai.com",
       "    ProxyCommand /opt/homebrew/bin/cloudflared access ssh --hostname %h",
     ].join("\n");
-    expect(kinds(block).filter(k => k === "ssh-endpoint")).toHaveLength(2);
+    const k = kinds(block);
+    expect(k).toContain("ssh-endpoint");        // HostName — shown, it locates the leak
+    expect(k).toContain("ssh-proxy-command");   // redacted in the report, see REDACTED_FINDING_KINDS
   });
 
   test("a templated or reserved host is documentation, not infrastructure", () => {
@@ -30,6 +32,7 @@ describe("privacy-scan — ssh-endpoint", () => {
       "    ProxyCommand %h",
     ]) {
       expect(kinds(line)).not.toContain("ssh-endpoint");
+      expect(kinds(line)).not.toContain("ssh-proxy-command");
     }
   });
 
@@ -49,6 +52,6 @@ describe("privacy-scan — ssh-endpoint", () => {
     // The substitution token does not make the binary path, the access method or
     // the tunnel any less of a leak.
     expect(kinds("    ProxyCommand /opt/homebrew/bin/cloudflared access ssh --hostname %h"))
-      .toContain("ssh-endpoint");
+      .toContain("ssh-proxy-command");
   });
 });

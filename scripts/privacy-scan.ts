@@ -221,9 +221,14 @@ function addFindingsForPattern(
 /**
  * Scan already-read text.
  *
- * Split out of `scanFile` so a test can exercise the REAL detectors. This module runs its
- * scan on import, so a test that cannot call a function ends up re-declaring the patterns
- * instead — and then stays green even if a detector here is deleted.
+ * Split out of `scanFile` so a test can exercise the REAL detectors rather than
+ * re-declaring the patterns — a copied regex stays green after the production
+ * detector is deleted, which is the failure this seam exists to prevent.
+ *
+ * Importing this module is side-effect free: the repo scan runs only under
+ * `import.meta.main` (see `runScan` below). It used to run at module scope, so
+ * importing `scanText` triggered a full scan and a failing one called
+ * `process.exit(1)` in the importing process.
  */
 export function scanText(file: string, text: string): Finding[] {
   const findings: Finding[] = [];
@@ -295,7 +300,7 @@ export function scanText(file: string, text: string): Finding[] {
     findings,
     file,
     text,
-    "ssh-endpoint",
+    "ssh-proxy-command",
     /^[ \t]*ProxyCommand[ \t]+(\S.*)$/gim,
     match => isAllowedSshEndpoint(match[1] ?? ""),
   );
@@ -325,8 +330,18 @@ function scanFile(file: string): Finding[] {
  * A home path or an email is context a reviewer needs in the failure message. A bearer
  * token or an API key is the very thing the scan exists to keep out of a readable
  * artifact, so the report names where it is instead of what it is.
+ *
+ * `ssh-proxy-command` is redacted for the same reason: the value carries the binary
+ * path, the access method and the tunnel options, and CI logs are far more widely
+ * readable than the diff it was caught in. `ssh-endpoint` (a bare `HostName`) is
+ * not — that one is the context a reviewer needs to find it.
  */
-const REDACTED_FINDING_KINDS = new Set(["bearer-token", "token-looking", "meta-api-key"]);
+const REDACTED_FINDING_KINDS = new Set([
+  "bearer-token",
+  "token-looking",
+  "meta-api-key",
+  "ssh-proxy-command",
+]);
 
 /**
  * Run the scan only when invoked as a script.
@@ -343,24 +358,24 @@ if (import.meta.main) {
 }
 
 function runScan(): void {
-const findings = gitLsFiles()
-  .filter(existsSync)
-  .filter(shouldScan)
-  .flatMap(scanFile);
+  const findings = gitLsFiles()
+    .filter(existsSync)
+    .filter(shouldScan)
+    .flatMap(scanFile);
 
-if (findings.length > 0) {
-  console.error("Privacy scan failed:");
-  for (const finding of findings) {
-    // A credential finding must not be echoed: this output goes to stderr and into CI
-    // logs, so printing the match would copy a leaked secret from one place it should
-    // not be into another — and CI logs are far more widely readable than a diff.
-    // The location and kind are enough to find it; the value is one `git show` away
-    // for whoever is fixing it.
-    const shown = REDACTED_FINDING_KINDS.has(finding.kind) ? "<redacted>" : finding.value;
-    console.error(`${finding.file}:${finding.line} ${finding.kind}: ${shown}`);
+  if (findings.length > 0) {
+    console.error("Privacy scan failed:");
+    for (const finding of findings) {
+      // A credential finding must not be echoed: this output goes to stderr and into CI
+      // logs, so printing the match would copy a leaked secret from one place it should
+      // not be into another — and CI logs are far more widely readable than a diff.
+      // The location and kind are enough to find it; the value is one `git show` away
+      // for whoever is fixing it.
+      const shown = REDACTED_FINDING_KINDS.has(finding.kind) ? "<redacted>" : finding.value;
+      console.error(`${finding.file}:${finding.line} ${finding.kind}: ${shown}`);
+    }
+    process.exit(1);
   }
-  process.exit(1);
-}
 
-console.log("Privacy scan passed");
+  console.log("Privacy scan passed");
 }
