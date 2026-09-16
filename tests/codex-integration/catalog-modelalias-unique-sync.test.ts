@@ -87,6 +87,9 @@ describe("modelAliases sync writes unique slugs (#4730)", () => {
     const runtime = createCodexCatalogFixture(opencodexHome);
     const config = {
       providers: {
+        // The forward surface is what keeps includeNativeOpenAi true; without it the merge
+        // drops every slash-less baseline row before the write guard ever sees them.
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
         "command-code": {
           adapter: "openai-chat",
           baseUrl: "https://catalog-fixture.invalid/v1",
@@ -125,11 +128,16 @@ describe("modelAliases sync writes unique slugs (#4730)", () => {
     }>;
     expect(passes).toHaveLength(2);
     expect(passes[0]!.written).toBe(true);
-    expect(passes[1]!.catalog).toEqual(passes[0]!.catalog);
+    // Slug-level idempotence: the same public names land in the same order every pass. Row
+    // bodies may legitimately differ between passes (native metadata refresh), so equality
+    // is asserted on the slug sequence, not on full rows.
+    expect(passes[1]!.catalog.map(row => row.slug)).toEqual(passes[0]!.catalog.map(row => row.slug));
     for (const pass of passes) {
       const slugs = pass.catalog.map(row => row.slug);
       // The write-path guard: whatever the merge/retention emitted, every slug lands once.
       expect(new Set(slugs).size).toBe(slugs.length);
+      // Distinct public names of the same provider model both survive, once each.
+      expect(slugs).toContain("CC-MiniMaxAI-MiniMax-M3");
       expect(slugs).toContain("command-code/MiniMaxAI-MiniMax-M3");
       expect(slugs).toContain("command-code/deepseek-deepseek-v4-flash");
     }
