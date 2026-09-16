@@ -99,7 +99,7 @@ export async function deliverAdapterResponse(
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
         declaredToolNames: (options.inboundWire === "chat" || options.inboundWire === "anthropic") ? undefined : declaredToolNames,
-      toolParameterSchemas,
+        toolParameterSchemas,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
         // Same grok-surface split as the runTurn branch above.

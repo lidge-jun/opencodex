@@ -3764,4 +3764,36 @@ describe("chat-completions deferred tool pass-through", () => {
       upstream.stop(true);
     }
   });
+
+  test("responses wire still enforces 502 fail-closed guard when upstream emits undeclared tool (#1700)", async () => {
+    const upstream = mockChatUpstreamWithToolCall("todo_write");
+    saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock/test-model",
+          stream: true,
+          input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "write to todo" }] }],
+          tools: [
+            {
+              type: "function",
+              name: "lookup",
+              description: "lookup symbol",
+              parameters: { type: "object", properties: { q: { type: "string" } } },
+            },
+          ],
+        }),
+      });
+
+      const text = await response.text();
+      expect(text).toContain("undeclared client tool");
+      expect(text).toContain("response.failed");
+    } finally {
+      await server.stop(true);
+      upstream.stop(true);
+    }
+  });
 });
