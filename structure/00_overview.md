@@ -22,6 +22,9 @@ archaeology, debugging, or source research.
 | [`09_compatibility-lab.md`](09_compatibility-lab.md) | Optional Compatibility Lab evidence, automation, and core-runtime isolation. |
 | [`10_adapter-registry.md`](10_adapter-registry.md) | Adapter construction authority and registry-derived contract inheritance. |
 | [`11_compatibility-contracts.md`](11_compatibility-contracts.md) | Versioned provider compatibility claims and fixture-evidence boundaries. |
+| [`12_skill-control.md`](12_skill-control.md) | Universal Agent Skill Control Plane: skill discovery, import, scanning, policy, deployment, drift. |
+| [`13_security-control.md`](13_security-control.md) | Authorized Security Agent Control Plane: authorization, scopes, campaigns, findings, approvals. |
+| [`14_credential-runtime.md`](14_credential-runtime.md) | Provider Access Control Plane: encrypted credentials, health, leases, policy, circuit breakers. |
 
 ## Product boundary
 

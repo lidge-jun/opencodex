@@ -10,6 +10,9 @@ import Storage from "./pages/Storage";
 import CodexSet from "./pages/CodexSet";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
+import { Skills } from "./pages/Skills";
+import { Security } from "./pages/Security";
+import { Credentials } from "./pages/Credentials";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
@@ -32,6 +35,9 @@ const PAGE_TKEY: Record<Page, TKey> = {
   providers: "nav.providers",
   models: "nav.models",
   subagents: "nav.subagents",
+  skills: "nav.skills",
+  security: "nav.security",
+  credentials: "nav.credentials",
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
@@ -434,6 +440,9 @@ export default function App() {
                 {page === "storage" && <Storage apiBase={sharedBase} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
                 {page === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
+                {page === "skills" && <Skills apiBase={sharedBase} />}
+                {page === "security" && <Security apiBase={sharedBase} />}
+                {page === "credentials" && <Credentials apiBase={sharedBase} />}
               </>
             )}
           </ErrorBoundary>
