@@ -320,6 +320,7 @@
     "chatgpt-token-expiry.test.ts": "oauth",
     "chutes-provider.test.ts": "providers",
     "ci-bun-crash-classifier.test.ts": "ci-workflows",
+    "ci-crash-disposition.test.ts": "ci-workflows",
     "ci-workflows.test.ts": "ci-workflows",
     "citation-markers.test.ts": "responses",
     "cl01-claude-outbound-review-regressions.test.ts": "routing",
