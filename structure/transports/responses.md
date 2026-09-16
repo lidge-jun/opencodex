@@ -445,6 +445,45 @@ Arguments, user text, and schema property names are never rewritten.
 
 > Decision record: [ADR-0043](../decisions/ADR-0043-responses-http-sse.md)
 
+### Declared-tool membership by inbound wire
+
+`declaredToolNames` carries the request's tool catalog into both bridges, and it does two separate
+jobs that are separately controlled.
+
+Normalization runs on every inbound wire. `normalizeDeclaredToolName` and `declaresCodeModeExec` in
+`src/types/tools.ts` read the same set to map a provider-invented `default.` namespace back to the
+declared bare tool and to rewrite code-mode helper names into the declared `exec`. Both return their
+input unchanged when the set is absent, so the set reaches the bridge on every wire and enforcement
+is expressed by a separate flag rather than by withholding it.
+
+Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
+wire enforces. A routed provider that names a tool the request never declared ends the turn there:
+`src/bridge/sse.ts` emits `response.failed` and `src/bridge/response-json.ts` returns a failed
+response, both carrying `undeclared client tool`. That is the #1700 contract and it stands. Codex
+executes a top-level tool call, so a hallucinated `apply_patch` — which under code mode exists only
+as a nested `tools.apply_patch(...)` helper inside `exec` — is refused before it reaches the
+runtime, where it previously surfaced as a bare `aborted` with the file untouched.
+
+The `chat` and `anthropic` inbound wires relay the call instead. This is a deliberate reversal of
+#1700's scope for those two wires, not an oversight. Both vendor specs make the client's own runner
+responsible for validating a tool call and then executing or denying it, and harnesses on those
+endpoints defer part of their catalog to conserve prompt tokens and discover the rest at runtime.
+Enforcing membership against a partial catalog killed those streams mid-turn with a 502 and cost the
+caller the whole turn. This proxy executes no tool call on any wire, so scoping enforcement off
+these two moves the decision to the party that already makes it rather than removing it.
+
+An explicitly empty catalog still authorizes nothing on the wire that enforces. A request declaring
+an empty tool list is making a statement rather than omitting one, which is how the passthrough
+guard reads it through `clientExplicitWireToolCatalog` in
+`src/server/responses/passthrough-dispatch.ts`.
+
+The passthrough guard is not wire-scoped. `undeclaredToolGuardActive` gates namespace normalization
+and continuation-state suppression as well as the refusal, and it stands down only for
+`authMode: "forward"` and for a request that declares no catalog at all.
+
+`src/server/responses/run-turn-execution.ts` and `src/server/responses/adapter-delivery.ts` set the
+flag from `inboundWire` on the streaming, buffered, and JSON paths alike, so the three cannot drift.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in
