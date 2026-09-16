@@ -1,9 +1,15 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as comboRequests from "../../src/combos";
+import { executeComboResponses } from "../../src/server/responses/core-combo";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import type { RequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses/core";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { saveConfig } from "../../src/config";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 
 /**
  * One logical request, one send budget -- asserted as a COUNT, because the defect in #4546 is a
@@ -86,6 +92,73 @@ const totalSends = (logCtx: RequestLogContext): number =>
   sendCounts(logCtx).reduce((sum, count) => sum + count, 0);
 
 describe("upstream sends per logical request", () => {
+  test.each(["prepare-throw", "prepare-abort", "child-throw", "child-abort", "settled-send", "opaque-send", "nested-observed", "opaque-success"] as const)(
+    "combo reservation cleanup preserves observed work and refunds local exits (%s)", async mode => {
+      const budget = createRequestExecutionBudget();
+      const translatorBudget = createTranslatorBudget();
+      const controller = new AbortController();
+      const failure = new Error("fixture pre-dispatch failure");
+      const originalPrepare = comboRequests.concreteComboRequestBody;
+      const preparation = mode.startsWith("prepare-")
+        ? spyOn(comboRequests, "concreteComboRequestBody").mockImplementationOnce((...args) => {
+          if (mode === "prepare-throw") throw failure;
+          controller.abort();
+          return originalPrepare(...args);
+        }) : undefined;
+      let children = 0;
+      try {
+        const pending = executeComboResponses(responsesRequest("combo/fan"), { model: "combo/fan", input: "hello", stream: false },
+          "fan", comboOverTargets(1), { model: "", provider: "" }, { translatorBudget, sendBudget: budget, abortSignal: controller.signal }, {
+            handleComboResponses: async () => { throw new Error("Unexpected nested combo"); },
+            handleResponses: async (_request, _config, log, options) => {
+              children += 1;
+              if (mode === "child-throw") throw failure;
+              if (mode === "child-abort") { controller.abort(); return new Response(null, { status: 499 }); }
+              if (mode === "settled-send") {
+                const send = (options!.sendBudget as RequestExecutionBudget).reserveDispatch({ sendClass: "transient", targetKey: "fixture" });
+                if (!send.allowed || !send.permit.use()) throw new Error("Expected prepaid child send");
+              }
+              if (mode === "opaque-send") log.activeAttempt!.sendCount = 1;
+              if (mode === "nested-observed") log.attempts = [{ ...log.activeAttempt!, sendCount: 1 }];
+              return Response.json({ error: { message: "fixture provider failure" } }, { status: mode === "opaque-success" ? 200 : 502 });
+            },
+          });
+        if (mode.endsWith("throw")) await expect(pending).rejects.toBe(failure);
+        else await (await pending).text();
+        expect(children).toBe(mode.startsWith("prepare-") ? 0 : 1);
+        expect(budget.used).toBe(mode.startsWith("prepare-") ? 0 : 1);
+      } finally { preparation?.mockRestore(); translatorBudget.dispose(); }
+    },
+  );
+
+  test("a local input refusal refunds its combo booking so later targets keep four plus two sends", async () => {
+    const cfg = comboOverTargets(3);
+    cfg.providers.t0!.contextWindow = 1;
+    for (const name of ["t1", "t2"]) cfg.providers[name] = {
+      ...cfg.providers[name]!, adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com",
+    };
+    cfg.providers.t1!.apiKeyPool = [{ id: "a", key: "sk-t1" }, { id: "b", key: "sk-t1-recovery" }];
+    saveConfig(cfg);
+    const seen: string[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      const key = new Headers(init?.headers).get("x-goog-api-key") ?? "";
+      seen.push(key);
+      const status = key === "sk-t1" && seen.length === 3 ? 429 : 502;
+      return Response.json({ error: { message: "fixture provider failure" } }, { status, headers: { "Retry-After": "0" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const budget = createRequestExecutionBudget();
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/fan", stream: false, input: "large input ".repeat(100) }),
+    }), cfg, logCtx, { sendBudget: budget });
+    expect(response.status).toBe(502);
+    await response.text();
+    expect(seen).toEqual(["sk-t1", "sk-t1", "sk-t1", "sk-t1-recovery", "sk-t2", "sk-t2"]);
+    expect(sendCounts(logCtx)).toEqual([0, 4, 2]);
+    expect(budget.used).toBe(6);
+  });
+
   test("a 5xx streak on a single target spends the base allowance and stops", async () => {
     const upstream = alwaysFailing(502, "upstream busy");
     const logCtx: RequestLogContext = { model: "", provider: "" };

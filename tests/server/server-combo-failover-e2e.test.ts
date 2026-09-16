@@ -46,6 +46,7 @@ import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { consumeComboFailure, createChildPassthroughCallbackGate } from "../../src/server/responses/core";
 import { clearComboRecallForTests, recallComboForLane, reconcileComboRecall } from "../../src/server/responses/combo-session-recall";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -1937,7 +1938,10 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("runTurn combo attempts retain requested effort without adapter wire metadata", async () => {
+    const sendBudget = createRequestExecutionBudget();
+    const dispatchedModels: string[] = [];
     customRunTurn = async (parsed, _incoming, emit) => {
+      dispatchedModels.push(parsed.modelId);
       if (parsed.modelId === "m1") {
         emit({ type: "error", message: "first target unavailable" });
         return;
@@ -1952,9 +1956,11 @@ describe("server combo failover 030 activation matrix", () => {
 
     const response = await postLogged(config, {
       reasoning: { effort: "high" },
-    });
+    }, { sendBudget });
     expect(response.status).toBe(200);
     expect(JSON.stringify(await response.json())).toContain("runTurn backup");
+    expect(dispatchedModels).toEqual(["m1", "m2"]);
+    expect(sendBudget.used).toBe(2);
     const { log, usage } = await latestAttemptReceipts(config);
 
     for (const receipt of [log, usage]) {
@@ -1973,6 +1979,7 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("hosted web-search eager model failure hops through the loop path", async () => {
+    const sendBudget = createRequestExecutionBudget();
     const modelHits: Array<{ model?: string; hasWebTool: boolean; authorization: string | null; account: string | null }> = [];
     const routed = serve(async request => {
       const body = await request.json() as { model?: string; tools?: Array<{ type?: string }> };
@@ -2005,7 +2012,7 @@ describe("server combo failover 030 activation matrix", () => {
     const response = await post(config, {
       stream: true,
       tools: [{ type: "web_search" }],
-    }, { onResponseComplete: model => models.push(model) }, {
+    }, { sendBudget, onResponseComplete: model => models.push(model) }, {
       session_id: "web-search-recall",
       authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-combo-search" })}`,
       "chatgpt-account-id": "acct-combo-search",
@@ -2013,6 +2020,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(response.status).toBe(200);
     expect(JSON.stringify(await collectSse(response))).toContain("web loop backup");
     expect(modelHits.map(hit => hit.model)).toEqual(["m1", "m2"]);
+    expect(sendBudget.used).toBe(2);
     expect(modelHits.every(hit => hit.hasWebTool)).toBe(true);
     expect(modelHits.map(hit => hit.authorization)).toEqual(["Bearer key-a", "Bearer key-b"]);
     expect(modelHits.every(hit => hit.account === null)).toBe(true);

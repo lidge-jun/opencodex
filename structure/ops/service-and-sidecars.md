@@ -1,6 +1,6 @@
 # Background Service And Sidecars
 
-401 recovery admits its inference before credential mutation or body disposal under the [recovery contract](../transports/responses.md#credential-hop-reservations), including native main/stored-account replay.
+401 recovery admits its inference before credential mutation or body disposal under the [recovery contract](../transports/responses.md#credential-hop-reservations), including native main/stored-account replay. Combo cleanup refunds proven local refusal while retaining successful, observed or uncertain child-dispatch charges under that contract.
 
 Budget-aware rebuilds reuse or fund a recovery reservation; the first helper send reuses the outer pacing slot under the [recovery and pacing contract](../transports/responses.md#credential-hop-reservations).
 

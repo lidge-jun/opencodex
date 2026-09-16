@@ -241,6 +241,11 @@ When no retry fits, they retain the prior HTTP failure instead of sending again.
 model-catalog lookup are separate from inference accounting. Ordinary Google AI Studio continues
 to use the server's existing retry helper.
 
+A combo child refused locally before any dispatch is recorded returns its unused send reservation,
+so later targets keep their remaining allowance. Successful or already-dispatched children retain
+their charge; cancellation or an unknown failure after child execution starts remains conservative.
+This does not promise a refund for every failure that happens before network bytes are sent.
+
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
 served the first request. Changing the selected key, its reference or resolved value, authentication
 mode, or base URL during search or provider pacing ends the turn with a bridge error before another

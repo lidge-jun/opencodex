@@ -689,6 +689,17 @@ budget before it knows whether a rotation is even possible, because the reservat
 `reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
 idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
 
+Combo bookings remain unconfirmed while constructing and dispatching a child. Preparation failure
+or a failed child with no dispatch recorded in its fresh attempt log releases the unused booking;
+an adapter-owned reservation or external send report settles it at the existing send boundary.
+Successful responses (including deferred streams), positive child/nested dispatch records, and
+unknown throws or cancellation after child entry retain the existing conservative one-send charge
+when their transport does not settle the booking itself. Dispatch records can precede pacing:
+this refunds proven local refusal, not every zero-wire failure. The iteration-wide cleanup covers
+preparation, abort, failure and early return. `tests/responses/responses-send-budget-counts.test.ts`
+checks local refusal followed by four plus two Vertex sends; the opaque runTurn and hosted search
+cases in `tests/server/server-combo-failover-e2e.test.ts` preserve their observed dispatch charges.
+
 An initial terminal-guard continuation repairs a no-tool completion, even without a recovery
 log label. It may spend the shared final reserve after base sends are exhausted. The retry helper
 settles that permit once; a missing or spent reserve prevents another dispatch or credential hop.
