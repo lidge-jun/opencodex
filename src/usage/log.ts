@@ -865,13 +865,27 @@ function ensureUsageLogDir(): void {
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
-  ensureUsageLogDir();
+  const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
   const path = usageLogPath();
-  const fileAlreadyEnsured = ensuredUsageLogFile === path;
-  appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
-  if (!fileAlreadyEnsured) {
-    try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
-    ensuredUsageLogFile = path;
+  const doAppend = (): void => {
+    ensureUsageLogDir();
+    const fileAlreadyEnsured = ensuredUsageLogFile === path;
+    appendFileSync(path, line, { encoding: "utf-8", mode: 0o600 });
+    if (!fileAlreadyEnsured) {
+      try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+      ensuredUsageLogFile = path;
+    }
+  };
+  try {
+    doAppend();
+  } catch (error: any) {
+    if (error?.code === "ENOENT") {
+      ensuredUsageLogDir = null;
+      ensuredUsageLogFile = null;
+      doAppend();
+      return;
+    }
+    throw error;
   }
 }
 

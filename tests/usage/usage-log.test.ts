@@ -1013,27 +1013,60 @@ describe("usage log", () => {
     expect(readRecentUsageEntries(1)).toEqual([]);
   }, STORE_BUDGET_MS);
 
-    test("appendUsageEntry avoids redundant mkdirSync and chmodSync on consecutive calls", async () => {
+  test("appendUsageEntry avoids redundant mkdirSync and chmodSync on consecutive calls", async () => {
     const nodeFs = await import("node:fs");
     const mkdirSpy = spyOn(nodeFs, "mkdirSync");
     const chmodSpy = spyOn(nodeFs, "chmodSync");
 
-    for (let i = 0; i < 5; i++) {
-      appendUsageEntry({
-        requestId: `ocx-perf-${i}`,
-        timestamp: Date.now(),
-        provider: "openai",
-        model: "gpt-4o",
-        status: 200,
-        durationMs: 10,
-        usageStatus: "unreported",
-      });
+    try {
+      for (let i = 0; i < 5; i++) {
+        appendUsageEntry({
+          requestId: `ocx-perf-${i}`,
+          timestamp: Date.now(),
+          provider: "openai",
+          model: "gpt-4o",
+          status: 200,
+          durationMs: 10,
+          usageStatus: "unreported",
+        });
+      }
+
+      expect(mkdirSpy.mock.calls.length).toBe(1);
+      expect(chmodSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      mkdirSpy.mockRestore();
+      chmodSpy.mockRestore();
     }
+  });
 
-    expect(mkdirSpy.mock.calls.length).toBe(1);
-    expect(chmodSpy.mock.calls.length).toBeLessThanOrEqual(2);
+  test("appendUsageEntry recovers cleanly on ENOENT if usage directory is deleted between calls", () => {
+    const entry1: PersistedUsageEntry = {
+      requestId: "ocx-enoent-1",
+      timestamp: Date.now(),
+      provider: "openai",
+      model: "gpt-4o",
+      status: 200,
+      durationMs: 10,
+      usageStatus: "unreported",
+    };
+    appendUsageEntry(entry1);
 
-    mkdirSpy.mockRestore();
-    chmodSpy.mockRestore();
+    // Simulate directory deletion by log rotation / cleanup while process is running
+    rmSync(testDir, { recursive: true, force: true });
+    expect(existsSync(testDir)).toBe(false);
+
+    const entry2: PersistedUsageEntry = {
+      requestId: "ocx-enoent-2",
+      timestamp: Date.now(),
+      provider: "openai",
+      model: "gpt-4o",
+      status: 200,
+      durationMs: 12,
+      usageStatus: "unreported",
+    };
+    expect(() => appendUsageEntry(entry2)).not.toThrow();
+    const readBack = readRecentUsageEntries(10);
+    expect(readBack.length).toBe(1);
+    expect(readBack[0].requestId).toBe("ocx-enoent-2");
   });
 });
