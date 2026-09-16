@@ -3,10 +3,13 @@ import {
   consumeForInspection,
   consumeForResponseLogMetadata,
   getInspectionCounters,
+  responseWithDeferredRequestLog,
   resetInspectionCountersForTest,
   type SseInspector,
 } from "../../src/server/relay";
-import type { RequestLogContext } from "../../src/server/request-log";
+import { registerResponseLogBodyCases } from "../helpers/response-log-body-cases";
+import { MAX_RESPONSE_LOG_INSPECTION_BYTES } from "../../src/server/response-log-body";
+import type { RequestLogContext, RequestLogEntry } from "../../src/server/request-log";
 
 // Regression for issue #44: native-passthrough turns are inspected on a teed background stream.
 // Codex disconnects the instant it finishes reading, so the inspection stream is frequently
@@ -425,3 +428,80 @@ describe("consumeForInspection bare-error EOF finality", () => {
     expect(cancels).toBe(1);
   });
 });
+
+describe("bounded response log body lifecycle", () => registerResponseLogBodyCases(test));
+
+for (const contentType of ["application/json", "text/plain"]) {
+  for (const outcome of ["eof", "error", "cancel"] as const) {
+    test(`deferred ${contentType} finalizes once on ${outcome}`, async () => {
+      const entries: RequestLogEntry[] = [];
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const reasons: unknown[] = [];
+      const source = new ReadableStream<Uint8Array>({
+        start(c) { controller = c; },
+        cancel(reason) { reasons.push(reason); },
+      });
+      const ctx: RequestLogContext = {
+        model: "fixture-model", provider: "custom", usageFromBridge: true,
+        usage: { inputTokens: 3, outputTokens: 2 },
+      };
+      const response = responseWithDeferredRequestLog(new Response(source, {
+        status: 503, statusText: "Unavailable", headers: { "content-type": contentType, "x-fixture": "retained" },
+      }), "bounded-log-fixture", Date.now(), ctx, entry => entries.push(entry));
+      const reader = response.body!.getReader();
+      const first = reader.read();
+      const bytes = encoder.encode(contentType === "application/json" ? '{"model":"wire-model"}' : "provider failed");
+      controller.enqueue(bytes);
+      expect((await first).value).toEqual(bytes);
+      expect(entries).toHaveLength(0);
+      expect(response.status).toBe(503);
+      expect(response.statusText).toBe("Unavailable");
+      expect(response.headers.get("x-fixture")).toBe("retained");
+      if (outcome === "eof") {
+        controller.close();
+        expect((await reader.read()).done).toBe(true);
+      } else if (outcome === "error") {
+        const failure = new Error("fixture reset");
+        controller.error(failure);
+        await expect(reader.read()).rejects.toThrow("fixture reset");
+      } else {
+        const pending = reader.read();
+        await reader.cancel("fixture cancelled");
+        await pending;
+        expect(reasons).toEqual(["fixture cancelled"]);
+      }
+      await tick();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.status).toBe(outcome === "cancel" ? 499 : outcome === "error" ? 502 : 503);
+      expect(entries[0]?.closeReason).toBe(outcome === "cancel" ? "client_cancel" : "non_stream");
+      expect(ctx.usageFromBridge).toBe(true);
+      expect(ctx.usage).toEqual({ inputTokens: 3, outputTokens: 2 });
+      expect(source.locked).toBe(false);
+      if (contentType === "application/json" && outcome !== "eof") {
+        expect(ctx.resolvedModel).toBeUndefined();
+      }
+    });
+  }
+}
+
+test("JSON inspection budget does not detach a long SSE terminal observer", async () => {
+  const terminals: string[] = [];
+  const completed: unknown[] = [];
+  const padding = encoder.encode(`: ${"x".repeat(64 * 1024)}\n\n`);
+  let remaining = Math.ceil(MAX_RESPONSE_LOG_INSPECTION_BYTES / padding.byteLength) + 1;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (remaining-- > 0) controller.enqueue(padding);
+      else {
+        controller.enqueue(completedFrame("after-json-budget"));
+        controller.close();
+      }
+    },
+  });
+  await new Promise<void>(resolve => consumeForInspection(
+    source, status => terminals.push(status), undefined, resolve,
+    undefined, undefined, response => completed.push(response),
+  ));
+  expect(terminals).toEqual(["completed"]);
+  expect(completed).toHaveLength(1);
+}, 10_000);

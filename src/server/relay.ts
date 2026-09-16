@@ -26,6 +26,7 @@ import {
   MAX_CLIENT_SSE_FRAME_BYTES,
 } from "./sse-frame-buffer";
 import { replaceSseDataPayload } from "./sse-payload-rewrite";
+import { relayResponseLogBody } from "./response-log-body";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
@@ -718,24 +719,21 @@ export function responseWithDeferredRequestLog(
   }
   if (!response.body || !contentType.includes("text/event-stream")) {
     if (response.body && (contentType.includes("application/json") || response.status >= 400)) {
-      const finalizeJsonLog = async () => {
-        const text = await response.text();
-        // Non-JSON error bodies: inspect/log only a bounded prefix (the stored
-        // upstreamError is 500 chars anyway); the FULL text is still forwarded to the
-        // client below, unchanged. JSON bodies keep full inspection (usage parsing).
-        const isJson = contentType.includes("application/json");
-        inspectResponseLogJson(logCtx, isJson ? text : text.slice(0, 8192));
-        addFinalRequestLog(requestId, start, logCtx, response.status, { closeReason: "non_stream" }, addLog);
-        return text;
-      };
-      const body = new ReadableStream<Uint8Array>({
-        async start(controller) {
+      const body = relayResponseLogBody(response.body, {
+        isJson: contentType.includes("application/json"),
+        onFinalize(outcome, text) {
           try {
-            controller.enqueue(new TextEncoder().encode(await finalizeJsonLog()));
-            controller.close();
-          } catch (err) {
-            addFinalRequestLog(requestId, start, logCtx, 502, { closeReason: "non_stream" }, addLog);
-            try { controller.error(err); } catch { /* already torn down */ }
+            // Only complete, within-budget JSON reaches the existing usage parser.
+            // Error/cancel prefixes must not masquerade as reported JSON usage.
+            if (text !== undefined) inspectResponseLogJson(logCtx, text);
+          } finally {
+            if (outcome === "error" && logCtx.activeAttempt) {
+              logCtx.activeAttempt.streamAborted = true;
+            }
+            const status = outcome === "cancel" ? 499 : outcome === "error" ? 502 : response.status;
+            addFinalRequestLog(requestId, start, logCtx, status, {
+              closeReason: outcome === "cancel" ? "client_cancel" : "non_stream",
+            }, addLog);
           }
         },
       });

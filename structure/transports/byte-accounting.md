@@ -39,3 +39,26 @@ These optimizations do not add request queues, retry policies, or RSS-based admi
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+## Non-stream response-log inspection
+
+`src/server/relay.ts` delegates JSON and non-JSON error-body delivery to
+`src/server/response-log-body.ts`. A single pull-driven stream forwards the original bytes;
+logging neither waits for the whole body before delivery nor eagerly drains a second tee branch.
+The inspection copy retains at most 32 MiB for JSON, or an 8 KiB byte prefix for other errors.
+One geometrically grown allocation also bounds retained chunk metadata. These are per-response
+inspection-copy limits, not a process-memory ceiling or an output-size limit; decoding and parsing
+can allocate additional bounded objects.
+
+JSON is inspected only after clean EOF when the entire body fits. Crossing its budget discards
+its inspection copy and skips parsing without truncating delivery, changing the HTTP status,
+or inventing usage. Error and cancellation paths never parse a partial JSON document. Other
+error bodies retain their bounded diagnostic prefix. The existing request-log parser and final
+log writer remain responsible for redaction, usage provenance, and attempt accounting.
+
+EOF logs the original status, a failed body read logs 502, and downstream cancellation logs 499
+with `client_cancel`, exactly once. The same cancellation reason reaches the source reader;
+reader cancellation is not awaited because a tee sibling can remain open. This limit does not
+apply to SSE turn length: existing frame/output-item budgets and post-disconnect drain ownership
+remain unchanged. `tests/server/consume-for-inspection-cancel.test.ts` registers the shared
+body-lifecycle cases and covers the integration and a late SSE terminal beyond the JSON budget.
