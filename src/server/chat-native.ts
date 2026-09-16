@@ -25,6 +25,7 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
+  isNonReplayableResponse,
   prepareSameTarget429Wait,
   type UpstreamSendRecovery,
 } from "../lib/upstream-retry";
@@ -51,7 +52,9 @@ import { linkAbortSignal } from "./responses";
 import {
   addFinalRequestLog,
   beginRequestAttempt,
-  noteAttemptSend,
+  noteProviderAttemptSend,
+  recordKeyAttemptFailure,
+  recordKeyWireAttemptUsage,
   recordFirstOutput,
   recordAttemptCredentialSource,
   sealRequestAttemptIdentity,
@@ -344,10 +347,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                 const encoding = new Headers(init.headers).get("accept-encoding");
                 if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
                 if (init.signal?.aborted) throw init.signal.reason;
-                noteAttemptSend(attempt, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
-                return ((activeProvider as OcxProviderTransport).fetch ?? execute)(request.url, applyUpstreamRecoveryInit({
+                noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+                const dispatched = await ((activeProvider as OcxProviderTransport).fetch ?? execute)(request.url, applyUpstreamRecoveryInit({
                   ...init, method: request.method, headers, body: request.body,
                 }, transportRecovery));
+                if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
+                return dispatched;
               },
             }),
           );
@@ -375,6 +380,11 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     let retries = 0;
     while (
       response.status === 429
+      // A 429 this proxy synthesized for a refused reset replay is not a provider rate
+      // limit: waiting and re-sending here is exactly the duplicate inference the refusal
+      // exists to stop. It kept the same shape under the old 502 only because 502 never
+      // matched this branch.
+      && !isNonReplayableResponse(response)
       && retryPolicy
       && retries < retryPolicy.attempts
       && transientSendAvailable()
@@ -388,7 +398,9 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       if (upstream.signal.aborted) throw upstream.signal.reason;
       response = await send(activeRequest, "rate-limit-429");
     }
-    while (response.status === 429 && hasKeyPoolFailover(activeProvider)) {
+    // Same reason as above, plus a second one: rotating here would write a cooldown against
+    // a key that rate-limited nothing, and that false signal outlives the request.
+    while (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
       const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
         retryAfter: response.headers.get("retry-after"),
         now: Date.now(),
@@ -509,8 +521,10 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       stallTimeoutSec: config.stallTimeoutSec,
       onFirstOutput: logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined,
       onUsage: usage => {
-        logCtx.usage = usage;
-        attempt.usage = usage;
+        if (!recordKeyWireAttemptUsage(logCtx, usage)) {
+          logCtx.usage = usage;
+          attempt.usage = usage;
+        }
       },
       onTerminal: (status: number, message?: string) => {
         terminalStatus = status;
@@ -600,8 +614,10 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   if (!completion) return fail(502, "upstream response contained no choices", "upstream_error");
   const usage = usageFromChat(completion.usage);
   if (usage) {
-    logCtx.usage = usage;
-    attempt.usage = usage;
+    if (!recordKeyWireAttemptUsage(logCtx, usage)) {
+      logCtx.usage = usage;
+      attempt.usage = usage;
+    }
   }
   if (logIds) recordFirstOutput(logCtx, logIds.start);
   try {

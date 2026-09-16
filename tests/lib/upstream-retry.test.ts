@@ -1,8 +1,11 @@
+import { formatErrorResponse as formatReplaySafetyError } from "../../src/bridge/errors";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
   isConnectionResetError,
+  isNonReplayableResponse,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   prepareSameTarget429Wait,
   releaseResponseBodyBestEffort,
   retryBackoffDelayMs,
@@ -148,7 +151,7 @@ describe("fetchWithResetRetry", () => {
   test("retries a Bun-shaped reset and returns the second attempt's response", async () => {
     silenceWarn();
     const mock = mockDoFetch([bunResetError(), new Response("ok", { status: 200 })]);
-    const res = await fetchWithResetRetry(mock.doFetch, { label: "test" });
+    const res = await fetchWithResetRetry(mock.doFetch, { label: "test", replaySafe: true });
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("ok");
     expect(mock.calls).toHaveLength(2);
@@ -161,7 +164,7 @@ describe("fetchWithResetRetry", () => {
       new Error("The socket connection was closed unexpectedly."),
       new Response("ok", { status: 200 }),
     ]);
-    const res = await fetchWithResetRetry(mock.doFetch);
+    const res = await fetchWithResetRetry(mock.doFetch, { replaySafe: true });
     expect(res.status).toBe(200);
     expect(mock.calls).toHaveLength(2);
   });
@@ -190,7 +193,7 @@ describe("fetchWithResetRetry", () => {
   test("gives up after max attempts and rethrows the last reset error", async () => {
     silenceWarn();
     const mock = mockDoFetch([bunResetError(), bunResetError(), bunResetError(), bunResetError()]);
-    await expect(fetchWithResetRetry(mock.doFetch)).rejects.toThrow("socket connection was closed unexpectedly");
+    await expect(fetchWithResetRetry(mock.doFetch, { replaySafe: true })).rejects.toThrow("socket connection was closed unexpectedly");
     expect(mock.calls).toHaveLength(3);
     expect(warnSpies[0]).toHaveBeenCalledTimes(2);
   });
@@ -207,7 +210,7 @@ describe("fetchWithResetRetry", () => {
     silenceWarn();
     const ac = new AbortController();
     const mock = mockDoFetch([bunResetError(), new Response("ok", { status: 200 })]);
-    const pending = fetchWithResetRetry(mock.doFetch, { abortSignal: ac.signal });
+    const pending = fetchWithResetRetry(mock.doFetch, { abortSignal: ac.signal, replaySafe: true });
     // First attempt rejects with a reset synchronously-ish; abort lands mid-backoff.
     setTimeout(() => ac.abort(new DOMException("client closed", "AbortError")), 10);
     await expect(pending).rejects.toThrow("client closed");
@@ -426,5 +429,124 @@ describe("prepareSameTarget429Wait", () => {
     }
     expect(events.length).toBeGreaterThanOrEqual(2);
     expect(events.every(type => type === "heartbeat")).toBe(true);
+  });
+});
+
+describe("ambiguous reset safety", () => {
+  test("a reset is terminal by default, even with a remaining send budget", async () => {
+    const reports: number[] = [];
+    const mock = mockDoFetch([bunResetError(), new Response("duplicate")]);
+    const response = await fetchWithResetRetry(mock.doFetch, {
+      attempts: 3, onSendsConsumed: count => reports.push(count),
+    });
+    // 429, not 502: the Codex client is configured retry_5xx / no-retry-429, so a 5xx here
+    // would be re-sent four times by the caller this refusal exists to protect.
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(mock.calls).toHaveLength(1);
+    expect(reports).toEqual([1]);
+  });
+
+  test("a 503 followed by a reset stops both retry layers and reports both sends once", async () => {
+    silenceWarn();
+    const reports: number[] = [];
+    const mock = mockDoFetch([
+      new Response("busy", { status: 503 }), bunResetError(), new Response("duplicate"),
+    ]);
+    const response = await fetchWithTransientRetry(mock.doFetch, {
+      attempts: 3, onSendsConsumed: count => reports.push(count),
+    });
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(mock.calls).toHaveLength(2);
+    expect(reports).toEqual([2]);
+  });
+
+  test("an exhausted last send still carries the no-replay verdict", async () => {
+    const mock = mockDoFetch([bunResetError()]);
+    const response = await fetchWithResetRetry(mock.doFetch, { attempts: 1 });
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("EPIPE and message-only resets are ambiguous too, without leaking the exception", async () => {
+    for (const error of [
+      Object.assign(new Error("private transport detail"), { code: "EPIPE" }),
+      new Error("The socket connection was closed unexpectedly. private transport detail"),
+    ]) {
+      const mock = mockDoFetch([error]);
+      const response = await fetchWithResetRetry(mock.doFetch);
+      expect(isNonReplayableResponse(response)).toBe(true);
+      expect(await response.text()).not.toContain("private transport detail");
+      expect(mock.calls).toHaveLength(1);
+    }
+  });
+
+  test("zero and invalid budgets never dispatch regardless of replay safety", async () => {
+    for (const replaySafe of [false, true]) {
+      for (const attempts of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        const mock = mockDoFetch([new Response("must not send")]);
+        await expect(fetchWithResetRetry(mock.doFetch, { attempts, replaySafe })).rejects.toThrow();
+        expect(mock.calls).toHaveLength(0);
+      }
+    }
+  });
+
+  test("explicitly replay-safe resets still share the total budget with 5xx", async () => {
+    silenceWarn();
+    const reports: number[] = [];
+    const mock = mockDoFetch([
+      bunResetError(), new Response("busy", { status: 503 }), new Response("ok"),
+    ]);
+    const response = await fetchWithTransientRetry(mock.doFetch, {
+      attempts: 3, replaySafe: true, onSendsConsumed: count => reports.push(count),
+    });
+    expect(await response.text()).toBe("ok");
+    expect(mock.calls).toHaveLength(3);
+    expect(reports).toEqual([3]);
+  });
+});
+
+describe("ambiguous reset safety through error formatting", () => {
+  test("every terminal code survives formatting without advertising Retry-After", async () => {
+    for (const code of ["upstream_no_response", "upstream_closed_before_response", "upstream_reset_replay_refused"]) {
+      const response = formatReplaySafetyError(502, "upstream_error", "closed", { code, retryAfter: "2" });
+      expect(isNonReplayableResponse(response)).toBe(true);
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect((await response.json()).error.code).toBe(code);
+    }
+  });
+
+  test("only the proxy-owned refusal restates the status; upstream verdicts keep theirs", async () => {
+    // The formatter is reached from combo and adapter paths holding an upstream-shaped 502.
+    // The two transport verdicts describe something upstream did and keep it; the refusal is
+    // this proxy's own decision and carries its own status wherever it is re-wrapped.
+    const refused = formatReplaySafetyError(502, "upstream_error", "closed", {
+      code: "upstream_reset_replay_refused",
+    });
+    expect(refused.status).toBe(429);
+    for (const code of ["upstream_no_response", "upstream_closed_before_response"]) {
+      expect(formatReplaySafetyError(502, "upstream_error", "closed", { code }).status).toBe(502);
+    }
+  });
+
+  test("unrecognized upstream codes do not override ordinary error classification", async () => {
+    const response = formatReplaySafetyError(502, "upstream_error", "failed", {
+      code: "untrusted_provider_code", retryAfter: "2",
+    });
+    expect(isNonReplayableResponse(response)).toBe(false);
+    expect(response.headers.get("retry-after")).toBe("2");
+    expect((await response.json()).error.code).not.toBe("untrusted_provider_code");
+  });
+
+  test("the cyber-policy hard block retains precedence", async () => {
+    const response = formatReplaySafetyError(502, "upstream_error", "blocked due to high-risk cybersecurity activity", {
+      code: "upstream_closed_before_response", retryAfter: "2",
+    });
+    expect(response.status).toBe(400);
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect((await response.json()).error.code).toBe("cyber_policy");
   });
 });

@@ -141,6 +141,27 @@ describe("DeepSeek Responses replay keeps reasoning on the wire", () => {
     expect(body.input[2]).toMatchObject({ type: "function_call_output", call_id: "call_1", output: "rain" });
   });
 
+  test("a route switch never forwards foreign opaque reasoning or invents plaintext", () => {
+    const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
+    enrichProviderFromRegistry("deepseek", provider);
+    const built = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "deepseek-v4-flash",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _stripReasoningEncryptedContent: true,
+      _rawBody: {
+        model: "deepseek-v4-flash",
+        tools: [{ type: "function", name: "get_weather", parameters: { type: "object" } }],
+        input: [reasoningItem({ content: [], encrypted_content: "foreign-provider-blob" })],
+      },
+    } as Parameters<ReturnType<typeof createResponsesPassthroughAdapter>["buildRequest"]>[0], { headers: new Headers() });
+    const body = JSON.parse(String(built.body)) as { input: Record<string, unknown>[] };
+    expect(body.input[0]).not.toHaveProperty("encrypted_content");
+    expect(JSON.stringify(body.input[0])).not.toContain("reasoning_text");
+    expect(JSON.stringify(body.input[0])).not.toContain("foreign-provider-blob");
+  });
+
   test("a canonical OpenAI provider still blanks reasoning content", () => {
     const provider = { ...providerConfigSeed(getProviderRegistryEntry("openai-apikey")!), apiKey: "sk-test" };
     const body = buildBody(provider);

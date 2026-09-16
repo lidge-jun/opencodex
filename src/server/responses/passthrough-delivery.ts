@@ -15,6 +15,7 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
+import { teeWithBoundedInspection } from "../inspection-tee";
 import {
   codexForwardTerminalOutcomeRecorder,
   usesCodexForwardPoolAuth,
@@ -27,7 +28,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "./ws-upstream";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
-import { codexProbeLeaseId, codexProbeQuotaScope } from "../../codex/auth-context";
+import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant } from "../../codex/auth-context";
 import { consumeComboFailure } from "./core-combo-failure";
 import { readDisplaySafeErrorText } from "./core-errors";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
@@ -251,6 +252,7 @@ export async function deliverPassthroughResponse(
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(admissionState.authCtx),
           probeQuotaScope: codexProbeQuotaScope(admissionState.authCtx),
+          transientProbe: codexTransientProbeGrant(admissionState.authCtx),
           writerGeneration: admissionState.authCtx.writerGeneration,
           // Includes a replay's second 401, which is the case that actually retires the
           // account — fence it on the credential the request was holding.
@@ -593,16 +595,18 @@ export async function deliverPassthroughResponse(
           })),
         );
       }
-      const [nativeBody, inspectBody] = passthroughSseBody.tee();
       const turnAc = new AbortController();
       const clientGone = new AbortController();
+      const clientGoneSignal = options.abortSignal
+        ? AbortSignal.any([clientGone.signal, options.abortSignal])
+        : clientGone.signal;
+      // Pace against raw bytes before rewrites, without detaching terminal ownership.
+      const [nativeBody, inspectBody] = teeWithBoundedInspection(passthroughSseBody, { clientGoneSignal });
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
         // Request abort can reject the fetch body before the response cancel hook runs.
-        clientGoneSignal: options.abortSignal
-          ? AbortSignal.any([clientGone.signal, options.abortSignal])
-          : clientGone.signal,
+        clientGoneSignal,
         drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
         upstream,
         pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,

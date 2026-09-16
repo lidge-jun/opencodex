@@ -367,6 +367,26 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 
 ## Usage accounting
 
+### Upstream key account attribution
+
+API-key attempts in `src/usage/log.ts` carry `accountLogLabel` as `k` plus 32 lowercase
+hex digits. `src/codex/account-label.ts` derives it from the first 128 bits of SHA-256 over
+`JSON.stringify(["ocx-key-account-v1", providerName, entryId ?? null, reference])`.
+`reference` is the configured value captured for the physical send, before environment or
+keychain resolution. The log contains the digest, not raw keys, references, or pool IDs.
+Existing Codex and OAuth label formats remain valid. Replacing a literal or reference changes
+identity; rotating the secret behind the same reference preserves the logical account.
+
+`src/providers/label.ts` stamps only key authentication, including implicit custom-provider
+keys. `src/server/request-log.ts` commits identity at dispatch after queued selection changes,
+retains separate flat records when retries change keys, and isolates each record's raw usage
+from parent combo totals and adapter-loop aggregation. Reported failure usage is retained;
+missing usage and historical identities remain unknown. Native wire snapshots replace only the
+current physical response contribution, preserving prior sends on the same key without counting
+repeated inspections twice. Consumers sum the flat attempts once and keep subscription quota
+observations separate from token or API-equivalent cost totals.
+
+
 `src/server/hub-usage.ts` serves `GET /v1/usage` on hubs for an explicit configured data key. The authenticated key selects the aggregate; query parameters cannot select an API-key identity. Unscoped environment/admin credentials and loopback bypass are not admitted. The response projects only this client's numeric totals, provider/model/day rows and incomplete-history metadata through `src/remote/hub-usage.ts`; accounts, raw records and key IDs are omitted. Unknown fields are stripped at every object boundary and the serialized body is capped at 1 MiB.
 
 Custom usage windows are immutable bounds on the streaming accumulator, applied to each
@@ -632,3 +652,5 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
 
 The raw provider editor round-trips `autoReviewModel` and `autoReviewModelOverrides` through editor-owned DTO fields. POST/PATCH/PUT share validation; PUT copies schema-normalized values into the persisted and live candidate before adoption. Canonical `openai` rejects these fields, including clear forms. Field-masked writes (PATCH, editor PUT, reload) pin every registry-seed key and ignore operator overlays the seed never defines, most commonly `selectedModels`; POST keeps the exact-key comparison. Canonical `openai` still rejects `allowPrivateNetwork`, which must not short-circuit destination DNS checks on the ChatGPT forward row. Existing authentication, origin checks and stale-baseline protection still govern the writes. See [reviewer projection](catalog.md#provider-scoped-approval-reviewer).
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.

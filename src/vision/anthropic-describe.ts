@@ -205,7 +205,7 @@ export async function describeImageAnthropic(
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
       }, recovery)),
-      { abortSignal: linkedSignal.signal, label: "vision-sidecar-anthropic" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "vision-sidecar-anthropic" },
     );
     if (!res.ok) {
       // The body is untrusted and only feeds one auth-failure message, so read a bounded prefix.

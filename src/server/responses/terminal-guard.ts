@@ -13,6 +13,9 @@ const PLAN_OR_COMPLETION_RE = /(?:\b(?:i(?:'|’)m going to|i will|i(?:'|’)ll|
 const WAITING_FOR_USER_RE = /(?:[?？]\s*$|需要我|请(?:确认|选择|提供)|是否|要不要|可以吗|\b(?:do you want|should i|which file|please confirm|please provide)\b)/iu;
 const EXPLICIT_CONTINUE_RE = /^(?:继续|接着|往下|go on|continue|proceed|keep going)\s*[.!。！]?$/iu;
 const MAX_ANNOUNCEMENT_CHARS = 280;
+const MAX_RETAINED_EVENTS = 1_024;
+// JavaScript string code units, not UTF-8 bytes or a process-wide memory limit.
+const MAX_RETAINED_CONTENT_CHARS = 64 * 1_024;
 
 export const TERMINAL_GUARD_NUDGE =
   "你刚才只描述了计划，没有执行任何工具。不要再次解释计划，现在立即调用必要工具执行用户任务。" +
@@ -195,7 +198,17 @@ function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): 
   };
 }
 
-/** Preserve normal terminals, but withhold one suspicious no-tool terminal for a bounded re-ask. */
+/**
+ * Forward adapter events and re-ask only short, suspicious no-tool completions.
+ * Retention is bounded per turn; tools or overflow disable analysis without truncating output.
+ * Reported usage from completed legs survives a continuation-factory failure. Unreported
+ * usage stays absent, and source-iteration failures propagate to the caller's transport handler.
+ *
+ * @param options Initial stream, parsed history, and continuation callback. The caller owns
+ * provider opt-in; the continuation limit defaults to one and is clamped to at most two.
+ * @yields Unchanged content events, internal assistant boundaries, and terminal events with
+ * accumulated reported usage when available. Returning the iterator closes its active source.
+ */
 export async function* guardTerminalEventStream(options: GuardedEventStreamOptions): AsyncGenerator<AdapterEvent> {
   const maxContinuations = Math.max(0, Math.min(2, Math.floor(options.maxAutoContinuations ?? 1)));
   let parsed = options.parsed;
@@ -205,6 +218,10 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
 
   while (true) {
     const seen: AdapterEvent[] = [];
+    let retainedContentChars = 0;
+    let retainedText = "";
+    let analysisEnabled = (options.adapterName === "anthropic" || options.adapterName === "openai-chat")
+      && continuations < maxContinuations;
     let terminalSeen = false;
     for await (const event of source) {
       // Liveness markers and tool argument fragments are passed through to the bridge, but
@@ -216,7 +233,7 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
       }
       if (event.type === "done") {
         terminalSeen = true;
-        const analysis = (options.adapterName === "anthropic" || options.adapterName === "openai-chat")
+        const analysis = analysisEnabled
           ? analyzeTerminalTurn(parsed, seen)
           : { decision: "pass" as const };
         const normalStop = event.stopReason !== "max_tokens" && event.stopReason !== "content_filter";
@@ -224,11 +241,17 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
           accumulatedUsage = mergeUsage(accumulatedUsage, event.usage);
           continuations += 1;
           parsed = buildContinuationRequest(parsed, seen);
+          seen.length = 0;
+          retainedText = "";
           yield { type: "assistant_boundary" };
           try {
             source = await options.continuation(parsed);
           } catch (error) {
-            yield { type: "error", message: error instanceof Error ? error.message : String(error) };
+            yield {
+              type: "error",
+              message: error instanceof Error ? error.message : String(error),
+              ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
+            };
             return;
           }
           break;
@@ -243,7 +266,45 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
         yield usage ? { ...event, usage } : event;
         return;
       }
-      seen.push(event);
+      if (analysisEnabled) {
+        if (event.type === "tool_call_start") {
+          // A real tool call permanently rules out a no-tool continuation for this turn.
+          analysisEnabled = false;
+        } else if (
+          event.type === "text_delta"
+          || event.type === "thinking_delta"
+          || event.type === "thinking_signature"
+          || event.type === "redacted_thinking"
+        ) {
+          const content = event.type === "text_delta"
+            ? event.text
+            : event.type === "thinking_delta"
+              ? event.thinking
+              : event.type === "thinking_signature"
+                ? event.signature
+                : event.data;
+          if (
+            seen.length >= MAX_RETAINED_EVENTS
+            || content.length > MAX_RETAINED_CONTENT_CHARS - retainedContentChars
+          ) {
+            analysisEnabled = false;
+          } else {
+            retainedContentChars += content.length;
+            if (event.type === "text_delta") retainedText += content;
+            // Match analyzeTerminalTurn's trimmed-text semantics, including split padding.
+            if (retainedText.trim().length > MAX_ANNOUNCEMENT_CHARS) {
+              analysisEnabled = false;
+            } else {
+              seen.push(event);
+            }
+          }
+        }
+        if (!analysisEnabled) {
+          // Never rebuild a continuation from truncated thinking or a partial turn.
+          seen.length = 0;
+          retainedText = "";
+        }
+      }
       yield event;
     }
     if (!terminalSeen) return;

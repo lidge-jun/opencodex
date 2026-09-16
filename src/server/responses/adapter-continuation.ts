@@ -10,7 +10,6 @@ import type { AdapterRequest } from "../../adapters/base";
 import {
   recordAdapterReasoning,
   recordAdapterTier,
-  noteAttemptSend,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
@@ -26,6 +25,7 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
+  isNonReplayableResponse,
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
 import { redactSecretString } from "../../lib/redact";
@@ -78,15 +78,18 @@ export function createAdapterContinuations(
     | "genericFailoverAccountId"
     | "genericFailovers"
     | "applyFailoverSnapshot"
+    | "noteRoutedAttemptSend"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   sendBudgetState: Pick<
     ResponsesSendBudget,
-    | "adapterSendBudget"
+    | "adapterDispatchBudget"
     | "noteAdapterPhysicalSend"
     | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "reserveCredentialHop"
+    | "pendingHopPermit"
+    | "sendBudgetExhausted"
   >,
   adapterExchange: Pick<
     AdapterExchange,
@@ -110,11 +113,12 @@ export function createAdapterContinuations(
   const { routedCompaction } = sidecarState;
   const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs } = adapterExchange;
   const {
-    adapterSendBudget,
+    adapterDispatchBudget,
     noteAdapterPhysicalSend,
     remainingTransientSendBudget,
     noteTransientSends,
     reserveCredentialHop,
+    sendBudgetExhausted,
   } = sendBudgetState;
 
 
@@ -182,15 +186,16 @@ export function createAdapterContinuations(
       const replayKind: AttemptRecoveryKind | undefined = recoveryKind;
       try {
         if (transportState.activeAdapter.fetchResponse) {
-          noteAttemptSend(logCtx.activeAttempt, continuationEstimate, replayKind);
+          transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
           await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
           return await transportState.activeAdapter.fetchResponse(builtContinuationRequest, {
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
-              sendBudget: adapterSendBudget,
+              sendBudget: adapterDispatchBudget,
             onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              pacingSlotAcquired: true,
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
               providerName: route.providerName,
               modelId: nextParsed.modelId,
@@ -205,7 +210,7 @@ export function createAdapterContinuations(
           : fetchWithResetRetry;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
-            noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind);
+            transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
               applyUpstreamRecoveryInit({
@@ -260,8 +265,16 @@ export function createAdapterContinuations(
       // loop; only after the attempts are exhausted does the continuation fail over.
       while (
         response.status === 429
+        // A synthesized replay refusal is not a rate limit; replaying the continuation on
+        // it would re-send a turn whose first send may already have been processed.
+        && !isNonReplayableResponse(response)
         && rateLimitPolicy !== null
         && adapterExchange.rateLimitRetries < rateLimitPolicy.attempts
+        // The main recovery loop and the passthrough ladder both consult the shared remainder
+        // here; this loop did not, so a request whose budget was already spent could still
+        // same-key replay on a live stream. Checked BEFORE the wait below cancels the body, so
+        // a refusal keeps the real upstream 429 -- status, Retry-After, quota evidence -- intact.
+        && !sendBudgetExhausted()
       ) {
         adapterExchange.rateLimitRetries += 1;
         // Release unread body + heartbeat-fed wait via the shared same-target helper.
@@ -302,7 +315,7 @@ export function createAdapterContinuations(
         }
       }
 
-      if (response.status === 429 && hasKeyPoolFailover(route.provider)) {
+      if (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(route.provider)) {
         const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
@@ -337,6 +350,7 @@ export function createAdapterContinuations(
       }
       if (
         response.status === 429
+        && !isNonReplayableResponse(response)
         && transportState.anthropicPoolAccountId
         && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
@@ -378,6 +392,7 @@ export function createAdapterContinuations(
       // the per-request bound cannot be silently re-armed by reaching a different loop.
       if (
         response.status === 429
+        && !isNonReplayableResponse(response)
         && transportState.genericFailoverAccountId
         && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
         && isGenericOAuthFailoverEnabled(config, route.providerName)
@@ -385,9 +400,15 @@ export function createAdapterContinuations(
         // Intersection with the shared request budget. The continuation loop re-sends the
         // turn, so without this the per-request bound could be re-armed simply by reaching a
         // different loop -- which is the divergence the comment above already warns about.
+        //
+        // Who settles the reservation depends on who sends the replay (#4709). An adapter that
+        // owns its ladder reserves once per physical send and would charge this replay twice;
+        // the helper path reports it back instead, which is what `countedExternally` names.
+        const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|continuation-oauth-429`,
+          !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
         );
         const nextAccountId = hop.allowed
           ? rotateGenericOAuthAccountOn429(
@@ -417,6 +438,11 @@ export function createAdapterContinuations(
               );
               sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
+              // The replay goes out on the next iteration. An adapter that owns its ladder
+              // reserves for that send itself, so hand this reservation down rather than let it
+              // take a second one for the same replay. A helper-routed replay needs no handoff:
+              // its reporter settles the booking made above.
+              if (adapterOwnsDispatch) sendBudgetState.pendingHopPermit = hop.permit;
               nextContinuationRecoveryKind = "oauth-account-429";
               continue;
             }
