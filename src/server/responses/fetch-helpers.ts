@@ -10,8 +10,59 @@ import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
+import { sharedPoolBackpressure, type PoolBackpressureLimiter } from "../../routing/probe-lease";
 
 export { withUpstreamHttpVersion };
+
+/**
+ * What one physical send IS, as far as the pool-wide recovery window is concerned (#4701).
+ *
+ * The window measures recovery traffic against observed demand, so it needs the distinction
+ * made where the send happens -- and `providerFetch` cannot make it. The wrapper sees a URL and
+ * an init; whether this is a conversation's first attempt, its third retry, or the one trial
+ * admitted against a held account is knowledge only the caller has. So the caller names it.
+ *
+ * - `initial`: a new request's first send. Recorded, never refused -- it is the denominator,
+ *   and refusing it would make the limiter a throughput cap rather than a recovery bound.
+ * - `retry`: a re-send of a request that already reached upstream once. Admitted only while
+ *   recovery traffic stays under its ratio of observed demand.
+ * - `probe`: the half-open trial against a held account. It ALREADY paid at selection, inside
+ *   `resolveHeldAccountDispatch`; charging it again here would bill one send twice and shrink
+ *   the very budget it was admitted from.
+ */
+export type PoolRecoveryDispatchClass = "initial" | "retry" | "probe";
+
+export interface PoolRecoveryDispatchDecision {
+  readonly admitted: boolean;
+  /**
+   * Earliest moment another recovery dispatch could be admitted. `now` when the send was
+   * admitted; otherwise a real change point strictly in the future, so a refused caller has
+   * something to wait on instead of busy-looping against a pool that is already failing.
+   */
+  readonly retryAt: number;
+}
+
+/**
+ * Admit one physical send against the process-wide recovery window.
+ *
+ * Per-request send budgets cannot see a storm: thousands of requests each staying inside their
+ * own allowance still compose into an unbounded rate against one failing upstream. This is the
+ * layer above them, and it is shared by construction.
+ */
+export function classifyPoolRecoveryDispatch(
+  dispatchClass: PoolRecoveryDispatchClass,
+  now = Date.now(),
+  limiter: PoolBackpressureLimiter = sharedPoolBackpressure(),
+): PoolRecoveryDispatchDecision {
+  if (dispatchClass === "initial") {
+    limiter.recordInitialSend(now);
+    return { admitted: true, retryAt: now };
+  }
+  if (dispatchClass === "probe") return { admitted: true, retryAt: now };
+  return limiter.tryPermitRetryDispatch(now)
+    ? { admitted: true, retryAt: now }
+    : { admitted: false, retryAt: limiter.nextRecoveryAt(now) };
+}
 
 export function disableResponsesRequestTimeout(req: Request, server: Pick<Server<WsData>, "timeout"> | undefined): boolean {
   if (!server) return false;

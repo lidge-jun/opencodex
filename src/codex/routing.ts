@@ -25,6 +25,7 @@ import {
   type CodexUpstreamOutcome,
   type CodexUpstreamOutcomeMeta,
 } from "./routing/cooldown-math";
+import type { CodexUpstreamOutcomeClass } from "./routing/cooldown-math";
 import {
   codexPoolKeyForScope,
   codexQuotaScopeForModel,
@@ -54,6 +55,15 @@ import {
   type CodexUpstreamHealth,
 } from "./routing/health-store";
 import { ownsProbeLease, probeMayClearCooldown, withProbeLeaseReleased } from "./routing/probe-lease";
+// NOTE THE PATH. `./routing/probe-lease` above is the QUOTA-COOLDOWN lease; the module below is
+// the unrelated half-open TRANSIENT-HOLD lease and its pool-wide recovery limiter (#4701). The two
+// live one directory apart, govern different domains, and must never settle each other's probe.
+import {
+  invalidateTransientProbe,
+  releaseTransientProbe,
+  resolveHeldAccountDispatch,
+  settleTransientProbe,
+} from "../routing/probe-lease";
 import {
   adoptLegacyLineageAffinity,
   affinityAfterRelease,
@@ -75,6 +85,7 @@ import {
   type CodexAffinityReason,
   type CodexThreadResolution,
   type ThreadAffinityEntry,
+  type TransientProbeGrant,
 } from "./routing/thread-affinity";
 import {
   accountPoolStrategyForScope,
@@ -181,6 +192,7 @@ export type {
   CodexAffinityMove,
   CodexAffinityReason,
   CodexAffinityDecision,
+  TransientProbeGrant,
 } from "./routing/thread-affinity";
 export {
   isCodexAccountPlanExcluded,
@@ -333,6 +345,108 @@ function transientDetourAccount(
 }
 
 /**
+ * What a request bound to a HELD account may actually do this turn (#4701).
+ *
+ * Both transient-hold branches used to end the same way: when no sibling could take the
+ * request they returned `selected` on the bound account, and the caller sent it at an account
+ * already known to be failing. Under a provider-wide 503 that is every request at once, which
+ * is the amplification the hold was supposed to prevent rather than cause.
+ *
+ * {@link resolveHeldAccountDispatch} answers the same question with a bound: one probe tests
+ * the held account, and a caller with nowhere else to go is WITHHELD and told when to come
+ * back rather than sent at the failure.
+ *
+ * A usable detour is taken BEFORE the resolver is consulted, which inverts that module's own
+ * probe-first ordering. Deliberately: a healthy sibling is always a better answer for a live
+ * request than an account carrying a failure streak, and turning the first request after a
+ * hold into the trial would spend a real user's turn on it. The ordering is not what #4701
+ * bounds -- the defect is the third answer this branch used to give, "send at the failing
+ * account anyway", and that one is reached only when no detour exists. Recovery is still
+ * discovered there, because that is exactly the case where nothing else can find out.
+ *
+ * The caller has already committed `transientHoldSince`/`lastUsedAt`; this decides only where
+ * the request goes. A withheld answer deliberately leaves `transientDetourAccountId` alone:
+ * being unable to send right now says nothing about which sibling was serving this thread.
+ */
+function resolveTransientHoldDispatch(
+  entry: ThreadAffinityEntry,
+  detour: string | null,
+  now: number,
+): CodexThreadResolution {
+  if (detour !== null && detour !== entry.accountId) {
+    entry.transientDetourAccountId = detour;
+    // Deliberately no promoteActiveCodexAccount and no rebind: this is one request routing
+    // around a blip, not the pool deciding where the conversation now lives.
+    return { status: "selected", accountId: detour, affinity: { move: "detour", reason: "transient" } };
+  }
+  const dispatch = resolveHeldAccountDispatch({ boundAccountId: entry.accountId, now });
+  if (dispatch.kind === "probe") {
+    return {
+      status: "selected",
+      accountId: entry.accountId,
+      affinity: { move: "held", reason: "transient" },
+      // The credential generation travels with the lease so a settle can refuse an answer about
+      // a credential this binding no longer has. See {@link TransientProbeGrant}.
+      transientProbe: { lease: dispatch.lease, affinityGeneration: entry.generation },
+    };
+  }
+  if (dispatch.kind === "withheld") {
+    return {
+      status: "withheld",
+      accountId: dispatch.boundAccountId,
+      retryAt: dispatch.retryAt,
+      // The remembered sibling, when there is one. It is unusable right now -- that is why this
+      // request is refused -- but it is what has been serving this thread, and a refusal that
+      // dropped it would make the next resolve re-pick cold.
+      ...(entry.transientDetourAccountId !== undefined
+        ? { detourAccountId: entry.transientDetourAccountId }
+        : {}),
+      affinity: { move: "held", reason: "transient" },
+    };
+  }
+  // Unreachable: no detour was handed in, so the resolver has none to hand back. Kept total
+  // rather than cast away, because the cost of being wrong here is a send at a failing account.
+  entry.transientDetourAccountId = dispatch.accountId;
+  return { status: "selected", accountId: dispatch.accountId, affinity: { move: "detour", reason: "transient" } };
+}
+
+/** Does the credential a probe was granted against still exist at that generation? */
+function transientProbeCredentialLive(accountId: string, generation: number): boolean {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) return generation === 0;
+  return isCodexAccountGenerationLive(accountId, generation);
+}
+
+/**
+ * Conclude the half-open recovery probe this request was holding (#4701).
+ *
+ * Three answers, because three things can be true of a probe that just ended:
+ *
+ * - The credential moved under it. Its result describes an identity the binding no longer has,
+ *   so the epoch is BURNED instead of settled -- invalidating makes every outstanding lease on
+ *   this account stale at once, which is what stops a late answer from reviving a dead account.
+ * - The answer says nothing about the account. A 3xx, a 400, or an unclassifiable status is the
+ *   request's problem, not the account's, so the lease is handed back unspent and the next
+ *   request may run a real trial instead of waiting out a recovery nobody observed.
+ * - Otherwise it is evidence: success means recovered, everything else means still failing.
+ */
+function settleTransientProbeGrant(
+  accountId: string,
+  grant: TransientProbeGrant,
+  outcomeClass: CodexUpstreamOutcomeClass,
+  now: number,
+): void {
+  if (!transientProbeCredentialLive(accountId, grant.affinityGeneration)) {
+    invalidateTransientProbe(accountId);
+    return;
+  }
+  if (outcomeClass === "neutral" || outcomeClass === "caller" || outcomeClass === "unknown") {
+    releaseTransientProbe(grant.lease);
+    return;
+  }
+  settleTransientProbe(grant.lease, outcomeClass === "success" ? "recovered" : "failed", now);
+}
+
+/**
  * Which account is ACTUALLY answering for one conversation key right now (#4546, wp8).
  *
  * First placement reads this, not the binding alone: a parent parked on a transient detour
@@ -477,6 +591,10 @@ export function resolveCodexAccountForThread(
   lineage?: CodexThreadLineage,
 ): string | null {
   const resolution = resolveCodexAccountForThreadDetailed(threadId, config, now, quotaScope, undefined, undefined, lineage);
+  // A WITHHELD dispatch is deliberately not an account here. This wrapper has nowhere to carry
+  // a retry time or a probe lease, and answering with the held account would be exactly the
+  // send the hold exists to prevent -- so it fails closed, like `none`. Callers that need to
+  // tell the two apart use {@link resolveCodexAccountForThreadDetailed}.
   return resolution.status === "selected" ? resolution.accountId : null;
 }
 
@@ -936,15 +1054,12 @@ export function resolveCodexAccountForThreadDetailed(
         const lane = transientDetourAccount(config, detourEntry, now, quotaScope, selectionOptions);
         detourEntry.transientHoldSince ??= now;
         detourEntry.lastUsedAt = now;
-        if (lane !== null && lane !== detourEntry.accountId) {
-          detourEntry.transientDetourAccountId = lane;
-          return { status: "selected", accountId: lane, affinity: { move: "detour", reason: "transient" } };
-        }
         // A provider-wide outage soft-avoids every sibling, so there is nowhere to detour.
         // That is a statement about where this request can go, not about who owns the
         // conversation: dropping the pin here would rebuild the cold prefix elsewhere for
-        // exactly the failure mode the hold exists to survive.
-        return { status: "selected", accountId: detourEntry.accountId, affinity: { move: "held", reason: "transient" } };
+        // exactly the failure mode the hold exists to survive. It is also not a licence to
+        // send at the failing account anyway -- that is what the dispatch resolver bounds.
+        return resolveTransientHoldDispatch(detourEntry, lane, now);
       }
       // Detour expiry or invalidation must not expire the ordinary task. Drop only
       // this model lane and select from ordinary/shared state below.
@@ -1018,16 +1133,12 @@ export function resolveCodexAccountForThreadDetailed(
       const detour = transientDetourAccount(config, entry, now, quotaScope, selectionOptions);
       entry.transientHoldSince ??= now;
       entry.lastUsedAt = now;
-      if (detour !== null && detour !== entry.accountId) {
-        entry.transientDetourAccountId = detour;
-        // Deliberately no promoteActiveCodexAccount and no rebind: this is one request routing
-        // around a blip, not the pool deciding where the conversation now lives.
-        return { status: "selected", accountId: detour, affinity: { move: "detour", reason: "transient" } };
-      }
       // No sibling can take it either -- the usual shape of a provider-wide 503. The binding
       // survives: "cannot send right now" and "forget which account owns this conversation"
-      // are different answers, and conflating them is what the hold was added to stop.
-      return { status: "selected", accountId: entry.accountId, affinity: { move: "held", reason: "transient" } };
+      // are different answers, and conflating them is what the hold was added to stop. So is
+      // the third answer this used to give -- "send at the failing account" -- which the
+      // dispatch resolver replaces with a bounded probe or a typed refusal (#4701).
+      return resolveTransientHoldDispatch(entry, detour, now);
     }
     // A model-only exclusion does not invalidate the shared task binding. Health,
     // generation, pause, cooldown, and failure evidence still retire it normally.
@@ -1277,6 +1388,19 @@ export function recordCodexUpstreamOutcome(
     recordUpstreamHostFailure(meta.hostKey, { code: meta.lastFailureCode, now: meta.now ?? Date.now() });
   }
   if (!accountId) return;
+  // Conclude the half-open recovery probe BEFORE the admissibility gate below (#4701). An
+  // outcome that gate drops still ended this request, and a lease nobody hands back leaves the
+  // next probe waiting out its 30s deadline instead of its 15s interval. The settle carries its
+  // own fences -- lease id, probe epoch, and the credential generation the binding held -- so
+  // running it early cannot let a stale answer through.
+  if (meta.transientProbe) {
+    settleTransientProbeGrant(
+      accountId,
+      meta.transientProbe,
+      classifyCodexUpstreamOutcome(outcome, meta.denial),
+      meta.now ?? Date.now(),
+    );
+  }
   const writerGeneration = meta.writerGeneration ?? captureConfigGeneration();
   if (!isHealthAccountAdmissible(accountId, writerGeneration)) return;
   const now = meta.now ?? Date.now();

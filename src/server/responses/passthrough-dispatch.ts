@@ -29,6 +29,7 @@ import {
   unwrapUpstreamRetryEvidenceError,
   codexProbeLeaseId,
   codexProbeQuotaScope,
+  codexTransientProbeGrant,
   createCodexReserveDispatchGuard,
 } from "../../codex/auth-context";
 import {
@@ -78,6 +79,7 @@ import {
   providerFetch,
   safeHostLabel,
   storedPoolReplayDispatchNotifier,
+  classifyPoolRecoveryDispatch,
 } from "./fetch-helpers";
 import { clientCancelledResponse } from "./core-errors";
 import {
@@ -736,6 +738,7 @@ export async function preparePassthroughExchange(
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(admissionState.authCtx),
           probeQuotaScope: codexProbeQuotaScope(admissionState.authCtx),
+          transientProbe: codexTransientProbeGrant(admissionState.authCtx),
           writerGeneration: admissionState.authCtx.writerGeneration,
         });
       }
@@ -752,6 +755,12 @@ export async function preparePassthroughExchange(
       // Body is a replayable string; nothing has streamed to the client yet.
       upstreamResponse = await fetchWithTransientRetry(
         recovery => {
+          // The pool-wide recovery window measures recovery traffic against observed demand,
+          // and this is where demand is observed: `recovery === undefined` is a new request's
+          // first send, everything after it is the same request trying again. Without this the
+          // ratio has no denominator and the window collapses to its quiet-pool floor, which
+          // would throttle recovery on a busy proxy exactly as hard as on an idle one (#4701).
+          if (recovery === undefined) classifyPoolRecoveryDispatch("initial");
           transportState.noteRoutedAttemptSend(passthroughEstimate, recovery);
           return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
             method: request.method,

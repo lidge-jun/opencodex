@@ -542,3 +542,20 @@ export function configureSharedPoolBackpressure(policy: PoolBackpressurePolicy):
 export function resetSharedPoolBackpressureForTests(): void {
   sharedLimiter = undefined;
 }
+
+/**
+ * Forget every account's probe pacing AND the shared recovery window.
+ *
+ * Called when the pool's routing state is reset wholesale -- a roster change, a config reload,
+ * an account removal. Both halves describe a pool that no longer exists: pacing is keyed on
+ * account ids that may be gone, and the window's buckets count sends made by a roster that
+ * changed underneath them. Keeping either across such a reset lets one context's recovery
+ * decisions govern the next one, which is also how it leaks between test files.
+ *
+ * This is the production reset. The two `ForTests` seams above stay separate because a test
+ * frequently wants exactly one half of it.
+ */
+export function clearPoolRecoveryState(): void {
+  probeStates.clear();
+  sharedLimiter = undefined;
+}

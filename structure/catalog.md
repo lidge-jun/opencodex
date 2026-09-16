@@ -245,6 +245,27 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   candidate is held the caller gets a typed withheld outcome, not a send. Recovery dispatches
   (retries and probes, never a new request's initial send) sit under a pool-wide ratio ceiling
   measured over a sliding window (`src/routing/probe-lease.ts`).
+
+  Where that reaches production, because a primitive nobody calls bounds nothing: the two
+  transient-hold branches of `resolveCodexAccountForThreadDetailed`
+  (`src/codex/routing.ts`) ask `resolveHeldAccountDispatch` what this request may do and
+  return a `withheld` resolution instead of selecting the failing account;
+  `resolveCodexAuthContext` (`src/codex/auth-context.ts`) turns that into
+  `CodexRecoveryWithheldError` before any upstream I/O, so a refused request reaches the
+  client as a 429 carrying the limiter's own change point in `Retry-After`. A granted probe
+  travels on the auth context, is settled by `recordCodexUpstreamOutcome` under the credential
+  generation the binding held, and is handed back by `releaseCodexAuthContextProbeLease` on
+  every path that never sends. The pool window observes demand at the initial passthrough send
+  and gates the alternate-account replay through `classifyPoolRecoveryDispatch`
+  (`src/server/responses/fetch-helpers.ts`). Same-account transient retries remain bounded by
+  the per-request send budget alone: refusing inside the retry helper's thunk would surface a
+  pool refusal as a 502 transport failure and record a transient outcome against an account
+  that was never asked, which is worse than the gap.
+
+  This hold and the quota-cooldown probe (`src/codex/routing/probe-lease.ts`) are different
+  domains one directory apart. They cannot both describe an account at once, because
+  `isTransientOnlyAffinityBlock` refuses to recognise a transient hold on an account carrying
+  quota health -- which is why no request ever pays two recovery permits for one send.
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the
   generation it started from still holds; a lost race raises a generation-conflict error rather
   than overwriting the newer credential (`src/codex/account-store.ts`). Callers handle that error;

@@ -16,7 +16,7 @@ import {
   upstreamHostHealthKey,
   resetUpstreamHostHealth,
 } from "../../codex/upstream-host-health";
-import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch } from "./fetch-helpers";
+import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch, classifyPoolRecoveryDispatch } from "./fetch-helpers";
 import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { upstreamErrorMessageFromPayload, isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
@@ -40,6 +40,7 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import {
   codexProbeLeaseId,
+  codexTransientProbeGrant,
   codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
   resolveCodexAuthContext,
@@ -459,6 +460,7 @@ export async function retryCodexPoolOnAlternateAccount(
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
       probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+      transientProbe: codexTransientProbeGrant(firstAuthCtx),
       writerGeneration: firstAuthCtx.writerGeneration,
     });
   };
@@ -557,6 +559,7 @@ export async function retryCodexPoolOnAlternateAccount(
         modelId: route.modelId,
         probeLeaseId: codexProbeLeaseId(firstAuthCtx),
         probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+        transientProbe: codexTransientProbeGrant(firstAuthCtx),
         writerGeneration: firstAuthCtx.writerGeneration,
       });
     }
@@ -588,6 +591,7 @@ export async function retryCodexPoolOnAlternateAccount(
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
       probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+      transientProbe: codexTransientProbeGrant(firstAuthCtx),
       writerGeneration: firstAuthCtx.writerGeneration,
       // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
       ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
@@ -693,9 +697,28 @@ export async function retryCodexPoolOnAlternateAccount(
       // The same-account gated-model 400 ladder below keeps its own `maxRetrySends` bound and
       // does not take the reserve again; only the move itself does.
       if (accountMovePermit) {
+        // The pool-wide recovery window is consulted BEFORE the request-local permit is used.
+        // `reserveDispatch` charges at reservation time and `release()` is the only way back, so
+        // using the permit first and refusing afterwards would spend a send the request never
+        // made. An account move is recovery traffic like any other: one request's own budget
+        // cannot see that a thousand other requests are moving at the same moment, which is
+        // precisely the amplification this window exists to bound (#4701).
+        //
+        // A refusal here is not a new failure mode: "no alternate was available" is already the
+        // outcome when the pool has nowhere to move this request to, and it is handled.
+        if (!classifyPoolRecoveryDispatch("retry").admitted) {
+          accountMovePermit.release();
+          accountMovePermit = undefined;
+          // The alternate context was resolved and will not send. Hand back whatever recovery
+          // lease it is holding rather than leaving that account unprobeable.
+          releaseCodexAuthContextProbeLease(retryAuthCtx);
+          recordUnmovedTransientOutcome();
+          return { kind: "no-alternate" };
+        }
         const charged = accountMovePermit.use();
         accountMovePermit = undefined;
         if (!charged) {
+          releaseCodexAuthContextProbeLease(retryAuthCtx);
           recordUnmovedTransientOutcome();
           return { kind: "no-alternate" };
         }
@@ -827,6 +850,7 @@ export function codexForwardTerminalOutcomeRecorder(
         modelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
         probeQuotaScope: codexProbeQuotaScope(authCtx),
+        transientProbe: codexTransientProbeGrant(authCtx),
         writerGeneration: authCtx.writerGeneration,
       });
       return;
@@ -849,6 +873,7 @@ export function codexForwardTerminalOutcomeRecorder(
       modelId,
       probeLeaseId: codexProbeLeaseId(authCtx),
       probeQuotaScope: codexProbeQuotaScope(authCtx),
+      transientProbe: codexTransientProbeGrant(authCtx),
       writerGeneration: authCtx.writerGeneration,
       // A mid-stream terminal can carry a semantic 401 long after the credential was
       // replaced. It is never replayed — the client already saw output — but it must

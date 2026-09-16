@@ -1052,6 +1052,7 @@
     "privacy-mask-account.test.ts": "lib",
     "privacy-scan-meta-key.test.ts": "ci-workflows",
     "probe-lease.test.ts": "routing",
+    "probe-lease-dispatch-wiring.test.ts": "routing",
     "process-control-graceful.test.ts": "lib",
     "process-control.test.ts": "lib",
     "process-state.test.ts": "service",
