@@ -1,6 +1,16 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, posix, win32 } from "node:path";
 import {
@@ -28,6 +38,12 @@ import {
   TEST_RUN_NO_QUEUE_ENV,
   type TestRunRuntimeFileSystem,
 } from "../../scripts/test-run-lock";
+import {
+  recoverStaleTestTempArtifacts,
+  removeTestTempTree,
+  TEST_TEMP_OWNER_FILE,
+  TEST_TEMP_RECOVERY_AGE_MS,
+} from "../../scripts/test-temp";
 import {
   decodeWindowsIdentityPowerShellOutputForTests,
   windowsIdentityPowerShellCommandForTests,
@@ -254,9 +270,20 @@ describe("test runner isolation", () => {
         USERPROFILE: isolated.root,
         OPENCODEX_HOME: join(isolated.root, ".opencodex"),
         CODEX_HOME: join(isolated.root, ".codex"),
+        TEMP: join(isolated.root, "tmp"),
+        TMP: join(isolated.root, "tmp"),
+        TMPDIR: join(isolated.root, "tmp"),
       });
       expect(existsSync(isolated.env.OPENCODEX_HOME!)).toBe(true);
       expect(existsSync(isolated.env.CODEX_HOME!)).toBe(true);
+      expect(existsSync(isolated.env.TEMP!)).toBe(true);
+      const owner = JSON.parse(readFileSync(join(isolated.root, TEST_TEMP_OWNER_FILE), "utf8"));
+      expect(owner).toMatchObject({
+        schemaVersion: 1,
+        kind: "opencodex-test-root",
+        root: isolated.root,
+        pid: process.pid,
+      });
     } finally {
       isolated.cleanup();
     }
@@ -303,6 +330,123 @@ describe("test runner isolation", () => {
       }
     },
   );
+});
+
+describe("Windows test TEMP recovery", () => {
+  const age = (path: string, milliseconds: number) => {
+    const date = new Date(milliseconds);
+    utimesSync(path, date, date);
+  };
+
+  test("automatically removes confirmed test roots older than 48 hours", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "opencodex-recovery-fixture-"));
+    const nowMs = Date.now();
+    const staleWrapped = join(tempRoot, "opencodex-test-Ab12Cd");
+    const staleDirect = join(tempRoot, "ocx-v2-Zx98Yw");
+    const young = join(tempRoot, "ocx-runtime-Qq11Ww");
+    const recentlyUsed = join(tempRoot, "ocx-runtime-Rr22Tt");
+    const unrelated = join(tempRoot, "application-cache-Ab12Cd");
+    for (const path of [staleWrapped, staleDirect, young, recentlyUsed, unrelated]) mkdirSync(path);
+    writeFileSync(join(staleDirect, "fixture.txt"), "test\n");
+    writeFileSync(join(recentlyUsed, "recent.txt"), "still active\n");
+    age(staleWrapped, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    age(join(staleDirect, "fixture.txt"), nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    age(staleDirect, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    age(young, nowMs - TEST_TEMP_RECOVERY_AGE_MS + 1_000);
+    age(recentlyUsed, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    age(unrelated, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+
+    try {
+      const result = recoverStaleTestTempArtifacts({ tempRoot, platform: "win32", nowMs });
+      expect(result).toMatchObject({ scanned: 4, removed: 2, skipped: 2, errors: 0 });
+      expect(existsSync(staleWrapped)).toBe(false);
+      expect(existsSync(staleDirect)).toBe(false);
+      expect(existsSync(young)).toBe(true);
+      expect(existsSync(recentlyUsed)).toBe(true);
+      expect(existsSync(unrelated)).toBe(true);
+    } finally {
+      removeTreeWithRetry(tempRoot);
+    }
+  });
+
+  test("fails closed for invalid ownership metadata and linked trees", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "opencodex-recovery-fixture-"));
+    const nowMs = Date.now();
+    const invalidOwner = join(tempRoot, "opencodex-test-Aa11Bb");
+    const linked = join(tempRoot, "ocx-v2-Cc22Dd");
+    const liveOwner = join(tempRoot, "opencodex-test-Ee33Ff");
+    const linkTarget = join(tempRoot, "link-target");
+    mkdirSync(invalidOwner);
+    mkdirSync(linked);
+    mkdirSync(liveOwner);
+    mkdirSync(linkTarget);
+    writeFileSync(join(invalidOwner, TEST_TEMP_OWNER_FILE), JSON.stringify({ schemaVersion: 1 }));
+    writeFileSync(join(liveOwner, TEST_TEMP_OWNER_FILE), JSON.stringify({
+      schemaVersion: 1,
+      kind: "opencodex-test-root",
+      root: liveOwner,
+      createdAtMs: nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000,
+      pid: process.pid,
+    }));
+    symlinkSync(linkTarget, join(linked, "redirect"), process.platform === "win32" ? "junction" : "dir");
+    age(invalidOwner, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    age(linked, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    age(join(liveOwner, TEST_TEMP_OWNER_FILE), nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    age(liveOwner, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+
+    try {
+      const result = recoverStaleTestTempArtifacts({ tempRoot, platform: "win32", nowMs });
+      expect(result).toMatchObject({ scanned: 3, removed: 0, skipped: 3, errors: 0 });
+      expect(existsSync(invalidOwner)).toBe(true);
+      expect(existsSync(linked)).toBe(true);
+      expect(existsSync(liveOwner)).toBe(true);
+      expect(existsSync(linkTarget)).toBe(true);
+    } finally {
+      removeTreeWithRetry(tempRoot);
+    }
+  });
+
+  test("bounds legacy recovery and leaves remaining candidates for a later run", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "opencodex-recovery-fixture-"));
+    const nowMs = Date.now();
+    for (const name of ["opencodex-test-Aa11Bb", "opencodex-test-Cc22Dd"]) {
+      const path = join(tempRoot, name);
+      mkdirSync(path);
+      age(path, nowMs - TEST_TEMP_RECOVERY_AGE_MS - 1_000);
+    }
+
+    try {
+      const result = recoverStaleTestTempArtifacts({
+        tempRoot,
+        platform: "win32",
+        nowMs,
+        maxCandidates: 1,
+      });
+      expect(result).toMatchObject({ scanned: 1, removed: 1, errors: 0, truncated: true });
+      expect(readdirSync(tempRoot)).toHaveLength(1);
+    } finally {
+      removeTreeWithRetry(tempRoot);
+    }
+  });
+
+  test("retries transient release races and preserves terminal failures", () => {
+    let attempts = 0;
+    const sleeps: number[] = [];
+    removeTestTempTree("fixture", {
+      attempts: 3,
+      retryDelayMs: 7,
+      remove: () => {
+        attempts += 1;
+        if (attempts < 3) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      },
+      sleep: milliseconds => { sleeps.push(milliseconds); },
+    });
+    expect(attempts).toBe(3);
+    expect(sleeps).toEqual([7, 7]);
+    expect(() => removeTestTempTree("fixture", {
+      remove: () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); },
+    })).toThrow("denied");
+  });
 });
 
 /**
@@ -516,10 +660,12 @@ describe("bun test argv", () => {
     )).toContain("did not emit a recognizable selection summary");
   });
 
-  test("the wrapper passes parallel execution through to bun", () => {
+  test("the wrapper passes parallel execution through to bun without leaving TEMP roots", () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), "opencodex-test-runner-"));
+    const sentinelTemp = join(fixtureRoot, "sentinel-temp");
     const fixturePath = join(fixtureRoot, "parallel-smoke.test.ts");
     const markerPath = join(fixtureRoot, "executed.marker");
+    mkdirSync(sentinelTemp);
     writeFileSync(
       fixturePath,
       `import { test } from "bun:test"; import { writeFileSync } from "node:fs"; test("smoke", () => writeFileSync(${JSON.stringify(markerPath)}, "executed"));\n`,
@@ -531,7 +677,13 @@ describe("bun test argv", () => {
         fixturePath,
       ], {
         cwd: repoRoot(),
-        env: { ...process.env, OCX_TEST_NO_QUEUE: "1" },
+        env: {
+          ...process.env,
+          TEMP: sentinelTemp,
+          TMP: sentinelTemp,
+          TMPDIR: sentinelTemp,
+          OCX_TEST_NO_QUEUE: "1",
+        },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -541,10 +693,45 @@ describe("bun test argv", () => {
       expect(result.exitCode).toBe(0);
       expect(output).toContain("PARALLEL");
       expect(existsSync(markerPath)).toBe(true);
+      expect(readdirSync(sentinelTemp)).toEqual([]);
     } finally {
       removeTreeWithRetry(fixtureRoot);
     }
-  });
+  }, { timeout: SPAWN_BUDGET_MS });
+
+  test.each(["pass", "fail"] as const)(
+    "a bare %s run removes its preload-owned TEMP root",
+    outcome => {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), "opencodex-bare-test-runner-"));
+      const sentinelTemp = join(fixtureRoot, "sentinel-temp");
+      const fixturePath = join(fixtureRoot, "bare-smoke.test.ts");
+      mkdirSync(sentinelTemp);
+      writeFileSync(
+        fixturePath,
+        `import { test } from "bun:test"; test("smoke", () => { ${outcome === "fail" ? 'throw new Error("expected fixture failure");' : ""} });\n`,
+      );
+      try {
+        const result = Bun.spawnSync([process.execPath, "test", "--parallel=1", fixturePath], {
+          cwd: repoRoot(),
+          env: {
+            ...process.env,
+            TEMP: sentinelTemp,
+            TMP: sentinelTemp,
+            TMPDIR: sentinelTemp,
+            OCX_TEST_NO_QUEUE: "1",
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+
+        expect(result.exitCode).toBe(outcome === "pass" ? 0 : 1);
+        expect(readdirSync(sentinelTemp)).toEqual([]);
+      } finally {
+        removeTreeWithRetry(fixtureRoot);
+      }
+    },
+    { timeout: SPAWN_BUDGET_MS },
+  );
 });
 
 describe("bun test user lock", () => {
