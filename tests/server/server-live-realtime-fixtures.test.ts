@@ -21,7 +21,8 @@ import { join } from "node:path";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
 import { saveConfig } from "../../src/config";
-import { MAX_WS_FRAME_BYTES, startServer } from "../../src/server";
+import { MAX_WS_FRAME_BYTES, openLiveSidebandUpstream, startServer } from "../../src/server";
+import { LIVE_FRAME_LOG_ENV } from "../../src/server/live";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -418,3 +419,57 @@ test("the realtime voice fixtures stay de-identified and fully registered", () =
     }
   }
 });
+
+test("sideband lifecycle records separate a refused join from a relay that ran", async () => {
+  const logPath = join(TEST_DIR, "live-lifecycle.jsonl");
+  const previousFrameLog = process.env[LIVE_FRAME_LOG_ENV];
+  process.env[LIVE_FRAME_LOG_ENV] = logPath;
+  try {
+    // A join whose upstream never opens. This is the case a frame-only log could not record at
+    // all, which is why an empty file read the same as a working call that carried nothing.
+    const refused = await openLiveSidebandUpstream(
+      "wss://api.openai.com/v1/live/rtc_fixture_refused",
+      {},
+      () => {
+        throw new Error("upstream refused the sideband join");
+      },
+    );
+    expect(refused.ok).toBe(false);
+
+    const stage = loadStage("audio.json");
+    const clientFrames = encodeFrames(stage.clientFrames);
+    await relaySidebandStage({
+      callId: stage.callId as string,
+      clientFrames,
+      upstreamFrames: encodeFrames(stage.upstreamFrames),
+    });
+    await waitFor(
+      () => existsSync(logPath) && readFileSync(logPath, "utf8").includes("relay-closed"),
+      "the sideband lifecycle log",
+    );
+
+    const raw = readFileSync(logPath, "utf8");
+    const records = raw.trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
+    const stages = records.filter(record => typeof record.stage === "string").map(record => record.stage);
+    // The three reported symptoms are only distinguishable if these are distinct records.
+    expect(stages).toContain("upstream-failed");
+    expect(stages).toContain("upstream-open");
+    expect(stages).toContain("relay-attached");
+    expect(stages).toContain("relay-closed");
+    // Only the refusal carries a status, because only the refusal handed the caller one.
+    expect(records.find(record => record.stage === "upstream-failed"))
+      .toMatchObject({ status: 502, code: "upstream_error" });
+
+    // Same privacy rule as the frame records: stage and status, never content.
+    const allowed = new Set(["ts", "stage", "status", "code", "dir", "kind", "bytes", "fffd"]);
+    for (const record of records) {
+      for (const key of Object.keys(record)) expect([key, allowed.has(key)]).toEqual([key, true]);
+    }
+    for (const frame of clientFrames) expect(raw).not.toContain(frame);
+    expect(raw).not.toContain("output_audio.delta");
+    expect(raw).not.toContain("rtc_fixture");
+  } finally {
+    if (previousFrameLog === undefined) delete process.env[LIVE_FRAME_LOG_ENV];
+    else process.env[LIVE_FRAME_LOG_ENV] = previousFrameLog;
+  }
+}, { timeout: 30_000 });

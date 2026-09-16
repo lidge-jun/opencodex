@@ -312,6 +312,7 @@ export function openLiveSidebandUpstream(
     try {
       socket = createWebSocket(url, headers);
     } catch {
+      logLiveSidebandStage("upstream-failed", { status: 502, code: "upstream_error" });
       resolve({ ok: false, status: 502, code: "upstream_error", message: "voice upstream connect failed" });
       return;
     }

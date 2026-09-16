@@ -1329,18 +1329,9 @@ test("sideband frame log preserves delivery without recording damaged or clean t
     expect(received).toContain(FFFD_TEXT);
     expect(c2uClean).toBeDefined();
     expect(c2uClean.fffd).toBe(false);
-    // The same file carries sideband lifecycle records, which is what lets an empty relay be
-    // told apart from a join that never opened. Both shapes are bounded here, because the
-    // privacy rule is the file's, not one record type's: even a short damaged transcript must
-    // not be persisted as diagnostic context.
-    const lifecycleKeys = new Set(["ts", "stage", "status", "code"]);
-    expect(lines.some(l => l.stage === "relay-attached")).toBe(true);
+    // Nothing here may persist as diagnostic context, lifecycle rows included (see #4721).
     for (const line of lines) {
-      if (typeof line.stage === "string") {
-        for (const key of Object.keys(line)) expect([key, lifecycleKeys.has(key)]).toEqual([key, true]);
-      } else {
-        expect(Object.keys(line).sort()).toEqual(["bytes", "dir", "fffd", "kind", "ts"]);
-      }
+      expect(Object.keys(line).sort()).toEqual(line.stage ? ["stage", "ts"] : ["bytes", "dir", "fffd", "kind", "ts"]);
       expect(JSON.stringify(line)).not.toContain("clean-frame");
       expect(JSON.stringify(line)).not.toContain(FFFD_TEXT);
     }
