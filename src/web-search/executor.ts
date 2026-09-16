@@ -94,7 +94,7 @@ export async function runWebSearch(
         // `session_id`, and `x-codex-turn-metadata` to the redirect target.
         redirect: "manual",
       }, recovery), forwardProvider)),
-      { abortSignal: linkedSignal.signal, label: "web-search-sidecar" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "web-search-sidecar" },
     );
     // Attach the body guard before ANY branch reads it. The success path guarded itself below,
     // but the failure branch's `res.text()` runs first, so a cancel landing between fetch

@@ -46,7 +46,7 @@ export async function runExaWebSearch(
         signal: linkedSignal.signal,
         redirect: "manual",
       }, recovery)),
-      { abortSignal: linkedSignal.signal, label: "exa-web-search-sidecar" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "exa-web-search-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
