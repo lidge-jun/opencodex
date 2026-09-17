@@ -108,7 +108,7 @@ function putDesktopSwitchInIsolatedHome(
     console.log(JSON.stringify({ status: response.status, body: await response.json() }));
   `;
   const child = spawnSync(process.execPath, ["--eval", script], {
-    cwd: repoRoot,
+    cwd: repoRoot(),
     env: {
       ...process.env,
       CODEX_HOME: codexHome,
