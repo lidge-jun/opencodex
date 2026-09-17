@@ -690,6 +690,7 @@ describe("the bridged client stream", () => {
 
   test("a turn with no search is relayed untouched and never re-sends", async () => {
     let sends = 0;
+    let finalizations = 0;
     const stream = createPassthroughWebSearchBridgeStream({
       plan,
       firstLeg: streamFromText(answerLeg()),
@@ -701,6 +702,7 @@ describe("the bridged client stream", () => {
       execute: async () => {
         throw new Error("must not execute a search for a turn that did not ask for one");
       },
+      onFinalize: () => { finalizations += 1; },
     });
 
     const body = await new Response(stream).text();
@@ -709,6 +711,7 @@ describe("the bridged client stream", () => {
     expect(body).toContain("response.completed");
     expect(body).toContain("The current release is 2.50.0.");
     expect(body.trimEnd().endsWith("data: [DONE]")).toBe(true);
+    expect(finalizations).toBe(1);
   });
 
   test("a search mixed with another client tool call ends the turn on that leg", async () => {
@@ -1172,7 +1175,7 @@ describe("the bridged client stream", () => {
   test("a cancelled client stream bills no further search and sends no continuation", async () => {
     let sends = 0;
     let executes = 0;
-    const controller = new AbortController();
+    let finalizations = 0;
     const stream = createPassthroughWebSearchBridgeStream({
       plan,
       firstLeg: streamFromText(searchLeg()),
@@ -1187,13 +1190,13 @@ describe("the bridged client stream", () => {
         executes += 1;
         return { text: "a result", sources: [] };
       },
-      signal: controller.signal,
+      onFinalize: () => { finalizations += 1; },
     });
 
-    controller.abort();
-    await new Response(stream).text();
+    await stream.getReader().cancel("client disconnected");
     expect(executes).toBe(0);
     expect(sends).toBe(0);
+    expect(finalizations).toBe(1);
   });
 
 
