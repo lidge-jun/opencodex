@@ -62,17 +62,21 @@ The strip belongs at the existing noncanonical boundary in
 one level down for the per-item private key
 `internal_chat_message_metadata_passthrough`.
 
-The predicate is `!isCanonicalOpenAiForwardProvider(provider)`, matching that
-sibling rather than the narrower `!isOpenAiOperatedResponsesDestination(provider)`
-the issue suggests. The reason is in this repository's own code: caller credentials
-reach only the canonical ChatGPT Codex forward surface
-(`mayForwardCallerCredentials = isCanonicalOpenAiForwardProvider(provider)`,
-`passthrough.ts`). Every other destination, including `api.openai.com` under an API
-key, authenticates with a different credential, so a selector the client mints only
-under ChatGPT auth cannot apply there. It is inert at best and a 400 at worst, and
-the official API rejects unknown top-level parameters. Using one predicate for both
-private-field strips also keeps a single boundary for a single concept instead of
-two that differ by one destination.
+The predicate is `!isOpenAiOperatedResponsesDestination(provider)`, not the
+`!isCanonicalOpenAiForwardProvider(provider)` its sibling uses. This reversed an
+earlier decision in this document, and reading `src/server/responses/compact.ts` is
+what reversed it: the native `/responses/compact` path spreads the caller's raw body
+into the upstream request without passing through this adapter, and
+`supportsNativeResponsesCompactEndpoint` offers that endpoint to the canonical
+ChatGPT surface and to `openai-apikey` at `api.openai.com`. Stripping on the
+canonical predicate would therefore make one provider behave differently on its two
+endpoints for the same field, which is a new inconsistency in exchange for nothing
+the report asked for.
+
+The destination predicate fixes exactly the reported class — gateways this proxy does
+not operate, which is where the 400 is observed — and leaves every OpenAI-operated
+route byte-identical. Whether `api.openai.com` tolerates the field under an API key
+is unverified, and this change does not have to answer it.
 
 ### Shape
 
@@ -134,6 +138,34 @@ stateful operation to do so. xAI's Responses API stores conversations and docume
 `stripStatefulResponsesParams` must stay unreachable from the new condition. The PR
 also does not claim to remove the first upstream reset, and should not be asked to.
 
+### Outcome
+
+Questions 1 and 2 came back clean. The repair and the adjacency pass both index and
+emit `custom_tool_call_output`, and both run before
+`rewriteRoutedCustomToolsForUpstream`, so a dangling custom call is paired first and
+lowered as a pair. The forward path is byte-identical, because the synthesis flag is
+`!forward && ...` in both versions. The hard constraint holds:
+`stripStatefulResponsesParams` is reachable only under `if (stateless)`, xAI does not
+set it, and `store` and `previous_response_id` survive.
+
+Question 3 found a real defect. `kimi` and `kimi-code` hold the adjacency flag and
+are neither forward nor stateless, so on `dev` the orphan repair never runs for them
+at all; gating synthesis on that flag would have started inserting placeholder tool
+turns into Kimi conversations. The evidence that this is wrong rather than merely
+broader is in the report that introduced the flag: Kimi returned HTTP 200 for a call
+with no result at all, so that shape is not one it rejects.
+
+The distinction worth keeping is that adjacency reorders items the upstream would
+accept in some order, while synthesis inserts an item the client never sent, which is
+a claim about what happened in the conversation. Those are different promises and
+should not share a flag. The fix adds `requiresPairedResponsesToolResults`, threaded
+exactly like its sibling and seeded on `xai` only; `statelessResponses` implies it,
+so DeepSeek keeps the repair it already had and Kimi returns to its `dev` behavior.
+
+It was pushed as a follow-up commit onto the contributor's own branch, which
+`maintainerCanModify` permits, so the pull request and its credit stay with its
+author rather than moving to a lane-owned branch. Regressions were added for the
+separation itself and for the custom-tool ordering, which was previously unpinned.
 ## U3 — #4848
 
 Contributor branch `fix/ollama-native-deferred-boundaries` (briascoi). A separate
@@ -145,6 +177,16 @@ that produced no result as a success: the synthesized message has to keep the
 execution status visibly unknown, the deferred messages must all be released with
 their order and multimodal content intact, and the orphan, duplicate and
 mismatched-result guards must still throw.
+
+### Outcome
+
+No correctness defect. The synthesized message records unknown execution status in
+wording identical to the chat wire's, the deferred list is FIFO and is released by
+the post-loop flush even when the history ends with an open batch, multimodal
+content survives, and all four strict guards still throw. State is request-local.
+Independence from U2 is confirmed at the file level: no shared file, helper, or state
+object, and separate adapter entries in `src/adapters/registry.ts`. The only comment
+left is a documentation suggestion, not a gate failure.
 
 ## Operating constraints
 
