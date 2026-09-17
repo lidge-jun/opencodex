@@ -232,6 +232,17 @@ describe("catalog-backed input ceilings on the cached chat path", () => {
     expect(urls.filter(url => url.endsWith("/GetChatMessage"))).toHaveLength(1);
   });
 
+  test("a failed catalog lookup is not retried within the turn", async () => {
+    // No seed: the mocked endpoint 503s, so every uncached catalog read issues
+    // a fetch (the user_jwt mint runs first and fails). The turn must make
+    // exactly one metadata attempt - runTurn hands the result to UID
+    // resolution and to the chat pre-flight.
+    const events = await run("gpt-5-6-sol");
+    expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+    expect(urls.filter(url => !url.endsWith("/GetChatMessage"))).toHaveLength(1);
+    expect(urls.filter(url => url.endsWith("/GetChatMessage"))).toHaveLength(1);
+  });
+
   test("keeps the encoder default without discovery or a configured hint", async () => {
     await run();
     expectWire(128_000);

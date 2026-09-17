@@ -11,7 +11,7 @@ import { namespacedToolName } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import type { ContentPart } from "./devin/cloud-direct/chat";
-import { getCachedCatalog } from "./devin/cloud-direct/catalog";
+import { getCachedCatalog, type CacheEntry } from "./devin/cloud-direct/catalog";
 import { collapseDevinModelUid } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
@@ -155,6 +155,7 @@ async function resolveWireModelUid(
   apiKey: string,
   host: string,
   reasoningEffort?: string,
+  catalog?: CacheEntry | null,
 ): Promise<string> {
   const modelId = normalizeDevinModelId(rawModelId);
   // Explicit effort wins over a suffix the picker already baked into the id, so
@@ -163,15 +164,18 @@ async function resolveWireModelUid(
   const swe2 = resolveSwe2Variant(modelId, reasoningEffort);
   if (swe2) return swe2;
   if (hasEffortSuffix(modelId)) return modelId;
-  const catalog = await getCachedCatalog(apiKey, host);
-  if (catalog) {
-    if (catalog.byUid.has(modelId)) return modelId;
+  // Callers that already read the catalog this turn pass it in; an explicit
+  // null records a failed lookup and must not trigger a same-turn retry —
+  // failures are not cached, so re-reading would only pay another timeout.
+  const entry = catalog !== undefined ? catalog : await getCachedCatalog(apiKey, host);
+  if (entry) {
+    if (entry.byUid.has(modelId)) return modelId;
     const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
     const suffixed = `${modelId}-${effort}`;
-    if (catalog.byUid.has(suffixed)) return suffixed;
+    if (entry.byUid.has(suffixed)) return suffixed;
     // Fall back to any enabled variant of this base model.
-    for (const uid of catalog.byUid.keys()) {
-      if (uid.startsWith(modelId + "-") && !catalog.byUid.get(uid)?.disabled) return uid;
+    for (const uid of entry.byUid.keys()) {
+      if (uid.startsWith(modelId + "-") && !entry.byUid.get(uid)?.disabled) return uid;
     }
   }
   // Degraded mode: append the default effort suffix.
@@ -533,7 +537,16 @@ export function createDevinAdapter(
       // entry: an EU or FedStart account that used provider.baseUrl would send
       // every RPC to the US server it is not provisioned on.
       const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId);
-      const modelUid = await resolveWireModelUid(rawModelId, apiKey, host, parsed.options.reasoning);
+      // One catalog read per turn serves model-UID resolution, the input
+      // ceiling, and the chat pre-flight inside streamChatEvents. Failures are
+      // not cached, so a second read would only pay another fetch timeout on
+      // an otherwise valid turn.
+      const catalog = await getCachedCatalog(apiKey, host, incoming.abortSignal);
+      if (incoming.abortSignal?.aborted) {
+        emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false });
+        return;
+      }
+      const modelUid = await resolveWireModelUid(rawModelId, apiKey, host, parsed.options.reasoning, catalog);
       const returnedToolNames = buildDevinReturnedToolNameMap(parsed.context.tools);
       let openToolId: string | undefined;
       let usage: OcxUsage | undefined;
@@ -546,13 +559,7 @@ export function createDevinAdapter(
       };
 
       try {
-        // The same per-account/host cache serves model selection and transport
-        // preflight. Read the selected UID, not the picker's collapsed base row.
-        const catalog = await getCachedCatalog(apiKey, host, incoming.abortSignal);
-        if (incoming.abortSignal?.aborted) {
-          emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false });
-          return;
-        }
+        // Read the selected UID's catalog row, not the picker's collapsed base.
         const maxInputTokens = resolveDevinMaxInputTokens(
           provider, modelUid, catalog?.byUid.get(modelUid)?.contextWindow,
         );
@@ -560,6 +567,7 @@ export function createDevinAdapter(
           apiKey,
           apiServerUrl: host,
           modelUid,
+          catalog,
           messages: mapOcxMessagesToDevin(parsed),
           tools: mapOcxToolsToDevin(parsed.context.tools),
           cascadeId,
