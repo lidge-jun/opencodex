@@ -745,6 +745,13 @@ export async function executeComboResponses(
       code: failure.upstreamCode,
       message: failure.classificationText,
     });
+    // Same target selector as the exclusionary pick below, minus `exclude`: the only
+    // difference is deliberate and is the whole point of the single-target retry.
+    const retryAfterCooldown = () =>
+      pickWithWait({
+        eligible: targetEligible,
+        now: failureNow,
+      });
     if (nextPick) {
       pick = nextPick;
     } else {
@@ -755,8 +762,9 @@ export async function executeComboResponses(
       });
       // A single-target combo with waitForCooldownMs has no alternate target to fail over to,
       // but can recover if it waits for its brief cooldown. The initial attempt accumulated into
-      // pick.attempted, so the first pickWithWait excluded it. Drop exclude for one retry
-      // when bounded by comboTargetsDispatched <= 1.
+      // pick.attempted, so the first pickWithWait above excluded it. retryAfterCooldown below is
+      // the same selector with `exclude` deliberately dropped, so the single cooled target
+      // becomes eligible again once its cooldown expires.
       // Termination is double-guarded:
       // 1) comboSendScope?.reserveDispatch refuses a second failover hop via comboExecutionBudgetPolicy
       //    (maxAlternateTargetSends: 1 for a single declared target).
@@ -769,10 +777,7 @@ export async function executeComboResponses(
         && comboTargetsDispatched <= 1
         && !options.abortSignal?.aborted
       ) {
-        pick = await pickWithWait({
-          eligible: targetEligible,
-          now: failureNow,
-        });
+        pick = await retryAfterCooldown();
       }
     }
     if (!pick) {
