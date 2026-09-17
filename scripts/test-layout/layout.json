@@ -1284,6 +1284,7 @@
     "service.test.ts": "service",
     "session-affinity.test.ts": "server",
     "session-lane-recall-harness.test.ts": "server",
+    "settings-desktop-switch-apply.test.ts": "config",
     "settings-main-account-hard-lock.test.ts": "config",
     "settings-oauth-open-browser.test.ts": "config",
     "settings-startup-health-seam.test.ts": "config",

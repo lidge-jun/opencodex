@@ -240,6 +240,34 @@ the preflight is an early no-write guard, not an authorization token for a later
 `supports_websockets = true` is appended to the provider table only when `websocketsEnabled(config)`
 returns true.
 
+## Desktop compatibility switches report three things, not one
+
+`codexDesktopAuthless` and `codexClientCompaction` only mean anything through the injected
+`config.toml`, so persisting them is not applying them. `PUT /api/settings` used to persist
+and then converge the catalog, and a comment there claimed the injector rewrote the form;
+`convergeCodexCatalog` rejects any scope but `catalog` and never reaches `injectCodexConfig`,
+so the injected shape stayed as it was until a separate `ocx sync`.
+
+The route now runs the real injection after catalog convergence and after the config mutation
+lock has closed — coordinated Codex writes take the Codex write lock before the config mutation
+lock, so awaiting the injector inside that transaction would invert the order — and reports
+three separate facts per switch: the **stored** value in `config.json`, the **effective** value
+this bind and role will actually produce, and whether `config.toml` was **applied**, with the
+reason and retryability when it was not. `src/codex/desktop-switches.ts` owns that projection.
+
+Effective values come from `isEffectiveCodexDesktopAuthless` and
+`isEffectiveCodexClientCompaction` in `src/codex/loopback-target.ts` rather than a second copy
+of the predicate, because the reporting answer and the injection answer diverging is the defect
+being fixed: a non-loopback bind without the unauthenticated loopback listener drops the
+authless flag while the API read back the configured `true`.
+
+The report also states the auth-source consequence. The flag decides `requires_openai_auth` in
+the injected provider table, which is what Codex reads to decide whether to ask the user to
+sign in at all, so flipping it changes whose identity is in use and the user is told at the
+moment they change it. The pre-existing top-level `codexDesktopAuthless` and
+`codexClientCompaction` booleans keep reporting the configured value for compatibility; the
+report is additive.
+
 ## Profile and fast tier
 
 When opencodex owns routing, it also writes `$CODEX_HOME/opencodex.config.toml` as an explicit profile

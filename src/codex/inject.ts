@@ -158,6 +158,8 @@ export interface CodexInjectResult {
    */
   historyPreflightFailureReason?: string;
   status?: "skipped";
+  /** Busy write lock, emitted by `codexInjectLockOutcome` and undeclared here until #4809. */
+  retryable?: boolean;
   /** `hub-gated` is the hub-role gate (#4236), distinct from the user's own OFF switch. */
   skippedReason?: "desired_disabled" | "desired_enabled" | "hub-gated";
   nativeSubagentDefaultsWarning?: string;
