@@ -142,11 +142,18 @@ export async function applyFinalRouteRequestNormalization(args: {
     route.modelId,
   );
 
-  // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
-  // this request will actually use (#404).
-  route.provider = resolveOpenCodeGoTransport(route.provider,
-    args.claudeGoAffinity ? args.claudeGoAffinity.sessionLane : getOrAllocateRequestSessionLane(req));
-  route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+  // Preserve the routed destination for Go recognition, then settle the wire before
+  // deriving protocol-scoped affinity. Recognition must not inspect the flipped adapter.
+  const routedProvider = route.provider;
+  const wireProvider = resolveWireProtocolOverride(
+    route.providerName,
+    route.modelId,
+    routedProvider,
+    inboundWire,
+  );
+  route.provider = resolveOpenCodeGoTransport(wireProvider,
+    args.claudeGoAffinity ? args.claudeGoAffinity.sessionLane : getOrAllocateRequestSessionLane(req),
+    routedProvider);
   parsed._plaintextV2AgentMessages = shouldPreparePlaintextV2AgentMessages({
     enabled: config.plaintextV2AgentMessages === true,
     inboundWire,

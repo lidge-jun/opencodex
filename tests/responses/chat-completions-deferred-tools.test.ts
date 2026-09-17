@@ -179,7 +179,21 @@ describe("chat-completions deferred tool pass-through", () => {
       const text = await response.text();
       expect(text).toContain("todo_write");
       expect(text).toContain("call_undeclared_1");
-      expect(text).not.toContain("502");
+      /*
+       * Terminal shape, not a substring search for "502".
+       *
+       * The old assertion searched the whole stream, and the relay stamps each chunk with a
+       * random `chatcmpl-<hex>` id. Windows shard 4/9 of run 35180376537 drew
+       * `chatcmpl-05021785ecf5440c96ca31be` and went red on a turn that had succeeded
+       * perfectly. `tests/images/loop.test.ts` already retired the identical assertion for
+       * "504" and measured it at roughly one run in 69.
+       *
+       * It could not see a real 502 either: this relay's failure carries an error frame and
+       * ends the turn, and the number never appears in the body. So assert that instead - the
+       * stream completed and carried no error.
+       */
+      expect(text).toContain("data: [DONE]");
+      expect(text).not.toContain("\"error\"");
       expect(text).not.toContain("undeclared client tool");
     } finally {
       await server.stop(true);

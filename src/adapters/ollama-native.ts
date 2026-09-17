@@ -306,17 +306,37 @@ function buildNativeMessages(
   // owned by this adapter/request lifecycle rather than process-global state.
   reservedToolCallIds.clear();
   let pending: PendingToolBatch | undefined;
+  // Codex records mid-turn injections (a PostToolUse hook verdict, a context notice) between an
+  // assistant tool call and that call's own tool result. Native Ollama needs the call and its
+  // results adjacent, so those conversational messages wait here instead of closing the batch
+  // early. The openai-chat adapter defers them the same way; refusing the replay killed the turn.
+  let deferred: OllamaNativeMessage[] = [];
+
+  const releaseDeferred = (): void => {
+    if (deferred.length === 0) return;
+    messages.push(...deferred);
+    deferred = [];
+  };
 
   const flushPending = (): void => {
     if (!pending) return;
     for (const call of pending.calls) {
       if (!call.result) {
-        throw new Error(`ollama-native tool call ${call.id} is missing its tool result; refusing interrupted replay`);
+        // No result exists anywhere in the replayed history: the turn was interrupted, or the
+        // result never reached it. State exactly that instead of inventing an outcome, and keep
+        // the conversation replayable.
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          tool_name: call.wireName,
+          // Same marker text as the chat adapter (openai-chat/messages.ts), so both adapters read
+          // the same in an operator's log. The name is this wire's flattened tool name, which is
+          // what the assistant turn above it carries.
+          content: `[ocx] no tool result was recorded for "${call.wireName}"; execution status unknown — do not treat this as success, failure, or user-provided input.`,
+        });
+        continue;
       }
-    }
-    for (const call of pending.calls) {
-      const result = call.result!;
-      const translated = contentToNative(result.content, "tool result");
+      const translated = contentToNative(call.result.content, "tool result");
       messages.push({
         role: "tool",
         tool_call_id: call.id,
@@ -326,6 +346,7 @@ function buildNativeMessages(
       });
     }
     pending = undefined;
+    releaseDeferred();
   };
 
   for (const message of parsed.context.messages) {
@@ -347,9 +368,22 @@ function buildNativeMessages(
       continue;
     }
 
-    // Native Ollama requires the whole assistant tool-call turn followed by its tool results.  A
-    // new conversational message is a hard boundary; unresolved calls are never fabricated.
-    if (pending) flushPending();
+    // Native Ollama requires the whole assistant tool-call turn followed by its tool results. A
+    // conversational message that arrives while the batch is still open is held aside instead of
+    // closing it, so the call keeps its results adjacent; it is released right after the batch
+    // flushes. Anything else (a new assistant turn) settles the batch first.
+    if (pending) {
+      if (message.role === "user" || message.role === "developer") {
+        const translated = message.role === "user"
+          ? contentToNative(message.content, "user")
+          : contentToNative(message.content, "developer", false);
+        deferred.push(message.role === "user"
+          ? { role: "user", content: translated.content, ...(translated.images ? { images: translated.images } : {}) }
+          : { role: "system", content: translated.content });
+        continue;
+      }
+      flushPending();
+    }
 
     switch (message.role) {
       case "user": {

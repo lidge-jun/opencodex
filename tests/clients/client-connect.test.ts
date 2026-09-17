@@ -940,13 +940,23 @@ describe("recoverable connected key rotation", () => {
 });
 
 
-/** Real per-process files and SQLite; only hub HTTP is substituted. Never return credential bytes. */
+/**
+ * Real per-process files and SQLite; hub HTTP and Windows ACL process runners are substituted.
+ * ACL behavior has dedicated tests. Launching PowerShell/icacls here only adds unrelated
+ * process contention to the Desktop lifecycle assertion. Never return credential bytes.
+ */
 function runDesktopLifecycleScenario(mode: string) {
   const root = mkdtempSync(join(tmpdir(), "ocx-desktop-lifecycle-client-"));
   const script = `
     const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
     const { Readable } = require("node:stream");
     const { spyOn } = require("bun:test");
+    const aclApi = require("./src/lib/windows-secret-acl");
+    const principalApi = require("./src/lib/windows-user-principal");
+    const aclSuccess = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    principalApi.setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+    aclApi.setIcaclsRunnerForTests(() => aclSuccess);
+    aclApi.setAsyncIcaclsRunnerForTests(async () => aclSuccess);
     const configApi = require("./src/config");
     const connectApi = require("./src/client/connect");
     const stateApi = require("./src/client/state");

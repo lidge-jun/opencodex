@@ -123,6 +123,35 @@ describe("modelCapabilityFields", () => {
     expect(modelCapabilityFields({ maxOutputTokens: 1.9 }).capabilities.supports_reasoning)
       .toBe(false);
   });
+
+  test("mirrors top-level context_window and max_output_tokens for external and legacy client discovery", () => {
+    const fields = modelCapabilityFields({ contextWindow: 200000, maxOutputTokens: 64000 });
+    expect(fields.context_window).toBe(200000);
+    expect(fields.context_length).toBe(200000);
+    expect(fields.max_output_tokens).toBe(64000);
+    expect(fields.capabilities.context_length).toBe(200000);
+    expect(fields.capabilities.max_output_tokens).toBe(64000);
+
+    // Empty or non-positive / unsafe inputs: keys omitted entirely
+    const empty = modelCapabilityFields({});
+    expect("context_window" in empty).toBe(false);
+    expect("context_length" in empty).toBe(false);
+    expect("max_output_tokens" in empty).toBe(false);
+
+    for (const value of [0, -50, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+      const fields = modelCapabilityFields({ contextWindow: value, maxOutputTokens: value });
+      expect("context_window" in fields).toBe(false);
+      expect("context_length" in fields).toBe(false);
+      expect("max_output_tokens" in fields).toBe(false);
+    }
+  });
+
+  test("mirrors the effective long context window at the top level", () => {
+    const fields = modelCapabilityFields({ contextWindow: 272000, longContextWindow: 922000 });
+    expect(fields.capabilities.context_length).toBe(922000);
+    expect(fields.context_window).toBe(922000);
+    expect(fields.context_length).toBe(922000);
+  });
 });
 
 describe("nativeOpenAiContextTier", () => {
@@ -165,6 +194,9 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
         supports_vision: true,
         reasoning_effort: ["low", "high", "max"],
       });
+      expect(k3!.context_window).toBe(200000);
+      expect(k3!.context_length).toBe(200000);
+      expect(k3!.max_output_tokens).toBe(64_000);
       // Grok Build's discovery fields stay untouched next to the new keys.
       expect(k3!.supports_reasoning_effort).toBe(true);
       expect(k3!.reasoning_effort).toBe("high");
@@ -186,6 +218,9 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       // Native GPT-5.6: 272k default window, 922k opt-in ceiling → Cursor Context selector.
       expect(solCaps.context_length).toBe(922000);
       expect(solCaps.max_output_tokens).toBe(128_000);
+      expect(sol!.context_window).toBe(922000);
+      expect(sol!.context_length).toBe(922000);
+      expect(sol!.max_output_tokens).toBe(128_000);
       expect(sol!.pricing).toEqual({ overrides: [{ min_prompt_tokens: 272000 }] });
       expect("long_context_threshold_tokens" in sol!).toBe(false);
       expect(solCaps.supports_vision).toBe(true);

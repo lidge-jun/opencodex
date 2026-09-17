@@ -328,7 +328,14 @@ describe("Grok fence lifecycle wiring", () => {
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
     const restoreFn = sliceFn(CLI_SOURCE, "async function restoreSharedClientStateAfterStop(", "async function handleStop(");
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
-    expect(restoreFn).toContain("if (result.success) console.log");
+    // The success branch grew a body when a degraded restore had to report the provider
+    // table it retained, so this pins the branch and its log separately rather than the
+    // one-line shape they used to share.
+    expect(restoreFn).toContain("if (result.success) {");
+    expect(restoreFn).toContain("console.log(`↩️  ${result.message}`)");
+    // A degraded restore is a discharged obligation, not a deferral: the refusal reason is
+    // what keeps a stop receipt owed, and it must stay part of that conjunction.
+    expect(restoreFn).toContain("result.historyPreflightRefusal !== undefined");
     // Config or catalog failure is a real teardown failure - a client reads those. Only a
     // history-only failure is separable, and it still surfaces (#3008).
     expect(restoreFn).toContain('artifacts.config.state === "failed" || artifacts.catalog.state === "failed"');

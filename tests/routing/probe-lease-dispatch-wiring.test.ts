@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   canAcquireTransientProbe,
   classifyPoolRecoveryDispatch,
   clearPoolRecoveryState,
   createPoolBackpressureLimiter,
+  sharedPoolBackpressure,
   transientProbeDiagnostics,
   tryAcquireTransientProbe,
   TRANSIENT_PROBE_INTERVAL_MS,
@@ -27,9 +28,9 @@ import {
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
-import { repoPath } from "../helpers/repo-root";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
  * The pool-wide recovery limiter, wired to the dispatch that actually sends (#4701).
@@ -38,7 +39,8 @@ import type { OcxConfig } from "../../src/types";
  * bounded nothing: no file under `src/` imported the module, so every hit for
  * `resolveHeldAccountDispatch` was its own definition or a direct unit test. An implementation
  * nothing calls is indistinguishable from an absent one at runtime, which is the whole of the
- * issue -- and it is why the first case here is a source oracle rather than a behaviour.
+ * issue. The first case therefore drives the public Responses handler and observes the shared
+ * limiter's demand counter at the physical-send boundary.
  *
  * The defect that reached production lived at the end of both transient-hold branches of
  * `resolveCodexAccountForThreadDetailed`: when no sibling could take the request they returned
@@ -80,33 +82,41 @@ function streakTransientFailures(config: OcxConfig, accountId: string, now: numb
 }
 
 describe("recovery limiter wiring is reachable from production (#4701)", () => {
-  test("the transient-hold module is imported by the selector and the dispatch boundary", () => {
-    // Not a style assertion. Before this change the module had complete unit coverage and zero
-    // production callers, so the suite was green while nothing in a running proxy was bounded.
-    // If a refactor ever detaches it again, that is the symptom to catch -- the behaviour tests
-    // below would keep passing against primitives nobody calls.
-    const holdDispatch = readFileSync(
-      repoPath("src", "codex", "routing", "transient-hold-dispatch.ts"), "utf8",
-    );
-    expect(holdDispatch).toContain('from "../../routing/probe-lease"');
-    expect(holdDispatch).toContain("resolveHeldAccountDispatch");
+  test("a production Responses dispatch records demand in the shared limiter", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      id: "resp-probe-lease-wiring",
+      object: "response",
+      status: "completed",
+      model: "fixture-model",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    })) as typeof fetch;
 
-    // The selector reaches the bound through that seam, on the production path.
-    const routing = readFileSync(repoPath("src", "codex", "routing.ts"), "utf8");
-    expect(routing).toContain('from "./routing/transient-hold-dispatch"');
-    expect(routing).toContain("resolveTransientHoldDispatch");
+    const config = {
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://fixture.example.test/v1",
+          apiKey: "sk-test",
+        },
+      },
+    } as OcxConfig;
 
-    // The physical-send boundary itself owns no routing policy -- `responses-fetch-helpers-
-    // boundary.test.ts` pins its runtime imports to three transport modules -- so the dispatch
-    // call sites name their own class instead.
-    const passthrough = readFileSync(repoPath("src", "server", "responses", "passthrough-dispatch.ts"), "utf8");
-    expect(passthrough).toContain('from "../../routing/probe-lease"');
-    expect(passthrough).toContain('classifyPoolRecoveryDispatch("initial")');
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/fixture-model", input: "hello", stream: false }),
+      }), config, { model: "", provider: "" });
+      await response.text();
 
-    // Two modules are named probe-lease, one directory apart, and they are different domains.
-    // The selector keeps importing the QUOTA one; merging them would make one settle the
-    // other's probe.
-    expect(routing).toContain('from "./routing/probe-lease"');
+      expect(response.status).toBe(200);
+      expect(sharedPoolBackpressure().state().initialSends).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

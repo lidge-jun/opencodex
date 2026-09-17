@@ -237,6 +237,17 @@ describe("#2569 Cursor catalog tracks the live GetUsableModels roster", () => {
     expect(cursorModelEffortLadder("gemini-3.7-flash")).toEqual(["low", "medium", "high"]);
   });
 
+  test("muse-spark-1.3 publishes minimal..xhigh and withholds the advertised max rung", () => {
+    expect(cursorModelEffortLadder("muse-spark-1.3")).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+    expect(cursorEffortSuffix("muse-spark-1.3", "minimal")).toBe("minimal");
+    expect(cursorWireModelIdWithEffort("muse-spark-1.3", "minimal")).toBe("muse-spark-1.3-minimal");
+    // Cursor's roster advertises muse-spark-1.3-max, but Meta publishes no max rung for Muse
+    // Spark and an independent probe rejected it, so a Codex request at max clamps to the top
+    // rung the vendor documents instead of sending an id only the reseller claims.
+    expect(cursorEffortSuffix("muse-spark-1.3", "max")).toBe("xhigh");
+    expect(cursorWireModelIdWithEffort("muse-spark-1.3", "xhigh")).toBe("muse-spark-1.3-xhigh");
+  });
+
   test("both families survive live-discovery filtering from effort-suffixed wire ids", () => {
     // The live roster lists ONLY suffixed ids for these models; a base id that does not match
     // one of them is dropped from the routed catalog.

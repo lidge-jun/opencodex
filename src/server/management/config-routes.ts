@@ -4,6 +4,11 @@ import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
+  applyCodexDesktopSwitches,
+  describeCodexDesktopSwitches,
+  type CodexDesktopSwitchApply,
+} from "../../codex/desktop-switches";
+import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
   deleteConfigTopLevelKey,
@@ -328,6 +333,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopAuthless: config.codexDesktopAuthless === true,
       // Absent keeps Design B remote compaction; true selects the dedicated provider identity.
       codexClientCompaction: config.codexClientCompaction === true,
+      codexDesktopSwitches: describeCodexDesktopSwitches(config, {
+        applied: false,
+        reason: "not_requested",
+        retryable: false,
+      }),
       startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -597,15 +607,26 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(body.appOwnedMemoryBudgetMb));
       enforceAppOwnedMemoryBudget();
     }
-    // Both Desktop compatibility switches change the injected config.toml shape, so converge now
-    // rather than waiting for the next start; the injector re-reads config and rewrites the form.
     const authlessIsEnabled = config.codexDesktopAuthless === true;
     const clientCompactionIsEnabled = config.codexClientCompaction === true;
-    const catalogRefresh = pickerWasEnabled !== pickerIsEnabled
-      || authlessWasEnabled !== authlessIsEnabled
-      || clientCompactionWasEnabled !== clientCompactionIsEnabled
+    const desktopSwitchesChanged = authlessWasEnabled !== authlessIsEnabled
+      || clientCompactionWasEnabled !== clientCompactionIsEnabled;
+    // Catalog convergence is not config injection, and the comment that used to sit here said
+    // it was. `convergeCodexCatalog` rejects any scope but `catalog` and never reaches the
+    // injector, which is why flipping either switch left `config.toml` in its old shape until
+    // a separate `ocx sync` (#4809). Both halves are needed when a Desktop switch changes; a
+    // picker-only update still refreshes just the catalog.
+    const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || desktopSwitchesChanged
       ? await convergeCodexCatalog()
       : undefined;
+    // Injection second, matching `syncModelsToCodex`: the injected `model_catalog_json` should
+    // point at a catalog that has already settled. And it runs here rather than inside the save
+    // because coordinated Codex writes acquire the Codex write lock N before the config mutation
+    // lock C — awaiting N while still holding C would invert that order.
+    const desktopSwitchApply: CodexDesktopSwitchApply = desktopSwitchesChanged
+      ? await applyCodexDesktopSwitches(config)
+      : { applied: false, reason: "not_requested", retryable: false };
+    const codexDesktopSwitches = describeCodexDesktopSwitches(config, desktopSwitchApply);
     const catalogRefreshPending = catalogRefresh
       ? catalogRefreshIsPending(catalogRefresh)
       : false;
@@ -622,6 +643,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       catalogRefreshPending,
       codexDesktopAuthless: authlessIsEnabled,
       codexClientCompaction: clientCompactionIsEnabled,
+      codexDesktopSwitches,
       codexMainAccountHardLock: config.codexMainAccountHardLock === true,
       mainAccountHardLock: getMainAccountHardLockStatus(config),
       startupHealth: await readStartupHealth(config),

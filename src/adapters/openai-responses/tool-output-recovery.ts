@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../empty-tool-output-annotation";
 import { isPlainObject } from "./internal";
+import { peekBridgeSearchReplay } from "../../responses/bridge-search-replay-cache";
 
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
 
@@ -263,6 +264,80 @@ export function backfillWebSearchQueries(body: unknown): unknown {
     return itemChanged ? { ...item, action: rep } : item;
   });
   return changed ? { ...body, input } : body;
+}
+
+/**
+ * Give a bridged destination back its own search call and result (issue #4587).
+ *
+ * When `providers.<name>.webSearchBridge` is armed, the proxy intercepts the destination's
+ * `function_call` named `web_search`, runs the search, and shows the CALLER a hosted
+ * `web_search_call` cell. The caller stores that cell and replays it on every later turn, so the
+ * destination receives an item type it never produced, carrying a query and sources but no result.
+ * It typically responds by searching again.
+ *
+ * This restores the exchange the destination actually had: the cell becomes the destination's own
+ * `function_call`, immediately followed by the `function_call_output` the bridge produced for
+ * it, in the cell's original position. It runs before the first leg of the next turn is
+ * dispatched, which is the only place it can run — by the time the bridge wraps a turn, that
+ * turn's first leg is already on the wire.
+ *
+ * Three things it deliberately does not do:
+ *   - It never re-runs a search. A missing memo entry means the result is gone, and paying for a
+ *     second search would answer the model with a different search than its history claims.
+ *   - It never invents result text. A miss leaves the item exactly as the caller sent it, which is
+ *     the behaviour every unbridged conversation already has.
+ *   - It never restores a call id the body already carries. If the history somehow holds that
+ *     `function_call` too, emitting a second one would be a duplicate the upstream must reject.
+ *
+ * Entries are scoped to the upstream destination, so a history replayed against a different
+ * provider cannot resurrect a call that provider never made. Callers pass `undefined` for any
+ * provider without the bridge armed, and the common path then returns the original reference.
+ */
+export function restoreBridgedWebSearchCalls(body: unknown, destinationScope: string | undefined): unknown {
+  if (destinationScope === undefined) return body;
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input;
+
+  // Cheap pre-check: nothing to do for a conversation that carries no hosted search cell at all,
+  // which is every turn before the model's first bridged search.
+  let hasCell = false;
+  for (const item of input) {
+    if (isPlainObject(item) && item.type === "web_search_call" && typeof item.id === "string") {
+      hasCell = true;
+      break;
+    }
+  }
+  if (!hasCell) return body;
+
+  const occupiedCallIds = new Set<string>();
+  for (const item of input) {
+    if (isPlainObject(item) && typeof item.call_id === "string") occupiedCallIds.add(item.call_id);
+  }
+
+  let changed = false;
+  const restored: unknown[] = [];
+  for (const item of input) {
+    if (isPlainObject(item) && item.type === "web_search_call" && typeof item.id === "string") {
+      const memo = peekBridgeSearchReplay(destinationScope, item.id);
+      if (memo && !occupiedCallIds.has(memo.callId)) {
+        changed = true;
+        occupiedCallIds.add(memo.callId);
+        restored.push({
+          type: "function_call",
+          ...(memo.sourceItemId ? { id: memo.sourceItemId } : {}),
+          call_id: memo.callId,
+          name: memo.name,
+          // The bridge records the complete arguments text from the call's own done frame; the
+          // empty-object fallback matches what a continuation leg would have sent.
+          arguments: memo.argumentsText.length > 0 ? memo.argumentsText : "{}",
+        });
+        restored.push({ type: "function_call_output", call_id: memo.callId, output: memo.output });
+        continue;
+      }
+    }
+    restored.push(item);
+  }
+  return changed ? { ...body, input: restored } : body;
 }
 
 export function repairOrphanedInputItems(body: unknown, dropReasoning: boolean, synthesizeMissingCallOutputs = false): unknown {

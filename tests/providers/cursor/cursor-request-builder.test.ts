@@ -16,6 +16,10 @@ import {
   CURSOR_TOOL_BYTES_LIMIT,
   CURSOR_TOOL_COUNT_LIMIT,
 } from "../../../src/adapters/cursor/request-builder";
+import {
+  clearCursorThreadContinuityForTests,
+  rememberCursorThreadConversation,
+} from "../../../src/adapters/cursor/thread-continuity";
 import { cursorCheckpointModelAffinityId } from "../../../src/adapters/cursor/discovery";
 import { cursorMcpToolsEncodedSize } from "../../../src/adapters/cursor/tool-definitions";
 import { encodeCursorCallId, resetCursorCallIdProvenanceForTests } from "../../../src/adapters/cursor/call-id";
@@ -77,6 +81,66 @@ describe("Cursor request builder", () => {
     });
 
     expect(continuation.conversationId).toBe(initial.conversationId);
+  });
+
+  test("thread remint override wins over a stale stored Cursor conversation id", () => {
+    // Only the remint path writes the thread store, so a stored id that disagrees with it is
+    // the pre-remint value. Preferring the stored id let a second Responses chain in the same
+    // Codex thread keep resuming the conversation the previous turn rotated away from.
+    clearCursorThreadContinuityForTests();
+    rememberCursorThreadConversation("thread-poisoned", "cursor_fresh", "acct-sticky");
+    try {
+      const request = createCursorRequest({
+        ...base,
+        modelId: "cursor/grok-4.6",
+        _clientThreadId: "thread-poisoned",
+        _cursorConversationId: "cursor_stale",
+        _cursorIdentityScope: "acct-sticky",
+      });
+      expect(request.conversationId).toBe("cursor_fresh");
+    } finally {
+      clearCursorThreadContinuityForTests();
+    }
+  });
+
+  test("isolated helpers ignore the parent thread remint override", () => {
+    clearCursorThreadContinuityForTests();
+    rememberCursorThreadConversation("thread-poisoned", "cursor_fresh", "acct-sticky");
+    try {
+      const request = createCursorRequest({
+        ...base,
+        modelId: "cursor/grok-4.6",
+        _clientThreadId: "thread-poisoned",
+        _cursorConversationId: "cursor_parent",
+        _cursorIdentityScope: "acct-sticky",
+        _cursorIsolateConversation: true,
+      });
+      expect(request.conversationId).not.toBe("cursor_fresh");
+      expect(request.conversationId).not.toBe("cursor_parent");
+    } finally {
+      clearCursorThreadContinuityForTests();
+    }
+  });
+
+  test("a compaction turn keeps its own conversation id over the parent thread override", () => {
+    // Compaction never sets the isolate flag, so preferring the thread override unconditionally
+    // pulled the compaction turn onto the parent conversation. It carries its own id and is
+    // isolated in effect; the override exists to beat a STALE stored id, not this one.
+    clearCursorThreadContinuityForTests();
+    rememberCursorThreadConversation("thread-compaction", "cursor_parent_stable", "acct-compaction");
+    try {
+      const request = createCursorRequest({
+        ...base,
+        modelId: "cursor/grok-4.6",
+        _clientThreadId: "thread-compaction",
+        _cursorConversationId: "cursor_compaction_turn",
+        _cursorIdentityScope: "acct-compaction",
+        _compactionRequest: true,
+      });
+      expect(request.conversationId).toBe("cursor_compaction_turn");
+    } finally {
+      clearCursorThreadContinuityForTests();
+    }
   });
 
   test("uses a Cursor-only Desktop owner without widening Responses replay scope", () => {

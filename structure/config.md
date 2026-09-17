@@ -1,5 +1,9 @@
 # Config Surface
 
+Native function-result injection follows [the separate opt-in control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
 
 Configuration consumers retain the [refresh-lock ownership boundary](catalog.md#accounts-namespaces-and-pool-rotation); failing to establish a usable matching lock identity does not authorize deleting its path or replacing the refresh callback outcome with a path-probe error. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
@@ -52,6 +56,13 @@ process-wide temp sequence, symlink target resolution, real-home test guard, own
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
 must not replace it with a local temp-and-rename shortcut.
 
+Windows hardening there is applied once per write, not once per harden call. Both calls stay
+`required: true` and still fail the write closed, but the pre-rename call resolves through the
+`src/lib/windows-secret-acl.ts` success memo: after the content write the writer re-asserts that the
+path still resolves to the object its descriptor holds, then re-attributes the memo to that same
+object so the freshness the data write moved does not read as a replacement. A different object, or
+one that cannot be observed, retires the memo and the pre-rename call performs the full sequence.
+
 > Decision record: [ADR-0016](decisions/ADR-0016-config-surface.md)
 
 `src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What
@@ -71,6 +82,11 @@ Env values are resolved through `src/config/proxy-env.ts`, so a config value nam
 the secret itself.
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
+
+The `ocx config show` reader in `src/cli/config-command.ts` uses those diagnostics directly. Its
+client annotation compares only the bounded service-token fingerprint with the validated client
+record; it does not call `loadConfig`, mutate permissions, or import the write-capable connect flow.
+All config publication continues through the existing required ACL-hardened writers above.
 
 `claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config/salvage.ts` already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
 
@@ -200,10 +216,23 @@ app and the CLI fell back to their built-in model list. `ocx sync` reported succ
 because that reason was special-cased into a `catalog-only` result — the downgrade is gone, so a
 refusal that survives is a real config or integrity failure again.
 
-Restore and removal keep the refusal. There the argument reverses: stripping the provider
-definition while its threads still point at it would orphan them, and those paths have no seam
-for keeping a compatibility table. A home that was already paginated therefore cannot yet be
-uninstalled through the product; that is tracked as open work, not as settled contract.
+Restore and removal now have that seam, so they no longer refuse on this one reason. The
+argument that forced the refusal still holds — stripping the provider definition while its
+threads still point at it would orphan them — but it only ever justified keeping the
+`[model_providers.opencodex]` table, not keeping the routing that aims plain `codex` at the
+proxy. Those are separable, and conflating them is what let `ocx uninstall` remove the proxy
+and leave the config pointing at it.
+
+On `history_paginated_requires_native_writer`, restore and removal take every OpenCodex root
+routing key out and retain the provider table verbatim, captured from the pre-transform bytes
+and re-appended into the same buffer so the file never passes through a state that names a
+provider it does not define — upstream fails the entire config load on a missing provider id,
+not the single thread. The history relabel is skipped rather than attempted, so paginated
+rollout bytes and thread rows stay untouched here exactly as they do on apply. The result is
+reported as `partial`, naming the retained lines and the command that removes them.
+`ocx restore --remove-codex-provider-table` is the explicit opt-in for full removal, and it
+states that conversations already tagged `opencodex` stop opening. Every other refusal reason
+keeps the hard refusal and the compensating rollback.
 
 Unattended sync, `POST /api/sync`, and every other config or ownership refusal keep the hard
 failure above.
@@ -214,6 +243,34 @@ the preflight is an early no-write guard, not an authorization token for a later
 
 `supports_websockets = true` is appended to the provider table only when `websocketsEnabled(config)`
 returns true.
+
+## Desktop compatibility switches report three things, not one
+
+`codexDesktopAuthless` and `codexClientCompaction` only mean anything through the injected
+`config.toml`, so persisting them is not applying them. `PUT /api/settings` used to persist
+and then converge the catalog, and a comment there claimed the injector rewrote the form;
+`convergeCodexCatalog` rejects any scope but `catalog` and never reaches `injectCodexConfig`,
+so the injected shape stayed as it was until a separate `ocx sync`.
+
+The route now runs the real injection after catalog convergence and after the config mutation
+lock has closed — coordinated Codex writes take the Codex write lock before the config mutation
+lock, so awaiting the injector inside that transaction would invert the order — and reports
+three separate facts per switch: the **stored** value in `config.json`, the **effective** value
+this bind and role will actually produce, and whether `config.toml` was **applied**, with the
+reason and retryability when it was not. `src/codex/desktop-switches.ts` owns that projection.
+
+Effective values come from `isEffectiveCodexDesktopAuthless` and
+`isEffectiveCodexClientCompaction` in `src/codex/loopback-target.ts` rather than a second copy
+of the predicate, because the reporting answer and the injection answer diverging is the defect
+being fixed: a non-loopback bind without the unauthenticated loopback listener drops the
+authless flag while the API read back the configured `true`.
+
+The report also states the auth-source consequence. The flag decides `requires_openai_auth` in
+the injected provider table, which is what Codex reads to decide whether to ask the user to
+sign in at all, so flipping it changes whose identity is in use and the user is told at the
+moment they change it. The pre-existing top-level `codexDesktopAuthless` and
+`codexClientCompaction` booleans keep reporting the configured value for compatibility; the
+report is additive.
 
 ## Profile and fast tier
 
@@ -255,6 +312,17 @@ validates both bounded metadata files, rejects path traversal and a symlink/junc
 and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
 traversing their targets. Unknown files remain in place and make the command report a partial
 uninstall with their exact paths.
+
+The newly created OAuth downgrade copy is registered after copying, so owned uninstall
+includes it. Invalid-config recovery copies are deliberately NOT registered: their names carry
+a timestamp, so one entry per invalid load would grow the uninstall manifest without bound, and
+the manifest stops validating past its path ceiling. A manifest that stops validating makes
+uninstall refuse outright, which would leave credentials on disk. Sweeping those copies by name
+pattern at removal time is the shape that fits; it is not in this change. Registration is best-effort: an intentionally
+unowned legacy home or a metadata-write failure must not suppress the recovery copy. Existing
+OAuth downgrade copies are neither rewritten nor retroactively claimed. Both a `false` registration
+result and a thrown registration error emit the same fixed warning without error details. Unregistered copies
+remain subject to the existing partial/refused uninstall result.
 
 Legacy nonempty config directories are deliberately not retroactively claimed. If either ownership
 file is missing, malformed, or bound to another root, uninstall refuses config deletion and reports
@@ -322,3 +390,5 @@ The text-only consumer reads exact inputModalities declarations before legacy hi
 ## Catalog auto-refresh
 
 `catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
+
+Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.

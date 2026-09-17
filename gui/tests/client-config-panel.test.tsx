@@ -535,6 +535,32 @@ test("no-key state is informational and leaves copy and download enabled", async
   await act(async () => { root.unmount(); });
 });
 
+test("keyless Gajae details do not ask users to generate an admission key", async () => {
+  const config = { providers: { opencodex: { apiKey: "opencodex-loopback", models: [] } } };
+  const envelope = {
+    ...OPENCODE_ENVELOPE,
+    client: "gajae",
+    apiKeyEnv: "",
+    exportHint: "No environment variable is required for the loopback-only Gajae integration.",
+    config,
+    text: JSON.stringify(config),
+  };
+  stubRoute(client => Response.json(client === "gajae" ? envelope : OPENCODE_ENVELOPE));
+  const { root, container } = await mountPanel({ hasKeys: false });
+
+  await act(async () => { rowButton(container, "gjc", "Details").click(); });
+  const dialog = container.querySelector("dialog")!;
+  expect(dialog.querySelector(".awi-clientconfig-nokey")).toBeNull();
+  expect(dialog.textContent).toContain(envelope.exportHint);
+  expect(dialog.textContent).not.toContain("Set the key before launching");
+  expect(dialog.textContent).not.toContain("environment variable named in the config");
+  expect(JSON.parse(dialog.querySelector("pre")!.textContent!)).toEqual(config);
+  expect(button(dialog, "Copy config").disabled).toBe(false);
+  expect(button(dialog, "Download").disabled).toBe(false);
+
+  await act(async () => { root.unmount(); });
+});
+
 test("N rows still mean exactly one live region", async () => {
   // Strengthened from the cold-load version: the risk changed from "a skeleton
   // and an announcer speaking for the same transition" to "one announcer per

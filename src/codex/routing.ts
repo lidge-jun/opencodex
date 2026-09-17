@@ -392,7 +392,14 @@ function pickLineageServingAccount(
   selectionOptions?: CodexAccountUsabilityOptions,
   modelId?: string,
 ): { accountId: string; reason: CodexAffinityReason } | null {
-  if (lineage.parentConversationKey !== undefined) {
+  // Cohort keying (#4780) makes a tree share one key, so for a same-session family the parent's
+  // key IS this request's and the lookup below would re-ask a question the caller already
+  // answered by finding no binding entry. What remains is the case cohort keying cannot unify:
+  // a session-less chain whose parent this scope has not recorded, where the keys differ.
+  if (
+    lineage.parentConversationKey !== undefined
+    && lineage.parentConversationKey !== lineage.conversationKey
+  ) {
     const parent = lineageServingAccountId(
       lineage.parentConversationKey, config, now, quotaScope, selectionOptions, modelId,
     );
