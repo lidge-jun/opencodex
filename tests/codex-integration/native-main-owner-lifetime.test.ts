@@ -211,8 +211,29 @@ class ChildHarness {
     for (;;) {
       const found = this.events.find(predicate);
       if (found) return found;
+      // A dead child and a slow one used to report identically. On run 35210400258
+      // (windows 7/9) the first wait of a case failed with `events=[] stderr=` -- and because
+      // that stderr promise only resolves at EOF, its emptiness proves the child had already
+      // exited, silently, rather than that it was still booting. The message never said so.
+      // Report the exit the moment it happens, with the code, instead of spending the deadline.
+      if (this.child.exitCode !== null || this.child.signalCode !== null) {
+        // The event and the exit can land in the same wake, so re-check before blaming death.
+        const settled = this.events.find(predicate);
+        if (settled) return settled;
+        throw new Error(
+          `child exited (code=${this.child.exitCode}, signal=${this.child.signalCode}) before the `
+          + `awaited event; events=${JSON.stringify(this.events)} stderr=${await this.stderr}`,
+        );
+      }
       if (Date.now() >= deadline) {
-        throw new Error(`child event timeout; events=${JSON.stringify(this.events)} stderr=${await this.stderr}`);
+        // Do NOT await `this.stderr` unguarded here. It resolves at EOF, so for the case this
+        // branch now describes -- a child still running -- it would never settle, and the
+        // timeout would hang until the enclosing budget killed the test with a worse message.
+        const stderr = await Promise.race([this.stderr, Bun.sleep(1_000).then(() => "<still open>")]);
+        throw new Error(
+          `child event timeout after ${timeoutMs}ms; the child is still running; `
+          + `events=${JSON.stringify(this.events)} stderr=${stderr}`,
+        );
       }
       await Promise.race([
         new Promise<void>(resolve => this.waiters.add(resolve)),

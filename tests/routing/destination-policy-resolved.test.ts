@@ -165,6 +165,56 @@ describe("providerDestinationResolvedError — canonical openai Clash fake-IP ex
   });
 });
 
+describe("providerDestinationResolvedError — canonical Antigravity config-write fake-IP exception", () => {
+  const canonical = {
+    adapter: "google",
+    authMode: "oauth",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+  } as const;
+
+  test("allows 198.18.0.0/15 for the exact registry transport without a caller opt-in", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "198.18.1.68", family: 4 }]);
+    expect(await providerDestinationResolvedError("google-antigravity", canonical)).toBeNull();
+  });
+
+  test("accepts only the canonical destination and transport shape", async () => {
+    for (const candidate of [
+      { ...canonical, baseUrl: "https://antigravity-relay.example.com" },
+      { ...canonical, adapter: "openai-chat" },
+      { ...canonical, authMode: "key" },
+    ] as const) {
+      lookupMock.mockResolvedValueOnce([{ address: "198.18.1.68", family: 4 }]);
+      expect(await providerDestinationResolvedError("google-antigravity", candidate))
+        .toContain("benchmark address (198.18.1.68)");
+    }
+  });
+
+  test("a canonical benchmark answer cannot smuggle a private or metadata companion", async () => {
+    lookupMock.mockResolvedValueOnce([
+      { address: "198.18.1.68", family: 4 },
+      { address: "10.0.0.5", family: 4 },
+    ]);
+    expect(await providerDestinationResolvedError("google-antigravity", canonical))
+      .toContain("private-network address (10.0.0.5)");
+
+    lookupMock.mockResolvedValueOnce([
+      { address: "198.18.1.68", family: 4 },
+      { address: "169.254.169.254", family: 4 },
+    ]);
+    expect(await providerDestinationResolvedError("google-antigravity", canonical))
+      .toContain("blocked metadata endpoint (169.254.169.254)");
+  });
+
+  test("literal benchmark destinations remain blocked before DNS", async () => {
+    lookupMock.mockClear();
+    expect(await providerDestinationResolvedError("google-antigravity", {
+      ...canonical,
+      baseUrl: "https://198.18.1.68",
+    })).toContain("benchmark address");
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("resolvePublicAddresses — caller-specific diagnostics", () => {
   test("provider callers do not receive image-URL DNS errors", async () => {
     lookupMock.mockRejectedValueOnce(Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }));

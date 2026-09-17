@@ -4,6 +4,7 @@ import { readClientConnectionState, sameClientConnectionOwner } from "../client/
 import { assertClientLifecycleHeld, withClientLifecycle } from "../client/lifecycle-lock";
 import { inspectRemoteDesktopCleanup, readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { removeOwnedConfigState, type ConfigRemovalResult } from "../lib/config-ownership";
+import { windowsSecretAclReapPendingAtOrBelow } from "../lib/windows-secret-acl";
 import { sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 
 export interface UninstallClientStateDeps {
@@ -13,6 +14,8 @@ export interface UninstallClientStateDeps {
   disconnect: (options?: Parameters<typeof disconnectClient>[0]) => Promise<unknown>;
   withLifecycle: typeof withClientLifecycle;
   remove: () => ConfigRemovalResult;
+  /** True while a timed-out icacls child still owns a path at or below the config directory. */
+  aclReapPending: (rootPath: string) => boolean;
 }
 
 const defaults: UninstallClientStateDeps = {
@@ -22,6 +25,7 @@ const defaults: UninstallClientStateDeps = {
   disconnect: options => disconnectClient(options),
   withLifecycle: withClientLifecycle,
   remove: () => removeOwnedConfigState(getConfigDir()),
+  aclReapPending: rootPath => windowsSecretAclReapPendingAtOrBelow(rootPath),
 };
 
 /** Restore connection-owned client artifacts before removing their ownership/recovery records. */
@@ -72,6 +76,14 @@ export async function removeOwnedConfigAfterDesktopCleanup(
       || latestReceipt.kind === "unsafe"
       || (latestReceipt.kind === "valid" && latestReceipt.value.phase !== "complete")) {
       throw new Error("Client cleanup refused: connection or Desktop state changed before removal.");
+    }
+    // The async ACL belt releases its caller on a stalled `icacls.exe`, which is what keeps
+    // startup and shutdown bounded. It is not evidence that the child released the directory,
+    // and on Windows a live handle makes this removal fail partway instead of cleanly. Refuse
+    // promptly and let the operator retry: waiting here would hand a stuck child the power to
+    // hang `ocx uninstall`, which is the bound the belt exists to preserve.
+    if (deps.aclReapPending(getConfigDir())) {
+      throw new Error("Client cleanup refused: ACL hardening still owns a path under the config directory.");
     }
     return deps.remove();
   });

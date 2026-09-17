@@ -31,6 +31,7 @@ import {
   setPlatformForTests,
   timedOutSecretPathCountForTests,
   hardenSecretDir,
+  flushWindowsSecretAclReapsBeforeRemoval,
 } from "../../src/lib/windows-secret-acl";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -208,6 +209,10 @@ afterEach(async () => {
   // hook moves OPENCODEX_HOME back to the developer's real home a few lines below, so a
   // directory-scoped flush here would settle the wrong tree and leave this one held.
   await flushConfigDirHardeningForTests();
+  // The ACL wrapper has its own watchdog, so its public flight can settle before a killed
+  // icacls.exe reports `exited`. This is a removal barrier, not part of ordinary shutdown: only
+  // the code about to delete this tree waits for the distinct handle-release guarantee.
+  await flushWindowsSecretAclReapsBeforeRemoval(testHome);
   // And settle any native-main release nobody awaited. `server.stop` awaits its own, but a
   // startServer that THREW cannot: the rollback fires `void lifecycle.release()` and rethrows,
   // because startServer is synchronous by contract. That release closes the owner's SQLite lease

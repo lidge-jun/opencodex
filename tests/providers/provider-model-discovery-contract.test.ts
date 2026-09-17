@@ -148,6 +148,44 @@ describe("registry-owned provider model discovery", () => {
       path: "models",
     } as unknown as ProviderModelDiscoverySpec)).toContain("mutually exclusive");
     expect(providerModelDiscoverySpecError({ maxModels: 25 })).toBeNull();
+    expect(providerModelDiscoverySpecError({ envelopeKey: " models ", idField: "slug" }))
+      .toContain("envelopeKey");
+    expect(providerModelDiscoverySpecError({ envelopeKey: "models", idField: "" }))
+      .toContain("idField");
+  });
+
+  test("zai uses its provider-specific discovery endpoint and response shape (#4822)", () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "zai");
+    if (!entry?.modelDiscovery) throw new Error("zai must declare modelDiscovery");
+    const seed = providerConfigSeed(entry);
+    const canonical = "https://api.z.ai/api/v1/models";
+
+    expect(resolveProviderModelDiscoveryUrl(
+      entry.id,
+      seed,
+      entry.baseUrl,
+      providerModelsUrl(entry.baseUrl),
+    )).toBe(canonical);
+    expect(isRegistryModelDiscoveryUrl(entry.id, canonical)).toBe(true);
+    expect(isRegistryModelDiscoveryUrl(entry.id, "https://api.z.ai/models")).toBe(false);
+
+    const discovery = resolveProviderModelDiscovery(entry.id, seed);
+    expect(extractProviderModelItems({ models: [{ slug: "glm-5.3" }] }, discovery)).toEqual({
+      ok: true,
+      rawCount: 1,
+      items: [{ slug: "glm-5.3", id: "glm-5.3" }],
+    });
+    expect(extractProviderModelItems(
+      { models: [{ slug: "glm-5.3" }] },
+      { maxResponseBytes: discovery.maxResponseBytes, maxModels: discovery.maxModels },
+    )).toEqual({ ok: false, reason: "invalid_shape" });
+
+    expect(entry.baseUrl).toBe("https://api.z.ai");
+    expect(entry.responsesPath).toBe("/api/v1/responses");
+    expect(entry.chatCompletionsPath).toBe("/api/coding/paas/v4/chat/completions");
+    expect(entry.destinationAliases).toEqual([
+      { baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat" },
+    ]);
   });
 
   test("clears cached rows before applying a temporary registry discovery policy", async () => {
