@@ -2236,6 +2236,23 @@ describe("server combo failover 030 activation matrix", () => {
     expect(hits).toBe(2);
   });
 
+  test("single-target combo with waitForCooldownMs stops after one retry when upstream fails continuously", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return Response.json({ error: { message: "service unavailable" } }, { status: 503 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const cooldown = { cooldownMs: 50, waitForCooldownMs: 500 };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], cooldown));
+    expect(response.status).toBe(503);
+    expect(hits).toBe(2);
+  });
+
   test("single-target combo with unset waitForCooldownMs fails immediately on 503", async () => {
     let hits = 0;
     const upstream = serve(() => {
