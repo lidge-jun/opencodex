@@ -1090,3 +1090,5 @@ route where this was first observed; explicit provider and operator caps may onl
 
 Regression coverage: `tests/server/input-admission.test.ts` and
 `tests/helpers/combo-context-headroom-cases.ts`.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).

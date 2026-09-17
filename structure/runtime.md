@@ -531,3 +531,5 @@ stamps the configured key selected for the physical request. `src/server/request
 retains per-key attempt usage, and `src/usage/log.ts` validates and persists labels. The
 [account attribution contract](gui-and-management-api.md#upstream-key-account-attribution)
 defines identity, unknown records, and aggregation boundaries.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).

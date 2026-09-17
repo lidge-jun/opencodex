@@ -54,7 +54,13 @@ export function validateSteeringFrame(frame: Frame): void {
   }
 }
 
-type Parent = { unacknowledged: number; accepted: Set<string>; ended: boolean };
+type Parent = {
+  unacknowledged: Array<{ deadline: number }>;
+  accepted: Set<string>;
+  ended: boolean;
+  successorDeadline?: number;
+  toolDeadline?: number;
+};
 
 /** Only client-owned results can use the early-continuation path. */
 function outputRequirement(item: unknown): Frame | undefined {
@@ -97,6 +103,9 @@ export class NativeSteeringChannel {
   private send?: Send;
   private onFailure?: (error: Error) => void;
   private timer?: ReturnType<typeof setTimeout>;
+  private timerDeadline?: number;
+  private idleDeadline?: number;
+  private continuationDeadline?: number;
   private readonly parents = new Map<string, Parent>();
   private readonly settings = new Map<string, string>();
   private currentId?: string;
@@ -126,7 +135,7 @@ export class NativeSteeringChannel {
   get ended(): boolean { return this.finished; }
   /** Count unacknowledged or accepted submissions that still own the response chain. */
   get hasOutstanding(): boolean {
-    return [...this.parents.values()].some(parent => parent.unacknowledged > 0 || parent.accepted.size > 0);
+    return [...this.parents.values()].some(parent => parent.unacknowledged.length > 0 || parent.accepted.size > 0);
   }
   /** Report whether the server has requested a saved-result continuation. */
   get awaitingContinuation(): boolean { return this.pendingParent !== undefined; }
@@ -143,8 +152,9 @@ export class NativeSteeringChannel {
       if (this.send !== send) return;
       this.send = undefined;
       this.onFailure = undefined;
-      clearTimeout(this.timer);
-      this.timer = undefined;
+      this.clearTimer();
+      this.idleDeadline = undefined;
+      this.continuationDeadline = undefined;
       this.correlation?.finish();
       this.correlation = undefined;
       this.parents.clear();
@@ -156,12 +166,63 @@ export class NativeSteeringChannel {
     };
   }
 
-  /** Replace the unrefed watchdog; timeout reports uncertainty instead of replaying. */
-  private wait(ms = NATIVE_STEERING_WAIT_MS): void {
+  /** Drop the physical timer without altering any protocol-stage deadline. */
+  private clearTimer(): void {
     clearTimeout(this.timer);
+    this.timer = undefined;
+    this.timerDeadline = undefined;
+  }
+
+  /** Earliest absolute control deadline wins, independently of ordinary stream activity. */
+  private nextDeadline(): number | undefined {
+    let deadline: number | undefined;
+    const include = (value: number | undefined) => {
+      if (value !== undefined) deadline = deadline === undefined ? value : Math.min(deadline, value);
+    };
+    for (const [id, parent] of this.parents) {
+      include(parent.unacknowledged[0]?.deadline);
+      if (parent.ended && (parent.accepted.size || parent.unacknowledged.length)) {
+        if (id === this.currentId && this.continuationSent) continue;
+        include(this.pendingParent === id ? parent.toolDeadline : parent.successorDeadline);
+      }
+    }
+    if (this.continuationSent) include(this.continuationDeadline);
+    if (this.currentId && !this.parents.get(this.currentId)?.ended) include(this.idleDeadline);
+    return deadline;
+  }
+
+  /** Settle once as unknown delivery; expiry never retries or invents a server rejection. */
+  private expire(): Error {
+    const error = new Error("Native steering continuation timed out; queued-input delivery is unknown. Do not automatically replay tools or steering input.");
+    if (!this.finished) {
+      this.finished = true;
+      this.clearTimer();
+      this.replay?.dispose();
+      this.onFailure?.(error);
+    }
+    return error;
+  }
+
+  /** Late wire activity must not win a race with an expired but not-yet-fired timer. */
+  private assertTimely(): void {
+    const deadline = this.nextDeadline();
+    if (this.finished || (deadline !== undefined && performance.now() >= deadline)) throw this.expire();
+  }
+
+  /** Arm one unrefed timer for the existing deadline, never for now plus a fresh wait. */
+  private armTimer(): void {
+    const deadline = this.finished || !this.send ? undefined : this.nextDeadline();
+    if (deadline === this.timerDeadline) return;
+    this.clearTimer();
+    if (deadline === undefined) return;
+    this.timerDeadline = deadline;
     this.timer = setTimeout(() => {
-      this.onFailure?.(new Error("Native steering continuation timed out; queued-input delivery is unknown. Do not automatically replay tools or steering input."));
-    }, ms);
+      this.clearTimer();
+      if (this.finished || !this.send) return;
+      const next = this.nextDeadline();
+      if (next !== undefined && performance.now() >= next) this.expire();
+      else this.armTimer(); // Early callbacks cannot shorten the monotonic bound.
+    }, Math.max(0, deadline - performance.now()));
     this.timer.unref?.();
   }
   /** Check the live owner and byte limit before journaling and sending one control. */
@@ -176,19 +237,22 @@ export class NativeSteeringChannel {
   steer(frame: Frame): void {
     validateSteeringFrame(frame);
     if (!this.send || this.finished) { this.liveSend(frame); return; }
+    this.assertTimely();
     const target = this.parents.get(frame.previous_response_id as string);
     if (!target || frame.previous_response_id !== this.currentId || target.ended) {
       throw new NativeSteeringError("response_not_active", "The target response is not active on this connection.");
     }
-    if ([...this.parents.values()].reduce((n, p) => n + p.unacknowledged + p.accepted.size, 0) >= MAX_NATIVE_STEERS) {
+    if ([...this.parents.values()].reduce((n, p) => n + p.unacknowledged.length + p.accepted.size, 0) >= MAX_NATIVE_STEERS) {
       throw new NativeSteeringError("too_many_pending_steers", "The native steering pending-submission limit was reached.");
     }
     // Count before send: fake transports, and some runtimes, deliver synchronously.
-    target.unacknowledged += 1;
-    this.wait();
+    const submission = { deadline: performance.now() + NATIVE_STEERING_WAIT_MS };
+    target.unacknowledged.push(submission);
+    this.armTimer();
     try { this.liveSend(frame); } catch (error) {
-      target.unacknowledged -= 1;
-      if (!this.hasOutstanding) { clearTimeout(this.timer); this.timer = undefined; }
+      const index = target.unacknowledged.indexOf(submission);
+      if (index >= 0) target.unacknowledged.splice(index, 1);
+      this.armTimer();
       throw error;
     }
   }
@@ -210,6 +274,7 @@ export class NativeSteeringChannel {
   /** Returns false only when an ordinary create may use normal dispatch. */
   continue(frame: Frame): boolean {
     if (this.finished || !this.send) return false;
+    this.assertTimely();
     const parent = this.currentId ? this.parents.get(this.currentId) : undefined;
     if (!parent?.ended || !this.currentId || frame.previous_response_id !== this.currentId) {
       if (this.hasOutstanding || this.continuationSent) throw new NativeSteeringError("steering_continuation_required", "Queued steering owns this connection; wait for the successor or send the required-input continuation, or explicitly stop the turn.");
@@ -241,13 +306,20 @@ export class NativeSteeringChannel {
     }
     if (used.size !== required.length) throw new NativeSteeringError("invalid_input", "Every required tool output or approval must be supplied exactly once.");
     this.continuationSent = true;
-    this.wait();
-    try { this.liveSend(frame); } catch (error) { this.continuationSent = false; throw error; }
+    this.continuationDeadline = performance.now() + NATIVE_STEERING_WAIT_MS;
+    this.armTimer();
+    try { this.liveSend(frame); } catch (error) {
+      this.continuationSent = false;
+      this.continuationDeadline = undefined;
+      this.armTimer();
+      throw error;
+    }
     return true;
   }
 
   /** Called on the ordered upstream wire, BEFORE the event is published to SSE. */
   observe(event: Frame): boolean {
+    this.assertTimely();
     const type = event.type;
     if (!(type === "error" && event.stream_id == null) && (event.stream_id ?? undefined) !== (this.lane ?? undefined)) throw new Error("native steering WebSocket lane mismatch");
     const response = record(event.response) ? event.response : undefined;
@@ -261,12 +333,13 @@ export class NativeSteeringChannel {
         parent.accepted.clear(); // response.created, not accepted, is the commit point.
       }
       this.currentId = id;
-      this.parents.set(id, { unacknowledged: 0, accepted: new Set(), ended: false });
+      this.parents.set(id, { unacknowledged: [], accepted: new Set(), ended: false });
       this.pendingParent = undefined;
       this.required = [];
       this.advertised.clear();
       this.advertisedBytes = 0;
       this.continuationSent = false;
+      this.continuationDeadline = undefined;
       this.correlation?.finish();
       this.correlation = new CodexWsCorrelation(true, () => false);
     }
@@ -275,15 +348,15 @@ export class NativeSteeringChannel {
       const parent = typeof steer?.previous_response_id === "string" ? this.parents.get(steer.previous_response_id) : undefined;
       if (!parent) throw new Error("native steering acknowledgement has an unknown parent");
       if (type === "response.steer.accepted") {
-        if (!validId(steer?.id) || parent.unacknowledged < 1 || parent.accepted.has(steer.id)) throw new Error("unexpected native steering acceptance");
-        parent.unacknowledged -= 1;
+        if (!validId(steer?.id) || parent.unacknowledged.length < 1 || parent.accepted.has(steer.id)) throw new Error("unexpected native steering acceptance");
+        parent.unacknowledged.shift();
         parent.accepted.add(steer.id);
       } else if (type === "response.steer.failed") {
         if (steer?.id !== undefined) {
           if (!validId(steer.id) || !parent.accepted.delete(steer.id)) throw new Error("unexpected native steering failure");
         } else {
-          if (parent.unacknowledged < 1) throw new Error("unexpected native steering rejection");
-          parent.unacknowledged -= 1;
+          if (parent.unacknowledged.length < 1) throw new Error("unexpected native steering rejection");
+          parent.unacknowledged.shift();
         }
       } else if (type === "response.steer.pending") {
         if (!validId(steer?.id) || !parent.accepted.has(steer.id) || !parent.ended
@@ -293,6 +366,7 @@ export class NativeSteeringChannel {
             || event.required_input.some(item => !record(item) || typeof item.type !== "string" || item.type === "message")
             || Buffer.byteLength(JSON.stringify(event.required_input)) > 256 * 1024) throw new Error("native steering required-input budget or schema violated");
           if (this.pendingParent && stable(this.required) !== stable(event.required_input)) throw new Error("native steering required-input stubs changed");
+          parent.toolDeadline ??= performance.now() + NATIVE_STEERING_TOOL_WAIT_MS;
           this.pendingParent = this.currentId;
           this.required = event.required_input as Frame[];
         }
@@ -303,15 +377,16 @@ export class NativeSteeringChannel {
       if (type === "response.output_item.done") this.advertise(event.item);
       if (type === "response.completed" || type === "response.failed" || type === "response.incomplete") {
         if (!this.currentId || response?.id !== this.currentId) throw new Error("native steering terminal identity mismatch");
-        this.parents.get(this.currentId)!.ended = true;
+        const parent = this.parents.get(this.currentId)!;
+        parent.ended = true;
+        parent.successorDeadline ??= performance.now() + NATIVE_STEERING_WAIT_MS;
         if (Array.isArray(response.output)) for (const item of response.output) this.advertise(item);
       }
     }
     if (type === "error") this.finished = true;
     else this.finished = this.currentId !== undefined && this.parents.get(this.currentId)!.ended && !this.hasOutstanding && !this.continuationSent;
-    if (this.finished) { clearTimeout(this.timer); this.timer = undefined; }
-    else if (this.hasOutstanding || this.continuationSent) this.wait(this.pendingParent && !this.continuationSent ? NATIVE_STEERING_TOOL_WAIT_MS : NATIVE_STEERING_WAIT_MS);
-    else if (this.currentId) this.wait(this.idleMs);
+    if (this.currentId && !this.parents.get(this.currentId)!.ended) this.idleDeadline = performance.now() + this.idleMs;
+    this.armTimer();
     this.replay?.observe(event);
     return this.finished;
   }

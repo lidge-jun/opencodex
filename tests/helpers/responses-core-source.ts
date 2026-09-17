@@ -11,6 +11,7 @@ export const RESPONSES_CORE_MODULES = [
   "native-response-control.ts",
   "native-tool-results.ts",
   "native-response-output.ts",
+  "native-response-json.ts",
   "native-injection-protocol.ts",
   "native-injection-replay.ts",
   "native-steering.ts",

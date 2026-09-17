@@ -1491,7 +1491,8 @@
     "request-log-nonstream.test.ts": "usage",
     "ws-native-result-continuations.test.ts": "responses",
     "ws-native-injection.test.ts": "responses",
-    "ws-native-steering.test.ts": "responses"
+    "ws-native-steering.test.ts": "responses",
+    "ws-steering-stability.test.ts": "responses"
   },
   "migrated": [
     "adapters",

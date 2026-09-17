@@ -1,4 +1,5 @@
-import { injectionFingerprint, injectionRecord as record, type InjectionFrame as Frame } from "./native-injection-protocol";
+import { nativeResponseFingerprint as injectionFingerprint, nativeResponseRecord as record } from "./native-response-json";
+type Frame = Record<string, unknown>;
 
 /**
  * Preserve completed wire items missing from a sparse terminal, including hosted

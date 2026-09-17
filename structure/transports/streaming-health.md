@@ -390,3 +390,41 @@ The wire relay does not synthesize or modify server-owned events or approvals.
 including false approval decisions, typed identity, content order, unsupported
 injection batches, sparse terminals and explicit mode transitions. No test asserts
 that a live subscription backend accepts these optional execution modes.
+
+### Steering deadlines and replay completeness
+
+`src/server/responses/native-steering.ts` uses monotonic, per-submission 90-second
+acknowledgement deadlines. Accepting or rejecting a steer removes only that
+submission's deadline; later steers or unrelated output never extend another
+submission's time. Accepted input can wait for a safe boundary while the active
+response retains ordinary sliding idle liveness. At a parent terminal, outstanding
+steering gets a fixed 90-second successor deadline. The first valid
+`waiting_for_required_input` notification replaces that parent's successor wait
+with a 30-minute tool/approval deadline; repeated notifications cannot restart it.
+An explicit saved-result continuation starts a fresh 90-second successor bound
+at local submission, including any existing pacing/auth wait. Late pending events
+or a rejected steer cannot extend or cancel that in-flight continuation's bound.
+Unacknowledged steers retain their own earlier deadlines during these phase changes.
+
+One unrefed timer tracks the earliest deadline. A late control or response event
+cannot rescue an expired deadline before the timer callback runs. Expiry settles
+once, clears retained replay bodies and follows the existing connection-failure
+path. It reports unknown delivery, not a synthesized rejection or success, and
+never resends instructions/results, reruns a tool or chooses another account.
+Normal completion and detach cancel the timer. Defaults and frame/count limits
+remain unchanged; no capability or execution-mode allowance is added.
+
+`src/server/responses/native-steering-replay.ts` uses the same
+`src/server/responses/native-response-output.ts` reconciliation as injection
+replay: retain completed wire items omitted by a sparse terminal, match shared
+identities by content and relative order, and reject contradictions before calling
+the continuation-cache writer. This affects local replay, not the original wire
+terminal. Completed parents can be remembered; failed/incomplete parent output
+stays private until a validated successor commits the prefix. Merged output is
+charged against the unchanged 32 MiB serialized history budget. The existing
+body-persistence eligibility and accepted-only steering commit rules still apply.
+`tests/responses/ws-steering-stability.test.ts` binds these deadline and replay
+contracts to deterministic clocks and a synthetic real-handler continuation test.
+`src/server/responses/native-response-json.ts` owns content comparison without
+importing either control owner, keeping the replay dependency graph acyclic.
+Injection retains its existing helper export names and comparison semantics.

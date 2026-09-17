@@ -1,3 +1,5 @@
+import { nativeResponseOutput } from "./native-response-output";
+
 /**
  * Connection-local replay journal. Only input committed by response.created enters
  * a successor's prefix. Uncommitted/rejected steering never enters the shared
@@ -26,7 +28,7 @@ export class NativeSteeringReplay implements NativeSteeringReplayObserver {
   private bytes: number;
   private current?: string;
   private previousOutput: unknown[] = [];
-  private outputItems = new Map<number, unknown>();
+  private outputItems = new Map<number, Frame>();
   private submissions: Array<{ parent: string; input: unknown[]; id?: string; bytes: number }> = [];
   private explicitInput: unknown[] = [];
   private explicitBytes = 0;
@@ -101,7 +103,7 @@ export class NativeSteeringReplay implements NativeSteeringReplayObserver {
       this.outputItems.set(index, frame.item);
     } else if (response && ["response.completed", "response.incomplete", "response.failed"].includes(String(frame.type))) {
       const doneItems = [...this.outputItems.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
-      const output = Array.isArray(response.output) && response.output.length ? response.output : doneItems;
+      const output = nativeResponseOutput(this.outputItems, response.output);
       for (const item of doneItems) this.bytes -= Buffer.byteLength(JSON.stringify(item));
       this.bytes += Buffer.byteLength(JSON.stringify(output));
       this.check();
