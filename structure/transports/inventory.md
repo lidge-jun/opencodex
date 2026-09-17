@@ -140,6 +140,11 @@ Caller-owned `provider.fetch` executors are also deferred: they receive literal/
 redirect blocking, but cannot inherit DNS classification or peer pinning without a verified-peer
 executor contract. Main-request migration must not treat that branch as fixed-transport equivalent.
 
+Crusoe model discovery is one fixed canonical destination on this path. It sends a Bearer key only
+to `https://api.inference.crusoecloud.com/v1/models`, rejects redirects, and applies the registry's
+256 KiB response and 256-row ceilings before catalog admission. A same-named custom destination
+does not inherit this policy.
+
 Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.

@@ -333,6 +333,10 @@ operator notes. Notes remain complete and editable once in the main column; stat
 account quota remain in the side column. This presentation does not write provider configuration
 or participate in routing.
 
+Provider marks remain a name-to-asset projection in `gui/src/provider-icons.ts`. The Crusoe preset
+maps to the self-hosted multicolor `gui/public/provider-icons/crusoe.svg`; the gradient is rendered
+as an image rather than flattened through the monochrome mask path.
+
 The sidebar exposes eleven pages (`gui/src/App.tsx` `NAV`). Several are workspace shells rather than
 single forms, and the shell pattern is the part worth keeping stable:
 

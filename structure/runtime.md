@@ -262,6 +262,12 @@ OAuth presets resolve discovery against the same canonical registry transport as
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
 
+The Crusoe preset uses that fixed-key path at `https://api.inference.crusoecloud.com/v1`. Its
+registry-owned policy admits only public rows whose `architecture.modality` is `text` or
+`multimodal`, caps the response at 256 KiB and 256 raw rows, and leaves same-named custom
+destinations untouched. Five catalog ids carry explicit text-and-image input metadata;
+`openai/gpt-oss-120b` alone carries a direct low/medium/high `reasoning_effort` ladder.
+
 Provider-scoped capability hints remain authoritative when discovery returns an id without
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
