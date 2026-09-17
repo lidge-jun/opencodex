@@ -896,6 +896,7 @@
   "prime-client.test.ts": "clients",
   "privacy-mask-account.test.ts": "lib",
   "privacy-scan-meta-key.test.ts": "ci-workflows",
+  "privacy-scan-ssh-endpoint.test.ts": "ci-workflows",
   "probe-lease.test.ts": "routing",
   "probe-lease-dispatch-wiring.test.ts": "routing",
   "process-control-graceful.test.ts": "lib",
