@@ -1,6 +1,7 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { restoreNativeCodexAsync } from "../codex/inject";
+import { describeRetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { statusWinswRaw, type WinswStatus } from "../lib/winsw";
@@ -291,7 +292,15 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
           break;
         }
         const restore = await restoreNativeCodexAsync();
-        if (restore.success) console.log("✅ service stopped + native Codex restored.");
+        if (restore.success) {
+          console.log("✅ service stopped + native Codex restored.");
+          // Success is not the whole answer when routing came down but the provider table
+          // stayed. Saying only "restored" here is how a user finds an unexplained
+          // opencodex table in their config weeks later (#4812).
+          if (restore.retainedCodexProviderTable) {
+            console.log(`   ${describeRetainedCodexProviderTable(restore.retainedCodexProviderTable)}`);
+          }
+        }
         else console.error(`⚠️ service stopped, but native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` (or check $CODEX_HOME/config.toml) before using native Codex.`);
         if (!restore.success) process.exitCode = 1;
         // The Grok fence is the other managed config this command owns. Leaving it behind
@@ -338,6 +347,9 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         if (!restore.success) {
           console.error(`⚠️ native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` before using native Codex.`);
           process.exitCode = 1;
+        }
+        else if (restore.retainedCodexProviderTable) {
+          console.log(`↩️  ${describeRetainedCodexProviderTable(restore.retainedCodexProviderTable)}`);
         }
         const grok = stripGrokConfig();
         if (grok.changed) console.log(`↩️  ${grok.message}`);

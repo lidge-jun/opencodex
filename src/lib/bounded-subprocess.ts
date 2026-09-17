@@ -9,8 +9,18 @@ export interface BoundedSubprocessExit {
   timedOut: boolean;
 }
 
+export type SubprocessDeadlineScheduler = (
+  callback: () => void,
+  milliseconds: number,
+) => () => void;
+
+const scheduleDeadline: SubprocessDeadlineScheduler = (callback, milliseconds) => {
+  const timer = setTimeout(callback, milliseconds);
+  return () => clearTimeout(timer);
+};
+
 /**
- * How long to wait for a killed child to actually be reaped before abandoning it.
+ * Compatibility allowance used by the ACL runner's outer watchdog.
  *
  * `kill()` only REQUESTS termination. It returns before the kernel has torn the process down, and
  * every handle that process holds stays held until it does. On Windows that is not a detail: file
@@ -20,12 +30,12 @@ export interface BoundedSubprocessExit {
 export const SUBPROCESS_KILL_GRACE_MS = 2_000;
 
 /**
- * Wait for a child, bounded. At the deadline, kill it AND wait for it to actually die.
+ * Wait for a child until the deadline. At the deadline, kill it AND wait for it to actually die.
  *
  * This used to kill, `unref`, and resolve in the same tick, which made every caller's "I waited
- * for my child" guarantee false precisely when it mattered. `flushConfigDirHardening` exists so
- * shutdown owns every `icacls.exe` it started; it awaited a promise that had already settled while
- * the child was still alive, so the contract read as satisfied and the directory stayed locked.
+ * for my child" guarantee false precisely when it mattered. The ACL runner now waits here until
+ * actual exit; if its separate caller-facing belt fires first, that layer registers the target so
+ * removal can wait for the reap without making ordinary startup or shutdown unbounded.
  *
  * That cost three failed fixes. #4789 blamed the removal retry budget and asked for more than
  * 2.5s; #4796 gave it a 15s exponential schedule; a later change awaited the hardening flight from
@@ -34,53 +44,45 @@ export const SUBPROCESS_KILL_GRACE_MS = 2_000;
  * still threw `EPERM ... rm ocx-management-auth-fDchUb`, with two
  * `ACL hardening timed out (ETIMEDOUT) - transient icacls stall` lines logged beside it.
  *
-* The grace is bounded and abandonment is still the fallback, so a genuinely unkillable child
-* cannot hang shutdown. The classification does not move: a child that missed its deadline is
-* reported as timed out whether or not it dies during the grace, because it did time out. Only the
-* moment of resolution changes.
+ * The old grace still abandoned a live child after two seconds. That recreated the same false
+ * ownership contract on a slower clock: the ACL flight settled, cleanup removed the directory,
+ * and Windows returned EPERM because the child still held it. A handle-bearing caller therefore
+ * has no second deadline after kill. The child's actual exit is the only release signal.
  *
- * Pass `0` to opt out. The grace buys exactly one thing -- a handle released before somebody
- * removes the path holding it -- so a caller whose child holds nothing anyone deletes should not
- * pay for it. `windows-user-principal` is that caller: its PowerShell lookup sits on the startup
- * critical path, where seconds are the scarce resource and no directory is waiting on the reap.
+ * Pass `0` to opt out for a child that holds no path anyone will remove. The numeric form is kept
+ * for compatibility with the existing callers; any positive value means that reaping is required.
+ * The injected scheduler is a test seam so deadline and exit ordering can be proved without sleep.
  */
 export function waitForSubprocessExit(
   proc: KillableSubprocess,
   timeoutMs: number,
-  killGraceMs: number = SUBPROCESS_KILL_GRACE_MS,
+  reapAfterKill: number = SUBPROCESS_KILL_GRACE_MS,
+  schedule: SubprocessDeadlineScheduler = scheduleDeadline,
 ): Promise<BoundedSubprocessExit> {
   return new Promise(resolve => {
     let settled = false;
     let deadlineFired = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let cancelDeadline: (() => void) | undefined;
     const finish = (result: BoundedSubprocessExit): void => {
       if (settled) return;
       settled = true;
-      if (timer !== undefined) clearTimeout(timer);
-      if (graceTimer !== undefined) clearTimeout(graceTimer);
+      cancelDeadline?.();
       resolve(result);
     };
-    timer = setTimeout(() => {
-      deadlineFired = true;
-      try { proc.kill(); } catch { /* already exited */ }
-      if (killGraceMs <= 0) {
-        try { proc.unref?.(); } catch { /* abandonment is still authoritative */ }
-        finish({ exitCode: null, timedOut: true });
-        return;
-      }
-      graceTimer = setTimeout(() => {
-        // The child outlived its own kill. Abandon it -- but only now, and only after having
-        // given the OS a real chance to release what it holds.
-        try { proc.unref?.(); } catch { /* abandonment is still authoritative */ }
-        finish({ exitCode: null, timedOut: true });
-      }, Math.max(1, killGraceMs));
-    }, Math.max(1, timeoutMs));
-    void proc.exited.then(
+    const reaped = proc.exited.then(
       exitCode => finish(deadlineFired
         ? { exitCode: null, timedOut: true }
         : { exitCode, timedOut: false }),
       () => finish({ exitCode: null, timedOut: deadlineFired }),
     );
+    cancelDeadline = schedule(() => {
+      deadlineFired = true;
+      try { proc.kill(); } catch { /* already exited */ }
+      if (reapAfterKill <= 0) {
+        try { proc.unref?.(); } catch { /* abandonment is still authoritative */ }
+        finish({ exitCode: null, timedOut: true });
+        return;
+      }
+    }, Math.max(1, timeoutMs));
   });
 }

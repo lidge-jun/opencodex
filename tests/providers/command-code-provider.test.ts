@@ -1,4 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveCredential, getAccountSet, setActiveAccount } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "../../src/lib/request-execution-budget";
+import { handleResponses } from "../../src/server/responses";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { budgetOwner } from "../helpers/send-budget-owner";
+import type { OcxConfig } from "../../src/types";
 import { commandCodeSessionId, createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../../src/oauth/command-code";
 import { buildModelsRequest, OAUTH_PROVIDERS } from "../../src/oauth";
@@ -39,6 +49,50 @@ async function builtRequest(...args: Parameters<ReturnType<typeof createCommandC
 afterEach(() => resetCommandCodeReasoningEffortsForTest());
 
 describe("Command Code provider", () => {
+  test("empty-completion OAuth continuation counts initial sends and keeps its prepaid hop charged", async () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const fixtureHome = mkdtempSync(join(tmpdir(), "ocx-command-hop-"));
+    process.env.OPENCODEX_HOME = fixtureHome;
+    const originalFetch = globalThis.fetch;
+    clearGenericFailoverHealth();
+    try {
+      for (let index = 0; index < 4; index++) await saveCredential("command-code", {
+        access: `synthetic-command-${index}`, refresh: `synthetic-refresh-${index}`,
+        expires: Date.now() + 3_600_000, accountId: `fixture-${index}`, source: "oauth",
+      }, { addAccount: true });
+      await setActiveAccount("command-code", getAccountSet("command-code")!.accounts[0]!.id);
+      // Every physical inference send, including the initial and continuation, shares this cap.
+      const budget = createRequestExecutionBudget({ ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
+        maxTotalModelSends: 3, baseSendAllowance: 3, finalRecoveryAllowance: 0 });
+      const authorizations: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url !== "https://api.commandcode.ai/alpha/generate") throw new Error(`Unexpected fixture request: ${url}`);
+        authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (authorizations.length === 1) return new Response('{"type":"finish","finishReason":"stop"}\n');
+        return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+      }) as typeof fetch;
+      const cfg = { defaultProvider: "command-code", emptyCompletionRetry: true, providers: {
+        "command-code": { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth",
+          models: ["deepseek/deepseek-v4-flash"] },
+      } } as OcxConfig;
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "command-code/deepseek/deepseek-v4-flash", input: "hello", stream: false }),
+      }), cfg, { model: "", provider: "" }, { sendBudget: budget });
+      await response.text();
+      expect(authorizations).toEqual(["Bearer synthetic-command-0", "Bearer synthetic-command-0", "Bearer synthetic-command-1"]);
+      expect(budget.used).toBe(3);
+      expect(getAccountSet("command-code")!.activeAccountId).toBe(getAccountSet("command-code")!.accounts[1]!.id);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearGenericFailoverHealth();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(fixtureHome);
+    }
+  }, 20_000);
+
   test("registry and OAuth surfaces stay in parity", () => {
     const registry = PROVIDER_REGISTRY.find(row => row.id === "command-code");
     expect(registry).toMatchObject({
@@ -650,7 +704,8 @@ describe("Command Code provider", () => {
     expect(JSON.parse(bareBuilt.body).params.tools).toEqual(tools);
   });
 
-  test("refreshes a stale official effort record only after a reasoning rejection and retries without it", async () => {
+  test.each(["fallback", "supplied", "prepaid"] as const)("refreshes stale effort metadata separately from inference executor (%s)", async mode => {
+    const supplied = mode !== "fallback";
     const requests: Array<{ url: string; body?: string }> = [];
     const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const href = String(url);
@@ -664,11 +719,35 @@ describe("Command Code provider", () => {
     }) as typeof globalThis.fetch;
     const adapter = createCommandCodeAdapter({ ...provider, fetch } as OcxProviderConfig);
     const request = await adapter.buildRequest({ ...parsed(), options: { reasoning: "max" } });
-    const response = await adapter.fetchResponse!(request);
-    expect(response.ok).toBe(true);
+    let suppliedCalls = 0;
+    const executor = (async (input, init) => {
+      expect(String(input).endsWith("/alpha/generate")).toBe(true);
+      suppliedCalls += 1;
+      return fetch(input, init);
+    }) as typeof globalThis.fetch;
+    const budget = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(budget);
+    try {
+      if (mode === "prepaid") {
+        budget.used = 3;
+        const hop = owner.reserveCredentialHop("auth-recovery", request.url, true);
+        if (!hop.allowed || !hop.permit) throw new Error("Expected final prepaid send");
+        owner.pendingHopPermit = hop.permit;
+      }
+      const scope = mode === "prepaid" ? owner.adapterDispatchBudget : budget;
+      const observed: number[] = [];
+      const response = await adapter.fetchResponse!(request, { ...(supplied ? { executor } : {}), sendBudget: scope,
+        onPhysicalSend: send => observed.push(send.ordinal) });
+      expect(suppliedCalls).toBe(supplied ? mode === "prepaid" ? 1 : 2 : 0);
+      expect(response.ok).toBe(mode !== "prepaid");
+      expect(budget.used).toBe(mode === "prepaid" ? 4 : 2);
+      expect(observed).toEqual(mode === "prepaid" ? [1] : [1, 2]);
+      const generated = requests.filter(request => request.url.endsWith("/alpha/generate"));
+      expect(generated).toHaveLength(mode === "prepaid" ? 1 : 2);
+      if (mode === "prepaid") expect(await response.text()).toContain("unsupported reasoning_effort");
+      else expect(JSON.parse(generated[1]!.body!).params).not.toHaveProperty("reasoning_effort");
+    } finally { dispose(); }
     expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["high"]);
-    const generated = requests.filter(request => request.url.endsWith("/alpha/generate"));
-    expect(JSON.parse(generated[1]!.body!).params).not.toHaveProperty("reasoning_effort");
   });
 
   // Pins the profileUrl of each id added for #2647 — nothing more.

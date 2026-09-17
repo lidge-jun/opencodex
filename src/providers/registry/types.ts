@@ -64,6 +64,10 @@ export interface ProviderModelDiscoveryFilter {
 interface ProviderModelDiscoverySharedSpec {
   /** Query parameters applied to the resolved discovery URL. */
   query?: Readonly<Record<string, string>>;
+  /** Top-level response key containing model rows; defaults to `data`. */
+  envelopeKey?: string;
+  /** Model-row field containing the provider-native identifier; defaults to `id`. */
+  idField?: string;
   /** Declarative eligibility rules evaluated against each untrusted model row. */
   filter?: ProviderModelDiscoveryFilter;
   /** Optional lower byte ceiling; the process-wide hard ceiling still wins. */

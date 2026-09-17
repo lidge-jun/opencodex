@@ -121,6 +121,49 @@ export function stripInternalChatMessageMetadataPassthrough(body: unknown): unkn
 }
 
 /**
+ * OpenAI-private TOP-LEVEL request keys, the sibling of `CANONICAL_ONLY_TOOL_FIELDS` one level up.
+ *
+ * Codex attaches these on the request body itself rather than on a tool or an input item, and gates
+ * them on its own auth rather than on the destination URL. Loopback injection keeps Codex pointed at
+ * its built-in `openai` provider, so the client still believes it is addressing the canonical
+ * ChatGPT backend and keeps the key no matter where this proxy routes the turn. A Responses gateway
+ * that validates its top-level schema then rejects the whole request before inference.
+ *
+ * Keep this a table, and keep it to keys a client is OBSERVED to send. It is not an unknown-field
+ * sanitizer: a top-level key nobody has traced to a client is forwarded untouched, because deleting
+ * it would silently drop a parameter some other caller means.
+ */
+const CANONICAL_ONLY_TOP_LEVEL_FIELDS: readonly string[] = [
+  // Cyber access program selector, new in Codex 0.155. codex-rs mints it from
+  // `cyber_access_program::for_auth`, which filters on ChatGPT auth alone and never on the
+  // destination base URL, and serializes it on the Responses request, the compaction input and the
+  // WebSocket `response.create` envelope. No public specification defines it, so a strict
+  // third-party gateway answers with an unknown-parameter error naming it, and every turn of that
+  // thread fails (#4853).
+  //
+  // `codex_output_schema` is deliberately NOT here. In codex-rs it is the `name` of the JSON-schema
+  // `text.format` object, not a top-level key, so listing it would delete a field this client never
+  // sends and discard it for any client that does send it meaningfully.
+  "access_programs",
+];
+
+/**
+ * Remove the OpenAI-private top-level keys.
+ *
+ * The caller decides the boundary; see the call site in `passthrough.ts`, which applies this only
+ * to a destination OpenCodex does not operate. Returns the input unchanged when no listed key is
+ * present, so the common path allocates nothing and the caller-owned raw body is never mutated.
+ */
+export function stripCanonicalOnlyTopLevelFields(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  if (!CANONICAL_ONLY_TOP_LEVEL_FIELDS.some(field => Object.hasOwn(body, field))) return body;
+
+  const next = { ...body };
+  for (const field of CANONICAL_ONLY_TOP_LEVEL_FIELDS) delete next[field];
+  return next;
+}
+
+/**
  * When `store` is false, the upstream API does not persist response items. Any item ID
  * forwarded in `input` is then interpreted as a reference to a stored item that does not
  * exist, producing a 404. Strip all item IDs in this case — `call_id` pairing is unaffected.
