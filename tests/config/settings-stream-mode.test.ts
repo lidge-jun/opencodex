@@ -917,6 +917,7 @@ describe("manual compaction settings", () => {
     for (const value of [null, { model: "gateway/other" }]) {
       await expect(putSettings(config, { manualCompaction: value }, deps)).rejects.toThrow("fixture save failure");
       expect(projectConfigRebaseProvenance(config)).toEqual(before);
+      expect(config.manualCompaction).toEqual({ model: "gateway/cheap", reasoningEffort: "low" });
     }
   });
 });

@@ -823,7 +823,8 @@ conversation's configured model or later automatic-compaction requests.
 `manualCompactionKeepsProviderIdentity` compares the source model's concrete route with the
 selected route (provider name, Codex account mode and namespace; combos on either side never
 match, and a bare source model the lane remembers as a combo target counts as a combo source,
-recorded as `sourceCombo` when the override is applied). A matching identity keeps the caller's credential and may use the native compact
+recorded as `sourceCombo` when the override is applied, and a configured combo target is recorded as
+`targetCombo` so its concretely routed children stay portable too). A matching identity keeps the caller's credential and may use the native compact
 endpoint. A mismatch marks the credential domain as rewritten, exactly like a shadow
 intercept, and forces the portable summarizer even for a native-capable target: `compact.ts`
 skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompaction`, which

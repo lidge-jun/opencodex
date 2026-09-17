@@ -10,6 +10,8 @@ export interface ManualCompactionOverride {
   sourceModel: string;
   /** Combo the lane remembers for a bare `sourceModel` (#3891); the conversation resumes there, not on the bare route. */
   sourceCombo?: string;
+  /** Combo the configured override resolves to; its children route concretely but stay portable. */
+  targetCombo?: string;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -57,11 +59,12 @@ export function applyManualCompactionOverride(
 
   const sourceModel = raw.model;
   const sourceCombo = recallComboForLane(config, sessionLaneIdFromRequest(headers), sourceModel);
+  const targetCombo = resolveComboId(config, override.model.trim()) ?? undefined;
   raw.model = override.model.trim();
   if (override.reasoningEffort !== undefined) {
     raw.reasoning = { ...record(raw.reasoning), effort: override.reasoningEffort };
   }
-  return sourceCombo ? { sourceModel, sourceCombo } : { sourceModel };
+  return { sourceModel, ...(sourceCombo ? { sourceCombo } : {}), ...(targetCombo ? { targetCombo } : {}) };
 }
 
 /** Same provider identity keeps caller auth and may use native compact; its ciphertext replays only there. */
@@ -70,7 +73,7 @@ export function manualCompactionKeepsProviderIdentity(
   override: ManualCompactionOverride,
   route: RouteResult,
 ): boolean {
-  if (route.combo || override.sourceCombo || resolveComboId(config, override.sourceModel)) return false;
+  if (route.combo || override.sourceCombo || override.targetCombo || resolveComboId(config, override.sourceModel)) return false;
   let source: RouteResult;
   try {
     source = routeConcreteModel(config, override.sourceModel);

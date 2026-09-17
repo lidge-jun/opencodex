@@ -485,4 +485,38 @@ describe("manual compaction reuses existing handlers", () => {
     expect(calls).toEqual(["https://api.openai.com/v1/responses"]);
     expect(recallComboForLane(settings, lane, "normal")).toBe("fast");
   });
+
+  test("a combo override whose same-provider child is canonical ChatGPT still runs the portable summarizer", async () => {
+    const settings = config();
+    settings.providers.openai = {
+      adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    settings.combos = { compact: { targets: [{ provider: "openai", model: "gpt-5.6-luna" }] } };
+    settings.manualCompaction = { model: "combo/compact", reasoningEffort: "low" };
+    const calls: Array<{ url: string; input: string }> = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body));
+      calls.push({ url: String(url), input: JSON.stringify(input.input) });
+      if (calls.at(-1)!.input.includes("compaction_trigger")) {
+        const response = { ...completion(), model: input.model, output: [{ type: "compaction", encrypted_content: "native-ciphertext" }] };
+        return new Response(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response })}\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return upstreamCompletion(input);
+    }) as typeof fetch;
+    const req = request({ ...body(), model: "gpt-6-astra" }, "manual");
+    req.headers.set("authorization", `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}`);
+    req.headers.set("chatgpt-account-id", "fixture-account");
+    const response = await handleResponses(req, settings, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain("native-ciphertext");
+    const output = (JSON.parse(text) as { output: Array<Record<string, any>> }).output;
+    expect(decodeCompactionSummary(output.find(item => item.type === "compaction")!.encrypted_content)).toContain("Retain progress");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(calls[0]!.input).not.toContain("compaction_trigger");
+  });
 });
