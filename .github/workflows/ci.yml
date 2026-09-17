@@ -833,12 +833,20 @@ jobs:
         # only 0.106-0.168s of wrapper overhead per process: at most ~2.1s against the margin.
         # A timeout or crash still fixes the shard red before singleton attribution. scope=all
         # preserves the full Windows suite; Linux keeps its correctly sized 12-file/120s defaults.
+        #
+        # The preload's Windows-only user lock serializes separate test runners on one machine.
+        # These batches are already one dedicated job's sequential pieces, so treating each Bun
+        # process as a competing runner can queue batch N+1 behind a straggler from batch N until
+        # this step's 480s process bound fires without running a test. Disable that outer queue for
+        # this step only. Every process still creates its own isolated home and arms the live-home
+        # and service-manager guard before the lock boundary.
         shell: bash
         env:
           TEST_SHARD: ${{ matrix.shard }}/9
           BUN_TEST_FILE_SCOPE: all
           BUN_TEST_BATCH_SIZE: "6"
           BUN_TEST_BATCH_TIMEOUT_SECONDS: "480"
+          OCX_TEST_NO_QUEUE: "1"
         run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke

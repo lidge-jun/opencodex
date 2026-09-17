@@ -209,6 +209,10 @@ describe("GitHub Actions hardening", () => {
     expect(windowsTest?.env?.BUN_TEST_FILE_SCOPE).toBe("all");
     expect(windowsTest?.env?.BUN_TEST_BATCH_SIZE).toBe("6");
     expect(windowsTest?.env?.BUN_TEST_BATCH_TIMEOUT_SECONDS).toBe("480");
+    // The 25 sequential Bun processes are one logical runner. On Windows the preload's
+    // machine-local queue can otherwise hold batch N+1 behind a straggler from batch N
+    // until the process bound fires without executing a test.
+    expect(windowsTest?.env?.OCX_TEST_NO_QUEUE).toBe("1");
     expect(windowsTest?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
     expect(ci.jobs?.["platform-windows"]?.name).toBe(`windows \${{ matrix.shard }}/${windowsShards.length}`);
     expect(workflow).toContain(`shards=${windowsShards.length}`);

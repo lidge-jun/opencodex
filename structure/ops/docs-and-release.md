@@ -89,7 +89,7 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs nine shards only on manual dispatch with `lane=all` (or empty), not on push events. Linux runs at-most-12-file processes with a 120-second process bound; Windows uses measured six-file/480-second processes and all-file scope so its full-suite contract is unchanged. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires nine concrete successful `windows N/9` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
+| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs nine shards only on manual dispatch with `lane=all` (or empty), not on push events. Linux runs at-most-12-file processes with a 120-second process bound; Windows uses measured six-file/480-second processes and all-file scope so its full-suite contract is unchanged. The dedicated Windows batch step sets `OCX_TEST_NO_QUEUE=1` because its sequential processes are one logical runner; each process still creates an isolated home and arms the test guards before the lock boundary. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires nine concrete successful `windows N/9` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch with an intended version and `pre-move` or `repair` mode | Opens the reviewed pull request that moves `dev` past a release target. The default `pre-move` mode runs before promotion and publication; explicit `repair` mode retains the post-publish catch-up path. It is neither called by `release.yml` nor triggered by publication. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires successful Cross-platform CI for the exact `GITHUB_SHA`, requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
@@ -299,10 +299,14 @@ aggregate green `ci` check on those events legitimately includes a deliberate Wi
 Nothing in the workflow retries. Linux and Windows use `scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
 Windows uses six files and 480 seconds. Windows selects all test families, while Linux leaves the
-storage-policy and api-usage families to its dedicated jobs. A test failure, a process timeout
-and a Bun runtime crash each fail their job on the first occurrence; the batch runner still sweeps a
-crashed or timed-out batch one file per process, but only to attribute a failure the shard has
-already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
+storage-policy and api-usage families to its dedicated jobs. The Windows step disables the
+user-scoped test-run queue with `OCX_TEST_NO_QUEUE=1`: the batches already run sequentially in one
+dedicated job, and queueing a new batch behind a surviving process from the preceding batch spends
+the process timeout without executing tests. The per-process home isolation and live-home/service
+manager guards remain active because the preload installs them before the lock boundary. A test
+failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
+batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
+failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
 jobs this run actually requested, then requires `success` from every one of them and `skipped`
 from every job the event did not request — so a job that was requested and never started can no
 longer report as a deliberate skip. On a `lane=all` dispatch the gate additionally reads the
