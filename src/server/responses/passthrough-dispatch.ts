@@ -91,11 +91,15 @@ import {
   usesCodexForwardPoolAuth,
   codexWsQuotaObserver,
   isFixedCodexAccount,
-  shouldRetryCodexPoolAccountModel400,
+  codexPoolAccountModel400Denial,
   shouldRetryCodexPoolAccountQuota,
   shouldRetryCodexPoolAccountTransient,
   retryCodexPoolOnAlternateAccount,
 } from "./core-codex-account";
+import {
+  clearCodexModelDenialEvidence,
+  recordCodexModelDenialEvidence,
+} from "../../codex/model-entitlements";
 import { readCodexWsStage } from "./codex-ws-wire";
 import { linkAbortSignal } from "./core-lifetime";
 import type { CodexAuthContext } from "../../codex/auth-context";
@@ -1291,11 +1295,25 @@ export async function preparePassthroughExchange(
 
     if (usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
-      if (await shouldRetryCodexPoolAccountModel400(
+      // A success is the freshest evidence there is about this pair, and it outranks any earlier
+      // refusal: whatever the entitlement was when upstream declined, it is not that now. Both
+      // ids are cleared because the wire model can differ from the routed one.
+      if (upstreamResponse.ok) {
+        clearCodexModelDenialEvidence(admissionState.authCtx.accountId, route.modelId);
+        clearCodexModelDenialEvidence(admissionState.authCtx.accountId, parsed.modelId);
+      }
+      const model400Denial = await codexPoolAccountModel400Denial(
         upstreamResponse,
         route.modelId,
         options.abortSignal,
-      )) {
+        parsed.modelId,
+      );
+      if (model400Denial !== undefined) {
+        // Spend this refusal on more than one retry. It is the account's own authenticated
+        // answer about this model, and the roster cache that selection otherwise reads expires
+        // five minutes after a catalog sync fills it -- so without remembering this, the next
+        // request selects the same account on quota alone and takes the same 400 (#4906).
+        recordCodexModelDenialEvidence(admissionState.authCtx.accountId, model400Denial);
         poolRetryOutcome = 400;
       } else if (!admissionState.authCtx.fixedAccount && await shouldRetryCodexPoolAccountQuota(
         upstreamResponse,
