@@ -2,6 +2,8 @@ import type { OcxProviderConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { NativeSteeringReplayObserver } from "./native-steering-replay";
 
+import { isInjectionRequest } from "./native-injection-protocol";
+
 /** Shared transport ownership, not a shared steer/inject protocol state machine. */
 export interface NativeResponseControl {
   readonly kind?: "steering" | "injection";
@@ -30,4 +32,12 @@ export function nativeResponseControlEligible(provider: OcxProviderConfig, contr
   return control?.kind === "injection" && provider.adapter === "openai-responses"
     && provider.upstreamWebsocket === true && provider.authMode !== "forward"
     && provider.baseUrl?.replace(/\/+$/, "") === "https://api.openai.com/v1";
+}
+
+/** Select by execution mode, never model name; a multi-agent request cannot acquire steering. */
+export function nativeResponseControlMode(frame: Record<string, unknown>, flags: {
+  codexNativeInjection?: boolean; codexNativeSteering?: boolean;
+}): "injection" | "steering" | undefined {
+  if (isInjectionRequest(frame)) return flags.codexNativeInjection === true ? "injection" : undefined;
+  return flags.codexNativeSteering === true ? "steering" : undefined;
 }

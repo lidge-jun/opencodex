@@ -321,7 +321,9 @@ to the outgoing beta header. No client/model capability or subscription entitlem
 is inferred. Translated, Combo, sidecar, plaintext-restoration and HTTP-fallback
 paths cannot receive controls. The common interface lives in
 `src/server/responses/native-response-control.ts`; it shares transport ownership,
-not protocol semantics, with steering. Mixed steer/inject turns are rejected.
+not protocol semantics, with steering. Mode selection excludes multi-agent turns from
+steering even when injection is disabled. An explicit new turn after completion can
+select another mode through ordinary dispatch; no queued work or acceptance is invented.
 
 `src/server/responses/native-injection.ts` retains the normally selected credential
 and private socket. `src/server/responses/native-injection-protocol.ts` validates
@@ -355,3 +357,36 @@ Existing socket/SSE frame limits and the active-response stall deadline also app
 `tests/responses/ws-native-injection.test.ts` exercises the real handler, captured
 auth, dispatch, relay, replay and synthetic failure paths. It is not live backend
 or Codex App/CLI compatibility certification.
+
+
+### Rich saved-result continuations and server-owned output
+
+`src/server/responses/native-tool-results.ts` validates the wider **continuation**
+contract: function/custom results accept strings or bounded arrays of `input_text`,
+`input_image` and `input_file`; MCP approval responses require an explicit boolean.
+Absent and explicit direct callers compare alike; program callers must match the
+server-advertised origin. Call and approval namespaces are distinct. Type, call,
+item, caller and agent provenance remain bound to this connection. Hosted calls
+never advertise client-owned result slots. References are forwarded, not fetched,
+uploaded, interpreted as local paths, flattened or split into separate requests.
+Result contents compare structurally with array order preserved. The parser
+allows documented detail/cache-breakpoint fields; unknown shapes are refused.
+
+Only an explicit same-parent/lane/settings `response.create` after the terminal
+can return all remaining saved results and approval decisions, once. An early
+same-parent create cannot cancel into normal dispatch. Missing decisions never
+become approval; rejected and accepted results remain distinguishable. Rich,
+custom and approval **inject** frames still fail before physical send: a general
+Responses input shape is not evidence that a beta injection operation accepts it.
+The existing count, byte, acknowledgement and account-ownership limits remain.
+
+`src/server/responses/native-response-output.ts` reconciles completed wire items
+with sparse terminal output without losing hosted calls, their results, encrypted
+agent messages or provenance. Shared IDs must preserve content and relative order;
+a contradiction fails rather than silently choosing one transcript. Continuation
+bodies are copied before retention; accepted results alone enter replay history.
+The wire relay does not synthesize or modify server-owned events or approvals.
+`tests/responses/ws-native-result-continuations.test.ts` covers those contracts,
+including false approval decisions, typed identity, content order, unsupported
+injection batches, sparse terminals and explicit mode transitions. No test asserts
+that a live subscription backend accepts these optional execution modes.

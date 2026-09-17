@@ -962,9 +962,10 @@ Return a saved tool result after the matching developer function call has comple
 ```
 
 Use the response/call IDs from the **same connection**, not these example IDs.
-The first version accepts string-valued `function_call_output` only. User/system
-messages, rich output arrays, hosted tools and simultaneous `response.steer` are
-not accepted in an injection turn. Multiple saved function results can share a
+`response.inject` accepts string-valued `function_call_output` only. User/system
+messages, rich output arrays, hosted-tool results and simultaneous `response.steer`
+are not accepted by that operation. The wider saved-result continuation below is
+a separate `response.create` operation, not a hidden conversion of rejected injection. Multiple saved function results can share a
 single injection. Each call can be submitted only once, including while queued.
 
 Parallel tool results are queued and sent one frame at a time, since the success
@@ -994,3 +995,40 @@ not gain injection support. Unsupported attempts return an explicit error instea
 of disappearing. The option stays off by default; synthetic transport tests are
 not live compatibility certification. Set `codexNativeInjection` to `false` and
 restart to roll back. No account or conversation files need to be removed.
+
+
+### Rich tool results and explicit approvals after response completion
+
+With `codexNativeInjection` enabled, a client-sent `response.create` on the same
+owned connection can now return **unsent** function/custom results containing text,
+image or file parts after `response.completed`. Supply the completed response's
+`previous_response_id`, the same lane and unchanged model/settings. Include every
+outstanding result or requested approval exactly once; omit already accepted
+injected results. The proxy forwards this caller-sent continuation using the
+original account and socket with the existing dispatch checks.
+
+Supported continuation items are `function_call_output`, `custom_tool_call_output`
+and `mcp_approval_response`. Tool output may be a string or an array of `input_text`,
+`input_image` and `input_file` parts. Image parts require `detail` (`auto`, `low`,
+`high` or `original`); file detail is optional (`auto`, `low`, `high`). Use exactly
+one image/file source. Inline file data requires a filename. Optional
+`prompt_cache_breakpoint: { "mode": "explicit" }` is preserved. Unsupported fields
+are rejected, not removed. References are not downloaded or reuploaded by the proxy.
+Each result has at most 1,024 content parts within the existing 8 MiB request limit.
+A supplied program caller must match the advertised call; it cannot impersonate
+another tool or agent. Content order, file references and original spelling survive.
+
+For a server-issued `mcp_approval_request`, pass its ID as `approval_request_id` and
+an explicit `approve: true` or `approve: false`. A refusal is forwarded unchanged.
+The proxy does not decide, default, auto-approve or execute the requested tool.
+A missing or unrelated decision is rejected. Hosted `multi_agent_call` actions and
+other server-run tools are **not** developer functions: their events, outputs and
+encrypted agent messages are preserved, never executed or injected by OpenCodex.
+
+This does not enable rich/custom/approval **mid-response injection**, nor simultaneous
+steering on a multi-agent response. Those operations have different upstream
+contracts. Unsupported injection is refused before reserving a call, so an unsent
+result remains available for a later explicit continuation. There is no automatic
+conversion, retry, tool rerun or account/API switch. A single-agent steering turn
+can follow a completed multi-agent turn as a new explicit request using ordinary
+routing. Client support and backend entitlement still require live verification.

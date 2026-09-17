@@ -572,3 +572,11 @@ A hub that serves its own local clients also sets
 [`unauthenticatedLoopbackListener`](#local-clients-that-cannot-receive-the-token). Its port-less
 companion form is what makes a hub a single-port deployment, and it is refused on a loopback or
 wildcard `hostname`, where the public listener already holds `127.0.0.1:<port>`.
+
+
+The opt-in `codexNativeInjection` owner also accepts typed saved-result
+continuations after the response terminal: rich function/custom outputs and explicit
+MCP approval decisions remain on the original account/socket. This does not widen
+`response.inject` beyond string-valued function results. Multi-agent requests never
+acquire the single-agent steering owner merely because injection is disabled.
+See [the continuation contract](../../guides/codex-integration.md#rich-tool-results-and-explicit-approvals-after-response-completion).

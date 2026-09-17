@@ -8,7 +8,10 @@ import {
   type FunctionResult, type InjectionFrame as Frame,
 } from "./native-injection-protocol";
 
-type Call = { itemId: unknown; state: "available" | "queued" | "accepted" | "failed"; result?: FunctionResult; recoverable?: boolean };
+import { nativeResultKey, nativeResultMatches, nativeResultFingerprint, nativeSavedResults, nativeToolRequirement,
+  type NativeToolRequirement } from "./native-tool-results";
+
+type Call = { requirement: NativeToolRequirement; state: "available" | "queued" | "accepted" | "failed"; result?: string; recoverable?: boolean };
 type Submission = { frame: Frame; results: FunctionResult[]; bytes: number };
 const ENVELOPE = new Set(["type", "input", "previous_response_id", "stream", "stream_id"]);
 
@@ -83,18 +86,18 @@ export class NativeInjectionChannel implements NativeResponseControl {
   private live(): void {
     if (!this.send || this.finished) injectionError("injection_not_supported", "No live native injection transport is available on this route.");
   }
-  /** Record only completed developer function calls, excluding hosted agent/tool actions. */
+  /** Advertise client-owned function/custom calls and approvals, never hosted execution. */
   private advertise(item: unknown): void {
-    if (!record(item) || item.type !== "function_call") return;
-    if (!injectionId(item.call_id)) throw new Error("Native injection function identity is invalid.");
-    const old = this.calls.get(item.call_id);
+    const requirement = nativeToolRequirement(item);
+    if (!requirement) return;
+    const old = this.calls.get(requirement.key);
     if (old) {
-      if (old.itemId !== item.id) throw new Error("Native injection function identity was reused.");
+      if (old.requirement.identity !== requirement.identity) throw new Error("Native result call identity was reused.");
       return;
     }
-    const bytes = Buffer.byteLength(item.call_id) + (typeof item.id === "string" ? Buffer.byteLength(item.id) : 0);
+    const bytes = Buffer.byteLength(JSON.stringify(requirement));
     if (this.calls.size >= MAX_NATIVE_INJECTION_CALLS || this.callBytes + bytes > 256 * 1024) throw new Error("Native injection call budget exceeded.");
-    this.calls.set(item.call_id, { itemId: item.id, state: "available" }); this.callBytes += bytes;
+    this.calls.set(requirement.key, { requirement, state: "available" }); this.callBytes += bytes;
   }
   /** Queue validated saved results; reserve each call before any possibly synchronous send. */
   inject(frame: Frame): void {
@@ -108,8 +111,8 @@ export class NativeInjectionChannel implements NativeResponseControl {
     }
     const results = injectionResults(frame.input);
     for (const item of results) {
-      const call = this.calls.get(item.call_id);
-      if (!call) injectionError("injection_call_not_found", "The result does not match a completed function call on this connection.");
+      const call = this.calls.get(nativeResultKey(item));
+      if (!call || !nativeResultMatches(item, call.requirement)) injectionError("injection_call_not_found", "The result does not match a completed function call on this connection.");
       if (call.state !== "available") injectionError("duplicate_injection", "This function result was already submitted; do not replay it.");
     }
     const text = JSON.stringify(frame);
@@ -120,7 +123,7 @@ export class NativeInjectionChannel implements NativeResponseControl {
     // Detach from caller-owned objects before keeping data across asynchronous callbacks.
     const copy = JSON.parse(text) as Frame;
     const submission = { frame: copy, results: copy.input as FunctionResult[], bytes };
-    for (const item of results) this.calls.get(item.call_id)!.state = "queued";
+    for (const item of results) this.calls.get(nativeResultKey(item))!.state = "queued";
     this.queue.push(submission); this.queueBytes += bytes;
     this.pump();
   }
@@ -151,11 +154,11 @@ export class NativeInjectionChannel implements NativeResponseControl {
     this.replay?.observe(event);
     this.lastAckSequence = event.sequence_number as number;
     for (const item of pending.results) {
-      const call = this.calls.get(item.call_id)!;
+      const call = this.calls.get(nativeResultKey(item))!;
       call.state = failed ? "failed" : "accepted";
       // Retain a digest, not another result body, for an explicitly rejected continuation.
       call.recoverable = failed && record(event.error) && event.error.code === "response_already_completed";
-      if (call.recoverable) call.result = { ...item, output: injectionFingerprint(item.output) };
+      if (call.recoverable) call.result = nativeResultFingerprint(item);
     }
     clearTimeout(this.ackTimer); this.ackTimer = undefined;
     this.inFlight = undefined; this.queue.shift(); this.queueBytes -= pending.bytes;
@@ -170,25 +173,28 @@ export class NativeInjectionChannel implements NativeResponseControl {
   continue(frame: Frame): boolean {
     if (!this.send || this.finished) return false;
     if (this.queue.length || this.continuationSent) injectionError("injection_pending", "Wait for every injection acknowledgement before creating another response.");
+    if (!this.terminal && frame.previous_response_id === this.currentId) {
+      injectionError("injection_pending", "Wait for the response terminal before sending saved-result continuations.");
+    }
     if (!this.terminal || frame.previous_response_id !== this.currentId) return false;
     if (this.terminal.type !== "response.completed") injectionError("injection_response_failed", "The parent response did not complete successfully.");
     if ((frame.stream_id ?? undefined) !== this.lane || frame.generate === false) injectionError("invalid_injection", "Use the same lane for an injection continuation.");
     for (const [key, value] of Object.entries(frame)) {
       if (!ENVELOPE.has(key) && this.settings.get(key) !== injectionFingerprint(value)) injectionError("injection_settings_changed", "A native injection continuation cannot change the pinned model or settings.");
     }
-    const results = injectionResults(frame.input);
+    const results = nativeSavedResults(frame.input);
     const required = [...this.calls.entries()].filter(([, call]) => call.state !== "accepted");
-    if (!required.length || results.length !== required.length) injectionError("invalid_injection", "Supply every outstanding saved function result exactly once.");
+    if (!required.length || results.length !== required.length) injectionError("invalid_injection", "Supply every outstanding saved tool result exactly once.");
     for (const item of results) {
-      const call = this.calls.get(item.call_id);
-      if (!call || call.state === "accepted" || call.state === "queued"
-        || (call.state === "failed" && (!call.recoverable || call.result?.output !== injectionFingerprint(item.output)))) {
-        injectionError("invalid_injection", "Continuation input must match unsent or explicitly completion-rejected function results.");
+      const call = this.calls.get(nativeResultKey(item));
+      if (!call || !nativeResultMatches(item, call.requirement) || call.state === "accepted" || call.state === "queued"
+        || (call.state === "failed" && (!call.recoverable || call.result !== nativeResultFingerprint(item)))) {
+        injectionError("invalid_injection", "Continuation input must match unsent or explicitly completion-rejected tool results.");
       }
     }
     if (Buffer.byteLength(JSON.stringify(frame)) > MAX_NATIVE_INJECTION_BYTES) injectionError("invalid_injection", "Native injection continuation exceeds its byte limit.");
     this.continuationSent = true;
-    try { this.recordTerminal(); this.replay?.submitted(frame); this.send(frame); }
+    try { this.recordTerminal(); const copy = JSON.parse(JSON.stringify(frame)) as Frame; this.replay?.submitted(copy); this.send(copy); }
     catch { this.fail(); injectionError("injection_delivery_unknown", "Continuation delivery is unknown; do not automatically resend results."); }
     if (!this.finished) this.armIdle(this.deadlines.ackMs);
     return true;

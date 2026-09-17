@@ -1,6 +1,9 @@
 import { MAX_NATIVE_STEERING_REPLAY_BYTES, type NativeSteeringReplayObserver } from "./native-steering-replay";
 import { injectionRecord as record, type InjectionFrame as Frame, type FunctionResult } from "./native-injection-protocol";
 
+import { nativeResultFingerprint } from "./native-tool-results";
+import { nativeResponseOutput } from "./native-response-output";
+
 /** A bounded journal of accepted tool results, independent of user steering history. */
 export class NativeInjectionReplay implements NativeSteeringReplayObserver {
   private prefix: unknown[];
@@ -28,7 +31,7 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
   }
   /** Journal before physical send, with rollback usable only for a known unsent frame. */
   submitted(frame: Frame): () => void {
-    const input = Array.isArray(frame.input) ? frame.input : [];
+    const input = Array.isArray(frame.input) ? structuredClone(frame.input) : [];
     const bytes = this.reserve(input);
     if (frame.type === "response.inject") this.pending = input as FunctionResult[];
     else this.explicit = input;
@@ -40,14 +43,13 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
   }
   /** Keep wire output order and insert each accepted result after its owning function call. */
   private completedOutput(response: Frame): unknown[] {
-    const output = Array.isArray(response.output) && response.output.length
-      ? response.output : [...this.output.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+    const output = nativeResponseOutput(this.output, response.output);
     const echoed = new Set<string>();
     for (const item of output) {
       if (!record(item) || item.type !== "function_call_output" || typeof item.call_id !== "string") continue;
       const accepted = this.accepted.get(item.call_id);
       if (accepted) {
-        if (echoed.has(item.call_id) || item.output !== accepted.output) throw new Error("Native injection replay result mismatch.");
+        if (echoed.has(item.call_id) || nativeResultFingerprint(item as FunctionResult) !== nativeResultFingerprint(accepted)) throw new Error("Native injection replay result mismatch.");
         echoed.add(item.call_id);
       }
     }
@@ -82,7 +84,7 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
         || (frame.output_index as number) > 10_000 || !record(frame.item)) throw new Error("Native injection replay output identity is invalid.");
       const old = this.output.get(frame.output_index as number);
       if (old) this.bytes -= Buffer.byteLength(JSON.stringify(old));
-      this.reserve(frame.item); this.output.set(frame.output_index as number, frame.item);
+      this.reserve(frame.item); this.output.set(frame.output_index as number, structuredClone(frame.item));
     } else if (record(frame.response) && ["response.completed", "response.failed", "response.incomplete"].includes(String(frame.type))) {
       if (this.pending) throw new Error("Native injection replay cannot commit an unacknowledged result.");
       const output = this.completedOutput(frame.response);

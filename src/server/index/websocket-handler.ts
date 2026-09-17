@@ -1,6 +1,5 @@
-import type { NativeResponseControl } from "../responses/native-response-control";
+import { nativeResponseControlMode, type NativeResponseControl } from "../responses/native-response-control";
 import { NativeInjectionChannel } from "../responses/native-injection";
-import { isInjectionRequest } from "../responses/native-injection-protocol";
 import { NativeSteeringChannel, NativeSteeringError } from "../responses/native-steering";
 import { createNativeSteeringLogObserver } from "../responses/native-steering-log";
 import type { Server, ServerWebSocket } from "bun";
@@ -226,9 +225,9 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
         try {
           const idleMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec)
             ? Math.max(1, config.stallTimeoutSec) * 1000 : 300_000;
-          nativeControl = config.codexNativeInjection === true && isInjectionRequest(frame)
-            ? new NativeInjectionChannel(frame, idleMs)
-            : config.codexNativeSteering === true ? new NativeSteeringChannel(frame, idleMs) : undefined;
+          const mode = nativeResponseControlMode(frame, config);
+          nativeControl = mode === "injection" ? new NativeInjectionChannel(frame, idleMs)
+            : mode === "steering" ? new NativeSteeringChannel(frame, idleMs) : undefined;
         } catch {
           sendJsonFrame(ws, buildWsErrorFrame(400, { type: "invalid_request_error", message: "Invalid native steering request settings" }));
           return;

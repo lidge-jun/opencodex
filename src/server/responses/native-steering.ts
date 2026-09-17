@@ -112,6 +112,9 @@ export class NativeSteeringChannel {
 
   /** Pin the initial lane and setting digests without opening a transport. */
   constructor(initial: Frame, private readonly idleMs = 300_000) {
+    if (record(initial.multi_agent) && initial.multi_agent.enabled === true) {
+      throw new NativeSteeringError("native_control_mode_mismatch", "Multi-agent responses cannot use the single-agent steering channel.");
+    }
     this.lane = initial.stream_id;
     for (const [key, value] of Object.entries(initial)) {
       if (!["type", "input", "previous_response_id", "stream", "stream_id"].includes(key)) this.settings.set(key, fingerprint(value));
