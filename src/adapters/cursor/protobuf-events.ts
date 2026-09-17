@@ -23,6 +23,7 @@ import {
 import { recordObservedCursorContextWindow } from "./discovery";
 import type { CursorServerMessage } from "./types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
+import { CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX } from "./cursor-errors";
 
 const DEFAULT_CONTEXT_USAGE_MAX_ENTRIES = 200;
 const DEFAULT_CONTEXT_USAGE_TTL_MS = 60 * 60 * 1_000;
@@ -1458,7 +1459,7 @@ export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServe
     // Clear so a second turnEnded (should not happen, but defensive) doesn't re-emit.
     for (const callId of openCallIds) state.translatorBudget?.closeCall(callId);
     state.openToolCalls.clear();
-    return [{ type: "error", message: `Cursor stream ended with incomplete tool call(s): ${openIds}. Arguments may be truncated; the call was not committed.` }];
+    return [{ type: "error", message: `${CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX} ${openIds}. Arguments may be truncated; the call was not committed.` }];
   }
   const out: CursorServerMessage[] = [];
   if (!state.sawRealClientToolCall) {

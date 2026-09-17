@@ -97,3 +97,12 @@ export function isEffectiveCodexDesktopAuthless(
     && config.runtimeRole !== "client"
     && !shouldInjectApiAuthHeader(config);
 }
+
+/** Keep reporting aligned with the admission-token gate used by standalone injection. */
+export function isEffectiveCodexClientCompaction(
+  config: Pick<OcxConfig, "runtimeRole" | "hostname" | "unauthenticatedLoopbackListener" | "codexClientCompaction"> | undefined,
+): boolean {
+  return config?.codexClientCompaction === true
+    && config.runtimeRole !== "client"
+    && !shouldInjectApiAuthHeader(config);
+}

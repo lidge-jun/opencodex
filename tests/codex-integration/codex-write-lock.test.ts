@@ -331,13 +331,34 @@ describe("two real processes contend for one lock", () => {
   // literal expired first on run 33930757649 ("case 0", 10.67 s). INTERNAL_DEADLINE_MS is
   // the named bound for an in-test wait and stays under the enclosing SPAWN_BUDGET_MS so
   // this helper's "timed out waiting for" diagnostic is what gets reported, not Bun's.
-  async function waitFor(path: string, timeoutMs = INTERNAL_DEADLINE_MS): Promise<void> {
+  //
+  // The CHILD is watched here, not only the file. Until it was, a child that died before
+  // publishing produced the same "timed out waiting for" line as one that was merely slow on a
+  // loaded shard, so nothing in CI could tell those apart -- and the two want opposite fixes.
+  // Racing the exit reports the dead child immediately, with its code and stderr, instead of
+  // spending the rest of the deadline to say nothing (run 35211904734, windows 3/9).
+  async function waitFor(
+    path: string,
+    child: ReturnType<typeof Bun.spawn>,
+    timeoutMs = INTERNAL_DEADLINE_MS,
+  ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (Bun.file(path).size > 0) return;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        // The marker write and the exit can land in the same 10 ms gap, so look once more
+        // before calling it a death: a holder that published and then exited is not a failure.
+        if (Bun.file(path).size > 0) return;
+        throw new Error(
+          `child exited (code=${child.exitCode}, signal=${child.signalCode}) before publishing `
+          + `${path}; stderr=${await new Response(child.stderr).text()}`,
+        );
+      }
       await Bun.sleep(10);
     }
-    throw new Error(`timed out waiting for ${path}`);
+    // Still running, so this one really is a slow boot rather than a crash. Say which, because
+    // the previous message was true of both.
+    throw new Error(`timed out waiting for ${path} after ${timeoutMs}ms; the child is still running`);
   }
 
   test("a second process is excluded while the first holds, and succeeds after it releases", async () => {
@@ -345,7 +366,7 @@ describe("two real processes contend for one lock", () => {
     const releaseMarker = join(root, "release");
 
     const holder = spawnChild({ holdMarker, releaseMarker, timeoutMs: 0, holdMs: 20_000 });
-    await waitFor(holdMarker);
+    await waitFor(holdMarker, holder);
 
     // The lock is genuinely held by another process right now.
     const blocked = await withCodexWriteLock(options({ timeoutMs: 0 }), publishing("parent"));
@@ -379,13 +400,13 @@ describe("two real processes contend for one lock", () => {
     const releaseMarker = join(root, "release-2");
     const waitMarker = join(root, "waiting-2");
     const holder = spawnChild({ holdMarker, releaseMarker, timeoutMs: 0, holdMs: 20_000 });
-    await waitFor(holdMarker);
+    await waitFor(holdMarker, holder);
 
     const waiter = spawnChild({ timeoutMs: 5_000, waitMarker });
     // The waiter writes this only after withCodexWriteLock has returned its
     // pending promise. Because the holder is still held, that means the waiter
     // has attempted N and reached the retry wait rather than failing fast.
-    await waitFor(waitMarker);
+    await waitFor(waitMarker, waiter);
     writeFileSync(releaseMarker, "go");
 
     const [waited, holderResult] = await Promise.all([childResult(waiter), childResult(holder)]);
@@ -456,7 +477,7 @@ describe("two real processes contend for one lock", () => {
       // to outlast the contender's process boot, which took >4 s on windows-latest in run
       // 33603770447 and made the default 3 s hold expire first (read as 'acquired').
       const holder = spawnChildWithEnv({ holdMarker, releaseMarker, timeoutMs: 0, holdMs: 20_000 }, { ...a });
-      await waitFor(holdMarker);
+      await waitFor(holdMarker, holder);
 
       // Fail-fast: if the two environments produced different lock files this
       // would acquire instead of reporting contention.

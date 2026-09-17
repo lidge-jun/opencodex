@@ -2216,6 +2216,59 @@ describe("server combo failover 030 activation matrix", () => {
     expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
   });
 
+  test("single-target combo with waitForCooldownMs waits and retries on failure", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return hits === 1
+        ? Response.json({ error: { message: "service unavailable" } }, { status: 503 })
+        : chatSuccess("single target recovered", "m1");
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const cooldown = { cooldownMs: 50, waitForCooldownMs: 500 };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], cooldown));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("single target recovered");
+    expect(hits).toBe(2);
+  });
+
+  test("single-target combo with waitForCooldownMs stops after one retry when upstream fails continuously", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return Response.json({ error: { message: "service unavailable" } }, { status: 503 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const cooldown = { cooldownMs: 50, waitForCooldownMs: 500 };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], cooldown));
+    expect(response.status).toBe(503);
+    expect(hits).toBe(2);
+  });
+
+  test("single-target combo with unset waitForCooldownMs fails immediately on 503", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return Response.json({ error: { message: "service unavailable" } }, { status: 503 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], { cooldownMs: 50 }));
+    expect(response.status).toBe(503);
+    expect(hits).toBe(1);
+  });
+
   test("a past Retry-After date remains immediate through response consumption", async () => {
     const now = Date.parse("2026-07-18T00:00:00.000Z");
     const failure = await consumeComboFailure(Response.json({ error: { message: "rate limited" } }, {

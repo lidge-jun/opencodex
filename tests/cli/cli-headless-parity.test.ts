@@ -54,7 +54,7 @@ describe("ocx system codex-restart confirmation", () => {
   });
 });
 
-describe("ocx system settings client compaction", () => {
+describe("ocx system settings desktop switches", () => {
   test("persists the explicit boolean through the shared settings endpoint", async () => {
     const { requests, deps } = fakeRuntime((_req, body) => ({ ok: true, ...body }));
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
@@ -65,6 +65,82 @@ describe("ocx system settings client compaction", () => {
         method: "PUT",
         body: { codexClientCompaction: true },
       }]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("prints stored and effective state, a deferred apply, and the auth-source consequence", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopAuthless: true,
+      codexDesktopSwitches: {
+        codexDesktopAuthless: {
+          stored: true,
+          effective: false,
+          inertReason: "non_loopback_bind_requires_admission_token",
+        },
+        codexClientCompaction: { stored: false, effective: false },
+        apply: {
+          applied: false,
+          reason: "write_lock_busy",
+          retryable: true,
+          detail: "another Codex config writer owns the lock",
+        },
+        authSource: {
+          presentsCodexAccount: true,
+          summary: "The Codex app will require its own account sign-in.",
+        },
+      },
+    }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["settings", "--desktop-authless", "on"], deps)).toBe(0);
+      const output = logSpy.mock.calls.flat().join("\n");
+      expect(output).toContain("Codex desktop authless: stored on.");
+      expect(output).toContain("Codex desktop authless: effective off because a non-loopback bind requires an admission token");
+      expect(output).toContain("Codex config: ~/.codex/config.toml was not rewritten because the Codex config write lock is busy.");
+      expect(output).toContain("Details: another Codex config writer owns the lock");
+      expect(output).toContain("Run 'ocx sync' to apply the stored settings.");
+      expect(output).toContain("Auth source: The Codex app will require its own account sign-in.");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("prints a completed inline apply and the authless identity consequence", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopAuthless: true,
+      codexDesktopSwitches: {
+        codexDesktopAuthless: { stored: true, effective: true },
+        codexClientCompaction: { stored: false, effective: false },
+        apply: { applied: true },
+        authSource: {
+          presentsCodexAccount: false,
+          summary: "The Codex app will not require its own account sign-in.",
+        },
+      },
+    }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["settings", "--desktop-authless", "on"], deps)).toBe(0);
+      const output = logSpy.mock.calls.flat().join("\n");
+      expect(output).toContain("Codex desktop authless: stored on.");
+      expect(output).toContain("Codex desktop authless: effective on.");
+      expect(output).toContain("Codex config: ~/.codex/config.toml was rewritten.");
+      expect(output).toContain("Auth source: The Codex app will not require its own account sign-in.");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("keeps the legacy success line when an older server omits the switch report", async () => {
+    const { deps } = fakeRuntime((_req, body) => ({ ok: true, ...body }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["settings", "--desktop-authless", "on"], deps)).toBe(0);
+      expect(logSpy.mock.calls.flat().join("\n")).toBe("System settings updated.");
     } finally {
       logSpy.mockRestore();
     }

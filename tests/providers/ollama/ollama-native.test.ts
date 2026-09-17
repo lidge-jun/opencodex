@@ -261,4 +261,150 @@ describe("ollama-native — request shape", () => {
       { role: "user", content: [{ type: "video", videoUrl: "data:video/mp4;base64,AAAA" }] },
     ]))).toThrow(/cannot send video/);
   });
+
+  test("a mid-turn developer message is deferred instead of closing the tool batch", async () => {
+    const adapter = createOllamaNativeAdapter(ollamaProvider());
+    const { body } = await adapter.buildRequest(parsedWith([
+      { role: "user", content: "continue", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "applying the patch" },
+          { type: "toolCall", id: "call_hook_split", name: "exec", arguments: { cmd: "ls" } },
+        ],
+        timestamp: 1,
+      },
+      { role: "developer", content: "[hook] design findings requiring review", timestamp: 2 },
+      { role: "toolResult", toolCallId: "call_hook_split", toolName: "exec", content: "done", isError: false, timestamp: 3 },
+    ]));
+    const messages = JSON.parse(String(body)).messages;
+    expect(messages.map((message: { role: string }) => message.role))
+      .toEqual(["user", "assistant", "tool", "system"]);
+    expect(messages[2].tool_call_id).toBe("call_hook_split");
+    expect(messages[2].content).toBe("done");
+    expect(messages[3].content).toBe("[hook] design findings requiring review");
+  });
+
+  test("a deferred user message keeps its text and images after the tool result", async () => {
+    const adapter = createOllamaNativeAdapter(ollamaProvider());
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    const { body } = await adapter.buildRequest(parsedWith([
+      { role: "user", content: "start", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_mid_user", name: "exec", arguments: { cmd: "ls" } }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "look at this" }, { type: "image", imageUrl: png }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: "call_mid_user", toolName: "exec", content: "done", isError: false, timestamp: 3 },
+    ]));
+    const messages = JSON.parse(String(body)).messages;
+    expect(messages.map((message: { role: string }) => message.role))
+      .toEqual(["user", "assistant", "tool", "user"]);
+    expect(messages[2].tool_call_id).toBe("call_mid_user");
+    expect(messages[2].content).toBe("done");
+    expect(messages[3].content).toBe("look at this");
+    expect(messages[3].images).toEqual(["iVBORw0KGgo="]);
+  });
+
+  test("out-of-order results inside a parallel batch still serialize in call order", async () => {
+    const adapter = createOllamaNativeAdapter(ollamaProvider());
+    const { body } = await adapter.buildRequest(parsedWith([
+      { role: "user", content: "continue", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_first", name: "exec", arguments: { cmd: "ls" } },
+          { type: "toolCall", id: "call_second", name: "exec", arguments: { cmd: "pwd" } },
+        ],
+        timestamp: 1,
+      },
+      { role: "developer", content: "[hook] findings", timestamp: 2 },
+      { role: "toolResult", toolCallId: "call_second", toolName: "exec", content: "second", isError: false, timestamp: 3 },
+      { role: "toolResult", toolCallId: "call_first", toolName: "exec", content: "first", isError: false, timestamp: 4 },
+    ]));
+    const messages = JSON.parse(String(body)).messages;
+    expect(messages.map((message: { role: string }) => message.role))
+      .toEqual(["user", "assistant", "tool", "tool", "system"]);
+    expect(messages[2].tool_call_id).toBe("call_first");
+    expect(messages[2].content).toBe("first");
+    expect(messages[3].tool_call_id).toBe("call_second");
+    expect(messages[3].content).toBe("second");
+  });
+
+  test("a call with no recorded result answers with an explicit unknown status", async () => {
+    const adapter = createOllamaNativeAdapter(ollamaProvider());
+    const { body } = await adapter.buildRequest(parsedWith([
+      { role: "user", content: "start", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_interrupted", name: "exec", arguments: { cmd: "ls" } }],
+        timestamp: 1,
+      },
+      { role: "user", content: "continue", timestamp: 2 },
+    ]));
+    const messages = JSON.parse(String(body)).messages;
+    expect(messages.map((message: { role: string }) => message.role))
+      .toEqual(["user", "assistant", "tool", "user"]);
+    expect(messages[2].tool_call_id).toBe("call_interrupted");
+    expect(messages[2].content).toContain("no tool result was recorded");
+    expect(messages[2].content).toContain('"exec"');
+    expect(messages[2].content).toContain("do not treat this as success, failure, or user-provided input");
+    expect(messages[3].content).toBe("continue");
+  });
+
+  test("a second assistant turn settles the first batch before its own", async () => {
+    const adapter = createOllamaNativeAdapter(ollamaProvider());
+    const { body } = await adapter.buildRequest(parsedWith([
+      { role: "user", content: "start", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_first", name: "exec", arguments: { cmd: "ls" } }],
+        timestamp: 1,
+      },
+      { role: "developer", content: "[hook] findings", timestamp: 2 },
+      { role: "toolResult", toolCallId: "call_first", toolName: "exec", content: "first done", isError: false, timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_second", name: "exec", arguments: { cmd: "pwd" } }],
+        timestamp: 4,
+      },
+      { role: "toolResult", toolCallId: "call_second", toolName: "exec", content: "second done", isError: false, timestamp: 5 },
+    ]));
+    const messages = JSON.parse(String(body)).messages;
+    expect(messages.map((message: { role: string }) => message.role))
+      .toEqual(["user", "assistant", "tool", "system", "assistant", "tool"]);
+    expect(messages[2].tool_call_id).toBe("call_first");
+    expect(messages[2].content).toBe("first done");
+    expect(messages[3].content).toBe("[hook] findings");
+    expect(messages[4].tool_calls[0].id).toBe("call_second");
+    expect(messages[5].tool_call_id).toBe("call_second");
+    expect(messages[5].content).toBe("second done");
+  });
+
+  test("an orphan tool result is still refused", () => {
+    const adapter = createOllamaNativeAdapter(ollamaProvider());
+    expect(() => adapter.buildRequest(parsedWith([
+      { role: "user", content: "hi" },
+      { role: "toolResult", toolCallId: "call_ghost", toolName: "exec", content: "x", isError: false, timestamp: 1 },
+    ]))).toThrow(/orphan tool result/);
+  });
+
+  test("a duplicate result for the same call is still refused", () => {
+    const adapter = createOllamaNativeAdapter(ollamaProvider());
+    expect(() => adapter.buildRequest(parsedWith([
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_once", name: "exec", arguments: { cmd: "ls" } }],
+        timestamp: 1,
+      },
+      { role: "toolResult", toolCallId: "call_once", toolName: "exec", content: "once", isError: false, timestamp: 2 },
+      { role: "toolResult", toolCallId: "call_once", toolName: "exec", content: "twice", isError: false, timestamp: 3 },
+    ]))).toThrow(/duplicate tool result/);
+  });
 });
