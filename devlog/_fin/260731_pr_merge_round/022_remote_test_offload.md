@@ -1,4 +1,4 @@
-# 022 — 전체 스위트를 macmini-cf로 보내기
+# 022 — 전체 스위트를 원격 러너로 보내기
 
 이 라운드에서 테스트가 13분씩 걸리고 멈춘 것처럼 보인 원인과, 그 해결책을
 기록한다. 다음 세션이 같은 함정에 빠지지 않도록.
@@ -34,48 +34,35 @@
 양방향 검증: 경쟁 러너가 있을 때 20초간 아무 테스트도 시작 안 함,
 opt-out을 켜면 즉시 실행(1 pass).
 
-### 2. 원격 오프로드 — macmini-cf
+### 2. 원격 오프로드
 
 무거운 스위트는 로컬에서 돌릴 이유가 없다. 사용자가 병렬로 작업 중이면
 서로를 방해할 뿐이다.
 
-```
-Host macmini-cf
-    HostName ssh-macmini.lidgeai.com
-    User junny
-    ProxyCommand /opt/homebrew/bin/cloudflared access ssh --hostname %h
-```
-
-10코어 arm64. bun은 PATH에 없고 `~/.bun/bin/bun`에 있다(1.3.9).
-체크아웃은 `~/ci/opencodex`에 새로 만들었다.
+이 문서에는 러너의 호스트명, 계정, 접근 구성, 체크아웃 경로를 기록하지
+않는다. 이 정보는 저장소 밖의 운영 구성에서 관리한다.
 
 **브랜치를 옮기는 방법이 중요하다.** `git push`로 보내면 로컬 pre-push 훅이
-전체 스위트를 돌린다 — 피하려는 바로 그 상황이다. 번들을 쓴다:
+전체 스위트를 돌린다 — 피하려는 바로 그 상황이다. 그래서 git bundle로
+브랜치를 전송한 뒤 원격에서 네 가지 게이트를 실행했다. 접속 대상과 경로가
+포함된 전송·실행 명령은 운영 인프라를 노출하므로 여기에 기록하지 않는다.
+러너에서 사용하는 일반 검증 명령은 다음과 같다.
 
-```bash
-git bundle create /tmp/x.bundle origin/dev..<branch>
-scp /tmp/x.bundle macmini-cf:/tmp/
-ssh macmini-cf 'cd ~/ci/opencodex && git fetch /tmp/x.bundle <branch>:<branch> && git checkout <branch>'
+```sh
+bun run test
+bun run typecheck
+bun run lint:gui
+bun run privacy:scan
 ```
-
-실행:
-
-```bash
-ssh macmini-cf 'export PATH=$HOME/.bun/bin:$PATH; cd ~/ci/opencodex && \
-  nohup sh -c "bun run typecheck && bun run lint:gui && bun run test && bun run privacy:scan" \
-  > /tmp/ocx-gate.log 2>&1 &'
-```
-
-주의: macmini에 `rg`가 없다. 로그는 `grep`으로 본다.
 
 ## 결과
 
-| | 로컬(4개 경합) | macmini-cf |
+| | 로컬(4개 경합) | 원격 러너 |
 |---|---|---|
 | 전체 스위트 | 13분+ (미완료) | **162초** |
 | load average | 10.2 | 2.4 |
 | 결과 | — | 6210 pass / 0 fail |
 
-푸시는 `--no-verify`로 했다. 게이트를 건너뛴 게 아니라 **원격에서 이미 통과**한
-것을 로컬에서 다시 돌리지 않기 위해서다. typecheck / lint:gui / test /
-privacy:scan 네 가지 모두 macmini에서 green이었다.
+푸시는 `--no-verify`로 했다. 원격에서 실행한 네 가지 — typecheck /
+lint:gui / test / privacy:scan — 가 모두 green이었기에 같은 검사를
+로컬에서 다시 돌리지 않았다. 원격 실행은 이 네 가지에 한정됐다.

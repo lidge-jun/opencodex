@@ -103,7 +103,7 @@ test("real handler -> auth/dispatch -> native exchange -> downstream preserves a
   socket.emit({ type: "response.incomplete", response: { id, status: "incomplete", output: [], incomplete_details: { reason: "steered" }, usage: { input_tokens: 10, output_tokens: 2 } } });
   socket.emit({ type: "response.created", response: { id: "successor", previous_response_id: id, output: [] } });
   complete(socket, "successor", { usage: { input_tokens: 20, output_tokens: 3 } });
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(sent.map(frame => frame.type)).toEqual(["response.created", "response.steer.accepted", "response.incomplete", "response.created", "response.completed"]);
   expect(sent.at(-1)?.response.id).toBe("successor");
   expect(Socket.all).toHaveLength(1);
@@ -123,7 +123,7 @@ test("normal completion before acceptance still retains the socket and successor
   accept(socket, id);
   socket.emit({ type: "response.created", response: { id: "r2", previous_response_id: id } });
   complete(socket, "r2");
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(sent.filter(frame => frame.type === "response.completed").map(frame => frame.response.id)).toEqual([id, "r2"]);
 });
 
@@ -146,7 +146,7 @@ test("pending results use one same-account/lane create and never replay accepted
   expect(sent.at(-1)?.error.code).toBe("duplicate_continuation");
   socket.emit({ type: "response.created", response: { id: "r2", previous_response_id: id } });
   complete(socket, "r2");
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.response.id).toBe("r2");
   expect(Socket.all).toHaveLength(1);
 });
@@ -157,7 +157,7 @@ test("subsequent ordinary turns retain committed steering through the scoped rep
   accept(socket, id); complete(socket, id);
   socket.emit({ type: "response.created", response: { id: "cached-successor", previous_response_id: id } });
   complete(socket, "cached-successor");
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   send({ type: "response.create", model: "gpt-5.5", previous_response_id: "cached-successor", input: "ordinary next turn" });
   await waitFor(() => Socket.all.length === 2 && Socket.all[1].frames.length > 0);
   const next = Socket.all[1];
@@ -165,7 +165,7 @@ test("subsequent ordinary turns retain committed steering through the scoped rep
   expect(JSON.stringify(next.frames[0].input)).toContain("initial");
   expect(JSON.stringify(next.frames[0].input)).toContain("ordinary next turn");
   complete(next, next.root);
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.type).toBe("response.completed");
 });
 
@@ -174,7 +174,7 @@ test("rejected steering after terminal settles without an invented successor", a
   send({ type: "response.steer", previous_response_id: id, input: "not supported" });
   complete(socket, id);
   socket.emit({ type: "response.steer.failed", steer: { previous_response_id: id, input: "not supported" }, error: { code: "steering_not_supported", message: "model does not support steering" } });
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.type).toBe("response.steer.failed");
   expect(sent.filter(frame => frame.type === "response.created")).toHaveLength(1);
   expect(socket.frames).toHaveLength(2);
@@ -263,7 +263,7 @@ test("HTTP upgrade fallback keeps ordinary streaming and rejects steering explic
   send({ type: "response.steer", previous_response_id: "http-response", input: "not delivered" });
   expect(sent.at(-1)?.error.code).toBe("steering_not_supported");
   finish();
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.type).toBe("response.completed");
   expect(fallbackCalls).toBe(1);
   expect(Socket.all).toHaveLength(0);
@@ -274,7 +274,7 @@ test("post-send disconnect never replays accepted steering through HTTP or anoth
   send({ type: "response.steer", previous_response_id: id, input: "delivery unknown" });
   accept(socket, id);
   socket.close();
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.type).toBe("error");
   expect(fallbackCalls).toBe(0);
   expect(Socket.all).toHaveLength(1);
@@ -287,7 +287,7 @@ test("downstream disconnect closes the dedicated upstream while steering is pend
   accept(socket, id); complete(socket, id);
   socket.emit({ type: "response.steer.pending", steer: { id: "s1", previous_response_id: id }, reason: "waiting_for_required_input", required_input: [{ type: "function_call_output", call_id: "saved-call" }] });
   handler.close(ws);
-  await waitFor(() => socket.readyState === 3 && !ws.data.nativeSteering);
+  await waitFor(() => socket.readyState === 3 && !ws.data.nativeControl);
   expect(fallbackCalls).toBe(0);
   expect(socket.frames).toHaveLength(2);
 });
@@ -319,7 +319,7 @@ test("saved tool results may arrive before pending and retain extra user input w
   expect(sent.some(frame => frame.type === "error")).toBe(false);
   socket.emit({ type: "response.created", response: { id: "early-successor", previous_response_id: id } });
   complete(socket, "early-successor");
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(Socket.all).toHaveLength(1);
   expect(fallbackCalls).toBe(0);
 });
@@ -354,7 +354,7 @@ test("a steering failure cannot close an already submitted explicit continuation
   expect(socket.readyState).toBe(1);
   socket.emit({ type: "response.created", response: { id: "explicit-successor", previous_response_id: id } });
   complete(socket, "explicit-successor");
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.response.id).toBe("explicit-successor");
   expect(fallbackCalls).toBe(0);
 });
@@ -386,18 +386,18 @@ test("early continuation validates advertised call and approval identities and r
 test("warmup leaves no steering owner and the next ordinary turn gets a fresh channel", async () => {
   const { ws, sent, send } = downstream({ generate: false });
   expect(sent.map(frame => frame.type)).toEqual(["response.created", "response.completed"]);
-  expect(ws.data.nativeSteering).toBeUndefined();
+  expect(ws.data.nativeControl).toBeUndefined();
   expect(ws.data.cancel).toBeUndefined();
   expect(Socket.all).toHaveLength(0);
   send({ type: "response.steer", previous_response_id: sent[0].response.id, input: "not a running turn" });
   expect(sent.at(-1)?.error.code).toBe("steering_not_supported");
   send({ type: "response.create", model: "gpt-5.5", input: "real turn" });
   await waitFor(() => Socket.all.length === 1 && sent.filter(frame => frame.type === "response.created").length === 2);
-  expect(ws.data.nativeSteering?.attached).toBe(true);
+  expect(ws.data.nativeControl?.attached).toBe(true);
   const socket = Socket.all[0];
   expect(socket.frames[0].input).toBe("real turn");
   complete(socket, socket.root);
-  await waitFor(() => !ws.data.nativeSteering);
+  await waitFor(() => !ws.data.nativeControl);
 });
 
 test("admission refusal leaves no steering owner and a later admitted turn is independent", async () => {
@@ -410,7 +410,7 @@ test("admission refusal leaves no steering owner and a later admitted turn is in
     expect(leases.length).toBeGreaterThan(0);
     const { ws, sent, send } = downstream();
     expect(sent.at(-1)?.error.code).toBe("server_busy");
-    expect(ws.data.nativeSteering).toBeUndefined();
+    expect(ws.data.nativeControl).toBeUndefined();
     expect(ws.data.cancel).toBeUndefined();
     expect(Socket.all).toHaveLength(0);
     for (const lease of leases) lease.release();
@@ -419,9 +419,9 @@ test("admission refusal leaves no steering owner and a later admitted turn is in
     expect(Socket.all).toHaveLength(1);
     const socket = Socket.all[0];
     expect(socket.frames[0].input).toBe("after admission");
-    expect(ws.data.nativeSteering?.attached).toBe(true);
+    expect(ws.data.nativeControl?.attached).toBe(true);
     complete(socket, socket.root);
-    await waitFor(() => !ws.data.nativeSteering);
+    await waitFor(() => !ws.data.nativeControl);
   } finally {
     for (const lease of leases) lease.release();
   }
@@ -429,9 +429,9 @@ test("admission refusal leaves no steering owner and a later admitted turn is in
 
 test("superseding an active turn with warmup clears its steering owner immediately", async () => {
   const { ws, socket, send } = await begin();
-  expect(ws.data.nativeSteering?.attached).toBe(true);
+  expect(ws.data.nativeControl?.attached).toBe(true);
   send({ type: "response.create", model: "gpt-5.5", input: "warmup", generate: false });
-  expect(ws.data.nativeSteering).toBeUndefined();
+  expect(ws.data.nativeControl).toBeUndefined();
   expect(ws.data.cancel).toBeUndefined();
   await waitFor(() => socket.readyState === 3);
 });

@@ -1,4 +1,6 @@
-import { markNativeSteeringResponse, type NativeSteeringChannel } from "./native-steering";
+import { mergeSteeringContinuation } from "./native-steering-settings";
+import { markNativeControlResponse } from "./native-response-control";
+import type { NativeResponseControl } from "./native-response-control";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { isSafeResponseHeader } from "../safe-response-headers";
 import { CodexWsMetadata, type CodexWsQuotaObserver } from "./codex-ws-metadata";
@@ -11,7 +13,7 @@ import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPO
   type CodexWsFailureStage, type CodexWsStageRecord } from "./codex-ws-wire";
 
 interface ExchangeOptions {
-  nativeSteering?: NativeSteeringChannel;
+  nativeControl?: NativeResponseControl;
   beforeContinuation?: () => Promise<void>;
   session: CodexWsSession;
   url: string;
@@ -89,7 +91,7 @@ function wrappedRejectionResponse(payload: Record<string, unknown>, prelude: Hea
 
 /** The sole SSE exchange state machine for both one-shot and retained sockets. */
 export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
-  const { session, url, init, prepared, sseFallback, onQuota, beforeDispatch, bunVersion, nativeSteering, beforeContinuation } = options;
+  const { session, url, init, prepared, sseFallback, onQuota, beforeDispatch, bunVersion, nativeControl, beforeContinuation } = options;
   const { frameText, headers } = prepared;
   const signal = init.signal ?? undefined;
   return new Promise<Response>((resolve, reject) => {
@@ -120,6 +122,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     const correlation = session.retainable ? new CodexWsCorrelation(session.reused, id => session.hasCompleted(id)) : null;
     let detachOwner = () => {};
     let detachSteering = () => {};
+    let continuationBase: Record<string, unknown> | undefined;
     // Liveness while waiting for the first response event (metadata path only): the
     // silence timer is re-armed by every inbound frame or pong; the pinger runs on a fixed
     // interval so a peer that answers pings can never trip the silence bound while alive.
@@ -203,7 +206,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       const response = new Response(stream, { status: 200, headers: responseHeaders });
       metadata?.commit();
       markCodexWsResponse(response, Boolean(metadata && onQuota));
-      if (nativeSteering) markNativeSteeringResponse(response);
+      if (nativeControl) markNativeControlResponse(response);
       markCodexWsStage(response, stageRecord(null));
       committedResponse = response;
       resolve(response);
@@ -336,8 +339,12 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       if (terminal || settledPreOpen || signal?.aborted) return;
       sent = true;
       try {
-        if (nativeSteering) {
-          detachSteering = nativeSteering.attach(frame => {
+        if (nativeControl) {
+          // Parsed once: the base body is immutable for this exchange, and a
+          // full-replay frame runs to megabytes. It seeds continuationBase on
+          // the first create frame.
+          let base: Record<string, unknown> | undefined;
+          detachSteering = nativeControl.attach(frame => {
             const sendControl = () => {
               if (terminal || signal?.aborted || session.closed || ws.readyState !== WebSocket.OPEN) {
                 throw new Error("Native steering connection is no longer available");
@@ -345,16 +352,19 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               beforeDispatch?.(new Headers(headers));
               let outgoing = frame;
               if (frame.type === "response.create") {
-                // The channel validates same settings/lane, saved results and user-only additions.
-                // Reuse the already-routed/authorized native settings; never feed a
-                // previous_response_id through the REST sanitizer or account selector.
-                const base = JSON.parse(frameText) as Record<string, unknown>;
-                outgoing = { ...base, input: frame.input, previous_response_id: frame.previous_response_id };
+                // Generation overrides have passed route policy; identity/tools remain pinned.
+                // Keep the last explicit wire settings for later explicit and automatic successors.
+                base ??= JSON.parse(frameText) as Record<string, unknown>;
+                continuationBase ??= base;
+                outgoing = nativeControl.kind === "steering"
+                  ? mergeSteeringContinuation(continuationBase, frame)
+                  : { ...continuationBase, input: frame.input, previous_response_id: frame.previous_response_id };
               }
               const text = JSON.stringify(outgoing);
               if (codexWsCreateFrameExceedsLimit(text)) {
                 throw new Error("Native steering frame exceeds the transport byte limit");
               }
+              if (frame.type === "response.create") continuationBase = outgoing;
               try { ws.send(text); } catch {
                 // A send failure has unknown delivery. Never replay or fall back.
                 failStream("Native steering send failed; delivery is unknown");
@@ -368,6 +378,15 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             } else sendControl();
           }, error => failStream(error));
         }
+      } catch (error) {
+        // An attach failure is an ownership conflict, not a failed send: no frame
+        // left the process, but the channel can never bind, so resolving the HTTP
+        // fallback here would silently degrade a multi-agent turn into an ordinary
+        // one. Fail the turn visibly instead.
+        failStream(error);
+        return;
+      }
+      try {
         ws.send(frameText);
         sentAt = Date.now();
       } catch {
@@ -441,7 +460,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       let steeringEnded = false;
       if (!controlFrame) {
         try {
-          if (nativeSteering) steeringEnded = nativeSteering.observe(normalized.payload);
+          if (nativeControl) steeringEnded = nativeControl.observe(normalized.payload);
           else correlation?.accept(normalized.payload);
         } catch (error) { failStream(error); return; }
         // Correlation must run first: a reused socket's foreign-stream error settles as a
@@ -485,7 +504,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         return;
       }
       if (!controlFrame) relayedEvents += 1;
-      if (nativeSteering ? steeringEnded : (type === "response.completed" || type === "response.failed" || type === "response.incomplete" || type === "error")) {
+      if (nativeControl ? steeringEnded : (type === "response.completed" || type === "response.failed" || type === "response.incomplete" || type === "error")) {
         const completedId = correlation?.completed(normalized.payload) ?? null;
         terminal = true;
         cleanup();

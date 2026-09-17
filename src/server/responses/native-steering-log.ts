@@ -9,7 +9,7 @@ export function createNativeSteeringLogObserver(logCtx: RequestLogContext, onFir
   return payload => {
     let event: { type?: string; delta?: unknown; response?: { id?: string; usage?: unknown; incomplete_details?: { reason?: string } } };
     try { event = JSON.parse(payload); } catch { return; }
-    if (event.type?.startsWith("response.steer.")) return;
+    if (event.type?.startsWith("response.steer.") || event.type?.startsWith("response.inject.")) return;
     if (!outputSeen && event.type?.endsWith(".delta") && typeof event.delta === "string" && event.delta.length) {
       outputSeen = true; onFirstOutput?.();
     }

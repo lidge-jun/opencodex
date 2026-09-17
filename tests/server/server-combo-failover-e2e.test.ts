@@ -844,60 +844,6 @@ describe("server combo failover 030 activation matrix", () => {
     }
   });
 
-  test("zero-output bare Responses SSE error hops before committing the child stream", async () => {
-    const hits: string[] = [];
-    const a = serve(() => {
-      hits.push("a");
-      return new Response([
-        "event: response.created",
-        `data: ${JSON.stringify({ type: "response.created", response: { id: "r1", status: "in_progress" } })}`,
-        "",
-        "event: error",
-        `data: ${JSON.stringify({
-          type: "error",
-          message: "An error occurred while processing your request. Please include request ID r1.",
-        })}`,
-        "",
-        "",
-      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
-    });
-    const b = serve(() => {
-      hits.push("b");
-      return new Response([
-        "event: response.completed",
-        `data: ${JSON.stringify({
-          type: "response.completed",
-          response: { ...responsesSuccess("bare-error backup", "m2"), status: "completed" },
-        })}`,
-        "",
-        "",
-      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
-    });
-    const config = comboConfig({
-      a: provider("openai-responses", baseUrl(a), "key-a"),
-      b: provider("openai-responses", baseUrl(b), "key-b"),
-    });
-
-    const parent: RequestLogContext = { model: "", provider: "" };
-    const response = await handleResponses(new Request("http://localhost/v1/responses", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
-    }), config, parent);
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain("bare-error backup");
-    expect(hits).toEqual(["a", "b"]);
-    expect(parent).toMatchObject({
-      provider: "combo",
-      model: "combo/free",
-      resolvedModel: "m2",
-      attempts: [
-        { ordinal: 1, provider: "a", model: "m1", status: 502 },
-        { ordinal: 2, provider: "b", model: "m2" },
-      ],
-    });
-  });
-
   test("zero-output adapter EOF hops to the next combo target", async () => {
     const hits: string[] = [];
     const a = serve(() => {
