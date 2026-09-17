@@ -521,7 +521,7 @@ export async function executeComboResponses(
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
-        if (!options.manualCompactionApplied && Object.hasOwn(config.providers, completedTarget.provider)
+        if (!options.manualCompactionOverride && Object.hasOwn(config.providers, completedTarget.provider)
           && provider && provider.disabled !== true
           && currentCombo?.targets.some(target => targetKey(target) === targetKey(completedTarget))) {
           rememberComboForLane(sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration);

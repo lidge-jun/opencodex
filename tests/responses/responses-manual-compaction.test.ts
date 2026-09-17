@@ -84,7 +84,7 @@ describe("manual compaction request selection", () => {
     const headers = new Headers();
     if (location !== "body") headers.set("x-codex-turn-metadata", metadata());
     if (location !== "header") input.client_metadata = { "x-codex-turn-metadata": metadata() };
-    expect(applyManualCompactionOverride(input, headers, config())).toBe(true);
+    expect(applyManualCompactionOverride(input, headers, config())).toEqual({ sourceModel: "gateway/normal" });
     expect(input.model).toBe("gateway/cheap");
     expect(input.reasoning).toEqual({ effort: "low", summary: "auto" });
     expect(input.input).toEqual(history);
@@ -98,14 +98,14 @@ describe("manual compaction request selection", () => {
     const input = body();
     const before = structuredClone(input);
     const headers = new Headers(value === undefined ? {} : { "x-codex-turn-metadata": value });
-    expect(applyManualCompactionOverride(input, headers, config())).toBe(false);
+    expect(applyManualCompactionOverride(input, headers, config())).toBeNull();
     expect(input).toEqual(before);
   });
 
   test("conflicting metadata cannot override automatic compaction", () => {
     for (const [header, embedded] of [[metadata(), metadata("auto")], [metadata("auto"), metadata()], [metadata(), "{"], ["{", metadata()]]) {
       const input = { ...body(), client_metadata: { "x-codex-turn-metadata": embedded } };
-      expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": header! }), config())).toBe(false);
+      expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": header! }), config())).toBeNull();
       expect(input.model).toBe("gateway/normal");
     }
   });
@@ -117,7 +117,7 @@ describe("manual compaction request selection", () => {
       const input = body();
       if (frame) input.client_metadata = { "x-codex-turn-metadata": metadata(frame) };
       const headers = new Headers({ "x-codex-turn-metadata": metadata(handshake) });
-      expect(applyManualCompactionOverride(input, headers, config(), "websocket")).toBe(expected);
+      expect(applyManualCompactionOverride(input, headers, config(), "websocket")).toEqual(expected ? { sourceModel: "gateway/normal" } : null);
       expect(input.model).toBe(expected ? "gateway/cheap" : "gateway/normal");
     }
   });
@@ -126,7 +126,7 @@ describe("manual compaction request selection", () => {
     const input = body();
     const settings = config();
     settings.manualCompaction = { model: "gateway/cheap" };
-    expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toBe(true);
+    expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toEqual({ sourceModel: "gateway/normal" });
     expect(input.reasoning).toEqual({ effort: "high", summary: "auto" });
     expect(settings.manualCompaction).toEqual({ model: "gateway/cheap" });
   });
@@ -136,7 +136,7 @@ describe("manual compaction request selection", () => {
     const before = structuredClone(input);
     const settings = config();
     delete settings.manualCompaction;
-    expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toBe(false);
+    expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toBeNull();
     expect(input).toEqual(before);
   });
 });
@@ -227,7 +227,7 @@ describe("manual compaction reuses existing handlers", () => {
     expect(calls[0]!.body.input).toContainEqual({ type: "compaction_trigger" });
   });
 
-  test("native compact retains its existing endpoint and reasoning behavior", async () => {
+  test("same-provider native compact retains its existing endpoint and reasoning behavior", async () => {
     const settings = config();
     settings.providers["openai-apikey"] = {
       adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", apiKey: "fixture-key",
@@ -238,13 +238,121 @@ describe("manual compaction reuses existing handlers", () => {
       calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
       return Response.json({ output: [{ type: "compaction", encrypted_content: "native-summary" }] });
     }) as typeof fetch;
-    const response = await handleResponsesCompact(request(body(false), "manual", "responses/compact"), settings, { model: "", provider: "" });
+    const input = { ...body(false), model: "openai-apikey/gpt-6-astra" };
+    const response = await handleResponsesCompact(request(input, "manual", "responses/compact"), settings, { model: "", provider: "" });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ output: [{ type: "compaction", encrypted_content: "native-summary" }] });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://api.openai.com/v1/responses/compact");
     expect(calls[0]!.body.model).toBe("gpt-5.6-luna");
     expect(calls[0]!.body.reasoning).toBeUndefined();
+  });
+
+  test.each(["v1", "v2"])("%s cross-provider override produces a summary the conversation model can replay", async version => {
+    const settings = config();
+    settings.providers["openai-apikey"] = {
+      adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", apiKey: "fixture-key",
+    };
+    settings.manualCompaction = { model: "openai-apikey/gpt-5.6-luna", reasoningEffort: "low" };
+    const calls: Array<{ url: string; body: Record<string, any> }> = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body));
+      calls.push({ url: String(url), body: input });
+      if (String(url).endsWith("/compact")) return Response.json({ output: [{ type: "compaction", encrypted_content: "native-ciphertext" }] });
+      return upstreamCompletion(input);
+    }) as typeof fetch;
+    const handler = version === "v1" ? handleResponsesCompact : handleResponses;
+    const response = await handler(request(body(version !== "v1"), "manual"), settings, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    const result = await response.json() as { output: Array<Record<string, any>> };
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://api.openai.com/v1/responses");
+    expect(calls[0]!.body.model).toBe("gpt-5.6-luna");
+    expect(calls[0]!.body.reasoning.effort).toBe("low");
+    expect(JSON.stringify(result.output)).not.toContain("native-ciphertext");
+    if (version === "v1") expect(JSON.stringify(result.output)).toContain(SUMMARY_PREFIX);
+    else expect(decodeCompactionSummary(result.output.find(item => item.type === "compaction")!.encrypted_content)).toContain("Retain progress");
+
+    const resumedBody = body(false);
+    resumedBody.input = [...result.output, ...resumedBody.input];
+    const resumed = await handleResponses(request(resumedBody), settings, { model: "", provider: "" });
+    expect(resumed.status).toBe(200);
+    await resumed.text();
+    expect(calls[1]!.url).toBe("https://gateway.example/v1/responses");
+    expect(calls[1]!.body.model).toBe("normal");
+    expect(JSON.stringify(calls[1]!.body.input)).toContain("Retain progress");
+    expect(JSON.stringify(calls[1]!.body.input)).not.toContain("cannot read");
+  });
+
+  test("same-provider override keeps a caller-supplied bearer; a cross-provider override drops it", async () => {
+    const settings = config();
+    settings.providers.openai = {
+      adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    settings.manualCompaction = { model: "gpt-5.6-luna", reasoningEffort: "low" };
+    const seen: Array<string | null> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers).get("authorization"));
+      return upstreamCompletion(JSON.parse(String(init?.body)));
+    }) as typeof fetch;
+    for (const [sourceModel, expectedStatus] of [["gpt-6-astra", 200], ["gateway/normal", 401]] as const) {
+      const input = { ...body(), model: sourceModel, stream: true };
+      const req = request(input, "manual");
+      req.headers.set("authorization", "Bearer opaque-caller-token");
+      const response = await handleResponses(req, settings, { model: "", provider: "" });
+      expect(response.status).toBe(expectedStatus);
+      await response.text();
+    }
+    expect(seen).toEqual(["Bearer opaque-caller-token"]);
+  });
+
+  test("a ChatGPT target for a routed conversation runs the portable summarizer instead of native compaction", async () => {
+    const settings = config();
+    settings.providers.openai = {
+      adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    settings.manualCompaction = { model: "gpt-5.6-luna", reasoningEffort: "low" };
+    const calls: Array<{ url: string; body: Record<string, any> }> = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body));
+      calls.push({ url: String(url), body: input });
+      if (String(url).endsWith("/compact") || JSON.stringify(input.input).includes("compaction_trigger")) {
+        const response = { ...completion(), model: input.model, output: [{ type: "compaction", encrypted_content: "native-ciphertext" }] };
+        return new Response(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response })}\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return upstreamCompletion(input);
+    }) as typeof fetch;
+    const jwt = `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}`;
+    for (const version of ["v1", "v2"] as const) {
+      calls.length = 0;
+      const req = request(body(version === "v2"), "manual", version === "v1" ? "responses/compact" : "responses");
+      req.headers.set("authorization", jwt);
+      req.headers.set("chatgpt-account-id", "fixture-account");
+      const handler = version === "v1" ? handleResponsesCompact : handleResponses;
+      const response = await handler(req, settings, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).not.toContain("native-ciphertext");
+      const output = (JSON.parse(text) as { output: Array<Record<string, any>> }).output;
+      if (version === "v1") expect(JSON.stringify(output)).toContain(SUMMARY_PREFIX);
+      else expect(decodeCompactionSummary(output.find(item => item.type === "compaction")!.encrypted_content)).toContain("Retain progress");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+      expect(calls[0]!.body.model).toBe("gpt-5.6-luna");
+      expect(JSON.stringify(calls[0]!.body.input)).not.toContain("compaction_trigger");
+
+      const resumedBody = body(false);
+      resumedBody.input = [...output, ...resumedBody.input];
+      const resumed = await handleResponses(request(resumedBody), settings, { model: "", provider: "" });
+      expect(resumed.status).toBe(200);
+      await resumed.text();
+      expect(calls[1]!.url).toBe("https://gateway.example/v1/responses");
+      expect(JSON.stringify(calls[1]!.body.input)).toContain("Retain progress");
+    }
   });
 
   test("manual quota failure cannot borrow the conversation's automatic handoff target", async () => {
@@ -264,7 +372,7 @@ describe("manual compaction reuses existing handlers", () => {
     const seed = await handleResponsesCompact(request(body(false), "auto"), settings, { model: "", provider: "" });
     expect(seed.status).toBe(200);
     await seed.text();
-    const manual = await handleResponsesCompact(request(body(false), "manual"), settings, { model: "", provider: "" });
+    const manual = await handleResponsesCompact(request({ ...body(false), model: "openai-apikey/gpt-6-astra" }, "manual"), settings, { model: "", provider: "" });
     expect(manual.status).toBe(429);
     await manual.text();
     expect(calls).toEqual(["normal", "gpt-5.6-luna"]);

@@ -117,7 +117,7 @@ import {
   codexLogAccountId,
 } from "./core-codex-account";
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
-import { applyManualCompactionOverride } from "./manual-compaction";
+import { applyManualCompactionOverride, manualCompactionKeepsProviderIdentity } from "./manual-compaction";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
@@ -148,8 +148,8 @@ export async function prepareResponsesRequest(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
-  if (!options.comboAttempt && !options.manualCompactionApplied && inboundWire === "responses") {
-    options.manualCompactionApplied = applyManualCompactionOverride(body, req.headers, config, options.inboundTransport);
+  if (!options.comboAttempt && !options.manualCompactionOverride && inboundWire === "responses") {
+    options.manualCompactionOverride = applyManualCompactionOverride(body, req.headers, config, options.inboundTransport);
   }
   // An effort row naming a table-less combo (`combo/x--high`) must reach the combo dispatcher
   // as its base id, so the selector is normalized here, before comboIdFromRawBody reads model.
@@ -182,7 +182,7 @@ export async function prepareResponsesRequest(
   }
   // Compaction may send the last client-visible bare model after a combo switch.
   // Configured selectors take precedence; otherwise recall before combo dispatch (#3891).
-  if (!options.comboAttempt && !options.manualCompactionApplied && body && typeof body === "object" && !Array.isArray(body)) {
+  if (!options.comboAttempt && !options.manualCompactionOverride && body && typeof body === "object" && !Array.isArray(body)) {
     const rawModel = (body as { model?: unknown }).model;
     const rawInput = (body as { input?: unknown }).input;
     const isCompactionTrigger = Array.isArray(rawInput)
@@ -204,7 +204,7 @@ export async function prepareResponsesRequest(
   // hops — which only exist inside that loop — are unreachable (#4129). Rewrite the selector
   // here instead, before comboIdFromRawBody reads `model`, and identify the combo by CONFIG
   // LOOKUP so the check can never observe a one-candidate collapse.
-  if (!options.comboAttempt && !options.manualCompactionApplied && body && typeof body === "object" && !Array.isArray(body)) {
+  if (!options.comboAttempt && !options.manualCompactionOverride && body && typeof body === "object" && !Array.isArray(body)) {
     const shadowIntercept = config.shadowCallIntercept;
     const rawShadowModel = (body as { model?: unknown }).model;
     if (shadowIntercept?.enabled && shadowIntercept.model && typeof rawShadowModel === "string"
@@ -392,7 +392,7 @@ export async function prepareResponsesRequest(
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
 
   let route: RouteResult;
-  let credentialDomainWasRewritten = options.manualCompactionApplied === true;
+  let credentialDomainWasRewritten = false;
   try {
     // A `compaction_trigger` turn may name a bare native model the operator has
     // no canonical OpenAI route for (#2901). Only the initial compaction route
@@ -405,7 +405,7 @@ export async function prepareResponsesRequest(
         : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
-    if (!options.manualCompactionApplied && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+    if (!options.manualCompactionOverride && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
       const sourcePrefix = shadowSourceModelPrefix(parsed.modelId, _sci.sourceModels)!;
       let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
       try {
@@ -433,8 +433,12 @@ export async function prepareResponsesRequest(
         shadowRoute = targetRoute;
       }
     }
-    if (parsed._compactionRequest === true || options.manualCompactionApplied) parsed._cursorIsolateConversation = true;
+    if (parsed._compactionRequest === true || options.manualCompactionOverride) parsed._cursorIsolateConversation = true;
     route = shadowRoute ?? resolveRoute(parsed.modelId);
+    if (options.manualCompactionOverride && !manualCompactionKeepsProviderIdentity(config, options.manualCompactionOverride, route)) {
+      credentialDomainWasRewritten = true;
+      if (parsed._compactionRequest === true) parsed._portableCompaction = true;
+    }
     logCtx.routeDecision = route.routeDecision;
   } catch (err) {
     if (err instanceof NoAvailableComboTargetsError) {

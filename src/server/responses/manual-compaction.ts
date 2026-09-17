@@ -1,5 +1,12 @@
 import type { OcxConfig } from "../../types";
 import { isDeclaredReasoningEffort } from "../../reasoning-effort";
+import { routeConcreteModel, type RouteResult } from "../../router";
+import { resolveComboId } from "../../combos/identifiers";
+
+/** `sourceModel` is the conversation's own selector before the rewrite. */
+export interface ManualCompactionOverride {
+  sourceModel: string;
+}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -7,33 +14,57 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-export function applyManualCompactionOverride(body: unknown, headers: Headers, config: OcxConfig, transport?: "websocket"): boolean {
+export function applyManualCompactionOverride(
+  body: unknown,
+  headers: Headers,
+  config: OcxConfig,
+  transport?: "websocket",
+): ManualCompactionOverride | null {
   const override = config.manualCompaction;
   const raw = record(body);
   if (!raw || typeof raw.model !== "string" || !raw.model.trim()
-    || typeof override?.model !== "string" || !override.model.trim()) return false;
+    || typeof override?.model !== "string" || !override.model.trim()) return null;
   if (override.reasoningEffort !== undefined
-    && (typeof override.reasoningEffort !== "string" || !isDeclaredReasoningEffort(override.reasoningEffort))) return false;
+    && (typeof override.reasoningEffort !== "string" || !isDeclaredReasoningEffort(override.reasoningEffort))) return null;
 
   const metadata: unknown[] = [];
   const header = headers.get("x-codex-turn-metadata");
   if (transport !== "websocket" && header !== null) metadata.push(header);
   const client = record(raw.client_metadata);
   if (client && Object.hasOwn(client, "x-codex-turn-metadata")) metadata.push(client["x-codex-turn-metadata"]);
-  if (metadata.length === 0) return false;
+  if (metadata.length === 0) return null;
   for (const value of metadata) {
-    if (typeof value !== "string") return false;
+    if (typeof value !== "string") return null;
     try {
       const parsed = record(JSON.parse(value));
-      if (parsed?.request_kind !== "compaction" || record(parsed.compaction)?.trigger !== "manual") return false;
+      if (parsed?.request_kind !== "compaction" || record(parsed.compaction)?.trigger !== "manual") return null;
     } catch {
-      return false;
+      return null;
     }
   }
 
+  const sourceModel = raw.model;
   raw.model = override.model.trim();
   if (override.reasoningEffort !== undefined) {
     raw.reasoning = { ...record(raw.reasoning), effort: override.reasoningEffort };
   }
-  return true;
+  return { sourceModel };
+}
+
+/** Same provider identity keeps caller auth and may use native compact; its ciphertext replays only there. */
+export function manualCompactionKeepsProviderIdentity(
+  config: OcxConfig,
+  override: ManualCompactionOverride,
+  route: RouteResult,
+): boolean {
+  if (route.combo || resolveComboId(config, override.sourceModel)) return false;
+  let source: RouteResult;
+  try {
+    source = routeConcreteModel(config, override.sourceModel);
+  } catch {
+    return false;
+  }
+  return source.providerName === route.providerName
+    && source.codexAccountMode === route.codexAccountMode
+    && source.codexAccountNamespace === route.codexAccountNamespace;
 }

@@ -813,13 +813,26 @@ only per-frame metadata; handshake headers can describe an earlier request.
 
 The override changes only the model and optional reasoning effort. Existing native forwarding,
 routed summaries, capability handling, and retry budgets remain authoritative; native compact
-still removes reasoning before sending. Internal handoffs carry a recursion guard so combo
-children and fallback attempts retain their selected targets. Manual overrides bypass shadow
-interception and conversation combo recall, and do not publish replacement combo/handoff recall.
-They never change the conversation's configured model or later automatic-compaction requests.
+still removes reasoning before sending. Internal handoffs carry the override record (with the
+conversation's source model) as a recursion guard so combo children and fallback attempts
+retain their selected targets. Manual overrides bypass shadow interception and conversation
+combo recall, and do not publish replacement combo/handoff recall. They never change the
+conversation's configured model or later automatic-compaction requests.
+
+`manualCompactionKeepsProviderIdentity` compares the source model's concrete route with the
+selected route (provider name, Codex account mode and namespace; combos on either side never
+match). A matching identity keeps the caller's credential and may use the native compact
+endpoint. A mismatch marks the credential domain as rewritten, exactly like a shadow
+intercept, and forces the portable summarizer even for a native-capable target: `compact.ts`
+skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompaction`, which
+`request-sidecar-auth.ts` (`routedCompaction`) and the passthrough adapter's compaction body
+build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the
+backend that minted it; the conversation model would otherwise resume with an omission marker
+in place of its history.
 
 `tests/responses/responses-manual-compaction.test.ts` covers trigger selection, config validation,
-native and routed handlers, summary replay, combo failover, and subsequent conversation settings.
+native and routed handlers, same-provider credential retention, cross-provider portable summaries
+and their replay, combo failover, and subsequent conversation settings.
 
 ## Core module ownership
 
