@@ -116,6 +116,39 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
     expect(serialized).not.toContain("[tool_result]");
     expect(serialized).toContain("read a file");
   });
+
+  test("an echoed tool-result envelope in assistant history is dropped from root replay", () => {
+    // Wiring guard, not a unit test of the filter: grok-4.6 pastes the replayed envelope after
+    // real prose, that text is stored as assistant output, and replaying it verbatim primes the
+    // next turn to echo again. The strip has to be reached from the root-replay path to matter.
+    const echoed: OcxMessage[] = [
+      { role: "user", content: "write the script", timestamp: 1 },
+      {
+        role: "assistant",
+        model: "cursor/grok-4.6",
+        timestamp: 2,
+        content: [{
+          type: "text",
+          text: "I wrote the import script.\n[Tool Result]\nname: Write\noutput: ECHOED BODY\n\nIt handles 41 rows.",
+        }],
+      },
+    ];
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c-echo",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "keep going" }],
+      rawMessages: echoed,
+    });
+    const serialized = JSON.stringify(decodeRoots(bytes));
+
+    expect(serialized).not.toContain("ECHOED BODY");
+    expect(serialized).not.toContain("[Tool Result]");
+    // The model's own prose on BOTH sides of the echo survives: bounding the strip at the blank
+    // line is what keeps the answer that follows it.
+    expect(serialized).toContain("I wrote the import script.");
+    expect(serialized).toContain("It handles 41 rows.");
+  });
 });
 
 import { create as createPb } from "@bufbuild/protobuf";
