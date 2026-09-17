@@ -11,7 +11,10 @@ import type { CursorEffortTable } from "../integrations/cursor-effort-table";
  * constants; context length and vision come from catalog data when known and are omitted
  * otherwise, matching Cursor's optional-field schema.
  *
- * Keep top-level capacity metrics mirrored with `capabilities` for clients that inspect flat rows.
+ * Top-level capacity metrics (`context_window`, `context_length`, `max_output_tokens`) are
+ * mirrored directly on each model row for external client discovery (e.g. pi-ai, DSH,
+ * LibreChat) that inspects flat properties rather than Cursor's nested `capabilities.*` shape.
+ * A row that gains a nested capacity value must gain the top-level mirror in the same change.
  */
 
 /**
