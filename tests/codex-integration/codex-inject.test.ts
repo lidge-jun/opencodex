@@ -15,6 +15,7 @@ import {
   stripRootContextWindowOverrides,
   standaloneCodexRoutingTarget,
 } from "../../src/codex/inject";
+import { extractOcxProviderTableBlock } from "../../src/codex/inject/remove";
 import { OCX_SECTION_MARKER, stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
 import {
   MANAGED_AGENTS_TABLE_MARKER,
@@ -595,6 +596,39 @@ describe("Design B openai_base_url injection", () => {
     expect(stripped).not.toContain("opencodex");
     expect(stripped).not.toContain("openai_base_url");
     expect(stripped).toContain('model = "gpt-5.5"');
+  });
+
+  test("provider-table capture ignores the identical marker on the root base-url override", () => {
+    const content = [
+      "# Auto-injected by opencodex",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      'model = "vendor/routed-model"',
+      "",
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+      "[model_providers.opencodex.env_http_headers]",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      "",
+      "[agents]",
+      "max_concurrent_threads_per_session = 8",
+      "",
+    ].join("\n");
+
+    expect(extractOcxProviderTableBlock(content)).toBe([
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+      "[model_providers.opencodex.env_http_headers]",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      "",
+    ].join("\n"));
   });
 
   test("legacy marker directly before the provider table survives the root strip order (removeOcxSection keeps its anchor)", () => {

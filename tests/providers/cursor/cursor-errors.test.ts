@@ -1,10 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   classifyCursorError,
+  CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX,
   isCursorBenignCancelError,
+  isCursorIncompleteToolCallMessage,
   isCursorInvalidArgumentError,
   safeCursorErrorMessage,
 } from "../../../src/adapters/cursor/cursor-errors";
+import {
+  inferCursorContextWindow,
+  recordObservedCursorContextWindow,
+  resetObservedCursorContextWindowsForTests,
+} from "../../../src/adapters/cursor/discovery";
+import { createCursorProtobufEventState, finalizeTurnEvents } from "../../../src/adapters/cursor/protobuf-events";
 import { inferHttpStatusFromAdapterMessage } from "../../../src/lib/errors";
 
 describe("classifyCursorError", () => {
@@ -199,5 +207,55 @@ describe("bare resource_exhausted size prior (devlog 260)", () => {
   test("explicit size phrases stay resource-limit regardless of size context", () => {
     expect(classifyCursorError("resource_exhausted: request body exceeds maximum allowed size", { estimatedInputTokens: 20, contextWindow: 200_000 }))
       .toBe("Cursor resource limit exceeded");
+  });
+
+  describe("observed checkpoint maxTokens feeds the size prior", () => {
+    afterEach(() => {
+      resetObservedCursorContextWindowsForTests();
+    });
+
+    test("a 20-token request against an observed 32k ceiling stays 429", () => {
+      const options = { identityScope: "account-a" };
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, options);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", options)).toBe(32_000);
+      expect(classifyCursorError(BARE, {
+        estimatedInputTokens: 20,
+        contextWindow: inferCursorContextWindow("claude-4.6-sonnet", options),
+      })).toBe("Cursor rate limit exceeded");
+    });
+
+    test("a request that is large relative to the observed ceiling stays overflow", () => {
+      const options = { identityScope: "account-a" };
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, options);
+      expect(classifyCursorError(BARE, {
+        estimatedInputTokens: 20_000,
+        contextWindow: inferCursorContextWindow("claude-4.6-sonnet", options),
+      })).toBe("Cursor context limit exceeded");
+    });
+  });
+});
+
+describe("isCursorIncompleteToolCallMessage", () => {
+  test("matches the message produced by finalizeTurnEvents", () => {
+    const state = createCursorProtobufEventState();
+    state.openToolCalls.set("call_from_producer", { name: "read_file", args: "" });
+
+    const [event] = finalizeTurnEvents(state);
+
+    expect(event?.type).toBe("error");
+    if (event?.type !== "error") throw new Error("incomplete tool call must finalize as an error");
+    expect(event.message.startsWith(CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX)).toBe(true);
+    expect(isCursorIncompleteToolCallMessage(event.message)).toBe(true);
+  });
+
+  test("matches streamed incomplete-tool errors and the unused truncation class", () => {
+    expect(isCursorIncompleteToolCallMessage(
+      "Cursor stream ended with incomplete tool call(s): call_abc. Arguments may be truncated; the call was not committed.",
+    )).toBe(true);
+    expect(isCursorIncompleteToolCallMessage(
+      "Cursor stream ended without terminating the turn; 1 tool call(s) left incomplete (call_abc) after 3 frame(s).",
+    )).toBe(true);
+    expect(isCursorIncompleteToolCallMessage("Cursor rate limit exceeded")).toBe(false);
+    expect(isCursorIncompleteToolCallMessage(new Error("Cursor stream ended with incomplete tool call(s): x"))).toBe(true);
   });
 });

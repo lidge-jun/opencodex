@@ -1,4 +1,6 @@
 import type { ResponsesTerminalStatus } from "../../bridge";
+import { comboFailureDecision } from "../../combos";
+import { httpStatusFromTerminalError } from "../../lib/errors";
 import type { RequestLogContext } from "../request-log";
 import { createSseInspector } from "../relay";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
@@ -30,12 +32,67 @@ const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "upstream_stall_timeout",
 ]);
 
+function bareErrorStatus(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const event = payload as Record<string, unknown>;
+  if (event.type !== "error") return undefined;
+  const nested = event.error;
+  const error = nested && typeof nested === "object" && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : event;
+  const explicitStatus = [
+    event.status,
+    event.status_code,
+    event.http_status,
+    error.status,
+    error.status_code,
+    error.http_status,
+  ]
+    .map(value => typeof value === "number" && Number.isInteger(value)
+      ? value
+      : typeof value === "string" && /^\d{3}$/.test(value.trim())
+        ? Number(value)
+        : undefined)
+    .find(value => value !== undefined && value >= 400 && value <= 599);
+  const code = typeof error.code === "string"
+    ? error.code
+    : typeof event.code === "string" ? event.code : null;
+  if (explicitStatus === undefined && code === "invalid_request_error") return 400;
+  return explicitStatus ?? httpStatusFromTerminalError({
+    type: typeof error.type === "string" && error.type !== "error" ? error.type : undefined,
+    code,
+    message: typeof error.message === "string"
+      ? error.message
+      : typeof event.message === "string" ? event.message : undefined,
+  });
+}
+
+function bareErrorIsRetryable(payload: unknown): boolean {
+  const status = bareErrorStatus(payload);
+  if (status === undefined || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const event = payload as Record<string, unknown>;
+  const nested = event.error;
+  const error = nested && typeof nested === "object" && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : event;
+  const code = typeof error.code === "string"
+    ? error.code
+    : typeof event.code === "string" ? event.code : null;
+  const message = typeof error.message === "string"
+    ? error.message
+    : typeof event.message === "string" ? event.message : "";
+  return comboFailureDecision(status, message, { code }) === "hop";
+}
+
 function retryableZeroOutputTerminal(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
     type?: unknown;
     response?: { incomplete_details?: { reason?: unknown } };
   };
+  if (bareErrorIsRetryable(event)) return true;
   if (event.type === "response.failed") return true;
   if (event.type !== "response.incomplete") return false;
   const reason = event.response?.incomplete_details?.reason;
@@ -95,12 +152,17 @@ function failedTerminalResponse(
     ? nested as Record<string, unknown>
     : {};
   const nestedError = terminalResponse.error;
+  const topLevelError = terminalPayload.error;
   const error = nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)
     ? nestedError as Record<string, unknown>
+    : topLevelError && typeof topLevelError === "object" && !Array.isArray(topLevelError)
+      ? topLevelError as Record<string, unknown>
     : {
       type: "upstream_error",
       code: "upstream_server_error",
-      message: logCtx.upstreamError ?? "Provider stream failed before producing output",
+      message: typeof terminalPayload.message === "string"
+        ? terminalPayload.message
+        : logCtx.upstreamError ?? "Provider stream failed before producing output",
     };
   const headers = new Headers(response.headers);
   headers.set("content-type", "application/json");
@@ -117,7 +179,7 @@ function failedTerminalResponse(
       ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
     },
   }), {
-    status: logCtx.terminalHttpStatus ?? 502,
+    status: logCtx.terminalHttpStatus ?? bareErrorStatus(terminalPayload) ?? 502,
     headers,
   });
 }
@@ -154,11 +216,12 @@ export async function preflightComboStreamResponse(
   const inspector = createSseInspector({
     logCtx,
     onParsedPayload: payload => {
+      if (terminalStatus !== undefined || outputCommitted || retryableTerminalPayload) return;
       const retryable = retryableTerminal(payload);
       const matchedBareError = retryable && payload !== null && typeof payload === "object"
         && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
-      // Only an explicit caller predicate may opt a known bare error into replay.
-      // Default combo classification still commits unknown/error events.
+      // A zero-output bare error is terminal evidence. Explicit client errors stay
+      // committed; unknown and retryable upstream failures may advance the combo.
       if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError) outputCommitted = true;
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
       if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
@@ -197,7 +260,7 @@ export async function preflightComboStreamResponse(
       }
 
       // A bare error event is not a protocol terminal (terminalStatus stays undefined),
-      // so its exact-message retryable match doubles as the terminal evidence.
+      // so its retryable classification doubles as the terminal evidence.
       if ((terminalStatus === "failed" || terminalStatus === "incomplete"
         || retryableTerminalPayload?.type === "error")
         && !outputCommitted && retryableTerminalPayload) {

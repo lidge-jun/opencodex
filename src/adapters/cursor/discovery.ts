@@ -24,8 +24,54 @@ const CONTEXT_272K = 272_000;
 const CONTEXT_262K = 262_144;
 const CONTEXT_256K = 256_000;
 const CONTEXT_200K = 200_000;
+export const CURSOR_OBSERVED_CONTEXT_WINDOW_MAX_ENTRIES = 2_048;
 
-export function inferCursorContextWindow(modelId: string): number {
+/**
+ * Process-local ceilings from `ConversationTokenDetails.maxTokens` on live
+ * checkpoints. Each observation belongs to the Cursor identity scope that
+ * produced it; plan-gated accounts sharing one proxy must not overwrite each
+ * other's overflow prior (senpi `cursor-context-limit`).
+ */
+const observedCursorContextWindows = new Map<string, number>();
+
+interface CursorContextWindowOptions {
+  identityScope?: string;
+  observed?: number;
+}
+
+function normalizeObservedWindowKey(modelId: string, identityScope?: string): string {
+  return `${identityScope?.trim() || "local"}\0${modelId.trim().toLowerCase()}`;
+}
+
+export function recordObservedCursorContextWindow(
+  modelId: string,
+  maxTokens: number | undefined,
+  options: Pick<CursorContextWindowOptions, "identityScope"> = {},
+): void {
+  if (!modelId.trim()) return;
+  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens) || maxTokens <= 0) return;
+  const key = normalizeObservedWindowKey(modelId, options.identityScope);
+  observedCursorContextWindows.delete(key);
+  observedCursorContextWindows.set(key, Math.floor(maxTokens));
+  while (observedCursorContextWindows.size > CURSOR_OBSERVED_CONTEXT_WINDOW_MAX_ENTRIES) {
+    const oldest = observedCursorContextWindows.keys().next().value;
+    if (oldest === undefined) break;
+    observedCursorContextWindows.delete(oldest);
+  }
+}
+
+export function observedCursorContextWindow(
+  modelId: string,
+  options: Pick<CursorContextWindowOptions, "identityScope"> = {},
+): number | undefined {
+  return observedCursorContextWindows.get(normalizeObservedWindowKey(modelId, options.identityScope));
+}
+
+export function resetObservedCursorContextWindowsForTests(): void {
+  observedCursorContextWindows.clear();
+}
+
+function inferCursorContextWindowHeuristic(modelId: string): number {
   const id = modelId.trim().toLowerCase();
   if (id.includes("1m")) return CONTEXT_1M;
   if (id.startsWith("gemini-")) return CONTEXT_1M;
@@ -38,6 +84,24 @@ export function inferCursorContextWindow(modelId: string): number {
   if (id.startsWith("grok-")) return CONTEXT_256K;
   if (id.includes("claude")) return CONTEXT_200K;
   return CURSOR_DEFAULT_CONTEXT_WINDOW;
+}
+
+/**
+ * Infer a conservative context window for a Cursor model id.
+ *
+ * A positive explicit observation wins, then an identity-scoped process-local
+ * checkpoint `maxTokens`, then the id heuristic. Cursor's `AvailableModelsResponse`
+ * does not currently include per-model context window metadata.
+ */
+export function inferCursorContextWindow(
+  modelId: string,
+  options: CursorContextWindowOptions = {},
+): number {
+  const { observed } = options;
+  if (typeof observed === "number" && Number.isFinite(observed) && observed > 0) {
+    return Math.floor(observed);
+  }
+  return observedCursorContextWindow(modelId, options) ?? inferCursorContextWindowHeuristic(modelId);
 }
 
 function normalizeInputModalities(input: string[] | undefined): string[] {

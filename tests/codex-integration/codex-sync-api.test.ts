@@ -22,18 +22,23 @@ const COMPETING_OFF_REAP_MS = 5_000;
  *
  * It used to derive them, and three derivations multiplied a single edit: when that shared
  * constant moved 45s -> 90s the outer bound here went 130s -> 265s, which nobody chose and no
- * measurement asked for. A 265s case on a Windows shard that already runs 25 minutes leaves an
- * unsafe margin against the 30-minute job timeout, so one hang would have been reported as a
- * cancelled job rather than as a named Bun timeout.
+ * measurement asked for. A 265s case on a Windows shard that already runs about 25 minutes
+ * leaves an unsafe margin against the 30-minute job timeout, so one hang would have been
+ * reported as a cancelled job rather than as a named Bun timeout.
  *
- * What the case costs in practice: five Windows shard logs put it at 3.7s, 3.8s, 4.1s, 7.6s
- * and 9.4s. What the numbers below are for is the cold-start outlier the reserve was written
- * against — 52.7s of real identity/admission preflight before the flip could even start. They
- * are headroom for that, not a duration, and the child now reports its own preparation time on
- * every green run so the next revision of these bounds can be measured rather than argued.
+ * The Windows reserve existed for a preflight nobody had measured — "CI observed 52.7s before
+ * the flip could even start" — so the child now reports its own preparation window on every
+ * green run. Run 35141541461 measured it at 2740ms on Windows and 423-575ms on Linux and
+ * macOS, with the whole case at 3675ms and 660-780ms; five earlier Windows shard logs put the
+ * case at 3.7s to 9.4s.
+ *
+ * These are still headroom rather than durations, sized so that even the 52.7s outlier the
+ * reserve was written for would fit: 52.7s of preparation still leaves the flip its full boot
+ * budget and its reap inside `COMPETING_OFF_CHILD_MS`. What they no longer do is track an
+ * unrelated shared constant.
  */
-const COMPETING_OFF_BOOT_MS = 40_000;
-const COMPETING_OFF_PREPARATION_MS = process.platform === "win32" ? 80_000 : COMPETING_OFF_BOOT_MS;
+const COMPETING_OFF_BOOT_MS = 30_000;
+const COMPETING_OFF_PREPARATION_MS = process.platform === "win32" ? 55_000 : COMPETING_OFF_BOOT_MS;
 const COMPETING_OFF_CHILD_MS = COMPETING_OFF_PREPARATION_MS + COMPETING_OFF_BOOT_MS + COMPETING_OFF_REAP_MS;
 const COMPETING_OFF_TEST_MS = COMPETING_OFF_CHILD_MS + COMPETING_OFF_REAP_MS;
 let prevCodexHome: string | undefined;
