@@ -1,7 +1,8 @@
 import type { OcxConfig } from "../types";
 import { getMainPolicyQuota } from "./quota";
+import { MAIN_ACCOUNT_HARD_LOCK_PERCENT } from "./quota-types";
 
-export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 99;
+export { MAIN_ACCOUNT_HARD_LOCK_PERCENT };
 
 export interface MainAccountHardLockStatus {
   enabled: boolean;

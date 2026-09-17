@@ -1,4 +1,6 @@
 /** Quota wire/storage shapes. This leaf must not import credential or config owners. */
+export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 99;
+
 export type StoredAccountQuota = {
   weeklyPercent?: number;
   monthlyPercent?: number;

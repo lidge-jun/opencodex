@@ -254,9 +254,11 @@ future or missing deadlines remain carried, and explicit incoming short readings
 This stops partial weekly/Spark or credits-only refreshes from renewing obsolete Spark-derived
 5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows.
 
-The separately retained main-policy snapshot preserves omitted short evidence even after its
-reset clock passes. Credits-only, weekly-only, and metadata-only updates cannot remove an
-existing short usage reading or release its hard lock; a fresh short reading can replace it.
+The separately retained main-policy snapshot preserves omitted blocking short evidence even after
+its reset clock passes. Credits-only, weekly-only, and metadata-only updates cannot remove an
+existing blocking short usage reading or release its hard lock; a fresh short reading can replace
+it. Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking
+weekly reading.
 
 The Codex writer explicitly asks `src/quota/reset-observer.ts` to retain an absent short window
 in `src/quota/reset-seen-store.ts`, with its original observation time. Detection compares only
