@@ -303,11 +303,13 @@ function uninstallFixture() {
     duringRemove?: () => void;
     finishCleanup: boolean;
     lease?: ClientLifecycleHeld;
+    aclReapPending: boolean;
     calls: { read: number; cleanup: number; remove: number; finalLock: number };
     cleanupOptions: Array<Parameters<UninstallClientStateDeps["disconnect"]>[0]>;
   } = {
     connection: { kind: "disconnected" }, desktop: { kind: "absent" }, receipt: { kind: "absent" },
-    finishCleanup: true, calls: { read: 0, cleanup: 0, remove: 0, finalLock: 0 }, cleanupOptions: [],
+    finishCleanup: true, aclReapPending: false,
+    calls: { read: 0, cleanup: 0, remove: 0, finalLock: 0 }, cleanupOptions: [],
   };
   const deps: UninstallClientStateDeps = {
     readConnection: () => { fixture.calls.read++; return fixture.connection; },
@@ -351,6 +353,7 @@ function uninstallFixture() {
       rmSync(configDir, { recursive: true });
       return { status: "removed", residualPaths: [] };
     },
+    aclReapPending: () => fixture.aclReapPending,
   };
   const bytes = () => sentinels.map(path => readFileSync(join(configDir, path), "utf8"));
   return { fixtureRoot, configDir, lockPath, fixture, deps, bytes };
@@ -419,6 +422,21 @@ describe("uninstall client cleanup before owner-state deletion", () => {
       const before = f.bytes();
       await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps)).rejects.toThrow("changed before removal");
       expect(f.fixture.calls.cleanup).toBe(1);
+      expect(f.fixture.calls.remove).toBe(0);
+      expect(f.bytes()).toEqual(before);
+    });
+  });
+
+  test("a pending ACL reap under the config directory refuses removal instead of waiting", async () => {
+    await withUninstallFixture(async f => {
+      // The async ACL belt releases its caller on a stalled icacls.exe so startup and shutdown
+      // stay bounded. That release is not evidence the child let go of the directory, and on
+      // Windows removing a tree it still holds fails partway. Refusing is the honest answer:
+      // waiting here would let a stuck child hang `ocx uninstall`.
+      f.fixture.aclReapPending = true;
+      const before = f.bytes();
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("ACL hardening still owns a path under the config directory");
       expect(f.fixture.calls.remove).toBe(0);
       expect(f.bytes()).toEqual(before);
     });

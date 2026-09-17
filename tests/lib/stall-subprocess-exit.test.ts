@@ -2,10 +2,9 @@
  * `waitForSubprocessExit` must not call a child dead before it is.
  *
  * The helper used to kill at the deadline and resolve in the same tick. Every caller then
- * believed it had waited for its child, which is the guarantee `flushConfigDirHardening` is built
- * on -- shutdown owning every `icacls.exe` it started. On Windows the handle an abandoned child
- * holds keeps a directory unremovable, so the caller proceeded to remove a tree that was still
- * locked and got EPERM. Three separate fixes aimed at the removal retry instead (#4789 raised the
+ * believed it had waited for its child. On Windows the handle an abandoned child holds keeps a
+ * directory unremovable, so the caller proceeded to remove a tree that was still locked and got
+ * EPERM. Three separate fixes aimed at the removal retry instead (#4789 raised the
  * budget, #4796 made it exponential over 15s, a later change awaited the hardening flight) and all
  * three failed identically on Windows shard 1/6, because none of them made the child exit.
  *
@@ -14,11 +13,31 @@
  * anything, on every platform, deterministically.
  */
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
-  flushRequiredSubprocessReapsForTests,
   waitForSubprocessExit,
   type KillableSubprocess,
 } from "../../src/lib/bounded-subprocess";
+import {
+  flushWindowsSecretAclReapsBeforeRemoval,
+  hardenSecretDirAsync,
+  resetHardenedStateForTests,
+  setAsyncIcaclsBeltSchedulerForTests,
+  setAsyncIcaclsRunnerForTests,
+  setNowForTests,
+  setPlatformForTests,
+} from "../../src/lib/windows-secret-acl";
+import {
+  AtomicWriteResidualTempError,
+  atomicWriteFileAsync,
+  setWindowsHardeningForTests,
+} from "../../src/config/atomic-write";
+import {
+  resetWindowsPrincipalForTests,
+  setAsyncWindowsPrincipalRunnerForTests,
+} from "../../src/lib/windows-user-principal";
 
 const DEADLINE_MS = 10;
 const REAP_REQUIRED = 1;
@@ -122,21 +141,17 @@ describe("waitForSubprocessExit", () => {
     expect(await pending).toEqual({ exitCode: null, timedOut: true });
   });
 
-  test("a child that outlives its kill keeps both the caller and teardown drain pending", async () => {
+  test("a child that outlives its kill keeps the caller pending until actual exit", async () => {
     const proc = fakeSubprocess();
     const deadline = manualDeadline();
     const pending = waitForSubprocessExit(proc, DEADLINE_MS, REAP_REQUIRED, deadline.schedule);
     deadline.fire();
-    const drain = flushRequiredSubprocessReapsForTests();
-
     expect(await promiseSettled(pending)).toBe(false);
-    expect(await promiseSettled(drain)).toBe(false);
     expect(proc.killCount()).toBe(1);
     expect(proc.unrefCount()).toBe(0);
 
     proc.settle(1);
     expect(await pending).toEqual({ exitCode: null, timedOut: true });
-    await drain;
   });
 
   test("a rejected exit before the deadline is not a timeout", async () => {
@@ -186,5 +201,112 @@ describe("waitForSubprocessExit", () => {
     expect(proc.killCount()).toBe(1);
     // Abandoned immediately rather than after a grace it was told not to take.
     expect(proc.unrefCount()).toBe(1);
+  });
+});
+
+describe("async icacls belt removal ownership", () => {
+  test("the belt releases the harden caller but removal waits for the runner reap", async () => {
+    const target = mkdtempSync(join(tmpdir(), "ocx-acl-belt-"));
+    const belt = manualDeadline();
+    let now = 0;
+    let releaseRunner!: () => void;
+    let runnerStarted!: () => void;
+    const started = new Promise<void>(resolve => { runnerStarted = resolve; });
+    const runner = new Promise<void>(resolve => { releaseRunner = resolve; });
+    setPlatformForTests("win32");
+    setAsyncWindowsPrincipalRunnerForTests(async () => ({
+      success: true,
+      exitCode: 0,
+      timedOut: false,
+      stdout: "S-1-5-21-1-2-3-1001\nTEST\\user\n",
+    }));
+    setNowForTests(() => now);
+    setAsyncIcaclsBeltSchedulerForTests(belt.schedule);
+    setAsyncIcaclsRunnerForTests(async () => {
+      runnerStarted();
+      await runner;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    try {
+      const harden = hardenSecretDirAsync(target, { required: false, deadlineMs: 10 });
+      await started;
+      now = 11;
+      belt.fire();
+
+      expect((await harden).ok).toBe(false);
+      const removalBarrier = flushWindowsSecretAclReapsBeforeRemoval(target);
+      expect(await promiseSettled(removalBarrier)).toBe(false);
+      expect(existsSync(target)).toBe(true);
+
+      releaseRunner();
+      await removalBarrier;
+      rmSync(target, { recursive: true });
+    } finally {
+      releaseRunner();
+      await flushWindowsSecretAclReapsBeforeRemoval(target);
+      setAsyncIcaclsRunnerForTests(null);
+      setAsyncIcaclsBeltSchedulerForTests(null);
+      setNowForTests(null);
+      setPlatformForTests(null);
+      setAsyncWindowsPrincipalRunnerForTests(null);
+      resetWindowsPrincipalForTests();
+      resetHardenedStateForTests();
+      if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  test("an async atomic writer leaves its temp untouched while icacls is still live", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "ocx-atomic-acl-belt-"));
+    const destination = join(targetDir, "secret.json");
+    const belt = manualDeadline();
+    let now = 0;
+    let releaseRunner!: () => void;
+    let runnerStarted!: () => void;
+    const started = new Promise<void>(resolve => { runnerStarted = resolve; });
+    const runner = new Promise<void>(resolve => { releaseRunner = resolve; });
+    setPlatformForTests("win32");
+    setAsyncWindowsPrincipalRunnerForTests(async () => ({
+      success: true,
+      exitCode: 0,
+      timedOut: false,
+      stdout: "S-1-5-21-1-2-3-1001\nTEST\\user\n",
+    }));
+    setWindowsHardeningForTests(true);
+    setNowForTests(() => now);
+    setAsyncIcaclsBeltSchedulerForTests(belt.schedule);
+    setAsyncIcaclsRunnerForTests(async () => {
+      runnerStarted();
+      await runner;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    try {
+      const writing = atomicWriteFileAsync(destination, "secret");
+      await started;
+      now = 60_001;
+      belt.fire();
+
+      const error = await writing.catch(cause => cause);
+      expect(error).toBeInstanceOf(AtomicWriteResidualTempError);
+      const tempPath = (error as AtomicWriteResidualTempError).tempPath;
+      expect(existsSync(tempPath)).toBe(true);
+      const removalBarrier = flushWindowsSecretAclReapsBeforeRemoval(targetDir);
+      expect(await promiseSettled(removalBarrier)).toBe(false);
+
+      releaseRunner();
+      await removalBarrier;
+      rmSync(targetDir, { recursive: true });
+    } finally {
+      releaseRunner();
+      await flushWindowsSecretAclReapsBeforeRemoval(targetDir);
+      setAsyncIcaclsRunnerForTests(null);
+      setAsyncIcaclsBeltSchedulerForTests(null);
+      setNowForTests(null);
+      setWindowsHardeningForTests(null);
+      setPlatformForTests(null);
+      setAsyncWindowsPrincipalRunnerForTests(null);
+      resetWindowsPrincipalForTests();
+      resetHardenedStateForTests();
+      if (existsSync(targetDir)) rmSync(targetDir, { recursive: true, force: true });
+    }
   });
 });

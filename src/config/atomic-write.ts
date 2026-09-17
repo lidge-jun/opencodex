@@ -18,6 +18,7 @@ import {
   hardenSecretPath,
   hardenSecretPathAsync,
   reattributeHardenedSecretPath,
+  windowsSecretAclReapPendingForPath,
 } from "../lib/windows-secret-acl";
 import {
   renameAtomicFile,
@@ -323,9 +324,11 @@ export async function atomicWriteFileAsync(
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let hardened = false;
+  let tempWasHardenedBeforeContent = false;
   try {
     if (io) ownsTemp = true;
     await effective.write(tmp, content);
+    tempWasHardenedBeforeContent = io === undefined && windowsHardeningApplies();
     await testSeam?.afterTempWrite?.(tmp);
     await effective.harden(tmp);
     hardened = true;
@@ -333,6 +336,13 @@ export async function atomicWriteFileAsync(
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {
     if (!ownsTemp) throw cause;
+    // The async ACL belt bounds the writer, but it is not evidence that icacls released this
+    // path. Leave the temp in the existing residual state instead of racing an unlink against a
+    // live Windows handle. The default Windows writer hardens before writing secret bytes; a
+    // failure inside that initial harden leaves its still-empty temp behind.
+    if (windowsSecretAclReapPendingForPath(tmp)) {
+      throw new AtomicWriteResidualTempError(tmp, tempWasHardenedBeforeContent, { cause });
+    }
     let scrubbed = false;
     try {
       await effective.truncate(tmp);

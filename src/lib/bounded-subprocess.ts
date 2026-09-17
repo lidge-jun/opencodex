@@ -14,8 +14,6 @@ export type SubprocessDeadlineScheduler = (
   milliseconds: number,
 ) => () => void;
 
-const pendingRequiredReaps = new Set<Promise<void>>();
-
 const scheduleDeadline: SubprocessDeadlineScheduler = (callback, milliseconds) => {
   const timer = setTimeout(callback, milliseconds);
   return () => clearTimeout(timer);
@@ -31,20 +29,13 @@ const scheduleDeadline: SubprocessDeadlineScheduler = (callback, milliseconds) =
  */
 export const SUBPROCESS_KILL_GRACE_MS = 2_000;
 
-/** Test teardown owns every handle-bearing subprocess even if an outer watchdog returned first. */
-export async function flushRequiredSubprocessReapsForTests(): Promise<void> {
-  while (pendingRequiredReaps.size > 0) {
-    await Promise.all([...pendingRequiredReaps]);
-  }
-}
-
 /**
  * Wait for a child until the deadline. At the deadline, kill it AND wait for it to actually die.
  *
  * This used to kill, `unref`, and resolve in the same tick, which made every caller's "I waited
- * for my child" guarantee false precisely when it mattered. `flushConfigDirHardening` exists so
- * shutdown owns every `icacls.exe` it started; it awaited a promise that had already settled while
- * the child was still alive, so the contract read as satisfied and the directory stayed locked.
+ * for my child" guarantee false precisely when it mattered. The ACL runner now waits here until
+ * actual exit; if its separate caller-facing belt fires first, that layer registers the target so
+ * removal can wait for the reap without making ordinary startup or shutdown unbounded.
  *
  * That cost three failed fixes. #4789 blamed the removal retry budget and asked for more than
  * 2.5s; #4796 gave it a 15s exponential schedule; a later change awaited the hardening flight from
@@ -92,9 +83,6 @@ export function waitForSubprocessExit(
         finish({ exitCode: null, timedOut: true });
         return;
       }
-      const tracked = reaped.then(() => undefined);
-      pendingRequiredReaps.add(tracked);
-      void tracked.finally(() => pendingRequiredReaps.delete(tracked));
     }, Math.max(1, timeoutMs));
   });
 }

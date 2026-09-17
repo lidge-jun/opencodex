@@ -30,8 +30,13 @@
  */
 
 import { existsSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { env, platform } from "node:process";
-import { SUBPROCESS_KILL_GRACE_MS, waitForSubprocessExit } from "./bounded-subprocess";
+import {
+  SUBPROCESS_KILL_GRACE_MS,
+  waitForSubprocessExit,
+  type SubprocessDeadlineScheduler,
+} from "./bounded-subprocess";
 import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
 import {
   cachedCurrentWindowsIdentity,
@@ -48,8 +53,15 @@ const hardenedPaths = new Map<string, HardenedIdentity>();
  * that attempt was consumed. Ordinary callers never consume it.
  */
 const timedOutPaths = new Map<string, boolean>();
-/** Slack above the kill grace so the outer belt can never fire before the runner settles. */
+/** Compatibility slack before the outer belt releases a caller whose killed child has not reaped. */
 const ASYNC_ICACLS_BELT_MARGIN_MS = 250;
+const pendingAsyncIcaclsReaps = new Map<string, Set<Promise<void>>>();
+
+const scheduleAsyncIcaclsBelt: SubprocessDeadlineScheduler = (callback, milliseconds) => {
+  const timer = setTimeout(callback, milliseconds);
+  return () => clearTimeout(timer);
+};
+let asyncIcaclsBeltScheduler: SubprocessDeadlineScheduler = scheduleAsyncIcaclsBelt;
 
 /**
  * The memo value: the `object` plus `freshness` of a file a harden was actually
@@ -347,7 +359,7 @@ function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
 /**
  * Async icacls runner (#612): yields the event loop while waiting for the child.
  * Async Subprocess has no exitedDueToTimeout, so the shared settlement helper
- * classifies the deadline and abandons a child that does not settle after kill.
+ * classifies the deadline and keeps waiting for a killed child to actually exit.
  */
 async function defaultAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
   const proc = trySpawnIcacls(args);
@@ -367,23 +379,76 @@ async function defaultAsyncIcaclsRunner(args: string[], timeoutMs: number): Prom
 function awaitAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
   return new Promise(resolve => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelBelt: (() => void) | undefined;
     const finish = (result: IcaclsResult): void => {
       if (settled) return;
       settled = true;
-      if (timer !== undefined) clearTimeout(timer);
+      cancelBelt?.();
       resolve(result);
     };
+    const runner = asyncIcaclsRunner(args, timeoutMs).then(
+      result => { finish(result); },
+      () => { finish(spawnFailedResult()); },
+    );
     // The belt has to outlast the runner it is guarding, or it is not a belt -- it is the
-    // deadline. At exactly `timeoutMs` this used to resolve while `waitForSubprocessExit` was
-    // still killing the child, which reintroduced the abandonment that helper now avoids: the
-    // caller saw a settled flight and started removing a directory `icacls.exe` still held.
-    timer = setTimeout(
-      () => finish({ success: false, exitCode: null, timedOut: true, stdout: "" }),
+    // deadline. The runner may now legitimately outlive it while a killed child is reaped. The
+    // caller is still released, but the target is registered so removal can wait for the distinct
+    // handle-release question instead of treating flight settlement as proof that the child died.
+    cancelBelt = asyncIcaclsBeltScheduler(
+      () => {
+        const targetPath = args[0];
+        if (targetPath) registerPendingAsyncIcaclsReap(targetPath, runner);
+        finish({ success: false, exitCode: null, timedOut: true, stdout: "" });
+      },
       Math.max(1, timeoutMs) + SUBPROCESS_KILL_GRACE_MS + ASYNC_ICACLS_BELT_MARGIN_MS,
     );
-    void asyncIcaclsRunner(args, timeoutMs).then(finish, () => finish(spawnFailedResult()));
   });
+}
+
+function registerPendingAsyncIcaclsReap(targetPath: string, reap: Promise<void>): void {
+  let pending = pendingAsyncIcaclsReaps.get(targetPath);
+  if (!pending) {
+    pending = new Set();
+    pendingAsyncIcaclsReaps.set(targetPath, pending);
+  }
+  pending.add(reap);
+  void reap.finally(() => {
+    pending!.delete(reap);
+    if (pending!.size === 0) pendingAsyncIcaclsReaps.delete(targetPath);
+  });
+}
+
+function pathIsAtOrBelow(targetPath: string, rootPath: string): boolean {
+  const relativePath = relative(resolve(rootPath), resolve(targetPath));
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+/** True while an async icacls runner still owns this exact path after its caller's belt fired. */
+export function windowsSecretAclReapPendingForPath(targetPath: string): boolean {
+  return (pendingAsyncIcaclsReaps.get(targetPath)?.size ?? 0) > 0;
+}
+
+/** Non-blocking removal guard for callers that must refuse rather than wait for a stuck child. */
+export function windowsSecretAclReapPendingAtOrBelow(rootPath: string): boolean {
+  return [...pendingAsyncIcaclsReaps.keys()]
+    .some(targetPath => pathIsAtOrBelow(targetPath, rootPath));
+}
+
+/**
+ * Removal barrier for a file or tree that may still be held by a timed-out icacls child.
+ *
+ * This wait is deliberately separate from ordinary startup and shutdown: a genuinely stuck child
+ * must not defeat the caller-facing belt. Code that chooses to remove the target has the stricter
+ * contract and must not proceed until every registered runner at or below it has actually reaped.
+ */
+export async function flushWindowsSecretAclReapsBeforeRemoval(rootPath: string): Promise<void> {
+  while (true) {
+    const pending = [...pendingAsyncIcaclsReaps]
+      .filter(([targetPath]) => pathIsAtOrBelow(targetPath, rootPath))
+      .flatMap(([, reaps]) => [...reaps]);
+    if (pending.length === 0) return;
+    await Promise.all(pending);
+  }
 }
 
 let icaclsRunner: IcaclsRunner = defaultIcaclsRunner;
@@ -399,6 +464,13 @@ export function setIcaclsRunnerForTests(runner: IcaclsRunner | null): void {
 /** Test seam: replace the async icacls runner. Pass null to restore the default. */
 export function setAsyncIcaclsRunnerForTests(runner: AsyncIcaclsRunner | null): void {
   asyncIcaclsRunner = runner ?? defaultAsyncIcaclsRunner;
+}
+
+/** Test seam: fire the outer caller-facing belt without sleeping. */
+export function setAsyncIcaclsBeltSchedulerForTests(
+  scheduler: SubprocessDeadlineScheduler | null,
+): void {
+  asyncIcaclsBeltScheduler = scheduler ?? scheduleAsyncIcaclsBelt;
 }
 
 /**
