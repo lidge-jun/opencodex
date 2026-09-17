@@ -49,7 +49,7 @@ JWT:
 resetMimoJwtCache();
 const freshJwt = await getMimoJwt(ctx?.abortSignal);
 retryHeaders = { ... };
-try { void response.body?.cancel().catch(() => {}); } catch { }
+try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
 ```
 
 `getMimoJwt` performs its own network call and can throw. When it does, the error leaves
