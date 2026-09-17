@@ -186,6 +186,46 @@ async function resolveWireModelUid(
  */
 export const resolveWireModelUidForTests = resolveWireModelUid;
 
+/**
+ * Resolve the INPUT ceiling for the exact UID selected for this turn. Catalog
+ * ClientModelConfig #18 and CompletionConfiguration #3 both carry input tokens;
+ * the independent output cap is not subtracted here. Smaller operator hints
+ * cap live evidence, never enlarge it. No evidence leaves the encoder's 128k
+ * fallback intact; an unrelated or opt-in long-context variant is not evidence.
+ */
+function resolveDevinMaxInputTokens(
+  provider: OcxProviderConfig,
+  modelUid: string,
+  liveWindow?: number,
+): number | undefined {
+  const positive = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  const baseId = collapseDevinModelUid(modelUid);
+  const configured = (record: Record<string, number> | undefined): number | undefined => {
+    if (!record) return undefined;
+    for (const id of [modelUid, baseId]) {
+      // Prefer the canonical spelling; retain dotted/case-folded saved hints,
+      // matching the model-id normalization used for the inference request.
+      const exact = Object.hasOwn(record, id) ? positive(record[id]) : undefined;
+      if (exact !== undefined) return exact;
+      const matches = Object.entries(record)
+        .filter(([key]) => normalizeDevinModelId(key).toLowerCase() === id.toLowerCase())
+        .map(([, value]) => positive(value))
+        .filter((value): value is number => value !== undefined);
+      if (matches.length > 0) return Math.min(...matches);
+    }
+    return undefined;
+  };
+  const contextHint = configured(provider.modelContextWindows) ?? positive(provider.contextWindow);
+  const inputHint = configured(provider.modelMaxInputTokens);
+  const ceilings = [positive(liveWindow), contextHint, inputHint]
+    .filter((value): value is number => value !== undefined);
+  return ceilings.length > 0 ? Math.min(...ceilings) : undefined;
+}
+
+/** Pure test seam; runtime uses the same resolver immediately before dispatch. */
+export const resolveDevinMaxInputTokensForTests = resolveDevinMaxInputTokens;
+
 export class DevinMissingCredentialError extends Error {
   constructor() {
     super("Devin live transport requires a Devin API key. Run ocx login devin to sign in with your Cognition/Devin account.");
@@ -506,6 +546,16 @@ export function createDevinAdapter(
       };
 
       try {
+        // The same per-account/host cache serves model selection and transport
+        // preflight. Read the selected UID, not the picker's collapsed base row.
+        const catalog = await getCachedCatalog(apiKey, host, incoming.abortSignal);
+        if (incoming.abortSignal?.aborted) {
+          emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false });
+          return;
+        }
+        const maxInputTokens = resolveDevinMaxInputTokens(
+          provider, modelUid, catalog?.byUid.get(modelUid)?.contextWindow,
+        );
         for await (const event of streamChatEvents({
           apiKey,
           apiServerUrl: host,
@@ -513,10 +563,10 @@ export function createDevinAdapter(
           messages: mapOcxMessagesToDevin(parsed),
           tools: mapOcxToolsToDevin(parsed.context.tools),
           cascadeId,
-          // Without these the request falls back to the encoder's defaults
-          // (8192 output, a 128k context window, temperature 0.7), so a client
-          // that asked for a 4k cap never got one.
+          // Input and output ceilings are separate wire fields. Omitting the
+          // input hint used to force every model through the 128k default.
           completionOpts: {
+            ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
             ...(typeof parsed.options.maxOutputTokens === "number" ? { maxOutputTokens: parsed.options.maxOutputTokens } : {}),
             ...(typeof parsed.options.temperature === "number" ? { temperature: parsed.options.temperature } : {}),
             ...(typeof parsed.options.topP === "number" ? { topP: parsed.options.topP } : {}),
