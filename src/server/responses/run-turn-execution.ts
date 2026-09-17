@@ -247,7 +247,8 @@ export async function executeResponsesRunTurn(
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         transportState.genericFailovers += 1;
-        if (!await applyFailoverSnapshot(snapshot)) {
+        const admittedSnapshot = await applyFailoverSnapshot(snapshot);
+        if (!admittedSnapshot) {
           hop.permit?.release();
           return false;
         }
@@ -277,7 +278,10 @@ export async function executeResponsesRunTurn(
           providerName: route.providerName,
           provider: rotatedProvider,
           adapterName: rotatedAdapter.name,
-          oauthCredentialSnapshot: { accountId: snapshot.accountId, generation: snapshot.generation },
+          oauthCredentialSnapshot: {
+            accountId: admittedSnapshot.accountId,
+            generation: admittedSnapshot.generation,
+          },
           codexAuthContext: admissionState.authCtx,
           forwardHeaders: requestState.selectedForwardHeaders,
         });

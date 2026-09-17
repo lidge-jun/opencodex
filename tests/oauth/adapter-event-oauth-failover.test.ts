@@ -13,6 +13,7 @@ const actualResolveAdapter = actualResolver.resolveAdapter;
 let attempts: AdapterEvent[][] = [];
 let attemptKeys: string[] = [];
 let attemptProjects: Array<string | undefined> = [];
+let attemptCredentialIdentities: Array<string | undefined> = [];
 /** Set by the delivery test: an attempt that emits, then blocks before completing the turn. */
 let slowAttempt: ((emit: (event: AdapterEvent) => void) => Promise<void>) | undefined;
 let beforePhysicalSend: (() => Promise<void>) | undefined;
@@ -30,6 +31,7 @@ function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter {
       const index = attemptKeys.length;
       attemptKeys.push(provider.apiKey ?? "");
       attemptProjects.push(provider.project);
+      attemptCredentialIdentities.push(_parsed._providerContinuationOwner?.credentialIdentity);
       const gate = beforePhysicalSend;
       beforePhysicalSend = undefined;
       await gate?.();
@@ -102,6 +104,7 @@ beforeEach(() => {
   attempts = [];
   attemptKeys = [];
   attemptProjects = [];
+  attemptCredentialIdentities = [];
   slowAttempt = undefined;
   beforePhysicalSend = undefined;
   physicalSends = 0;
@@ -229,6 +232,11 @@ describe("#2568 adapter-event OAuth failover", () => {
     expect(await response.text()).toContain("manual choice answered");
     expect(attemptKeys).toEqual(["cursor-access-2", "cursor-access-1"]);
     expect(getCredential("cursor")?.access).toBe("cursor-access-1");
+    await (await handleResponses(request(false), config(false), { model: "", provider: "" })).text();
+    expect(attemptCredentialIdentities[1]).toBe(attemptCredentialIdentities[2]);
+    await setActiveAccount("cursor", accounts[0]!.id);
+    await (await handleResponses(request(false), config(false), { model: "", provider: "" })).text();
+    expect(attemptCredentialIdentities[1]).not.toBe(attemptCredentialIdentities[3]);
   });
 
   test("a single account is a strict no-op", async () => {
