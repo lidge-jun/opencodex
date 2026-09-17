@@ -579,4 +579,4 @@ continuations after the response terminal: rich function/custom outputs and expl
 MCP approval decisions remain on the original account/socket. This does not widen
 `response.inject` beyond string-valued function results. Multi-agent requests never
 acquire the single-agent steering owner merely because injection is disabled.
-See [the continuation contract](../../guides/codex-integration.md#rich-tool-results-and-explicit-approvals-after-response-completion).
+See [the continuation contract](/guides/codex-integration/#rich-tool-results-and-explicit-approvals-after-response-completion).

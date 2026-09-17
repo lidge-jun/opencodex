@@ -12,6 +12,8 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
   private output = new Map<number, Frame>();
   private accepted = new Map<string, FunctionResult>();
   private pending?: FunctionResult[];
+  private pendingBytes = 0;
+  private acceptedBatchBytes: number[] = [];
   private explicit: unknown[] = [];
   private previous: unknown[] = [];
 
@@ -33,10 +35,10 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
   submitted(frame: Frame): () => void {
     const input = Array.isArray(frame.input) ? structuredClone(frame.input) : [];
     const bytes = this.reserve(input);
-    if (frame.type === "response.inject") this.pending = input as FunctionResult[];
+    if (frame.type === "response.inject") { this.pending = input as FunctionResult[]; this.pendingBytes = bytes; }
     else this.explicit = input;
     return () => {
-      if (frame.type === "response.inject") this.pending = undefined;
+      if (frame.type === "response.inject") { this.pending = undefined; this.pendingBytes = 0; }
       else this.explicit = [];
       this.bytes -= bytes;
     };
@@ -72,13 +74,14 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
         for (const item of this.explicit) this.prefix.push(item);
       }
       this.current = String(record(frame.response) ? frame.response.id : "");
-      this.output.clear(); this.accepted.clear(); this.explicit = []; this.previous = [];
+      this.output.clear(); this.accepted.clear(); this.acceptedBatchBytes = []; this.explicit = []; this.previous = [];
     } else if (frame.type === "response.inject.created" || frame.type === "response.inject.failed") {
       if (!this.pending) throw new Error("Native injection replay acknowledgement has no pending input.");
       if (frame.type === "response.inject.created") {
         for (const item of this.pending) this.accepted.set(item.call_id, item);
-      } else this.bytes -= Buffer.byteLength(JSON.stringify(this.pending));
-      this.pending = undefined;
+        this.acceptedBatchBytes.push(this.pendingBytes);
+      } else this.bytes -= this.pendingBytes;
+      this.pending = undefined; this.pendingBytes = 0;
     } else if (frame.type === "response.output_item.done") {
       if (!Number.isSafeInteger(frame.output_index) || (frame.output_index as number) < 0
         || (frame.output_index as number) > 10_000 || !record(frame.item)) throw new Error("Native injection replay output identity is invalid.");
@@ -89,14 +92,14 @@ export class NativeInjectionReplay implements NativeSteeringReplayObserver {
       if (this.pending) throw new Error("Native injection replay cannot commit an unacknowledged result.");
       const output = this.completedOutput(frame.response);
       for (const item of this.output.values()) this.bytes -= Buffer.byteLength(JSON.stringify(item));
-      for (const item of this.accepted.values()) this.bytes -= Buffer.byteLength(JSON.stringify(item));
-      this.reserve(output); this.output.clear(); this.accepted.clear(); this.previous = output;
+      for (const bytes of this.acceptedBatchBytes) this.bytes -= bytes;
+      this.reserve(output); this.output.clear(); this.accepted.clear(); this.acceptedBatchBytes = []; this.previous = output;
       if (frame.type === "response.completed") this.remember(this.prefix, { ...frame.response, output });
     }
   }
   /** Drop all retained bodies at cancellation, connection teardown or unknown delivery. */
   dispose(): void {
-    this.prefix = []; this.output.clear(); this.accepted.clear(); this.pending = undefined;
+    this.prefix = []; this.output.clear(); this.accepted.clear(); this.pending = undefined; this.pendingBytes = 0; this.acceptedBatchBytes = [];
     this.explicit = []; this.previous = []; this.bytes = 0;
   }
 }
