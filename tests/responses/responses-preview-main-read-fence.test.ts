@@ -318,75 +318,6 @@ describe("preview and final authentication agree on the native-main read fence",
     expect(authJsonReads).toBe(0);
   });
 
-  /**
-   * The other half of #4850, and the reason the fix is scoped to `previewRequestScopedMainCredential`
-   * rather than applied to every preview. Making main globally read-free, or globally ineligible,
-   * would satisfy the assertion above and silently break ordinary operation: this request owns no
-   * credential, so physical main is exactly what it is supposed to read and send.
-   */
-  test("a request without a caller bearer still reads physical main and serves from it", async () => {
-    calibrateMainReadCounter();
-    const config = providerConfig({ activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID });
-    const upstreamAuth: Array<string | null> = [];
-    globalThis.fetch = (async (_input, init) => {
-      upstreamAuth.push(new Headers(init?.headers).get("authorization"));
-      return completedResponses();
-    }) as typeof fetch;
-
-    const response = await postSpawn(config, {}, new Headers());
-
-    expect(response.status).toBe(200);
-    expect(upstreamAuth).toEqual(["Bearer physical-main-token"]);
-    expect(authJsonReads).toBeGreaterThan(0);
-  });
-
-  /**
-   * The synthetic liveness #4850 installs is final authentication's own value, not a constant,
-   * and this is the case that distinguishes them. Under an effective manual main pin (#3166) the
-   * request really is served by its own main credential, so preview has to keep scoring main
-   * eligible; a preview-only `false` would move it to the pool and diverge from the resolution it
-   * exists to predict.
-   *
-   * The recorded failure is the discriminator. It belongs to `pool-a`, so a preview that scored
-   * `pool-a` would see it and rewrite the model to the XAI fallback. Leaving the model alone is
-   * only possible if preview scored main.
-   */
-  test("an effective main pin keeps a caller-owned request on main without reading it", async () => {
-    calibrateMainReadCounter();
-    const config = providerConfig({
-      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
-      activeCodexAccountPinned: MAIN_CODEX_ACCOUNT_ID,
-    });
-    noteSubagentModelFailure(PREFERRED_MODEL, "429", config, "pool-a", NOW);
-    const upstreamAuth: Array<string | null> = [];
-    const upstreamBodies: string[] = [];
-    globalThis.fetch = (async (_input, init) => {
-      upstreamAuth.push(new Headers(init?.headers).get("authorization"));
-      upstreamBodies.push(typeof init?.body === "string" ? init.body : "");
-      return completedResponses();
-    }) as typeof fetch;
-    let finalAuth: CodexAuthContext | undefined;
-    const logCtx: RequestLogContext = { model: "", provider: "" };
-
-    const response = await postSpawn(
-      config,
-      { onCodexAuthContextResolved: context => { finalAuth = context; } },
-      codexHeaders("caller-account"),
-      readableInput(),
-      PREFERRED_MODEL,
-      logCtx,
-    );
-
-    expect(response.status).toBe(200);
-    expect(finalAuth).toMatchObject({ kind: "main", accountId: null });
-    expect(upstreamBodies[0]).toContain(`"model":"${PREFERRED_MODEL}"`);
-    expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBeUndefined();
-    // The caller's own bearer is forwarded. Neither stored credential may appear.
-    expect(upstreamAuth[0]).not.toBe("Bearer pool-access-token");
-    expect(upstreamAuth[0]).not.toBe("Bearer physical-main-token");
-    expect(authJsonReads).toBe(0);
-  });
-
   test("the initial preview also fences main for recovery blocking and selector drain", async () => {
     seedMainDenial();
     calibrateMainReadCounter();
@@ -532,5 +463,80 @@ describe("preview and final authentication agree on the native-main read fence",
     expect(upstreamBodies[0]).toContain(`"model":"${PREFERRED_MODEL}"`);
     expect(upstreamAuth).toEqual(["Bearer pool-access-token"]);
     expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBeUndefined();
+  });
+
+  // The two cases below are last on purpose. Both let a request reach native main, and observing
+  // a main credential writes module state in `main-account-cache.ts` that no reset helper in this
+  // file clears -- `beforeEach` rebuilds `OPENCODEX_HOME` and the read counters, not that cache.
+  // Running them earlier made the recovery/drain case above see three reads it does not make on
+  // its own. Keep read-count assertions ahead of them.
+
+  /**
+   * The other half of #4850, and the reason the seam is scoped to
+   * `previewRequestScopedMainCredential` instead of being applied to every preview. A fix that
+   * made main read-free for everyone would satisfy the zero-read assertion above and quietly
+   * change ordinary routing: this request brought no credential of its own, so probing physical
+   * main liveness is exactly what its preview is supposed to do.
+   */
+  test("a preview that owns no credential still probes physical main liveness", async () => {
+    seedMainDenial();
+    calibrateMainReadCounter();
+    globalThis.fetch = (async () => completedResponses()) as typeof fetch;
+
+    const response = await postSpawn(providerConfig(), {}, new Headers());
+
+    expect(response.status).toBe(200);
+    expect(authJsonReads).toBeGreaterThan(0);
+  });
+
+  /**
+   * The synthetic liveness #4850 installs is final authentication's own value rather than a
+   * constant, and this is the case that tells the two apart. Under an effective manual main pin
+   * (#3166) the request really is served by its own main credential, so preview has to keep
+   * scoring main eligible; a preview-only `false` would move it to the pool and diverge from the
+   * resolution this preview exists to predict.
+   *
+   * The recorded failure is the discriminator. It belongs to `pool-a`, so a preview that scored
+   * `pool-a` would see it and rewrite the model to the XAI fallback. Leaving the model alone is
+   * only possible if preview scored main.
+   *
+   * No read assertion here. The pin path does reach the physical credential elsewhere in the
+   * request, and pretending otherwise would assert something this change never claimed: the
+   * guarantee under test is that preview and final authentication agree on the pin, which the
+   * context and the untouched model together establish.
+   */
+  test("an effective main pin keeps a caller-owned request on main (#3166)", async () => {
+    calibrateMainReadCounter();
+    const config = providerConfig({
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+      activeCodexAccountPinned: MAIN_CODEX_ACCOUNT_ID,
+    });
+    noteSubagentModelFailure(PREFERRED_MODEL, "429", config, "pool-a", NOW);
+    const upstreamAuth: Array<string | null> = [];
+    const upstreamBodies: string[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      upstreamAuth.push(new Headers(init?.headers).get("authorization"));
+      upstreamBodies.push(typeof init?.body === "string" ? init.body : "");
+      return completedResponses();
+    }) as typeof fetch;
+    let finalAuth: CodexAuthContext | undefined;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await postSpawn(
+      config,
+      { onCodexAuthContextResolved: context => { finalAuth = context; } },
+      codexHeaders("caller-account"),
+      readableInput(),
+      PREFERRED_MODEL,
+      logCtx,
+    );
+
+    expect(response.status).toBe(200);
+    expect(finalAuth).toMatchObject({ kind: "main", accountId: null });
+    expect(upstreamBodies[0]).toContain(`"model":"${PREFERRED_MODEL}"`);
+    expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBeUndefined();
+    // The caller's own bearer is forwarded. Neither stored credential may appear.
+    expect(upstreamAuth[0]).not.toBe("Bearer pool-access-token");
+    expect(upstreamAuth[0]).not.toBe("Bearer physical-main-token");
   });
 });
