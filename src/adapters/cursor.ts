@@ -3,7 +3,7 @@ import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
-import { isCursorBenignCancelError, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
+import { isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
 import { cursorCheckpointModelAffinityId, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
@@ -32,8 +32,11 @@ import { isDebugEnabled } from "../lib/debug-settings";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { estimateTokens } from "../lib/token-estimate";
 import {
+  clearCursorIncompleteToolRemint,
+  cursorIncompleteToolRemintScopeKey,
   cursorOverflowRemintScopeKey,
   markCursorOverflowSurfaced,
+  recordCursorIncompleteToolRemint,
   recordCursorOverflowRemint,
   rememberCursorThreadConversation,
   shouldSkipCursorOverflowRemint,
@@ -202,6 +205,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         let completedNormally = false;
         let lastTransport: { captured?: Uint8Array } | undefined;
         let emittedClientTool = false;
+        let sawIncompleteToolCall = false;
         // Ordering proof for tool-suspended checkpoints: true only when the newest captured
         // checkpoint bytes arrived AFTER the turn emitted a client tool call, i.e. upstream
         // serialized its suspended-on-tool-call state. Only that snapshot can safely resume
@@ -344,6 +348,9 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                },
              });
              for (const event of events) {
+                if (event.type === "error" && isCursorIncompleteToolCallMessage(event.message)) {
+                  sawIncompleteToolCall = true;
+                }
                 if (!guardsSettled()) {
                   if (event.type === "text_delta") {
                     guardHeld.push(event);
@@ -528,6 +535,34 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               break;
             }
           }
+        }
+        const incompleteToolRemintScopeKey =
+          _parsed._cursorIsolateConversation !== true
+          && request.contextUsageStoreCheckpoints !== false
+            ? cursorIncompleteToolRemintScopeKey(
+                cursorClientThreadOwner(_parsed),
+                _parsed._cursorIdentityScope,
+              )
+            : null;
+        // Incomplete-tool errors are streamed, not thrown. Do not retry this turn; rotate only
+        // the next turn's id. request-prepare currently isolates compaction, but adapter callers
+        // can bypass that upstream invariant, so checkpoint storage is the local isolation boundary.
+        if (sawIncompleteToolCall && incompleteToolRemintScopeKey) {
+          if (recordCursorIncompleteToolRemint(incompleteToolRemintScopeKey)) {
+            if (inheritedCheckpointRef) invalidateCursorCheckpoint(inheritedCheckpointRef);
+            debugProviderDiagnostic("cursor", "incomplete-tool-remint", {
+              wireModel: request.modelId,
+              conversationHash: request.conversationId.slice(0, 16),
+            });
+            remintConversationId(request.conversationId);
+          } else {
+            debugProviderDiagnostic("cursor", "incomplete-tool-remint-exhausted", {
+              wireModel: request.modelId,
+              conversationHash: request.conversationId.slice(0, 16),
+            });
+          }
+        } else if (!sawIncompleteToolCall && completedNormally && incompleteToolRemintScopeKey) {
+          clearCursorIncompleteToolRemint(incompleteToolRemintScopeKey);
         }
         if (
           request.checkpointInvalidationReason
