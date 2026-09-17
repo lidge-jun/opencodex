@@ -575,15 +575,13 @@ wildcard `hostname`, where the public listener already holds `127.0.0.1:<port>`.
 
 
 The opt-in `codexNativeInjection` owner also accepts typed saved-result
-continuations after the response terminal: rich function/custom outputs and explicit
-MCP approval decisions remain on the original account/socket. This does not widen
-`response.inject` beyond string-valued function results. Multi-agent requests never
-acquire the single-agent steering owner merely because injection is disabled.
+continuations on the original account/socket. It does not widen
+`response.inject` beyond string-valued function results, and multi-agent requests
+never acquire the single-agent steering owner merely because injection is disabled.
 See [the continuation contract](/guides/codex-integration/#rich-tool-results-and-explicit-approvals-after-response-completion).
 
 
-Native steering confirmation uses per-submission and per-phase absolute deadlines,
-not a timeout renewed by unrelated output. Its local continuation history reconciles
-sparse terminal summaries with completed output already received. See
+`codexNativeSteering` confirmation uses fixed absolute deadlines and retains
+completed output for local continuation history. See
 [steering confirmation deadlines and retained context](/guides/codex-integration/#steering-confirmation-deadlines-and-retained-context)
 for phase timing, unknown-delivery recovery and live-comparison precautions.

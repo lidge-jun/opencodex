@@ -885,7 +885,7 @@ Do not rewrite an active paginated rollout or thread row to migrate those conver
 
 ## Experimental native mid-turn steering
 
-For a compatible native OpenAI model and a client that sends `response.steer`, enable both
+For a compatible model on the canonical ChatGPT forward route and a client that sends `response.steer`, enable both
 options in `~/.opencodex/config.json` and restart OpenCodex before starting a fresh turn:
 
 ```json
@@ -913,7 +913,7 @@ HTTP fallback, other providers, translated models, sidecars, Combo attempts and 
 restoration do not support this option. It does not add steering capability to a model or
 a client that lacks it. Unsupported routes return a protocol error rather than silently
 ignoring input. Disconnected or timed-out delivery may be unknown: never automatically
-resubmit tools or steering text. Pending controls time out after 90 seconds of inactivity;
+resubmit tools or steering text. Pending controls have fixed 90-second acknowledgement or successor deadlines;
 saved-tool-result waits have a 30-minute cap.
 
 The implementation has synthetic protocol and regression coverage, not live Astra/client
