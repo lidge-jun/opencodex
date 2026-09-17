@@ -307,9 +307,20 @@ disarmed rather than falling through to another paid search. A leg that mixes an
 `web_search` call with another client-executed tool ends the turn on that leg: the intercepted
 searches run, their hosted cells complete, the held client calls are released for the caller to
 execute, and the leg's own terminal closes the turn with no continuation sent upstream. The
-destination therefore never receives the executed search result — the caller replays the hosted
-`web_search_call` cell, which carries the query and sources but no result text, so the
-destination's own `function_call`/`function_call_output` pair is not reconstructed. A leg whose
+destination therefore does not receive that search result during the turn. It gets it on the next
+one: every search the bridge executes is recorded in `src/responses/bridge-search-replay-cache.ts`
+under the hosted cell's proxy-minted id, scoped to the upstream destination and bounded by entry
+count, total bytes, and a one-hour TTL. When the caller replays that cell,
+`restoreBridgedWebSearchCalls` in `src/adapters/openai-responses/tool-output-recovery.ts` puts the
+destination's own `function_call` and the executed `function_call_output` back in the cell's
+position before the next turn's first leg is dispatched, recording exactly the text
+`appendBridgeSearchTurn` would have sent on a continuation leg so a replayed turn and a continued
+turn show the destination one consistent conversation. The rewrite runs only for a provider with
+`webSearchBridge.enabled`, and a miss — unknown id, expired entry, a different destination, or a
+`call_id` the body already carries — leaves the replayed item untouched. Re-running the search or
+synthesizing result text is not a permitted recovery.
+`tests/web-search/web-search-bridge-replay.test.ts` pins the restore and each of those refusals.
+A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
 any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
 instruction.

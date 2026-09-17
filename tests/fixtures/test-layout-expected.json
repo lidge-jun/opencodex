@@ -1254,6 +1254,7 @@
   "warmup.test.ts": "codex-integration",
   "web-search-anthropic.test.ts": "web-search",
   "web-search-backend-union.test.ts": "web-search",
+  "web-search-bridge-replay.test.ts": "web-search",
   "web-search-candidates.test.ts": "web-search",
   "web-search-parse.test.ts": "web-search",
   "web-search-passthrough-bridge.test.ts": "web-search",
