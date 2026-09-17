@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readResponsesCoreModule } from "../helpers/responses-core-source";
-import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import {
+  createResponsesSendBudget,
+  transientSendCapFor,
+} from "../../src/server/responses/request-send-budget";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../src/lib/upstream-retry";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { ResponsesRequestContext } from "../../src/server/responses/core-options";
 
@@ -30,8 +34,10 @@ describe("the Responses passthrough lane reads the provider transient policy", (
 
   test("the ladder is resolved from the provider row, not a constant", () => {
     expect(packed).toContain(dense(
-      "const transientSendAttempts = (): number =>\n"
-      + "  transientRetryPolicyFor(route.provider)?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;",
+      "const transientSendAttempts = (): number => transientSendCapFor(\n"
+      + "  transientRetryPolicyFor(route.provider)?.attempts,\n"
+      + "  sendBudgetState.sendsUsed,\n"
+      + ");",
     ));
   });
 
@@ -76,23 +82,43 @@ function sendBudgetFor(budget: ReturnType<typeof createRequestExecutionBudget>) 
 /**
  * The budget half of the same issue.
  *
- * The provider value is a cap on the ladder, intersected with the request-wide base allowance by
- * `remainingBaseSends`. That intersection is the deliberate settlement the issue asked for: an
- * operator can narrow this request's sends exactly, and cannot widen the bound that exists to
- * stop per-request amplification (#4546).
+ * A configured `attempts` is documented as the TOTAL sends for one request including the first,
+ * so the cap each leg receives is that total minus what the request has already sent. Passing the
+ * configured value straight through would make it a per-leg ceiling instead, and a provider
+ * configured at one send could still reach upstream again on a recovery leg.
+ *
+ * The result is then intersected with the request-wide base allowance by `remainingBaseSends`.
+ * That intersection is the deliberate settlement the issue asked for: an operator can narrow this
+ * request's sends exactly, and cannot widen the bound that exists to stop per-request
+ * amplification (#4546).
  */
 describe("a configured ladder is bounded by the request budget", () => {
+  test("an absent policy resolves to the constant, unchanged at every send count", () => {
+    for (const used of [0, 1, 2, 3, 9]) {
+      expect(transientSendCapFor(undefined, used)).toBe(TRANSIENT_RETRY_MAX_ATTEMPTS);
+    }
+  });
+
+  test("a configured total is measured against what the request already sent", () => {
+    expect(transientSendCapFor(1, 0)).toBe(1);
+    // The whole total is spent, so no later leg may dispatch. Passing the configured value
+    // straight through would answer 1 here and fund a second upstream send.
+    expect(transientSendCapFor(1, 1)).toBe(0);
+    expect(transientSendCapFor(5, 2)).toBe(3);
+    expect(transientSendCapFor(5, 9)).toBe(0);
+  });
+
   test("a lower configured value ends the ladder the constant would have continued", () => {
     const budget = createRequestExecutionBudget();
     const state = sendBudgetFor(budget);
 
-    expect(state.sendBudgetExhausted(1)).toBe(false);
+    expect(state.sendBudgetExhausted(transientSendCapFor(1, state.sendsUsed))).toBe(false);
     budget.used = 1;
-    // Configured `attempts: 1`: one send is the whole budget, so no recovery leg may dispatch.
-    expect(state.sendBudgetExhausted(1)).toBe(true);
+    // Configured `attempts: 1`: one send is the whole request, so no recovery leg may dispatch.
+    expect(state.sendBudgetExhausted(transientSendCapFor(1, state.sendsUsed))).toBe(true);
     // At the constant the same request still looks fundable, which is the behaviour the reporter
     // measured as "three sends whatever I configure".
-    expect(state.sendBudgetExhausted(3)).toBe(false);
+    expect(state.sendBudgetExhausted(transientSendCapFor(undefined, state.sendsUsed))).toBe(false);
   });
 
   test("a higher configured value does not lift the request-wide allowance", () => {
@@ -100,10 +126,10 @@ describe("a configured ladder is bounded by the request budget", () => {
     const state = sendBudgetFor(budget);
 
     // The guarded profile allows three base sends per logical request.
-    expect(state.remainingTransientSendBudget(10)).toBe(3);
+    expect(state.remainingTransientSendBudget(transientSendCapFor(10, state.sendsUsed))).toBe(3);
     budget.used = 2;
-    expect(state.remainingTransientSendBudget(10)).toBe(1);
+    expect(state.remainingTransientSendBudget(transientSendCapFor(10, state.sendsUsed))).toBe(1);
     // And a narrower configured value still wins over the remaining allowance.
-    expect(state.remainingTransientSendBudget(0)).toBe(0);
+    expect(state.remainingTransientSendBudget(transientSendCapFor(2, state.sendsUsed))).toBe(0);
   });
 });

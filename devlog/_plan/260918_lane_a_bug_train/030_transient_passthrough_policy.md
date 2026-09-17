@@ -30,14 +30,27 @@ and wires the lane to it.
 **Budget accounting.** `remainingTransientSendBudget(cap)` resolves to
 `RequestExecutionBudget.remainingBaseSends(cap)`, which is
 `min(cap, baseSendAllowance - spent)`. `core.ts` builds every Responses request's budget from
-`CODEX_TEXT_GUARDED_BUDGET_POLICY`, whose `baseSendAllowance` is 3. So the provider value is a
-cap on the ladder intersected with the request-wide allowance, not an independent one.
+`CODEX_TEXT_GUARDED_BUDGET_POLICY`, whose `baseSendAllowance` is 3.
+
+The shape of that function matters, and getting it wrong is the one real trap here. `cap` bounds
+what REMAINS, not what the request may spend in total. That is the right reading for the fixed
+constant — every leg may ask for up to three, and the request-wide allowance is what actually
+bounds the total — but `transientRetryOn5xx.attempts` is documented as the total for one request
+including the first send. Passing the configured value straight through would silently turn it
+into a per-leg ceiling, so a provider configured at one send would still reach upstream again on
+a recovery leg. The first revision of this change did exactly that, and its own regression caught
+it.
+
+So `transientSendCapFor(configured, sendsUsed)` reduces the configured total by what the request
+has already sent, and the result is then intersected with the base allowance. An absent policy
+returns the constant unchanged, so a provider that configures nothing is byte-for-byte unaffected
+at every call site.
 
 That intersection is the deliberate settlement, and it answers the issue's question about whether
 a provider "can now widen a request-wide bound". It cannot. Configuring below the allowance
-narrows the ladder exactly — `attempts: 1` sends once, which is the direction the reporter
-demonstrated as broken. Configuring above it does not raise the bound that exists to stop
-per-request amplification (#4546).
+narrows the request exactly — `attempts: 1` sends once and no recovery leg may dispatch, which is
+the direction the reporter demonstrated as broken. Configuring above it does not raise the bound
+that exists to stop per-request amplification (#4546).
 
 Leaving that implicit would reproduce the original complaint one threshold higher, so it is
 stated in the English reference and asserted in the regression. Raising `baseSendAllowance` per

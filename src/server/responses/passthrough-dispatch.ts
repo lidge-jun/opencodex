@@ -11,6 +11,7 @@ import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
+import { transientSendCapFor } from "./request-send-budget";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
@@ -105,7 +106,6 @@ import {
   SendBudgetExhaustedError,
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
-  TRANSIENT_RETRY_MAX_ATTEMPTS,
   isNonReplayableResponse,
   prepareSameTarget429Wait,
   sleepWithAbort,
@@ -202,6 +202,7 @@ export async function preparePassthroughExchange(
     | "reserveCredentialHop"
     | "pendingHopPermit"
     | "workflowRootId"
+    | "sendsUsed"
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
@@ -670,26 +671,29 @@ export async function preparePassthroughExchange(
     const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
     /**
-     * How many upstream sends this lane's transient-5xx ladder may make, from the provider's own
-     * `transientRetryOn5xx` policy.
+     * This leg's transient-5xx ladder cap, from the provider's own `transientRetryOn5xx`.
      *
-     * This lane used to pass `TRANSIENT_RETRY_MAX_ATTEMPTS` at every call site, so an operator
-     * who configured the option on a key-auth `openai-responses` provider changed nothing in
-     * either direction: the same provider on `openai-chat` honoured it, and that asymmetry is
-     * #4893. The gate in `transientRetryPolicyFor` keeps this null for OAuth and forward
-     * providers, so the ChatGPT pool keeps exactly the ladder it has always had.
+     * The lane used to pass `TRANSIENT_RETRY_MAX_ATTEMPTS` at every call site, so an operator who
+     * configured the option on a key-auth `openai-responses` provider changed nothing in either
+     * direction, while the same provider on `openai-chat` was tuned normally. That asymmetry is
+     * #4893. The gate in `transientRetryPolicyFor` returns null for OAuth and forward providers,
+     * so the ChatGPT pool keeps exactly the ladder it has always had.
      *
-     * Read per call rather than captured once. `route.provider` is reassigned inside the
-     * recovery loop by credential rotation and transport resolution, so a hoisted value could
-     * outlive the provider row it came from.
+     * Read per call rather than captured once, for two reasons. `route.provider` is reassigned
+     * inside the recovery loop by credential rotation and transport resolution, so a hoisted
+     * policy could outlive the provider row it came from. And the configured value is a total for
+     * the whole request, so it has to be measured against what the request has already sent at
+     * the moment each leg asks.
      *
-     * The value is a cap on the LADDER, not a new allowance. Every site passes it through
-     * `remainingTransientSendBudget`, which intersects it with the request-wide base allowance,
-     * so a provider can narrow this request's sends exactly and cannot widen the bound that
-     * exists to stop per-request amplification (#4546).
+     * Still bounded by the request: every site feeds this to `remainingTransientSendBudget` or
+     * `recoverySendAllowance`, which intersect it with the request-wide base allowance. So a
+     * provider can narrow this request's sends exactly and cannot widen the bound that exists to
+     * stop per-request amplification (#4546).
      */
-    const transientSendAttempts = (): number =>
-      transientRetryPolicyFor(route.provider)?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+    const transientSendAttempts = (): number => transientSendCapFor(
+      transientRetryPolicyFor(route.provider)?.attempts,
+      sendBudgetState.sendsUsed,
+    );
     /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
      *

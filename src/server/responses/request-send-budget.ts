@@ -13,6 +13,28 @@ import type {
   SingleUseDispatchPermit,
 } from "../../lib/request-execution-budget";
 
+/**
+ * The transient-5xx ladder cap for ONE leg, given the provider's configured request total.
+ *
+ * `remainingTransientSendBudget(cap)` treats `cap` as a ceiling on what REMAINS, which is the
+ * right shape for the fixed constant: every leg may ask for up to three, and the request-wide
+ * base allowance is what actually bounds the total. A configured `transientRetryOn5xx.attempts`
+ * is documented as the total for one request including the first send, so it has to be reduced
+ * by what the request already sent before it is intersected with that allowance. Passing it
+ * straight through would make it a per-leg ceiling instead, and a request configured at one send
+ * could still reach upstream again on a recovery leg (#4893).
+ *
+ * An absent policy returns the constant unchanged, so a provider that configures nothing behaves
+ * exactly as it does today at every call site.
+ */
+export function transientSendCapFor(
+  configuredAttempts: number | undefined,
+  sendsUsed: number,
+): number {
+  if (configuredAttempts === undefined) return TRANSIENT_RETRY_MAX_ATTEMPTS;
+  return Math.max(0, configuredAttempts - Math.max(0, sendsUsed));
+}
+
 /** Owns the shared request send counter and recovery permits. */
 export function createResponsesSendBudget(
   requestContext: Pick<ResponsesRequestContext, "options" | "req" | "logCtx">,
@@ -188,6 +210,14 @@ export function createResponsesSendBudget(
     workflowRootId,
     noteTransientSends,
     remainingTransientSendBudget,
+    /**
+     * Physical sends this logical request has already made.
+     *
+     * A live getter, not a snapshot: it is read once per dispatch leg to resolve a configured
+     * ladder, and a value frozen at construction would answer for a request that had sent
+     * nothing.
+     */
+    get sendsUsed(): number { return sendBudget.used; },
     adapterSendBudget,
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
