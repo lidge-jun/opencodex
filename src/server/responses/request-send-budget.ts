@@ -71,8 +71,18 @@ export function createResponsesSendBudget(
     if (send.ordinal <= 1) return;
     noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
   };
-  const sendBudgetExhausted = (): boolean =>
-    remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS) === 0;
+  /**
+   * Whether this request has any base send left under `cap`.
+   *
+   * The cap is a parameter because a lane that reads a provider's configured
+   * `transientRetryOn5xx` ladder has to ask this question at the SAME cap its sends use.
+   * Asking at the constant while dispatching at a configured value lets a provider with
+   * headroom be told it is exhausted, and lets one configured below the constant pass this
+   * check and then be refused at the send (#4893). Defaulted, so every existing caller keeps
+   * the constant it already used.
+   */
+  const sendBudgetExhausted = (cap: number = TRANSIENT_RETRY_MAX_ATTEMPTS): boolean =>
+    remainingTransientSendBudget(cap) === 0;
   /**
    * A credential hop reserves the send its own replay will make, and that replay is a recovery
    * leg. The leg must SPEND the hop's reservation instead of taking a second one: the

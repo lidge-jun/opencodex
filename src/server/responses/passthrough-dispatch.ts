@@ -115,7 +115,11 @@ import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upst
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
-import { rateLimitRetryPolicyFor, rateLimitRetryDelayMs } from "../../providers/key-failover";
+import {
+  rateLimitRetryPolicyFor,
+  rateLimitRetryDelayMs,
+  transientRetryPolicyFor,
+} from "../../providers/key-failover";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { refreshPoolForwardAuth, refreshNativeMainForwardAuth, withClaudeNativeSession } from "./core-auth";
@@ -666,6 +670,27 @@ export async function preparePassthroughExchange(
     const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
     /**
+     * How many upstream sends this lane's transient-5xx ladder may make, from the provider's own
+     * `transientRetryOn5xx` policy.
+     *
+     * This lane used to pass `TRANSIENT_RETRY_MAX_ATTEMPTS` at every call site, so an operator
+     * who configured the option on a key-auth `openai-responses` provider changed nothing in
+     * either direction: the same provider on `openai-chat` honoured it, and that asymmetry is
+     * #4893. The gate in `transientRetryPolicyFor` keeps this null for OAuth and forward
+     * providers, so the ChatGPT pool keeps exactly the ladder it has always had.
+     *
+     * Read per call rather than captured once. `route.provider` is reassigned inside the
+     * recovery loop by credential rotation and transport resolution, so a hoisted value could
+     * outlive the provider row it came from.
+     *
+     * The value is a cap on the LADDER, not a new allowance. Every site passes it through
+     * `remainingTransientSendBudget`, which intersects it with the request-wide base allowance,
+     * so a provider can narrow this request's sends exactly and cannot widen the bound that
+     * exists to stop per-request amplification (#4546).
+     */
+    const transientSendAttempts = (): number =>
+      transientRetryPolicyFor(route.provider)?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+    /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
      *
      * Unconfigured this measures nothing and returns undefined, so an unset proxy behaves
@@ -804,7 +829,7 @@ export async function preparePassthroughExchange(
             // retry wrapper replaces — proves the host was reached (#914 review).
             .then(adoptObservedResponse);
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
+        { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
       );
     } catch (err) {
       return transportFailureResponse(err);
@@ -869,7 +894,7 @@ export async function preparePassthroughExchange(
       // after a 5xx streak alive at four total sends instead of dying at three. Reserved
       // outside the try so the finally can hand it back if the leg never reached its send.
       const allowance = recoverySendAllowance(
-        TRANSIENT_RETRY_MAX_ATTEMPTS,
+        transientSendAttempts(),
         recoveryClassFor(recovery),
         `${route.providerName}|${route.modelId}|${recovery}`,
       );
@@ -1033,7 +1058,7 @@ export async function preparePassthroughExchange(
       // Refused here, before the 401 body is cancelled: once it is gone the request can only
       // answer with a synthetic 502, which would report a proxy budget decision as an upstream
       // fault and throw away the credential evidence the client needs.
-      && !sendBudgetExhausted()
+      && !sendBudgetExhausted(transientSendAttempts())
     ) {
       oauth401ReplayAttempted = true;
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -1134,7 +1159,7 @@ export async function preparePassthroughExchange(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1211,7 +1236,7 @@ export async function preparePassthroughExchange(
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
       // body, so a refusal discovered after the wait can no longer return the real rate-limit
       // answer and would surface a synthetic 502 instead.
-      && !sendBudgetExhausted()
+      && !sendBudgetExhausted(transientSendAttempts())
     ) {
       rateLimitRetries += 1;
       // Release unread body + deliberate wait via the shared same-target helper.
@@ -1259,7 +1284,7 @@ export async function preparePassthroughExchange(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
         );
       } catch (err) {
         return transportFailureResponse(err);
