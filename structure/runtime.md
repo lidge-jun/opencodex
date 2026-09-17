@@ -16,6 +16,15 @@ it requires no runtime lifecycle change or new configuration option.
 
 Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
 
+## Anthropic streaming usage snapshots
+
+`src/claude/outbound.ts` starts Anthropic semantic framing lazily. When `response.created` or
+`response.in_progress` reports numeric input usage before the first content event, `message_start`
+uses that confirmed value through the normal Anthropic cache-token transform. Without an early
+measurement it emits the required zero snapshot without estimating or delaying content. The terminal
+`message_delta.usage` remains cumulative and is always derived from the terminal response usage;
+this wire projection does not change the usage ledger.
+
 ## CLI readiness diagnostics
 
 Catalog-derived reasoning-level diagnostics are escaped only at the human-output boundary, which `src/cli/runtime-api.ts` owns alongside the human/JSON print split. Every CLI path that prints a hub-supplied catalog value renders it there: the first-time refusal in `src/cli/connect.ts` and the connected `ocx sync` refusal in `src/cli/dispatch.ts`. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason, and a rendered failure keeps the domain error as its `cause`. The ready/unverified/incompatible classification and exit policy are unchanged.
@@ -234,9 +243,10 @@ Custom providers keep the conventional `${baseUrl}/models` request, normalized b
 whitespace and trailing slashes are trimmed and an already-pasted `/models` is not doubled, so a
 `baseUrl` written with or without a trailing slash yields the identical discovery URL and an
 existing path prefix is preserved. Canonical presets may select a
-trusted URL/path/query and declarative eligibility filter without persisting that policy into user
-config. A response is rejected before caching when it exceeds 4 MiB, contains more than 2,000 raw
-rows, has a malformed OpenAI list envelope, or includes an invalid model id. Tests use fixtures and
+trusted URL/path/query, response envelope key, model identifier field, and declarative eligibility
+filter without persisting that policy into user config. A response is rejected before caching when
+it exceeds 4 MiB, contains more than 2,000 raw rows, has a malformed declared list envelope, or
+includes an invalid model id. Tests use fixtures and
 must never depend on live provider endpoints. Newly promoted fixed key presets opt into
 `preserveCustomDestination`, so an older same-named custom provider keeps its configured adapter,
 destination, and key boundary instead of being silently canonicalized onto the new host. Fixed

@@ -1,5 +1,5 @@
 import { create } from "@bufbuild/protobuf";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   AgentServerMessageSchema,
   ConversationStateStructureSchema,
@@ -21,6 +21,12 @@ import {
   mapCursorProtobufServerMessage,
   mapSyntheticMcpExecToToolEvents,
 } from "../../../src/adapters/cursor/protobuf-events";
+import {
+  inferCursorContextWindow,
+  resetObservedCursorContextWindowsForTests,
+} from "../../../src/adapters/cursor/discovery";
+import { MAX_PENDING_TEXT_TOOLCALL_BYTES } from "../../../src/adapters/cursor/text-toolcall";
+import { resetDebugSettingsForTests } from "../../../src/lib/debug-settings";
 import { createTranslatorBudget } from "../../../src/lib/translator-budget";
 import { observeEmptyCompletion } from "../../../src/server/responses/empty-completion-guard";
 import type { AdapterEvent } from "../../../src/types";
@@ -55,12 +61,15 @@ function mcpToolCall(toolName: string, args: Record<string, string>) {
   });
 }
 
-function checkpointUpdate(usedTokens: number) {
+function checkpointUpdate(usedTokens: number, maxTokens?: number) {
   return create(AgentServerMessageSchema, {
     message: {
       case: "conversationCheckpointUpdate",
       value: create(ConversationStateStructureSchema, {
-        tokenDetails: create(ConversationTokenDetailsSchema, { usedTokens }),
+        tokenDetails: create(ConversationTokenDetailsSchema, {
+          usedTokens,
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+        }),
       }),
     },
   });
@@ -1184,18 +1193,25 @@ describe("request-local input estimate (#373)", () => {
   });
 });
 
-describe("textual pseudo tool-call marker normalization (#2305)", () => {
+describe("textual pseudo tool-call marker quarantine", () => {
   function textDelta(text: string) {
     return interaction({ case: "textDelta", value: create(TextDeltaUpdateSchema, { text }) });
   }
 
-  test("display alias inside [TOOL_CALL]...[ARGS] markers folds to the wire name", () => {
-    const state = createCursorProtobufEventState();
-    const events = mapCursorProtobufServerMessage(
-      textDelta('[TOOL_CALL]mcp_opencodex-responses_grep[ARGS]{"pattern":"OpenCodex"}'),
+  test("display-alias marker is stripped from text and promoted as a real tool call", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    const textEvents = mapCursorProtobufServerMessage(
+      textDelta('before [TOOL_CALL]mcp_opencodex-responses_grep[ARGS]{"pattern":"OpenCodex"} after'),
       state,
     );
-    expect(events).toEqual([{ type: "text", text: '[TOOL_CALL]grep[ARGS]{"pattern":"OpenCodex"}' }]);
+    const finalEvents = finalizeTurnEvents(state);
+    expect(textEvents.filter(event => event.type === "text")).toEqual([
+      { type: "text", text: "before  after" },
+    ]);
+    expect(finalEvents.some(event => event.type === "tool_call_start" && event.name === "grep")).toBe(true);
+    expect(finalEvents.some(event => event.type === "tool_call_delta" && event.arguments === '{"pattern":"OpenCodex"}')).toBe(true);
+    expect(finalEvents.some(event => event.type === "tool_call_end")).toBe(true);
+    expect(JSON.stringify([...textEvents, ...finalEvents])).not.toContain("[TOOL_CALL]");
   });
 
   test("prose mentioning the display alias without markers stays untouched", () => {
@@ -1205,18 +1221,144 @@ describe("textual pseudo tool-call marker normalization (#2305)", () => {
     expect(events).toEqual([{ type: "text", text: prose }]);
   });
 
-  test("markers with a non-opencodex provider prefix are not rewritten", () => {
-    const state = createCursorProtobufEventState();
-    const other = "[TOOL_CALL]mcp_other-provider_grep[ARGS]{}";
-    const events = mapCursorProtobufServerMessage(textDelta(other), state);
-    expect(events).toEqual([{ type: "text", text: other }]);
+  test("unadvertised marker is stripped and not promoted", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    const events = mapCursorProtobufServerMessage(
+      textDelta('[TOOL_CALL]mcp_other-provider_grep[ARGS]{"pattern":"x"}'),
+      state,
+    );
+    expect(events).toEqual([]);
+    expect(state.openToolCalls.size).toBe(0);
   });
 
-  test("already-short names inside markers pass through unchanged", () => {
+  test("short advertised name is stripped and promoted", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    const events = mapCursorProtobufServerMessage(
+      textDelta("[TOOL_CALL]grep[ARGS]{}"),
+      state,
+    );
+    expect(events.filter(event => event.type === "text")).toEqual([]);
+    const finalEvents = finalizeTurnEvents(state);
+    expect(finalEvents.some(event => event.type === "tool_call_start" && event.name === "grep")).toBe(true);
+  });
+
+  test("marker split across two text deltas is held then promoted", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    const first = mapCursorProtobufServerMessage(textDelta("[TOOL_CALL]grep[ARGS]"), state);
+    expect(first).toEqual([]);
+    expect(state.pendingTextToolCall).toBe("[TOOL_CALL]grep[ARGS]");
+    const second = mapCursorProtobufServerMessage(textDelta('{"pattern":"x"}'), state);
+    expect(state.pendingTextToolCall).toBeUndefined();
+    expect(second).toEqual([]);
+    const finalEvents = finalizeTurnEvents(state);
+    expect(finalEvents.some(event => event.type === "tool_call_start" && event.name === "grep")).toBe(true);
+    expect(finalEvents.some(event => event.type === "tool_call_delta" && event.arguments === '{"pattern":"x"}')).toBe(true);
+    expect(JSON.stringify(finalEvents)).not.toContain("[TOOL_CALL]");
+  });
+
+  test("a real frame wins over a textual echo in the same turn", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    expect(mapCursorProtobufServerMessage(
+      textDelta('[TOOL_CALL]grep[ARGS]{"pattern":"echo"}'),
+      state,
+    )).toEqual([]);
+    const toolCall = mcpToolCall("grep", { pattern: "real" });
+    const realEvents = mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+    }), state);
+    const events = [...realEvents, ...finalizeTurnEvents(state)];
+    expect(events.filter(event => event.type === "tool_call_start")).toEqual([
+      { type: "tool_call_start", id: "call_1", name: "grep" },
+    ]);
+    expect(events.some(event => event.type === "tool_call_delta" && event.arguments.includes("echo"))).toBe(false);
+  });
+
+  test("a split marker is dropped when an incomplete real frame appears", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    expect(mapCursorProtobufServerMessage(textDelta("[TOOL_CALL]grep[ARGS]"), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(textDelta('{"pattern":"fallback"}'), state)).toEqual([]);
+    const toolCall = mcpToolCall("grep", { pattern: "real" });
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([]);
+    const events = finalizeTurnEvents(state);
+    expect(events).toEqual([{
+      type: "error",
+      message: "Cursor stream ended with incomplete tool call(s): call_1. Arguments may be truncated; the call was not committed.",
+    }]);
+    expect(JSON.stringify(events)).not.toContain("textcall_");
+  });
+
+  test("malformed arguments are diagnosed without promotion, text leakage, or argument logging", () => {
+    const previousDebug = process.env.OCX_DEBUG;
+    process.env.OCX_DEBUG = "1";
+    resetDebugSettingsForTests();
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+      const events = mapCursorProtobufServerMessage(
+        textDelta('[TOOL_CALL]grep[ARGS]{"secret-argument":}'),
+        state,
+      );
+      expect(events).toEqual([]);
+      expect(finalizeTurnEvents(state).some(event => event.type.startsWith("tool_call"))).toBe(false);
+      expect(error).toHaveBeenCalledTimes(1);
+      const diagnostic = String(error.mock.calls[0]?.[0] ?? "");
+      expect(diagnostic).toContain("[ocx:cursor:text-toolcall-invalid-arguments]");
+      expect(diagnostic).not.toContain("secret-argument");
+    } finally {
+      error.mockRestore();
+      if (previousDebug === undefined) delete process.env.OCX_DEBUG;
+      else process.env.OCX_DEBUG = previousDebug;
+      resetDebugSettingsForTests();
+    }
+  });
+
+  test("an over-cap marker stays suppressed until its JSON object closes", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    const oversized = "한".repeat(Math.ceil(MAX_PENDING_TEXT_TOOLCALL_BYTES / 3));
+    const first = mapCursorProtobufServerMessage(
+      textDelta(`[TOOL_CALL]grep[ARGS]{"payload":"${oversized}`),
+      state,
+    );
+    expect(first).toEqual([]);
+    expect(state.pendingTextToolCall).toBeUndefined();
+    expect(state.suppressedTextToolCall).toBeDefined();
+    const second = mapCursorProtobufServerMessage(textDelta('"} visible'), state);
+    expect(second).toEqual([{ type: "text", text: " visible" }]);
+    expect(state.suppressedTextToolCall).toBeUndefined();
+    expect(JSON.stringify(second)).not.toContain(oversized.slice(0, 32));
+  });
+
+  test("a non-JSON marker payload leaks no text", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    const events = mapCursorProtobufServerMessage(
+      textDelta("[TOOL_CALL]foo[ARGS]not-json"),
+      state,
+    );
+    expect(events).toEqual([]);
+    expect(finalizeTurnEvents(state).some(event => event.type.startsWith("tool_call"))).toBe(false);
+  });
+
+  test("a marker without an advertised tool set is stripped but never promoted", () => {
     const state = createCursorProtobufEventState();
-    const short = "[TOOL_CALL]grep[ARGS]{}";
-    const events = mapCursorProtobufServerMessage(textDelta(short), state);
-    expect(events).toEqual([{ type: "text", text: short }]);
+    expect(mapCursorProtobufServerMessage(
+      textDelta('[TOOL_CALL]grep[ARGS]{"pattern":"x"}'),
+      state,
+    )).toEqual([]);
+    const events = finalizeTurnEvents(state);
+    expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+  });
+
+  test("finalize drops an incomplete held marker instead of leaking it", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["grep"] });
+    mapCursorProtobufServerMessage(textDelta("[TOOL_CALL]grep[ARGS]"), state);
+    const events = finalizeTurnEvents(state);
+    expect(state.pendingTextToolCall).toBeUndefined();
+    expect(JSON.stringify(events)).not.toContain("[TOOL_CALL]");
+    expect(events[0]?.type).toBe("done");
   });
 });
 
@@ -1261,6 +1403,32 @@ describe("#2472 the Cursor producer path for a silent empty turn", () => {
   });
 });
 
+
+describe("observed checkpoint maxTokens ceiling", () => {
+  afterEach(() => {
+    resetObservedCursorContextWindowsForTests();
+  });
+
+  test("a positive maxTokens records a process-local window for that wire model", () => {
+    const state = createCursorProtobufEventState({ wireModelId: "claude-4.6-sonnet" });
+    expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+    expect(mapCursorProtobufServerMessage(checkpointUpdate(1_200, 32_000), state)).toEqual([]);
+    expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(32_000);
+  });
+
+  test("zero or missing maxTokens leaves the heuristic in place", () => {
+    const state = createCursorProtobufEventState({ wireModelId: "claude-4.6-sonnet" });
+    expect(mapCursorProtobufServerMessage(checkpointUpdate(1_200, 0), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(checkpointUpdate(1_200), state)).toEqual([]);
+    expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+  });
+
+  test("a checkpoint without wireModelId does not record a window", () => {
+    const state = createCursorProtobufEventState();
+    expect(mapCursorProtobufServerMessage(checkpointUpdate(1_200, 32_000), state)).toEqual([]);
+    expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+  });
+});
 
 describe("#2472 end to end: the real producer output reaches the observer", () => {
   /**

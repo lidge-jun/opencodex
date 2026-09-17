@@ -156,6 +156,7 @@ jobs:
       ci: ${{ steps.scope.outputs.ci }}
       gui: ${{ steps.filter.outputs.gui }}
       packaging: ${{ steps.filter.outputs.packaging }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -207,6 +208,20 @@ jobs:
               - '.github/workflows/stale-needs-info.yml'
             gui:
               - 'gui/**'
+            # The docs site is built by nothing else on a pull request. `ci` above
+            # deliberately omits `docs-site/**` -- a prose edit has no business
+            # starting the cross-platform suite -- and `deploy-docs.yml` triggers
+            # only on `push` to `main`. That left the Astro toolchain with no
+            # pull-request build gate at all, so a dependency bump under
+            # `docs-site/` could only be proven by an author's local run and would
+            # otherwise surface at promotion.
+            #
+            # `.github/workflows/ci.yml` is here so an edit to the job below
+            # verifies itself. Without it this filter's own pull request would
+            # skip the thing it adds.
+            docs:
+              - 'docs-site/**'
+              - '.github/workflows/ci.yml'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -833,12 +848,20 @@ jobs:
         # only 0.106-0.168s of wrapper overhead per process: at most ~2.1s against the margin.
         # A timeout or crash still fixes the shard red before singleton attribution. scope=all
         # preserves the full Windows suite; Linux keeps its correctly sized 12-file/120s defaults.
+        #
+        # The preload's Windows-only user lock serializes separate test runners on one machine.
+        # These batches are already one dedicated job's sequential pieces, so treating each Bun
+        # process as a competing runner can queue batch N+1 behind a straggler from batch N until
+        # this step's 480s process bound fires without running a test. Disable that outer queue for
+        # this step only. Every process still creates its own isolated home and arms the live-home
+        # and service-manager guard before the lock boundary.
         shell: bash
         env:
           TEST_SHARD: ${{ matrix.shard }}/9
           BUN_TEST_FILE_SCOPE: all
           BUN_TEST_BATCH_SIZE: "6"
           BUN_TEST_BATCH_TIMEOUT_SECONDS: "480"
+          OCX_TEST_NO_QUEUE: "1"
         run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke
@@ -928,6 +951,40 @@ jobs:
       - name: Build, start, and recreate the container
         run: bun scripts/ci/docker-smoke.ts
 
+  # Proves the Astro toolchain still builds the site, on the only event that can
+  # prove it before promotion.
+  #
+  # Linux only, and one leg. The site is static output from a Node/Bun toolchain
+  # with no OS-specific behaviour to promise, so a Windows or macOS leg would buy
+  # queue time rather than coverage. `docs-site` keeps its own manifest and
+  # lockfile, so this installs there and nowhere else.
+  #
+  # `--frozen-lockfile` is the point of the job as much as the build is: it fails
+  # on a manifest and lockfile that disagree, which is exactly the shape a
+  # hand-edited override introduces.
+  docs-site-build:
+    name: docs site build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install docs-site dependencies
+        working-directory: docs-site
+        run: bun install --frozen-lockfile
+
+      - name: Build the docs site
+        working-directory: docs-site
+        run: bun run build
+
   npm-global-smoke:
     name: npm-global ${{ matrix.os }}
     needs: changes
@@ -1006,7 +1063,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, npm-global-smoke]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, npm-global-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1023,6 +1080,7 @@ jobs:
           LANE: ${{ github.event.inputs.lane }}
           CHANGES_CI: ${{ needs.changes.outputs.ci }}
           CHANGES_PACKAGING: ${{ needs.changes.outputs.packaging }}
+          CHANGES_DOCS: ${{ needs.changes.outputs.docs }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1047,6 +1105,10 @@ jobs:
           if [ "$CHANGES_PACKAGING" = "true" ]; then
             packaging=requested
           fi
+          docs=not-requested
+          if [ "$CHANGES_DOCS" = "true" ]; then
+            docs=requested
+          fi
           dispatch=not-requested
           windows=not-requested
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
@@ -1061,7 +1123,7 @@ jobs:
           # without adding it here fails the gate by name rather than passing unnoticed.
           GATED_JOBS="changes select-windows-runner test storage-policy api-usage gates"
           GATED_JOBS="$GATED_JOBS platform-macos keyring-smoke docker-smoke npm-global-smoke"
-          GATED_JOBS="$GATED_JOBS macos-control platform-windows"
+          GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
 
           expected_for() {
             case "$1" in
@@ -1069,6 +1131,7 @@ jobs:
               test|storage-policy|api-usage|gates|platform-macos|keyring-smoke|docker-smoke)
                 echo "$scoped" ;;
               npm-global-smoke) echo "$packaging" ;;
+              docs-site-build) echo "$docs" ;;
               macos-control) echo "$dispatch" ;;
               platform-windows) echo "$windows" ;;
               *) echo undeclared ;;

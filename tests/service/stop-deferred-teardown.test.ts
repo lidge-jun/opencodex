@@ -115,21 +115,48 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.receiptExists).toBe(false);
   });
 
+  test("a paginated degraded restore releases its receipt and exits successfully", async () => {
+    const retained = {
+      reason: "history_paginated_requires_native_writer" as const,
+      lines: ["# Auto-injected by opencodex", "[model_providers.opencodex]"],
+      followUp: "Remove the table explicitly only if tagged conversations may stop opening.",
+    };
+    const restore = {
+      success: true,
+      message: "Native routing restored; provider table retained.",
+      retainedCodexProviderTable: retained,
+      artifacts: {
+        config: { state: "partial", action: "routing-restored-provider-retained", retained },
+        catalog: { state: "ok" },
+        history: { state: "skipped" },
+      },
+    } as unknown as CodexNativeRestoreResult;
+    const outcome = await runParentStop({ receipt: true,
+      response: { success: true, sharedTeardown: "deferred" }, restore });
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 1, grok: 1, cleared: 1 });
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.receiptExists).toBe(false);
+  });
+
   /**
-   * #4718: a refusal that happens BEFORE anything is restored.
+   * #4718, still live after #4812: a refusal that happens BEFORE anything is restored.
    *
-   * A paginated Codex history store makes the preflight refuse ahead of the config half,
-   * so every artifact comes back untouched rather than failed. `handleStop` had no branch
-   * for that shape and fell through to the generic failure, which exited 1 — and the
-   * updater reads 1 as "the proxy would not stop" and aborts with the service already
-   * down. The obligation really is still owed, so the receipt has to stay; what was wrong
-   * was calling it a stop failure.
+   * The paginated-history reason no longer reaches this shape — it takes routing down and
+   * reports `partial`, which the test above pins. Every OTHER preflight reason still
+   * refuses ahead of the config half, so every artifact comes back untouched rather than
+   * failed. `handleStop` had no branch for that shape and fell through to the generic
+   * failure, which exited 1 — and the updater reads 1 as "the proxy would not stop" and
+   * aborts with the service already down. The obligation really is still owed, so the
+   * receipt has to stay; what was wrong was calling it a stop failure.
+   *
+   * This case is easy to lose while narrowing the paginated reason, and losing it would
+   * silently retire exit code 80 along with the updater contract that reads it.
    */
-  test("a history-preflight refusal keeps its receipt and reports the deferred code", async () => {
+  test("a non-paginated preflight refusal keeps its receipt and reports the deferred code", async () => {
     const restore = {
       success: false,
-      message: "Native restore refused: history_paginated_requires_native_writer. Config, catalog, history and provenance were preserved.",
-      historyPreflightRefusal: "history_paginated_requires_native_writer",
+      message: "Native restore refused: history_state_database_missing. Config, catalog, history and provenance were preserved.",
+      historyPreflightRefusal: "history_state_database_missing",
       artifacts: { config: { state: "skipped" }, catalog: { state: "skipped" }, history: { state: "skipped" } },
     } as unknown as CodexNativeRestoreResult;
     const outcome = await runParentStop({ receipt: true,
@@ -163,8 +190,8 @@ describe("parent CLI shared teardown completion", () => {
     // so a run that damaged it must keep failing the stop however it got there.
     const restore = {
       success: false,
-      message: "Native restore refused: history_paginated_requires_native_writer.",
-      historyPreflightRefusal: "history_paginated_requires_native_writer",
+      message: "Native restore refused: history_rollout_record_invalid.",
+      historyPreflightRefusal: "history_rollout_record_invalid",
       artifacts: { config: { state: "failed" }, catalog: { state: "skipped" }, history: { state: "skipped" } },
     } as unknown as CodexNativeRestoreResult;
     const outcome = await runParentStop({ receipt: true,
@@ -246,6 +273,36 @@ describe("performStopTeardown", () => {
     expect(stripped).toBe(1);
     expect(body.sharedTeardown).toBe("performed");
     expect(body.message).toContain("native Codex restored");
+  });
+
+  test("a degraded stop reports the retained provider table without turning success into deferral", async () => {
+    const retained = {
+      reason: "history_paginated_requires_native_writer" as const,
+      lines: ["# Auto-injected by opencodex", "[model_providers.opencodex]"],
+      followUp: "Run the explicit removal command only if tagged conversations may stop opening.",
+    };
+    const body = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"), {
+      ownsReceipt: () => false,
+      restoreNativeCodex: async () => ({
+        ...restoreResult(true),
+        retainedCodexProviderTable: retained,
+        artifacts: {
+          ...restoreResult(true).artifacts,
+          config: {
+            state: "partial",
+            changed: true,
+            action: "routing-restored-provider-retained",
+            message: "routing restored",
+            retained,
+          },
+        },
+      }),
+      stripGrok: () => ({ ok: true, changed: false, message: "clean" }),
+    });
+
+    expect(body).toMatchObject({ success: true, sharedTeardown: "performed" });
+    expect(body.message).toContain("[model_providers.opencodex]");
+    expect(body.message).toContain("history_paginated_requires_native_writer");
   });
 
   test("a receipt-backed deferral touches neither config and says so", async () => {

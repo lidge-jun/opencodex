@@ -212,10 +212,23 @@ app and the CLI fell back to their built-in model list. `ocx sync` reported succ
 because that reason was special-cased into a `catalog-only` result — the downgrade is gone, so a
 refusal that survives is a real config or integrity failure again.
 
-Restore and removal keep the refusal. There the argument reverses: stripping the provider
-definition while its threads still point at it would orphan them, and those paths have no seam
-for keeping a compatibility table. A home that was already paginated therefore cannot yet be
-uninstalled through the product; that is tracked as open work, not as settled contract.
+Restore and removal now have that seam, so they no longer refuse on this one reason. The
+argument that forced the refusal still holds — stripping the provider definition while its
+threads still point at it would orphan them — but it only ever justified keeping the
+`[model_providers.opencodex]` table, not keeping the routing that aims plain `codex` at the
+proxy. Those are separable, and conflating them is what let `ocx uninstall` remove the proxy
+and leave the config pointing at it.
+
+On `history_paginated_requires_native_writer`, restore and removal take every OpenCodex root
+routing key out and retain the provider table verbatim, captured from the pre-transform bytes
+and re-appended into the same buffer so the file never passes through a state that names a
+provider it does not define — upstream fails the entire config load on a missing provider id,
+not the single thread. The history relabel is skipped rather than attempted, so paginated
+rollout bytes and thread rows stay untouched here exactly as they do on apply. The result is
+reported as `partial`, naming the retained lines and the command that removes them.
+`ocx restore --remove-codex-provider-table` is the explicit opt-in for full removal, and it
+states that conversations already tagged `opencodex` stop opening. Every other refusal reason
+keeps the hard refusal and the compensating rollback.
 
 Unattended sync, `POST /api/sync`, and every other config or ownership refusal keep the hard
 failure above.

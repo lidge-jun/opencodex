@@ -138,7 +138,7 @@ const FAKE_BUN = [
   'for arg in "$@"; do',
   '  case "$arg" in *.test.ts) files=$((files + 1)) ;; esac',
   "done",
-  "printf '%s|%s\\n' \"$files\" \"$*\" >> \"$FIXTURE_CALLS\"",
+  "printf '%s|%s|%s\\n' \"$files\" \"${OCX_TEST_NO_QUEUE:-}\" \"$*\" >> \"$FIXTURE_CALLS\"",
   'if [ "$files" -le 1 ]; then',
   "  exit 0",
   "fi",
@@ -185,6 +185,7 @@ function runBatches(
         CI: "true",
         BUN_TEST_BATCH_SIZE: "3",
         BUN_TEST_FILE_SCOPE: fileScope,
+        OCX_TEST_NO_QUEUE: "1",
         OPENCODEX_BUN_PATH: join(binDirectory, "bun"),
         FIXTURE_MODE: mode,
         FIXTURE_CALLS: calls,
@@ -207,6 +208,8 @@ const batchCalls = (result: RunnerResult): string[] =>
   result.calls.filter(call => !call.startsWith("1|"));
 const singletonCalls = (result: RunnerResult): string[] =>
   result.calls.filter(call => call.startsWith("1|"));
+const noQueueFlags = (result: RunnerResult): string[] =>
+  result.calls.map(call => call.split("|")[1] ?? "");
 
 describe.skipIf(process.platform !== "linux")("the Linux batch runner, executed", () => {
   test("a clean run is green and runs each batch exactly once", () => {
@@ -214,6 +217,7 @@ describe.skipIf(process.platform !== "linux")("the Linux batch runner, executed"
     expect(`status:${run.status}`, run.output).toBe("status:0");
     expect(batchCalls(run)).toHaveLength(2);
     expect(singletonCalls(run)).toEqual([]);
+    expect(noQueueFlags(run)).toEqual(["1", "1"]);
     expect(run.calls.some(call => call.includes(DEDICATED_FILE))).toBe(false);
   }, SPAWN_BUDGET_MS);
 
@@ -249,6 +253,9 @@ describe.skipIf(process.platform !== "linux")("the Linux batch runner, executed"
     // This is the exact case the deleted "a timeout may still recover" contract pinned green.
     expect(`status:${run.status}`, run.output).toBe("status:124");
     expect(singletonCalls(run)).toHaveLength(FIRST_BATCH.length);
+    // The bypass reaches both the primary process and every attribution process;
+    // otherwise a survivor from the failed process can queue the diagnostic sweep too.
+    expect(new Set(noQueueFlags(run))).toEqual(new Set(["1"]));
     expect(run.output).toContain("every file passed alone");
     expect(run.output).not.toContain("continuing");
   }, SPAWN_BUDGET_MS);
