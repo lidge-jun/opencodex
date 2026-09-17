@@ -1,10 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   classifyCursorError,
   isCursorBenignCancelError,
   isCursorInvalidArgumentError,
   safeCursorErrorMessage,
 } from "../../../src/adapters/cursor/cursor-errors";
+import {
+  inferCursorContextWindow,
+  recordObservedCursorContextWindow,
+  resetObservedCursorContextWindowsForTests,
+} from "../../../src/adapters/cursor/discovery";
 import { inferHttpStatusFromAdapterMessage } from "../../../src/lib/errors";
 
 describe("classifyCursorError", () => {
@@ -199,5 +204,30 @@ describe("bare resource_exhausted size prior (devlog 260)", () => {
   test("explicit size phrases stay resource-limit regardless of size context", () => {
     expect(classifyCursorError("resource_exhausted: request body exceeds maximum allowed size", { estimatedInputTokens: 20, contextWindow: 200_000 }))
       .toBe("Cursor resource limit exceeded");
+  });
+
+  describe("observed checkpoint maxTokens feeds the size prior", () => {
+    afterEach(() => {
+      resetObservedCursorContextWindowsForTests();
+    });
+
+    test("a 20-token request against an observed 32k ceiling stays 429", () => {
+      const options = { identityScope: "account-a" };
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, options);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", options)).toBe(32_000);
+      expect(classifyCursorError(BARE, {
+        estimatedInputTokens: 20,
+        contextWindow: inferCursorContextWindow("claude-4.6-sonnet", options),
+      })).toBe("Cursor rate limit exceeded");
+    });
+
+    test("a request that is large relative to the observed ceiling stays overflow", () => {
+      const options = { identityScope: "account-a" };
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, options);
+      expect(classifyCursorError(BARE, {
+        estimatedInputTokens: 20_000,
+        contextWindow: inferCursorContextWindow("claude-4.6-sonnet", options),
+      })).toBe("Cursor context limit exceeded");
+    });
   });
 });

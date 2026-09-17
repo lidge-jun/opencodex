@@ -17,12 +17,13 @@ const payload = JSON.parse(process.env.OCX_LOCK_CHILD_PAYLOAD ?? "{}") as {
   timeoutMs?: number;
   holdMarker?: string;
   releaseMarker?: string;
+  waitMarker?: string;
   holdMs?: number;
 };
 
 const admitted = { authoritySnapshotId: "authority-child" } as AdmissionSnapshot;
 
-const result = await withCodexWriteLock(
+const pending = withCodexWriteLock(
   {
     timeoutMs: payload.timeoutMs ?? 0,
     admitted,
@@ -75,9 +76,28 @@ const result = await withCodexWriteLock(
   },
 );
 
+if (payload.waitMarker) {
+  let settled = false;
+  void pending.then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  // Flush reactions for a promise that completed synchronously. When a holder
+  // already owns N, an unsettled promise here means withCodexWriteLock tried to
+  // acquire it and suspended in its retry wait.
+  await Promise.resolve();
+  if (!settled) writeFileSync(payload.waitMarker, "waiting");
+}
+
+const result = await pending;
+
 console.log(JSON.stringify({
   status: result.status,
-  ...(result.status === "acquired" ? { value: result.value, lockId: result.lockId } : {}),
-  ...(result.status === "busy" ? { reason: result.reason, lockId: result.lockId } : {}),
+  ...(result.status === "acquired"
+    ? { value: result.value, waitedMs: result.waitedMs, lockId: result.lockId }
+    : {}),
+  ...(result.status === "busy"
+    ? { reason: result.reason, waitedMs: result.waitedMs, lockId: result.lockId }
+    : {}),
   ...(result.status === "refused" ? { reason: result.reason, message: result.message } : {}),
 }));

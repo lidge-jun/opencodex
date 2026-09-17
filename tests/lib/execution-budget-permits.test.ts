@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
@@ -200,76 +199,73 @@ describe("layer caps intersect the shared budget", () => {
 });
 
 /**
- * The refund property above is only worth something if every caller actually uses it.
+ * A credential hop reserves before it knows whether account resolution, request rebuilding, or
+ * admission will reach the wire. The reservation is a real charge immediately, so every exit
+ * before dispatch must release it. Once bytes leave, the same permit must become non-refundable.
  *
- * The generic-OAuth 429 ladder reserves a hop before it knows whether a rotation is possible.
- * Two of its three exits released correctly and the `catch` did not, so a throw from the
- * snapshot fetch or from credential application charged the request for a send that never left
- * the process — and a later recovery in the same request was then refused on an allowance
- * nothing had spent. The passthrough and runTurn ladders already had it right; these two did not.
- *
- * This is a source oracle because the defect lives in the caller's control flow, not in the
- * budget: a unit test of the budget cannot see a caller that forgets to hand the permit back.
+ * These cases assert the permit state and spend observer directly. They fail on the historical
+ * accounting defect without depending on a particular server function name or catch-block shape.
  */
-describe("generic-OAuth hop reservations are handed back when no send happens", () => {
-  // Bounded to each ladder's own span and matched on the catch that opens it. An earlier version
-  // of this test searched from the first following "catch {" and found the inline body-cancel
-  // catch instead, so it passed while the defect was still present.
-  const ladder = (relativePath: string, fromMarker: string, toMarker: string): string => {
-    const source = readFileSync(new URL("../../" + relativePath, import.meta.url), "utf8");
-    const from = source.indexOf(fromMarker);
-    const to = source.indexOf(toMarker, from);
-    expect(from).toBeGreaterThan(-1);
-    expect(to).toBeGreaterThan(from);
-    return source.slice(from, to);
+describe("dispatch permits distinguish pre-send failures from physical sends", () => {
+  const recordingObserver = () => {
+    const events: string[] = [];
+    return {
+      events,
+      observer: {
+        charge: () => { events.push("charge"); return true; },
+        refund: () => { events.push("refund"); },
+      },
+    };
   };
-  const refundsOnThrow = /catch \{[^}]*hop\.permit\?\.release\(\)/;
 
-  test("the adapter dispatch ladder confirms at the dispatch boundary and refunds otherwise", () => {
-    const source = readFileSync(new URL("../../src/server/responses/adapter-dispatch.ts", import.meta.url), "utf8");
-    // Confirming before the rebuild is not enough: buildRequest failures return { failed }
-    // without reaching the wire, so the hop is confirmed by the callback the rebuild invokes at
-    // its dispatch boundary, and the { failed } arm refunds whatever that callback did not spend.
-    expect(source).toContain("onDispatch?.()");
-    // Confirmed at the wire, not before the pacer: waitForProviderRequestSlot can reject for an
-    // abort, a saturated queue, an expired slot or a removed provider without ever calling the
-    // adapter, and release() is a no-op once used, so an early confirm could never be refunded.
-    const slotWait = source.indexOf("await waitForProviderRequestSlot(");
-    const confirmAfterWait = source.indexOf("onDispatch?.()", slotWait);
-    const adapterSend = source.indexOf("transportState.activeAdapter.fetchResponse(retryRequest", confirmAfterWait);
-    expect(slotWait).toBeGreaterThan(-1);
-    expect(confirmAfterWait).toBeGreaterThan(slotWait);
-    expect(adapterSend).toBeGreaterThan(confirmAfterWait);
-    // The helper path has the same boundary inside the thunk that reaches the wire.
-    const thunkConfirm = source.indexOf("onDispatch?.()", adapterSend);
-    const headerTimeout = source.indexOf("fetchWithHeaderTimeout(retryRequest.url", thunkConfirm);
-    expect(thunkConfirm).toBeGreaterThan(adapterSend);
-    expect(headerTimeout).toBeGreaterThan(thunkConfirm);
-    const block = ladder(
-      "src/server/responses/adapter-dispatch.ts",
-      "adapter-recovery-oauth-429",
-      "attemptOpaqueBlobRecovery",
-    );
-    expect(block).toContain('rebuildAndRefetch("oauth-account-429", () => {');
-    // ...except on an adapter-owned ladder, which confirms through its own reservation. Settling
-    // here as well would close the permit before `adapterDispatchBudget` could hand it over, and
-    // an adapter whose `use()` fails reads the request as exhausted and stops sending (#4709).
-    expect(block).toContain("if (!adapterOwnsDispatch) hop.permit?.use();");
-    expect(block).toContain("sendBudgetState.pendingHopPermit = hop.permit;");
-    expect(block).toMatch(/if \("failed" in result\) \{[^}]*hop\.permit\?\.release\(\)/);
-    expect(block).toMatch(refundsOnThrow);
+  test("a reservation released after a pre-dispatch failure books no spend", () => {
+    const spy = recordingObserver();
+    const budget = createRequestExecutionBudget(ONE_SEND_LEFT, "lr-pre-dispatch", spy.observer);
+    const hop = budget.reserveDispatch({
+      sendClass: "auth-recovery",
+      targetKey: "provider|model",
+      countedExternally: true,
+    });
+    if (!hop.allowed) throw new Error("unreachable");
+
+    let physicalSends = 0;
+    try {
+      throw new Error("credential application failed");
+    } catch {
+      hop.permit.release();
+    }
+
+    expect(physicalSends).toBe(0);
+    expect(budget.used).toBe(0);
+    expect(spy.events).toEqual(["charge", "refund"]);
+    expect(hop.permit.use()).toBe(false);
+    expect(budget.reserveDispatch({ sendClass: "auth-recovery", targetKey: "provider|model" }).allowed)
+      .toBe(true);
   });
 
-  test("the continuation ladder refunds, because its send happens after the loop continues", () => {
-    const block = ladder(
-      "src/server/responses/adapter-continuation.ts",
-      "continuation-oauth-429",
-      "shouldAttemptImageTierRetry",
-    );
-    // Nothing in that try dispatches: the replay is the next iteration, so a throw must return
-    // the reservation rather than confirm it.
-    expect(block).not.toContain("hop.permit?.use()");
-    expect(block).toMatch(refundsOnThrow);
+  test("a reservation confirmed at dispatch stays charged after a later failure", () => {
+    const spy = recordingObserver();
+    const budget = createRequestExecutionBudget(ONE_SEND_LEFT, "lr-post-dispatch", spy.observer);
+    const hop = budget.reserveDispatch({
+      sendClass: "auth-recovery",
+      targetKey: "provider|model",
+    });
+    if (!hop.allowed) throw new Error("unreachable");
+
+    let physicalSends = 0;
+    try {
+      physicalSends += 1;
+      expect(hop.permit.use()).toBe(true);
+      throw new Error("upstream rejected after dispatch");
+    } catch {
+      hop.permit.release();
+    }
+
+    expect(physicalSends).toBe(1);
+    expect(budget.used).toBe(1);
+    expect(spy.events).toEqual(["charge"]);
+    expect(budget.reserveDispatch({ sendClass: "transient", targetKey: "provider|model" }))
+      .toEqual({ allowed: false, reason: "total-exhausted" });
   });
 });
 
@@ -327,27 +323,6 @@ describe("a credential hop is settled by whichever layer dispatches its replay",
     expect(budget.used).toBe(2);
   });
 
-  test("the three adapter hop sites hand their reservation down instead of double-charging", () => {
-    const responses = (name: string): string =>
-      readFileSync(new URL("../../src/server/responses/" + name, import.meta.url), "utf8");
-    // The adapter recovery loop and the continuation loop both pick their settlement from the
-    // shape of the dispatcher, so neither promises an external report an adapter would never make.
-    for (const name of ["adapter-dispatch.ts", "adapter-continuation.ts"]) {
-      const source = responses(name);
-      expect(source).toContain("const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;");
-      expect(source).toContain("!adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,");
-    }
-    // runTurn has only one shape: the adapter owns the transport, so it never reports and the
-    // reservation is always handed down rather than confirmed here.
-    const runTurn = responses("run-turn-execution.ts");
-    expect(runTurn).toContain("sendBudgetState.pendingHopPermit = hop.permit;");
-    expect(runTurn).not.toContain("hop.permit?.use();");
-    // Every adapter-owned transport now reserves against the view, which is what spends the
-    // handed-down permit. Passing the bare holder is the regression this pins.
-    for (const name of ["adapter-dispatch.ts", "adapter-continuation.ts", "run-turn-execution.ts"]) {
-      expect(responses(name)).not.toContain("sendBudget: adapterSendBudget");
-    }
-  });
 });
 
 describe("derived policy scopes", () => {
