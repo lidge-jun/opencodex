@@ -180,6 +180,10 @@ then trusted catalog metadata such as a configured qualified provider/model alia
 This overlay never changes route identity or the upstream wire model, and its catalog fingerprint makes
 a label edit refresh Codex output.
 
+Raw `/v1/models` rows advertise positive safe capacity values in both Cursor's nested
+`capabilities` object and top-level discovery fields used by other clients. A model with a larger
+opt-in context tier uses that effective long window in both shapes; invalid values are omitted.
+
 Supported bare native GPT rows also consume `providers.openai.modelDisplayNames`. Retained sync
 and convergence pass the same map to the observed-state merge. After native normalization and
 ordering, the merge applies the exact nonblank trimmed label and saves

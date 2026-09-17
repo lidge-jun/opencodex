@@ -28,6 +28,7 @@ import {
 import {
   preflightCodexHistoryInjection,
   syncCodexHistoryProvider,
+  HISTORY_RELABEL_STANDS_DOWN,
   type CodexHistoryFailureReason,
 } from "../history-provider";
 import {
@@ -44,7 +45,11 @@ import {
 } from "../paths";
 import { shouldInjectApiAuthHeader } from "../loopback-target";
 import { currentExternalCodexModelProvider } from "./config-toml";
-import { removeCodexConfig } from "./remove";
+import {
+  readOcxProviderTableBlock,
+  removeCodexConfig,
+  retainOcxProviderTableOnDisk,
+} from "./remove";
 
 class CodexRestoreRefusal extends Error {
   constructor(readonly config: CodexRestoreConfigResult) {
@@ -57,13 +62,49 @@ export function setBeforeRestoreConfigForTests(hook: typeof beforeRestoreConfigF
   beforeRestoreConfigForTests = hook;
 }
 
-export type CodexRestoreArtifactState = "ok" | "skipped" | "failed";
+/**
+ * `partial` means the artifact was restored as far as it safely could be and named what
+ * it left behind. It is not a failure — the caller's obligation was discharged — but it
+ * is not a plain `ok` either, because something on disk still needs a decision (#4812).
+ */
+export type CodexRestoreArtifactState = "ok" | "partial" | "skipped" | "failed";
+
+/** What a degraded restore kept, why, and how to finish the job. */
+export interface RetainedCodexProviderTable {
+  reason: typeof HISTORY_RELABEL_STANDS_DOWN;
+  /** The exact `config.toml` lines left on disk. */
+  lines: string[];
+  followUp: string;
+}
+
+const RETAINED_PROVIDER_TABLE_FOLLOW_UP =
+  "Run 'ocx restore --remove-codex-provider-table' to remove it; conversations already tagged "
+  + "opencodex will stop opening if you do.";
+
+/**
+ * The one sentence every teardown surface prints about retained residue.
+ *
+ * Shared rather than rewritten per caller: `restore`, `stop`, `uninstall`, the service
+ * subcommands and the stop API all report this same outcome, and a user who runs two of
+ * them should not have to work out whether two different descriptions mean the same state.
+ */
+export function describeRetainedCodexProviderTable(retained: RetainedCodexProviderTable): string {
+  return "Kept [model_providers.opencodex] in $CODEX_HOME/config.toml because Codex owns this home's"
+    + ` paginated history (${retained.reason}): conversations already tagged opencodex resolve only`
+    + ` through that table. Plain \`codex\` is native again. ${retained.followUp}`;
+}
 
 export interface CodexRestoreConfigResult {
   state: CodexRestoreArtifactState;
   changed: boolean;
-  action: "journal-restored" | "owned-fields-stripped" | "external-provider-preserved" | "failed";
+  action:
+    | "journal-restored"
+    | "owned-fields-stripped"
+    | "routing-restored-provider-retained"
+    | "external-provider-preserved"
+    | "failed";
   message: string;
+  retained?: RetainedCodexProviderTable;
 }
 
 export interface CodexRestoreCatalogResult {
@@ -101,6 +142,14 @@ export interface CodexNativeRestoreResult {
    * make a safety decision depend on prose.
    */
   historyPreflightRefusal?: string;
+  /**
+   * Set when routing came out but `[model_providers.opencodex]` stayed (#4812).
+   *
+   * Distinct from `historyPreflightRefusal`, which means nothing was attempted at all.
+   * This one means the config obligation WAS discharged, so a stop receipt must be
+   * released rather than preserved.
+   */
+  retainedCodexProviderTable?: RetainedCodexProviderTable;
   artifacts: {
     config: CodexRestoreConfigResult;
     catalog: CodexRestoreCatalogResult;
@@ -243,10 +292,42 @@ function historyPreflightRefusalEnvelope(historyError: string): CodexNativeResto
   return result;
 }
 
+/**
+ * How a restore may proceed given what the history preflight says.
+ *
+ * The preflight answers one question — may conversation history be rewritten — and this
+ * translates it into the separate question the restore actually needs answered: may
+ * OpenCodex routing come out of `config.toml`, and what has to stay if it does.
+ */
+export type RestoreHistoryDisposition =
+  | { kind: "proceed" }
+  | { kind: "stand-down"; retainProviderTable: boolean }
+  | { kind: "refuse"; reason: string };
+
+export function resolveRestoreHistoryDisposition(
+  removeProviderTable: boolean | undefined,
+  reason: string | null = preflightCodexHistoryInjection(false, false),
+): RestoreHistoryDisposition {
+  if (!reason) return { kind: "proceed" };
+  // Every other reason still means the history state itself is wrong — a missing store, an
+  // unreadable rollout, an integrity failure. Those keep the hard refusal and the
+  // compensating rollback they have always had.
+  if (reason !== HISTORY_RELABEL_STANDS_DOWN) return { kind: "refuse", reason };
+  // The rows stay tagged `opencodex` either way, because the native writer owns them.
+  // Retaining the table is what keeps those conversations openable; the explicit flag is
+  // the user accepting that they will not be.
+  return { kind: "stand-down", retainProviderTable: removeProviderTable !== true };
+}
+
+export interface RestoreConfigOptions {
+  /** Strip `[model_providers.opencodex]` too, accepting that tagged threads stop opening. */
+  removeProviderTable?: boolean;
+}
+
 /** The config/profile half of a native restore, reported as one artifact. */
-function restoreCodexConfigInline(kind = "sync"): CodexRestoreConfigResult {
+function restoreCodexConfigInline(kind = "sync", options: RestoreConfigOptions = {}): CodexRestoreConfigResult {
   const preImages = captureCodexPreImages();
-  const result = restoreCodexConfigInlineImpl(kind);
+  const result = restoreCodexConfigInlineImpl(kind, options);
   if (result.state === "failed") {
     const compensated = restoreCodexPreImages(preImages);
     if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
@@ -254,11 +335,25 @@ function restoreCodexConfigInline(kind = "sync"): CodexRestoreConfigResult {
   return result;
 }
 
-function restoreCodexConfigInlineImpl(kind: string): CodexRestoreConfigResult {
+function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOptions): CodexRestoreConfigResult {
   try {
     beforeRestoreConfigForTests?.(kind);
-    const historyError = preflightCodexHistoryInjection(false, false);
-    if (historyError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${historyError}.` };
+    const disposition = resolveRestoreHistoryDisposition(options.removeProviderTable);
+    if (disposition.kind === "refuse") {
+      return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${disposition.reason}.` };
+    }
+    // Captured unconditionally, not only when the stand-down is already known.
+    //
+    // Two different paths need bytes that only exist before the write. The journal restore
+    // replays the pre-injection config, which never contained our table, and then deletes
+    // the journal. And Codex can paginate DURING the write: the post-write re-check below
+    // then sees a stand-down that the pre-write check did not, at which point the table has
+    // already been stripped and there is nothing left to read. Both are cheap to prevent
+    // and impossible to repair afterwards, so the read happens once, here.
+    //
+    // The one caller that must not capture is the explicit removal flag: it is the user
+    // accepting that tagged conversations stop opening.
+    const capturedBlock = options.removeProviderTable === true ? null : readOcxProviderTableBlock();
     const journal = restoreJournalState();
     if (journal.unverified) {
       return {
@@ -267,13 +362,51 @@ function restoreCodexConfigInlineImpl(kind: string): CodexRestoreConfigResult {
       };
     }
     const restored = journal.configRestored
-      ? { success: true, message: "Codex config restored from opencodex journal." }
-      : removeCodexConfig({ preserveProfile: journal.profileRestored || journal.profileChanged });
+      ? { success: true, message: "Codex config restored from opencodex journal.", retainedProviderTable: undefined as string[] | undefined }
+      : removeCodexConfig({
+          preserveProfile: journal.profileRestored || journal.profileChanged,
+          // The history question was resolved above; hand the answer down rather than making
+          // the transform re-derive it, which refused the explicit-removal path outright.
+          historyDisposition: disposition.kind === "stand-down"
+            ? disposition.retainProviderTable ? "stand-down-retain" : "stand-down-remove"
+            : "refuse-on-any",
+        });
+    let retainedLines = restored.retainedProviderTable ?? null;
     if (restored.success) {
       // A successful journal/fallback write can race native history migration too.
       // Refuse here while preimage compensation and the remove transaction can roll back.
-      const finalHistoryError = preflightCodexHistoryInjection(false, false);
-      if (finalHistoryError) return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${finalHistoryError}.` };
+      // A stand-down observed now is the same stand-down that was already accounted for —
+      // it must not undo a routing removal that has already reached disk.
+      const settled = resolveRestoreHistoryDisposition(options.removeProviderTable);
+      if (settled.kind === "refuse") {
+        return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${settled.reason}.` };
+      }
+      // One re-attach covers three cases that all need the same bytes on disk: the journal
+      // path, which wrote a config without our table; the migration race, where the strip ran
+      // before anyone knew a table was needed; and the ordinary planned retention, where
+      // `removeCodexConfig` already put it back and this is a no-op. Re-attaching is
+      // idempotent — it checks for the table before appending — so the three do not have to
+      // be told apart here.
+      if (settled.kind === "stand-down" && settled.retainProviderTable && capturedBlock !== null) {
+        retainedLines = retainOcxProviderTableOnDisk(capturedBlock) ?? retainedLines;
+      }
+    }
+    if (restored.success && retainedLines !== null) {
+      return {
+        state: "partial",
+        changed: true,
+        action: "routing-restored-provider-retained",
+        message: journal.configRestored
+          ? "Codex config restored from opencodex journal. Kept [model_providers.opencodex] so conversations already"
+            + " tagged opencodex still open; remove it with 'ocx restore --remove-codex-provider-table'"
+            + " (those conversations stop opening)."
+          : restored.message,
+        retained: {
+          reason: HISTORY_RELABEL_STANDS_DOWN,
+          lines: retainedLines,
+          followUp: RETAINED_PROVIDER_TABLE_FOLLOW_UP,
+        },
+      };
     }
     return restored.success
       ? {
@@ -336,7 +469,7 @@ function restoreCodexCatalogArtifact(
  * that lost race into the discriminated `desired_enabled` skip.
  */
 export async function restoreNativeCodexAsync(
-  options: { revalidateDesiredState?: boolean } = {},
+  options: { revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
 ): Promise<CodexNativeRestoreResult> {
   try {
     return await restoreNativeCodexAsyncImpl(options);
@@ -347,7 +480,7 @@ export async function restoreNativeCodexAsync(
 }
 
 async function restoreNativeCodexAsyncImpl(
-  options: { revalidateDesiredState?: boolean },
+  options: { revalidateDesiredState?: boolean; removeProviderTable?: boolean },
 ): Promise<CodexNativeRestoreResult> {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
@@ -368,8 +501,12 @@ async function restoreNativeCodexAsyncImpl(
     if (shouldSyncCodexOnStart(loadConfig())) return desiredEnabledRestoreSkip();
   }
 
-  const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return historyPreflightRefusalEnvelope(historyError);
+  const disposition = resolveRestoreHistoryDisposition(options.removeProviderTable);
+  if (disposition.kind === "refuse") return historyPreflightRefusalEnvelope(disposition.reason);
+  // A stand-down spawns no history Worker. The preflight the Worker would run first has
+  // already answered, and the rows stay tagged `opencodex` on purpose — which is exactly
+  // why the provider table has to survive the config half.
+  const historyStandsDown = disposition.kind === "stand-down";
 
   const eligibility = codexWriteCoordinationEligibility({
     coordinatorPath: () =>
@@ -420,7 +557,7 @@ async function restoreNativeCodexAsyncImpl(
         const preImages = captureCodexPreImages();
         let restored: CodexRestoreConfigResult;
         try {
-          restored = restoreCodexConfigInline(eligibility.kind);
+          restored = restoreCodexConfigInline(eligibility.kind, options);
           // Throw inside N so the published remove transition rolls back too.
           if (restored.state === "failed") throw new CodexRestoreRefusal(restored);
         } catch (error) {
@@ -463,20 +600,34 @@ async function restoreNativeCodexAsyncImpl(
     if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
       return desiredEnabledRestoreSkip();
     }
-    config = restoreCodexConfigInline(eligibility.kind);
+    config = restoreCodexConfigInline(eligibility.kind, options);
   }
 
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
-  const outcome = await runCodexHistoryJob({
-    ...resolveCodexHistoryJobTarget(),
-    ...(options.revalidateDesiredState ? { expectedDesiredEnabled: false } : {}),
-    operation: deriveCodexHistoryOperation({ direction: "restore", resumeHistory: true, legacyMode: false }),
-  });
+  // Re-asked after the config half, because the store can paginate mid-transaction. Deciding
+  // the history job from the pre-write answer alone would spawn a Worker whose own preflight
+  // is now guaranteed to refuse, and report that refusal as a restore failure on a home that
+  // was in fact restored.
+  const historyStoodDown = historyStandsDown
+    || resolveRestoreHistoryDisposition(options.removeProviderTable).kind === "stand-down";
+  const outcome: CodexHistoryJobOutcome = historyStoodDown
+    ? { kind: "skipped" }
+    : await runCodexHistoryJob({
+      ...resolveCodexHistoryJobTarget(),
+      ...(options.revalidateDesiredState ? { expectedDesiredEnabled: false } : {}),
+      operation: deriveCodexHistoryOperation({ direction: "restore", resumeHistory: true, legacyMode: false }),
+    });
   if (transitionReceipt) {
     resolveCodexHistoryTransition(transitionReceipt, outcome);
   }
-  const history: CodexRestoreHistoryResult = outcome.kind === "converged"
+  const history: CodexRestoreHistoryResult = historyStoodDown
+    ? {
+        state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0,
+        message: `Codex resume history was left to Codex's native writer (${HISTORY_RELABEL_STANDS_DOWN});`
+          + " existing threads keep the provider they are tagged with and no rollout byte was read or written.",
+      }
+    : outcome.kind === "converged"
     ? {
         state: "ok", changed: outcome.rows > 0 || outcome.files > 0, rows: outcome.rows, files: outcome.files, ejectedRows: 0,
         message: outcome.rows > 0
@@ -500,14 +651,24 @@ async function restoreNativeCodexAsyncImpl(
     : config.message;
   const success = catalog.state !== "failed"
     && history.state !== "failed";
+  // A stood-down relabel is not a failure, but it is something the operator has to be told:
+  // their existing conversations keep the provider they are tagged with, and nothing will
+  // ever change that from this side. Printing only the config half would be the same
+  // partial-success-reported-as-success problem this change exists to end.
+  const historyNote = history.state === "failed"
+    ? ` ⚠️ ${history.message}`
+    : historyStoodDown ? ` ${history.message}` : "";
   return {
     success,
-    message: `${base}${history.state === "failed" ? ` ⚠️ ${history.message}` : ""}`,
+    message: `${base}${historyNote}`,
+    ...(config.retained ? { retainedCodexProviderTable: config.retained } : {}),
     artifacts: { config, catalog, history },
   };
 }
 
-export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateDesiredState?: boolean } = {}): CodexNativeRestoreResult {
+export function restoreNativeCodex(
+  options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
+): CodexNativeRestoreResult {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     removeJournal();
@@ -516,14 +677,18 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
   if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
     return desiredEnabledRestoreSkip();
   }
-  const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return historyPreflightRefusalEnvelope(historyError);
+  const disposition = resolveRestoreHistoryDisposition(options.removeProviderTable);
+  if (disposition.kind === "refuse") return historyPreflightRefusalEnvelope(disposition.reason);
+  const historyStandsDown = disposition.kind === "stand-down";
   // Captured before the config half: a successful journal restore DELETES the journal, and
   // restoring the config can drop `model_catalog_json`. Either one would hide the routed
   // catalog we actually wrote (#1798).
   const journaledCatalogPath = journaledInjectedCatalogPath();
-  const config = restoreCodexConfigInline();
+  const config = restoreCodexConfigInline("sync", options);
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
+  // Same mid-transaction pagination re-check as the async path.
+  const historyStoodDown = historyStandsDown
+    || resolveRestoreHistoryDisposition(options.removeProviderTable).kind === "stand-down";
   const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
   // Design B (loopback) steady state: threads are already tagged openai, so prove the
   // no-op with a readonly probe instead of write-opening a DB the Codex app may hold
@@ -537,12 +702,18 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
   }
   // `skipHistory` is how the async wrapper takes this work for itself: the
   // native files come down here, and history runs in the Worker under H.
-  const rawHistory = options.skipHistory
+  const rawHistory = options.skipHistory || historyStoodDown
     ? { rows: 0, files: 0 }
     : syncCodexHistoryProvider("openai", undefined, undefined, {
         skipWhenProvablyNoop,
       });
-  const history: CodexRestoreHistoryResult = options.skipHistory
+  const history: CodexRestoreHistoryResult = historyStoodDown
+    ? {
+        state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0,
+        message: `Codex resume history was left to Codex's native writer (${HISTORY_RELABEL_STANDS_DOWN});`
+          + " existing threads keep the provider they are tagged with and no rollout byte was read or written.",
+      }
+    : options.skipHistory
     ? { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message: "History restoration runs asynchronously." }
     : rawHistory.failed
       ? failedHistoryRestore(rawHistory.failureReason, undefined, rawHistory)
@@ -561,7 +732,8 @@ export function restoreNativeCodex(options: { skipHistory?: boolean; revalidateD
     : config.message;
   return {
     success: catalog.state !== "failed" && history.state !== "failed",
-    message,
+    message: historyStoodDown ? `${message} ${history.message}` : message,
+    ...(config.retained ? { retainedCodexProviderTable: config.retained } : {}),
     artifacts: { config, catalog, history },
   };
 }

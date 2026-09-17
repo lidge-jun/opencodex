@@ -99,11 +99,20 @@ function safeCursorTransportError(err: unknown, sizeContext?: CursorSizeContext)
  * estimate over the outgoing text vs the model's context window. Only used to keep
  * SMALL requests on the 429 class — unknown/large stays on the overflow mapping.
  */
-function cursorRequestSizeContext(request: { modelId: string; system: string[]; messages: { content: string }[] }): CursorSizeContext {
+function cursorRequestSizeContext(request: {
+  modelId: string;
+  _cursorIdentityScope?: string;
+  system: string[];
+  messages: { content: string }[];
+}): CursorSizeContext {
   const text = [...request.system, ...request.messages.map(message => message.content)].join("\n");
   return {
     estimatedInputTokens: estimateTokens(text, request.modelId),
-    contextWindow: inferCursorContextWindow(request.modelId),
+    // Prefers this identity scope's checkpoint `maxTokens` over the id heuristic
+    // so a plan-gated ceiling participates in the 0.5-window overflow vs 429 prior.
+    contextWindow: inferCursorContextWindow(request.modelId, {
+      identityScope: request._cursorIdentityScope,
+    }),
   };
 }
 
@@ -171,7 +180,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         }
         const inheritedCheckpointRef = _parsed._providerContinuation?.cursor?.checkpointRef;
         const previousConversationId = _parsed._cursorConversationId;
-        let request = createCursorRequest(_parsed);
+        let request = {
+          ...createCursorRequest(_parsed),
+          _cursorIdentityScope: _parsed._cursorIdentityScope?.trim() || "local",
+        };
         requestSizeContext = cursorRequestSizeContext(request);
         // The builder may derive a stable provider id from the client thread when Responses state
         // is unavailable. Rekey only existing state; there is nothing to migrate on a fresh turn,
@@ -413,7 +425,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         const remintConversationId = (failedConversationId: string) => {
           lastTransport = undefined;
           _parsed._cursorConversationId = undefined;
-          const next = createCursorRequest(_parsed, { forceFreshConversation: true });
+          const next = {
+            ...createCursorRequest(_parsed, { forceFreshConversation: true }),
+            _cursorIdentityScope: _parsed._cursorIdentityScope?.trim() || "local",
+          };
           rekeyContextUsage(failedConversationId, next.conversationId);
           _parsed._cursorConversationId = next.conversationId;
           // Persist recovery for store:false clients that send any stable Cursor thread owner, so

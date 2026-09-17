@@ -11,11 +11,16 @@ import {
   isCodexShellBridgeToolName,
   isCursorStructuredEditToolName,
   normalizeCursorWireName,
-  normalizeCursorTextToolMarkers,
   OCX_RESPONSES_TOOL_PROVIDER,
   resolveShellBridgeAliasKey,
   responsesToolNameFromCursorWire,
 } from "./tool-definitions";
+import {
+  drainCursorTextToolCalls,
+  type DrainedTextToolCall,
+  type SuppressedTextToolCallScan,
+} from "./text-toolcall";
+import { recordObservedCursorContextWindow } from "./discovery";
 import type { CursorServerMessage } from "./types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 
@@ -176,6 +181,23 @@ export interface CursorProtobufEventState {
    */
   syntheticStructuredEditToolNames?: ReadonlySet<string>;
   translatorBudget?: TranslatorBudget;
+  /**
+   * Incomplete `[TOOL_CALL]…[ARGS]{` prefix held across `textDelta` frames so a
+   * marker split by the stream cannot leak into assistant text.
+   */
+  pendingTextToolCall?: string;
+  /** Constant-space scanner used after an incomplete textual marker exceeds its retained byte cap. */
+  suppressedTextToolCall?: SuppressedTextToolCallScan;
+  /** Parsed textual fallback calls held until turn finalization establishes that no real frame won. */
+  bufferedTextToolCalls?: DrainedTextToolCall[];
+  /** True once this turn carries any real client-tool frame, including an incomplete one. */
+  sawRealClientToolCall?: boolean;
+  /** Monotonic id suffix for tool calls promoted from text markers. */
+  textToolCallSeq?: number;
+  /** Wire model id used to record checkpoint `maxTokens` for the next turn. */
+  wireModelId?: string;
+  /** Normalized Cursor identity scope that owns the observed checkpoint ceiling. */
+  identityScope: string;
 }
 
 
@@ -215,6 +237,10 @@ export function createCursorProtobufEventState(options: {
    */
   estimatedInputTokens?: number;
   translatorBudget?: TranslatorBudget;
+  /** Wire model id for recording checkpoint `maxTokens` into the process-local window map. */
+  wireModelId?: string;
+  /** Cursor request identity scope; normalized identically to request-builder continuity. */
+  identityScope?: string;
 } = {}): CursorProtobufEventState {
   return {
     // Cursor provides no authoritative usage frame; token counts are heuristic estimates from
@@ -244,6 +270,8 @@ export function createCursorProtobufEventState(options: {
       && options.estimatedInputTokens > 0
       ? { estimatedInputTokens: options.estimatedInputTokens }
       : {}),
+    ...(options.wireModelId?.trim() ? { wireModelId: options.wireModelId.trim() } : {}),
+    identityScope: options.identityScope?.trim() || "local",
   };
 }
 
@@ -1048,6 +1076,7 @@ export function mapSyntheticMcpExecToToolEvents(
 ): CursorServerMessage[] {
   if (args.providerIdentifier !== OCX_RESPONSES_TOOL_PROVIDER) return [];
   if (options.state?.terminated) return [];
+  if (options.state) options.state.sawRealClientToolCall = true;
   if (options.allowEmptyArgs !== true && !hasMcpArgBytes(args)) return [];
   const cursorWireName = mcpWireNameFromArgs(args);
   if (!cursorWireName) return [{ type: "error", message: "Cursor requested a Responses tool without a tool name" }];
@@ -1115,6 +1144,11 @@ function recordToolCall(state: CursorProtobufEventState, callId: string, cursorW
   state.translatorBudget?.openCall(callId);
   state.startedClientToolCalls++;
   return [];
+}
+
+function recordRealToolCall(state: CursorProtobufEventState, callId: string, cursorWireName: string): CursorServerMessage[] {
+  state.sawRealClientToolCall = true;
+  return recordToolCall(state, callId, cursorWireName);
 }
 
 /**
@@ -1232,33 +1266,70 @@ export function mapCursorProtobufServerMessage(
   if (state.terminated) return [];
 
   if (serverMessage.message.case === "conversationCheckpointUpdate") {
-    const usedTokens = serverMessage.message.value.tokenDetails?.usedTokens ?? 0;
+    const tokenDetails = serverMessage.message.value.tokenDetails;
+    const usedTokens = tokenDetails?.usedTokens ?? 0;
     // `usedTokens` is the ABSOLUTE conversation context size, not a per-turn output delta. Track it
     // separately (monotonic max) and surface it as `done.usage.totalTokens`; folding it into
     // `outputTokens` (which also accumulates `tokenDelta`) double-counts in Codex. See contextTokens.
     observeContextTokens(state, usedTokens);
+    // First checkpoints often send maxTokens=0 (senpi). Only a positive ceiling
+    // replaces the id heuristic for the next turn's overflow vs 429 size prior.
+    if (state.wireModelId) {
+      recordObservedCursorContextWindow(state.wireModelId, tokenDetails?.maxTokens, {
+        identityScope: state.identityScope,
+      });
+    }
     return [];
   }
 
   if (serverMessage.message.case !== "interactionUpdate") return [];
   const update = serverMessage.message.value.message;
   switch (update.case) {
-    case "textDelta":
-      // #2305: fold Cursor display aliases inside textual pseudo tool-call markers back to
-      // the advertised wire name before any client sees the text. Real frames are already
-      // normalized structurally (mcpWireNameFromArgs above).
-      return update.value.text ? [{ type: "text", text: normalizeCursorTextToolMarkers(update.value.text) }] : [];
+    case "textDelta": {
+      // Textual `[TOOL_CALL]name[ARGS]{…}` is not assistant prose. Leaving it in
+      // the text channel (even after #2305 renamed the display alias) leaks a
+      // synthetic protocol marker that later turns few-shot-mimic as inert text.
+      // Strip complete markers, buffer advertised fallbacks until finalize,
+      // and hold or suppress-scan an incomplete opener across deltas.
+      const chunk = update.value.text ?? "";
+      if (!chunk && !state.pendingTextToolCall && !state.suppressedTextToolCall) return [];
+      const drained = drainCursorTextToolCalls(
+        state.pendingTextToolCall ?? "",
+        chunk,
+        state.suppressedTextToolCall,
+      );
+      if (drained.pending) state.pendingTextToolCall = drained.pending;
+      else delete state.pendingTextToolCall;
+      if (drained.suppressed) state.suppressedTextToolCall = drained.suppressed;
+      else delete state.suppressedTextToolCall;
+      const out: CursorServerMessage[] = [];
+      if (drained.text) out.push({ type: "text", text: drained.text });
+      for (const call of drained.calls) {
+        const advertised = resolveAdvertisedClientToolName(state, call.name);
+        if (
+          state.sawRealClientToolCall
+          || !state.clientToolNames
+          || !advertised
+          || (state.bufferedTextToolCalls?.length ?? 0) >= state.maxClientToolCalls
+        ) continue;
+        (state.bufferedTextToolCalls ??= []).push({
+          name: advertised,
+          args: normalizeJsonText(call.args, advertised, state),
+        });
+      }
+      return out;
+    }
     case "thinkingDelta":
       return update.value.text ? [{ type: "thinking", thinking: update.value.text }] : [];
     case "toolCallStarted": {
       const name = mcpCursorWireName(update.value.toolCall);
       // Record the open call but defer the outward tool_call_start to completion (atomic emission).
-      return name ? recordToolCall(state, update.value.callId, name) : [];
+      return name ? recordRealToolCall(state, update.value.callId, name) : [];
     }
     case "partialToolCall": {
       const out: CursorServerMessage[] = [];
       const name = mcpCursorWireName(update.value.toolCall);
-      if (name) out.push(...recordToolCall(state, update.value.callId, name));
+      if (name) out.push(...recordRealToolCall(state, update.value.callId, name));
       if (out.some(event => event.type === "error")) return out;
       // Buffer cumulative args; do not emit a delta. Args are emitted once, normalized, at completion.
       if (state.openToolCalls.has(update.value.callId)) {
@@ -1274,6 +1345,7 @@ export function mapCursorProtobufServerMessage(
       const out: CursorServerMessage[] = [];
       if (state.completedToolCalls.has(update.value.callId)) return [];
       const name = mcpCursorWireName(update.value.toolCall);
+      if (name) state.sawRealClientToolCall = true;
       const args = mcpArgsFromToolCall(update.value.toolCall);
       const openBeforeStart = state.openToolCalls.get(update.value.callId);
       // Empty-arg completion handling:
@@ -1362,8 +1434,24 @@ export function resolvedTurnUsage(state: CursorProtobufEventState): OcxUsage {
  * with corrupt/empty arguments. Emit an explicit error instead of done (fail-closed).
  * Mirrors kiro-truncation.ts behavior.
  */
+/**
+ * True when this turn holds textual fallback tool calls that only turn finalization can emit.
+ *
+ * Cursor can close a stream with a clean Connect END_STREAM and no turnEnded frame. The transport
+ * finalizes that path only for a turn it can see is unfinished, and a turn whose entire visible
+ * text was a stripped marker looks empty from the outside. Without this the deferred fallback
+ * would be dropped exactly when the marker was the turn's only content.
+ */
+export function hasBufferedTextToolCalls(state: CursorProtobufEventState): boolean {
+  return (state.bufferedTextToolCalls?.length ?? 0) > 0;
+}
+
 export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServerMessage[] {
   state.terminated = true;
+  delete state.pendingTextToolCall;
+  delete state.suppressedTextToolCall;
+  const bufferedTextToolCalls = state.bufferedTextToolCalls ?? [];
+  delete state.bufferedTextToolCalls;
   if (state.openToolCalls.size > 0) {
     const openCallIds = [...state.openToolCalls.keys()];
     const openIds = openCallIds.join(", ");
@@ -1372,10 +1460,20 @@ export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServe
     state.openToolCalls.clear();
     return [{ type: "error", message: `Cursor stream ended with incomplete tool call(s): ${openIds}. Arguments may be truncated; the call was not committed.` }];
   }
+  const out: CursorServerMessage[] = [];
+  if (!state.sawRealClientToolCall) {
+    for (const call of bufferedTextToolCalls) {
+      state.textToolCallSeq = (state.textToolCallSeq ?? 0) + 1;
+      const callId = `textcall_${state.textToolCallSeq}`;
+      out.push(...recordToolCall(state, callId, call.name));
+      if (state.openToolCalls.has(callId)) out.push(...commitToolCall(state, callId, call.args));
+    }
+  }
   // Surface the absolute context size (when Cursor reported a checkpoint) as both totalTokens and
   // the estimated input side of Codex's visible `input + output` counter. Codex status lines can
   // render the additive pair instead of total_tokens, so leaving inputTokens at 0 makes a 16k-context
   // first turn display as "9 used". Keep outputTokens as the per-turn delta and clamp the inferred
   // input to 0 in case Cursor reports a checkpoint smaller than the streamed output delta.
-  return [{ type: "done", usage: resolvedTurnUsage(state) }];
+  out.push({ type: "done", usage: resolvedTurnUsage(state) });
+  return out;
 }

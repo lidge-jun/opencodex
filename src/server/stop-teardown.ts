@@ -67,7 +67,14 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
   // undone (#3008).
   const grokNote = grok.ok ? "" : ` Grok config cleanup failed: ${grok.message}`;
   if (restore.success && grok.ok) {
-    return { success: true, message: "Proxy stopping, native Codex restored.", sharedTeardown: "performed" };
+    // A degraded restore is a success — routing is out and the client is no longer aimed at
+    // a port that is about to disappear — but it left a provider table behind on purpose.
+    // Reporting a bare "restored" would put the caller in exactly the position #4812
+    // describes: a config they did not expect and no idea why it is there.
+    const retained = restore.retainedCodexProviderTable
+      ? ` ${(await import("../codex/inject/restore")).describeRetainedCodexProviderTable(restore.retainedCodexProviderTable)}`
+      : "";
+    return { success: true, message: `Proxy stopping, native Codex restored.${retained}`, sharedTeardown: "performed" };
   }
   if (restore.success) {
     return {

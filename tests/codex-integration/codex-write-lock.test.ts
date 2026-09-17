@@ -286,7 +286,15 @@ describe("two real processes contend for one lock", () => {
 
   function spawnChild(payload: Record<string, unknown>) {
     return Bun.spawn(["bun", childPath], {
-      env: { ...process.env, CODEX_HOME: codexHome, OCX_LOCK_CHILD_PAYLOAD: JSON.stringify(payload) },
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        // N is the lock under test. Give the child processes in this case their
+        // own C database so unrelated files in the same Bun batch cannot make a
+        // holder retry after it has published its held marker.
+        OPENCODEX_HOME: join(root, ".opencodex"),
+        OCX_LOCK_CHILD_PAYLOAD: JSON.stringify(payload),
+      },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -298,6 +306,7 @@ describe("two real processes contend for one lock", () => {
       env: {
         ...process.env,
         CODEX_HOME: codexHome,
+        OPENCODEX_HOME: join(root, ".opencodex"),
         ...env,
         OCX_LOCK_CHILD_PAYLOAD: JSON.stringify(payload),
       },
@@ -309,7 +318,13 @@ describe("two real processes contend for one lock", () => {
   async function childResult(child: ReturnType<typeof Bun.spawn>) {
     const [stdout] = await Promise.all([new Response(child.stdout).text(), child.exited]);
     const line = stdout.trim().split("\n").filter(Boolean).at(-1) ?? "{}";
-    return JSON.parse(line) as { status: string; reason?: string; value?: string; lockId?: string };
+    return JSON.parse(line) as {
+      status: string;
+      reason?: string;
+      value?: string;
+      waitedMs?: number;
+      lockId?: string;
+    };
   }
 
   // A spawned holder child boots in 8-19 s on a loaded windows-latest shard; the 10 s
@@ -362,14 +377,18 @@ describe("two real processes contend for one lock", () => {
   test("a contender with a deadline waits for the holder instead of failing immediately", async () => {
     const holdMarker = join(root, "held-2");
     const releaseMarker = join(root, "release-2");
+    const waitMarker = join(root, "waiting-2");
     const holder = spawnChild({ holdMarker, releaseMarker, timeoutMs: 0, holdMs: 20_000 });
     await waitFor(holdMarker);
 
-    const waiter = withCodexWriteLock(options({ timeoutMs: 5_000 }), publishing("waited"));
-    await Bun.sleep(150);
+    const waiter = spawnChild({ timeoutMs: 5_000, waitMarker });
+    // The waiter writes this only after withCodexWriteLock has returned its
+    // pending promise. Because the holder is still held, that means the waiter
+    // has attempted N and reached the retry wait rather than failing fast.
+    await waitFor(waitMarker);
     writeFileSync(releaseMarker, "go");
 
-    const [waited, holderResult] = await Promise.all([waiter, childResult(holder)]);
+    const [waited, holderResult] = await Promise.all([childResult(waiter), childResult(holder)]);
     expect(holderResult.status).toBe("acquired");
     expect(waited.status).toBe("acquired");
     expect(waited.status === "acquired" && waited.waitedMs).toBeGreaterThan(0);

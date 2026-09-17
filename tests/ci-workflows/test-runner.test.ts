@@ -773,6 +773,11 @@ describe("bun test argv", () => {
 });
 
 describe("bun test user lock", () => {
+  // Lock behavior must not inherit a workflow-level opt-out. The Windows batch leg
+  // intentionally sets OCX_TEST_NO_QUEUE for its outer processes, while these unit
+  // cases exercise the queued implementation itself.
+  const queuedTestEnv: NodeJS.ProcessEnv = {};
+
   test("distinct POSIX users receive distinct temp-runtime locks", () => {
     const common = { env: {}, tempDir: "/tmp", hostName: "builder-1", platform: "linux" as const };
     const alice = resolveDefaultTestRunLockPath({
@@ -1163,8 +1168,9 @@ describe("bun test user lock", () => {
     const root = mkdtempSync(join(tmpdir(), "opencodex-test-lock-"));
     const lockPath = join(root, "suite.lock");
     try {
-      const owner = await acquireTestRunLock({ runId: "suite-a", lockPath, pollMs: 5, maxWaitMs: 50 });
-      const sibling = await acquireTestRunLock({ runId: "suite-a", lockPath, pollMs: 5, maxWaitMs: 50 });
+      const options = { runId: "suite-a", lockPath, pollMs: 5, maxWaitMs: 50, env: queuedTestEnv };
+      const owner = await acquireTestRunLock(options);
+      const sibling = await acquireTestRunLock(options);
       expect(owner.acquired).toBe(true);
       expect(sibling.acquired).toBe(false);
       sibling.release();
@@ -1180,12 +1186,15 @@ describe("bun test user lock", () => {
     const root = mkdtempSync(join(tmpdir(), "opencodex-test-lock-"));
     const lockPath = join(root, "suite.lock");
     try {
-      const owner = await acquireTestRunLock({ runId: "wrapped", lockPath, pollMs: 5, maxWaitMs: 50 });
+      const owner = await acquireTestRunLock({
+        runId: "wrapped", lockPath, pollMs: 5, maxWaitMs: 50, env: queuedTestEnv,
+      });
       expect(owner.owner).not.toBeNull();
       const sibling = await acquireTestRunLock({
         runId: "wrapped",
         lockPath,
         joinExistingOwnerToken: owner.owner!.token,
+        env: queuedTestEnv,
       });
       expect(sibling.acquired).toBe(false);
       const wrongToken = owner.owner!.token === "57f44b0e-b750-4bd2-b23d-4a035e75da18"
@@ -1196,6 +1205,7 @@ describe("bun test user lock", () => {
         runId: "wrapped",
         lockPath,
         joinExistingOwnerToken: wrongToken,
+        env: queuedTestEnv,
       })).rejects.toThrow("refusing to create or reclaim");
 
       owner.release();
@@ -1204,6 +1214,7 @@ describe("bun test user lock", () => {
         runId: "wrapped",
         lockPath,
         joinExistingOwnerToken: owner.owner!.token,
+        env: queuedTestEnv,
       })).rejects.toThrow("refusing to create or reclaim");
       expect(existsSync(lockPath)).toBe(false);
     } finally {
@@ -1221,8 +1232,11 @@ describe("bun test user lock", () => {
         lockPath,
         pollMs: 5,
         maxWaitMs: 50,
+        env: queuedTestEnv,
       });
-      const replacement = await acquireTestRunLock({ runId: "stale", lockPath, pollMs: 5, maxWaitMs: 50 });
+      const replacement = await acquireTestRunLock({
+        runId: "stale", lockPath, pollMs: 5, maxWaitMs: 50, env: queuedTestEnv,
+      });
       expect(replacement.acquired).toBe(true);
       stale.release();
       expect(existsSync(lockPath)).toBe(true);
@@ -1237,13 +1251,16 @@ describe("bun test user lock", () => {
     const root = mkdtempSync(join(tmpdir(), "opencodex-test-lock-"));
     const lockPath = join(root, "suite.lock");
     try {
-      const owner = await acquireTestRunLock({ runId: "live", lockPath, pollMs: 5, maxWaitMs: 50 });
+      const owner = await acquireTestRunLock({
+        runId: "live", lockPath, pollMs: 5, maxWaitMs: 50, env: queuedTestEnv,
+      });
       let waits = 0;
       await expect(acquireTestRunLock({
         runId: "blocked",
         lockPath,
         pollMs: 5,
         maxWaitMs: 20,
+        env: queuedTestEnv,
         onWait: () => { waits += 1; },
       })).rejects.toThrow("timed out");
       expect(waits).toBe(1);

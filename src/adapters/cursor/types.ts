@@ -11,6 +11,11 @@ export interface CursorRequestedModelParameter {
 
 export interface CursorRunRequest {
   modelId: string;
+  /**
+   * Normalized Cursor identity scope carried from request parsing so checkpoint
+   * observations stay scope-local. Transport metadata only; never serialized on the wire.
+   */
+  _cursorIdentityScope?: string;
   /** Cursor model-picker parameters encoded through AgentRunRequest.requested_model. */
   requestedModelParameters?: readonly CursorRequestedModelParameter[];
   /** Cursor Router optimization parameter; valid only while modelId is the `default` wire model. */

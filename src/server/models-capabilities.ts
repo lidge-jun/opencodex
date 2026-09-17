@@ -10,6 +10,11 @@ import type { CursorEffortTable } from "../integrations/cursor-effort-table";
  * Completions, Responses and Anthropic Messages, streams, and accepts tool calls, so those are
  * constants; context length and vision come from catalog data when known and are omitted
  * otherwise, matching Cursor's optional-field schema.
+ *
+ * Top-level capacity metrics (`context_window`, `context_length`, `max_output_tokens`) are
+ * mirrored directly on each model row for external client discovery (e.g. pi-ai, DSH,
+ * LibreChat) that inspects flat properties rather than Cursor's nested `capabilities.*` shape.
+ * A row that gains a nested capacity value must gain the top-level mirror in the same change.
  */
 
 /**
@@ -133,6 +138,19 @@ export interface ModelCapabilityFields {
     reasoning_effort?: string[];
   };
   /**
+   * Mirrored top-level context window for external/legacy client discovery (e.g. pi-ai, DSH)
+   * that reads top-level context_window / context_length instead of nested capabilities.
+   */
+  context_window?: number;
+  /**
+   * Top-level context length alias matching capabilities.context_length for clients expecting context_length.
+   */
+  context_length?: number;
+  /**
+   * Mirrored top-level max output token limit for external/legacy client discovery.
+   */
+  max_output_tokens?: number;
+  /**
    * Cursor reads the long-context threshold from `pricing.overrides[].min_prompt_tokens`. That
    * key sits outside its validated capability schema, so it is the one place a threshold can
    * be carried without failing row validation (`cost.long_context` is rejected by that schema).
@@ -153,6 +171,7 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
   const longContextLength = positiveInt(input.longContextWindow);
   const maxOutputTokens = positiveInt(input.maxOutputTokens);
   const hasLongTier = contextLength !== undefined && longContextLength !== undefined && longContextLength > contextLength;
+  const effectiveContextLength = hasLongTier ? longContextLength : contextLength;
   const modalities = Array.isArray(input.inputModalities)
     ? input.inputModalities.filter(modality => typeof modality === "string" && modality.length > 0)
     : undefined;
@@ -160,9 +179,7 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
   return {
     api_types: [...OPENCODEX_MODEL_API_TYPES],
     capabilities: {
-      ...(hasLongTier
-        ? { context_length: longContextLength }
-        : contextLength !== undefined ? { context_length: contextLength } : {}),
+      ...(effectiveContextLength !== undefined ? { context_length: effectiveContextLength } : {}),
       ...(maxOutputTokens !== undefined ? { max_output_tokens: maxOutputTokens } : {}),
       // Once a gateway advertises api_types, Cursor keeps only rows whose output_modalities
       // include "text"; omitting the key drops the row from the extended catalog.
@@ -174,6 +191,10 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
       ...(supportsVision !== undefined ? { supports_vision: supportsVision } : {}),
       ...(efforts.length > 0 ? { reasoning_effort: [...efforts] } : {}),
     },
+    ...(effectiveContextLength !== undefined
+      ? { context_window: effectiveContextLength, context_length: effectiveContextLength }
+      : {}),
+    ...(maxOutputTokens !== undefined ? { max_output_tokens: maxOutputTokens } : {}),
     ...(hasLongTier ? { pricing: { overrides: [{ min_prompt_tokens: contextLength }] } } : {}),
   };
 }

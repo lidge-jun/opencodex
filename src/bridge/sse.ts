@@ -1171,7 +1171,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "done": {
-              if (currentMsg) closeCurrentMessage(event.stopReason ? undefined : "final_answer");
+              if (currentMsg) closeCurrentMessage(isTruncatedStopReason(event.stopReason) ? undefined : "final_answer");
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
