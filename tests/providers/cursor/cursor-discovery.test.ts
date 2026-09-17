@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   CURSOR_AUTO_WIRE_MODEL_ID,
   CURSOR_DEFAULT_CONTEXT_WINDOW,
+  CURSOR_OBSERVED_CONTEXT_WINDOW_MAX_ENTRIES,
   CURSOR_ROUTER_MODEL_IDS,
   CURSOR_ROUTING_LEVELS,
   CURSOR_NO_VISION_MODELS,
@@ -238,26 +239,58 @@ describe("Cursor discovery metadata", () => {
       resetObservedCursorContextWindowsForTests();
     });
 
-    test("a positive recorded ceiling wins over the id heuristic", () => {
-      expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
-      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000);
-      expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(32_000);
-      expect(inferCursorContextWindow("CLAUDE-4.6-SONNET")).toBe(32_000);
+    test("same-model observations are isolated by normalized identity scope", () => {
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, { identityScope: " account-a " });
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 64_000, { identityScope: "account-b" });
+
+      expect(inferCursorContextWindow("CLAUDE-4.6-SONNET", { identityScope: "account-a" })).toBe(32_000);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", { identityScope: " account-b " })).toBe(64_000);
     });
 
-    test("zero, missing, and non-finite maxTokens keep the heuristic", () => {
-      recordObservedCursorContextWindow("claude-4.6-sonnet", 0);
-      recordObservedCursorContextWindow("claude-4.6-sonnet", undefined);
-      recordObservedCursorContextWindow("claude-4.6-sonnet", Number.NaN);
-      recordObservedCursorContextWindow("claude-4.6-sonnet", -8);
-      recordObservedCursorContextWindow("", 32_000);
+    test("an unscoped lookup does not read a scoped observation", () => {
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, { identityScope: "account-a" });
+
       expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(200_000);
+    });
+
+    test("zero, negative, missing, and non-finite maxTokens keep the heuristic", () => {
+      const options = { identityScope: "account-a" };
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 0, options);
+      recordObservedCursorContextWindow("claude-4.6-sonnet", undefined, options);
+      recordObservedCursorContextWindow("claude-4.6-sonnet", Number.NaN, options);
+      recordObservedCursorContextWindow("claude-4.6-sonnet", -8, options);
+      recordObservedCursorContextWindow("", 32_000, options);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", options)).toBe(200_000);
     });
 
     test("an explicit observed argument outranks the process-local map", () => {
-      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000);
-      expect(inferCursorContextWindow("claude-4.6-sonnet", 8_000)).toBe(8_000);
-      expect(inferCursorContextWindow("claude-4.6-sonnet", 0)).toBe(32_000);
+      const identityScope = "account-a";
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, { identityScope });
+      expect(inferCursorContextWindow("claude-4.6-sonnet", { identityScope, observed: 8_000 })).toBe(8_000);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", { identityScope, observed: 0 })).toBe(32_000);
+    });
+
+    test("reset clears observations from every identity scope", () => {
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, { identityScope: "account-a" });
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 64_000, { identityScope: "account-b" });
+
+      resetObservedCursorContextWindowsForTests();
+
+      expect(inferCursorContextWindow("claude-4.6-sonnet", { identityScope: "account-a" })).toBe(200_000);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", { identityScope: "account-b" })).toBe(200_000);
+    });
+
+    test("evicts the oldest observation after the bounded capacity", () => {
+      recordObservedCursorContextWindow("oldest-model", 32_000, { identityScope: "account-oldest" });
+      for (let index = 1; index <= CURSOR_OBSERVED_CONTEXT_WINDOW_MAX_ENTRIES; index++) {
+        recordObservedCursorContextWindow(`model-${index}`, 32_000 + index, { identityScope: `account-${index}` });
+      }
+
+      expect(inferCursorContextWindow("oldest-model", { identityScope: "account-oldest" }))
+        .toBe(CURSOR_DEFAULT_CONTEXT_WINDOW);
+      expect(inferCursorContextWindow(`model-${CURSOR_OBSERVED_CONTEXT_WINDOW_MAX_ENTRIES}`, {
+        identityScope: `account-${CURSOR_OBSERVED_CONTEXT_WINDOW_MAX_ENTRIES}`,
+      })).toBe(32_000 + CURSOR_OBSERVED_CONTEXT_WINDOW_MAX_ENTRIES);
     });
   });
 

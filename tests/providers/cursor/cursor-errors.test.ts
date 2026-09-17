@@ -212,19 +212,21 @@ describe("bare resource_exhausted size prior (devlog 260)", () => {
     });
 
     test("a 20-token request against an observed 32k ceiling stays 429", () => {
-      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000);
-      expect(inferCursorContextWindow("claude-4.6-sonnet")).toBe(32_000);
+      const options = { identityScope: "account-a" };
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, options);
+      expect(inferCursorContextWindow("claude-4.6-sonnet", options)).toBe(32_000);
       expect(classifyCursorError(BARE, {
         estimatedInputTokens: 20,
-        contextWindow: inferCursorContextWindow("claude-4.6-sonnet"),
+        contextWindow: inferCursorContextWindow("claude-4.6-sonnet", options),
       })).toBe("Cursor rate limit exceeded");
     });
 
     test("a request that is large relative to the observed ceiling stays overflow", () => {
-      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000);
+      const options = { identityScope: "account-a" };
+      recordObservedCursorContextWindow("claude-4.6-sonnet", 32_000, options);
       expect(classifyCursorError(BARE, {
         estimatedInputTokens: 20_000,
-        contextWindow: inferCursorContextWindow("claude-4.6-sonnet"),
+        contextWindow: inferCursorContextWindow("claude-4.6-sonnet", options),
       })).toBe("Cursor context limit exceeded");
     });
   });

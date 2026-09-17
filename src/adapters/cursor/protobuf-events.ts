@@ -196,6 +196,8 @@ export interface CursorProtobufEventState {
   textToolCallSeq?: number;
   /** Wire model id used to record checkpoint `maxTokens` for the next turn. */
   wireModelId?: string;
+  /** Normalized Cursor identity scope that owns the observed checkpoint ceiling. */
+  identityScope: string;
 }
 
 
@@ -237,6 +239,8 @@ export function createCursorProtobufEventState(options: {
   translatorBudget?: TranslatorBudget;
   /** Wire model id for recording checkpoint `maxTokens` into the process-local window map. */
   wireModelId?: string;
+  /** Cursor request identity scope; normalized identically to request-builder continuity. */
+  identityScope?: string;
 } = {}): CursorProtobufEventState {
   return {
     // Cursor provides no authoritative usage frame; token counts are heuristic estimates from
@@ -267,6 +271,7 @@ export function createCursorProtobufEventState(options: {
       ? { estimatedInputTokens: options.estimatedInputTokens }
       : {}),
     ...(options.wireModelId?.trim() ? { wireModelId: options.wireModelId.trim() } : {}),
+    identityScope: options.identityScope?.trim() || "local",
   };
 }
 
@@ -1270,7 +1275,9 @@ export function mapCursorProtobufServerMessage(
     // First checkpoints often send maxTokens=0 (senpi). Only a positive ceiling
     // replaces the id heuristic for the next turn's overflow vs 429 size prior.
     if (state.wireModelId) {
-      recordObservedCursorContextWindow(state.wireModelId, tokenDetails?.maxTokens);
+      recordObservedCursorContextWindow(state.wireModelId, tokenDetails?.maxTokens, {
+        identityScope: state.identityScope,
+      });
     }
     return [];
   }

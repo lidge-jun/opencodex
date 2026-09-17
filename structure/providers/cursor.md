@@ -143,9 +143,12 @@ clears any held or suppressed prefix. Coverage lives in
 
 `conversationCheckpointUpdate.tokenDetails.maxTokens` is the account-advertised
 ceiling for that wire model. A positive value is stored in a process-local map
-keyed by model id (`src/adapters/cursor/discovery.ts`) and preferred by
-`inferCursorContextWindow` over the static heuristic. Zero and missing values
-are ignored — the first checkpoint is often 0. The next turn's
+keyed by the normalized Cursor identity scope and model id
+(`src/adapters/cursor/discovery.ts`) and preferred by `inferCursorContextWindow`
+only for that scope. Missing scopes normalize to the distinct `local` scope, so
+they cannot inherit an authenticated account's observation. The map evicts its
+oldest insertion above 2,048 entries. Zero and missing values are ignored — the
+first checkpoint is often 0. The next turn's
 `cursorRequestSizeContext` feeds that window into the existing 0.5-window
 overflow vs 429 prior so a tiny request against a plan-gated 32k ceiling stays
 on the 429 class, while a request that is large relative to the real window
