@@ -164,6 +164,38 @@ An incomplete client-tool stream is fail-closed for the current turn: `finalizeT
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
 
+## Mid-stream envelope echo
+
+The prefix sniffer only watches the opening bytes of a turn. An external model that writes real
+prose first and then pastes a replayed `[Tool Result]` envelope defeats it, so that text reaches
+the client and is stored as assistant output. `CursorMidstreamEchoObserver` records those
+findings without throwing or withholding output, and at turn end eligible non-isolated turns
+remint the conversation id for the NEXT turn. The current send is never retried: the echo is
+already delivered and a resend would be an uncertain replay.
+
+That rotation has its own bounded allowance in `src/adapters/cursor/thread-continuity.ts`,
+separate from the incomplete-tool budget and from the overflow budget. It is bounded because a
+model that echoes every turn would otherwise rotate the conversation forever, and it is separate
+because echoing is cheap and repeatable while an incomplete client-tool stream is rare and
+structural — one shared counter would let the cheap failure spend the allowance the other
+recovery depends on. Exhaustion records a `midstream-envelope-echo-remint-exhausted` diagnostic
+and keeps the conversation; a turn that completes without an echo clears only this counter. When
+an incomplete-tool remint already fired in the same turn, the echo arm does not rotate again.
+
+Assistant root replay drops echoed envelopes before they are sent back upstream
+(`stripAssistantEchoedToolEnvelope`), so the transcript stops feeding itself. The strip starts at
+a whole-line marker and ends at the next blank line rather than at the end of the message: the
+envelope has no recognisable terminator and observed copies are not byte-exact, and truncating to
+the end discarded a genuine answer whenever the model resumed after the echo. An envelope whose
+pasted body contains its own blank line therefore leaves a remainder in replay; conversation
+remint, not this filter, is the primary defence against a poisoned conversation.
+
+`resolveCursorConversationId` prefers the retained thread override over a stored
+`_cursorConversationId`. Only the remint path writes that store, so a stored id that disagrees
+with it is the pre-remint value; preferring it let a second Responses chain in one Codex thread
+keep resuming the conversation the previous turn had rotated away from. Isolated helper turns
+still bypass both and mint their own id.
+
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
