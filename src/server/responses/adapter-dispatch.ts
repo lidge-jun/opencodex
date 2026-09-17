@@ -681,7 +681,19 @@ export async function prepareAdapterExchange(
         // released below; a failed or slow read just leaves the header path in charge.
         // Peeks a bounded prefix and hands back a Response still carrying the whole
         // body, so the cancel below still releases the socket.
-        const peeked = await readQuotaResetAt(upstreamResponse);
+        let peeked: Awaited<ReturnType<typeof readQuotaResetAt>>;
+        try {
+          peeked = await readQuotaResetAt(upstreamResponse, { signal: options.abortSignal });
+        } catch {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          return clientCancelledResponse();
+        }
+        if (options.abortSignal?.aborted) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          return clientCancelledResponse();
+        }
         upstreamResponse = peeked.response;
         const quotaResetAt = peeked.at;
         const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {

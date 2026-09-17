@@ -9,6 +9,7 @@ import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../sr
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { startServer } from "../../src/server";
+import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -557,6 +558,65 @@ describe("server 429 key failover (end-to-end)", () => {
     } finally {
       await server.stop(true);
     }
+  });
+
+  test("client cancellation during the 429 body peek does not rotate or cool the key", async () => {
+    const bodyRead = Promise.withResolvers<void>();
+    const bodyCancelled = Promise.withResolvers<void>();
+    const seenAuth: string[] = [];
+    upstream = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(req) {
+        seenAuth.push(req.headers.get("authorization") ?? "");
+        let pulls = 0;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(new TextEncoder().encode('{"error":{"code":"rate_limit_error","message":"Weekly Limit Exhausted.'));
+              return;
+            }
+            bodyRead.resolve();
+            return new Promise<void>(() => {});
+          },
+          cancel() {
+            bodyCancelled.resolve();
+          },
+        }), { status: 429, headers: { "content-type": "application/json" } });
+      },
+    });
+    const config = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "cancelled",
+      providers: {
+        cancelled: {
+          adapter: "openai-chat", authMode: "key",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true,
+          apiKey: "key-canc-000111222333",
+          apiKeyPool: [
+            { id: "c1", key: "key-canc-000111222333", addedAt: 1 },
+            { id: "c2", key: "key-cancelled-444555666777", addedAt: 2 },
+          ],
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const abort = new AbortController();
+    const pending = handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "cancelled/some-model", input: "hello", stream: false }),
+    }), config, { model: "", provider: "" }, { abortSignal: abort.signal });
+
+    await bodyRead.promise;
+    abort.abort(new DOMException("client closed", "AbortError"));
+    const response = await pending;
+
+    expect(response.status).toBe(499);
+    expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+    await bodyCancelled.promise;
+    expect(seenAuth).toEqual(["Bearer key-canc-000111222333"]);
+    expect(getKeyCooldownUntil("cancelled", "c1")).toBeNull();
+    expect(loadConfig().providers.cancelled?.apiKey).toBe("key-canc-000111222333");
   });
 
   test("reasoning replay misses after a 429 rotates to a different physical key", async () => {

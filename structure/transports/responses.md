@@ -189,7 +189,13 @@ wholesale assignment sends the literal reference as the bearer token. `adapter` 
 are not at risk on a stored row, because the config schema requires both.
 
 Reactive 429 rotation (`rotateProviderTransportOn429`) remains the recovery path after a
-send has already earned a throttle.
+send has already earned a throttle. Before rotating a key, the Responses dispatch path peeks at
+most 4 KiB of a 429 body under the client abort signal and a short deadline. Only the canonical
+OpenRouter quota error shape (`rate_limit_error` or numeric 429 plus a Weekly/Monthly Limit
+Exhausted message) may supply a dated cooldown; other providers continue to use `Retry-After` or
+the ordinary undated cooldown. Bytes pulled in the boundary chunk are replayed ahead of the unread
+stream, and every timeout, read failure, or cancellation cancels the reader and releases its lock. Client
+cancellation terminates dispatch before rotation can persist another key.
 
 ### Routed service-tier capability
 

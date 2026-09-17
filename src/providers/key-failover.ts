@@ -51,32 +51,93 @@ const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
  * operator would think to look at.
  */
 const MAX_QUOTA_COOLDOWN_MS = 32 * 24 * 60 * 60_000;
+const QUOTA_RESET_PEEK_TIMEOUT_MS = 250;
+
+interface QuotaResetReadOptions {
+  now?: number;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+function rebuiltResponse(response: Response, body: ReadableStream<Uint8Array>): Response {
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function replayOnlyResponse(response: Response, chunks: readonly Uint8Array[]): Response {
+  return rebuiltResponse(response, new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  }));
+}
 
 /**
  * Read a bounded prefix of a 429 body and pull the upstream's declared reset instant.
  *
- * Clones first: the caller still cancels the original body to release the socket,
- * and a rotation storm must not be gated on reading N full error payloads. Any
- * failure — no body, already consumed, slow, malformed — returns undefined and
- * leaves the `Retry-After` path exactly as it was.
+ * The returned response replays the bounded prefix and any boundary-chunk overflow
+ * before streaming the unread remainder. A rotation storm must not be gated on
+ * reading N full error payloads. Any failure — no body, already consumed, slow,
+ * malformed — returns undefined and leaves the `Retry-After` path in charge.
  */
 export async function readQuotaResetAt(
   response: Response,
-  now = Date.now(),
+  nowOrOptions: number | QuotaResetReadOptions = {},
 ): Promise<{ at: number | undefined; response: Response }> {
   if (!response.body) return { at: undefined, response };
+  const options = typeof nowOrOptions === "number" ? { now: nowOrOptions } : nowOrOptions;
+  const now = options.now ?? Date.now();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
   try {
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
+  } catch {
+    return { at: undefined, response };
+  }
+  const chunks: Uint8Array[] = [];
+  let transferred = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new AbortController();
+  const timeoutReason = new DOMException("Quota reset body peek timed out", "TimeoutError");
+  try {
     const decoder = new TextDecoder();
-    const chunks: Uint8Array[] = [];
     let seen = 0;
     let text = "";
+    timer = setTimeout(() => deadline.abort(timeoutReason), options.timeoutMs ?? QUOTA_RESET_PEEK_TIMEOUT_MS);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, deadline.signal])
+      : deadline.signal;
     while (seen < QUOTA_RESET_SCAN_BYTES) {
-      const { done, value } = await reader.read();
+      const read = reader.read();
+      let rejectAbort: ((reason: unknown) => void) | undefined;
+      const onAbort = () => rejectAbort?.(signal.reason);
+      const aborted = new Promise<never>((_resolve, reject) => {
+        rejectAbort = reject;
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener("abort", onAbort, { once: true });
+      });
+      // Derived from the reader rather than named directly: Bun's lib types
+      // `ReadableStreamDefaultReader.read()` as returning
+      // `ReadableStreamDefaultReadResult`, which is not assignable to the
+      // `ReadableStreamReadResult` alias.
+      let result: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        result = await Promise.race([read, aborted]);
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+      const { done, value } = result;
       if (done) break;
-      chunks.push(value);
-      seen += value.byteLength;
-      text += decoder.decode(value, { stream: true });
+      const remaining = QUOTA_RESET_SCAN_BYTES - seen;
+      const prefix = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      const overflow = value.byteLength > remaining ? value.subarray(remaining) : undefined;
+      chunks.push(prefix);
+      if (overflow?.byteLength) chunks.push(overflow);
+      seen += prefix.byteLength;
+      text += decoder.decode(prefix, { stream: true });
     }
     // Hand back a Response carrying the bytes already pulled followed by whatever
     // is left, so the caller can still read or cancel it. `response.clone()` is
@@ -88,25 +149,41 @@ export async function readQuotaResetAt(
         for (const c of chunks) controller.enqueue(c);
       },
       async pull(controller) {
-        const { done, value } = await reader.read();
-        if (done) {
-          controller.close();
-          return;
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            reader.releaseLock();
+            return;
+          }
+          controller.enqueue(value);
+        } catch (error) {
+          controller.error(error);
+          reader.releaseLock();
         }
-        controller.enqueue(value);
       },
-      cancel(reason) {
-        return reader.cancel(reason);
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } finally {
+          reader.releaseLock();
+        }
       },
     });
-    const rebuilt = new Response(rest, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
+    transferred = true;
+    return { at: parseQuotaResetAt(text, now), response: rebuiltResponse(response, rest) };
+  } catch (error) {
+    const clientAborted = options.signal?.aborted === true;
+    void reader.cancel(error).catch(() => {}).finally(() => {
+      try { reader.releaseLock(); } catch { /* already released */ }
     });
-    return { at: parseQuotaResetAt(text, now), response: rebuilt };
-  } catch {
-    return { at: undefined, response };
+    if (clientAborted) throw options.signal!.reason ?? error;
+    return { at: undefined, response: replayOnlyResponse(response, chunks) };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (!transferred) {
+      try { reader.releaseLock(); } catch { /* already released */ }
+    }
   }
 }
 
@@ -150,8 +227,21 @@ function isRealCalendarDate(value: string): boolean {
 export function parseQuotaResetAt(body: string | null | undefined, now = Date.now()): number | undefined {
   const text = body?.slice(0, QUOTA_RESET_SCAN_BYTES);
   if (!text) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const error = (parsed as { error?: unknown }).error;
+  if (!error || typeof error !== "object") return undefined;
+  const code = (error as { code?: unknown }).code;
+  const message = (error as { message?: unknown }).message;
+  if ((code !== "rate_limit_error" && code !== 429) || typeof message !== "string") return undefined;
+  if (!/^(?:Weekly|Monthly) Limit Exhausted\b/i.test(message.trim())) return undefined;
   // `will reset at 2026-09-09 03:30:06` / `... at 2026-09-09T03:30:06Z` / `resets at <date>`
-  const match = /reset[s]?\s+at\s+([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?)/i.exec(text);
+  const match = /reset[s]?\s+at\s+([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?)/i.exec(message);
   if (!match) return undefined;
   // Pin a bare `YYYY-MM-DD hh:mm:ss` to UTC explicitly.
   //
