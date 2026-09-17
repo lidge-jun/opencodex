@@ -130,6 +130,9 @@ export function providerTlsFetch(
       return response;
     } catch (error) {
       status.set(name, "failed");
+      if (init?.signal?.aborted && error === init.signal.reason) {
+        throw error;
+      }
       throw preserveTransportError(error);
     }
   }) as typeof globalThis.fetch;

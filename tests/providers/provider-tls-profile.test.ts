@@ -152,4 +152,35 @@ describe("provider TLS profile", () => {
       )("https://cloudcode-pa.googleapis.com/v1"),
     ).rejects.not.toThrow("super-secret");
   });
+  test("preserves exact abort reason identity when transport rejects with active signal reason", async () => {
+    const customReason = new Error("caller-owned cancel");
+    const controller = new AbortController();
+    controller.abort(customReason);
+
+    setProviderTlsRuntimeForTest({
+      fetch: async () => {
+        throw customReason;
+      },
+    });
+
+    const provider = {
+      adapter: "google",
+      authMode: "oauth",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://cloudcode-pa.googleapis.com",
+      tlsProfile: "antigravity-browser" as const,
+    };
+
+    const fetcher = providerTlsFetch("google-antigravity", provider, fetch);
+    let caught: unknown;
+    try {
+      await fetcher("https://cloudcode-pa.googleapis.com/v1", {
+        signal: controller.signal,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBe(customReason);
+    expect(getProviderTlsProfileStatus("google-antigravity")).toBe("failed");
+  });
 });
