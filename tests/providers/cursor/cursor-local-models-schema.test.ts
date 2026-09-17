@@ -132,22 +132,25 @@ describe("modelCapabilityFields", () => {
     expect(fields.capabilities.context_length).toBe(200000);
     expect(fields.capabilities.max_output_tokens).toBe(64000);
 
-    // Long-tier input: mirrors the effective long window at the top level matching capabilities.context_length
-    const tiered = modelCapabilityFields({ contextWindow: 272000, longContextWindow: 922000 });
-    expect(tiered.context_window).toBe(922000);
-    expect(tiered.context_length).toBe(922000);
-    expect(tiered.capabilities.context_length).toBe(922000);
-
     // Empty or non-positive / unsafe inputs: keys omitted entirely
     const empty = modelCapabilityFields({});
     expect("context_window" in empty).toBe(false);
     expect("context_length" in empty).toBe(false);
     expect("max_output_tokens" in empty).toBe(false);
 
-    const invalid = modelCapabilityFields({ contextWindow: 0, maxOutputTokens: -50 });
-    expect("context_window" in invalid).toBe(false);
-    expect("context_length" in invalid).toBe(false);
-    expect("max_output_tokens" in invalid).toBe(false);
+    for (const value of [0, -50, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+      const fields = modelCapabilityFields({ contextWindow: value, maxOutputTokens: value });
+      expect("context_window" in fields).toBe(false);
+      expect("context_length" in fields).toBe(false);
+      expect("max_output_tokens" in fields).toBe(false);
+    }
+  });
+
+  test("mirrors the effective long context window at the top level", () => {
+    const fields = modelCapabilityFields({ contextWindow: 272000, longContextWindow: 922000 });
+    expect(fields.capabilities.context_length).toBe(922000);
+    expect(fields.context_window).toBe(922000);
+    expect(fields.context_length).toBe(922000);
   });
 });
 
@@ -245,4 +248,3 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
     }
   });
 });
-
