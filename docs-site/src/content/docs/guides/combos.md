@@ -314,6 +314,16 @@ even when every target supports images — the catalog drops `image` from `input
 image-bearing requests are rejected with HTTP 400 before any target is called. `"auto"` (or
 omitting the field) keeps the automatic intersection.
 
+In the dashboard, the **Image / multimodal** switch can be enabled whenever every target is a
+known catalog row. Members that advertise image input stay unchanged; members that do not are
+automatically declared text-only on save (`modelCapabilities[model].inputModalities = ["text"]`)
+so the [Vision Sidecar](/guides/sidecars/) describes their images. The switch's hint names the
+members that will be enrolled. Turning the switch off disables image input for the combo but
+keeps those provider declarations, and `PUT /api/combos` accepts the same enrollment as an
+optional top-level `visionSidecarTargets` array of exact `{ provider, model }` targets
+(request-only; it is never stored on the combo and is rejected while `imageInput` is
+`"disabled"`).
+
 ## Encrypted v2 sub-agent tasks
 
 There is one important limitation for Codex v2 sub-agents ([issue #92](https://github.com/lidge-jun/opencodex/issues/92)).
