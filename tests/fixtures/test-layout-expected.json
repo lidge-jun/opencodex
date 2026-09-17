@@ -1,6 +1,8 @@
 {
   "key-attribution.test.ts": "usage",
   "provider-send-path-import.test.ts": "server",
+  "socks5-fetch.test.ts": "lib",
+  "start-args.test.ts": "cli",
   "responses-core-modules.test.ts": "responses",
   "responses-passthrough-transient-policy.test.ts": "responses",
   "responses-spend-ledger-wiring.test.ts": "responses",
@@ -1292,6 +1294,7 @@
   "ws-failure-stage.test.ts": "responses",
   "ws-upstream-reuse.test.ts": "responses",
   "ws-upstream.test.ts": "responses",
+  "ws-upstream-socks5.test.ts": "responses",
   "xai-client.test.ts": "images",
   "xai-oauth-retry.test.ts": "providers/xai",
   "xai-refresh-lock.test.ts": "providers/xai",

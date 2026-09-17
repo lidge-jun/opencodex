@@ -302,7 +302,7 @@ Qwen Cloud, Qoder Global et CN (PAT officiel + CLI), SiliconFlow, et d'autres. L
 
 ```bash
 ocx init                       # configuration interactive (écrit la configuration, relie Codex, propose le shim)
-ocx start [--port 10100]       # démarre le proxy au premier plan
+ocx start [--port 10100] [--socks5 [host:port] | --socks5-off]  # SOCKS5 par défaut : socks5://127.0.0.1:10808
 ocx stop                       # arrête le proxy et restaure Codex natif
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # service en arrière-plan
 ocx codex-shim install         # démarre le proxy à la demande dès que `codex` se lance

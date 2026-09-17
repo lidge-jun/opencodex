@@ -508,8 +508,8 @@ describe("#3462 Mihomo IPv6 fake-IP admission is gated on the scheme-matched pro
     expect(fetchInits).toHaveLength(0);
   });
 
-  test("HTTPS target + ALL_PROXY only: not admitted", async () => {
-    const { resolveOptions, fetchInits } = await run({ ALL_PROXY: "socks5://127.0.0.1:7891" }, { admit: false });
+  test("HTTPS target + HTTP ALL_PROXY only: not admitted", async () => {
+    const { resolveOptions, fetchInits } = await run({ ALL_PROXY: "http://127.0.0.1:7891" }, { admit: false });
     expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: false }]);
     expect(fetchInits).toHaveLength(0);
   });
@@ -544,7 +544,7 @@ describe("#3462 Mihomo IPv6 fake-IP admission is gated on the scheme-matched pro
 });
 
 describe("effectiveProxyFor picks the variable Bun fetch actually honours", () => {
-  test("scheme-matched selection; ALL_PROXY is never consulted", async () => {
+  test("scheme-matched selection; HTTP ALL_PROXY is never consulted", async () => {
     const { effectiveProxyFor } = await import("../../src/lib/proxy-env");
     const https = new URL("https://opencode.ai/zen/v1/models");
     const http = new URL("http://ollama.lan:11434/v1/models");
@@ -552,6 +552,7 @@ describe("effectiveProxyFor picks the variable Bun fetch actually honours", () =
     expect(effectiveProxyFor(https, { https_proxy: " http://p:2 " })).toBe("http://p:2");
     expect(effectiveProxyFor(https, { HTTP_PROXY: "http://p:3" })).toBeNull();
     expect(effectiveProxyFor(https, { ALL_PROXY: "http://p:4" })).toBeNull();
+    expect(effectiveProxyFor(https, { ALL_PROXY: "socks5://127.0.0.1:1080" })).toBe("socks5://127.0.0.1:1080");
     expect(effectiveProxyFor(http, { HTTP_PROXY: "http://p:5" })).toBe("http://p:5");
     expect(effectiveProxyFor(http, { HTTPS_PROXY: "http://p:6" })).toBeNull();
     expect(effectiveProxyFor(https, { HTTPS_PROXY: "   " })).toBeNull();
