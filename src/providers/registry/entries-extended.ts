@@ -427,6 +427,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // model_access_denied, which is why the Chat path cannot simply hang off the new base.
     responsesPath: "/api/v1/responses",
     chatCompletionsPath: "/api/coding/paas/v4/chat/completions",
+    modelDiscovery: { path: "/api/v1/models", envelopeKey: "models", idField: "slug" },
     // The address this row occupied before the move. A saved custom provider still pointing
     // at the Chat endpoint keeps receiving this row's metadata (#1100).
     destinationAliases: [{ baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat" }],

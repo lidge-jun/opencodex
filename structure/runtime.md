@@ -234,9 +234,10 @@ Custom providers keep the conventional `${baseUrl}/models` request, normalized b
 whitespace and trailing slashes are trimmed and an already-pasted `/models` is not doubled, so a
 `baseUrl` written with or without a trailing slash yields the identical discovery URL and an
 existing path prefix is preserved. Canonical presets may select a
-trusted URL/path/query and declarative eligibility filter without persisting that policy into user
-config. A response is rejected before caching when it exceeds 4 MiB, contains more than 2,000 raw
-rows, has a malformed OpenAI list envelope, or includes an invalid model id. Tests use fixtures and
+trusted URL/path/query, response envelope key, model identifier field, and declarative eligibility
+filter without persisting that policy into user config. A response is rejected before caching when
+it exceeds 4 MiB, contains more than 2,000 raw rows, has a malformed declared list envelope, or
+includes an invalid model id. Tests use fixtures and
 must never depend on live provider endpoints. Newly promoted fixed key presets opt into
 `preserveCustomDestination`, so an older same-named custom provider keeps its configured adapter,
 destination, and key boundary instead of being silently canonicalized onto the new host. Fixed
