@@ -28,6 +28,7 @@ export interface AdapterEventPreflight {
   stream: AsyncIterable<AdapterEvent>;
   error?: Extract<AdapterEvent, { type: "error" }>;
   empty: boolean;
+  replayUnsafe: boolean;
 }
 
 async function* replay(
@@ -51,10 +52,12 @@ export async function preflightAdapterEvents(
 ): Promise<AdapterEventPreflight> {
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
+  let replayUnsafe = false;
   while (true) {
     const next = await iterator.next();
-    if (next.done) return { stream: replay(buffered, iterator), empty: true };
+    if (next.done) return { stream: replay(buffered, iterator), empty: true, replayUnsafe };
     if (next.value.type === "heartbeat") {
+      replayUnsafe ||= next.value.replayUnsafe === true;
       buffered.push(next.value);
       if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
       continue;
@@ -62,9 +65,9 @@ export async function preflightAdapterEvents(
     buffered.push(next.value);
     if (next.value.type === "error") {
       await iterator.return?.();
-      return { stream: replay(buffered, iterator), error: next.value, empty: false };
+      return { stream: replay(buffered, iterator), error: next.value, empty: false, replayUnsafe };
     }
-    return { stream: replay(buffered, iterator), empty: false };
+    return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
   }
 }
 

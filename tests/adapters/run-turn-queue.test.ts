@@ -256,6 +256,22 @@ describe("run-turn adapter event preflight", () => {
     expect(await collect(preflight.stream)).toEqual([heartbeat, error]);
   });
 
+  test("replay-unsafe state survives heartbeat buffer eviction", async () => {
+    const unsafeHeartbeat: AdapterEvent = { type: "heartbeat", replayUnsafe: true };
+    const error: AdapterEvent = { type: "error", message: "rate limited" };
+    const values = [
+      unsafeHeartbeat,
+      ...Array.from({ length: PREFLIGHT_HEARTBEAT_RETAIN_LIMIT + 1 }, () => heartbeat),
+      error,
+    ];
+    const preflight = await preflightAdapterEvents(events(values));
+    expect(preflight.replayUnsafe).toBe(true);
+    expect(await collect(preflight.stream)).toEqual([
+      ...Array.from({ length: PREFLIGHT_HEARTBEAT_RETAIN_LIMIT }, () => heartbeat),
+      error,
+    ]);
+  });
+
   test("heartbeat text done commits and replays the full order once", async () => {
     const values = [heartbeat, text("once"), done];
     const preflight = await preflightAdapterEvents(events(values));
