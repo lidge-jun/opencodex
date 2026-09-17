@@ -25,7 +25,7 @@ import {
 import type { AdmissionSnapshot } from "../../src/codex/convergence-types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath } from "../helpers/repo-root";
-import { COLD_SPAWN_BUDGET_MS, INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 let root = "";
 let codexHome = "";
@@ -327,26 +327,6 @@ describe("two real processes contend for one lock", () => {
     };
   }
 
-  /**
-   * Consumed once, by the readiness wait of this file's first child, per the contract on
-   * {@link COLD_SPAWN_BUDGET_MS}. Every later spawn in the process is warm -- the constant
-   * records a first child publishing at 50.7 s against 1.76 s for the next one in the same
-   * file -- so a second consumer here would be waiting on something other than cold start.
-   */
-  let coldStartUnspent = true;
-
-  /**
-   * 15 s was smaller than the range this file itself documents for the wait it bounds, which is
-   * a sizing error rather than thin headroom: a case that takes 19 s is described here as
-   * normal. The first child pays Windows cold start and gets the ceiling named for it; every
-   * later one is warm and keeps the ordinary in-test deadline.
-   */
-  function spendColdStartAllowance(): number {
-    if (!coldStartUnspent) return INTERNAL_DEADLINE_MS;
-    coldStartUnspent = false;
-    return COLD_SPAWN_BUDGET_MS;
-  }
-
   // A spawned holder child boots in 8-19 s on a loaded windows-latest shard; the 10 s
   // literal expired first on run 33930757649 ("case 0", 10.67 s). INTERNAL_DEADLINE_MS is
   // the named bound for an in-test wait and stays under the enclosing SPAWN_BUDGET_MS so
@@ -360,7 +340,7 @@ describe("two real processes contend for one lock", () => {
   async function waitFor(
     path: string,
     child: ReturnType<typeof Bun.spawn>,
-    timeoutMs = spendColdStartAllowance(),
+    timeoutMs = INTERNAL_DEADLINE_MS,
   ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
