@@ -84,6 +84,33 @@ describe("Cursor discovery metadata", () => {
     expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["composer-2.5-fast"]).toBe(200_000);
   });
 
+  test("a live Muse Spark roster reaches the picker through its seed row (#4820)", () => {
+    // Live discovery filters the CONFIGURED roster; it never iterates a live-only id. A family
+    // absent from CURSOR_CAPABILITIES therefore stayed invisible no matter what GetUsableModels
+    // returned, which is why six advertised Muse variants produced no Cursor row.
+    const liveMuseIds = [
+      "muse-spark-1.3-minimal",
+      "muse-spark-1.3-low",
+      "muse-spark-1.3-medium",
+      "muse-spark-1.3-high",
+      "muse-spark-1.3-xhigh",
+      "muse-spark-1.3-max",
+    ];
+    const ids = cursorModelIds(CURSOR_STATIC_MODELS);
+
+    expect(ids).toContain("muse-spark-1.3");
+    expect(isCursorModelAvailableForAccount("muse-spark-1.3", liveMuseIds)).toBe(true);
+    expect(
+      filterCursorConfiguredModelsByLiveDiscovery(
+        CURSOR_STATIC_MODELS.filter(model => model.id === "muse-spark-1.3"),
+        liveMuseIds,
+      ).map(model => model.id),
+    ).toEqual(["muse-spark-1.3"]);
+    expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["muse-spark-1.3"]).toBe(1_048_576);
+    // The base row is one umbrella row, not six effort rows.
+    expect(ids.filter(id => id.startsWith("muse-spark"))).toEqual(["muse-spark-1.3"]);
+  });
+
   test("auto is not activated by live GetUsableModels wire ids alone", () => {
     expect(isCursorModelAvailableForAccount("gpt-5.4", ["gpt-5.4-high"])).toBe(true);
     expect(isCursorModelAvailableForAccount("claude-fable-5", ["gpt-5.4-high"])).toBe(false);

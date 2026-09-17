@@ -60,6 +60,8 @@ const CONTEXT_500K = 500 * K;
 const CONTEXT_1M = 1_000 * K;
 /** Gemini publishes the exact power-of-two window, not a rounded 1M. */
 const CONTEXT_GEMINI = 1_048_576;
+/** Meta publishes 1,048,576 for both Muse Spark 1.3 tiers (dev.meta.ai/docs/models). */
+const CONTEXT_MUSE = 1_048_576;
 
 const FULL = ["low", "medium", "high", "xhigh", "max"] as const;
 const T = "thinking-then-effort" as const;
@@ -210,6 +212,15 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     window: CONTEXT_GEMINI,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high"] } },
+  },
+  // Seeded from the live GetUsableModels roster attached to #4820, which advertises six
+  // muse-spark-1.3 effort variants. The ladder stops at xhigh on purpose: see the matching
+  // effort-map entry for why Cursor advertising `-max` is not evidence that it runs.
+  "muse-spark-1.3": {
+    displayName: "Muse Spark 1.3",
+    window: CONTEXT_MUSE,
+    defaultVariant: "regular",
+    variants: { regular: { levels: ["minimal", "low", "medium", "high", "xhigh"] } },
   },
   "kimi-k3": {
     displayName: "Kimi K3",

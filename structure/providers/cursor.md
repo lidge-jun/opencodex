@@ -50,6 +50,23 @@ advertises and sends `xhigh`. Live discovery recognizes Cursor's flattened
 `cursor-grok-{version}-{effort}-fast` variants, plus the older
 `grok-{version}-fast-{effort}` ordering, as availability evidence only.
 
+## Cursor live discovery is seed-gated
+
+`filterCursorConfiguredModelsByLiveDiscovery` filters the configured roster by live
+availability; it does not union live ids into the catalog. A wire id `GetUsableModels`
+advertises but no capability base claims is therefore invisible to the picker, however many
+effort variants the roster carries. That is deliberate — Cursor advertises ids whose every
+`Run` returns `not_found`, which is what `CURSOR_KNOWN_UNCALLABLE_MODEL_IDS` and the
+variant-level quarantine exist for — so a new family is admitted by adding its capability row,
+not by relaxing the filter.
+
+A seeded ladder carries only rungs supported by vendor evidence. `muse-spark-1.3` is seeded at
+`minimal` through `xhigh` even though Cursor's roster also advertises `muse-spark-1.3-max`:
+Meta publishes no `max` rung for Muse Spark and an independent probe rejected it, both already
+recorded on `META_MUSE_REASONING_EFFORTS`. A reseller advertising a wire id is not evidence the
+wire accepts it, so a Codex request at `max` clamps to `xhigh` rather than sending a rung two
+sources say does not exist.
+
 ## Cursor active-context usage
 
 Cursor's `conversationCheckpointUpdate.tokenDetails.usedTokens` is treated as the authoritative
