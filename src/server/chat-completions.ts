@@ -150,10 +150,15 @@ async function handleChatCompletionsWithBudget(
   let chatNativeRoute: ReturnType<typeof routeModel> | null = null;
   try {
     const route = routeModel(config, chatBody.model as string, evidenceFromBody(chatBody));
-    route.provider = resolveOpenCodeGoTransport(route.provider, getOrAllocateRequestSessionLane(req));
-    // Settle the wire once so every branch below reads the adapter this model will
-    // actually use, not the provider-wide default (#404).
-    route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "chat");
+    // Preserve the routed destination for Go recognition, then settle the wire before
+    // deriving protocol-scoped affinity. Recognition must not inspect the flipped adapter.
+    const routedProvider = route.provider;
+    const wireProvider = resolveWireProtocolOverride(route.providerName, route.modelId, routedProvider, "chat");
+    route.provider = resolveOpenCodeGoTransport(
+      wireProvider,
+      getOrAllocateRequestSessionLane(req),
+      routedProvider,
+    );
     logCtx.model = route.modelId;
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;
