@@ -223,36 +223,50 @@ function hasOpencodexRouting(content: string): boolean {
   );
 }
 
+/**
+ * What the caller already decided about conversation history before calling.
+ *
+ * - `refuse-on-any` — nothing was decided, so re-derive and refuse on any refusal reason.
+ *   This is the default, and it is what a direct caller gets.
+ * - `stand-down-retain` — a stand-down was accepted and `[model_providers.opencodex]` must
+ *   survive, because the rows this home tagged `opencodex` stay tagged and resolve only
+ *   through that table. Those conversations still open; their requests fail against a
+ *   stopped proxy, which is an ordinary connection error.
+ * - `stand-down-remove` — a stand-down was accepted and the user explicitly asked for the
+ *   table to go too, accepting that those conversations stop opening.
+ *
+ * One option rather than two booleans: retention and the refusal are the same decision seen
+ * from two sides, and splitting them is how the explicit-removal path ended up refused by a
+ * preflight its caller had already answered.
+ */
+export type RemoveCodexConfigHistoryDisposition =
+  | "refuse-on-any"
+  | "stand-down-retain"
+  | "stand-down-remove";
+
 export interface RemoveCodexConfigOptions {
   preserveProfile?: boolean;
-  /**
-   * Keep `[model_providers.opencodex]` on disk while every routing key comes out.
-   *
-   * Set when the history preflight stands the relabel down: the rows this home tagged
-   * `opencodex` stay tagged, and they resolve only through this table. Retaining it means
-   * those conversations still open — their requests fail against a stopped proxy, which is
-   * an ordinary connection error — while plain `codex` returns to the built-in provider.
-   */
-  retainProviderTable?: boolean;
+  historyDisposition?: RemoveCodexConfigHistoryDisposition;
 }
 
 export interface RemoveCodexConfigResult {
   success: boolean;
   message: string;
-  /** The exact lines left on disk when `retainProviderTable` kept the table. */
+  /** The exact lines left on disk when the disposition was `stand-down-retain`. */
   retainedProviderTable?: string[];
 }
 
 export function removeCodexConfig(
   options: RemoveCodexConfigOptions = {},
 ): RemoveCodexConfigResult {
+  const historyDisposition = options.historyDisposition ?? "refuse-on-any";
   const historyError = preflightCodexHistoryInjection(false, false);
   // The preflight answers "may I rewrite conversation history?". Routing removal is a
   // different question, and treating one answer as both is what left `ocx uninstall`
   // pointing a live config at a port it had just removed (#4812). Only the stand-down
   // reason is separable; every other reason still means something is wrong with the
-  // history state itself, and those keep the hard refusal.
-  if (historyError && !(options.retainProviderTable === true && historyError === HISTORY_RELABEL_STANDS_DOWN)) {
+  // history state itself, and those keep the hard refusal even for a caller that decided.
+  if (historyError && !(historyDisposition !== "refuse-on-any" && historyError === HISTORY_RELABEL_STANDS_DOWN)) {
     return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
   }
   if (!existsSync(CODEX_CONFIG_PATH)) {
@@ -279,7 +293,7 @@ export function removeCodexConfig(
   const stripped = stripOpencodexConfigResult(content, journaledBaseUrl, journaledRealtimeWsBaseUrl);
   // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
   // afterwards would find nothing.
-  const retainedBlock = options.retainProviderTable === true
+  const retainedBlock = historyDisposition === "stand-down-retain"
     ? extractOcxProviderTableBlock(content)
     : null;
   const finalContent = retainedBlock === null

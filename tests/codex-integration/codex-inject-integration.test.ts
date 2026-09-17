@@ -551,7 +551,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     // state, and each entry point reports the degraded result as a successful partial restore.
     const restoreScript = `
       const { restoreNativeCodex, restoreNativeCodexAsync, removeCodexConfig } = require("./src/codex/inject");
-      const results = [restoreNativeCodex(), await restoreNativeCodexAsync(), removeCodexConfig({ retainProviderTable: true })];
+      const results = [restoreNativeCodex(), await restoreNativeCodexAsync(), removeCodexConfig({ historyDisposition: "stand-down-retain" })];
       console.log(JSON.stringify(results));
     `;
     const restored = spawnSync(process.execPath, ["--eval", restoreScript], {

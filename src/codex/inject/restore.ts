@@ -342,7 +342,6 @@ function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOption
     if (disposition.kind === "refuse") {
       return { state: "failed", changed: false, action: "failed", message: `Codex configuration and journal preserved: ${disposition.reason}.` };
     }
-    const retainProviderTable = disposition.kind === "stand-down" && disposition.retainProviderTable;
     // Captured unconditionally, not only when the stand-down is already known.
     //
     // Two different paths need bytes that only exist before the write. The journal restore
@@ -366,7 +365,11 @@ function restoreCodexConfigInlineImpl(kind: string, options: RestoreConfigOption
       ? { success: true, message: "Codex config restored from opencodex journal.", retainedProviderTable: undefined as string[] | undefined }
       : removeCodexConfig({
           preserveProfile: journal.profileRestored || journal.profileChanged,
-          retainProviderTable,
+          // The history question was resolved above; hand the answer down rather than making
+          // the transform re-derive it, which refused the explicit-removal path outright.
+          historyDisposition: disposition.kind === "stand-down"
+            ? disposition.retainProviderTable ? "stand-down-retain" : "stand-down-remove"
+            : "refuse-on-any",
         });
     let retainedLines = restored.retainedProviderTable ?? null;
     if (restored.success) {
