@@ -55,6 +55,28 @@ The prefilter is only an optimization, not final process-membership authority.
 `tests/clients/desktop-app-restart.test.ts` covers both mixed-slash directions through the adapter and runs the real PowerShell filter against synthetic CIM rows on Windows.
 `tests/clients/desktop-app-restart-posix.test.ts` keeps the POSIX separator contract covered; uid-dependent macOS/Linux cases skip on Windows.
 
+## Explicit Codex CLI installation observation
+
+`src/cli/codex-cli-update.ts` dispatches the opt-in Windows x64 `attest` operation to
+`src/codex/cli-installation-identity.ts`. With no options, `src/codex/cli-installation-targets.ts`
+derives the four inputs from the proof-bound launcher snapshot: the configured candidate or
+the first codex on the captured PATH, an OpenCodex wrapper resolving to its renamed npm
+backing, the npm prefix layout, and the Node/npm toolchain beside the resolved node.exe.
+Configured values containing a path separator must be drive-absolute; otherwise derivation
+refuses with `candidate_unavailable` instead of substituting a different PATH candidate. Bare
+command names and the unset default continue to resolve only through the captured PATH.
+Discovery only proposes paths and never reads ambient state. Four explicit absolute paths
+remain accepted as an all-or-none override. Only the
+standard npm command shim or direct Codex package entry is accepted. The native reader in
+`src/codex/windows-installation-files.ts` holds ancestor/file handles for bounded reads and
+rejects reparse points, conflicting writers and unsupported paths/platforms. Its path-free
+report binds file identities and bytes to this observation, not a durable update permission.
+`installationIdentityObserved` can be true; `selectionAttested`, `managed` and `applyAllowed`
+remain false. Supplied Node identity does not prove launcher selection, effective npm config,
+past installer identity or tool authenticity. No package-registry request, installation,
+config write or process control occurs. Existing Windows `check` retains zero candidate/config
+filesystem I/O. A reported refusal can exit 0; consumers inspect `status`.
+
 ## Entrypoints
 
 | Path | Responsibility |
