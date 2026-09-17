@@ -103,6 +103,24 @@ Codex-private tool fields are removed at the same boundary from one table
 web-search variant, and `defer_loading` on any declaration, which `activateDeferredTool` clears only
 for tools a `tool_search_output` already loaded. A new private bit is a row there.
 
+OpenAI-private TOP-LEVEL request keys have their own table, `CANONICAL_ONLY_TOP_LEVEL_FIELDS`, with
+the same discipline and a different scope. It currently holds `access_programs`, which Codex 0.155
+mints from ChatGPT auth alone and never from the destination URL, so loopback injection — which
+keeps Codex pointed at its built-in `openai` provider on purpose — leaves it attached wherever the
+turn is routed. A gateway that validates its top-level schema rejects the request before inference:
+Console Go answers with an unknown-parameter error naming the field, and every turn of that thread
+fails (#4853). The key is scoped by DESTINATION rather than by the canonical surface, because
+`src/server/responses/compact.ts` spreads the caller's raw body into the native
+`/responses/compact` request without passing through this adapter, and that endpoint is offered
+only to OpenAI-operated destinations; stripping on the canonical predicate would make
+`openai-apikey` behave differently on its two endpoints.
+
+This table is not an unknown-parameter sanitizer, and the distinction is the point. It lists keys a
+client is observed to send, so an unrecognized top-level key reaches the wire untouched rather than
+being deleted on the theory that the destination would have rejected it. `codex_output_schema` is
+deliberately absent for that reason: in codex-rs it is the `name` of the JSON-schema `text.format`
+object, not a top-level key, so listing it would remove a field this client never sends.
+
 After that namespace boundary has produced public function tools, the Grok CLI Responses transport
 applies the same root-schema policy as its Chat transport. A root `oneOf`/`anyOf` is flattened only
 when the shared xAI normalizer can preserve its meaning; an unsafe function is omitted instead of
