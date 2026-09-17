@@ -97,6 +97,10 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
 Connected `ocx status` diagnostics follow the shared
 [status credential binding](../runtime.md#remote-hub-status-credential-binding).
 
+The smaller `_remoteHub` annotation from `src/cli/config-command.ts` is intentionally independent
+of Desktop recovery and catalog readiness. It observes only the validated client record and local
+data-token ownership, so displaying configuration cannot enter Desktop or client lifecycle work.
+
 ## Claude Desktop config-library resolution
 
 The Desktop profile writer and the management status probe share

@@ -79,6 +79,11 @@ the secret itself.
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
+The `ocx config show` reader in `src/cli/config-command.ts` uses those diagnostics directly. Its
+client annotation compares only the bounded service-token fingerprint with the validated client
+record; it does not call `loadConfig`, mutate permissions, or import the write-capable connect flow.
+All config publication continues through the existing required ACL-hardened writers above.
+
 `claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config/salvage.ts` already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
 
 The former `showCodexSparkQuota` key is inert passthrough data when loading an old config.

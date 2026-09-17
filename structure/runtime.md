@@ -355,6 +355,11 @@ readiness, then reads that runtime's effort ladder without persisting its select
 preferred candidates still fall back in priority order. General `ocx status` retains full runtime
 discovery and passes its resolved command into readiness, avoiding a second version probe without adding cache state.
 
+`ocx config show` stays outside that lifecycle path. `src/cli/config-command.ts` reads the validated
+config snapshot and the bounded service-token observation needed for its `_remoteHub` annotation;
+it does not import the connect command, inspect catalog readiness, acquire lifecycle locks, or run
+config/secret ACL hardening.
+
 `src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.
 
 ### Remote Hub status credential binding
