@@ -591,6 +591,10 @@ export interface OcxConfig {
   subagentEffortCap?: string;
   /** Global model effort overrides, after provider model/wide pins; none means omission. */
   modelPinnedEfforts?: Record<string, string>;
+  manualCompaction?: {
+    model: string;
+    reasoningEffort?: string;
+  };
   /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only

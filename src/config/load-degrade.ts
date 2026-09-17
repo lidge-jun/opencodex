@@ -100,6 +100,14 @@ export function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig)
   }
 }
 
+export function warnDegradedManualCompaction(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).manualCompaction;
+  if (raw !== undefined && validated.manualCompaction === undefined) {
+    console.warn("⚠️  config.json manualCompaction is invalid (expected { model, reasoningEffort? } with a nonblank model and a declared effort) — manual /compact keeps the conversation model");
+  }
+}
+
 /**
  * Load-time degradation for `retryOn429` (loadConfig only): one hand-edited invalid optional
  * field (e.g. `attempts: 0` or a string) must not trip the whole provider schema and hide every

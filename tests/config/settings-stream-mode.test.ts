@@ -874,3 +874,50 @@ describe("config.json schema resilience", () => {
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
+
+describe("manual compaction settings", () => {
+  test("saves, reloads, replaces effort, and clears without changing other settings", async () => {
+    const config = baseConfig();
+    config.effortCap = "high";
+    const originalProviders = structuredClone(config.providers);
+    expect((await (await getSettings(config))!.json()).manualCompaction).toBeNull();
+    const setting = { model: "gateway/cheap", reasoningEffort: "low" };
+    const response = await putSettings(config, { manualCompaction: setting });
+    expect(response?.status).toBe(200);
+    expect((await response!.json()).manualCompaction).toEqual(setting);
+    expect(loadConfig().manualCompaction).toEqual(setting);
+    expect((await (await getSettings(config))!.json()).manualCompaction).toEqual(setting);
+    await putSettings(config, { manualCompaction: { model: "gateway/cheap" } });
+    expect(loadConfig().manualCompaction).toEqual({ model: "gateway/cheap" });
+    await putSettings(config, { manualCompaction: null });
+    expect(config.manualCompaction).toBeUndefined();
+    expect(loadConfig().manualCompaction).toBeUndefined();
+    expect(config.effortCap).toBe("high");
+    expect(config.providers).toEqual(originalProviders);
+    expect((await (await getSettings(config))!.json()).manualCompaction).toBeNull();
+  });
+
+  test("rejects malformed settings before any mutation", async () => {
+    const config = baseConfig();
+    config.manualCompaction = { model: "gateway/cheap", reasoningEffort: "low" };
+    const before = structuredClone(config);
+    for (const value of [false, [], {}, { model: " " }, { model: 2 }, { model: "m", reasoningEffort: "invalid" }, { model: "m", enabled: true }]) {
+      const response = await putSettings(config, { manualCompaction: value, streamMode: "eager-relay" });
+      expect(response?.status).toBe(400);
+      expect(config).toEqual(before);
+    }
+  });
+
+  test("failed persistence restores the override and its deletion intent", async () => {
+    const { projectConfigRebaseProvenance } = await import("../../src/config/rebase-provenance");
+    const config = baseConfig();
+    config.manualCompaction = { model: "gateway/cheap", reasoningEffort: "low" };
+    const before = projectConfigRebaseProvenance(config);
+    const deps = { saveConfigPreservingClaudeCode() { throw new Error("fixture save failure"); } };
+    for (const value of [null, { model: "gateway/other" }]) {
+      await expect(putSettings(config, { manualCompaction: value }, deps)).rejects.toThrow("fixture save failure");
+      expect(projectConfigRebaseProvenance(config)).toEqual(before);
+      expect(config.manualCompaction).toEqual({ model: "gateway/cheap", reasoningEffort: "low" });
+    }
+  });
+});

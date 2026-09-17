@@ -170,7 +170,7 @@ import {
   sanitizeModelCostsForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   warnInheritedFastWireConflicts,
-  warnDegradedStreamMode,
+  warnDegradedStreamMode, warnDegradedManualCompaction,
   warnDegradedHostname,
   warnDegradedListeners,
   warnDegradedApiKeys,
@@ -227,7 +227,7 @@ export function loadConfig(): OcxConfig {
     if (result.success) {
       const config = normalizeApiKeyIds(result.data as OcxConfig);
       warnInheritedFastWireConflicts(configPath, config);
-      warnDegradedStreamMode(parsed, config);
+      warnDegradedStreamMode(parsed, config); warnDegradedManualCompaction(parsed, config);
       warnDegradedHostname(parsed, config);
       warnDegradedListeners(parsed, config);
       warnDegradedApiKeys(parsed, config);

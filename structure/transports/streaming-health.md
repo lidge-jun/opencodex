@@ -470,3 +470,5 @@ Codex App/CLI UI certification. The fixture suite also exercises real loopback s
 `tests/responses/ws-steering-completion.test.ts` and `ws-steering-smoke.test.ts`
 cover effective wire settings, immutable-route refusals, policy preservation,
 independent API credentials, unavailable-mode diagnostics and safe probe outcomes.
+
+WebSocket [manual compaction selection](responses.md#manual-compaction-overrides) uses per-frame metadata; handshake metadata cannot supply a later frame's trigger.

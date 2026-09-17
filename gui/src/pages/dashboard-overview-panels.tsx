@@ -1,3 +1,4 @@
+import ManualCompactionPanel from "../components/ManualCompactionPanel";
 import MemoryObservabilityCard from "../components/MemoryObservabilityCard";
 import type { useDashboardData } from "./use-dashboard-data";
 import {
@@ -18,6 +19,7 @@ export function DashboardOverviewPanels(props: Dash) {
         <DashboardMaintenancePanel d={props} />
       </div>
       <DashboardSidecarPanels d={props} />
+      <ManualCompactionPanel apiBase={props.apiBase} models={props.models} />
       <MemoryObservabilityCard apiBase={props.apiBase} />
     </>
   );

@@ -159,3 +159,7 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Routed Grok compaction uses the existing adapter and summary contract after a same-provider
+[manual compaction model override](../transports/responses.md#manual-compaction-overrides); a
+cross-provider override runs the portable summarizer on the selected provider instead.
