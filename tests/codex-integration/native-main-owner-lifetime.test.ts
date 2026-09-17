@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { watchdogMs } from "../helpers/ci-watchdog";
+import { COLD_SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 import { saveConfig } from "../../src/config";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -146,6 +147,25 @@ const OWNER_EVENT_WAIT_MS = watchdogMs(10_000);
 // drift apart again.
 const OWNER_LEASE_BUDGET_MS = Math.max(30_000, OWNER_EVENT_WAIT_MS * 4);
 
+/**
+ * Windows cold start of this file's FIRST child, spent once, per the contract on
+ * {@link COLD_SPAWN_BUDGET_MS}.
+ *
+ * `watchdogMs(10_000)` sizes every wait in this file for a child that is already able to
+ * answer. The first one is not: it boots Bun, imports the server graph, and binds a port, and
+ * the constant records that first child taking 50.7 s where the next spawn in the same file was
+ * ready in 1.76 s. On run 35210400258 (windows 7/9) the very first wait of a case -- for
+ * `listening` -- expired with no events at all. Every later wait keeps the watchdog bound,
+ * because by then the cold start has already been paid and a slow answer means something else.
+ */
+let ownerColdStartUnspent = true;
+
+function spendOwnerColdStartAllowance(): number {
+  if (!ownerColdStartUnspent) return OWNER_EVENT_WAIT_MS;
+  ownerColdStartUnspent = false;
+  return Math.max(OWNER_EVENT_WAIT_MS, COLD_SPAWN_BUDGET_MS);
+}
+
 async function waitUntil<T>(probe: () => T | null, timeoutMs = OWNER_EVENT_WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -206,13 +226,34 @@ class ChildHarness {
     })();
   }
 
-  async waitFor(predicate: (event: Event) => boolean, timeoutMs = OWNER_EVENT_WAIT_MS): Promise<Event> {
+  async waitFor(predicate: (event: Event) => boolean, timeoutMs = spendOwnerColdStartAllowance()): Promise<Event> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const found = this.events.find(predicate);
       if (found) return found;
+      // A dead child and a slow one used to report identically. On run 35210400258
+      // (windows 7/9) the first wait of a case failed with `events=[] stderr=` -- and because
+      // that stderr promise only resolves at EOF, its emptiness proves the child had already
+      // exited, silently, rather than that it was still booting. The message never said so.
+      // Report the exit the moment it happens, with the code, instead of spending the deadline.
+      if (this.child.exitCode !== null || this.child.signalCode !== null) {
+        // The event and the exit can land in the same wake, so re-check before blaming death.
+        const settled = this.events.find(predicate);
+        if (settled) return settled;
+        throw new Error(
+          `child exited (code=${this.child.exitCode}, signal=${this.child.signalCode}) before the `
+          + `awaited event; events=${JSON.stringify(this.events)} stderr=${await this.stderr}`,
+        );
+      }
       if (Date.now() >= deadline) {
-        throw new Error(`child event timeout; events=${JSON.stringify(this.events)} stderr=${await this.stderr}`);
+        // Do NOT await `this.stderr` unguarded here. It resolves at EOF, so for the case this
+        // branch now describes -- a child still running -- it would never settle, and the
+        // timeout would hang until the enclosing budget killed the test with a worse message.
+        const stderr = await Promise.race([this.stderr, Bun.sleep(1_000).then(() => "<still open>")]);
+        throw new Error(
+          `child event timeout after ${timeoutMs}ms; the child is still running; `
+          + `events=${JSON.stringify(this.events)} stderr=${stderr}`,
+        );
       }
       await Promise.race([
         new Promise<void>(resolve => this.waiters.add(resolve)),
