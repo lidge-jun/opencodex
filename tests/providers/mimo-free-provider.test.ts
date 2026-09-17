@@ -16,6 +16,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { budgetOwner } from "../helpers/send-budget-owner";
 
 for (const phase of ["bootstrap", "chat", "401-replay"] as const) test.each([307, 308])(`MiMo ${phase} never follows %i`, async status => {
   const nativeFetch = globalThis.fetch;
@@ -319,7 +321,8 @@ describe("mimo-free auth retry predicate", () => {
     return createMimoFreeAdapter(provider);
   }
 
-  test("401 retries exactly once with a fresh JWT after draining the first body", async () => {
+  test.each(["fallback", "supplied", "prepaid"] as const)("401 retry preserves inference admission and separate bootstrap (%s)", async mode => {
+    const supplied = mode !== "fallback";
     const fakeJwt = "h." + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64") + ".s";
     const calls: string[] = [];
     const originalFetch = globalThis.fetch;
@@ -336,21 +339,42 @@ describe("mimo-free auth retry predicate", () => {
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }) as unknown as typeof fetch;
+    const budget = createRequestExecutionBudget();
+    const { owner, dispose } = budgetOwner(budget);
     try {
       const adapter = adapterForRetry();
+      let suppliedCalls = 0;
+      const executor = (async (input, init) => {
+        expect(String(input)).toBe(MIMO_CHAT_URL);
+        suppliedCalls += 1;
+        return globalThis.fetch(input, init);
+      }) as typeof fetch;
+      if (mode === "prepaid") {
+        budget.used = 3;
+        const hop = owner.reserveCredentialHop("auth-recovery", MIMO_CHAT_URL, true);
+        if (!hop.allowed || !hop.permit) throw new Error("Expected final prepaid send");
+        owner.pendingHopPermit = hop.permit;
+      }
+      const scope = mode === "prepaid" ? owner.adapterDispatchBudget : budget;
+      const observed: number[] = [];
       const res = await adapter.fetchResponse!(
         { url: MIMO_CHAT_URL, method: "POST", headers: { "Authorization": "Bearer stale" }, body: "{}" },
-        {} as never,
+        { ...(supplied ? { executor } : {}), sendBudget: scope, onPhysicalSend: send => observed.push(send.ordinal) },
       );
-      expect(res.status).toBe(200);
+      expect(suppliedCalls).toBe(supplied ? mode === "prepaid" ? 1 : 2 : 0);
+      expect(res.status).toBe(mode === "prepaid" ? 401 : 200);
+      expect(budget.used).toBe(mode === "prepaid" ? 4 : 2);
+      expect(observed).toEqual(mode === "prepaid" ? [1] : [1, 2]);
       // Sequence: first chat with stale token -> 401 -> bootstrap -> retry with fresh JWT.
       expect(calls[0]).toBe("chat:Bearer stale");
-      expect(calls[1]).toBe("bootstrap");
-      expect(calls[2]).toBe(`chat:Bearer ${fakeJwt}`);
-      expect(calls.length).toBe(3);
+      if (mode !== "prepaid") expect(calls[1]).toBe("bootstrap");
+      if (mode === "prepaid") expect(await res.text()).toBe("expired");
+      else expect(calls[2]).toBe(`chat:Bearer ${fakeJwt}`);
+      expect(calls.length).toBe(mode === "prepaid" ? 1 : 3);
     } finally {
       globalThis.fetch = originalFetch;
       resetMimoJwtCache();
+      dispose();
     }
   });
 

@@ -20,6 +20,7 @@
   "adapter-event-oauth-failover.test.ts": "oauth",
   "adapter-inner-send-budget-wiring.test.ts": "adapters",
   "adapter-inner-send-budget.test.ts": "adapters",
+  "physical-send.test.ts": "adapters",
   "adapter-registry-authority.test.ts": "adapters",
   "adapter-resolve.test.ts": "server",
   "adapter-tool-conformance.test.ts": "adapters",
