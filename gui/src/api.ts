@@ -253,13 +253,20 @@ async function reBootstrapSessionToken(plane: ApiPlane): Promise<RebootstrapResu
 
 async function verifyAdminToken(plane: ApiPlane, token: string): ReturnType<AdminTokenVerifier> {
   if (!rawFetch) return "unavailable";
+  const bounded = createBoundedFetch(rebootstrapTimeoutMs);
   try {
     const state = runtime(plane);
-    const [input, init] = withAuth(plane, `${state.target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`, { cache: "no-store" }, token);
+    const [input, init] = withAuth(
+      plane,
+      `${state.target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`,
+      { cache: "no-store", signal: bounded.signal },
+      token,
+    );
     const response = await rawFetch(input, init);
     if (response.status === 401) return "rejected";
     return response.ok ? "accepted" : "unavailable";
   } catch { return "unavailable"; }
+  finally { bounded.clear(); }
 }
 
 async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null, callerSignal?: AbortSignal): Promise<string | null> {
