@@ -338,6 +338,9 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       sent = true;
       try {
         if (nativeControl) {
+          // Parsed once: the base body is immutable for this exchange, and a
+          // full-replay frame runs to megabytes.
+          let base: Record<string, unknown> | undefined;
           detachSteering = nativeControl.attach(frame => {
             const sendControl = () => {
               if (terminal || signal?.aborted || session.closed || ws.readyState !== WebSocket.OPEN) {
@@ -349,7 +352,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
                 // The channel validates same settings/lane, saved results and user-only additions.
                 // Reuse the already-routed/authorized native settings; never feed a
                 // previous_response_id through the REST sanitizer or account selector.
-                const base = JSON.parse(frameText) as Record<string, unknown>;
+                base ??= JSON.parse(frameText) as Record<string, unknown>;
                 outgoing = { ...base, input: frame.input, previous_response_id: frame.previous_response_id };
               }
               const text = JSON.stringify(outgoing);
