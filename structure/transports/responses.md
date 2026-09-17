@@ -1,5 +1,9 @@
 # Responses Transport
 
+Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
@@ -102,6 +106,24 @@ Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
 web-search variant, and `defer_loading` on any declaration, which `activateDeferredTool` clears only
 for tools a `tool_search_output` already loaded. A new private bit is a row there.
+
+OpenAI-private TOP-LEVEL request keys have their own table, `CANONICAL_ONLY_TOP_LEVEL_FIELDS`, with
+the same discipline and a different scope. It currently holds `access_programs`, which Codex 0.155
+mints from ChatGPT auth alone and never from the destination URL, so loopback injection — which
+keeps Codex pointed at its built-in `openai` provider on purpose — leaves it attached wherever the
+turn is routed. A gateway that validates its top-level schema rejects the request before inference:
+Console Go answers with an unknown-parameter error naming the field, and every turn of that thread
+fails (#4853). The key is scoped by DESTINATION rather than by the canonical surface, because
+`src/server/responses/compact.ts` spreads the caller's raw body into the native
+`/responses/compact` request without passing through this adapter, and that endpoint is offered
+only to OpenAI-operated destinations; stripping on the canonical predicate would make
+`openai-apikey` behave differently on its two endpoints.
+
+This table is not an unknown-parameter sanitizer, and the distinction is the point. It lists keys a
+client is observed to send, so an unrecognized top-level key reaches the wire untouched rather than
+being deleted on the theory that the destination would have rejected it. `codex_output_schema` is
+deliberately absent for that reason: in codex-rs it is the `name` of the JSON-schema `text.format`
+object, not a top-level key, so listing it would remove a field this client never sends.
 
 After that namespace boundary has produced public function tools, the Grok CLI Responses transport
 applies the same root-schema policy as its Chat transport. A root `oneOf`/`anyOf` is flattened only
@@ -646,9 +668,11 @@ request-log accounting without promoting a truncated repair candidate.
 Chat Completions streams do not carry the Responses `message.phase` field. The bridge keeps an
 unphased live message provisional while its deltas arrive, then assigns `commentary` when a later
 tool, search, reasoning, or assistant boundary proves that more work follows, and assigns
-`final_answer` only when a clean terminal `done` closes the current message. Explicit adapter
-phases always win. Streaming `output_item.added` remains unphased until that future boundary is
-known; `output_item.done` and the terminal response snapshot carry the authoritative inferred phase
+`final_answer` when a terminal `done` closes the current message unless the shared stop-reason
+classifier marks that reason as truncated. Normal provider reasons such as `end_turn`,
+`stop_sequence`, and `tool_use` therefore remain final answers, as does an absent reason. Explicit
+adapter phases always win. Streaming `output_item.added` remains unphased until that future boundary
+is known; `output_item.done` and the terminal response snapshot carry the authoritative inferred phase
 with the same item id. The batch/non-streaming bridge follows the same rule.
 
 > Decision record: [ADR-0069](../decisions/ADR-0069-chat-to-responses-message-phase-inference.md)
@@ -727,6 +751,8 @@ reader and buffers only until one of these boundaries:
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
+- a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
+  may advance while errors explicitly classified as non-retryable 4xx remain committed;
 - a completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
 
@@ -1064,3 +1090,7 @@ route where this was first observed; explicit provider and operator caps may onl
 
 Regression coverage: `tests/server/input-admission.test.ts` and
 `tests/helpers/combo-context-headroom-cases.ts`.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

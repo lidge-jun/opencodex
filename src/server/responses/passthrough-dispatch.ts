@@ -1,3 +1,7 @@
+import { createSteeringSettingsNormalizer } from "./native-steering-policy";
+import { nativeResponseControlEligible } from "./native-response-control";
+import { NativeInjectionReplay } from "./native-injection-replay";
+import { NativeSteeringReplay } from "./native-steering-replay";
 import type {
   ResponsesRequestContext,
   ResponsesAdmissionState,
@@ -10,7 +14,7 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
-import { rememberResponseState } from "../../responses/state";
+import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
 import {
   currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
@@ -251,6 +255,19 @@ export async function preparePassthroughExchange(
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
         rememberResponseState(parsed._rawBody, response, undefined, responseStateOptions(true))
       : undefined;
+    if (options.nativeControl && nativeResponseControlEligible(route.provider, options.nativeControl)
+      && options.inboundTransport === "websocket" && !options.comboAttempt) {
+      const body = parsed._rawBody as Record<string, unknown>;
+      if (options.nativeControl.kind === "steering") {
+        options.nativeControl.normalizeContinuation = createSteeringSettingsNormalizer(parsed, route, config, req.headers);
+      }
+      const Replay = options.nativeControl.kind === "injection" ? NativeInjectionReplay : NativeSteeringReplay;
+      options.nativeControl.replayFactory = () => new Replay(body.input, (input, response) => {
+        if (passthroughRecordEligible && !isBodyNonPersistable(body)) {
+          rememberResponseState({ ...body, input }, response, undefined, responseStateOptions(true));
+        }
+      });
+    }
     if (parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
       console.warn(
         `[responses] previous_response_id ${parsed.previousResponseId} not found in local replay state `
@@ -772,6 +789,9 @@ export async function preparePassthroughExchange(
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -868,6 +888,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, innerRecovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -974,6 +997,9 @@ export async function preparePassthroughExchange(
           // here on is a genuine transport attempt.
           storedPoolReplayDispatchNotifier(
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -1095,6 +1121,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -1217,6 +1246,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,

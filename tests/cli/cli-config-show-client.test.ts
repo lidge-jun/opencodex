@@ -19,7 +19,10 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { remoteHubConfigNote } from "../../src/cli/config-command";
+import {
+  remoteHubConfigNote,
+  remoteHubConnectionFromTokenState,
+} from "../../src/cli/config-command";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -44,6 +47,7 @@ const PRIOR_CATALOG = "A".repeat(12_288);
 
 /** The data-plane token this fixture's `tokenFingerprint` is computed from. */
 const FIXTURE_TOKEN = "fixture-token";
+const FIXTURE_TOKEN_FINGERPRINT = createHash("sha256").update(FIXTURE_TOKEN).digest("hex");
 
 function clientHome(options: { token?: string | null } = {}): string {
   const home = mkdtempSync(join(tmpdir(), "ocx-config-client-"));
@@ -60,7 +64,7 @@ function clientHome(options: { token?: string | null } = {}): string {
       selectedClients: ["codex", "claude"],
       tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
       apiKeyId: "client-one",
-      tokenFingerprint: createHash("sha256").update(FIXTURE_TOKEN).digest("hex"),
+      tokenFingerprint: FIXTURE_TOKEN_FINGERPRINT,
       protocolVersion: 1,
       connectedAt: "2026-09-01T00:00:00.000Z",
       priorCatalog: PRIOR_CATALOG,
@@ -75,7 +79,7 @@ function standaloneHome(): string {
   return home;
 }
 
-/** The shape `collectClientConnectionStatus()` returns, narrowed to what the note reads. */
+/** The narrow connection observation consumed by the display-only note. */
 type NoteConnection = Parameters<typeof remoteHubConfigNote>[1] extends () => infer T ? T : never;
 
 function connection(overrides: Partial<NoteConnection> = {}): NoteConnection {
@@ -84,7 +88,10 @@ function connection(overrides: Partial<NoteConnection> = {}): NoteConnection {
 
 const CLIENT_CONFIG = {
   runtimeRole: "client",
-  client: { serverUrl: "https://hub.example.test:8443" },
+  client: {
+    serverUrl: "https://hub.example.test:8443",
+    tokenFingerprint: FIXTURE_TOKEN_FINGERPRINT,
+  },
 } as OcxConfig;
 
 describe("remoteHubConfigNote", () => {
@@ -132,6 +139,20 @@ describe("remoteHubConfigNote", () => {
     const disconnected = remoteHubConfigNote(CLIENT_CONFIG, () => connection({ state: "disconnected", token: "missing" }));
     expect(disconnected?.connected).toBe(false);
     expect(disconnected?.note).toContain("its connection is disconnected");
+  });
+
+  test("the read-only note derives ownership from the bounded token observation alone", () => {
+    expect(remoteHubConnectionFromTokenState(CLIENT_CONFIG, {
+      kind: "present",
+      token: FIXTURE_TOKEN,
+      fingerprint: FIXTURE_TOKEN_FINGERPRINT,
+    })).toEqual({ state: "connected", token: "owned" });
+    expect(remoteHubConnectionFromTokenState(CLIENT_CONFIG, { kind: "absent" }))
+      .toEqual({ state: "connected", token: "missing" });
+    expect(remoteHubConnectionFromTokenState(CLIENT_CONFIG, {
+      kind: "unsafe",
+      reason: "not a bounded regular file",
+    })).toEqual({ state: "connected", token: "unsafe" });
   });
 });
 

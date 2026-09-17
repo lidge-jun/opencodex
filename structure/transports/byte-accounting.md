@@ -1,5 +1,9 @@
 # Byte Accounting
 
+Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 Responses body-reader limits and lifetime handling follow the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 
@@ -99,3 +103,7 @@ invent usage for an unreported failed send, retry a failed factory, or turn fail
 Source-iteration exceptions still propagate to the caller. Returning the guard iterator closes
 its active source; cancellation at an assistant boundary does not start the continuation callback.
 The same focused tests cover these lifecycle paths and Unicode code-unit limit boundaries.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

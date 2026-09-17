@@ -158,3 +158,70 @@ export function cursorOverflowRemintCountForTests(): number {
   pruneOverflowRemints(now());
   return overflowRemintByScope.size;
 }
+
+/** Max next-turn conversation-id rotations after incomplete client-tool streams per retained scope. */
+export const CURSOR_INCOMPLETE_TOOL_REMINT_MAX = 3;
+export const CURSOR_INCOMPLETE_TOOL_REMINT_TTL_MS = CURSOR_OVERFLOW_REMINT_TTL_MS;
+export const CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES = CURSOR_OVERFLOW_REMINT_MAX_ENTRIES;
+
+type IncompleteToolRemintState = {
+  remintCount: number;
+  updatedAt: number;
+};
+
+const incompleteToolRemintByScope = new Map<string, IncompleteToolRemintState>();
+
+function pruneIncompleteToolRemints(at: number): void {
+  for (const [scopeKey, entry] of incompleteToolRemintByScope) {
+    if (at - entry.updatedAt > CURSOR_INCOMPLETE_TOOL_REMINT_TTL_MS) {
+      incompleteToolRemintByScope.delete(scopeKey);
+    }
+  }
+  while (incompleteToolRemintByScope.size > CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES) {
+    const oldest = incompleteToolRemintByScope.keys().next().value;
+    if (oldest === undefined) break;
+    incompleteToolRemintByScope.delete(oldest);
+  }
+}
+
+/** Incomplete-tool and overflow recovery share ownership scope, but keep independent budgets. */
+export function cursorIncompleteToolRemintScopeKey(
+  threadOwner: string | undefined,
+  identityScope?: string,
+): string | null {
+  return cursorOverflowRemintScopeKey(threadOwner, identityScope);
+}
+
+/** Record one incomplete-tool remint; returns false when the independent cap is exhausted. */
+export function recordCursorIncompleteToolRemint(scopeKey: string): boolean {
+  const at = now();
+  pruneIncompleteToolRemints(at);
+  const existing = incompleteToolRemintByScope.get(scopeKey);
+  if (existing && existing.remintCount >= CURSOR_INCOMPLETE_TOOL_REMINT_MAX) {
+    existing.updatedAt = at;
+    incompleteToolRemintByScope.delete(scopeKey);
+    incompleteToolRemintByScope.set(scopeKey, existing);
+    return false;
+  }
+  const entry = existing ?? { remintCount: 0, updatedAt: at };
+  entry.remintCount += 1;
+  entry.updatedAt = at;
+  incompleteToolRemintByScope.delete(scopeKey);
+  incompleteToolRemintByScope.set(scopeKey, entry);
+  pruneIncompleteToolRemints(at);
+  return true;
+}
+
+/** A clean turn replenishes this recovery without changing the overflow retry budget. */
+export function clearCursorIncompleteToolRemint(scopeKey: string): void {
+  incompleteToolRemintByScope.delete(scopeKey);
+}
+
+export function clearCursorIncompleteToolRemintForTests(): void {
+  incompleteToolRemintByScope.clear();
+}
+
+export function cursorIncompleteToolRemintCountForTests(): number {
+  pruneIncompleteToolRemints(now());
+  return incompleteToolRemintByScope.size;
+}

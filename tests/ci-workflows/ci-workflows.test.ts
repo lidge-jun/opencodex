@@ -55,10 +55,10 @@ function hasExactShellCommand(run: string | undefined, expected: string): boolea
 
 /**
  * Same intent as {@link hasExactShellCommand}, but for a command that is the HEAD of a
- * pipeline. The retry loops capture the suite with `… 2>&1 | tee "$suite_log"`, so an exact
- * whole-line match would reject the very shape the retry requires. Anchoring at the start of
- * the line still rejects an `echo` of the command or a commented-out copy, which is what the
- * exact match was protecting against.
+ * pipeline. Each platform lane captures the suite with `… 2>&1 | tee "$suite_log"` so the
+ * classifier can read what Bun printed, and an exact whole-line match would reject that shape.
+ * Anchoring at the start of the line still rejects an `echo` of the command or a commented-out
+ * copy, which is what the exact match was protecting against.
  */
 function hasShellCommandHead(run: string | undefined, expected: string): boolean {
   return (run ?? "")
@@ -193,20 +193,29 @@ describe("GitHub Actions hardening", () => {
       expect(`${jobName}:${String(checkout?.with?.["fetch-tags"])}`).toBe(`${jobName}:true`);
     }
 
-    // Windows shards more finely than Linux: the same suite takes 17-25 minutes per
-    // quarter on windows-latest, which is the leg's own 25-minute ceiling (run
-    // 33934756997 cancelled a green 3/4 at 25m12s). The invariant that matters is the
-    // one above — the matrix and the divisor tile the suite exactly — so pin the
-    // Windows matrix to its own divisor rather than to Linux's, and pin it to be
-    // contiguous from 1 so a dropped entry cannot leave a slice of the suite unrun.
+    // Windows shards more finely than Linux. Six shards grew to 13-30 minutes against
+    // the 30-minute wall; nine restores margin while keeping the bound unchanged. The
+    // matrix, runner shard spec, job name and aggregate leg count must move together.
     const windowsShards = (ci.jobs?.["platform-windows"] as {
       strategy?: { matrix?: { shard?: number[] } };
     })?.strategy?.matrix?.shard ?? [];
-    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(windowsShards).toEqual(windowsShards.map((_, i) => i + 1));
-    const windowsSteps = (ci.jobs?.["platform-windows"] as { steps?: Array<{ run?: string }> })?.steps ?? [];
-    expect(windowsSteps.some(step => step.run?.includes(`--shard=\${{ matrix.shard }}/${windowsShards.length}`))).toBe(true);
+    const windowsSteps = (ci.jobs?.["platform-windows"] as {
+      steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }>;
+    })?.steps ?? [];
+    const windowsTest = windowsSteps.find(step => step.name === "Test in fresh-process batches");
+    expect(windowsTest?.env?.TEST_SHARD).toBe(`\${{ matrix.shard }}/${windowsShards.length}`);
+    expect(windowsTest?.env?.BUN_TEST_FILE_SCOPE).toBe("all");
+    expect(windowsTest?.env?.BUN_TEST_BATCH_SIZE).toBe("6");
+    expect(windowsTest?.env?.BUN_TEST_BATCH_TIMEOUT_SECONDS).toBe("480");
+    // The 25 sequential Bun processes are one logical runner. On Windows the preload's
+    // machine-local queue can otherwise hold batch N+1 behind a straggler from batch N
+    // until the process bound fires without executing a test.
+    expect(windowsTest?.env?.OCX_TEST_NO_QUEUE).toBe("1");
+    expect(windowsTest?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
     expect(ci.jobs?.["platform-windows"]?.name).toBe(`windows \${{ matrix.shard }}/${windowsShards.length}`);
+    expect(workflow).toContain(`shards=${windowsShards.length}`);
 
     // The aggregate gate is the check a human trusts. Three ways to break it
     // silently: drop `if: always()` so it skips (and a skipped job reports
@@ -259,24 +268,22 @@ describe("GitHub Actions hardening", () => {
     expect(macosShards?.["fail-fast"]).toBe(false);
     expect(macosShards?.matrix?.shard).toEqual([1, 2]);
 
-    // The macOS leg retries ONLY a Bun runtime crash, and only once. Bun 1.3.14
-    // segfaults reclaiming a Worker at an `--isolate` file boundary with
-    // balanced worker counts, which is a runtime defect rather than a test
-    // result; the Linux shards already absorb that class in
-    // `scripts/ci/run-bun-test-batches.sh`. Two ways to break this silently:
-    // drop the crash-signature guard so an assertion failure gets retried into
-    // green, or let the retry loop swallow a repeated crash. Pin both.
+    // The macOS leg retries NOTHING. It carried a crash-only retry until
+    // 2026-09-17, on the reasoning that a Bun panic is a runtime defect rather than a
+    // test result. Both halves of that are true and the conclusion still does not
+    // follow: a panic is process death a user would have seen, and a second execution
+    // that happens not to die does not un-kill the first. Pin the absence of the loop
+    // and of its vocabulary, so it cannot return in a renamed form.
     const macosTestRun = macosTestStep?.run ?? "";
     // Actions invokes multiline `run:` blocks with `bash -e`. The retry loop
-    // must disable errexit before the crash-prone command or exit 133 aborts
-    // the step before PIPESTATUS can be inspected and the retry can run.
+    // is gone but errexit must still be disabled before the crash-prone command:
+    // otherwise exit 133 aborts the step before PIPESTATUS can be inspected and the
+    // failure is reported without saying what kind it was.
     expect(hasExactShellCommand(macosTestRun, "set +e")).toBe(true);
     // The crash signatures themselves moved to scripts/ci/bun-crash-signatures.sh; that one
     // definition and every lane that sources it are pinned by ci-bun-crash-classifier.test.ts.
-    expect(macosTestRun).toContain("assertion failures are not retried");
-    expect(macosTestRun).toContain("failing after one retry");
-    // `for attempt in 1 2` — one retry, never an unbounded loop.
-    expect(macosTestRun).toContain("for attempt in 1 2");
+    expect(macosTestRun).toContain("it fails this leg on the first occurrence");
+    expect(macosTestRun).not.toContain("for attempt in");
     expect(macosTestRun).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
     expect((ci.jobs?.["platform-macos"] as { if?: string })?.if)
@@ -304,10 +311,9 @@ describe("GitHub Actions hardening", () => {
     expect(macosControlSteps.some(step => step.run?.includes("--shard"))).toBe(false);
     const macosControlTestRun = macosControlSteps.find(step => step.run?.includes("bun test --isolate --timeout 60000 tests"))?.run ?? "";
     expect(hasExactShellCommand(macosControlTestRun, "set +e")).toBe(true);
-    expect(macosControlTestRun).toContain("for attempt in 1 2");
+    expect(macosControlTestRun).not.toContain("for attempt in");
     expect(macosControlTestRun).not.toContain("while true");
-    expect(macosControlTestRun).toContain("assertion failures are not retried");
-    expect(macosControlTestRun).toContain("failing after one retry");
+    expect(macosControlTestRun).toContain("it fails this leg on the first occurrence");
 
     // Windows is dispatch-only: it gates nothing, not even the shipping
     // boundary. The sharded promotion run surfaced ~207 Windows-only failures
@@ -338,34 +344,27 @@ describe("GitHub Actions hardening", () => {
     // self-hosted workspace wipe. Without the wipe a deleted file survives on
     // the runner's disk and the suite passes against a tree that no longer
     // exists in git.
-    const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
-    // --timeout is part of the contract, not incidental: this leg ran on Bun's 5s default
-    // while Linux and macOS both pass 60000, and it is the slowest hardware on the board.
-    // Three composed-acceptance failures were that default firing on tests still working
-    // at 41s. Pin the flag so the leg cannot silently drift back to the default.
-    const windowsTestCommand = `bun test --isolate --timeout 60000 tests --shard=\${{ matrix.shard }}/${windowsShards.length}`;
-    expect(hasShellCommandHead(`echo ${windowsTestCommand}`, windowsTestCommand)).toBe(false);
-    // Binding the assertion to an executable line is only half the guarantee: a
-    // step carrying the exact command still runs nothing under `if: false`, and
-    // the suite would stay green against a Windows leg that never tests. Require
-    // the matching step to be unconditional.
-    const windowsTestSteps = winSteps.filter(step => hasShellCommandHead(step.run, windowsTestCommand));
-    expect(windowsTestSteps.length).toBeGreaterThan(0);
-    expect(windowsTestSteps.every(step => step.if === undefined)).toBe(true);
+    const winSteps = (ci.jobs?.["platform-windows"] as {
+      steps?: { if?: string; name?: string; run?: string }[];
+    })?.steps ?? [];
+    const windowsBatchStep = winSteps.find(step => step.name === "Test in fresh-process batches");
+    expect(windowsBatchStep?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
+    // A step carrying the runner still runs nothing under `if: false`; require the
+    // suite step to be unconditional.
+    expect(windowsBatchStep?.if).toBeUndefined();
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
 
-    // The crash-signature list lives in exactly one file now, and every lane sources it.
-    // ci-bun-crash-classifier.test.ts owns that contract, including the rule that no lane may
-    // reintroduce an inline copy and that a runtime crash fails the shard instead of being swept.
-    const windowsTestRun = windowsTestSteps[0]?.run ?? "";
-
-    // Windows carries the same bounded retry as macOS: one attempt, crash-only.
-    expect(hasExactShellCommand(windowsTestRun, "set +e")).toBe(true);
-    expect(windowsTestRun).toContain("for attempt in 1 2");
-    expect(windowsTestRun).not.toContain("while true");
-    expect(windowsTestRun).toContain("assertion failures are not retried");
-    expect(windowsTestRun).toContain("failing after one retry");
+    // Windows shares Linux's bounded process runner but overrides the process shape with
+    // Windows measurements above. Pin Linux's 12-file/120s defaults at their owner so the
+    // Windows calibration cannot silently widen the correctly sized Linux lane.
+    const batchRunner = await readText("scripts/ci/run-bun-test-batches.sh");
+    expect(batchRunner).toContain('readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"');
+    expect(batchRunner).toContain('readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"');
+    expect(batchRunner).toContain('"$BUN_BIN" test --isolate --timeout 60000 "${files[@]}"');
+    expect(batchRunner).not.toContain("for attempt in");
+    expect(batchRunner).not.toContain("while true");
+    expect(batchRunner).toContain("fail this shard on their first occurrence");
 
     // Every job that runs the root suite must build the GUI first, unconditionally.
     // Tests that fetch the served dashboard read their session bootstrap out of

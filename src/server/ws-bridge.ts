@@ -1,3 +1,4 @@
+import type { NativeResponseControl } from "./responses/native-response-control";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -17,6 +18,9 @@ type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
 type ResponsesPayloadObserver = (payload: string) => void;
 
 export interface WsData {
+  nativeControl?: NativeResponseControl;
+  /** Content-free per-turn explanation; never a model capability assertion. */
+  nativeSteeringUnavailable?: string;
   headers?: Headers; // base inbound forward headers only; per-turn auth refresh injects current pool tokens
   /**
    * Resolved once at the handshake. Auth is handshake-time only on this path, so
@@ -229,6 +233,7 @@ export async function pumpResponsesSseToWebSocket(
   sseStream: ReadableStream<Uint8Array>,
   options: {
     isCurrent?: () => boolean;
+    untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
   } = {},
@@ -251,6 +256,7 @@ export async function pumpResponsesSseToWebSocket(
   const decoder = new TextDecoder();
   const framer = new BoundedSseFrameBuffer();
   let terminalSeen = false;
+  let lastTerminal: ResponsesTerminalStatus | undefined;
 
   const handlePayload = (payload: string): boolean => {
     if (!isCurrent()) return true;
@@ -270,8 +276,10 @@ export async function pumpResponsesSseToWebSocket(
     }
     if (terminalSeen) return true;
     sendTextFrame(ws, payload);
-    const terminalStatus = terminalStatusFromType(type);
+    if (options.untilEof && type === "response.created") lastTerminal = undefined;
+    const terminalStatus = type === "error" && options.untilEof ? "failed" : terminalStatusFromType(type);
     if (terminalStatus) {
+      if (options.untilEof) { lastTerminal = terminalStatus; return false; }
       reportTerminal(terminalStatus);
       terminalSeen = true;
       void reader.cancel().catch(() => {});
@@ -293,6 +301,10 @@ export async function pumpResponsesSseToWebSocket(
     if (!terminalSeen && tail.byteLength > 0) {
       const payload = parseSseBlock(decoder.decode(tail));
       if (payload) handlePayload(payload);
+    }
+    if (options.untilEof && lastTerminal && isCurrent() && !clientCancelled) {
+      reportTerminal(lastTerminal);
+      terminalSeen = true;
     }
     if (!terminalSeen && isCurrent() && !clientCancelled) {
       reportTerminal("incomplete");
@@ -368,6 +380,7 @@ export async function sendResponseToWebSocket(
   response: Response,
   isCurrent: () => boolean,
   options: {
+    untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
   } = {},
@@ -398,6 +411,7 @@ export async function sendResponseToWebSocket(
   if (contentType.includes("text/event-stream")) {
     await pumpResponsesSseToWebSocket(ws, response.body, {
       isCurrent,
+      untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
     });
@@ -420,6 +434,7 @@ export async function sendResponseToWebSocket(
   if (looksLikeSse(prefix)) {
     await pumpResponsesSseToWebSocket(ws, stream, {
       isCurrent,
+      untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
     });

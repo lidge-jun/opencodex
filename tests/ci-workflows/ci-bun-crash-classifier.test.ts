@@ -1,5 +1,6 @@
 /**
- * The Bun crash classifier is one definition, every lane sources it, and a crash fails the shard.
+ * The Bun crash classifier is one definition, every direct lane or shared runner uses it, and a
+ * crash fails the shard.
  *
  * Two separate defects are pinned here.
  *
@@ -15,9 +16,18 @@
  * success when that sweep passed. The sweep is not a retry of a flaky test: one file per process
  * is a configuration in which this class of defect cannot occur, so it was guaranteed to pass and
  * guaranteed to report nothing. Linux CI segfaulted twelve to fourteen times per run from
- * 2026-09-08 while reporting green, and the Windows lane -- which has no sweep -- was the only
- * place the Bun 1.4.2 regression was visible at all. The sweep is kept for attribution; the shard
- * now fails regardless of its result.
+ * 2026-09-08 while reporting green, and the then-unbatched Windows lane was the only place the
+ * Bun 1.4.2 regression was visible at all. The sweep is kept for attribution; the shard now fails
+ * regardless of its result.
+ *
+ * What this file may and may not assert. Reading shell SOURCE TEXT proves only that a string is
+ * present, which is why the disposition contract does NOT live here any more: the old
+ * "a timeout may still recover" case pinned the mask itself, and every other case in this
+ * describe would have passed just as happily against a runner that retried everything into
+ * green. Disposition is asserted by EXECUTING the runner in
+ * tests/ci-workflows/ci-crash-disposition.test.ts. What is left here is the property that has
+ * no executable form: that the signature list exists exactly once and that no lane carries a
+ * private copy of it.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -56,7 +66,6 @@ describe("the Bun crash classifier is shared", () => {
   const workflow = read(".github", "workflows", "ci.yml");
 
   const lanes = {
-    windows: runBlockContaining(workflow, "bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/6"),
     "macos-shard": runBlockContaining(workflow, "run_macos_suite tests"),
     "macos-control": runBlockContaining(workflow, "bun test --isolate --timeout 60000 tests 2>&1"),
   };
@@ -80,7 +89,7 @@ describe("the Bun crash classifier is shared", () => {
     }
   });
 
-  test("every lane sources the classifier and calls the shared predicate", () => {
+  test("every direct lane and the shared batch runner use the classifier", () => {
     for (const [name, text] of Object.entries(lanes)) {
       expect(`${name}:sources:${text.includes(SOURCE_LINE)}`).toBe(`${name}:sources:true`);
       expect(`${name}:calls:${text.includes("is_bun_runtime_crash \"$suite_status\" \"$suite_log\"")}`)
@@ -88,6 +97,7 @@ describe("the Bun crash classifier is shared", () => {
     }
     expect(batchScript).toContain("bun-crash-signatures.sh");
     expect(batchScript).toContain('is_bun_runtime_crash "$status" "$log_file"');
+    expect(workflow.match(/run: bash scripts\/ci\/run-bun-test-batches\.sh/g)).toHaveLength(2);
   });
 
   test("the thread-numbered panic form is the anchor nowhere", () => {
@@ -108,35 +118,41 @@ describe("the Bun crash classifier is shared", () => {
   });
 });
 
-describe("a Bun runtime crash fails the Linux shard", () => {
+describe("no lane can retry its way to green", () => {
   const batchScript = read("scripts", "ci", "run-bun-test-batches.sh");
+  const workflow = read(".github", "workflows", "ci.yml");
 
-  test("crashed batches are collected and the shard exits non-zero", () => {
-    expect(batchScript).toContain("CRASHED_BATCHES=()");
-    expect(batchScript).toContain('CRASHED_BATCHES+=("$batch_number")');
-    expect(batchScript).toContain("if (( ${#CRASHED_BATCHES[@]} > 0 )); then");
-    // The failure is an error annotation and a non-zero exit, not a warning and a green shard.
-    const tail = batchScript.slice(batchScript.indexOf("if (( ${#CRASHED_BATCHES[@]} > 0 )); then"));
-    expect(tail).toContain("::error::");
-    expect(tail).toContain("exit 1");
+  test("the sweep is named and documented as attribution, not recovery", () => {
+    // A reader of this script has to be able to tell, from the name alone, that the
+    // one-file-per-process pass cannot change the outcome. It was called
+    // `recover_batch_file_by_file` while it did exactly that.
+    expect(batchScript).toContain("attribute_batch_file_by_file");
+    expect(batchScript).not.toContain("recover_batch_file_by_file");
+    for (const promise of [
+      "passed under singleton isolation",
+      "passed on its single",
+      "may recover",
+      "failing after one retry",
+    ]) {
+      expect(`batch-script:${promise}:${batchScript.includes(promise)}`)
+        .toBe(`batch-script:${promise}:false`);
+    }
   });
 
-  test("the singleton sweep reports a crash as an error rather than a recovery", () => {
-    expect(batchScript).toContain('if [[ "$batch_failure_kind" == "runtime" ]]; then');
-    // The old wording promised recovery. A crash may not be announced that way again.
-    const sweepEnd = batchScript.slice(batchScript.indexOf("recover_batch_file_by_file"));
-    expect(sweepEnd).not.toContain("passed under singleton isolation after the original runtime");
-  });
-
-  test("a real failing file found by the sweep still reports that file immediately", () => {
-    // Failing on the crash must not swallow an assertion the sweep genuinely attributed.
-    expect(batchScript).toContain("Singleton isolation identified ${file} as a failing test file.");
-    expect(batchScript).toContain("if (( recovery_status != 0 )); then");
-  });
-
-  test("a timeout may still recover, because a timeout is a load condition", () => {
-    expect(batchScript).toContain('if [[ "$LAST_FAILURE_KIND" != "runtime" && "$LAST_FAILURE_KIND" != "timeout" ]]; then');
-    expect(batchScript).toContain("passed under singleton isolation after the original ${batch_failure_kind}; continuing.");
+  test("no platform lane loops over attempts", () => {
+    // The macOS shard, the macOS control and the Windows shard each carried
+    // `for attempt in 1 2`. A second execution that happens not to crash does not un-crash
+    // the first, so every one of them is gone and none may come back in any form.
+    expect(workflow).not.toContain("for attempt in");
+    expect(workflow).not.toContain("attempt ${attempt}");
+    expect(workflow).not.toContain("while true");
+    for (const promise of [
+      "assertion failures are not retried",
+      "failing after one retry",
+      "crash repeated",
+    ]) {
+      expect(`workflow:${promise}:${workflow.includes(promise)}`)
+        .toBe(`workflow:${promise}:false`);
+    }
   });
 });
-
