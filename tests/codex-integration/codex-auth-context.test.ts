@@ -915,19 +915,20 @@ describe("Codex auth context", () => {
     const resolved = await resolveCodexAuthContext(headers, cfg, "pool");
     expect(resolved).toMatchObject({ kind: "pool", accountId: "pool-a" });
     if (resolved.kind !== "pool") throw new Error("expected pool context");
-    // The parent used to BE the key, so every child of one parent shared a single binding
-    // entry and none of them could hold one of their own. A child now keys as its own
-    // conversation; the parent qualifies placement, not identity.
+    // The parent used to BE the key, so every child of one parent shared a single binding entry
+    // unrelated to the root's own (#4546 wp8). Since #4780 the tree is the binding unit and the
+    // session is the cohort, so what matters here is that the key is opaque, derived from the
+    // session rather than from any caller-supplied identifier, and stable across turns.
     expect(resolved.affinityKey?.startsWith("app:")).toBe(true);
     expect(resolved.affinityKey).not.toContain("canonical-parent-thread");
     expect(resolved.affinityKey).not.toContain("desktop-session-private");
     expect(resolved.affinityKey).not.toContain("desktop-thread-private");
-    // Stable across turns that drop the parent header: the key is the session/thread pair.
+    // Stable across turns that drop the parent header: the cohort is the session.
     expect(resolved.affinityKey).toBe(codexPoolAffinityKey(new Headers({
       "session-id": "desktop-session-private",
       "thread-id": "desktop-thread-private",
     })));
-    // And distinct from the parent's own lane, which is what a parent-only request rides.
+    // And distinct from a session-less parent-only lane, which anchors on the parent instead.
     expect(resolved.affinityKey).not.toBe(codexPoolAffinityKey(new Headers({
       "x-codex-parent-thread-id": "canonical-parent-thread",
     })));
