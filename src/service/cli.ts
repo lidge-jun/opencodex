@@ -1,6 +1,7 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { describeRetainedCodexProviderTable, restoreNativeCodexAsync } from "../codex/inject";
+import { restoreNativeCodexAsync } from "../codex/inject";
+import { describeRetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { statusWinswRaw, type WinswStatus } from "../lib/winsw";

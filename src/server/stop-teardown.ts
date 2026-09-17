@@ -72,7 +72,7 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
     // Reporting a bare "restored" would put the caller in exactly the position #4812
     // describes: a config they did not expect and no idea why it is there.
     const retained = restore.retainedCodexProviderTable
-      ? ` ${(await import("../codex/inject")).describeRetainedCodexProviderTable(restore.retainedCodexProviderTable)}`
+      ? ` ${(await import("../codex/inject/restore")).describeRetainedCodexProviderTable(restore.retainedCodexProviderTable)}`
       : "";
     return { success: true, message: `Proxy stopping, native Codex restored.${retained}`, sharedTeardown: "performed" };
   }

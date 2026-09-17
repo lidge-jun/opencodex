@@ -8,7 +8,6 @@ import {
   buildProviderTableBlock,
   chooseCatalogPathForInjection,
   dominantEol,
-  extractOcxProviderTableBlock,
   setRootOpenaiBaseUrl,
   setRootRealtimeWsBaseUrl,
   stripInjectedOpenaiBaseUrl,
@@ -16,6 +15,7 @@ import {
   stripRootContextWindowOverrides,
   standaloneCodexRoutingTarget,
 } from "../../src/codex/inject";
+import { extractOcxProviderTableBlock } from "../../src/codex/inject/remove";
 import { OCX_SECTION_MARKER, stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
 import {
   MANAGED_AGENTS_TABLE_MARKER,

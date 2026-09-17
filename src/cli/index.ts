@@ -15,13 +15,18 @@ try {
 }
 import {
   currentExternalCodexModelProvider,
-  describeRetainedCodexProviderTable,
-  readOcxProviderTableBlock,
   restoreNativeCodex,
   restoreNativeCodexAsync,
   shouldInjectApiAuthHeader,
-  type RetainedCodexProviderTable,
 } from "../codex/inject";
+// Straight from the owning modules rather than the facade: these are teardown-reporting
+// helpers, not part of the injection surface, and `inject.ts` sits under a size cap that
+// exists to stop it collecting exactly this kind of passthrough.
+import { readOcxProviderTableBlock } from "../codex/inject/remove";
+import {
+  describeRetainedCodexProviderTable,
+  type RetainedCodexProviderTable,
+} from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
 import {
