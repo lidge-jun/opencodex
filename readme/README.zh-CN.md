@@ -86,7 +86,7 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 
 使用 `ocx service` 在后台运行。
 
-打开 **http://localhost:10100**，在 Web 仪表板中完成所有配置 —— 添加提供商
+打开 **[http://localhost:10100](http://localhost:10100)**，在 Web 仪表板中完成所有配置 —— 添加提供商
 （40 多个内置，或任意 OpenAI 兼容端点）、选择模型、管理账户。随时运行 `ocx gui`
 可重新打开仪表板。
 它还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多个 ChatGPT / Codex 账户，
