@@ -311,7 +311,7 @@ describe("OpenCode Go session affinity (#3344)", () => {
     expect(explicit.headers.get(SESSION_HEADER)).toBe(RESPONSES_SESSION_VECTORS.client);
   });
 
-  for (const [model, url] of [
+  for (const [model, url, sessionVectors] of [
     [CHAT_MODEL, "https://opencode.ai/zen/go/v1/chat/completions", CHAT_SESSION_VECTORS],
     [MUSE_MODEL, "https://opencode.ai/zen/go/v1/responses", RESPONSES_SESSION_VECTORS],
   ] as const) {
