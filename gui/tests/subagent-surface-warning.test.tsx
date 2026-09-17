@@ -31,7 +31,7 @@ test("the fallback guide URL matches the runtime constant", async () => {
 test("every locale defines the dialog keys, and Korean uses the wording that was asked for", () => {
   // Read the loaded catalogs, not the source text: a key mentioned only in a comment would
   // satisfy a grep and still render the raw key id to the operator.
-  expect(LOCALES.length).toBe(9);
+  expect(LOCALES.length).toBe(10);
   for (const { code } of LOCALES) {
     for (const key of KEYS) {
       const value = DICTS[code][key as keyof (typeof DICTS)[typeof code]];
