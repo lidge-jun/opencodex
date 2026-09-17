@@ -1085,6 +1085,7 @@
   "server-clickjacking-headers.test.ts": "server",
   "server-combo-failover-e2e.test.ts": "server",
   "server-combo-reasoning-replay-eligibility.test.ts": "server",
+  "server-combo-zero-output-failover.test.ts": "server",
   "server-google-antigravity-oauth-401-replay.test.ts": "server",
   "server-images-bodyless-content-length.test.ts": "server",
   "server-images.test.ts": "server",
@@ -1320,5 +1321,10 @@
   "responses-account-change-scrub.test.ts": "responses",
   "response-log-inspection.test.ts": "server",
   "request-log-nonstream.test.ts": "usage",
-  "ws-native-steering.test.ts": "responses"
+  "ws-native-result-continuations.test.ts": "responses",
+  "ws-native-injection.test.ts": "responses",
+  "ws-native-steering.test.ts": "responses",
+  "ws-steering-stability.test.ts": "responses",
+  "ws-steering-completion.test.ts": "responses",
+  "ws-steering-smoke.test.ts": "responses"
 }
