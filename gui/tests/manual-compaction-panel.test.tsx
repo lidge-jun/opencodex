@@ -27,6 +27,9 @@ beforeEach(() => {
   win.localStorage.setItem("ocx-lang", "en");
   setting = null; failLoad = false; failSave = false; writes = [];
   Object.defineProperty(globalThis, "fetch", { configurable: true, writable: true, value: async (_input: unknown, init?: RequestInit) => {
+    if (String(_input).endsWith("/api/combos")) {
+      return Response.json({ combos: [{ id: "compact", model: "combo/compact", targets: [{ provider: "gateway", model: "a" }, { provider: "openai-apikey", model: "b" }, { provider: "gateway", model: "c" }] }] });
+    }
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
       writes.push(body);
@@ -122,7 +125,7 @@ test("discloses that the selected provider receives the full conversation", asyn
   await choose("model", "gateway/cheap");
   expect(container.querySelector('[role="note"]')?.textContent).toContain("sends the full conversation contents to gateway for summarization");
   await choose("model", "combo/compact");
-  expect(container.querySelector('[role="note"]')?.textContent).toContain("sends the full conversation contents to combo/compact for summarization");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("every target of combo combo/compact (gateway, openai-apikey), including failover targets");
   await choose("model", "Use conversation model");
   expect(container.querySelector('[role="note"]')).toBeNull();
 });

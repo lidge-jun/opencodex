@@ -9,6 +9,21 @@ import { formatNamespacedModelId } from "../provider-icons";
 type Setting = { model: string; reasoningEffort?: string } | null;
 const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
+function readComboProviders(payload: unknown): Record<string, string[]> {
+  const combos = (payload as { combos?: unknown })?.combos;
+  if (!Array.isArray(combos)) return {};
+  const result: Record<string, string[]> = {};
+  for (const combo of combos) {
+    if (!combo || typeof combo !== "object" || typeof (combo as { id?: unknown }).id !== "string") continue;
+    const targets = (combo as { targets?: unknown }).targets;
+    const providers = Array.isArray(targets)
+      ? targets.map(target => (target as { provider?: unknown })?.provider).filter((value): value is string => typeof value === "string")
+      : [];
+    result[(combo as { id: string }).id] = [...new Set(providers)];
+  }
+  return result;
+}
+
 function readSetting(payload: { manualCompaction?: unknown }): Setting {
   const value = payload.manualCompaction;
   if (value == null) return null;
@@ -32,6 +47,7 @@ function ManualCompactionControls({ apiBase, models }: { apiBase: string; models
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [feedback, setFeedback] = useState<"saved" | "failed" | null>(null);
+  const [comboProviders, setComboProviders] = useState<Record<string, string[]>>({});
   const active = useRef(false);
   const pending = useRef<ReturnType<typeof createBoundedFetch> | null>(null);
 
@@ -50,6 +66,8 @@ function ManualCompactionControls({ apiBase, models }: { apiBase: string; models
       const response = await fetch(`${apiBase}/api/settings`, { signal: request.signal });
       const value = readSetting(await requireJson(response));
       if (active.current && pending.current === request) accept(value);
+      const combos = await fetch(`${apiBase}/api/combos`, { signal: request.signal }).then(requireJson).then(readComboProviders).catch(() => ({}));
+      if (active.current && pending.current === request) setComboProviders(combos);
     } catch {
       if (active.current && pending.current === request) setLoadError(true);
     } finally {
@@ -103,7 +121,9 @@ function ManualCompactionControls({ apiBase, models }: { apiBase: string; models
   const disabled = busy || saved === undefined || loadError;
   const dirty = model !== (saved?.model ?? "") || effort !== (saved?.reasoningEffort ?? "");
   const namespace = model.slice(0, Math.max(model.indexOf("/"), 0));
-  const provider = namespace && namespace !== "combo" ? namespace : model;
+  const combo = namespace === "combo" ? model.slice(namespace.length + 1) : "";
+  const provider = namespace && !combo ? namespace : model;
+  const providers = comboProviders[combo]?.join(", ") || t("manualCompact.comboProvidersUnknown");
 
   return (
     <section className="panel" aria-labelledby="manual-compaction-title" aria-busy={busy || (saved === undefined && !loadError)}>
@@ -129,7 +149,9 @@ function ManualCompactionControls({ apiBase, models }: { apiBase: string; models
         </button>
       </div>
       <p className="card-sub">{t("manualCompact.effortHint")}</p>
-      {provider && <div className="notice-warn" role="note"><IconAlert width={14} /> {t("manualCompact.providerWarning", { provider })}</div>}
+      {provider && <div className="notice-warn" role="note"><IconAlert width={14} /> {combo
+        ? t("manualCompact.comboWarning", { combo: model, providers })
+        : t("manualCompact.providerWarning", { provider })}</div>}
       {loadError && <div role="alert">{t("manualCompact.loadFailed")} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button></div>}
       {feedback && <div role={feedback === "failed" ? "alert" : "status"}>{t(feedback === "saved" ? "manualCompact.saved" : "manualCompact.saveFailed")}</div>}
     </section>

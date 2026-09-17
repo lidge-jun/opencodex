@@ -459,4 +459,30 @@ describe("manual compaction reuses existing handlers", () => {
     expect(calls).toEqual(["unavailable", "cheap"]);
     expect(recallComboForLane(settings, lane, "normal")).toBe("normal");
   });
+
+  test("a bare source model remembered as a combo target takes the portable path even on a same-provider native override", async () => {
+    const settings = config();
+    settings.providers["openai-apikey"] = {
+      adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", apiKey: "fixture-key",
+    };
+    settings.combos = { fast: { targets: [{ provider: "gateway", model: "normal" }] } };
+    settings.defaultProvider = "openai-apikey";
+    settings.manualCompaction = { model: "openai-apikey/gpt-5.6-luna", reasoningEffort: "low" };
+    const req = request({ ...body(false), model: "normal" }, "manual", "responses/compact");
+    const lane = sessionLaneIdFromRequest(req.headers);
+    rememberComboForLane(lane, "fast", { provider: "gateway", model: "normal" }, "normal", captureConfigGeneration());
+    const calls: string[] = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push(String(url));
+      if (String(url).endsWith("/compact")) return Response.json({ output: [{ type: "compaction", encrypted_content: "native-ciphertext" }] });
+      return upstreamCompletion(JSON.parse(String(init?.body)));
+    }) as typeof fetch;
+    const response = await handleResponsesCompact(req, settings, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain("native-ciphertext");
+    expect(text).toContain(SUMMARY_PREFIX);
+    expect(calls).toEqual(["https://api.openai.com/v1/responses"]);
+    expect(recallComboForLane(settings, lane, "normal")).toBe("fast");
+  });
 });

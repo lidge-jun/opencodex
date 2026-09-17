@@ -492,13 +492,17 @@ not activate the override, including on older clients without trigger metadata. 
 requests use each frame's metadata rather than the connection's earlier handshake metadata.
 
 The selected model's provider receives the entire conversation for summarization, including
-conversations that normally run on another provider. The dashboard panel states this next to
-the model picker. The override reuses the existing compaction handlers and summary formats. When the selected
-model lives on the same provider as the conversation model, the request keeps the caller's
-credential and may use that backend's native compact endpoint. When it lives on a different
-provider, OpenCodex runs the portable summarizer instead, so the summary stays readable when
-the conversation resumes on its own model, and the caller's credential does not cross to the
-other provider. The selected model must support the input size and content. This setting does
+conversations that normally run on another provider. A combo selector sends it to every combo
+target, including failover targets. The dashboard panel states this next to the model picker
+and names the destination provider, or the combo's target providers, once a model is chosen.
+The override reuses the existing compaction handlers and summary formats. When the selected
+model shares the conversation model's provider and account-routing identity (provider name,
+Codex account mode, and account namespace), the request keeps the caller's credential and may
+use that backend's native compact endpoint. Otherwise, including when either side is a combo or
+the conversation model is remembered as a combo target, OpenCodex runs the portable summarizer
+instead, so the summary stays readable when the conversation resumes on its own model, and the
+caller's credential does not cross to the other provider. The selected model must support the
+input size and content. This setting does
 not guarantee a cache hit for automatic compaction. Restart the proxy after editing
 `config.json` by hand. Dashboard saves apply immediately.
 

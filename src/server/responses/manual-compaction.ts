@@ -2,10 +2,14 @@ import type { OcxConfig } from "../../types";
 import { isDeclaredReasoningEffort } from "../../reasoning-effort";
 import { routeConcreteModel, type RouteResult } from "../../router";
 import { resolveComboId } from "../../combos/identifiers";
+import { recallComboForLane } from "./combo-session-recall";
+import { sessionLaneIdFromRequest } from "../request-log-conversation";
 
 /** `sourceModel` is the conversation's own selector before the rewrite. */
 export interface ManualCompactionOverride {
   sourceModel: string;
+  /** Combo the lane remembers for a bare `sourceModel` (#3891); the conversation resumes there, not on the bare route. */
+  sourceCombo?: string;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -52,11 +56,12 @@ export function applyManualCompactionOverride(
   }
 
   const sourceModel = raw.model;
+  const sourceCombo = recallComboForLane(config, sessionLaneIdFromRequest(headers), sourceModel);
   raw.model = override.model.trim();
   if (override.reasoningEffort !== undefined) {
     raw.reasoning = { ...record(raw.reasoning), effort: override.reasoningEffort };
   }
-  return { sourceModel };
+  return sourceCombo ? { sourceModel, sourceCombo } : { sourceModel };
 }
 
 /** Same provider identity keeps caller auth and may use native compact; its ciphertext replays only there. */
@@ -65,7 +70,7 @@ export function manualCompactionKeepsProviderIdentity(
   override: ManualCompactionOverride,
   route: RouteResult,
 ): boolean {
-  if (route.combo || resolveComboId(config, override.sourceModel)) return false;
+  if (route.combo || override.sourceCombo || resolveComboId(config, override.sourceModel)) return false;
   let source: RouteResult;
   try {
     source = routeConcreteModel(config, override.sourceModel);

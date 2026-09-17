@@ -358,6 +358,8 @@ export const zh: Record<TKey, string> = {
   "manualCompact.effortHint": "推理设置仅在压缩端点支持时生效。模型必须能容纳完整对话。",
   "manualCompact.dataNotice": "手动 /compact 会将整个对话发送给所选模型的提供商进行摘要，即使对话正在其他提供商上运行。",
   "manualCompact.providerWarning": "启用此设置后，每次手动 /compact 都会将完整对话内容发送给 {provider} 进行摘要。",
+  "manualCompact.comboWarning": "启用此设置后，每次手动 /compact 都会将完整对话内容发送给组合 {combo} 的每个目标（{providers}），包括故障转移目标，以进行摘要。",
+  "manualCompact.comboProvidersUnknown": "其已配置的目标提供商",
   "manualCompact.loadFailed": "无法加载压缩设置。",
   "manualCompact.saved": "压缩设置已保存。",
   "manualCompact.saveFailed": "保存失败。更改仍然保留，请重试。",

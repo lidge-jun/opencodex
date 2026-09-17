@@ -363,6 +363,8 @@ export const ja: Record<TKey, string> = {
   "manualCompact.effortHint": "圧縮エンドポイントが対応している場合に推論設定が適用されます。モデルは会話全体を受け入れられる必要があります。",
   "manualCompact.dataNotice": "手動の /compact は、会話が別のプロバイダーで動いていても、会話全体を選択したモデルのプロバイダーへ送信して要約します。",
   "manualCompact.providerWarning": "この設定では、手動の /compact のたびに会話の全内容が要約のために {provider} へ送信されます。",
+  "manualCompact.comboWarning": "この設定では、手動の /compact のたびに会話の全内容が、フェイルオーバー先を含むコンボ {combo} のすべてのターゲット（{providers}）へ要約のために送信されます。",
+  "manualCompact.comboProvidersUnknown": "設定済みのターゲットプロバイダー",
   "manualCompact.loadFailed": "圧縮設定を読み込めませんでした。",
   "manualCompact.saved": "圧縮設定を保存しました。",
   "manualCompact.saveFailed": "保存できませんでした。変更内容は保持されています。再試行してください。",

@@ -253,6 +253,8 @@ export const zhTW: Record<TKey, string> = {
   "manualCompact.effortHint": "推理設定僅在壓縮端點支援時生效。模型必須能容納完整對話。",
   "manualCompact.dataNotice": "手動 /compact 會將整個對話傳送給所選模型的供應商進行摘要，即使對話正在其他供應商上執行。",
   "manualCompact.providerWarning": "啟用此設定後，每次手動 /compact 都會將完整對話內容傳送給 {provider} 進行摘要。",
+  "manualCompact.comboWarning": "啟用此設定後，每次手動 /compact 都會將完整對話內容傳送給組合 {combo} 的每個目標（{providers}），包括容錯移轉目標，以進行摘要。",
+  "manualCompact.comboProvidersUnknown": "其已設定的目標供應商",
   "manualCompact.loadFailed": "無法載入壓縮設定。",
   "manualCompact.saved": "壓縮設定已儲存。",
   "manualCompact.saveFailed": "儲存失敗。變更仍然保留，請重試。",
