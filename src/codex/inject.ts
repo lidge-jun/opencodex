@@ -92,7 +92,7 @@ import {
   stripRootContextWindowOverrides,
 } from "./inject/config-toml";
 import { hasOcxProviderTable, removeOcxSection } from "./inject/remove";
-
+import { reconcileInjectedV1Surface } from "./inject/multi-agent-v2";
 
 export { effectiveLoopbackListenerPort, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
 
@@ -217,7 +217,7 @@ async function injectCodexConfigImpl(
     };
   }
 
-  const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  let rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
   const preflightTableMode = usesProviderTable(routingTarget);
   const compactionOnly = routingTarget.clientCompaction === true
     && routingTarget.desktopAuthless !== true
@@ -252,6 +252,10 @@ async function injectCodexConfigImpl(
         `  For direct injection, switch to the built-in openai provider, remove any user-owned root openai_base_url, and rerun 'ocx start'.`,
     };
   }
+
+  const v1Surface = await reconcileInjectedV1Surface(config, options, rawContent);
+  if (!v1Surface.ok) return { success: false, message: v1Surface.message };
+  rawContent = v1Surface.content;
 
   // Marker-owned native defaults are OpenCodex residue, never part of the
   // user's journal baseline. Clean them before either snapshotting or adding a
