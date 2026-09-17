@@ -385,6 +385,10 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 
 [Anthropic seed image metadata](runtime.md#capability-aware-image-admission) supplies missing capability evidence; subagent selection and eligibility rules remain unchanged.
 
+Opper's fallback pool seeds carry provider-scoped text/image declarations from
+`src/providers/registry/model-seeds.ts`. They feed the same capability-aware image admission and
+do not change subagent selection, roster order, or eligibility.
+
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.

@@ -262,6 +262,11 @@ OAuth presets resolve discovery against the same canonical registry transport as
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
 
+The fixed-key Opper preset in `src/providers/registry/entries-extended.ts` uses the shared
+OpenAI Chat adapter at `https://api.opper.ai/v3/compat`, discovers models live, and preserves an
+older same-named custom destination. Its fallback catalog in `src/providers/registry/model-seeds.ts`
+contains bare Opper pool ids; vendor-prefixed model ids still pass through unchanged.
+
 Provider-scoped capability hints remain authoritative when discovery returns an id without
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
