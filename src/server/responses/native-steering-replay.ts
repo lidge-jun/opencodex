@@ -93,9 +93,9 @@ export class NativeSteeringReplay implements NativeSteeringReplayObserver {
       this.previousOutput = [];
       this.outputItems.clear();
       this.current = String(response?.id);
-    } else if (frame.type === "response.output_item.done" && Number.isSafeInteger(frame.output_index)) {
+    } else if (frame.type === "response.output_item.done") {
       const index = frame.output_index as number;
-      if (index < 0 || index > 10_000 || !record(frame.item)) throw new Error("Native steering replay output identity is invalid");
+      if (!Number.isSafeInteger(index) || index < 0 || index > 10_000 || !record(frame.item)) throw new Error("Native steering replay output identity is invalid");
       const previous = this.outputItems.get(index);
       if (previous !== undefined) this.bytes -= Buffer.byteLength(JSON.stringify(previous));
       this.bytes += Buffer.byteLength(JSON.stringify(frame.item));
