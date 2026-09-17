@@ -646,9 +646,11 @@ request-log accounting without promoting a truncated repair candidate.
 Chat Completions streams do not carry the Responses `message.phase` field. The bridge keeps an
 unphased live message provisional while its deltas arrive, then assigns `commentary` when a later
 tool, search, reasoning, or assistant boundary proves that more work follows, and assigns
-`final_answer` only when a clean terminal `done` closes the current message. Explicit adapter
-phases always win. Streaming `output_item.added` remains unphased until that future boundary is
-known; `output_item.done` and the terminal response snapshot carry the authoritative inferred phase
+`final_answer` when a terminal `done` closes the current message unless the shared stop-reason
+classifier marks that reason as truncated. Normal provider reasons such as `end_turn`,
+`stop_sequence`, and `tool_use` therefore remain final answers, as does an absent reason. Explicit
+adapter phases always win. Streaming `output_item.added` remains unphased until that future boundary
+is known; `output_item.done` and the terminal response snapshot carry the authoritative inferred phase
 with the same item id. The batch/non-streaming bridge follows the same rule.
 
 > Decision record: [ADR-0069](../decisions/ADR-0069-chat-to-responses-message-phase-inference.md)
