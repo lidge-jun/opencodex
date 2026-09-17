@@ -527,7 +527,7 @@ function buildResponseJSONWithBudget(
         compactionEncryptedContent = e.compactionEncryptedContent;
         sawTerminal = true;
         endTurn = e.endTurn;
-        cleanDone = e.stopReason === undefined;
+        cleanDone = !isTruncatedStopReason(e.stopReason);
         rawStopReason = e.stopReason;
         if (e.providerState) options?.onProviderState?.(e.providerState);
         // Match streaming: max_tokens and content_filter both terminate as incomplete.

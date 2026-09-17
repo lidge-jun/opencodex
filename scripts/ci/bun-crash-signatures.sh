@@ -65,4 +65,3 @@ is_bun_runtime_crash() {
 
   bun_log_has_crash_signature "$log_file"
 }
-

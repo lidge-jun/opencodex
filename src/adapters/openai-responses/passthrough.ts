@@ -32,7 +32,7 @@ import {
   createAdapterTierMetadata,
 } from "../../providers/fastwire";
 import { mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored } from "./request-strips";
+import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored } from "./request-strips";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
@@ -316,6 +316,20 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       outBody = backfillWebSearchQueries(outBody);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         outBody = stripInternalChatMessageMetadataPassthrough(outBody);
+        // The same class of private field, one level up, but keyed on the DESTINATION rather than
+        // on the canonical surface alone. `src/server/responses/compact.ts` spreads the caller's
+        // raw body into the native `/responses/compact` request without passing through this
+        // adapter, and that endpoint is offered only to OpenAI-operated destinations
+        // (supportsNativeResponsesCompactEndpoint). Stripping on the canonical predicate here
+        // would make the two paths disagree for `openai-apikey`; stripping on the destination
+        // keeps every OpenAI-operated route byte-identical and removes the field exactly where it
+        // is known to break, which is a gateway this proxy does not operate.
+        //
+        // Placed before the routed compaction body is built and before serialization, so the HTTP,
+        // routed-compaction and WebSocket outbounds are all covered by this one call.
+        if (!isOpenAiOperatedResponsesDestination(provider)) {
+          outBody = stripCanonicalOnlyTopLevelFields(outBody);
+        }
         outBody = promoteClientLoadedTools(outBody);
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
