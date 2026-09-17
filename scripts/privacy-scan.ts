@@ -225,10 +225,8 @@ function addFindingsForPattern(
  * re-declaring the patterns — a copied regex stays green after the production
  * detector is deleted, which is the failure this seam exists to prevent.
  *
- * Importing this module is side-effect free: the repo scan runs only under
- * `import.meta.main` (see `runScan` below). It used to run at module scope, so
- * importing `scanText` triggered a full scan and a failing one called
- * `process.exit(1)` in the importing process.
+ * Safe to import: the repo scan runs only under `import.meta.main`, for the
+ * reason documented on `runScan`.
  */
 export function scanText(file: string, text: string): Finding[] {
   const findings: Finding[] = [];
@@ -349,20 +347,20 @@ const REDACTED_FINDING_KINDS = new Set([
   "ssh-endpoint",
 ]);
 
+if (import.meta.main) {
+  runScan();
+}
+
 /**
- * Run the scan only when invoked as a script.
+ * Run the scan. Invoked only as a script, never on import.
  *
- * Previously this ran at module scope, so `import { scanText }` executed a full
+ * This used to run at module scope, so `import { scanText }` executed a full
  * repo scan as a side effect — and a failing scan called `process.exit(1)`,
  * taking the importing test process with it. That coupling is invisible while
  * the tree is clean and bites the moment a detector finds something: adding the
  * `ssh-endpoint` rule below broke `privacy-scan-meta-key.test.ts`, which does
  * nothing but import the same seam this file exports for testing.
  */
-if (import.meta.main) {
-  runScan();
-}
-
 function runScan(): void {
   const findings = gitLsFiles()
     .filter(existsSync)
