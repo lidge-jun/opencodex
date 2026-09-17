@@ -1,5 +1,9 @@
 # Adapter Registry Authority
 
+Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 Request-local adapter bindings are separate from registry authority in the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
@@ -63,6 +67,15 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   rows each base model's collapsed UID gathers — the EFFORT_TOKENS suffixes, tier rows
   like `-1m` included: unmeasured rows abstain, unanimous measured rows advertise
   `["text"]` or `["text", "image"]`, and measured disagreement stays unadvertised.
+
+  At dispatch the adapter reads the same per-account/host cache once more for the
+  exact selected wire UID and forwards `completionOpts.maxInputTokens`: the smallest
+  of that row's field #18 window and any valid configured model/provider input
+  hints, so `CompletionConfiguration` field #3 no longer serializes the encoder's
+  128000 fallback. Smaller operator hints cap live evidence and never enlarge it;
+  with no evidence the adapter hint is omitted and the encoder still serializes
+  its own 128000 fallback for field #3. Investigation and limits:
+  `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
@@ -185,3 +198,7 @@ translation boundary and verifies that rejection sends no upstream request.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

@@ -3,7 +3,7 @@ import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
-import { isCursorBenignCancelError, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
+import { isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
 import { cursorCheckpointModelAffinityId, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
@@ -32,8 +32,14 @@ import { isDebugEnabled } from "../lib/debug-settings";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { estimateTokens } from "../lib/token-estimate";
 import {
+  clearCursorIncompleteToolRemint,
+  cursorIncompleteToolRemintScopeKey,
+  clearCursorEnvelopeEchoRemint,
+  cursorEnvelopeEchoRemintScopeKey,
   cursorOverflowRemintScopeKey,
   markCursorOverflowSurfaced,
+  recordCursorIncompleteToolRemint,
+  recordCursorEnvelopeEchoRemint,
   recordCursorOverflowRemint,
   rememberCursorThreadConversation,
   shouldSkipCursorOverflowRemint,
@@ -202,6 +208,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         let completedNormally = false;
         let lastTransport: { captured?: Uint8Array } | undefined;
         let emittedClientTool = false;
+        let sawIncompleteToolCall = false;
+        let sawMidstreamEnvelopeEcho = false;
         // Ordering proof for tool-suspended checkpoints: true only when the newest captured
         // checkpoint bytes arrived AFTER the turn emitted a client tool call, i.e. upstream
         // serialized its suspended-on-tool-call state. Only that snapshot can safely resume
@@ -344,6 +352,9 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                },
              });
              for (const event of events) {
+                if (event.type === "error" && isCursorIncompleteToolCallMessage(event.message)) {
+                  sawIncompleteToolCall = true;
+                }
                 if (!guardsSettled()) {
                   if (event.type === "text_delta") {
                     guardHeld.push(event);
@@ -383,7 +394,9 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 }
                 if (event.type !== "heartbeat") emittedOutput = true;
                 if (event.type === "done") {
-                  for (const finding of midstreamObserver?.findings() ?? []) {
+                  const midstreamFindings = midstreamObserver?.findings() ?? [];
+                  if (midstreamFindings.length > 0) sawMidstreamEnvelopeEcho = true;
+                  for (const finding of midstreamFindings) {
                     debugProviderDiagnostic("cursor", "midstream-envelope-echo", {
                       wireModel: activeRequest.modelId,
                       conversationHash: activeRequest.conversationId.slice(0, 16),
@@ -528,6 +541,69 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               break;
             }
           }
+        }
+        const incompleteToolRemintScopeKey =
+          _parsed._cursorIsolateConversation !== true
+          && request.contextUsageStoreCheckpoints !== false
+            ? cursorIncompleteToolRemintScopeKey(
+                cursorClientThreadOwner(_parsed),
+                _parsed._cursorIdentityScope,
+              )
+            : null;
+        // Incomplete-tool errors are streamed, not thrown. Do not retry this turn; rotate only
+        // the next turn's id. request-prepare currently isolates compaction, but adapter callers
+        // can bypass that upstream invariant, so checkpoint storage is the local isolation boundary.
+        if (sawIncompleteToolCall && incompleteToolRemintScopeKey) {
+          if (recordCursorIncompleteToolRemint(incompleteToolRemintScopeKey)) {
+            if (inheritedCheckpointRef) invalidateCursorCheckpoint(inheritedCheckpointRef);
+            debugProviderDiagnostic("cursor", "incomplete-tool-remint", {
+              wireModel: request.modelId,
+              conversationHash: request.conversationId.slice(0, 16),
+            });
+            remintConversationId(request.conversationId);
+          } else {
+            debugProviderDiagnostic("cursor", "incomplete-tool-remint-exhausted", {
+              wireModel: request.modelId,
+              conversationHash: request.conversationId.slice(0, 16),
+            });
+          }
+        } else if (!sawIncompleteToolCall && completedNormally && incompleteToolRemintScopeKey) {
+          clearCursorIncompleteToolRemint(incompleteToolRemintScopeKey);
+        }
+        // A mid-stream envelope echo has ALREADY reached the client — the prefix sniffer only
+        // watches the first bytes of a turn, and grok-4.6 writes a real sentence before pasting
+        // the envelope. It cannot be quarantined, so the recovery is the same as the
+        // incomplete-tool case: leave this turn alone and rotate the next turn's id, otherwise
+        // the stored echo is replayed and primes the model to echo again.
+        //
+        // Its own budget, not the incomplete-tool one: echoing is cheap and repeatable while an
+        // incomplete client-tool stream is rare and structural, so a shared counter would let a
+        // persistently echoing model spend the allowance the other recovery needs. Skipped when
+        // the incomplete-tool arm already reminted this turn — one rotation is enough.
+        const envelopeEchoRemintScopeKey =
+          _parsed._cursorIsolateConversation !== true
+          && request.contextUsageStoreCheckpoints !== false
+            ? cursorEnvelopeEchoRemintScopeKey(
+                cursorClientThreadOwner(_parsed),
+                _parsed._cursorIdentityScope,
+              )
+            : null;
+        if (sawMidstreamEnvelopeEcho && !sawIncompleteToolCall && envelopeEchoRemintScopeKey) {
+          if (recordCursorEnvelopeEchoRemint(envelopeEchoRemintScopeKey)) {
+            if (inheritedCheckpointRef) invalidateCursorCheckpoint(inheritedCheckpointRef);
+            debugProviderDiagnostic("cursor", "midstream-envelope-echo-remint", {
+              wireModel: request.modelId,
+              conversationHash: request.conversationId.slice(0, 16),
+            });
+            remintConversationId(request.conversationId);
+          } else {
+            debugProviderDiagnostic("cursor", "midstream-envelope-echo-remint-exhausted", {
+              wireModel: request.modelId,
+              conversationHash: request.conversationId.slice(0, 16),
+            });
+          }
+        } else if (!sawMidstreamEnvelopeEcho && completedNormally && envelopeEchoRemintScopeKey) {
+          clearCursorEnvelopeEchoRemint(envelopeEchoRemintScopeKey);
         }
         if (
           request.checkpointInvalidationReason

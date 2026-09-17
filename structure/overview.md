@@ -1,11 +1,11 @@
 # Overview
 
+Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
 Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts.
-
-Native-main device cancellation, polling and restart follow the [flow-ownership contract](gui-and-management-api.md#dashboard-surfaces), including status-gated error DTO handling.
 
 ## Product boundary
 
@@ -161,4 +161,4 @@ Provider-scoped approval reviewer settings are projected by the [catalog owner](
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 
-Native-main reauthentication retains the same flow and its Cancel control from the cancellation click, including an unresolved DELETE racing with a GET HTTP failure; retryable failure keeps cancellation available, and a trusted terminal result releases ownership.
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

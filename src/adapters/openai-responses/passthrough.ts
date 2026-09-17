@@ -36,7 +36,8 @@ import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOn
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
-import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems } from "./tool-output-recovery";
+import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems, restoreBridgedWebSearchCalls } from "./tool-output-recovery";
+import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-cache";
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
@@ -270,19 +271,31 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
       outBody = applyTierDecisionToResponsesBody(outBody, parsed.options?.tierDecision);
       const stateless = provider.statelessResponses === true;
+      const adjacentToolResults = provider.requiresAdjacentResponsesToolResults === true;
+      // Adjacency reorders items the upstream would accept in some order. Pairing synthesizes an
+      // item the client never sent, which is a larger claim about the conversation, so it is its
+      // own capability: Kimi carries the adjacency flag but accepts a dangling call (#4726) and
+      // must not start receiving placeholders it never needed.
+      const pairedToolResults = provider.requiresPairedResponsesToolResults === true;
       if (stateless) outBody = stripStatefulResponsesParams(outBody);
       // A replay miss can leave a function_call_output whose paired function_call sat
       // in the prefix that was never expanded. A stateless upstream cannot resolve the
       // pair from its own storage either, so it needs the same repair the forward
       // backend gets — dropping previous_response_id is not much use if the body that
       // reaches the wire is unparseable.
+      // A parser can also 400 on a function_call with no matching output at all. DeepSeek gets
+      // that repair through statelessResponses. xAI cannot be marked stateless: its Responses API
+      // stores conversations for 30 days and documents previous_response_id. So it carries the
+      // pairing capability instead, which reuses the orphan-call placeholder without touching
+      // store or previous_response_id.
       if (provider.annotateEmptyToolOutputs === true) {
         outBody = annotateEmptyResponsesToolOutputs(outBody, true);
       }
-      if (forward || stateless) {
-        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, stateless && !forward);
+      const synthesizeMissingCallOutputs = !forward && (stateless || pairedToolResults);
+      if (forward || stateless || pairedToolResults) {
+        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, synthesizeMissingCallOutputs);
       }
-      if (provider.requiresAdjacentResponsesToolResults === true) {
+      if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
       if (forward) {
@@ -309,6 +322,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = repairOversizedReplayCallIds(outBody);
       }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
+      // #4587: on a bridged provider, hand the destination back the search call and result the
+      // proxy executed on its behalf, in place of the hosted cell the caller replays. Scoped to
+      // this destination and recorded by the bridge itself, so a provider without the opt-in
+      // computes no identity and keeps the body reference it already had. This runs before the
+      // query backfill below because a restored cell is no longer a web_search_call to repair.
+      if (provider.webSearchBridge?.enabled === true) {
+        outBody = restoreBridgedWebSearchCalls(outBody, bridgeSearchReplayScope(provider.baseUrl));
+      }
       // Repair stored history from before the bridge emitted both keys, in either
       // direction: a conversation that already recorded a web_search_call replays it
       // every turn, and a strict parser rejects the whole request over the missing key —

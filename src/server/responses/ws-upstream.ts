@@ -1,3 +1,6 @@
+import { OPENAI_API_RESPONSES_URL } from "./native-response-control";
+import { isInjectionRequest } from "./native-injection-protocol";
+import type { NativeResponseControl } from "./native-response-control";
 // Upstream WebSocket transport for the ChatGPT Codex backend.
 //
 // Why this exists: the Codex backend serves the responses_websockets path from
@@ -129,6 +132,8 @@ export function codexWsUpstreamFetch(
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
   onQuota?: CodexWsQuotaObserver,
   beforeDispatch?: (headers: Headers) => void,
+  nativeControl?: NativeResponseControl,
+  beforeContinuation?: () => Promise<void>,
 ): Promise<Response> {
   const prepared = prepareCodexWsRequest(url, init);
   if (!prepared) return sseFallback(url, prepareCodexHttpInit(url, init));
@@ -142,6 +147,17 @@ export function codexWsUpstreamFetch(
   }
 
   const { frameText, headers } = prepared;
+  // Never infer backend support from a model name or enable controls on a gateway.
+  const control = nativeControl?.kind === "injection"
+    ? ((prepared.canonical || url === OPENAI_API_RESPONSES_URL) && isInjectionRequest(JSON.parse(frameText)) ? nativeControl : undefined)
+    : (prepared.canonical || url === OPENAI_API_RESPONSES_URL) ? nativeControl : undefined;
+  if (control?.kind === "injection" && url === OPENAI_API_RESPONSES_URL) {
+    const beta = headers["openai-beta"];
+    if (!beta?.split(",").some(value => value.trim() === "responses_multi_agent=v1")) {
+      headers["openai-beta"] = beta ? `${beta}, responses_multi_agent=v1` : "responses_multi_agent=v1";
+    }
+  }
+
 
   // Decide before dialing. Once the socket is open the caller already holds a
   // streaming Response, so the oversized close can only be surfaced as a stream
@@ -169,7 +185,9 @@ export function codexWsUpstreamFetch(
   }
   let session: CodexWsSession;
   try {
-    const identity = codexWsReuseIdentity(url, headers, frameText, proxy);
+    // Steering keeps a private physical connection across successor responses; it
+    // must never enter the idle-socket pool or move to a different credential.
+    const identity = control ? null : codexWsReuseIdentity(url, headers, frameText, proxy);
     session = (identity ? codexWsPool.acquire(identity, wsUrl, headers, proxy) : null)
       ?? new CodexWsSession(wsUrl, headers, false, undefined, proxy);
     if (!session.busy && !session.reserve()) {
@@ -181,6 +199,8 @@ export function codexWsUpstreamFetch(
   }
   return codexWsExchange({
     session, url, init, prepared, sseFallback, onQuota, beforeDispatch,
+    nativeControl: control,
+    beforeContinuation,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
   });
 }
