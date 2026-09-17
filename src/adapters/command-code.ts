@@ -13,6 +13,8 @@ import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from 
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
+import { createAdapterPhysicalSend } from "./physical-send";
+import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 
 // Retain the short ids emitted by the first local integration. New requests use the live catalog's
 // provider-native IDs directly; this map is compatibility-only and is not a model fallback list.
@@ -469,7 +471,7 @@ async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContex
   const timer = setTimeout(() => timeout.abort(new DOMException("Timeout elapsed", "TimeoutError")), ctx?.timeoutMs ?? 200_000);
   const callerSignal = ctx?.abortSignal ?? new AbortController().signal;
   try {
-    return await (ctx?.executor ?? executor)(request.url, {
+    return await executor(request.url, {
       method: request.method,
       headers: request.headers,
       body: request.body,
@@ -556,7 +558,8 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       };
     },
     async fetchResponse(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> {
-      const response = await fetchCommandCode(request, ctx, executor);
+      const send = createAdapterPhysicalSend(ctx, executor);
+      const response = await send({ url: request.url, dispatch: physical => fetchCommandCode(request, ctx, physical) });
       if (response.ok) return response;
       const currentEffort = (() => {
         try { return (JSON.parse(request.body) as { params?: { reasoning_effort?: unknown } }).params?.reasoning_effort; } catch { return undefined; }
@@ -577,8 +580,14 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       if (!refreshed || refreshed.includes(currentEffort)) return response;
       const retry = requestWithoutReasoningEffort(request);
       if (!retry) return response;
-      try { void response.body?.cancel(); } catch { /* already closed */ }
-      return fetchCommandCode(retry, ctx, executor);
+      try {
+        return await send({ url: retry.url, sendClass: "repair", recovery: "reasoning-effort-downgrade",
+          beforeDispatch: () => { try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ } },
+          dispatch: physical => fetchCommandCode(retry, ctx, physical) });
+      } catch (error) {
+        if (error instanceof SendBudgetExhaustedError) return response;
+        throw error;
+      }
     },
     async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       let sawFinish = false;

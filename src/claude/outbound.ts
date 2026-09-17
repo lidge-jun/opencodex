@@ -189,7 +189,7 @@ function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultConte
   return { id, input, resultContent, completed };
 }
 
-function messageSnapshot(model: string): Rec {
+function messageSnapshot(model: string, confirmedUsage?: Rec): Rec {
   return {
     id: `msg_${uuid()}`,
     type: "message",
@@ -198,7 +198,7 @@ function messageSnapshot(model: string): Rec {
     model,
     stop_reason: null,
     stop_sequence: null,
-    usage: { input_tokens: 0, output_tokens: 0 },
+    usage: confirmedUsage ?? { input_tokens: 0, output_tokens: 0 },
   };
 }
 
@@ -246,6 +246,7 @@ export function responsesSseToAnthropicSse(
   let open: OpenBlock | null = null;
   let sawToolUse = false;
   let webSearchRequests = 0;
+  let earlyAnthropicUsage: Rec | undefined;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const utf8SliceBytes = (value: string, start: number, end: number): number => {
@@ -282,7 +283,7 @@ export function responsesSseToAnthropicSse(
       const ensureStarted = () => {
         if (started) return;
         started = true;
-        emit("message_start", { type: "message_start", message: messageSnapshot(model) });
+        emit("message_start", { type: "message_start", message: messageSnapshot(model, earlyAnthropicUsage) });
         emit("ping", { type: "ping" });
       };
       // Keepalive pings protect remote deployments behind LB/NAT idle timeouts even
@@ -405,8 +406,17 @@ export function responsesSseToAnthropicSse(
       const handleFrame = (eventName: string, data: Rec) => {
         switch (eventName) {
           case "response.created":
-            // Transport prelude only. Start Anthropic framing on semantic output or completion.
+          case "response.in_progress": {
+            // Lifecycle preludes do not start Anthropic framing, but some upstreams attach
+            // confirmed input usage before semantic output. Retain only its bounded Anthropic
+            // projection so message_start can report measurements that already arrived.
+            const response = isRec(data.response) ? data.response : {};
+            const usage = isRec(response.usage) ? response.usage : undefined;
+            if (!started && usage && typeof usage.input_tokens === "number") {
+              earlyAnthropicUsage = anthropicUsage(usage);
+            }
             break;
+          }
           case "response.heartbeat":
             if ((controller.desiredSize ?? 0) > 0) emit("ping", { type: "ping" });
             break;

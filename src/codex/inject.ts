@@ -40,7 +40,7 @@ import {
   removeJournal,
   writeJournal,
 } from "./journal";
-import { preflightCodexHistoryInjection } from "./history-provider";
+import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "./history-provider";
 import {
   describeHistoryJobFailure,
   deriveCodexHistoryOperation,
@@ -162,12 +162,6 @@ export interface CodexInjectResult {
   skippedReason?: "desired_disabled" | "desired_enabled" | "hub-gated";
   nativeSubagentDefaultsWarning?: string;
 }
-
-/**
- * The one history preflight reason that is permanent rather than operational: Codex owns
- * paginated rollout ordinals, so no retry makes the legacy relabel protocol available again.
- */
-const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
 
 class CodexHistoryPreflightRefusal extends Error {}
 let historyArtifactStageForTests: ((stage: string) => void) | undefined;

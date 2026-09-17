@@ -33,12 +33,12 @@ test("supports1m is true at and above the threshold, false below it", async () =
     // Live-backed assertions against the real catalog: 1 MiB windows qualify.
     const oneMiB = state.models.find(m => m.route === "google-antigravity/gemini-3.1-pro");
     const exact1M = state.models.find(m => m.route === "alibaba-token-plan-intl/glm-5.2");
-    const below = state.models.find(m => m.route === "alibaba-token-plan-intl/qwen3.8-max");
+    const below = state.models.find(m => m.route === "alibaba-token-plan-intl/MiniMax-M2.5");
     const blank = state.models.find(m => m.route === "anthropic/claude-opus-4-6");
 
     if (oneMiB) expect(oneMiB.supports1m).toBe(true);       // 1_048_576
     if (exact1M) expect(exact1M.supports1m).toBe(true);      // 1_000_000 exactly
-    if (below) expect(below.supports1m).toBe(false);         // 983_616
+    if (below) expect(below.supports1m).toBe(false);         // 196_608
     if (blank) expect(blank.supports1m).toBe(false);         // no window known
 
     // The boundary rule itself: 983616 must never qualify, 1000000 always does.

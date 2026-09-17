@@ -36,6 +36,7 @@ import {
   previewCodexPoolLineage,
   applyCodexAuthContextToProvider,
   hasCallerCodexBearer,
+  requestOwnedMainPinState,
 } from "../../codex/auth-context";
 import {
   copyPreviousResponseReplayProvenance,
@@ -483,11 +484,37 @@ export async function prepareResponsesRequest(
   const nativeMainReadsForbidden = previewRequestScopedMainCredential
     || nativeMainRecoveryBlocked
     || previewSelectionAdmission?.mainProfileDraining === true;
+  // The liveness answer final authentication gives its own selection options, computed from the
+  // same shared predicate so the two cannot drift apart again (#4850). `fixedAccountId` is
+  // mirrored through `route.codexAccountId` because that is literally what core-auth.ts passes
+  // as `accountId`. A reserve-authorized request is the one input where the two can differ, and
+  // it differs harmlessly: reserve plus a caller bearer is served as main either way, which is
+  // the answer this produces.
+  const previewRequestOwnedMainPin = requestOwnedMainPinState(
+    previewAuthHeaders,
+    config,
+    options.codexAuthPolicy ?? config,
+    previewRequestScopedMainCredential,
+    route.codexAccountId,
+  ).preserve;
   // Deliberately NOT fenced on ownership: final auth derives `nativeMainSelectionOnly` from the
   // drain alone, and adding a term here would diverge from it in the other direction.
   const previewSelectionOptions = {
     nativeMainSelectionOnly: !nativeMainRecoveryBlocked
       && previewSelectionAdmission?.mainProfileDraining === true,
+    // Pool eligibility was the last part of preview still outside the fence (#4850). Without
+    // this seam `codexAccountUnusableReason` takes its default branch into
+    // `isMainAccountCredentialUsable()`, which opens the physical `auth.json` -- twice per
+    // spawn, because subagent fallback re-enters the preview through the callback below.
+    //
+    // Scoped to ownership, and carrying final auth's value rather than a constant, because
+    // preview exists to predict final auth. Under an effective main pin the request really is
+    // served by its own main credential, so main must stay eligible; without the pin final auth
+    // scores main `main_credential_unavailable` and drops it, so preview has to drop it too. A
+    // hardcoded `true` would be wrong in the second case and `false` in the first.
+    isMainAccountTokenLive: previewRequestScopedMainCredential
+      ? () => previewRequestOwnedMainPin
+      : undefined,
     // Preview must reach the same answer as the final resolution, including the uploaded-file
     // retention (#4778): a preview that reported a quota move the request will not make would
     // hand subagent fallback a different account than the one that actually serves.
@@ -711,9 +738,23 @@ export async function prepareResponsesRequest(
                 route,
                 options,
               ).requestScopedMainCredential && hasCallerCodexBearer(recoveryAuthHeaders);
+              // Recovery's own answer to the same question, against the route it may have moved
+              // to. Reconstructing the options without it is what left pool eligibility outside
+              // the fence on the first preview (#4850); recovery re-previews, so it would leave
+              // the same two reads on the one path that runs after decryption.
+              const recoveryRequestOwnedMainPin = requestOwnedMainPinState(
+                recoveryAuthHeaders,
+                config,
+                options.codexAuthPolicy ?? config,
+                recoveryRequestScopedMainCredential,
+                route.codexAccountId,
+              ).preserve;
               const recoverySelectionOptions = {
                 nativeMainSelectionOnly: !recoveryNativeMainBlocked
                   && recoverySelectionAdmission?.mainProfileDraining === true,
+                isMainAccountTokenLive: recoveryRequestScopedMainCredential
+                  ? () => recoveryRequestOwnedMainPin
+                  : undefined,
                 // #4778, same reason as `previewSelectionOptions` above: this preview decides
                 // which account subagent fallback scores against, and final auth passes the
                 // retention. Recovery is exactly where the two could diverge -- it re-previews
