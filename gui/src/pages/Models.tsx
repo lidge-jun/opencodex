@@ -2499,8 +2499,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                 onClick={() => {
                   const modelId = customFormModelId.trim();
                   const displayName = customFormDisplayName.trim();
-                  const parsedContextWindow = parseContextWindowDraft(customFormContextWindow);
-                  if (parsedContextWindow === undefined) return setCustomError(t("models.contextInvalid"));
+                  const parsedContextWindow = parseContextWindowDraft(customFormContextWindow); // "350k" -> undefined, never "omitted / cleared"
+                  if (parsedContextWindow === undefined) { setCustomError(t("models.contextInvalid")); return; }
                   if (customModalMode === "add") {
                     const reasoningEfforts = customFormReasoning ? customFormReasoningEfforts : undefined;
                     void addCustomModel(
