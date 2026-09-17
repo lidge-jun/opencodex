@@ -180,8 +180,11 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
   });
 
   test("the table is bounded in both dimensions, not just per scope", () => {
+    // One cohort per index. Members of ONE tree now share a conversation key, so a fixture that
+    // varied only the thread id would write every record under a single key and the eviction
+    // probe below would read the newest record back through the oldest key.
     const keyFor = (index: number) => recordCodexThreadLineage(
-      new Headers({ "session-id": "bulk", "thread-id": `bulk-${index}` }), NOW,
+      new Headers({ "session-id": `bulk-${index}`, "thread-id": `bulk-${index}` }), NOW,
     )!.conversationKey;
     const oldest = keyFor(0);
     for (let index = 1; index <= CODEX_LINEAGE_MAX_ENTRIES; index += 1) keyFor(index);
@@ -455,10 +458,17 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     expect(previewCodexPoolLineage(callerOwned, config, { requestScopedMainCredential: true }))
       .toBeUndefined();
 
-    // Read-only: the record belongs to the resolution that binds. A preview must not leave one
-    // behind for a request that turns out to own no Pool state at all.
+    // Read-only: the record belongs to the resolution that binds, so even an ELIGIBLE preview
+    // leaves nothing behind. Probed on a cohort nothing has recorded, because a member of an
+    // already-recorded tree would answer from its root's entry now that they share one key.
+    const unseen = new Headers({
+      "session-id": "unseen-sess",
+      "thread-id": "unseen-child",
+      "x-codex-parent-thread-id": "unseen-root",
+    });
+    expect(previewCodexPoolLineage(unseen, config)).toBeDefined();
     expect(codexThreadLineageLookup(
-      codexPoolAffinityKey(child)!, codexLineageScopeKey(child), NOW,
+      codexPoolAffinityKey(unseen)!, codexLineageScopeKey(unseen), NOW,
     )).toBeUndefined();
   });
 
