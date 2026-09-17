@@ -557,6 +557,21 @@ bodyCase("redirect bodies are bounded even with an SSE content type", async cloc
   assert.equal(f.source.locked, false);
 });
 
+bodyCase("a plain successful passthrough body is inactivity-bounded", async clock => {
+  const f = bodyFixture(clock);
+  const response = guardDirectPassthroughBodyInactivity(new Response(f.source, {
+    status: 200, headers: { "content-type": "text/plain" },
+  }), f.upstream.signal, 100);
+  assert.notEqual(response.body, null);
+  const failed = assert.rejects(response.text(), ResponseBodyInactivityError);
+  await f.waitForPull();
+  clock.advance(100);
+  await failed;
+  assert.equal(f.cancelled.length, 1);
+  assert.equal(f.source.locked, false);
+  assert.equal(clock.pending, 0);
+});
+
 bodyCase("large deadlines do not overflow setTimeout into an immediate failure", async clock => {
   const f = bodyFixture(clock);
   const failed = assert.rejects(f.guard(3_000_000_000).response.text(), ResponseBodyInactivityError);

@@ -71,12 +71,29 @@ export async function deliverAdapterResponse(
 
 
   if (parsed.stream) {
-    const initialEventStream = readResponseStreamWithInactivity(
-      upstreamResponse,
-      upstream.signal,
-      bodyInactivityMs,
-      response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
-    );
+    // The continuation legs classify a stalled body themselves; the initial stream needs the
+    // same mapping or the bridge catch reports this upstream timeout as a 500 proxy_error.
+    const initialEventStream = (async function* (): AsyncGenerator<AdapterEvent> {
+      try {
+        yield* readResponseStreamWithInactivity(
+          upstreamResponse,
+          upstream.signal,
+          bodyInactivityMs,
+          response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
+        );
+      } catch (error) {
+        if (error instanceof ResponseBodyInactivityError) {
+          yield {
+            type: "error",
+            message: "Upstream response body stalled before completing",
+            status: 504,
+            errorType: "upstream_error",
+          };
+          return;
+        }
+        throw error;
+      }
+    })();
     const eventStream = terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
