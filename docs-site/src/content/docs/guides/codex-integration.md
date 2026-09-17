@@ -885,8 +885,10 @@ Do not rewrite an active paginated rollout or thread row to migrate those conver
 
 ## Experimental native mid-turn steering
 
-For a compatible model on the canonical ChatGPT forward route and a client that sends `response.steer`, enable both
-options in `~/.opencodex/config.json` and restart OpenCodex before starting a fresh turn:
+For a compatible model on the canonical ChatGPT forward route or an explicitly configured
+[OpenAI API WebSocket route](#steering-continuation-settings-and-public-api), and a client
+that sends `response.steer`, enable both options in `~/.opencodex/config.json` and restart
+OpenCodex before starting a fresh turn:
 
 ```json
 {

@@ -574,21 +574,10 @@ companion form is what makes a hub a single-port deployment, and it is refused o
 wildcard `hostname`, where the public listener already holds `127.0.0.1:<port>`.
 
 
-The opt-in `codexNativeInjection` owner also accepts typed saved-result
-continuations on the original account/socket. It does not widen
-`response.inject` beyond string-valued function results, and multi-agent requests
-never acquire the single-agent steering owner merely because injection is disabled.
-See [the continuation contract](/guides/codex-integration/#rich-tool-results-and-explicit-approvals-after-response-completion).
+## Experimental native response controls
 
-
-`codexNativeSteering` confirmation uses fixed absolute deadlines and retains
-completed output for local continuation history. See
-[steering confirmation deadlines and retained context](/guides/codex-integration/#steering-confirmation-deadlines-and-retained-context)
-for phase timing, unknown-delivery recovery and live-comparison precautions.
-
-
-Native steering also supports explicitly opted-in canonical OpenAI API key-mode
-WebSockets; it never moves subscription traffic to API billing. Its saved-result
-continuations allow validated generation settings, while normal provider pins,
-subagent caps and capability restrictions remain effective. See
-[settings and the executable consent-gated probe](/guides/codex-integration/#steering-continuation-settings-and-public-api).
+`codexNativeSteering` and `codexNativeInjection` enable separate, default-off native
+WebSocket control paths. See the canonical guide for
+[supported steering routes and settings](../../guides/codex-integration.md#steering-continuation-settings-and-public-api),
+[typed result and approval continuations](../../guides/codex-integration.md#rich-tool-results-and-explicit-approvals-after-response-completion),
+and [confirmation deadlines and retained context](../../guides/codex-integration.md#steering-confirmation-deadlines-and-retained-context).
