@@ -40,7 +40,7 @@ import {
   removeJournal,
   writeJournal,
 } from "./journal";
-import { preflightCodexHistoryInjection } from "./history-provider";
+import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "./history-provider";
 import {
   describeHistoryJobFailure,
   deriveCodexHistoryOperation,
@@ -166,8 +166,10 @@ export interface CodexInjectResult {
 /**
  * The one history preflight reason that is permanent rather than operational: Codex owns
  * paginated rollout ordinals, so no retry makes the legacy relabel protocol available again.
+ *
+ * The constant now lives beside the guard that produces it, in `history-provider.ts`, so
+ * the apply and restore directions cannot disagree about which reason stands down.
  */
-const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
 
 class CodexHistoryPreflightRefusal extends Error {}
 let historyArtifactStageForTests: ((stage: string) => void) | undefined;
@@ -967,9 +969,14 @@ export {
 export type { CodexRoutingKind } from "./inject/routing-classify";
 
 export {
+  appendOcxProviderTableBlock,
+  extractOcxProviderTableBlock,
+  readOcxProviderTableBlock,
   removeCodexConfig,
+  retainOcxProviderTableOnDisk,
   stripOpencodexConfig,
 } from "./inject/remove";
+export type { RemoveCodexConfigOptions, RemoveCodexConfigResult } from "./inject/remove";
 
 export type {
   CodexNativeRestoreResult,
@@ -977,9 +984,13 @@ export type {
   CodexRestoreCatalogResult,
   CodexRestoreConfigResult,
   CodexRestoreHistoryResult,
+  RestoreHistoryDisposition,
+  RetainedCodexProviderTable,
 } from "./inject/restore";
 export {
   failedHistoryRestoreFromOutcome,
+  describeRetainedCodexProviderTable,
+  resolveRestoreHistoryDisposition,
   restoreNativeCodex,
   restoreNativeCodexAsync,
   setBeforeRestoreConfigForTests,

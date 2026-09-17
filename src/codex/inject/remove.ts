@@ -7,7 +7,7 @@ import {
   rootTomlString,
   stripJournaledOpenaiBaseUrl,
 } from "../injected-marker";
-import { preflightCodexHistoryInjection } from "../history-provider";
+import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "../history-provider";
 import {
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
@@ -79,6 +79,90 @@ export function removeOcxSection(content: string): string {
   );
 }
 
+/**
+ * Capture `[model_providers.opencodex]` verbatim so it can survive a restore that only
+ * takes routing down (#4812).
+ *
+ * This is deliberately NOT a mirror of `removeOcxSection`'s scan. That one opens a
+ * section on any line containing `OCX_SECTION_MARKER`, which is safe there only because
+ * `stripInjectedOpenaiBaseUrl` has already consumed the identical marker that annotates
+ * the root `openai_base_url`. Capture runs against the untouched file, so the same rule
+ * would collect that marker and the routing line under it — and re-appending the result
+ * would restore the exact base-url override the caller just removed.
+ *
+ * So the anchor is the provider header itself, via the shared `isOcxProviderHeaderLine`,
+ * with an immediately preceding marker line pulled in as its comment. Sharing that
+ * predicate is what keeps capture and removal from disagreeing about what our table is.
+ */
+export function extractOcxProviderTableBlock(content: string): string | null {
+  const lines = content.split("\n");
+  const collected: string[] = [];
+  let capturing = false;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (isOcxProviderHeaderLine(line.trim())) {
+      if (!capturing) {
+        const previous = lines[index - 1];
+        if (previous !== undefined && previous.includes(OCX_SECTION_MARKER)) collected.push(previous);
+        capturing = true;
+      }
+      collected.push(line);
+      continue;
+    }
+    if (!capturing) continue;
+    // A foreign table header closes ours, exactly as in `removeOcxSection`. A later
+    // `[model_providers.opencodex.*]` sub-table reopens capture on the next iteration,
+    // which is why the two are separate passes over the same predicate.
+    if (/^\s*\[/.test(line)) {
+      capturing = false;
+      continue;
+    }
+    collected.push(line);
+  }
+  if (collected.length === 0) return null;
+  return collected.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}
+
+/**
+ * Append a captured provider table to stripped content, as one buffer.
+ *
+ * Pure on purpose. Upstream resolves `model_provider` against the merged provider map and
+ * fails the WHOLE config load on a miss — not the one thread — so a config carrying root
+ * `model_provider = "opencodex"` without this table breaks every `codex` invocation. The
+ * strip and the re-append therefore have to reach disk in a single write, which they can
+ * only do if the append is a transform rather than a second file operation.
+ */
+export function appendOcxProviderTableBlock(content: string, block: string): string {
+  if (hasOcxProviderTable(content)) return content;
+  return `${content.replace(/\n+$/, "")}\n\n${block.replace(/\n+$/, "")}\n`;
+}
+
+/** Read the provider table straight off disk, before anything has transformed it. */
+export function readOcxProviderTableBlock(): string | null {
+  if (!existsSync(CODEX_CONFIG_PATH)) return null;
+  return extractOcxProviderTableBlock(applyEol(readFileSync(CODEX_CONFIG_PATH, "utf-8"), "\n"));
+}
+
+/**
+ * Re-attach a captured provider table after an exact journal restore.
+ *
+ * This is the one place retention needs a second write, because the journal replays whole
+ * pre-injection bytes rather than transforming the current file. The intermediate state is
+ * the safe one: the journal's config is the user's own, so it carries no
+ * `model_provider = "opencodex"` for a missing table to strand. A crash between the two
+ * writes leaves a fully native config, which is the direction this whole change is trying
+ * to reach anyway.
+ */
+export function retainOcxProviderTableOnDisk(block: string): string[] | null {
+  if (!existsSync(CODEX_CONFIG_PATH)) return null;
+  const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  const eol = dominantEol(rawContent);
+  const content = applyEol(rawContent, "\n");
+  const next = appendOcxProviderTableBlock(content, block);
+  if (next !== content) atomicWriteFile(CODEX_CONFIG_PATH, applyEol(next, eol));
+  return block.replace(/\n+$/, "").split("\n");
+}
+
 interface StripOpencodexConfigResult {
   content: string;
   managedDefaultsError: string | null;
@@ -139,11 +223,38 @@ function hasOpencodexRouting(content: string): boolean {
   );
 }
 
+export interface RemoveCodexConfigOptions {
+  preserveProfile?: boolean;
+  /**
+   * Keep `[model_providers.opencodex]` on disk while every routing key comes out.
+   *
+   * Set when the history preflight stands the relabel down: the rows this home tagged
+   * `opencodex` stay tagged, and they resolve only through this table. Retaining it means
+   * those conversations still open — their requests fail against a stopped proxy, which is
+   * an ordinary connection error — while plain `codex` returns to the built-in provider.
+   */
+  retainProviderTable?: boolean;
+}
+
+export interface RemoveCodexConfigResult {
+  success: boolean;
+  message: string;
+  /** The exact lines left on disk when `retainProviderTable` kept the table. */
+  retainedProviderTable?: string[];
+}
+
 export function removeCodexConfig(
-  options: { preserveProfile?: boolean } = {},
-): { success: boolean; message: string } {
+  options: RemoveCodexConfigOptions = {},
+): RemoveCodexConfigResult {
   const historyError = preflightCodexHistoryInjection(false, false);
-  if (historyError) return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
+  // The preflight answers "may I rewrite conversation history?". Routing removal is a
+  // different question, and treating one answer as both is what left `ocx uninstall`
+  // pointing a live config at a port it had just removed (#4812). Only the stand-down
+  // reason is separable; every other reason still means something is wrong with the
+  // history state itself, and those keep the hard refusal.
+  if (historyError && !(options.retainProviderTable === true && historyError === HISTORY_RELABEL_STANDS_DOWN)) {
+    return { success: false, message: `Codex configuration preserved: ${historyError}. Native writer coordination is required.` };
+  }
   if (!existsSync(CODEX_CONFIG_PATH)) {
     if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
       unlinkSync(CODEX_PROFILE_PATH);
@@ -166,13 +277,25 @@ export function removeCodexConfig(
     || (journaledRealtimeWsBaseUrl !== null
       && rootTomlString(content, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
   const stripped = stripOpencodexConfigResult(content, journaledBaseUrl, journaledRealtimeWsBaseUrl);
-  if (had || stripped.content !== content) {
-    atomicWriteFile(CODEX_CONFIG_PATH, applyEol(stripped.content, eol));
+  // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
+  // afterwards would find nothing.
+  const retainedBlock = options.retainProviderTable === true
+    ? extractOcxProviderTableBlock(content)
+    : null;
+  const finalContent = retainedBlock === null
+    ? stripped.content
+    : appendOcxProviderTableBlock(stripped.content, retainedBlock);
+  if (had || finalContent !== content) {
+    atomicWriteFile(CODEX_CONFIG_PATH, applyEol(finalContent, eol));
   }
   if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
     unlinkSync(CODEX_PROFILE_PATH);
+  const retainedNote = retainedBlock === null
+    ? ""
+    : " Kept [model_providers.opencodex] so conversations already tagged opencodex still open;"
+      + " remove it with 'ocx restore --remove-codex-provider-table' (those conversations stop opening).";
   const removedMessage = had
-    ? `Removed opencodex routing from Codex config${options.preserveProfile ? "." : " + profile."}`
+    ? `Removed opencodex routing from Codex config${options.preserveProfile ? "." : " + profile."}${retainedNote}`
     : "opencodex not present in Codex config.";
   if (stripped.managedDefaultsError) {
     const routingMessage = had
@@ -188,5 +311,6 @@ export function removeCodexConfig(
   return {
     success: true,
     message: removedMessage,
+    ...(retainedBlock === null ? {} : { retainedProviderTable: retainedBlock.replace(/\n+$/, "").split("\n") }),
   };
 }

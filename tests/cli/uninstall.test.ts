@@ -110,6 +110,16 @@ describe("full uninstall command", () => {
     expect(uninstallBody.indexOf('runStep("proxy stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("service removed"'));
     expect(uninstallBody.indexOf("await stopProxy(pid);")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
   });
+
+  test("restore forwards the explicit provider-table removal flag and warns before mutation", async () => {
+    const dispatch = await readText("src/cli/dispatch.ts");
+    const restoreStart = dispatch.indexOf("restore: async deps => {");
+    const restoreBody = dispatch.slice(restoreStart, dispatch.indexOf('"recover-history": async', restoreStart));
+
+    expect(restoreBody).toContain('takeFlag(restoreArgs, "--remove-codex-provider-table")');
+    expect(restoreBody).toContain("conversations already tagged opencodex will stop opening");
+    expect(restoreBody).toContain("restoreNativeCodexAsync({ revalidateDesiredState: true, removeProviderTable })");
+  });
 });
 describe("uninstall gates shared teardown on a proven service stop", () => {
   test("the authorization rule, exercised for every failure permutation", async () => {
@@ -213,6 +223,15 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(fn).toContain("observed.respawnWindowVerified = true;");
     const gateAt = fn.indexOf("if (sharedTeardownAuthorized(observed)) {");
     expect(gateAt).toBeLessThan(fn.indexOf("native Codex restored", gateAt));
+    const nativeRestoreStep = fn.slice(
+      fn.indexOf('runStep("native Codex restored"', gateAt),
+      fn.indexOf('runStep("Grok Build config restored"', gateAt),
+    );
+    // A partial config artifact with success=true discharged routing. Uninstall must report
+    // the retained table and continue, rather than adding this step to the failure list.
+    expect(nativeRestoreStep).toContain("if (!r.success) throw new Error(r.message);");
+    expect(nativeRestoreStep).toContain("if (r.retainedCodexProviderTable)");
+    expect(nativeRestoreStep).not.toContain('state === "partial"');
     // The skip is a failure, not a silent pass: the command must exit nonzero and say what
     // to run once the blocker is resolved.
     expect(fn).toContain('failures.push("native Codex restored", "Grok Build config restored");');

@@ -13,7 +13,15 @@ try {
     /* best-effort */
   }
 }
-import { currentExternalCodexModelProvider, restoreNativeCodex, restoreNativeCodexAsync, shouldInjectApiAuthHeader } from "../codex/inject";
+import {
+  currentExternalCodexModelProvider,
+  describeRetainedCodexProviderTable,
+  readOcxProviderTableBlock,
+  restoreNativeCodex,
+  restoreNativeCodexAsync,
+  shouldInjectApiAuthHeader,
+  type RetainedCodexProviderTable,
+} from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
 import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
 import {
@@ -117,6 +125,12 @@ function reportShellHookFailure(result: { state: "installed" | "absent" | "faile
   if (result.state !== "failed") return;
   console.warn(`   Claude shell hook not reconciled${result.reason ? `: ${result.reason}` : ""}`);
   console.warn("   Check ~/.zshrc for the '# opencodex claude-env hook' block.");
+}
+
+function reportRetainedCodexProviderTable(retained: RetainedCodexProviderTable): void {
+  console.log(`   ${describeRetainedCodexProviderTable(retained)}`);
+  console.log("   Retained config lines:");
+  for (const line of retained.lines) console.log(`      ${line}`);
 }
 
 async function refreshOwnedRaycastCatalog(
@@ -799,7 +813,12 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
   let other = false;
   try {
     const result = await restoreNativeCodexAsync();
-    if (result.success) console.log(`↩️  ${result.message}`);
+    if (result.success) {
+      console.log(`↩️  ${result.message}`);
+      if (result.retainedCodexProviderTable) {
+        reportRetainedCodexProviderTable(result.retainedCodexProviderTable);
+      }
+    }
     else {
       // Codex history is the one restore whose failure leaves the runtime consistent: the
       // manifest is retained and the routed metadata is untouched. Config and catalog are
@@ -810,6 +829,9 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
       // attempted. Reading the states alone cannot tell that apart from an ownership
       // refusal, so the structured reason carries it and the states are still required to
       // agree — a refusal that somehow reports a failed artifact is not this case.
+      // A degraded restore has no refusal reason and reports config as partial, so it cannot
+      // enter this branch: its config obligation was discharged and the stop receipt must be
+      // released rather than preserved.
       const preflightRefused = result.historyPreflightRefusal !== undefined
         && artifacts.config.state === "skipped"
         && artifacts.catalog.state === "skipped"
@@ -1357,6 +1379,9 @@ async function handleUninstall() {
     await runStep("native Codex restored", async () => {
       const r = await restoreNativeCodexAsync();
       if (!r.success) throw new Error(r.message);
+      if (r.retainedCodexProviderTable) {
+        reportRetainedCodexProviderTable(r.retainedCodexProviderTable);
+      }
     });
 
     await runStep("Grok Build config restored", () => {
@@ -1503,6 +1528,18 @@ async function handleStatus() {
   console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}${local}`);
   console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}${local}`);
   console.log(`   ${formatStartupRoutingDetail(status.json.startup)}${local}`);
+  if (status.json.startup.routingKind === "native") {
+    let retainedProviderTable = false;
+    try {
+      retainedProviderTable = readOcxProviderTableBlock() !== null;
+    } catch {
+      // The routing snapshot owns unreadable-config reporting. A later read race must not
+      // turn this diagnostic command into a teardown failure.
+    }
+    if (retainedProviderTable) {
+      console.log(`   ⚠️  Codex provider table retained${local}: [model_providers.opencodex] remains while root routing is native. Remove with 'ocx restore --remove-codex-provider-table'; tagged conversations will stop opening.`);
+    }
+  }
   console.log(`   Service: ${status.json.service.summary}${local}`);
   console.log(`   ${status.json.codexShim.summary}${local}`);
   console.log(`   Codex runtime: ${status.json.codexRuntime.path}${local}`);
