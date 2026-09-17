@@ -176,27 +176,61 @@ function isAllowedBearerToken(file: string, token: string): boolean {
 }
 
 /**
- * Placeholder endpoints that are documentation, not infrastructure.
+ * One token of an SSH directive value that is documentation, not infrastructure.
  *
- * Deliberately narrow: RFC 2606 reserved names, an obviously templated value, and
- * SSH's own `%h`/`%p` tokens. Anything else naming a host or an account is treated
- * as real, because the cost of a false positive here is one allowlist line and the
- * cost of a false negative is a published endpoint.
+ * Deliberately narrow: SSH's own `%h`/`%p`/`%r` substitutions, an obviously templated
+ * value, RFC 2606 / RFC 6761 reserved names, and generic account words. Anything else
+ * naming a host or an account is treated as real, because the cost of a false positive
+ * here is one allowlist line and the cost of a false negative is a published endpoint.
+ *
+ * Every rule is anchored to the whole token. An unanchored reserved-name test reads
+ * `example.com.internal-buildfarm.net` as documentation, when it is a real host that
+ * merely begins with one.
+ */
+function isPlaceholderToken(token: string): boolean {
+  // `%h`, and the composed forms SSH's own documentation uses: `%h:%p`, `%r@%h`.
+  // A token made only of substitutions names nothing.
+  if (/^(?:[@:/._-]*%[hpr])+[@:/._-]*$/.test(token)) return true;
+  // `<host>`, `${HOST}`, `{{ runner }}` — templated rather than literal. Both ends
+  // are anchored so a real host carrying a stray bracket is not laundered into one.
+  if (/^<[^<>]*>$/.test(token)) return true;
+  if (/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(token)) return true;
+  if (/^\{+[^{}]*\}*$/.test(token)) return true;
+  if (/^[}>]+$/.test(token)) return true;
+  // Judge a `login@host:port` token on its host part: userinfo and a port name no
+  // infrastructure on their own. (Written without a dotted domain after the "@" so this
+  // comment is not itself an email finding — which is exactly what it was, once.)
+  const host = (token.split("@").at(-1) ?? "").replace(/:\d+$/, "").replace(/\.$/, "");
+  if (/^(?:localhost|example|invalid|test|example\.(?:com|net|org))$/i.test(host)) return true;
+  if (/\.(?:localhost|example|invalid|test|example\.(?:com|net|org))$/i.test(host)) return true;
+  // Generic account placeholders, matching the home-path allowlist's spirit.
+  return /^(?:user|username|me|you|someone|root|ubuntu|runner)$/i.test(token);
+}
+
+/**
+ * Whether an SSH directive value is documentation in its entirety.
+ *
+ * EVERY whitespace-separated token must be a placeholder. The question this replaces
+ * was whether the value *contained* something allowlisted, which is the wrong question
+ * for `ProxyCommand`: its value is a command line rather than a host, so one reserved
+ * name anywhere in it cleared the entire line. Two concrete bypasses followed from
+ * that, and both are pinned as tests:
+ *
+ *   - `ProxyCommand nc -X connect -x proxy.example.com:8080 <real-host> 22` passed the
+ *     unanchored reserved-name rule on its proxy hop while naming the real endpoint
+ *     three tokens later.
+ *   - any value beginning with `$` passed the templated-prefix rule outright, so
+ *     `ProxyCommand $CF access ssh --hostname <real-host>` was allowed whole.
+ *
+ * A `ProxyCommand` is a leak by default; only a wholly templated value is
+ * documentation. `HostName` takes a single token, so this is the same question asked
+ * of one token, and its behavior is unchanged except for the anchoring above.
  */
 function isAllowedSshEndpoint(value: string): boolean {
-  const v = value.trim();
+  // A trailing `# comment` is ssh_config syntax, not part of the value.
+  const v = value.replace(/(?:^|[ \t])#.*$/, "").trim();
   if (!v) return true;
-  // A bare substitution token is a template. A real command that merely CONTAINS
-  // `%h` is not — `ProxyCommand /opt/homebrew/bin/cloudflared access ssh --hostname %h`
-  // names the binary, the access method and the tunnel, which is the leak itself.
-  if (/^%[hpr]$/.test(v)) return true;
-  // `<host>`, `$HOST`, `{{ runner }}` — templated rather than literal.
-  if (/^[<{$]/.test(v)) return true;
-  // RFC 2606 / RFC 6761 reserved documentation names.
-  if (/(?:^|[.@\s])(?:example\.(?:com|net|org)|example|invalid|localhost|test)(?:$|[\s:/])/i.test(v)) return true;
-  // Generic account placeholders, matching the home-path allowlist's spirit.
-  if (/^(?:user|username|me|you|someone|root|ubuntu|runner)$/i.test(v)) return true;
-  return false;
+  return v.split(/[ \t]+/).every(isPlaceholderToken);
 }
 
 function addFindingsForPattern(
@@ -292,7 +326,14 @@ export function scanText(file: string, text: string): Finding[] {
     // single-token form during development. The username alone is also the least
     // sensitive part of a Host block, and `MAINTAINER_HOME_USERNAME` already
     // covers the maintainer's account in path form.
-    /^[ \t]*HostName[ \t]+(\S+)[ \t]*$/gim,
+    //
+    // A trailing `# comment` is allowed after the value, because ssh_config permits
+    // one and without it the end-of-line anchor simply failed to match the directive.
+    // The `Keyword=value` form is deliberately NOT accepted here: `hostname = "127.0.0.1",`
+    // is ordinary TypeScript, and three such lines are in `src/server/ports.ts` and
+    // `src/server/port-reclaim.ts` today. `ProxyCommand` below does accept it, because
+    // that word is not an identifier anyone writes in code.
+    /^[ \t]*HostName[ \t]+(\S+)(?:[ \t]+#[^\n]*)?[ \t]*$/gim,
     match => isAllowedSshEndpoint(match[1] ?? ""),
   );
   addFindingsForPattern(
@@ -300,7 +341,7 @@ export function scanText(file: string, text: string): Finding[] {
     file,
     text,
     "ssh-proxy-command",
-    /^[ \t]*ProxyCommand[ \t]+(\S.*)$/gim,
+    /^[ \t]*ProxyCommand[ \t=]+(\S.*)$/gim,
     match => isAllowedSshEndpoint(match[1] ?? ""),
   );
   /*
@@ -330,10 +371,9 @@ function scanFile(file: string): Finding[] {
  * token or an API key is the very thing the scan exists to keep out of a readable
  * artifact, so the report names where it is instead of what it is.
  *
- * `ssh-proxy-command` is redacted for the same reason: the value carries the binary
- * path, the access method and the tunnel options, and CI logs are far more widely
- * readable than the diff it was caught in. `ssh-endpoint` (a bare `HostName`) is
- * not — that one is the context a reviewer needs to find it.
+ * Both SSH kinds are redacted: the `ProxyCommand` value carries the binary path, the
+ * access method and the tunnel options, and the `HostName` value is the endpoint
+ * itself. CI logs are far more widely readable than the diff either was caught in.
  */
 const REDACTED_FINDING_KINDS = new Set([
   "bearer-token",
