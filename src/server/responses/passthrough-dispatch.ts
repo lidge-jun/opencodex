@@ -1,3 +1,4 @@
+import { createSteeringSettingsNormalizer } from "./native-steering-policy";
 import { nativeResponseControlEligible } from "./native-response-control";
 import { NativeInjectionReplay } from "./native-injection-replay";
 import { NativeSteeringReplay } from "./native-steering-replay";
@@ -257,6 +258,9 @@ export async function preparePassthroughExchange(
     if (options.nativeControl && nativeResponseControlEligible(route.provider, options.nativeControl)
       && options.inboundTransport === "websocket" && !options.comboAttempt) {
       const body = parsed._rawBody as Record<string, unknown>;
+      if (options.nativeControl.kind === "steering") {
+        options.nativeControl.normalizeContinuation = createSteeringSettingsNormalizer(parsed, route, config, req.headers);
+      }
       const Replay = options.nativeControl.kind === "injection" ? NativeInjectionReplay : NativeSteeringReplay;
       options.nativeControl.replayFactory = () => new Replay(body.input, (input, response) => {
         if (passthroughRecordEligible && !isBodyNonPersistable(body)) {

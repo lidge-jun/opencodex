@@ -19,6 +19,8 @@ type ResponsesPayloadObserver = (payload: string) => void;
 
 export interface WsData {
   nativeControl?: NativeResponseControl;
+  /** Content-free per-turn explanation; never a model capability assertion. */
+  nativeSteeringUnavailable?: string;
   headers?: Headers; // base inbound forward headers only; per-turn auth refresh injects current pool tokens
   /**
    * Resolved once at the handshake. Auth is handshake-time only on this path, so

@@ -1,4 +1,4 @@
-import { nativeResponseControlMode, type NativeResponseControl } from "../responses/native-response-control";
+import { nativeSteeringUnavailableReason, nativeResponseControlMode, type NativeResponseControl } from "../responses/native-response-control";
 import { NativeInjectionChannel } from "../responses/native-injection";
 import { NativeSteeringChannel, NativeSteeringError } from "../responses/native-steering";
 import { createNativeSteeringLogObserver } from "../responses/native-steering-log";
@@ -200,7 +200,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
               return;
             }
             if (frame.type === "response.steer") {
-              if (!ws.data.nativeControl) throw new NativeSteeringError("steering_not_supported", "Native steering is disabled or unavailable on this route.");
+              if (!ws.data.nativeControl) throw new NativeSteeringError("steering_not_supported", ws.data.nativeSteeringUnavailable ?? "Native steering transport is unavailable; the route may be unsupported or using HTTP fallback.");
               ws.data.nativeControl.steer(frame);
               return;
             }
@@ -218,9 +218,6 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
         if (frame.type !== "response.create") return;
         markActivity("ws response.create");
 
-        ws.data.cancel?.();
-        // A superseded turn must not keep ownership during warmup or refusal.
-        ws.data.nativeControl = undefined;
         let nativeControl: NativeResponseControl | undefined;
         try {
           const idleMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec)
@@ -232,6 +229,10 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           sendJsonFrame(ws, buildWsErrorFrame(400, { type: "invalid_request_error", message: "Invalid native steering request settings" }));
           return;
         }
+        ws.data.cancel?.();
+        // A superseded turn must not keep ownership during warmup or refusal.
+        ws.data.nativeControl = undefined;
+        ws.data.nativeSteeringUnavailable = nativeSteeringUnavailableReason(frame, config.codexNativeSteering);
         const turnId = (ws.data.turnId ?? 0) + 1;
         ws.data.turnId = turnId;
         const isCurrent = () => ws.data.turnId === turnId;
