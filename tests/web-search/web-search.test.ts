@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as abortModule from "../../src/lib/abort";
 import { parseRequest } from "../../src/responses/parser";
 import { planWebSearch, shouldResolveOpenAiWebSearchSidecar, webSearchStallTimeoutSec } from "../../src/web-search";
 import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps } from "../../src/web-search/loop";
@@ -960,57 +961,56 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
   });
 
   test("fast headers plus raw byte progress can outlive connectTimeoutMs", async () => {
-    const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-    let bodyCancelled = 0;
-    const adapter: ProviderAdapter = {
-      name: "slow-healthy-stream",
-      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+    const connectTimeoutMs = 25;
+    // First-byte virtual time exceeds the header deadline; moving clear() there turns this red.
+    const deadlineController = new AbortController(), timeoutReason = new DOMException("Timeout elapsed", "TimeoutError"), originalDeadline = abortModule.clearableDeadline;
+    let deadlineCreations = 0, deadlineClears = 0, deadlineCleared = false, virtualElapsedMs = 0, bodyCancelled = 0;
+    const deadlineSpy = spyOn(abortModule, "clearableDeadline").mockImplementation((timeoutMs, parent) => {
+      if (timeoutMs !== connectTimeoutMs) return originalDeadline(timeoutMs, parent);
+      deadlineCreations++; const signal = parent ? AbortSignal.any([parent, deadlineController.signal]) : deadlineController.signal;
+      return {
+        signal, timeoutReason,
+        didExpire: () => signal.aborted && signal.reason === timeoutReason,
+        clear: () => { deadlineClears++; deadlineCleared = true; } };
+    });
+    const encoder = new TextEncoder(), adapter: ProviderAdapter = {
+      name: "slow-healthy-stream", buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
       fetchResponse: async (_request, ctx) => {
-        const body = new ReadableStream<Uint8Array>({
-          async start(controller) {
-            const encoder = new TextEncoder();
-            for (const chunk of ["a", "b", "c", "d", "e"]) {
-              await delay(12);
-              if (ctx?.abortSignal?.aborted) {
-                controller.error(ctx.abortSignal.reason);
-                return;
-              }
-              controller.enqueue(encoder.encode(chunk));
-            }
-            controller.close();
+        let chunkIndex = 0;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            virtualElapsedMs += connectTimeoutMs + 1;
+            if (virtualElapsedMs > connectTimeoutMs && !deadlineCleared) deadlineController.abort(timeoutReason);
+            if (ctx?.abortSignal?.aborted) { controller.error(ctx.abortSignal.reason); return; }
+            controller.enqueue(encoder.encode("abcde"[chunkIndex++]!));
+            if (chunkIndex === 5) controller.close();
           },
           cancel() { bodyCancelled++; },
-        });
-        return new Response(body, { status: 200 });
+        }, { highWaterMark: 0 }), { status: 200 });
       },
       async *parseStream(response) {
         expect(await response.text()).toBe("abcde");
         yield { type: "text_delta", text: "healthy after slow generation" };
         yield { type: "done" };
       },
-      async parseResponse(response) {
-        await response.text();
-        return [{ type: "text_delta", text: "legacy non-stream result" }, { type: "done" }];
-      },
+      async parseResponse(response) { await response.text(); return [{ type: "text_delta", text: "legacy non-stream result" }, { type: "done" }]; },
     };
+    try {
+      const response = await runWithWebSearch({
+        parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+        adapter, forwardProvider, hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+        settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+        maxSearches: 1, connectTimeoutMs,
+      });
 
-    const started = performance.now();
-    const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
-      adapter,
-      forwardProvider,
-      hostedTool: { type: "web_search" },
-      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
-      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
-      maxSearches: 1,
-      connectTimeoutMs: 25,
-    });
-
-    expect(response.status).toBe(200);
-    const frames = await collectSse(response.body!);
-    expect(performance.now() - started).toBeGreaterThanOrEqual(50);
-    expect(bodyCancelled).toBe(0);
-    expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+      expect(response.status).toBe(200);
+      const frames = await collectSse(response.body!);
+      expect(virtualElapsedMs).toBeGreaterThan(connectTimeoutMs); expect(deadlineCreations).toBe(1);
+      expect(deadlineClears).toBeGreaterThan(0); expect(deadlineController.signal.aborted).toBe(false);
+      expect(bodyCancelled).toBe(0);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+    } finally { deadlineSpy.mockRestore(); }
   }, 1_000);
 
   test("a buffered web_search followed by error never dispatches the hosted sidecar", async () => {

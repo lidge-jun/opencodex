@@ -1344,6 +1344,60 @@ describe("citation markers never reach the client (#3150)", () => {
   });
 });
 
+describe("terminal stop classification preserves final answer phases (#4855)", () => {
+  test.each([
+    ["end_turn", { type: "done", stopReason: "end_turn" }, "response.completed", "final_answer", undefined],
+    ["max_output_tokens", { type: "done", stopReason: "max_output_tokens" }, "response.incomplete", undefined, "max_output_tokens"],
+    ["refusal", { type: "done", stopReason: "refusal" }, "response.incomplete", undefined, "content_filter"],
+    ["an absent stopReason", { type: "done" }, "response.completed", "final_answer", undefined],
+  ] as const)("streaming terminal %s classifies the final message phase", async (
+    _label,
+    terminal,
+    terminalEvent,
+    expectedPhase,
+    expectedIncompleteReason,
+  ) => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "answer" },
+      terminal,
+    ]), "routed/model"));
+    const message = frames.find(frame =>
+      frame.event === "response.output_item.done"
+      && (frame.data.item as Record<string, unknown>)?.type === "message"
+    )?.data.item as Record<string, unknown>;
+    const response = frames.find(frame => frame.event === terminalEvent)?.data.response as Record<string, unknown>;
+
+    expect(message.phase).toBe(expectedPhase);
+    expect((response.output as Record<string, unknown>[])[0]?.phase).toBe(expectedPhase);
+    expect((response.incomplete_details as Record<string, unknown> | undefined)?.reason)
+      .toBe(expectedIncompleteReason);
+  });
+
+  test.each([
+    ["end_turn", { type: "done", stopReason: "end_turn" }, "completed", "final_answer", undefined],
+    ["max_output_tokens", { type: "done", stopReason: "max_output_tokens" }, "incomplete", undefined, "max_output_tokens"],
+    ["refusal", { type: "done", stopReason: "refusal" }, "incomplete", undefined, "content_filter"],
+    ["an absent stopReason", { type: "done" }, "completed", "final_answer", undefined],
+  ] as const)("buffered terminal %s classifies the final message phase", (
+    _label,
+    terminal,
+    expectedStatus,
+    expectedPhase,
+    expectedIncompleteReason,
+  ) => {
+    const response = buildResponseJSON([
+      { type: "text_delta", text: "answer" },
+      terminal,
+    ], "routed/model");
+    const message = (response.output as Record<string, unknown>[])[0];
+
+    expect(response.status).toBe(expectedStatus);
+    expect(message?.phase).toBe(expectedPhase);
+    expect((response.incomplete_details as Record<string, unknown> | undefined)?.reason)
+      .toBe(expectedIncompleteReason);
+  });
+});
+
 describe("Responses bridge stopReason threading (issue #246)", () => {
   test("done with stopReason max_tokens emits response.incomplete", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([

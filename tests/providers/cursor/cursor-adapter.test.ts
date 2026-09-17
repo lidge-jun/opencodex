@@ -1,25 +1,48 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   createCursorAdapter as createCursorAdapterProduction,
   cursorExecDeniedMessage,
 } from "../../../src/adapters/cursor";
 import {
+  clearCursorIncompleteToolRemint,
+  clearCursorIncompleteToolRemintForTests,
   clearCursorOverflowRemintForTests,
   clearCursorThreadContinuityForTests,
+  CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES,
+  cursorIncompleteToolRemintScopeKey,
+  cursorIncompleteToolRemintCountForTests,
+  cursorOverflowRemintScopeKey,
   lookupCursorThreadConversation,
+  markCursorOverflowSurfaced,
+  recordCursorIncompleteToolRemint,
+  recordCursorOverflowRemint,
+  rememberCursorThreadConversation,
+  shouldSkipCursorOverflowRemint,
 } from "../../../src/adapters/cursor/thread-continuity";
 import {
   clearCursorCheckpointsForTests,
   commitCursorCheckpoint,
   getCursorCheckpoint,
 } from "../../../src/adapters/cursor/checkpoint-store";
-import { create, toBinary } from "@bufbuild/protobuf";
-import { ConversationStateStructureSchema } from "../../../src/adapters/cursor/gen/agent_pb";
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import {
+  AgentClientMessageSchema,
+  ConversationStateStructureSchema,
+  ConversationStepSchema,
+  ConversationTurnStructureSchema,
+  GetBlobArgsSchema,
+  KvServerMessageSchema,
+} from "../../../src/adapters/cursor/gen/agent_pb";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
 import type { CursorTransportFactoryInput } from "../../../src/adapters/cursor/transport";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
-import { CursorRootEnvelopeLimitError } from "../../../src/adapters/cursor/cursor-errors";
+import { CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX, CursorRootEnvelopeLimitError } from "../../../src/adapters/cursor/cursor-errors";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests, setDebugSettings } from "../../../src/lib/debug-settings";
+import { encodeCursorCallId, resetCursorCallIdProvenanceForTests } from "../../../src/adapters/cursor/call-id";
+import { handleCursorNativeKv, resetCursorBlobStateForTests } from "../../../src/adapters/cursor/native-exec";
+import { CURSOR_MISSING_TOOL_RESULT, encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
 
 const createCursorAdapter = (...args: Parameters<typeof createCursorAdapterProduction>) =>
   withTestTranslatorBudget(createCursorAdapterProduction(...args));
@@ -1204,6 +1227,335 @@ describe("Cursor overflow accounting across requests", () => {
       await adapter.runTurn?.(overflowTurnBody(), { headers: new Headers() }, event => events.push(event));
       expect(attempts).toBe(turn + 1);
       expect(events.some(event => event.type === "error")).toBe(true);
+    }
+  });
+});
+
+const INCOMPLETE_TOOL_ERROR =
+  `${CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX} call_abc. Arguments may be truncated; the call was not committed.`;
+
+describe("Cursor incomplete-tool conversation remint", () => {
+  test("native Composer unpaired tool calls replay with a missing-result placeholder", () => {
+    resetCursorBlobStateForTests();
+    resetCursorCallIdProvenanceForTests();
+    const blobData = (blobId: Uint8Array): Uint8Array => {
+      const reply = fromBinary(AgentClientMessageSchema, handleCursorNativeKv(create(KvServerMessageSchema, {
+        id: 1,
+        message: { case: "getBlobArgs", value: create(GetBlobArgsSchema, { blobId }) },
+      })));
+      if (reply.message.case !== "kvClientMessage") return new Uint8Array();
+      const kv = reply.message.value;
+      return kv.message.case === "getBlobResult" ? kv.message.value.blobData : new Uint8Array();
+    };
+    try {
+      const local = encodeCursorCallId("ocxc1e_");
+      const bytes = encodeCursorRunRequest({
+        modelId: "composer-2.5",
+        conversationId: "c1",
+        system: ["You are helpful."],
+        messages: [{ role: "user", content: "continue anyway" }],
+        rawMessages: [
+          { role: "user", content: "read a file", timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/auto",
+            timestamp: 2,
+            content: [{ type: "toolCall", id: local, name: "read_file", arguments: { path: "a.txt" } }],
+          },
+          { role: "user", content: "continue anyway", timestamp: 3 },
+        ],
+      });
+      const msg = fromBinary(AgentClientMessageSchema, bytes);
+      const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+      const turnIds = run?.conversationState?.turns ?? [];
+      expect(turnIds).toHaveLength(1);
+      const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnIds[0]!));
+      expect(turn.turn.case).toBe("agentConversationTurn");
+      const step = fromBinary(ConversationStepSchema, blobData(turn.turn.value.steps[0]!));
+      expect(step.message.case).toBe("toolCall");
+      const tool = step.message.value.tool;
+      expect(tool.case).toBe("mcpToolCall");
+      if (tool.case === "mcpToolCall" && tool.value.result?.result.case === "success") {
+        expect(tool.value.args?.toolCallId).toBe("ocxc1e_");
+        expect(tool.value.result.result.value.isError).toBe(true);
+        const content = tool.value.result.result.value.content[0]?.content;
+        expect(content?.case).toBe("text");
+        if (content?.case === "text") expect(content.value.text).toBe(CURSOR_MISSING_TOOL_RESULT);
+      }
+    } finally {
+      resetCursorBlobStateForTests();
+    }
+  });
+
+  test("remints after a streamed incomplete-tool error and persists the thread override", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          if (attempts === 1) {
+            yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+            return;
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+
+    const threadId = "incomplete-tool-remint-thread";
+    const body: OcxParsedRequest = {
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorIdentityScope: "acct-incomplete-tool-remint",
+      _clientThreadId: threadId,
+    };
+
+    const firstEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => firstEvents.push(event));
+
+    expect(attempts).toBe(1);
+    expect(firstEvents).toEqual([
+      { type: "error", message: INCOMPLETE_TOOL_ERROR },
+    ]);
+    expect(body._cursorConversationId).toBeDefined();
+    expect(body._cursorConversationId).not.toBe(seen[0]);
+    expect(lookupCursorThreadConversation(threadId, "acct-incomplete-tool-remint")).toBe(body._cursorConversationId);
+
+    const secondEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => secondEvents.push(event));
+
+    expect(attempts).toBe(2);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(body._cursorConversationId);
+    expect(seen[1]).not.toBe(seen[0]);
+    expect(secondEvents.some(event => event.type === "done")).toBe(true);
+  });
+
+  test("compaction storage isolation preserves the stable thread override without relying on the isolate flag", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    const owner = "incomplete-tool-compaction";
+    const identityScope = "acct-incomplete-tool-remint";
+    const stableConversation = "cursor_parent_stable";
+    rememberCursorThreadConversation(owner, stableConversation, identityScope);
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run(request) {
+          seen.push(request.conversationId);
+          yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+    const compaction: OcxParsedRequest = {
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "summarize", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _compactionRequest: true,
+      _cursorConversationId: "cursor_compaction_turn",
+      _cursorIdentityScope: identityScope,
+      _clientThreadId: owner,
+    };
+
+    await adapter.runTurn?.(compaction, { headers: new Headers() }, () => {});
+
+    expect(compaction._cursorIsolateConversation).toBeUndefined();
+    expect(seen).toEqual(["cursor_compaction_turn"]);
+    expect(compaction._cursorConversationId).toBe("cursor_compaction_turn");
+    expect(lookupCursorThreadConversation(owner, identityScope)).toBe(stableConversation);
+  });
+
+  test("the fourth incomplete-tool truncation keeps the conversation and records exhaustion", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    resetDebugLogBufferForTests();
+    setDebugSettings({ debug: true });
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run(request) {
+          seen.push(request.conversationId);
+          yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+    const owner = "incomplete-tool-cap";
+    const body: OcxParsedRequest = {
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorIdentityScope: "acct-incomplete-tool-remint",
+      _clientThreadId: owner,
+    };
+
+    try {
+      for (let truncation = 0; truncation < 3; truncation++) {
+        await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+        expect(body._cursorConversationId).not.toBe(seen.at(-1));
+      }
+      const retainedConversation = body._cursorConversationId;
+      await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+
+      expect(seen).toHaveLength(4);
+      expect(seen.at(-1)).toBe(retainedConversation);
+      expect(body._cursorConversationId).toBe(retainedConversation);
+      expect(lookupCursorThreadConversation(owner, "acct-incomplete-tool-remint")).toBe(retainedConversation);
+      expect(getDebugLogEntries().some(entry => entry.line.includes("[ocx:cursor:incomplete-tool-remint-exhausted]"))).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+      resetDebugSettingsForTests();
+      resetDebugLogBufferForTests();
+      clearCursorIncompleteToolRemintForTests();
+      clearCursorThreadContinuityForTests();
+    }
+  });
+
+  test("a clean completed turn replenishes the incomplete-tool remint budget", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    let incomplete = true;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run() {
+          if (incomplete) {
+            yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+          } else {
+            yield { type: "done" } satisfies CursorServerMessage;
+          }
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+    const body: OcxParsedRequest = {
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorIdentityScope: "acct-incomplete-tool-remint",
+      _clientThreadId: "incomplete-tool-clean-reset",
+    };
+
+    for (let truncation = 0; truncation < 3; truncation++) {
+      await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    }
+    incomplete = false;
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    incomplete = true;
+    const beforeRecoveredTruncation = body._cursorConversationId;
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+
+    expect(body._cursorConversationId).not.toBe(beforeRecoveredTruncation);
+  });
+
+  test("incomplete-tool and overflow remint budgets do not consume or replenish each other", () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorOverflowRemintForTests();
+    const incompleteScope = cursorIncompleteToolRemintScopeKey("independent-remint-budgets", "acct-remint-budget");
+    const overflowScope = cursorOverflowRemintScopeKey("independent-remint-budgets", "acct-remint-budget");
+    expect(incompleteScope).toBe(overflowScope);
+    if (!incompleteScope || !overflowScope) throw new Error("stable thread owner must produce remint scopes");
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(recordCursorIncompleteToolRemint(incompleteScope)).toBe(true);
+    }
+    expect(recordCursorIncompleteToolRemint(incompleteScope)).toBe(false);
+    expect(shouldSkipCursorOverflowRemint(overflowScope)).toBe(false);
+    markCursorOverflowSurfaced(overflowScope);
+    expect(recordCursorOverflowRemint(overflowScope)).toBe(true);
+
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorOverflowRemintForTests();
+    markCursorOverflowSurfaced(overflowScope);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(recordCursorOverflowRemint(overflowScope)).toBe(true);
+    }
+    expect(shouldSkipCursorOverflowRemint(overflowScope)).toBe(true);
+    expect(recordCursorIncompleteToolRemint(incompleteScope)).toBe(true);
+    clearCursorIncompleteToolRemint(incompleteScope);
+    expect(shouldSkipCursorOverflowRemint(overflowScope)).toBe(true);
+  });
+
+  test("bounds incomplete-tool remint state to the shared entry cap", () => {
+    clearCursorIncompleteToolRemintForTests();
+    for (let index = 0; index < CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES + 20; index++) {
+      const scope = cursorIncompleteToolRemintScopeKey(`incomplete-retention-${index}`, "acct-remint-budget");
+      if (!scope) throw new Error("stable thread owner must produce an incomplete-tool scope");
+      expect(recordCursorIncompleteToolRemint(scope)).toBe(true);
+    }
+    expect(cursorIncompleteToolRemintCountForTests()).toBe(CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES);
+    clearCursorIncompleteToolRemintForTests();
+  });
+
+  test("isolated helpers do not remint or park a throwaway id on the parent thread", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    clearCursorCheckpointsForTests();
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run(request) {
+          seen.push(request.conversationId);
+          yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+
+    try {
+      const owner = "incomplete-tool-isolated-helper";
+      const parentRef = commitCursorCheckpoint({
+        conversationId: "cursor_parent_incomplete",
+        identityScope: "acct-incomplete-tool-remint",
+        modelId: "default",
+        checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+          pendingToolCalls: ["incomplete-isolation-fixture"],
+        })),
+        coveredMessageCount: 1,
+      });
+      expect(parentRef).toBeDefined();
+
+      const helper: OcxParsedRequest = {
+        modelId: "cursor/grok-4.6",
+        context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        stream: false,
+        options: {},
+        _cursorIsolateConversation: true,
+        _cursorConversationId: "cursor_parent_incomplete",
+        _cursorIdentityScope: "acct-incomplete-tool-remint",
+        _clientThreadId: owner,
+        _providerContinuation: {
+          cursor: { conversationId: "cursor_parent_incomplete", checkpointUsable: true, checkpointRef: parentRef },
+        },
+      };
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(helper, { headers: new Headers() }, event => events.push(event));
+
+      expect(seen).toHaveLength(1);
+      expect(events).toEqual([{ type: "error", message: INCOMPLETE_TOOL_ERROR }]);
+      expect(helper._cursorConversationId).toBe(seen[0]);
+      expect(getCursorCheckpoint(parentRef)?.ref).toBe(parentRef);
+      expect(lookupCursorThreadConversation(owner, "acct-incomplete-tool-remint")).toBeUndefined();
+    } finally {
+      clearCursorThreadContinuityForTests();
+      clearCursorCheckpointsForTests();
     }
   });
 });

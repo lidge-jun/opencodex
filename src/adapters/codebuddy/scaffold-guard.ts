@@ -5,10 +5,10 @@ export const CODEBUDDY_SCAFFOLD_ERROR_CODE = "vendor_scaffold_detected";
 
 // The observed control protocol uses FULLWIDTH VERTICAL LINE (U+FF5C). Detection stays
 // deliberately narrower than the marker spelling: a calls control line must be followed by an
-// invoke line for a functions.* tool. That distinguishes an agent scaffold from prose quoting or
+// invoke line with a non-empty tool name. That distinguishes an agent scaffold from prose quoting or
 // discussing one tag.
 const DSML_CALLS_LINE = "<｜｜dsml｜｜ calls>";
-const DSML_INVOKE_PREFIX = "<｜｜dsml｜｜ invoke name=\"functions.";
+const DSML_INVOKE_PREFIX = "<｜｜dsml｜｜ invoke name=\"";
 
 export interface CodeBuddyScaffoldFilterResult {
   /** Bytes released from a suffix withheld by an earlier event on this channel. */
@@ -39,7 +39,7 @@ function prefixAtEnd(text: string, at: number, expected: string): boolean {
  * Control tags are recognized only at column zero and outside fenced Markdown. Inline code,
  * quoted strings, blockquotes, indented source, and prose all add syntax before the tag and are
  * therefore forwarded unchanged. A calls line alone is harmless; refusal requires the observed
- * two-line calls-plus-functions-invoke grammar.
+ * two-line calls-plus-named-invoke grammar.
  */
 function scan(
   text: string,
@@ -77,7 +77,8 @@ function scan(
 
           if (invokeAt >= 0) {
             const invokeRest = text.slice(invokeAt).toLowerCase();
-            if (invokeRest.startsWith(DSML_INVOKE_PREFIX)) {
+            const invokeNameStart = invokeRest[DSML_INVOKE_PREFIX.length];
+            if (invokeRest.startsWith(DSML_INVOKE_PREFIX) && invokeNameStart && !/[\s"]/.test(invokeNameStart)) {
               return { safe: text.slice(0, index), held: "", fail: true, fence, lineStart };
             }
             if (invokeRest.length === 0 || DSML_INVOKE_PREFIX.startsWith(invokeRest)) {

@@ -266,6 +266,9 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: entry.requiresAdjacentResponsesToolResults }
       : {}),
+    ...(entry.requiresPairedResponsesToolResults !== undefined
+      ? { requiresPairedResponsesToolResults: entry.requiresPairedResponsesToolResults }
+      : {}),
     ...(entry.annotateEmptyToolOutputs !== undefined
       ? { annotateEmptyToolOutputs: entry.annotateEmptyToolOutputs }
       : {}),
@@ -540,6 +543,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
   if (prov.requiresAdjacentResponsesToolResults === undefined && seed.requiresAdjacentResponsesToolResults !== undefined) {
     prov.requiresAdjacentResponsesToolResults = seed.requiresAdjacentResponsesToolResults;
+  }
+  if (prov.requiresPairedResponsesToolResults === undefined && seed.requiresPairedResponsesToolResults !== undefined) {
+    prov.requiresPairedResponsesToolResults = seed.requiresPairedResponsesToolResults;
   }
   if (prov.annotateEmptyToolOutputs === undefined && seed.annotateEmptyToolOutputs !== undefined) {
     prov.annotateEmptyToolOutputs = seed.annotateEmptyToolOutputs;

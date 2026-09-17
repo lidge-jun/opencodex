@@ -23,6 +23,8 @@ import type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseS
 export { responseAdmissionCountersForTests } from "./state/spill-failure";
 import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, spillCounters, spillWriteHealth } from "./state/spill-failure";
 import { loadSnapshotEntry } from "./state/snapshot-codec";
+import { isBodyNonPersistable } from "./state/body-policy";
+export { isBodyNonPersistable, markBodyNonPersistable } from "./state/body-policy";
 export { flushPendingResponseSpillsForTests, awaitResponseSpillPublicationTailForTests, pendingResponseSpillMetricsForTests, setResponseSpillShutdownBudgetForTests, setResponseSpillAsyncAclAttemptBudgetForTests, setResponseSpillShutdownTerminalizationPassLimitForTests } from "./state/spill-queue";
 import {
   bindSpillQueueStore,
@@ -1235,27 +1237,6 @@ export function responseStateMetrics(): ResponseStateMetrics {
  * Cache completed output and max_output_tokens partial output for previous_response_id replay.
  * Content-filtered incomplete and failed output are not authoritative replay history.
  */
-/**
- * Request bodies that must never enter the continuation cache.
- *
- * The cache is persisted to `responses-state.json`, so anything recorded here reaches disk.
- * Encrypted-agent-task recovery decrypts task text into the request body and promises
- * in-memory, TTL-bounded retention; recording that body would put the plaintext on disk with
- * no TTL and break the promise.
- *
- * A WeakSet rather than a body field on purpose: `_rawBody` is serialized verbatim by the
- * native passthrough, so any marker written into the body itself would be sent upstream.
- * Marking is enforced once here rather than at each call site, because every recording path
- * (streaming, non-streaming, passthrough, forced) funnels through `rememberResponseState` —
- * a new call site cannot reintroduce the leak by forgetting a guard.
- */
-const nonPersistableBodies = new WeakSet<object>();
-
-/** Bar this exact request body from the continuation cache, and therefore from disk. */
-export function markBodyNonPersistable(body: unknown): void {
-  if (body && typeof body === "object") nonPersistableBodies.add(body as object);
-}
-
 export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
@@ -1264,7 +1245,7 @@ export function rememberResponseState(
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
   const request = requestBody as Record<string, unknown>;
-  if (nonPersistableBodies.has(request)) return;
+  if (isBodyNonPersistable(request)) return;
   // `force` bypasses only the store:false skip: Codex sends `store:false` on every non-Azure
   // HTTP request (and WS inherits it), yet its WS turns still chain with previous_response_id.
   // The passthrough branch records with force so those chains can be expanded locally; the

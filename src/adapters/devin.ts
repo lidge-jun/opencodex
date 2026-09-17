@@ -11,7 +11,7 @@ import { namespacedToolName } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import type { ContentPart } from "./devin/cloud-direct/chat";
-import { getCachedCatalog } from "./devin/cloud-direct/catalog";
+import { getCachedCatalog, type CacheEntry } from "./devin/cloud-direct/catalog";
 import { collapseDevinModelUid } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
@@ -155,6 +155,7 @@ async function resolveWireModelUid(
   apiKey: string,
   host: string,
   reasoningEffort?: string,
+  catalog?: CacheEntry | null,
 ): Promise<string> {
   const modelId = normalizeDevinModelId(rawModelId);
   // Explicit effort wins over a suffix the picker already baked into the id, so
@@ -163,15 +164,18 @@ async function resolveWireModelUid(
   const swe2 = resolveSwe2Variant(modelId, reasoningEffort);
   if (swe2) return swe2;
   if (hasEffortSuffix(modelId)) return modelId;
-  const catalog = await getCachedCatalog(apiKey, host);
-  if (catalog) {
-    if (catalog.byUid.has(modelId)) return modelId;
+  // Callers that already read the catalog this turn pass it in; an explicit
+  // null records a failed lookup and must not trigger a same-turn retry —
+  // failures are not cached, so re-reading would only pay another timeout.
+  const entry = catalog !== undefined ? catalog : await getCachedCatalog(apiKey, host);
+  if (entry) {
+    if (entry.byUid.has(modelId)) return modelId;
     const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
     const suffixed = `${modelId}-${effort}`;
-    if (catalog.byUid.has(suffixed)) return suffixed;
+    if (entry.byUid.has(suffixed)) return suffixed;
     // Fall back to any enabled variant of this base model.
-    for (const uid of catalog.byUid.keys()) {
-      if (uid.startsWith(modelId + "-") && !catalog.byUid.get(uid)?.disabled) return uid;
+    for (const uid of entry.byUid.keys()) {
+      if (uid.startsWith(modelId + "-") && !entry.byUid.get(uid)?.disabled) return uid;
     }
   }
   // Degraded mode: append the default effort suffix.
@@ -185,6 +189,46 @@ async function resolveWireModelUid(
  * part of the adapter public API. Mirrors sanitizeToolDescriptionForCognitionForTests.
  */
 export const resolveWireModelUidForTests = resolveWireModelUid;
+
+/**
+ * Resolve the INPUT ceiling for the exact UID selected for this turn. Catalog
+ * ClientModelConfig #18 and CompletionConfiguration #3 both carry input tokens;
+ * the independent output cap is not subtracted here. Smaller operator hints
+ * cap live evidence, never enlarge it. No evidence leaves the encoder's 128k
+ * fallback intact; an unrelated or opt-in long-context variant is not evidence.
+ */
+function resolveDevinMaxInputTokens(
+  provider: OcxProviderConfig,
+  modelUid: string,
+  liveWindow?: number,
+): number | undefined {
+  const positive = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  const baseId = collapseDevinModelUid(modelUid);
+  const configured = (record: Record<string, number> | undefined): number | undefined => {
+    if (!record) return undefined;
+    for (const id of [modelUid, baseId]) {
+      // Prefer the canonical spelling; retain dotted/case-folded saved hints,
+      // matching the model-id normalization used for the inference request.
+      const exact = Object.hasOwn(record, id) ? positive(record[id]) : undefined;
+      if (exact !== undefined) return exact;
+      const matches = Object.entries(record)
+        .filter(([key]) => normalizeDevinModelId(key).toLowerCase() === id.toLowerCase())
+        .map(([, value]) => positive(value))
+        .filter((value): value is number => value !== undefined);
+      if (matches.length > 0) return Math.min(...matches);
+    }
+    return undefined;
+  };
+  const contextHint = configured(provider.modelContextWindows) ?? positive(provider.contextWindow);
+  const inputHint = configured(provider.modelMaxInputTokens);
+  const ceilings = [positive(liveWindow), contextHint, inputHint]
+    .filter((value): value is number => value !== undefined);
+  return ceilings.length > 0 ? Math.min(...ceilings) : undefined;
+}
+
+/** Pure test seam; runtime uses the same resolver immediately before dispatch. */
+export const resolveDevinMaxInputTokensForTests = resolveDevinMaxInputTokens;
 
 export class DevinMissingCredentialError extends Error {
   constructor() {
@@ -493,7 +537,16 @@ export function createDevinAdapter(
       // entry: an EU or FedStart account that used provider.baseUrl would send
       // every RPC to the US server it is not provisioned on.
       const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId);
-      const modelUid = await resolveWireModelUid(rawModelId, apiKey, host, parsed.options.reasoning);
+      // One catalog read per turn serves model-UID resolution, the input
+      // ceiling, and the chat pre-flight inside streamChatEvents. Failures are
+      // not cached, so a second read would only pay another fetch timeout on
+      // an otherwise valid turn.
+      const catalog = await getCachedCatalog(apiKey, host, incoming.abortSignal);
+      if (incoming.abortSignal?.aborted) {
+        emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false });
+        return;
+      }
+      const modelUid = await resolveWireModelUid(rawModelId, apiKey, host, parsed.options.reasoning, catalog);
       const returnedToolNames = buildDevinReturnedToolNameMap(parsed.context.tools);
       let openToolId: string | undefined;
       let usage: OcxUsage | undefined;
@@ -506,17 +559,22 @@ export function createDevinAdapter(
       };
 
       try {
+        // Read the selected UID's catalog row, not the picker's collapsed base.
+        const maxInputTokens = resolveDevinMaxInputTokens(
+          provider, modelUid, catalog?.byUid.get(modelUid)?.contextWindow,
+        );
         for await (const event of streamChatEvents({
           apiKey,
           apiServerUrl: host,
           modelUid,
+          catalog,
           messages: mapOcxMessagesToDevin(parsed),
           tools: mapOcxToolsToDevin(parsed.context.tools),
           cascadeId,
-          // Without these the request falls back to the encoder's defaults
-          // (8192 output, a 128k context window, temperature 0.7), so a client
-          // that asked for a 4k cap never got one.
+          // Input and output ceilings are separate wire fields. Omitting the
+          // input hint used to force every model through the 128k default.
           completionOpts: {
+            ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
             ...(typeof parsed.options.maxOutputTokens === "number" ? { maxOutputTokens: parsed.options.maxOutputTokens } : {}),
             ...(typeof parsed.options.temperature === "number" ? { temperature: parsed.options.temperature } : {}),
             ...(typeof parsed.options.topP === "number" ? { topP: parsed.options.topP } : {}),

@@ -5,10 +5,8 @@ import {
   RESPONSES_CORE_MODULES,
   readResponsesCoreModule,
 } from "../helpers/responses-core-source";
-import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
-import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import type { TransientSendBudget } from "../../src/lib/upstream-retry";
+import { budgetOwner } from "../helpers/send-budget-owner";
 
 // Existing, separately owned siblings at the extraction boundary. A new owner
 // cannot silently disappear from source-oracle coverage by being absent from the inventory.
@@ -111,20 +109,6 @@ describe("Responses core module boundaries", () => {
     expect(continuation).toContain("transportState.activeAdapter");
   });
 });
-
-function budgetOwner(sendBudget: TransientSendBudget) {
-  const translatorBudget = createTranslatorBudget();
-  const result = createResponsesSendBudget({
-    req: new Request("http://localhost/v1/responses"),
-    logCtx: { model: "test", provider: "test" },
-    options: { translatorBudget, sendBudget },
-  });
-  if (result instanceof Response) {
-    translatorBudget.dispose();
-    throw new Error("Unexpected workflow refusal without a workflow root");
-  }
-  return { owner: result, dispose: () => translatorBudget.dispose() };
-}
 
 describe("Responses request-owned send budget after extraction", () => {
   test("legacy holders retain identity and an exhausted remainder stays zero", () => {
