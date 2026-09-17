@@ -105,9 +105,9 @@ describe("loadCommandCodeProjectContext", () => {
   test("first-wins across skill roots by resolved name", async () => {
     const root = makeTempDir("ocx-cc-ctx-firstwins-");
     try {
-      writeSkill(root, ".commandcode/skills", "shared", "from commandcode");
-      writeSkill(root, ".agents/skills", "shared", "from agents");
-      writeSkill(root, ".pi/skills", "shared", "from pi");
+      writeSkill(root, ".commandcode/skills", "shared-cc", "from commandcode", "name: shared");
+      writeSkill(root, ".agents/skills", "shared-agents", "from agents", "name: shared");
+      writeSkill(root, ".pi/skills", "shared-pi", "from pi", "name: shared");
       writeSkill(root, ".agents/skills", "agents-only", "agents only body");
       writeSkill(root, ".pi/skills", "pi-only", "pi only body");
 
@@ -224,6 +224,50 @@ describe("loadCommandCodeProjectContext", () => {
       expect(matches?.length).toBe(16);
       // Without bounding, all 300 entries are iterated. With the scan cap,
       // iteration stops once 256 valid dirs are found.
+      expect(entriesIterated).toBeLessThan(300);
+      expect(entriesIterated).toBeLessThanOrEqual(256);
+    } finally {
+      opendirMock.mockImplementation(realOpendir);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds mixed and nonmatching directory enumeration to the scan budget", async () => {
+    const root = makeTempDir("ocx-cc-ctx-mixed-budget-");
+    const skillRoot = join(root, ".commandcode", "skills");
+    try {
+      mkdirSync(skillRoot, { recursive: true });
+      for (let i = 0; i < 100; i++) {
+        writeFileSync(join(skillRoot, `file-${String(i).padStart(3, "0")}.txt`), "data", "utf8");
+        mkdirSync(join(skillRoot, `no-skill-${String(i).padStart(3, "0")}`));
+        mkdirSync(join(skillRoot, `.hidden-${String(i).padStart(3, "0")}`));
+      }
+
+      let entriesIterated = 0;
+      opendirMock.mockImplementation(async path => {
+        const dir = await realOpendir(path);
+        const originalIterator = dir[Symbol.asyncIterator].bind(dir);
+        dir[Symbol.asyncIterator] = function () {
+          const iter = originalIterator();
+          return {
+            async next() {
+              const res = await iter.next();
+              if (!res.done) entriesIterated++;
+              return res;
+            },
+            async return() {
+              return typeof iter.return === "function" ? iter.return() : { done: true, value: undefined };
+            },
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+          };
+        };
+        return dir;
+      });
+
+      const result = await loadCommandCodeProjectContext(root);
+      expect(result.skills).toBeNull();
       expect(entriesIterated).toBeLessThan(300);
       expect(entriesIterated).toBeLessThanOrEqual(256);
     } finally {
@@ -580,14 +624,12 @@ describe("projectContextCache eviction", () => {
   });
 
   test("cache never exceeds the cap when inserting via loader", async () => {
-    const now = Date.now();
     const roots: string[] = [];
     try {
       for (let i = 0; i < MAX_PROJECT_CONTEXT_CACHE_ENTRIES + 10; i++) {
         const root = makeTempDir(`ocx-cc-ctx-cap-${i}-`);
         roots.push(root);
         writeFileSync(join(root, "AGENTS.md"), `agents ${i}`, "utf8");
-        pruneProjectContextCache(now + i);
         await loadCommandCodeProjectContext(root);
       }
       expect(projectContextCache.size).toBeLessThanOrEqual(MAX_PROJECT_CONTEXT_CACHE_ENTRIES);

@@ -218,16 +218,19 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
         const openedDir = await opendir(skillRootCanonical);
         dir = openedDir;
         const names: string[] = [];
+        let visitedEntries = 0;
         try {
           for await (const entry of openedDir) {
-            if (entry.name.startsWith(".")) continue;
-            if (!entry.isDirectory()) continue;
-            const skillMd = join(skillRoot, entry.name, "SKILL.md");
-            const skillMdCanonical = confinedCanonicalPath(skillMd, cwdCanonical);
-            if (!skillMdCanonical) continue;
-            if (!existsSync(skillMdCanonical)) continue;
-            names.push(entry.name);
-            if (names.length >= scanBudget) break;
+            visitedEntries++;
+            const atLimit = visitedEntries >= scanBudget;
+            if (!entry.name.startsWith(".") && entry.isDirectory()) {
+              const skillMd = join(skillRoot, entry.name, "SKILL.md");
+              const skillMdCanonical = confinedCanonicalPath(skillMd, cwdCanonical);
+              if (skillMdCanonical && existsSync(skillMdCanonical)) {
+                names.push(entry.name);
+              }
+            }
+            if (atLimit) break;
           }
         } catch {
           try {
@@ -330,13 +333,18 @@ function truncateUtf8BodyForXml(body: string, capBytes: number): string | null {
 async function readSkills(cwd: string, cwdCanonical: string, timeoutMs: number): Promise<string | null> {
   const seen = new Set<string>();
   const collected: SkillEntry[] = [];
+  const deadline = Date.now() + timeoutMs;
 
   for (const rootRel of SKILL_ROOTS) {
+    const remainingScanMs = deadline - Date.now();
+    if (remainingScanMs <= 0) break;
     const skillRoot = join(cwd, ...rootRel.split("/"));
-    const dirs = await listSkillDirs(skillRoot, cwdCanonical, MAX_SKILL_DIRS_TO_SCAN, timeoutMs);
+    const dirs = await listSkillDirs(skillRoot, cwdCanonical, MAX_SKILL_DIRS_TO_SCAN, remainingScanMs);
     for (const dirName of dirs) {
       if (collected.length >= MAX_SKILLS) break;
-      const skill = await readSkill(skillRoot, dirName, cwdCanonical, timeoutMs);
+      const remainingReadMs = deadline - Date.now();
+      if (remainingReadMs <= 0) break;
+      const skill = await readSkill(skillRoot, dirName, cwdCanonical, remainingReadMs);
       if (!skill) continue;
       if (seen.has(skill.name)) continue;
       seen.add(skill.name);

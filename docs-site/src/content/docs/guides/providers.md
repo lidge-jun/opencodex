@@ -607,8 +607,13 @@ Provider-API keys at [Command Code Studio](https://commandcode.ai/studio/).
 
 The OAuth adapter sends empty `memory`, `taste`, and `skills` fields by default. Set
 `projectContext: "on"` on a `command-code` provider to include bounded local
-`AGENTS.md`, `taste.md`, and skill files from the current working directory. The
-loader is fail-soft, caps each payload, and stays off unless explicitly enabled.
+`AGENTS.md`, `.commandcode/taste/taste.md`, and `SKILL.md` files discovered under
+`.commandcode/skills`, `.agents/skills`, and `.pi/skills` within the local working
+directory. Enabling `projectContext` sends this collected workspace content to the
+configured Command Code endpoint. Note that context is read from the local opencodex
+process working directory, which may not match a remote client caller workspace. The
+loader is fail-soft, caps each payload and scan budget, enforces a wall-clock deadline,
+and stays off unless explicitly enabled.
 
 **OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for
 one-click browser authorization or `ocx login orcarouter` to paste an existing API key. The PKCE
