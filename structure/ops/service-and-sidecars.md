@@ -1,6 +1,7 @@
 # Background Service And Sidecars
 
 Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Service endpoints are unchanged by the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.

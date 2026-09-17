@@ -1086,6 +1086,7 @@
   "server-clickjacking-headers.test.ts": "server",
   "server-combo-failover-e2e.test.ts": "server",
   "server-combo-reasoning-replay-eligibility.test.ts": "server",
+  "server-combo-zero-output-failover.test.ts": "server",
   "server-google-antigravity-oauth-401-replay.test.ts": "server",
   "server-images-bodyless-content-length.test.ts": "server",
   "server-images.test.ts": "server",
@@ -1113,6 +1114,7 @@
   "service.test.ts": "service",
   "session-affinity.test.ts": "server",
   "session-lane-recall-harness.test.ts": "server",
+  "settings-desktop-switch-apply.test.ts": "config",
   "settings-main-account-hard-lock.test.ts": "config",
   "settings-oauth-open-browser.test.ts": "config",
   "settings-startup-health-seam.test.ts": "config",
@@ -1289,6 +1291,7 @@
   "xai-client.test.ts": "images",
   "xai-oauth-retry.test.ts": "providers/xai",
   "xai-refresh-lock.test.ts": "providers/xai",
+  "xai-responses-adjacency.test.ts": "providers/xai",
   "xai-tool-schema.test.ts": "providers/xai",
   "xai-transport.test.ts": "providers/xai",
   "xai-video-client.test.ts": "videos",
@@ -1318,5 +1321,6 @@
   "codex-pool-refresh-backoff.test.ts": "codex-integration",
   "responses-account-change-scrub.test.ts": "responses",
   "response-log-inspection.test.ts": "server",
-  "request-log-nonstream.test.ts": "usage"
+  "request-log-nonstream.test.ts": "usage",
+  "ws-native-steering.test.ts": "responses"
 }
