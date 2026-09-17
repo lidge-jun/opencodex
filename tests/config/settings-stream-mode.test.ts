@@ -97,7 +97,10 @@ function putDesktopSwitchInIsolatedHome(
     writeRuntimePort({ pid: process.pid, port: config.port });
     const request = new Request("http://127.0.0.1:10100/api/settings", {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      // Same requirement as the in-process cases: managementRequestOrigin derives the
+      // allowed origin from the Host header, and a constructed Request carries none, so
+      // without this the handler is never reached and the response is a 403.
+      headers: { host: "127.0.0.1:10100", "content-type": "application/json" },
       body: JSON.stringify(requestBody),
     });
     const response = await handleManagementAPI(request, new URL(request.url), config, {
