@@ -102,6 +102,12 @@ echo is a guess rather than a nomination. The bridges check the declared set bef
 declaration is untouched throughout: that is the caller declaring the tool, not a namespace being
 discarded to manufacture a bare name.
 
+Function-call wrappers around freeform bodies are restored by
+`src/responses/apply-patch-envelope.ts`. The declared `input` field is authoritative. For bare
+`exec` and `apply_patch`, one tool-specific alternate field or one complete outer Markdown fence
+is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
+therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
+
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
 web-search variant, and `defer_loading` on any declaration, which `activateDeferredTool` clears only
