@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ComboEffort, ComboStrategy, ComboTarget, ProviderQuotaStates } from "../combo-workspace-data";
-import { comboImagesSupported } from "../combo-capabilities";
+import { comboImagesSupported, comboVisionSidecarTargets } from "../combo-capabilities";
 import { COMBO_EFFORTS, COMBO_STRATEGIES, COMBO_STRATEGY_LABEL_KEYS, newComboTarget } from "../combo-workspace-data";
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
@@ -102,6 +102,14 @@ export function ComboCapabilities({
   const imagesSupported = comboImagesSupported(targets, models);
   // Default: checked (auto) when supported; force off when any target lacks image.
   const effectiveOn = imagesSupported && imageInput !== "disabled";
+  const sidecarTargets = comboVisionSidecarTargets(targets, models);
+  const imageHint = !imagesSupported
+    ? t("cws.capability.imageInputUnavailable")
+    : sidecarTargets.length > 0
+      ? t("cws.capability.imageInputSidecarHint", {
+        models: sidecarTargets.map(({ provider, model }) => `${provider}/${model}`).join(", "),
+      })
+      : t("cws.capability.imageInputHint");
 
   return (
     <section className="cwi-capabilities" aria-label={t("cws.capabilities")}>
@@ -110,7 +118,7 @@ export function ComboCapabilities({
         <div>
           <span className="cwi-capability-label">{t("cws.capability.imageInput")}</span>
           <p className="muted cwi-capability-hint">
-            {imagesSupported ? t("cws.capability.imageInputHint") : t("cws.capability.imageInputUnavailable")}
+            {imageHint}
           </p>
         </div>
         <Switch
