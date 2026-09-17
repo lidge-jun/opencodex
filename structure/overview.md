@@ -49,7 +49,8 @@ preserves saved user model selections and historical usage. See the bounded
 installed service resolve it the same way (`src/config.ts`). Ownership inside that root is tracked
 by the uninstall manifest in `src/lib/config-ownership.ts`, which starts from a declared path list
 and grows as opencodex claims further paths at runtime — so the manifest, not this table, is what
-bounds uninstall. This table groups the state by purpose; it is not an exhaustive file list, and
+bounds uninstall. Newly generated recovery backups follow the [backup ownership contract](config.md#restore)
+without suppressing recovery when registration is unavailable. This table groups state by purpose; it is not an exhaustive file list, and
 derived files such as `auth.json.pre-multiauth` are covered by the group they belong to.
 
 `$CODEX_HOME` is a separate root with a separate owner, and opencodex writes there too: removing the
@@ -75,6 +76,10 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | `$CODEX_HOME/opencodex-journal.json` | opencodex | Injection journal used by restore to strip only marker-owned values while preserving later user edits. |
 | `$CODEX_HOME/models_cache.json` | Codex, invalidated by opencodex | Cache invalidated after model/catalog changes. |
 | `dist/`, `gui/dist/`, `node_modules/` | generated | Build output/dependencies. |
+
+OrcaRouter login returns credentials for storage only after bounded response ingestion and payload
+validation. The shared reader's cancellation contract and the login-specific byte/deadline limits
+are defined in [bounded response ingestion](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 ## Non-negotiable invariants
 

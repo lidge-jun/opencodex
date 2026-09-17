@@ -463,11 +463,18 @@ fingerprints compare the same client-visible items without content-to-summary co
 It does not change streaming selection or Chat model routes. Go fixtures cover Luna, Grok
 and Muse against both response formats.
 
-The canonical OpenCode Go transport also derives `x-opencode-session` from the existing hashed
-session lane before per-model wire selection. One conversation keeps one opaque affinity value
-across Responses, Chat, retries, and key rotation, while sibling subagents remain distinct. An
-operator-supplied header wins case-insensitively. Renamed providers are covered only when their
+The canonical OpenCode Go transport derives `x-opencode-session` from the existing hashed session
+lane and the final per-model wire protocol. One conversation keeps one opaque affinity value within
+each protocol across ingress surfaces, retries, and key rotation, while Anthropic, Responses, and
+Chat turns use separate namespaces and sibling subagents remain distinct. Destination recognition
+uses the original routed provider while the generated hash uses the settled adapter, so selecting an
+Anthropic hard pin cannot make the canonical Go destination disappear from transport recognition.
+An operator-supplied header wins case-insensitively. Renamed providers are covered only when their
 fixed key-auth destination still matches the registry; custom and lookalike URLs receive nothing.
+OpenCode Go's exact `union-alpha` model id is hard-pinned to the Anthropic wire from every inbound
+surface; sibling models retain their existing Chat or Responses selection. This wire choice and the
+session namespace do not assert upstream availability after the Messages endpoint accepts the
+session header.
 Muse Spark's Responses sanitizer also drops the provider-rejected `search_content_types` and
 `indexed_web_access` fields from plain `web_search` tools while preserving preview tools and
 unrelated models.
@@ -792,7 +799,7 @@ WebSocket metadata and compact are excluded. This does not disable upstream safe
 Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch) privately to final dispatch; preliminary route selection does not inject Go-only headers.
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates; account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates; account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority. Raw-byte readers on this path supply their own byte and deadline budgets under the [bounded ingestion contract](inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

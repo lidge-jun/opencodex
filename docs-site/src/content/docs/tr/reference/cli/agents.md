@@ -230,7 +230,7 @@ için kendi varsayılanlarını uygular) gelir.
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | yok — geri döngü yer tutucusu |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | gizli olmayan geri döngü yer tutucusu |
 | `dsh` | `$DSH_HOME/settings.yaml` (varsayılan `~/.dsh/settings.yaml`) | `settings.yaml` | yok — gizli olmayan geri döngü bearer yer tutucusu |
 | `mcode` | `~/.minimax/config.yaml` (ayarlandığında `MINIMAX_DATA_DIR`, ardından eski `MAVIS_DATA_DIR` öncelikli; göreli değer reddedilir) | `mcode-config.yaml` | yok — geri döngü yer tutucusu |
 | `zcode` | `~/.zcode/v2/config.json` (ayarlandığında `ZCODE_DATA_DIR` öncelikli; göreli değer reddedilir) | `config.json` | yok — geri döngü yer tutucusu |
@@ -274,9 +274,7 @@ döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl
 görmek için [Uzaktan erişim](/tr/reference/configuration/#remote-access)
 bölümüne bakın. Yukarı akış sağlayıcılarının kendi anahtarları tamamen ayrı bir
 şeydir ve [Sağlayıcılar](/tr/guides/providers/) bölümüne göre yapılandırılır.
-gjc istisnadır: `OPENCODEX_GAJAE_API_KEY` provider kimlik bilgisini ortamdan
-sağlar, ancak şeması uzaktan kabul başlığını gönderemediği için üretilen gjc
-entegrasyonu yalnızca geri döngüde çalışır.
+Oluşturulan gjc entegrasyonu gizli olmayan bir loopback yer tutucusu kullanır; ortam değişkeni gerekmez. Yalnızca loopback desteklenir, uzak erişim kimlik bilgileri yapılandırılmaz.
 
 Aynı yük `GET /api/client-config` tarafından sunulur ve kontrol panelinin API
 sekmesinde işlenir; böylece CLI, API ve GUI aynı baytları kullanır.

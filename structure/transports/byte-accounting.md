@@ -5,7 +5,7 @@ Native result continuations and function-result injection follow [the mode-speci
 Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Responses body-reader limits and lifetime handling follow the
-[core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
+[core module ownership](responses.md#core-module-ownership). Raised HTTP concurrency follows the separate admission contract below.
 
 How opencodex measures request and stream bytes without allocating copies solely to count
 them. These contracts are shared by request parsing, SSE rewriting, the provider adapters and
@@ -17,9 +17,36 @@ the translator budget, which is why so many documents link here rather than rest
 without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
 `JSON.stringify(parsed)`: numeric normalization can make it larger than the input text. These
 observations retain the existing ownership and release lifecycle and do not consume the translator's
-hard byte cap. Admission limits, parsing, compression, and error envelopes are unchanged.
+hard byte cap. Per-body limits, parsing, compression, and reader error envelopes are unchanged.
 `tests/usage/request-decompress.test.ts` covers exact accounting across codecs and Unicode/numeric
 normalization, UTF-8 counting without encoded copies, and release after malformed or optional empty input.
+
+## Raised HTTP body admission
+
+`src/server/inbound-body-admission.ts` reserves the full resolved `maxInboundBodyBytes` allowance
+from a process-wide 512 MiB admission budget when the allowance exceeds the 256 MiB default.
+`src/server/index.ts` owns this lease in `runAdmittedHttpTurn`, after authentication and origin
+checks, before any request body is read. Default and smaller allowances do not consume this budget.
+Missing or small Content-Length and compressed wire bodies do not reduce the reservation.
+An already-aborted request or explicitly oversized declaration keeps the existing abort/413 path.
+
+The lease covers upload, parsing, downstream awaits and response consumption. It is released on
+response EOF/error or after producer cancellation settles, not when parsing or response headers
+complete. A pending read resolving as EOF during cancellation does not release it early. The
+outermost response wrapper preserves bytes and metadata and adds no eager pull. Internal direct
+combo/translation calls share their HTTP owner's reservation rather than reserving again.
+
+The exact POST routes are Responses, compact, Chat Completions, Messages, count_tokens, image
+generations/edits and alpha search. Image/search/count_tokens retain their configured per-body
+limits. Management, audio, context relay and WebSocket frames retain their independent contracts.
+Capacity refusal happens before protocol handlers, with HTTP 503, `Retry-After: 1`, and code
+`server_busy`; Messages/count_tokens use the Anthropic `error`/`overloaded_error` envelope.
+The HTTP owner preserves receiving-listener CORS and records the refusal without reading the body.
+
+This is an allowance budget, not a measured RSS or parsed-heap cap. All covered requests, even small
+ones, serialize when configured above 256 MiB. It does not bound retained state beyond the HTTP
+lifetime or change default-cap concurrency. `tests/server/server-request-body-size.test.ts` covers
+lifecycle, cancellation races, protocol envelopes, and the real HTTP admission boundary.
 
 ## Stream-buffer accounting
 
@@ -74,6 +101,9 @@ handling remains distinct.
 composition, including a turn beyond 32 MiB, late usage/output, slow readers,
 cancellation and read-error races. `tests/usage/request-log-nonstream.test.ts`
 binds the bounded non-stream wrapper to request-log status and metadata behavior.
+
+Retaining whole response bodies is the separate concern of `src/lib/bounded-body.ts`, whose cap,
+deadline, and cancellation rules are specified in the [bounded ingestion contract](inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 

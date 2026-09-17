@@ -92,11 +92,15 @@ import {
   usesCodexForwardPoolAuth,
   codexWsQuotaObserver,
   isFixedCodexAccount,
-  shouldRetryCodexPoolAccountModel400,
+  codexPoolAccountModel400Denial,
   shouldRetryCodexPoolAccountQuota,
   shouldRetryCodexPoolAccountTransient,
   retryCodexPoolOnAlternateAccount,
 } from "./core-codex-account";
+import {
+  clearCodexModelDenialEvidence,
+  recordCodexModelDenialEvidence,
+} from "../../codex/model-entitlements";
 import { readCodexWsStage } from "./codex-ws-wire";
 import { linkAbortSignal } from "./core-lifetime";
 import type { CodexAuthContext } from "../../codex/auth-context";
@@ -107,7 +111,7 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
-  prepareSameTarget429Wait,
+ prepareSameTarget429Wait,
   sleepWithAbort,
 } from "../../lib/upstream-retry";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
@@ -1174,13 +1178,13 @@ export async function preparePassthroughExchange(
 
     // Native Responses returns before the generic adapter's OAuth rotation loop. Keep
     // the same quorum, cooldown and request budget here, before any client bytes flow.
-    if (
-      upstreamResponse.status === 429
+   if (
+     upstreamResponse.status === 429
       // Not a provider rate limit when this proxy synthesized it for a refused reset
       // replay; rotating accounts on it would re-send an inference that may already
       // have run and would cool down an account that refused nothing.
       && !isNonReplayableResponse(upstreamResponse)
-      && transportState.genericFailoverAccountId
+     && transportState.genericFailoverAccountId
       && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
@@ -1196,6 +1200,8 @@ export async function preparePassthroughExchange(
         const nextAccountId = rotateGenericOAuthAccountOn429(
           config, route.providerName, transportState.genericFailoverAccountId,
           upstreamResponse.headers.get("retry-after"),
+          Date.now(),
+          route.modelId,
         );
         let snapshot: OAuthAccessSnapshot | undefined;
         if (nextAccountId) {
@@ -1232,10 +1238,10 @@ export async function preparePassthroughExchange(
     // immediately with no same-key replay. Pre-stream only — nothing has been relayed yet, so
     // the replay is lossless (same invariant as the recovery loop). Forward/OAuth providers
     // keep their pool logic below (rateLimitRetryPolicyFor returns null for them).
-    while (
-      upstreamResponse.status === 429
+   while (
+     upstreamResponse.status === 429
       && !isNonReplayableResponse(upstreamResponse)
-      && rateLimitPolicy !== null
+     && rateLimitPolicy !== null
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
       // body, so a refusal discovered after the wait can no longer return the real rate-limit
@@ -1320,11 +1326,25 @@ export async function preparePassthroughExchange(
 
     if (usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
-      if (await shouldRetryCodexPoolAccountModel400(
+      // A success is the freshest evidence there is about this pair, and it outranks any earlier
+      // refusal: whatever the entitlement was when upstream declined, it is not that now. Both
+      // ids are cleared because the wire model can differ from the routed one.
+      if (upstreamResponse.ok) {
+        clearCodexModelDenialEvidence(admissionState.authCtx.accountId, route.modelId);
+        clearCodexModelDenialEvidence(admissionState.authCtx.accountId, parsed.modelId);
+      }
+      const model400Denial = await codexPoolAccountModel400Denial(
         upstreamResponse,
         route.modelId,
         options.abortSignal,
-      )) {
+        parsed.modelId,
+      );
+      if (model400Denial !== undefined) {
+        // Spend this refusal on more than one retry. It is the account's own authenticated
+        // answer about this model, and the roster cache that selection otherwise reads expires
+        // five minutes after a catalog sync fills it -- so without remembering this, the next
+        // request selects the same account on quota alone and takes the same 400 (#4906).
+        recordCodexModelDenialEvidence(admissionState.authCtx.accountId, model400Denial);
         poolRetryOutcome = 400;
       } else if (!admissionState.authCtx.fixedAccount && await shouldRetryCodexPoolAccountQuota(
         upstreamResponse,

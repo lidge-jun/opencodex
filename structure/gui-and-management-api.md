@@ -113,7 +113,7 @@ be treated as implemented:
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates to
 `src/server/management-api.ts`, which composes the route modules under `src/server/management/`.
 Codex account routes live in `src/codex/auth-api/routes.ts` because they own the credential store, not
-because they are a different plane.
+because they are a different plane. Upstream account response reads and OrcaRouter key exchange follow the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 The registered route set is larger than the areas described below; the code is the route SOT. What
 this document owns is which module holds which area and what invariant that area must not break.
@@ -655,7 +655,7 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 
 Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
 
-The raw provider editor round-trips `autoReviewModel` and `autoReviewModelOverrides` through editor-owned DTO fields. POST/PATCH/PUT share validation; PUT copies schema-normalized values into the persisted and live candidate before adoption. Canonical `openai` rejects these fields, including clear forms. Field-masked writes (PATCH, editor PUT, reload) pin every registry-seed key and ignore operator overlays the seed never defines, most commonly `selectedModels`; POST keeps the exact-key comparison. Canonical `openai` still rejects `allowPrivateNetwork`, which must not short-circuit destination DNS checks on the ChatGPT forward row. Existing authentication, origin checks and stale-baseline protection still govern the writes. See [reviewer projection](catalog.md#provider-scoped-approval-reviewer).
+The raw provider editor round-trips `autoReviewModel` and `autoReviewModelOverrides` through editor-owned DTO fields. POST/PATCH/PUT share validation; PUT copies schema-normalized values into the persisted and live candidate before adoption. Canonical `openai` rejects these fields, including clear forms. Field-masked writes (PATCH, editor PUT, reload) pin every registry-seed key and ignore operator overlays the seed never defines, most commonly `selectedModels`; POST keeps the exact-key comparison. Canonical `openai` still rejects `allowPrivateNetwork`, which must not short-circuit destination DNS checks on the ChatGPT forward row. Existing authentication, origin checks and stale-baseline protection still govern the writes. See [reviewer projection](catalog.md#provider-scoped-approval-reviewer). Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 

@@ -68,6 +68,15 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   like `-1m` included: unmeasured rows abstain, unanimous measured rows advertise
   `["text"]` or `["text", "image"]`, and measured disagreement stays unadvertised.
 
+  At dispatch the adapter reads the same per-account/host cache once more for the
+  exact selected wire UID and forwards `completionOpts.maxInputTokens`: the smallest
+  of that row's field #18 window and any valid configured model/provider input
+  hints, so `CompletionConfiguration` field #3 no longer serializes the encoder's
+  128000 fallback. Smaller operator hints cap live evidence and never enlarge it;
+  with no evidence the adapter hint is omitted and the encoder still serializes
+  its own 128000 fallback for field #3. Investigation and limits:
+  `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
+
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
 Codex Spark retirement removes model-specific exceptions from the Responses adapter, without

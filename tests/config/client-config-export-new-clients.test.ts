@@ -3,7 +3,6 @@ import { join } from "node:path";
 import {
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
-  GAJAE_API_KEY_ENV,
   HERMES_API_KEY_ENV_REF,
   LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCLAW_API_KEY_ENV_REF,
@@ -292,12 +291,12 @@ describe("kimi", () => {
 });
 
 describe("gajae", () => {
-  test("uses apiKeyEnv, never apiKey, and emits only schema-known fields", () => {
+  test("uses a non-secret loopback placeholder and emits only schema-known fields", () => {
     const doc = buildClientConfig("gajae", ctx()) as GajaeGeneratedConfig;
     const block = doc.providers[OPENCODE_PROVIDER_ID]!;
-    expect(block.apiKeyEnv).toBe(GAJAE_API_KEY_ENV);
-    expect(block).not.toHaveProperty("apiKey");
-    expect(Object.keys(block).sort()).toEqual(["api", "apiKeyEnv", "baseUrl", "models"]);
+    expect(block.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(block).not.toHaveProperty("apiKeyEnv");
+    expect(Object.keys(block).sort()).toEqual(["api", "apiKey", "baseUrl", "models"]);
     const allowed = new Set(["id", "name", "input", "contextWindow", "maxTokens"]);
     for (const model of block.models) {
       for (const key of Object.keys(model)) expect(allowed.has(key)).toBe(true);

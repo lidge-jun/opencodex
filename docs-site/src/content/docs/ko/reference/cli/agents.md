@@ -184,7 +184,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 없음 - loopback placeholder |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | 비밀이 아닌 루프백용 대체 값 |
 | `dsh` | `$DSH_HOME/settings.yaml`(기본값 `~/.dsh/settings.yaml`) | `settings.yaml` | 없음 — 비밀이 아닌 loopback bearer placeholder |
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`, 그다음 레거시 `MAVIS_DATA_DIR`가 설정되면 우선. 상대 경로는 거부됩니다) | `mcode-config.yaml` | 없음 — loopback placeholder |
 | `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR`가 설정되면 우선. 상대 경로는 거부됩니다) | `config.json` | 없음 — loopback placeholder |
@@ -201,7 +201,9 @@ opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 
 `ocx export`는 실제 client config를 절대 쓰지 않습니다. 대상 경로는 손으로 병합하라고 출력되며, `--out`은 `--force` 없이 기존 파일을 덮어쓰지 않습니다. config를 바꾸어 덮어쓰면 이미 들어 있던 다른 provider, agent, MCP entry가 사라지기 때문입니다.
 :::
 
-어떤 key도 직렬화되지 않습니다. 생성되는 config에는 문서화된 env reference 또는 비밀이 아닌 loopback placeholder 중 하나가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. proxy가 loopback을 넘어 바인딩할 때는 해당하는 `OPENCODEX_OPENCODE_API_KEY`, `OPENCODEX_HERMES_API_KEY`, `OPENCODEX_OPENCLAW_API_KEY`를 설정하십시오. `OPENCODEX_GAJAE_API_KEY`는 gjc provider 인증 값을 환경에서 전달하지만 remote admission header를 보낼 수는 없으므로, 생성되는 gjc 통합은 loopback 전용으로 남습니다. admission key가 어떻게 발급되는지는 [Remote access](/reference/configuration/#remote-access)를 보십시오. upstream provider 자체의 key는 완전히 별개의 것으로, 각 [Providers](/guides/providers/)에 맞게 설정합니다.
+어떤 key도 직렬화되지 않습니다. 생성되는 config에는 문서화된 env reference 또는 비밀이 아닌 loopback placeholder 중 하나가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. 클라이언트의 설정 형식이 지원하고 proxy가 loopback 외부에 바인딩하는 경우에만 참조된 환경변수를 설정하십시오. admission key 발급 방법은 [Remote access](/reference/configuration/#remote-access)를 참조하십시오. upstream provider 자체의 key는 별도로 설정하며, [Providers](/guides/providers/)에서 안내합니다.
+
+생성된 gjc 연동은 비밀이 아닌 로컬 접속용 값을 사용하므로 환경변수가 필요하지 않습니다. 루프백 전용이며 원격 접속 인증은 설정하지 않습니다.
 
 같은 payload는 `GET /api/client-config`로 제공되고 dashboard의 API 탭에도 렌더링되므로, CLI, API, GUI가 모두 같은 바이트를 사용합니다.
 

@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
-  GAJAE_API_KEY_ENV,
   HERMES_API_KEY_ENV_REF,
   LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCLAW_API_KEY_ENV_REF,
@@ -60,12 +59,12 @@ describe("no client config ever carries a credential", () => {
     expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
   });
 
-  test("gajae uses apiKeyEnv, not the apiKey footgun", () => {
+  test("gajae can use loopback without a separately populated environment variable", () => {
     const doc = buildClientConfig("gajae", ctx()) as GajaeGeneratedConfig;
     const provider = doc.providers[OPENCODE_PROVIDER_ID]!;
-    expect(provider.apiKeyEnv).toBe(GAJAE_API_KEY_ENV);
-    // `apiKey` would fall back to treating the literal name as the token.
-    expect(provider).not.toHaveProperty("apiKey");
+    expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(provider).not.toHaveProperty("apiKeyEnv");
+    expect(EXPORT_CLIENTS.gajae.apiKeyEnv).toBe("");
   });
 });
 
@@ -137,7 +136,7 @@ describe("gajae", () => {
   test("emits only schema-known fields, because unknown ones fail validation", () => {
     const doc = buildClientConfig("gajae", ctx()) as GajaeGeneratedConfig;
     const provider = doc.providers[OPENCODE_PROVIDER_ID]!;
-    expect(Object.keys(provider).sort()).toEqual(["api", "apiKeyEnv", "baseUrl", "models"]);
+    expect(Object.keys(provider).sort()).toEqual(["api", "apiKey", "baseUrl", "models"]);
     for (const model of provider.models) {
       for (const key of Object.keys(model)) {
         expect(["id", "name", "input", "contextWindow", "maxTokens"]).toContain(key);

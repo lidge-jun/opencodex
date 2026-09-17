@@ -313,6 +313,17 @@ and removes only normalized manifest entries. Manifest-owned directory links are
 traversing their targets. Unknown files remain in place and make the command report a partial
 uninstall with their exact paths.
 
+The newly created OAuth downgrade copy is registered after copying, so owned uninstall
+includes it. Invalid-config recovery copies are deliberately NOT registered: their names carry
+a timestamp, so one entry per invalid load would grow the uninstall manifest without bound, and
+the manifest stops validating past its path ceiling. A manifest that stops validating makes
+uninstall refuse outright, which would leave credentials on disk. Sweeping those copies by name
+pattern at removal time is the shape that fits; it is not in this change. Registration is best-effort: an intentionally
+unowned legacy home or a metadata-write failure must not suppress the recovery copy. Existing
+OAuth downgrade copies are neither rewritten nor retroactively claimed. Both a `false` registration
+result and a thrown registration error emit the same fixed warning without error details. Unregistered copies
+remain subject to the existing partial/refused uninstall result.
+
 Legacy nonempty config directories are deliberately not retroactively claimed. If either ownership
 file is missing, malformed, or bound to another root, uninstall refuses config deletion and reports
 the residual directory for manual review; there is no recursive-delete fallback.
@@ -379,3 +390,5 @@ The text-only consumer reads exact inputModalities declarations before legacy hi
 ## Catalog auto-refresh
 
 `catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
+
+Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.

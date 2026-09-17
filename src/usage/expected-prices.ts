@@ -124,6 +124,16 @@ const META_MUSE_SPARK_13_CONTRIBUTOR: Cost4 = { input: 0.1, output: 0.2, cacheRe
 const META_SPARK_SOURCE = `Meta Model API published price ${META_MODEL_PRICING}`;
 const META_SPARK_CONTRIBUTOR_SOURCE = `Meta Model API published Contributor-tier price ${META_MODEL_PRICING}; data-sharing discount tier`;
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
+/*
+ * DeepSeek V4.1-Flash list prices (USD / 1M tokens), verified 2026-09-17 against
+ * https://api-docs.deepseek.com/quick_start/pricing. The page prices a peak window
+ * (09:30-24:00 Beijing) and an off-peak window; the tuple below is the peak-window
+ * list rate and the off-peak discount (0.15 / 0.60, cache-hit 0.003) is deliberately
+ * not baked in — the same rule as the Devin time-boxed promos. cacheWrite=0 follows
+ * the existing deepseek-chat / deepseek-reasoner rows: DeepSeek publishes no
+ * cache-write charge.
+ */
+const DEEPSEEK_V41_FLASH: Cost4 = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
 const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cacheWrite derived = input, Kimi auto-cache has no write billing)";
@@ -142,6 +152,14 @@ const BIGMODEL_NOTE = "z.ai international list price shown as estimate; domestic
 // anywhere. Cache stays 0 rather than inheriting the reseller's 0.15 — a reseller number
 // under a vendor-price label would be a wrong value wearing a verified badge.
 const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
+// Qwen-published qwen3.8-flash rate ($0.16 in / $0.47 out per 1M tokens) via the
+// Qwen3.8 release announcement, corroborated by API-vendor price tables. No cache
+// rate is published anywhere, so cache stays 0 rather than borrowing a reseller's
+// number — the same hold QWEN38_MAX takes. The announcement marks API availability
+// as coming soon, but the id is already served (and logged) on OpenCode Go, so the
+// estimate applies to real usage rows now.
+const QWEN38_FLASH: Cost4 = { input: 0.16, output: 0.47, cacheRead: 0, cacheWrite: 0 };
+const QWEN38_FLASH_PRICING = "https://qwen.ai/blog?id=qwen3.8-2026 (Qwen release announcement; API marked coming soon at announcement; cache rates unpublished -> 0; input/output corroborated by https://docs.b.ai/guides/models/qwen/qwen3.8-flash)";
 
 /*
  * Cognition/Devin list prices (USD / 1M tokens), verified 2026-09-13 against the
@@ -289,6 +307,16 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // for what that source does and does not cover.
   { provider: "alibaba-token-plan", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
   { provider: "alibaba-token-plan-intl", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
+  // OpenCode Go — five served ids with no jawcode bundle row and no vendor-level
+  // fallback (the fallback only searches jawcode metadata, never overlays), so the
+  // Usage estimated-cost column and the per-model breakdown rendered an em dash for
+  // every request through them. Each row reuses the vendor's own published list
+  // price as an estimate: Go itself is subscription-billed, hence verified-derived.
+  { provider: "opencode-go", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: `vendor list price applied to the OpenCode Go surface; ${QWEN38_MAX_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "qwen3.8-flash", cost4: QWEN38_FLASH, source: `vendor list price applied to the OpenCode Go surface; ${QWEN38_FLASH_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "deepseek-v4.1-flash", cost4: DEEPSEEK_V41_FLASH, source: `peak-window list rate applied to the OpenCode Go surface (off-peak 0.15/0.60 + cache-hit 0.003 not baked in); ${DEEPSEEK_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `z.ai list price applied to the OpenCode Go surface as an estimate; ${ZAI_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "muse-spark-1.3-contributor", cost4: META_MUSE_SPARK_13_CONTRIBUTOR, source: `Meta Model API Contributor-tier price applied to the OpenCode Go surface as an estimate; ${META_SPARK_CONTRIBUTOR_SOURCE}`, verifiedAt: "2026-09-17", status: "verified-derived" },
   // Cursor Auto router — Cursor's published fixed token price (verified).
   { provider: "cursor", modelId: "auto", cost4: { input: 1.25, output: 6, cacheRead: 0.25, cacheWrite: 1.25 }, source: "https://docs.cursor.com/account/pricing + https://cursor.com/blog/aug-2025-pricing", verifiedAt: "2026-07-20", status: "verified" },
   // Z.AI GLM family — the zai bundle's rows are all-zero upstream, and the four

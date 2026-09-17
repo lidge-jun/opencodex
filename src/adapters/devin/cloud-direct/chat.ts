@@ -35,7 +35,7 @@ import {
 } from './wire.js';
 import { buildMetadata } from './metadata.js';
 import { getCachedUserJwt } from './auth.js';
-import { getCachedCatalog, ModelNotAvailableError } from './catalog.js';
+import { getCachedCatalog, ModelNotAvailableError, type CacheEntry } from './catalog.js';
 import { anySignal, cancelBodyOnAbort } from '../../../lib/abort.js';
 import { resolveDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
 
@@ -1046,6 +1046,13 @@ export interface CloudChatRequest {
   completionOpts?: BuildArgs['completionOpts'];
   /** Override request_type (default = 5, CASCADE). */
   requestType?: number;
+  /**
+   * Catalog the caller already resolved this turn. An explicit `null`
+   * records a failed lookup: the pre-flight below then skips its own fetch
+   * instead of paying a second catalog timeout on the same turn. Omit the
+   * field to let the pre-flight perform its own cached lookup.
+   */
+  catalog?: CacheEntry | null;
   /** Abort signal — closes the fetch stream. */
   signal?: AbortSignal;
 }
@@ -1140,7 +1147,9 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // error and the trailer-error path below enriches the message in-place.
   // Treat an empty catalog (schema drift / unexpected response) as "no catalog"
   // so chat passes through instead of failing every request.
-  const catalog = await getCachedCatalog(req.apiKey, host, req.signal).catch(() => null);
+  const catalog = req.catalog !== undefined
+    ? req.catalog
+    : await getCachedCatalog(req.apiKey, host, req.signal).catch(() => null);
   if (catalog && catalog.byUid.size > 0) {
     const entry = catalog.byUid.get(req.modelUid);
     if (!entry) {

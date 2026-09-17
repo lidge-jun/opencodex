@@ -240,6 +240,43 @@ function registryAllowsPrivateNetwork(name: string): boolean {
   return getProviderRegistryEntry(name)?.allowPrivateNetworkByDefault === true;
 }
 
+function normalizedCanonicalEndpoint(value: string): string | null {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.username || parsed.password || parsed.hash) return null;
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Config-time Fake-IP allowance for the one overridable OAuth provider whose canonical
+ * Google endpoint is known to sit behind Clash/Mihomo transparent DNS in the field.
+ *
+ * Antigravity permits a custom base URL, so provider identity alone is not authority:
+ * adapter, auth mode, and the normalized final base URL must still match the registry seed.
+ * Custom destinations therefore keep the ordinary fail-closed SSRF policy.
+ */
+function registryAllowsBenchmarkDnsAtWriteTime(
+  name: string,
+  provider: Pick<OcxProviderConfig, "baseUrl"> & Partial<Pick<OcxProviderConfig, "adapter" | "authMode">>,
+): boolean {
+  if (name !== "google-antigravity") return false;
+  const entry = getProviderRegistryEntry(name);
+  if (
+    !entry
+    || entry.authKind !== "oauth"
+    || entry.allowBaseUrlOverride !== true
+    || provider.adapter !== entry.adapter
+    || provider.authMode !== "oauth"
+  ) return false;
+  const configured = normalizedCanonicalEndpoint(provider.baseUrl);
+  const canonical = normalizedCanonicalEndpoint(entry.baseUrl);
+  return configured !== null && configured === canonical;
+}
+
 /**
  * OAuth registry entries that opt into `allowBaseUrlOverride` send bearer credentials to a
  * user-configured endpoint (review findings, PR #2109 / PR #2110): a cleartext `http:`
@@ -328,13 +365,16 @@ export function assertProviderDestinationAllowed(name: string, provider: Pick<Oc
  * advisory and must not hard-fail offline startups. DNS rebinding after validation is
  * a recorded residual for this loopback proxy (devlog 260712_pr_batch_landing 000).
  *
- * `allowBenchmarkAddresses` is only for the exact canonical ChatGPT Codex seed under
- * Clash fake-IP DNS (198.18.0.0/15). Every other non-public answer — including mixed
- * benchmark + private/metadata sets — still fails.
+ * `allowBenchmarkAddresses` remains the explicit caller opt-in used by canonical ChatGPT
+ * Codex. Canonical Google Antigravity receives the same 198.18.0.0/15 DNS-answer exception
+ * only when its adapter/auth/base URL still match the registry seed. Every other non-public
+ * answer — including custom Antigravity destinations and mixed benchmark + private/metadata
+ * sets — still fails.
  */
 export async function providerDestinationResolvedError(
   name: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">
+    & Partial<Pick<OcxProviderConfig, "adapter" | "authMode">>,
   options?: { allowBenchmarkAddresses?: boolean },
 ): Promise<string | null> {
   const syncError = providerDestinationConfigError(name, provider);
@@ -349,6 +389,8 @@ export async function providerDestinationResolvedError(
     return null; // literals and localhost are fully handled by the sync path
   }
   if (providerAllowsPrivateNetwork(name, provider)) return null;
+  const allowBenchmarkAddresses = options?.allowBenchmarkAddresses === true
+    || registryAllowsBenchmarkDnsAtWriteTime(name, provider);
   let addresses: { address: string }[];
   try {
     addresses = await lookup(hostname, { all: true, verbatim: true });
@@ -360,7 +402,7 @@ export async function providerDestinationResolvedError(
     const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
     if (!assessment || assessment.kind === "public") continue;
     // Clash fake-IP only: 198.18/19 benchmark detail. Mixed dangerous sets still reject.
-    if (options?.allowBenchmarkAddresses && isBenchmarkDnsAnswer(address, assessment)) {
+    if (allowBenchmarkAddresses && isBenchmarkDnsAnswer(address, assessment)) {
       continue;
     }
     if (assessment.kind === "metadata") return `baseUrl hostname ${hostname} resolves to a blocked metadata endpoint (${address})`;

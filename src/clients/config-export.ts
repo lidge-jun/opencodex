@@ -41,7 +41,7 @@ export type { RaycastAbility, RaycastAbilityName, RaycastModelEntry, RaycastProv
 export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
 
 import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
-import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, GAJAE_API_KEY_ENV, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV } from "./config-export/constants";
+import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV } from "./config-export/constants";
 import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./config-export/omp";
 import { buildDshClientConfig, summarizeDsh, buildDshContribution } from "./config-export/dsh";
@@ -867,7 +867,7 @@ export interface GajaeModelEntry {
 /** Gajae validates strictly: an unknown field fails the whole config. */
 export interface GajaeProviderBlock {
   baseUrl: string;
-  apiKeyEnv: string;
+  apiKey: string;
   api: "openai-completions";
   models: GajaeModelEntry[];
 }
@@ -1056,7 +1056,7 @@ function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
     providers: {
       [OPENCODE_PROVIDER_ID]: {
         baseUrl: ctx.baseUrl,
-        apiKeyEnv: GAJAE_API_KEY_ENV,
+        apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
         api: "openai-completions",
         models,
       },
@@ -1320,8 +1320,8 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     id: "gajae",
     filename: "gajae-models.yaml",
     destination: env => gajaeConfigPath(env),
-    apiKeyEnv: GAJAE_API_KEY_ENV,
-    exportHint: `export ${GAJAE_API_KEY_ENV}=<your key>`,
+    apiKeyEnv: "",
+    exportHint: "No environment variable is needed for the loopback provider.",
     build: buildGajaeClientConfig,
     format: "yaml",
     summarize: summarizeGajae,
