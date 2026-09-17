@@ -1,4 +1,5 @@
 import { diagnoseInvalidToolCalls, isRecord, type InvalidToolCallDiagnostic } from "./tool-call-validation";
+import { TranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxUsage } from "../../types";
 
 export function stopReasonFor(finishReason: unknown): "max_tokens" | "content_filter" | undefined {
@@ -22,6 +23,9 @@ export interface ReasoningDetailSegment {
   text: string;
 }
 
+const MAX_REASONING_DETAIL_ID_BYTES = 1024;
+const MAX_REASONING_DETAIL_SEGMENTS = 1024;
+
 /**
  * Structured `reasoning_details` array (MiniMax M-series with `reasoning_split`).
  * Each segment's key scopes cumulative-snapshot tracking: upstream repeats the
@@ -35,14 +39,69 @@ export function reasoningDetailSegmentsFrom(record: Record<string, unknown>): Re
     const item: unknown = raw[i];
     if (!isRecord(item)) continue;
     if (typeof item.text !== "string" || item.text.length === 0) continue;
-    const key = typeof item.id === "string" && item.id.length > 0
-      ? `id:${item.id}`
-      : typeof item.index === "number"
-        ? `i:${item.index}`
-        : `n:${i}`;
+    let key: string;
+    if (typeof item.id === "string" && item.id.length > 0) {
+      if (new TextEncoder().encode(item.id).byteLength > MAX_REASONING_DETAIL_ID_BYTES) {
+        throw new TranslatorBudgetExceededError("reasoning", MAX_REASONING_DETAIL_ID_BYTES);
+      }
+      key = `id:${item.id}`;
+    } else if (typeof item.index === "number") {
+      key = `i:${item.index}`;
+    } else {
+      key = `n:${i}`;
+    }
     segments.push({ key, text: item.text });
   }
   return segments;
+}
+
+/**
+ * Per-stream cumulative-snapshot store for structured `reasoning_details`. Each stream chunk
+ * repeats a detail's full text-so-far, so deltas are derived by prefix-diffing per segment key;
+ * a piece that does not extend the previous snapshot is appended whole, which keeps incremental
+ * senders parseable on the same path. Retained key+text bytes are charged to the translator
+ * budget under the `reasoning` kind, and both the id length and the segment count are capped,
+ * so a hostile upstream cannot grow the map without bound.
+ */
+export function createReasoningDetailSnapshotTracker(budget: TranslatorBudget): {
+  ingest(segment: ReasoningDetailSegment): string | null;
+  release(): void;
+} {
+  const snapshots = new Map<string, string>();
+  const encoder = new TextEncoder();
+  let retainedBytes = 0;
+  return {
+    ingest(segment) {
+      const existing = snapshots.get(segment.key);
+      if (existing === undefined && snapshots.size >= MAX_REASONING_DETAIL_SEGMENTS) {
+        throw new TranslatorBudgetExceededError("reasoning", MAX_REASONING_DETAIL_SEGMENTS);
+      }
+      const prev = existing ?? "";
+      if (segment.text === prev) return null;
+      const extendsPrev = segment.text.startsWith(prev);
+      const next = extendsPrev ? segment.text : prev + segment.text;
+      const previousBytes = existing === undefined
+        ? 0
+        : encoder.encode(segment.key).byteLength + encoder.encode(prev).byteLength;
+      const nextBytes = encoder.encode(segment.key).byteLength + encoder.encode(next).byteLength;
+      const reservation = budget.reserveTransient(nextBytes, { kind: "reasoning" });
+      try {
+        snapshots.set(segment.key, next);
+        reservation.commitRetained();
+        budget.releaseRetained(previousBytes, { kind: "reasoning" });
+        retainedBytes += nextBytes - previousBytes;
+      } catch (error) {
+        reservation.release();
+        throw error;
+      }
+      return extendsPrev ? segment.text.slice(prev.length) : segment.text;
+    },
+    release() {
+      budget.releaseRetained(retainedBytes, { kind: "reasoning" });
+      retainedBytes = 0;
+      snapshots.clear();
+    },
+  };
 }
 
 /** Single-segment `reasoning_details` entry for replaying preserved reasoning (MiniMax wire shape). */

@@ -202,6 +202,42 @@ describe("MiniMax split reasoning", () => {
     expect(events).toContainEqual({ type: "text_delta", text: "answer" });
   });
 
+  test("streaming reasoning detail snapshots are bounded by the translation budget", async () => {
+    const route = minimaxRoute("MiniMax-M3");
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let index = 0; index < 20; index++) {
+          const chunk = { choices: [{ delta: { reasoning_details: [{ id: `segment-${index}`, text: "x" }] } }] };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+        }
+        controller.close();
+      },
+    });
+    const budget = createTranslatorBudget({ maxTurnBytes: 256 });
+    const events = [];
+
+    for await (const event of adapterFor(route.provider, route.modelId).parseStream(new Response(stream), budget)) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "translation_buffer_limit" });
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("rejects oversized reasoning detail ids without retaining them", async () => {
+    const route = minimaxRoute("MiniMax-M3");
+    const chunk = { choices: [{ delta: { reasoning_details: [{ id: "x".repeat(1025), text: "thinking" }] } }] };
+    const stream = new Response(`data: ${JSON.stringify(chunk)}\n\n`);
+    const budget = createTranslatorBudget();
+    const events = [];
+
+    for await (const event of adapterFor(route.provider, route.modelId).parseStream(stream, budget)) events.push(event);
+
+    expect(events).toEqual([expect.objectContaining({ type: "error", code: "translation_buffer_limit" })]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("providers without reasoning_details opt-in keep ignoring the array", async () => {
     const provider: OcxProviderConfig = {
       adapter: "openai-chat",
