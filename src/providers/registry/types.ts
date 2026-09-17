@@ -222,6 +222,11 @@ export interface ProviderRegistryEntry {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
+   * Responses upstream that also rejects a tool call with no matching output anywhere in the
+   * replayed input. Seeded/backfilled like other fixed wire capabilities.
+   */
+  requiresPairedResponsesToolResults?: boolean;
+  /**
    * When enabled, tool results that are present but empty are annotated on the wire.
    * Seeded/backfilled like other fixed wire capabilities.
    */

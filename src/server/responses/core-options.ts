@@ -1,3 +1,4 @@
+import type { NativeResponseControl } from "./native-response-control";
 import type { OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
@@ -51,6 +52,8 @@ export interface HandleResponsesOptions {
   /** Called at most once after the complete client body is read and accepted for dispatch. */
   onRequestBodyRead?: () => void;
   forceEmptyResponseId?: boolean;
+  /** Internal, connection-owned control channel; never reconstructed from headers. */
+  nativeControl?: NativeResponseControl;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;

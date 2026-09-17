@@ -915,6 +915,12 @@ describe("status reports stale process records end to end", () => {
       //
       // Confirm refusal around every probe and re-allocate when something takes it, so a stolen
       // port retries the setup instead of failing an assertion it never exercised.
+      //
+      // That guard was applied to the --json run only, and the asymmetry was the remaining
+      // defect: the human run makes the identical `/healthz` probe and can abort the identical
+      // way, so a human probe that timed out instead of being refused printed no stale line and
+      // was read as a lost signal — the same misreading this comment already describes, one run
+      // later. Both runs are now guarded the same way.
       let parsed: { proxy?: { staleProcessState?: unknown } } | undefined;
       let humanStdout: string | undefined;
       for (let attempt = 0; attempt < 5 && humanStdout === undefined; attempt++) {
@@ -937,11 +943,25 @@ describe("status reports stale process records end to end", () => {
           encoding: "utf8",
         });
         if (!await refusesConnection(port)) continue;
+        // Re-sample the structured verdict under the conditions the human run just saw. A
+        // `true` here means the probe path was reaching a refusal at that moment, so the human
+        // output is a valid sample and the assertions below judge it — a human path that
+        // genuinely stopped reporting the stale line still fails. A `false` while the port is
+        // still refusing is the documented abort, observed rather than assumed, so this attempt
+        // is discarded instead of being asserted against.
+        const confirm = runStatusJson(home);
+        if (confirm.status !== 0) continue;
+        const confirmed = JSON.parse(confirm.stdout) as { proxy?: { staleProcessState?: unknown } };
+        if (!await refusesConnection(port)) continue;
+        if (confirmed?.proxy?.staleProcessState !== true) continue;
         parsed = observed;
         humanStdout = human.stdout;
       }
 
-      expect(humanStdout, "no allocated port stayed refused across both status probes").toBeDefined();
+      expect(
+        humanStdout,
+        "no allocated port stayed refused, with the stale verdict reached, across every status probe",
+      ).toBeDefined();
       expect(parsed?.proxy?.staleProcessState).toBe(true);
       expect(humanStdout).toContain("may have exited unexpectedly");
     } finally {

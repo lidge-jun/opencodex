@@ -882,3 +882,115 @@ When returning to the root-override form, OpenCodex retains an existing `[model_
 `ocx restore` and Codex config removal still refuse on `history_paginated_requires_native_writer`. Stripping the `[model_providers.opencodex]` definition while thread rows still reference it would make those conversations unresolvable, and the restore path has no way to keep a compatibility provider table. A home that is already paginated cannot currently be uninstalled through the product; that is known open work rather than intended behaviour.
 
 Do not rewrite an active paginated rollout or thread row to migrate those conversations yourself. Close the affected conversation before any recovery, and report the exact error and versions without uploading private history. A backup or a successful script alone does not prove the conversation is visible again. Check the restored conversation in Codex after reopening.
+
+## Experimental native mid-turn steering
+
+For a compatible native OpenAI model and a client that sends `response.steer`, enable both
+options in `~/.opencodex/config.json` and restart OpenCodex before starting a fresh turn:
+
+```json
+{
+  "websockets": true,
+  "codexNativeSteering": true
+}
+```
+
+Merge these keys into the existing configuration; do not replace your provider/account settings.
+This option is off by default. It forwards steering to the same native ChatGPT WebSocket
+connection and selected account, preserving automatic successor responses and pending
+saved-tool-result continuations. Acceptance means queued, not yet applied.
+
+Supply the required tool results or approval decisions **once per parent**, on the same lane.
+Results can arrive before `response.steer.pending`: the relay also matches the completed
+parent's advertised calls and approvals. A `name` on a pending function-output stub is
+optional on the result, as in the native schema. Additional user messages may accompany
+these results; system/developer messages, duplicate results and unrelated call IDs are refused.
+Do not rerun tools or resend accepted steering text. This first implementation requires
+unchanged model and request settings. A changed model/settings requires an explicitly stopped or finished turn
+and normal new dispatch. Multiple independent conversations use independent connections.
+
+HTTP fallback, other providers, translated models, sidecars, Combo attempts and plaintext V2
+restoration do not support this option. It does not add steering capability to a model or
+a client that lacks it. Unsupported routes return a protocol error rather than silently
+ignoring input. Disconnected or timed-out delivery may be unknown: never automatically
+resubmit tools or steering text. Pending controls time out after 90 seconds of inactivity;
+saved-tool-result waits have a 30-minute cap.
+
+The implementation has synthetic protocol and regression coverage, not live Astra/client
+certification. Keep the option disabled for production work until your client/model path
+has been verified. Set `codexNativeSteering` to `false` and restart to restore the existing
+single-response relay; no account or conversation files need to be deleted.
+
+
+## Experimental native function-result injection
+
+For a compatible client that sends OpenAI multi-agent `response.inject` messages,
+merge these keys into the existing OpenCodex configuration and restart before a
+fresh turn. Do not replace your provider or account settings:
+
+```json
+{
+  "websockets": true,
+  "codexNativeInjection": true
+}
+```
+
+The initial `response.create` must explicitly include `"multi_agent": { "enabled": true }`.
+OpenCodex does not enable it based on a model name. A public OpenAI API provider
+must use `adapter: "openai-responses"`, `baseUrl: "https://api.openai.com/v1"`,
+its normal API-key authentication and `upstreamWebsocket: true`. Route the initial
+model through that provider's configured prefix. The relay adds the required
+`responses_multi_agent=v1` beta token on that public API connection only, preserving
+other configured beta tokens. It does not substitute a subscription credential,
+create an API account or automatically switch to a separately billed API.
+
+Canonical ChatGPT forward connections can opt into the same transport experimentally,
+but the public API contract does **not** establish ChatGPT subscription or Codex
+App/CLI support. A compatible upstream model and execution mode are still required.
+See the [OpenAI multi-agent protocol](https://developers.openai.com/api/docs/guides/responses-multi-agent).
+
+Return a saved tool result after the matching developer function call has completed:
+
+```json
+{
+  "type": "response.inject",
+  "response_id": "resp_example",
+  "input": [
+    { "type": "function_call_output", "call_id": "call_example", "output": "saved result" }
+  ]
+}
+```
+
+Use the response/call IDs from the **same connection**, not these example IDs.
+The first version accepts string-valued `function_call_output` only. User/system
+messages, rich output arrays, hosted tools and simultaneous `response.steer` are
+not accepted in an injection turn. Multiple saved function results can share a
+single injection. Each call can be submitted only once, including while queued.
+
+Parallel tool results are queued and sent one frame at a time, since the success
+event identifies the response rather than an individual injection. The relay
+preserves `response.inject.created` and `response.inject.failed`. It keeps the
+connection alive after a response terminal while submitted results await confirmation
+or advertised calls await results, so late asynchronous results are not discarded.
+
+When the server rejects an injection with `response_already_completed`, use its
+returned saved outputs in **one client-sent** `response.create` with the completed
+`previous_response_id`, unchanged model/settings and the same lane. Include each
+outstanding result exactly once; do not include already accepted outputs. The
+relay keeps that continuation on the original account/socket and preserves normal
+request pacing. It never runs the tool again or creates a recovery request itself.
+Other failures remain visible for the client to handle.
+
+A missing acknowledgement or a disconnect means delivery can be **unknown**. Do
+not automatically resend a result, restart a tool or change accounts to retry it.
+The pending queue is limited to 32 frames and 8 MiB, with 1,024 advertised function
+calls, a 32 MiB replay journal and at most 128 responses per owned connection.
+Each sent injection has a 90-second acknowledgement deadline that unrelated output
+cannot extend; a saved-result wait is limited to 30 minutes. Existing frame limits
+and stall timeouts still apply.
+
+Translated providers, custom gateways, Combo/sidecar paths and HTTP fallback do
+not gain injection support. Unsupported attempts return an explicit error instead
+of disappearing. The option stays off by default; synthetic transport tests are
+not live compatibility certification. Set `codexNativeInjection` to `false` and
+restart to roll back. No account or conversation files need to be removed.

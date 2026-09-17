@@ -1,3 +1,4 @@
+import { isNativeControlResponse } from "./native-response-control";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -310,6 +311,16 @@ export async function deliverPassthroughResponse(
         // display-safe, and an empty body is exactly what the retryable-429 default fires on.
         replayRefusal: isReplayRefusalResponse(upstreamResponse),
       });
+    }
+
+    if (options.nativeControl && isNativeControlResponse(upstreamResponse) && upstreamResponse.body) {
+      // A native chain carries several response terminals. Ordinary SSE repair,
+      // cancellation-on-terminal and local previous-response replay are single-response
+      // contracts and would truncate it. Keep the bounded upstream as the sole reader.
+      options.nativeControl.relayActive = true;
+      commitReasoningReplayServingRoute(nativeExchange.request.headers);
+      const body = trackStreamLifetime(upstreamResponse.body, upstream, undefined, options.turnAdmissionLease);
+      return new Response(body, { status: upstreamResponse.status, headers });
     }
 
     // Bun#32111 workaround: passthrough SSE uses tee()+native relay to avoid the
