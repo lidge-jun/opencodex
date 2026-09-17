@@ -466,7 +466,9 @@ describe("Reserve opt-in admission refusal", () => {
   test("an operator-aliased Reserve route off the canonical forward still forwards", async () => {
     inference = completed("gpt-reserve");
     const cfg = optInOff(c => {
-      c.providers.alias = { adapter: "openai-responses", authMode: "key", apiKey: "sk-reserve-optin-fixture",
+      // Kept under the 20-character body the privacy scan treats as token-looking, the same
+      // shape the existing reserve fixtures use (tests/server/reserve-ingress.test.ts).
+      c.providers.alias = { adapter: "openai-responses", authMode: "key", apiKey: "sk-optin-fixture",
         baseUrl: "https://reserve-optin-alias.example.test/v1" };
     });
     await forwarded(await handleResponses(request("alias/gpt-reserve"), cfg, { model: "", provider: "" },
