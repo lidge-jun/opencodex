@@ -127,33 +127,32 @@ function ManualCompactionControls({ apiBase, models }: { apiBase: string; models
 
   return (
     <section className="panel" aria-labelledby="manual-compaction-title" aria-busy={busy || (saved === undefined && !loadError)}>
-      <strong id="manual-compaction-title">{t("manualCompact.title")}</strong>
-      <p className="card-sub">{t("manualCompact.description")}</p>
-      <p className="card-sub">{t("manualCompact.dataNotice")}</p>
-      <div className="row" style={{ flexWrap: "wrap", alignItems: "end", gap: 12 }}>
-        <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-          <label htmlFor="manual-compaction-model" className="card-sub">{t("manualCompact.model")}</label>
-          <Select id="manual-compaction-model" value={model} options={options} disabled={disabled}
-            style={{ width: "100%" }} label={t("manualCompact.model")}
-            onChange={value => { setModel(value); if (!value) setEffort(""); setFeedback(null); }} />
+      <div className="spread" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 20rem", minWidth: 0 }}>
+          <div className="font-semibold" id="manual-compaction-title">{t("manualCompact.title")}</div>
+          <div className="muted setting-hint">{t("manualCompact.description")}</div>
+          <div className="muted setting-hint">{t("manualCompact.dataNotice")}</div>
+          <div className="muted setting-hint">{t("manualCompact.effortHint")}</div>
         </div>
-        <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-          <label htmlFor="manual-compaction-effort" className="card-sub">{t("manualCompact.effort")}</label>
-          <Select id="manual-compaction-effort" value={effort} disabled={disabled || !model}
-            style={{ width: "100%" }} label={t("manualCompact.effort")}
+        <div className="dash-delegation-controls" style={{ flex: "0 1 auto" }}>
+          <Select id="manual-compaction-model" value={model} options={options} disabled={disabled}
+            label={t("manualCompact.model")}
+            onChange={value => { setModel(value); if (!value) setEffort(""); setFeedback(null); }} />
+          <Select id="manual-compaction-effort" value={effort} disabled={disabled || !model} align="right"
+            label={t("manualCompact.effort")}
             options={[{ value: "", label: t("manualCompact.currentEffort") }, ...EFFORTS.map(value => ({ value, label: t(`models.reasoningEffort.${value}` as TKey) }))]}
             onChange={value => { setEffort(value); setFeedback(null); }} />
+          <button type="button" className="btn btn-primary btn-sm" disabled={disabled || !dirty} onClick={() => { void save(); }}>
+            {busy ? t("common.saving") : t("common.save")}
+          </button>
         </div>
-        <button type="button" className="btn btn-primary" disabled={disabled || !dirty} onClick={() => { void save(); }}>
-          {busy ? t("common.saving") : t("common.save")}
-        </button>
       </div>
-      <p className="card-sub">{t("manualCompact.effortHint")}</p>
-      {provider && <div className="notice-warn" role="note"><IconAlert width={14} /> {combo
+      {provider && <div className="notice-warn" role="note" style={{ marginTop: 12 }}><IconAlert width={14} /> {combo
         ? t("manualCompact.comboWarning", { combo: model, providers })
         : t("manualCompact.providerWarning", { provider })}</div>}
-      {loadError && <div role="alert">{t("manualCompact.loadFailed")} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button></div>}
-      {feedback && <div role={feedback === "failed" ? "alert" : "status"}>{t(feedback === "saved" ? "manualCompact.saved" : "manualCompact.saveFailed")}</div>}
+      {loadError && <div className="notice notice-err" role="alert" style={{ marginTop: 12, marginBottom: 0 }}>{t("manualCompact.loadFailed")} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button></div>}
+      {feedback === "failed" && <div className="notice notice-err" role="alert" style={{ marginTop: 12, marginBottom: 0 }}>{t("manualCompact.saveFailed")}</div>}
+      {feedback === "saved" && <div className="muted setting-hint" role="status">{t("manualCompact.saved")}</div>}
     </section>
   );
 }
