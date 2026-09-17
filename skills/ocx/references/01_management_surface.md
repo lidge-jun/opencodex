@@ -392,7 +392,7 @@ Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--candidate` | string | Absolute npm codex.cmd or package bin/codex.js path. All four paths are all-or-none; omit them to attest the selected candidate. |
+| `--candidate` | string | Absolute npm codex.cmd or package bin/codex.js path; all four paths are all-or-none. |
 | `--npm-prefix` | string | Absolute prefix containing node_modules/@openai/codex. |
 | `--npm-cli` | string | Absolute node_modules/npm/bin/npm-cli.js path. |
 | `--node` | string | Absolute node.exe path; observed, never executed. |
@@ -401,7 +401,7 @@ Drives no management route.
 JSON mode: `envelope`.
 
 - Opt-in Windows x64 local-volume inspection using held native file handles; refuses reparse points, active writers and unsupported layouts.
-- Without explicit paths, the proof-bound launcher snapshot identifies the selected candidate (configured CODEX_CLI_PATH or the first codex on the captured PATH); an OpenCodex wrapper resolves to its codex.opencodex-real backing. Discovery proposes paths only — the held-handle observation remains the authority, and a launch without the proof-bound snapshot reports the selected candidate unavailable.
+- Without explicit paths, the proof-bound launcher snapshot identifies the selected candidate: the configured CODEX_CLI_PATH or the first codex on the captured PATH, with an OpenCodex wrapper resolving to its codex.opencodex-real backing. Discovery only proposes paths; the held-handle observation remains the authority.
 - Success binds observed file identities and bytes, not selected-runtime admission or installer ownership.
 - selectionAttested, managed and applyAllowed remain false. The digest is an observation, not a durable update permit.
 - Does not run the named Codex/npm/Node files, query a registry, install software, control processes or persist state.
