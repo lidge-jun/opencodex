@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   claimQuotaRecovery,
+  fencePropagatedQuotaRecovery,
   quotaRecoveryRecordForTests,
   releaseQuotaRecovery,
   resetQuotaRecoveryForTests,
@@ -75,6 +76,19 @@ describe("claim identity", () => {
 });
 
 describe("settlement by outcome", () => {
+  test("a propagated alias generation is fenced without its own claim", () => {
+    const alias = "same-grant-alias";
+    const staleClaim = claimQuotaRecovery(alias, 4);
+    if (!staleClaim.granted) throw new Error("expected a claim");
+
+    fencePropagatedQuotaRecovery(alias, 5);
+
+    expect(quotaRecoveryRecordForTests(alias)).toEqual({ state: "spent", lineage: 5 });
+    expect(claimQuotaRecovery(alias, 5)).toEqual({ granted: false, reason: "spent" });
+    settleQuotaRecovery(alias, staleClaim.claimId, { provenance: "self-refresh", generation: 6 });
+    expect(quotaRecoveryRecordForTests(alias)).toEqual({ state: "spent", lineage: 5 });
+  });
+
   test("a joined lineage spends the returned generation, like a self-refresh", () => {
     const claim = claimQuotaRecovery(ACCOUNT, 7);
     if (!claim.granted) throw new Error("expected a claim");

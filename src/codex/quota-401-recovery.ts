@@ -106,6 +106,18 @@ export function settleQuotaRecovery(
 }
 
 /**
+ * Fence a same-grant alias that adopted the credential produced by another account's refresh.
+ *
+ * Propagation advances the alias without making it a separate credential lineage. Leaving its
+ * committed generation unspent would let a later quota poll rotate the same refresh grant again.
+ * This deliberately supersedes an old live claim for the alias: that claim targets the
+ * pre-propagation generation, and its eventual settlement must not erase this newer fence.
+ */
+export function fencePropagatedQuotaRecovery(accountId: string, lineage: number): void {
+  records.set(accountId, { state: "spent", lineage });
+}
+
+/**
  * Record a refresh that failed with proof the grant itself is dead.
  *
  * Distinct from {@link releaseQuotaRecovery}: a revoked or expired grant will not become
