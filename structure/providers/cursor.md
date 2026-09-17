@@ -124,9 +124,43 @@ Shared raw-reasoning events retain content-channel presentation; provider-author
 
 Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
 
+## Textual pseudo tool-call quarantine
+
+Cursor models sometimes emit `[TOOL_CALL]name[ARGS]{…}` inside `textDelta` instead of a
+real `toolCall*` frame. `src/adapters/cursor/text-toolcall.ts` strips every complete
+marker from the assistant text channel and yields the parsed name/args. It retains split
+markers up to a byte-counted cap, then switches to a constant-space suppressed scan until
+the JSON object closes; neither an oversized tail nor a malformed payload returns to prose.
+Malformed argument diagnostics contain only the failure class and an optional tool name,
+never the argument content. `src/adapters/cursor/protobuf-events.ts` buffers advertised textual calls
+until turn finalization. It flushes them onto the atomic tool-call path only when the turn
+contained no real client-tool frame; any real frame, including one left incomplete, wins and
+drops the whole textual buffer. A missing advertised-name set is fail-closed. Finalize also
+clears any held or suppressed prefix. Coverage lives in
+`tests/providers/cursor/cursor-protobuf-events.test.ts`.
+
+## Observed checkpoint window
+
+`conversationCheckpointUpdate.tokenDetails.maxTokens` is the account-advertised
+ceiling for that wire model. A positive value is stored in a process-local map
+keyed by the normalized Cursor identity scope and model id
+(`src/adapters/cursor/discovery.ts`) and preferred by `inferCursorContextWindow`
+only for that scope. Missing scopes normalize to the distinct `local` scope, so
+they cannot inherit an authenticated account's observation. The map evicts its
+oldest insertion above 2,048 entries. Zero and missing values are ignored — the
+first checkpoint is often 0. The next turn's
+`cursorRequestSizeContext` feeds that window into the existing 0.5-window
+overflow vs 429 prior so a tiny request against a plan-gated 32k ceiling stays
+on the 429 class, while a request that is large relative to the real window
+classifies as overflow. Coverage lives in
+`tests/providers/cursor/cursor-errors.test.ts` and
+`tests/providers/cursor/cursor-protobuf-events.test.ts`.
+
 ## Overflow remint boundary
 
 `src/adapters/cursor.ts` surfaces the first bare context overflow before attempting conversation remint on later eligible requests. `cursorClientThreadOwner` recognizes both client thread aliases; `src/adapters/cursor/thread-continuity.ts` limits recovery to three remints per retained identity-scoped owner, with a one-hour idle TTL and 2,048-entry bound. Conversation-only requests have no stable owner and do not automatically remint. Quota/rate errors, tool-result resumes, partial output, local side effects, isolated helper/shadow requests and compaction remain fail-closed. Isolated requests neither consume the parent allowance nor invalidate its checkpoint. Eligible overflow checks refresh existing retention timestamps and LRU position even after the cap is exhausted, without allocating absent scopes. Retention expiry, eviction or process restart resets the in-memory allowance; this is not a persistent lifetime cap or semantic-progress policy.
+
+An incomplete client-tool stream is fail-closed for the current turn: `finalizeTurnEvents` emits the prefix owned by `CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX` and does not retry that send. After the error is streamed, eligible non-isolated turns remint the Cursor conversation id, persist the thread override, and invalidate the inherited checkpoint so the next turn does not resume a conversation left waiting for `mcpResult`. `src/adapters/cursor/thread-continuity.ts` permits three such rotations per retained identity-scoped thread owner in a separate bounded counter; exhaustion keeps reusing the conversation and records an `incomplete-tool-remint-exhausted` diagnostic, while a clean completed turn clears that scope's counter. This allowance never consumes or replenishes the overflow resend budget. Isolated helper and compaction turns neither remint nor change the parent's allowance or checkpoint. Native Composer replay synthesizes `[missing tool_result for this tool_use in history]` for unpaired `toolCallStep` history; external wire models skip native `mcpToolCall` replay, so conversation remint is their recovery path.
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
 

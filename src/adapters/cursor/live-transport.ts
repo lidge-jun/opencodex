@@ -20,6 +20,7 @@ import {
   createCursorContextUsageTracker,
   createCursorProtobufEventState,
   finalizeTurnEvents,
+  hasBufferedTextToolCalls,
   mapCursorProtobufServerMessage,
   mapSyntheticMcpExecToToolEvents,
   reportableContextTokens,
@@ -732,6 +733,8 @@ class LiveCursorTransport implements CursorTransport {
         syntheticStructuredEditToolNames,
         translatorBudget: this.translatorBudget,
         contextUsage,
+        wireModelId: request.modelId,
+        identityScope: request._cursorIdentityScope,
         ...(prepared.estimatedInputTokens !== undefined
           ? { estimatedInputTokens: prepared.estimatedInputTokens }
           : {}),
@@ -1265,6 +1268,7 @@ class LiveCursorTransport implements CursorTransport {
             state.openToolCalls.size > 0
             || this.sawAssistantText
             || hasPendingClientToolFinalization
+            || hasBufferedTextToolCalls(state)
           )
         ) {
           const terminal = hasPendingClientToolFinalization && state.openToolCalls.size === 0
@@ -1431,7 +1435,7 @@ class LiveCursorTransport implements CursorTransport {
           settler.settleFinish();
           return;
         }
-        if (this.framesReceived > 0 && this.sawAssistantText) {
+        if (this.framesReceived > 0 && (this.sawAssistantText || hasBufferedTextToolCalls(state))) {
           for (const event of finalizeTurnEvents(state)) push(event);
           releaseBacklogLease();
           settler.settleFinish();

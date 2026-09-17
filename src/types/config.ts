@@ -749,6 +749,10 @@ export interface OcxConfig {
   shutdownTimeoutMs?: number;
   /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */
   websockets?: boolean;
+  /** Experimental single-lane native OpenAI WebSocket steering; default off. */
+  codexNativeSteering?: boolean;
+  /** Experimental, default-off saved function-result injection on native multi-agent WebSockets. */
+  codexNativeInjection?: boolean;
   /**
    * Opt-in auto-cleanup policy for archived Codex sessions (issue #42 Phase 3).
    * Default OFF (`enabled` false / unset). Never enabled implicitly.

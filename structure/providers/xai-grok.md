@@ -1,7 +1,17 @@
 # xAI Grok Provider
 
+Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 xAI uses the same shared credential and delivery policies through the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
+One Responses capability is seeded for xAI alone: `requiresPairedResponsesToolResults`, which
+answers a replayed tool call whose output never arrived. It is deliberately not the same flag as
+`requiresAdjacentResponsesToolResults`, which xAI also carries and shares with the Kimi presets.
+The contract for both, and the reason they do not collapse into one, is specified in
+[chat-compat](./chat-compat.md); it is not restated here.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
@@ -145,3 +155,7 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

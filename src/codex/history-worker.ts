@@ -33,6 +33,7 @@ import {
 } from "./internal/history-writer";
 import {
   snapshotCodexHistoryNoop,
+  adoptHistoryDbBusyTimeout,
   type CodexHistoryFailureReason,
   type CodexHistoryVerifiedNoopProof,
 } from "./history-provider";
@@ -62,6 +63,11 @@ export interface HistoryWorkerRunMessage {
   readonly canonicalBackupPath: string;
   /** When set, prove this transition's desired direction while H is held. */
   readonly expectedDesiredEnabled?: boolean;
+  /**
+   * The parent realm's `state_5.sqlite` busy timeout. A Worker cannot observe a parent that
+   * resolved a different window, for the same reason the homes below are explicit.
+   */
+  readonly busyTimeoutMs?: number;
   /** Env snapshot: a Worker may not observe parent mutations on every platform. */
   readonly env?: { readonly CODEX_HOME?: string; readonly OPENCODEX_HOME?: string };
 }
@@ -107,7 +113,11 @@ export function isHistoryWorkerRunMessage(data: unknown): data is HistoryWorkerR
     && nonEmpty(message.canonicalCodexHome)
     && nonEmpty(message.canonicalStateDbPath)
     && nonEmpty(message.canonicalBackupPath)
-    && (message.expectedDesiredEnabled === undefined || typeof message.expectedDesiredEnabled === "boolean");
+    && (message.expectedDesiredEnabled === undefined || typeof message.expectedDesiredEnabled === "boolean")
+    && (message.busyTimeoutMs === undefined
+      || (typeof message.busyTimeoutMs === "number"
+        && Number.isFinite(message.busyTimeoutMs)
+        && message.busyTimeoutMs >= 0));
 }
 
 /**
@@ -207,6 +217,9 @@ if (typeof self !== "undefined" && typeof (self as { onmessage?: unknown }) === 
     try {
       if (message.env?.CODEX_HOME) process.env.CODEX_HOME = message.env.CODEX_HOME;
       if (message.env?.OPENCODEX_HOME) process.env.OPENCODEX_HOME = message.env.OPENCODEX_HOME;
+      // Before any DB open: the timeout has to be in force for the first `openStateDb`, not
+      // after the writer has already waited out this realm's default.
+      if (message.busyTimeoutMs !== undefined) adoptHistoryDbBusyTimeout(message.busyTimeoutMs);
       self.postMessage(runHistoryUnitUnderLock(message));
     } catch (error) {
       self.postMessage({

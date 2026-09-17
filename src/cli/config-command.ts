@@ -4,7 +4,7 @@ import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeMo
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
-import type { ClientConnectionStatus } from "./connect";
+import type { ServiceApiTokenState } from "../lib/service-secrets";
 import { CliUsageError, printData, rejectArgs, runCliAction, takeFlag } from "./runtime-api";
 
 const USAGE = `Usage:
@@ -38,9 +38,8 @@ const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
  * `client` block, which is the same defect in miniature: the presence of configuration is not
  * evidence that the connection works, and a machine whose data-plane token was revoked, rotated
  * away or deleted would have been labelled `connected: true` while it could not reach the hub at
- * all. `collectClientConnectionStatus` is the one reader that knows — it compares the token file's
- * fingerprint against the connection record — so the caller passes its answer in and this stays
- * pure and testable.
+ * all. The read-only projection compares the bounded token file's fingerprint against the
+ * connection record, and passes that answer in so this formatter stays pure and testable.
  *
  * Synthetic and NOT persisted, for two reasons. `clientConnectionSchema` is `.strict()`, so a
  * `client.note` field would not validate; and persisted prose drifts from the behaviour it
@@ -49,7 +48,7 @@ const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
  */
 export function remoteHubConfigNote(
   config: OcxConfig,
-  readConnection: () => Pick<ClientConnectionStatus, "state" | "reason" | "token">,
+  readConnection: () => RemoteHubConnectionObservation,
 ): { connected: boolean; origin: string; note: string } | null {
   if (config.runtimeRole !== "client" || !config.client) return null;
   // A thunk, so a standalone or hub install pays nothing: the guard above returns first and the
@@ -65,6 +64,36 @@ export function remoteHubConfigNote(
       ? `this machine is configured as a client but its hub data-plane token is ${connection.token}; run ocx connect status`
       : "provider credentials and model availability live on the hub; run ocx status";
   return { connected, origin: config.client.serverUrl, note };
+}
+
+export type RemoteHubConnectionObservation = {
+  state: "disconnected" | "connected" | "invalid" | "mismatched";
+  reason?: string;
+  token: "owned" | "missing" | "changed" | "unsafe";
+};
+
+export function remoteHubConnectionFromTokenState(
+  config: Pick<OcxConfig, "client">,
+  tokenState: ServiceApiTokenState,
+): RemoteHubConnectionObservation {
+  const token = tokenState.kind === "absent"
+    ? "missing"
+    : tokenState.kind === "unsafe"
+      ? "unsafe"
+      : tokenState.fingerprint === config.client?.tokenFingerprint ? "owned" : "changed";
+  return { state: "connected", token };
+}
+
+async function readRemoteHubConfigNote(config: OcxConfig): Promise<ReturnType<typeof remoteHubConfigNote>> {
+  if (config.runtimeRole !== "client" || !config.client) return null;
+  // This display command needs only connection ownership, not lifecycle recovery, catalog
+  // readiness, or any write-capable connect machinery. Keep the read on the bounded token
+  // observer so a cold `config show` never imports the full connect command graph.
+  const { readServiceApiTokenState } = await import("../lib/service-secrets");
+  return remoteHubConfigNote(
+    config,
+    () => remoteHubConnectionFromTokenState(config, readServiceApiTokenState()),
+  );
 }
 
 function redact(value: unknown, key = ""): unknown {
@@ -168,19 +197,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       rejectArgs(args, USAGE);
       const diagnostics = readConfigDiagnostics();
       const redacted = redact(diagnostics.config);
-      // Imported here rather than at module scope: `./connect` pulls the whole client lifecycle
-      // in, and `ocx config get/set` has no use for it.
-      const { collectClientConnectionStatus } = await import("./connect");
-      // The readiness probe is declined explicitly. `collectClientConnectionStatus` observes the
-      // local Codex ladder for a connected client, and observing it spawns `codex debug models`
-      // under a 45s budget. `ocx config show` reads only `state`, `reason` and `token` from the
-      // result, so paying for a subprocess here would buy nothing and would quietly turn a
-      // read-only config dump into a runtime probe. Returning no ladder resolves readiness to
-      // `unverified`, which is the honest answer for a caller that never asked.
-      const note = remoteHubConfigNote(
-        diagnostics.config,
-        () => collectClientConnectionStatus(undefined, undefined, { supportedEfforts: () => null }),
-      );
+      const note = await readRemoteHubConfigNote(diagnostics.config);
       // First key, not last: it has to be read before the empty `providers` map that misled a
       // reader into concluding nothing was configured anywhere.
       const config = note && redacted && typeof redacted === "object" && !Array.isArray(redacted)

@@ -900,22 +900,70 @@ describe("status reports stale process records end to end", () => {
   let freePort: number;
   beforeEach(async () => { freePort = await allocateFreePort(); });
 
-  test("a dead owner record surfaces in --json and in human output", () => {
+  test("a dead owner record surfaces in --json and in human output", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-stale-json-"));
     try {
-      seed(home, { runtime: true, port: freePort });
+      // Same hazard the fallback-port case below already guards, and for the same reason:
+      // `probeUncleanExitState` only reports a stale record when the recorded port REFUSES, and
+      // `allocateFreePort` hands back a port it has already released. This case spawns the CLI
+      // TWICE, so it was exposed for the whole gap between the two.
+      //
+      // Dispatch run 35121570658 lost the race there. The --json run saw the refusal and
+      // reported true; the human run a moment later found the port answering and correctly said
+      // nothing about a previous exit. Both reports were right. The fixture was asserting
+      // against a port it no longer owned, so it read a correct report as a lost signal.
+      //
+      // Confirm refusal around every probe and re-allocate when something takes it, so a stolen
+      // port retries the setup instead of failing an assertion it never exercised.
+      //
+      // That guard was applied to the --json run only, and the asymmetry was the remaining
+      // defect: the human run makes the identical `/healthz` probe and can abort the identical
+      // way, so a human probe that timed out instead of being refused printed no stale line and
+      // was read as a lost signal — the same misreading this comment already describes, one run
+      // later. Both runs are now guarded the same way.
+      let parsed: { proxy?: { staleProcessState?: unknown } } | undefined;
+      let humanStdout: string | undefined;
+      for (let attempt = 0; attempt < 5 && humanStdout === undefined; attempt++) {
+        const port = await allocateFreePort();
+        if (!await refusesConnection(port)) continue;
+        seed(home, { runtime: true, port });
 
-      const json = runStatusJson(home);
-      expect(json.status).toBe(0);
-      const parsed = JSON.parse(json.stdout) as { proxy?: { staleProcessState?: unknown } };
-      expect(parsed.proxy?.staleProcessState).toBe(true);
+        const json = runStatusJson(home);
+        expect(json.status).toBe(0);
+        const observed = JSON.parse(json.stdout) as { proxy?: { staleProcessState?: unknown } };
+        if (!await refusesConnection(port)) continue;
+        // A /healthz probe can abort without ECONNREFUSED even while the port is empty; that
+        // leaves the field false without anything having taken the port. Retry rather than
+        // treat a timed-out probe as a verdict.
+        if (observed?.proxy?.staleProcessState !== true) continue;
 
-      const human = spawnSync(process.execPath, [cliPath, "status"], {
-        cwd: repoRoot,
-        env: { ...process.env, OPENCODEX_HOME: home },
-        encoding: "utf8",
-      });
-      expect(human.stdout).toContain("may have exited unexpectedly");
+        const human = spawnSync(process.execPath, [cliPath, "status"], {
+          cwd: repoRoot,
+          env: { ...process.env, OPENCODEX_HOME: home },
+          encoding: "utf8",
+        });
+        if (!await refusesConnection(port)) continue;
+        // Re-sample the structured verdict under the conditions the human run just saw. A
+        // `true` here means the probe path was reaching a refusal at that moment, so the human
+        // output is a valid sample and the assertions below judge it — a human path that
+        // genuinely stopped reporting the stale line still fails. A `false` while the port is
+        // still refusing is the documented abort, observed rather than assumed, so this attempt
+        // is discarded instead of being asserted against.
+        const confirm = runStatusJson(home);
+        if (confirm.status !== 0) continue;
+        const confirmed = JSON.parse(confirm.stdout) as { proxy?: { staleProcessState?: unknown } };
+        if (!await refusesConnection(port)) continue;
+        if (confirmed?.proxy?.staleProcessState !== true) continue;
+        parsed = observed;
+        humanStdout = human.stdout;
+      }
+
+      expect(
+        humanStdout,
+        "no allocated port stayed refused, with the stale verdict reached, across every status probe",
+      ).toBeDefined();
+      expect(parsed?.proxy?.staleProcessState).toBe(true);
+      expect(humanStdout).toContain("may have exited unexpectedly");
     } finally {
       removeTreeWithRetry(home);
     }

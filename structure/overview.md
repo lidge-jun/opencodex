@@ -1,5 +1,7 @@
 # Overview
 
+Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
@@ -106,6 +108,15 @@ still cover the rule, which is a judgement only review makes.
   through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`.
   Enforced by `tests/test-layout.test.ts`.
 
+CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
+scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
+jobs out of the general shards. The manual Windows matrix selects all-file scope and overrides the
+process shape to six files and 480 seconds, so batching changes process size without changing the
+platform suite's file set. Its dedicated batch step sets `OCX_TEST_NO_QUEUE=1`: those sequential
+processes are one logical runner, while each process still installs its own isolated home and test
+guards. The workflow contract and process bounds live in
+[`ops/docs-and-release.md`](ops/docs-and-release.md#cross-platform-ci).
+
 Two invariants are stated here without a binding, and `grace.unboundInvariants` in
 [`manifest.json`](manifest.json) carries the reason for each. They are true statements about the system;
 no test in this repository currently pins them, and saying so is more useful than naming a test that
@@ -149,3 +160,5 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

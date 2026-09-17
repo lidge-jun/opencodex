@@ -5,11 +5,16 @@ readonly SHARD_SPEC="${1:-}"
 readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"
 readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"
 readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
+readonly TEST_FILE_SCOPE="${BUN_TEST_FILE_SCOPE:-general}"
 # Runtime under test. Defaults to whatever `bun` PATH resolves to; the Bun 1.4
 # qualification lane sets OPENCODEX_BUN_PATH so the batches actually execute on
 # the candidate binary. Without this the lane would export an override, run the
 # bundled stable runtime anyway, and report a qualification it never performed.
 readonly BUN_BIN="${OPENCODEX_BUN_PATH:-bun}"
+
+# One definition of the crash classifier, shared with the Windows and macOS legs in ci.yml.
+# shellcheck source=scripts/ci/bun-crash-signatures.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bun-crash-signatures.sh"
 
 usage() {
   echo "usage: $0 <shard/total>" >&2
@@ -38,6 +43,10 @@ if [[ ! "$BATCH_KILL_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "BUN_TEST_BATCH_KILL_GRACE_SECONDS must be a positive integer, got: $BATCH_KILL_GRACE_SECONDS" >&2
   exit 64
 fi
+if [[ "$TEST_FILE_SCOPE" != "general" && "$TEST_FILE_SCOPE" != "all" ]]; then
+  echo "BUN_TEST_FILE_SCOPE must be general or all, got: $TEST_FILE_SCOPE" >&2
+  exit 64
+fi
 if ! command -v timeout >/dev/null 2>&1; then
   echo "GNU timeout is required to bound Bun test batches." >&2
   exit 69
@@ -46,13 +55,17 @@ fi
 is_general_test_file() {
   local path="$1"
 
-  case "$path" in
-    # Dedicated CI jobs run these in their own Bun process (ci.yml storage-policy / api-usage).
-    # Match by basename at any depth so the exclusion survives the tests/ domain layout.
-    */api-storage-policy*.test.ts|*/api-storage.test.ts|*/api-usage.test.ts)
-      return 1
-      ;;
-  esac
+  if [[ "$TEST_FILE_SCOPE" == "general" ]]; then
+    case "$path" in
+      # Dedicated Linux CI jobs run these in their own Bun process (ci.yml storage-policy /
+      # api-usage). Windows sets scope=all because its manual platform leg has always covered
+      # the full suite and batching must not silently shrink that platform contract.
+      # Match by basename at any depth so the exclusion survives the tests/ domain layout.
+      */api-storage-policy*.test.ts|*/api-storage.test.ts|*/api-usage.test.ts)
+        return 1
+        ;;
+    esac
+  fi
 
   case "$path" in
     *.test.js|*.test.jsx|*.test.ts|*.test.tsx|*_test.js|*_test.jsx|*_test.ts|*_test.tsx|*.spec.js|*.spec.jsx|*.spec.ts|*.spec.tsx|*_spec.js|*_spec.jsx|*_spec.ts|*_spec.tsx)
@@ -64,38 +77,12 @@ is_general_test_file() {
   esac
 }
 
-is_bun_runtime_crash() {
-  local status="$1"
-  local log_file="$2"
-
-  case "$status" in
-    132|133|134|135|136|137|139)
-      return 0
-      ;;
-  esac
-
-  # Bun 1.3.14 can surface a Linux epoll registration failure as exit 1,
-  # even though the failure comes from Bun's internal WriteStream setup rather
-  # than a test assertion. Treat only that narrow runtime signature as a crash.
-  if (( status == 1 )) \
-    && grep -Fq '# Unhandled error between tests' "$log_file" \
-    && grep -Fq 'error: EEXIST: file already exists, epoll_ctl' "$log_file" \
-    && grep -Fq 'at new WriteStream (internal:fs/streams:' "$log_file"; then
-    return 0
-  fi
-
-  grep -Eqi \
-    'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' \
-    "$log_file"
-}
-
 LAST_FAILURE_KIND=""
 
 run_test_once() {
   local batch_number="$1"
   local phase="$2"
-  local attempt="$3"
-  shift 3
+  shift 2
   local -a files=("$@")
   local log_file
   local status
@@ -107,7 +94,7 @@ run_test_once() {
 
   log_file="$(mktemp -t ocx-bun-test-batch.XXXXXX)"
 
-  echo "::group::${label} attempt ${attempt} (${#files[@]} files)"
+  echo "::group::${label} (${#files[@]} files)"
   printf '  %s\n' "${files[@]}"
 
   set +e
@@ -127,14 +114,14 @@ run_test_once() {
 
   if (( status == 124 )); then
     LAST_FAILURE_KIND="timeout"
-    echo "::warning::Bun test process timed out after ${BATCH_TIMEOUT_SECONDS}s in ${label} (attempt ${attempt})."
+    echo "::warning::Bun test process timed out after ${BATCH_TIMEOUT_SECONDS}s in ${label}."
     rm -f -- "$log_file"
     return "$status"
   fi
 
   if is_bun_runtime_crash "$status" "$log_file"; then
     LAST_FAILURE_KIND="runtime"
-    echo "::warning::Bun runtime crash in ${label} (exit ${status}, attempt ${attempt})."
+    echo "::warning::Bun runtime crash in ${label} (exit ${status})."
     rm -f -- "$log_file"
     return "$status"
   fi
@@ -145,52 +132,43 @@ run_test_once() {
   return "$status"
 }
 
-recover_batch_file_by_file() {
+# Attribution, never disposition.
+#
+# This runs only after the shard has already failed, and nothing it prints can change that.
+# One file per process removes precisely the conditions that produce a batch failure of this
+# class -- batch concurrency, shared process state, resource pressure -- so a clean sweep was
+# always going to be clean and was always going to report nothing. Reading that as a recovery
+# is how twelve to fourteen Linux segfaults per run were reported green from 2026-09-08.
+#
+# It is kept because the half that IS informative survives: a human reading the log learns
+# whether any single file reproduces the failure alone. The function returns success in every
+# case on purpose; its caller has already decided to fail.
+attribute_batch_file_by_file() {
   local batch_number="$1"
   local batch_failure_kind="$2"
   shift 2
   local -a files=("$@")
   local file
   local file_index=0
-  local status
-  local retry_kind
+  local reproduced=""
 
-  echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} hit a ${batch_failure_kind}; rerunning its ${#files[@]} files one at a time in fresh Bun processes."
+  echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} hit a ${batch_failure_kind} and has already failed this shard; rerunning its ${#files[@]} files one at a time for attribution only."
 
   for file in "${files[@]}"; do
     ((file_index += 1))
-    if run_test_once "$batch_number" "singleton ${file_index}/${#files[@]}" 1 "$file"; then
+    if run_test_once "$batch_number" "attribution ${file_index}/${#files[@]}" "$file"; then
       continue
-    else
-      status=$?
     fi
 
-    if [[ "$LAST_FAILURE_KIND" != "runtime" && "$LAST_FAILURE_KIND" != "timeout" ]]; then
-      echo "::error::Singleton isolation identified ${file} as a failing test file."
-      return "$status"
-    fi
-
-    retry_kind="$LAST_FAILURE_KIND"
-    echo "Retrying ${file} once in another fresh Bun process after ${retry_kind} failure..."
-    if run_test_once "$batch_number" "singleton ${file_index}/${#files[@]}" 2 "$file"; then
-      echo "::warning::${file} passed on its single ${retry_kind} retry."
-      continue
-    else
-      status=$?
-    fi
-
-    if [[ "$LAST_FAILURE_KIND" == "timeout" ]]; then
-      echo "::error::${file} timed out twice under singleton isolation; failing after one retry."
-    elif [[ "$LAST_FAILURE_KIND" == "runtime" ]]; then
-      echo "::error::Bun runtime crash repeated for ${file} under singleton isolation; failing after one retry."
-    else
-      echo "::error::${file} failed during singleton retry."
-    fi
-    return "$status"
+    echo "::error::Attribution: ${file} reproduces alone (${LAST_FAILURE_KIND})."
+    reproduced+="${file} (${LAST_FAILURE_KIND}) "
   done
 
-  echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} passed under singleton isolation after the original ${batch_failure_kind}; continuing."
-  return 0
+  if [[ -n "$reproduced" ]]; then
+    echo "::error::Shard ${SHARD_SPEC} batch ${batch_number}: file(s) that reproduce alone: ${reproduced% }"
+  else
+    echo "::error::Shard ${SHARD_SPEC} batch ${batch_number}: every file passed alone, so the ${batch_failure_kind} lives in multi-file process state, not in any single test."
+  fi
 }
 
 mapfile -d '' -t ALL_TEST_FILES < <(
@@ -217,28 +195,32 @@ if (( ${#SELECTED_FILES[@]} == 0 )); then
 fi
 
 readonly TOTAL_BATCHES=$(( (${#SELECTED_FILES[@]} + BATCH_SIZE - 1) / BATCH_SIZE ))
-echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
-echo "Runtime crashes and timeouts fall back to one-file-per-process isolation; assertion/test failures do not retry."
+echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (scope ${TEST_FILE_SCOPE}, batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
+echo "Nothing here is retried. A test failure, a process timeout and a Bun runtime crash each fail this shard on their first occurrence."
+echo "A timeout or a crash is additionally swept one file per process for attribution, after the shard has already failed; that sweep cannot turn it green."
 
 for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
   start=$(( batch_index * BATCH_SIZE ))
   batch=("${SELECTED_FILES[@]:start:BATCH_SIZE}")
   batch_number=$(( batch_index + 1 ))
 
-  if run_test_once "$batch_number" "" 1 "${batch[@]}"; then
+  if run_test_once "$batch_number" "" "${batch[@]}"; then
     continue
   else
     status=$?
   fi
 
-  if [[ "$LAST_FAILURE_KIND" != "runtime" && "$LAST_FAILURE_KIND" != "timeout" ]]; then
+  failure_kind="$LAST_FAILURE_KIND"
+  # A test failure is already attributed by Bun's own output; there is nothing to sweep.
+  if [[ "$failure_kind" != "runtime" && "$failure_kind" != "timeout" ]]; then
     exit "$status"
   fi
 
-  failure_kind="$LAST_FAILURE_KIND"
-  if recover_batch_file_by_file "$batch_number" "$failure_kind" "${batch[@]}"; then
-    continue
-  else
-    exit $?
-  fi
+  # The shard is red from this line onwards. A process timeout is a batch that never
+  # finished, and a Bun panic is process death a user would have seen; running the same
+  # files again in a configuration that cannot reproduce either one is not evidence that
+  # they did not happen. Sweep for attribution, then fail with the original status.
+  echo "::error::Shard ${SHARD_SPEC} batch ${batch_number} ${failure_kind} failure (exit ${status}). This shard has failed; the sweep below only attributes it."
+  attribute_batch_file_by_file "$batch_number" "$failure_kind" "${batch[@]}"
+  exit "$status"
 done

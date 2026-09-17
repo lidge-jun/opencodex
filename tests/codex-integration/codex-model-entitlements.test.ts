@@ -37,9 +37,9 @@ import {
 import { clearCodexRuntimeResolveCache, loadPersistedCodexRuntime } from "../../src/codex/runtime";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
 import upstreamModelsSnapshot from "../../src/codex/data/upstream-models.json";
-import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const TEST_CLIENT_VERSION = "0.146.0";
 const DAYBREAK = "gpt-daybreak-blue-latest";
@@ -1863,5 +1863,93 @@ describe("cached per-account denials for always-visible natives", () => {
     expect(cachedDeniedCodexAccountIdsForModel(DAYBREAK, now)).toBeUndefined();
     expect(cachedDeniedCodexAccountIdsForModel("gpt-5.5", now)).toBeUndefined();
     expect(cachedDeniedCodexAccountIdsForModel(undefined, now)).toBeUndefined();
+  });
+});
+
+/**
+ * The denial reader validates every cached roster against the account's CURRENT credential, and
+ * for native main that validation is a synchronous read of the physical stored token -- once per
+ * cached client version, on the request path.
+ *
+ * Some requests are forbidden to make that read: a profile switch draining the native identity,
+ * and a request served by its own forwarded credential which owns no main state. Those callers
+ * already exclude main from every other account question they ask, and reaching the token here
+ * anyway crossed the fence for an ordering hint. Excluding it is safe precisely because the hint
+ * is soft: the account becomes UNKNOWN rather than denied, which is indistinguishable from
+ * having no cached roster for it and leaves selection exactly as it was.
+ */
+describe("the denial reader honours a caller's account read fence", () => {
+  test("an excluded account contributes no denial while the others still do", () => {
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests("plus", ["gpt-5.5"], now, TEST_CLIENT_VERSION);
+    seedCodexModelEntitlementsForTests("free", ["gpt-5.5"], now, TEST_CLIENT_VERSION);
+
+    expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now) ?? [])].sort())
+      .toEqual(["free", "plus"]);
+    expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now, {
+      excludeAccountIds: new Set(["plus"]),
+    }) ?? [])]).toEqual(["free"]);
+  });
+
+  test("excluding the only denied account answers undefined, never an empty set", () => {
+    // Same contract the unexcluded reader keeps: a caller must not be able to read "everything I
+    // was allowed to look at grants the model" as "no candidates exist".
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests("free", ["gpt-5.5"], now, TEST_CLIENT_VERSION);
+
+    expect(cachedDeniedCodexAccountIdsForModel(ASTRA, now, {
+      excludeAccountIds: new Set(["free"]),
+    })).toBeUndefined();
+  });
+
+  test("native main is dropped without its stored credential being consulted", () => {
+    // Written so the answer cannot depend on whether a main token is readable in this
+    // environment: readable, absent, or mismatched, an excluded main is the same nothing. That
+    // is the whole point -- the excluded reader must reach no verdict about main, which is what
+    // makes not reading the token safe.
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests(MAIN_CODEX_ACCOUNT_ID, ["gpt-5.5"], now, TEST_CLIENT_VERSION);
+
+    expect(cachedDeniedCodexAccountIdsForModel(ASTRA, now, {
+      excludeAccountIds: new Set([MAIN_CODEX_ACCOUNT_ID]),
+    })).toBeUndefined();
+  });
+
+  test("an absent or empty exclusion set leaves the reader exactly as it was", () => {
+    const now = 1_800_000_000_000;
+    seedCodexModelEntitlementsForTests("free", ["gpt-5.5"], now, TEST_CLIENT_VERSION);
+
+    expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now, {}) ?? [])]).toEqual(["free"]);
+    expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now, {
+      excludeAccountIds: new Set<string>(),
+    }) ?? [])]).toEqual(["free"]);
+  });
+
+  /**
+   * The fence is a property of the CALLERS, not of this reader: the reader cannot know which
+   * request is draining main. Asserted from source because the failure mode is an omitted
+   * argument -- every behavioural assertion above passes with the callers unchanged, which is
+   * exactly how the original violation survived review.
+   */
+  test("every request-path caller passes its own fence", () => {
+    const authContext = readFileSync(repoPath("src", "codex", "auth-context.ts"), "utf8");
+    const prepare = readFileSync(repoPath("src", "server", "responses", "request-prepare.ts"), "utf8");
+
+    // Auth context reuses the very set it already built for the entitlement snapshot, so the two
+    // account questions on this request can never disagree about what it may read.
+    const authCalls = [...authContext.matchAll(/cachedDeniedCodexAccountIdsForModel\(/g)]
+      .map(match => authContext.slice(match.index ?? 0, (match.index ?? 0) + 400));
+    expect(authCalls).toHaveLength(1);
+    expect(authCalls[0]).toContain("excludeAccountIds");
+
+    // Both previews in request-prepare, including the one rebuilt after encrypted-task recovery.
+    const previewCalls = [...prepare.matchAll(/cachedDeniedCodexAccountIdsForModel\(/g)]
+      .map(match => prepare.slice(match.index ?? 0, (match.index ?? 0) + 400));
+    expect(previewCalls).toHaveLength(2);
+    for (const call of previewCalls) expect(call).toContain("excludeAccountIds:");
+    expect(previewCalls[0]).toContain("nativeMainReadsForbidden");
+    // Recovery evaluates the drain against its own, later view rather than the one captured
+    // before decryption.
+    expect(previewCalls[1]).toContain("recoveryNativeMainBlocked");
   });
 });

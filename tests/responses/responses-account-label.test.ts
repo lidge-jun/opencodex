@@ -344,6 +344,32 @@ describe("Responses account usage attribution", () => {
     });
   });
 
+  // Pool health reads a 429 as the account saying it is out of quota. The replay refusal wears
+  // the same status but no upstream produced it, so recording it would cool a credential that
+  // refused nothing -- and the cooldown outlives the request that invented it.
+  test("a refused reset replay is not quota evidence and invites no client retry", async () => {
+    await withPoolHome(async () => {
+      const config = poolConfig(["pool-a"]);
+      savePoolCredential("pool-a");
+      updateAccountQuota("pool-a", 10);
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+      }) as typeof fetch;
+
+      const response = await handleResponses(request(), config, { model: "", provider: "" }, {});
+
+      expect(response.status).toBe(429);
+      expect(sends).toBe(1);
+      expect((await response.json() as { error?: { code?: string } }).error?.code)
+        .toBe("upstream_reset_replay_refused");
+      expect(response.headers.get("Retry-After")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBeUndefined();
+      expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toBeUndefined();
+    });
+  });
+
   test("a wrapped quota failure cools a sole account when no alternate exists", async () => {
     await withPoolHome(async () => {
       const config = poolConfig(["pool-a"]);

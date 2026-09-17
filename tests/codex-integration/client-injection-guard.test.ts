@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -134,7 +134,7 @@ async function within<T>(promise: Promise<T>, milliseconds: number): Promise<T> 
     })]);
   } finally { if (timer !== undefined) clearTimeout(timer); }
 }
-async function runScenario(mode: string): Promise<Record<string, any>> {
+async function runScenario(mode: string, childDeadlineMs = 30_000): Promise<Record<string, any>> {
   const root = mkdtempSync(join(tmpdir(), "ocx-client-guard-")); roots.push(root);
   const codex = join(root, "codex"); const ocx = join(root, "ocx"); const desktop = join(root, "desktop");
   for (const directory of [codex, ocx, desktop]) mkdirSync(directory, { recursive: true });
@@ -171,14 +171,14 @@ async function runScenario(mode: string): Promise<Record<string, any>> {
   children.push(child);
   const stdout = new Response(child.stdout).text();
   const stderr = new Response(child.stderr).text();
-  const code = await within(child.exited, 30_000);
+  const code = await within(child.exited, childDeadlineMs);
   const output = await within(Promise.all([stdout, stderr]), 5_000);
   const result = JSON.parse(output[0].trim().split("\n").at(-1) ?? "{}");
   if (code !== 0) throw new Error("injection fixture failed: " + String(result.fatal ?? output[1]));
   return result;
 }
 
-afterEach(async () => {
+async function cleanupFixtures(): Promise<void> {
   const errors: unknown[] = [];
   for (const child of children.splice(0)) {
     try {
@@ -193,7 +193,28 @@ afterEach(async () => {
     try { removeTreeWithRetry(root); } catch (error) { errors.push(error); }
   }
   if (errors.length) throw new AggregateError(errors, "injection fixture cleanup failed");
-}, 30_000);
+}
+
+beforeAll(async () => {
+  try {
+    // Windows run 35098735960 spent 30.446s in the first child, then 17.038s and
+    // 1.3-2.0s in its siblings. Run 35093667426 likewise paid 3.814s first versus
+    // 1.6-2.7s later. Exercise the real write/SQLite/ACL path once before a scenario's
+    // 30s execution budget so Bun and Windows first-touch work is not timed
+    // as guard behavior. The 45s warm-up ceiling is the file's existing test budget.
+    await runScenario("deny", 45_000);
+  } catch {
+    // Deliberately swallowed. This hook exists only to pay first-touch cost; it asserts
+    // nothing. Letting it throw would convert one broken scenario into seven failures whose
+    // messages all point at a warm-up rather than at the guard, and the real "deny" test below
+    // reproduces any genuine breakage with its own assertions. A warm-up that merely ran out of
+    // its own budget on a loaded runner must not fail a file it was added to stabilise.
+  } finally {
+    await cleanupFixtures();
+  }
+}, 55_000);
+
+afterEach(cleanupFixtures, 30_000);
 
 for (const mode of ["deny", "queued-native", "legacy", "external", "malformed", "async", "async-reject"]) {
   test("client commit guard preserves every routing artifact (" + mode + ")", async () => {

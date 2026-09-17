@@ -1,5 +1,7 @@
 # Docs And Release
 
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
 
 Refresh-lock validation covers fresh unreadable locks, descriptor-matched release, path-probe failures preserving callback outcomes, and confirmed-owner unlink error handling in `tests/codex-integration/codex-account-store.test.ts`; the [catalog contract](../catalog.md#accounts-namespaces-and-pool-rotation) explicitly does not promise atomic compare-and-delete. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
@@ -10,6 +12,10 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
 Human-readable connect and sync-refresh diagnostics follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics), with regression coverage for both paths in `tests/cli/cli-connect-readiness.test.ts`.
+
+`tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
+`src/cli/config-command.ts` derives token ownership without importing the connect command or
+triggering catalog, lifecycle, or ACL-hardening work.
 
 The CLI default dashboard address follows the [management ingress bind](../runtime.md#hub-management-dashboard-address), covered by `tests/cli/cli-dispatch.test.ts`.
 
@@ -42,6 +48,17 @@ https://opencodex.me/
 
 The workflow runs on `main` pushes touching `docs-site/**` or the workflow itself, builds
 `docs-site`, uploads the artifact, and deploys with GitHub Pages.
+
+That workflow is the deploy path, not a review gate: it first runs after promotion to `main`,
+so on its own it can only report a broken site once the change has already left review. The
+pull-request gate is the `docs-site-build` job in `.github/workflows/ci.yml`, selected by the
+`changes` job's `docs` filter (`docs-site/**` and the workflow itself). One Linux leg installs
+`docs-site` with `--frozen-lockfile` and runs the Astro build, so a manifest and lockfile that
+disagree fail before the build does. The `ci` aggregate treats it exactly like the other scoped
+jobs: requested when the filter is true, required `skipped` otherwise.
+
+The deliberate omission is that `docs-site/**` is not in the `ci` filter. A prose edit has no
+business starting the cross-platform suite; it only has to build.
 
 > Decision record: [ADR-0080](../decisions/ADR-0080-github-pages.md)
 
@@ -85,10 +102,10 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs six shards only on manual dispatch with `lane=all` (or empty), not on push events. Aggregate `ci` accepts an intentional Windows skip, so release evidence must inspect all six actual job results on the exact publish SHA. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
+| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs nine shards only on manual dispatch with `lane=all` (or empty), not on push events. Linux runs at-most-12-file processes with a 120-second process bound; Windows uses measured six-file/480-second processes and all-file scope so its full-suite contract is unchanged. The dedicated Windows batch step sets `OCX_TEST_NO_QUEUE=1` because its sequential processes are one logical runner; each process still creates an isolated home and arms the test guards before the lock boundary. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires nine concrete successful `windows N/9` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch with an intended version and `pre-move` or `repair` mode | Opens the reviewed pull request that moves `dev` past a release target. The default `pre-move` mode runs before promotion and publication; explicit `repair` mode retains the post-publish catch-up path. It is neither called by `release.yml` nor triggered by publication. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires successful Cross-platform CI for the exact `GITHUB_SHA`, requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. |
-| `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
+| `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. This is the deploy path; the pull-request build gate is the `docs-site-build` job in `ci.yml`. |
 | `.github/workflows/service-lifecycle.yml` | `pull_request` to `main`/`dev` and `push`, both filtered on the service path set (`src/service.ts`, `src/cli.ts`, `src/cli/index.ts`, `src/lib/bun-runtime.ts`, `package.json`, `bun.lock`, the workflow), or manual dispatch | Service-lifecycle smoke on three platforms: Linux systemd, macOS launchd, and Windows Scheduled Tasks. Each installs, verifies, stops via `ocx stop`, and uninstalls. The path list is kept in sync with the `release.yml` service-gate regex. |
 | `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events filtered to successful `CodeRabbit` statuses | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. |
 | `.github/workflows/enforce-issue-quality.yml` | `issues` (opened, edited, reopened), `issue_comment` (created, edited), or manual dispatch with an issue number | Issue-template compliance gate. |
@@ -288,10 +305,27 @@ The [desktop membership contract](../runtime.md#codex-desktop-process-membership
 
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. Linux runs
 the suite in four shards with a separate `gates` job, and macOS runs it in two shards. Windows
-runs the full suite in six shards only on manual `workflow_dispatch` with `lane=all` (or an
-empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix. A
-release that requires Windows proof must dispatch it for the exact publish SHA and inspect
-all six successful jobs; an aggregate green `ci` check can include a deliberate Windows skip.
+runs the full suite in nine shards only on manual `workflow_dispatch` with `lane=all` (or an
+empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix, and an
+aggregate green `ci` check on those events legitimately includes a deliberate Windows skip.
+
+Nothing in the workflow retries. Linux and Windows use `scripts/ci/run-bun-test-batches.sh`, but
+each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
+Windows uses six files and 480 seconds. Windows selects all test families, while Linux leaves the
+storage-policy and api-usage families to its dedicated jobs. The Windows step disables the
+user-scoped test-run queue with `OCX_TEST_NO_QUEUE=1`: the batches already run sequentially in one
+dedicated job, and queueing a new batch behind a surviving process from the preceding batch spends
+the process timeout without executing tests. The per-process home isolation and live-home/service
+manager guards remain active because the preload installs them before the lock boundary. A test
+failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
+batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
+failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
+jobs this run actually requested, then requires `success` from every one of them and `skipped`
+from every job the event did not request — so a job that was requested and never started can no
+longer report as a deliberate skip. On a `lane=all` dispatch the gate additionally reads the
+run's own job list through the Actions API and requires nine concrete successful `windows N/9`
+results, because a matrix rollup can report `success` when one matrix leg is skipped. A
+release that requires Windows proof still dispatches it for the exact publish SHA.
 Across the jobs, the workflow runs:
 
 ```bash
@@ -394,3 +428,5 @@ Provider-scoped approval reviewer settings are projected by the [catalog owner](
 Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

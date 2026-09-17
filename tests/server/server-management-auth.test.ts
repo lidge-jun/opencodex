@@ -7,6 +7,8 @@ import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { clearContextSessionOwnersForTests } from "../../src/codex/context-owner";
 import { resetContextRelayActivationForTests } from "../../src/codex/context-compat";
 import { startServer } from "../../src/server";
@@ -29,6 +31,7 @@ import {
   setPlatformForTests,
   timedOutSecretPathCountForTests,
   hardenSecretDir,
+  flushWindowsSecretAclReapsBeforeRemoval,
 } from "../../src/lib/windows-secret-acl";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -189,7 +192,37 @@ beforeEach(() => {
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Settle every in-flight config-directory harden before anything here removes a directory.
+  //
+  // `hardenConfigDir()` spawns `icacls.exe`, which holds the directory open until it exits, and
+  // Windows file locking is mandatory: removing that tree while the child lives returns EPERM no
+  // matter how long the caller waits. Windows shard 1/6 of run 35108652486 proved the waiting is
+  // not the answer -- it exhausted the full 15s exponential budget and still threw
+  // `EPERM: operation not permitted, rm .../tmp/ocx-management-auth-fDchUb` out of this hook.
+  // #4789 filed the same failure at this same line when the budget was 2.5s, and raising it to
+  // 15s in #4796 bought six times the wait and changed nothing, because the handle was never
+  // going to close on its own schedule. The process that started the child has to wait for it.
+  //
+  // The all-directories variant is the required one. `server.stop` already flushes, but through
+  // `flushConfigDirHardening()`, which defaults to `getConfigDir()` read at stop time -- and this
+  // hook moves OPENCODEX_HOME back to the developer's real home a few lines below, so a
+  // directory-scoped flush here would settle the wrong tree and leave this one held.
+  await flushConfigDirHardeningForTests();
+  // The ACL wrapper has its own watchdog, so its public flight can settle before a killed
+  // icacls.exe reports `exited`. This is a removal barrier, not part of ordinary shutdown: only
+  // the code about to delete this tree waits for the distinct handle-release guarantee.
+  await flushWindowsSecretAclReapsBeforeRemoval(testHome);
+  // And settle any native-main release nobody awaited. `server.stop` awaits its own, but a
+  // startServer that THREW cannot: the rollback fires `void lifecycle.release()` and rethrows,
+  // because startServer is synchronous by contract. That release closes the owner's SQLite lease
+  // and stable lock file, both under CODEX_HOME, which is this very directory.
+  //
+  // This file reaches that path. Two of its cases bind a management ingress on the fixed port
+  // 10101, which nine other test files also use, so a collision on the six-shard Windows leg
+  // turns a passing start into the rollback. That is why the same file and line failed on shard
+  // 1, then 2, then 3 while every other shard passed: the trigger is another shard, not this one.
+  await flushNativeMainStartupReleases();
   resetContextRelayActivationForTests();
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;

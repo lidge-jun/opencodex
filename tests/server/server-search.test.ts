@@ -315,16 +315,21 @@ test("an account-qualified search model uses that exact account and sends the ba
 test("an exact search 429 never switches to the active Pool account and reports only its public selector", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeSearchUpstream(captured, 429, { error: { message: "rate limited" } });
-  saveConfig(exactSearchConfig());
+  const config = exactSearchConfig();
+  saveConfig(config);
   saveExactSearchCredentials();
 
-  const server = startServer(0);
   try {
-    const requestExactSearch = () => fetch(new URL("/v1/alpha/search", server.url), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: "search-session", model: "side/gpt-test" }),
-    });
+    // Run 35093667426 returned a local 401 before this fixture could return its 429.
+    // Full server startup is unrelated to this routing contract and widens the interval
+    // between writing and reading the credential store selected by process-wide
+    // OPENCODEX_HOME. Call the handler while that fixture home is current.
+    const logCtx = { model: "", provider: "" };
+    const requestExactSearch = () => handleSearch(
+      alphaSearchRequest({ id: "search-session", model: "side/gpt-test" }),
+      config,
+      logCtx,
+    );
 
     const first = await requestExactSearch();
     expect(first.status).toBe(429);
@@ -342,11 +347,9 @@ test("an exact search 429 never switches to the active Pool account and reports 
     expect(captured).toHaveLength(1);
     expect(loadConfig().activeCodexAccountId).toBe("pool-b");
     expect(getCodexUpstreamHealth("pool-b")).toBeNull();
-    const entry = getRequestLogEntries().findLast(candidate => candidate.model === "side/gpt-test");
-    expect(entry?.provider).toBe("openai-side");
-    expect(JSON.stringify(entry)).not.toContain("pool-a");
+    expect(logCtx.provider).toBe("openai-side");
+    expect(JSON.stringify(logCtx)).not.toContain("pool-a");
   } finally {
-    await server.stop(true);
     await upstream.stop(true);
   }
 });

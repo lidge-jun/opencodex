@@ -1,5 +1,6 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { AuxiliaryListenerBindError } from "./ports";
+import { runAdmittedBodyWork } from "./inbound-body-admission";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -106,7 +107,6 @@ export {
   unregisterTurn,
 } from "./lifecycle";
 import {
-  addFinalRequestLog,
   hydrateRequestLogsFromDisk,
   httpStatusForRequestLogTerminal,
   inspectResponseLogSsePayload,
@@ -181,7 +181,7 @@ import {
   type NativeMainStartupLifecycle,
 } from "../codex/native-profile-startup";
 import { EXTERNAL_CALL_PREFIX, LiveCallBindings } from "./live-call-bindings";
-import { codexCompatibleUrl, contextEndpoint, contextRelayActivated } from "../codex/context-compat";
+import { contextEndpoint, contextRelayActivated } from "../codex/context-compat";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
   createManagementSessionControl,
@@ -268,11 +268,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     startupOwnershipStatePaths,
     startupWindowsTaskListingCache,
   );
-  // Startup cache invalidation is best-effort and must never block the server from
-  // serving. It now takes K so it cannot race a convergence commit. Use the home
-  // paired with the ownership inspection; re-reading ambient CODEX_HOME here could
-  // invalidate a different installation after an environment or mount change.
-  if (startupCacheOwnership.ownership === "owned" && startupOwnershipHomes !== null) {
+  // Startup cache invalidation is best-effort and applies only when startup sync is enabled.
+  // Check OFF before taking K: on Windows K resolves SID + LocalAppData through PowerShell,
+  // and run 35093667426 exceeded healthy controls by 33.8 s against that 30 s child budget.
+  // The permit callback still re-reads intent under K to close a concurrent disable race.
+  if (shouldSyncCodexOnStart(config) && startupCacheOwnership.ownership === "owned" && startupOwnershipHomes !== null) {
     try {
       const startupCodexHome = startupOwnershipHomes.codexHome;
       // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
@@ -519,7 +519,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
     let response: Response;
     try {
-      response = await work(lease);
+      response = await runAdmittedBodyWork(req, policy, config.maxInboundBodyBytes, () => work(lease), refusalLog);
     } catch (error) {
       releaseWorkflow();
       lease.release();

@@ -65,10 +65,29 @@ describe("install scripts", () => {
     expect(pkg.main).toBe("./bin/package-main.mjs");
     expect(pkg.exports?.["."]?.bun).toBe("./src/index.ts");
     expect(pkg.exports?.["."]?.default).toBe("./bin/package-main.mjs");
-    expect(pkg.dependencies?.bun).toBe("1.4.2");
+    // Bun stays at 1.4.0 until 1.4.2's test-runner crash is fixed upstream. 1.4.2 segfaults
+    // while RE-LOADING the bunfig preload that `--isolate` re-enters once per test file:
+    // `load_preloads -> JSModuleLoader::loadModule -> JSPromise::status` dereferences a dead
+    // promise and the process dies with "Segmentation fault at address 0x10". It is a crash in
+    // the interpreter, not a test result, and no test content avoids it.
+    //
+    // The A/B is two Linux CI runs 40 minutes apart, either side of #4064 (02bc10e8af), which
+    // is the commit that moved this line to 1.4.2:
+    //   run 34274464811, 6bd3274ab2, Bun 1.4.0 -- 0 panics across all four shards
+    //   run 34278407438, 02bc10e8af, Bun 1.4.2 -- 12 panics across all four shards
+    // Every sampled 1.4.0 tree is clean and every sampled 1.4.2 tree crashes 12-14 times per
+    // run. Linux hid it because `scripts/ci/run-bun-test-batches.sh` re-runs a crashed batch one
+    // file per process, and one preload load cannot reach the second that faults, so the sweep
+    // always "passes". Windows had no such sweep: shard 5/6 died on both attempts of runs
+    // 35087572377, 35093667426 and 35098735960, always at the 67th file, and the file sitting at
+    // that position changed between them.
+    //
+    // Moving this back to 1.4.2, or on to a later release, needs a green `lane=all` dispatch as
+    // the evidence -- an ordinary PR run cannot show it, because the Linux sweep masks it.
+    expect(pkg.dependencies?.bun).toBe("1.4.0");
     expect(pkg.dependencies?.zod).toBe("4.4.3");
     expect(pkg.devDependencies?.typescript).toBe("7.0.2");
-    expect(pkg.devDependencies?.["@types/bun"]).toBe("1.4.2");
+    expect(pkg.devDependencies?.["@types/bun"]).toBe("1.4.0");
     expect(pkg.scripts?.dev).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:proxy"]).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:gui"]).toBe("cd gui && bun run dev");
