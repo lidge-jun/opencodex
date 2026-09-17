@@ -1,5 +1,7 @@
 # Inbound Compatibility Surfaces
 
+Native function-result injection follows [the separate opt-in control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Compatibility callers retain the public Responses ingress described by the

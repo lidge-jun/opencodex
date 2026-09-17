@@ -1,4 +1,5 @@
-import { markNativeSteeringResponse, type NativeSteeringChannel } from "./native-steering";
+import { markNativeSteeringResponse } from "./native-steering";
+import type { NativeResponseControl } from "./native-response-control";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { isSafeResponseHeader } from "../safe-response-headers";
 import { CodexWsMetadata, type CodexWsQuotaObserver } from "./codex-ws-metadata";
@@ -11,7 +12,7 @@ import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPO
   type CodexWsFailureStage, type CodexWsStageRecord } from "./codex-ws-wire";
 
 interface ExchangeOptions {
-  nativeSteering?: NativeSteeringChannel;
+  nativeSteering?: NativeResponseControl;
   beforeContinuation?: () => Promise<void>;
   session: CodexWsSession;
   url: string;

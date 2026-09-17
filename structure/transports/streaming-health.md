@@ -308,3 +308,50 @@ compatibility certification. End-to-end live client/backend verification remains
 before promoting this experimental option to a default.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+
+## Experimental native function-result injection
+
+`codexNativeInjection` is a separate, default-off opt-in on the Responses WebSocket
+ingress. An initial request must explicitly set `multi_agent.enabled: true`. The
+canonical ChatGPT forward route remains experimental; public API injection requires
+the exact `https://api.openai.com/v1` provider, non-forward authentication and
+`upstreamWebsocket: true`. Only that public route adds `responses_multi_agent=v1`
+to the outgoing beta header. No client/model capability or subscription entitlement
+is inferred. Translated, Combo, sidecar, plaintext-restoration and HTTP-fallback
+paths cannot receive controls. The common interface lives in
+`src/server/responses/native-response-control.ts`; it shares transport ownership,
+not protocol semantics, with steering. Mixed steer/inject turns are rejected.
+
+`src/server/responses/native-injection.ts` retains the normally selected credential
+and private socket. `src/server/responses/native-injection-protocol.ts` validates
+only string-valued developer `function_call_output` items for completed calls
+advertised by that response and lane. IDs are never global lookup keys. One physical
+injection awaits acknowledgement at a time because success carries a response ID,
+not an injection ID; further submissions remain in a bounded FIFO. Repeated call
+results, mismatched/repeated acknowledgements and unsupported shapes fail closed.
+
+A response terminal is relayed immediately, but pending acknowledgements and
+unreturned advertised calls retain the socket. Late tool results still reach that
+socket. A `response_already_completed` failure is relayed unchanged, including its
+returned input; only an explicit same-parent/lane/settings client create can supply
+those saved outputs once. The existing continuation pacing and captured dispatch
+guard run again. The proxy never reruns tools, invents acceptance, switches accounts
+or automatically creates a recovery response. Unknown delivery terminates without
+HTTP fallback or replay. The client decides how to recover other failures.
+
+`src/server/responses/native-injection-replay.ts` commits accepted outputs only,
+after all acknowledgements settle, inserting results after their owning calls and
+preserving the original non-persistable-body policy. Failed inputs do not enter
+continuation history. The existing numeric usage observer excludes inject events,
+including echoed failed tool outputs, from log samples. All private bodies and
+timers are disposed on teardown.
+
+Limits: 32 pending submissions including the on-wire frame, 8 MiB queued frame
+bytes, 1,024 function identities / 256 KiB identity bytes, 128 response IDs and a
+32 MiB replay journal. An on-wire injection has an absolute 90-second acknowledgement
+deadline independent of incoming output; saved-tool-result waits use 30 minutes.
+Existing socket/SSE frame limits and the active-response stall deadline also apply.
+`tests/responses/ws-native-injection.test.ts` exercises the real handler, captured
+auth, dispatch, relay, replay and synthetic failure paths. It is not live backend
+or Codex App/CLI compatibility certification.

@@ -920,3 +920,77 @@ The implementation has synthetic protocol and regression coverage, not live Astr
 certification. Keep the option disabled for production work until your client/model path
 has been verified. Set `codexNativeSteering` to `false` and restart to restore the existing
 single-response relay; no account or conversation files need to be deleted.
+
+
+## Experimental native function-result injection
+
+For a compatible client that sends OpenAI multi-agent `response.inject` messages,
+merge these keys into the existing OpenCodex configuration and restart before a
+fresh turn. Do not replace your provider or account settings:
+
+```json
+{
+  "websockets": true,
+  "codexNativeInjection": true
+}
+```
+
+The initial `response.create` must explicitly include `"multi_agent": { "enabled": true }`.
+OpenCodex does not enable it based on a model name. A public OpenAI API provider
+must use `adapter: "openai-responses"`, `baseUrl: "https://api.openai.com/v1"`,
+its normal API-key authentication and `upstreamWebsocket: true`. Route the initial
+model through that provider's configured prefix. The relay adds the required
+`responses_multi_agent=v1` beta token on that public API connection only, preserving
+other configured beta tokens. It does not substitute a subscription credential,
+create an API account or automatically switch to a separately billed API.
+
+Canonical ChatGPT forward connections can opt into the same transport experimentally,
+but the public API contract does **not** establish ChatGPT subscription or Codex
+App/CLI support. A compatible upstream model and execution mode are still required.
+See the [OpenAI multi-agent protocol](https://developers.openai.com/api/docs/guides/responses-multi-agent).
+
+Return a saved tool result after the matching developer function call has completed:
+
+```json
+{
+  "type": "response.inject",
+  "response_id": "resp_example",
+  "input": [
+    { "type": "function_call_output", "call_id": "call_example", "output": "saved result" }
+  ]
+}
+```
+
+Use the response/call IDs from the **same connection**, not these example IDs.
+The first version accepts string-valued `function_call_output` only. User/system
+messages, rich output arrays, hosted tools and simultaneous `response.steer` are
+not accepted in an injection turn. Multiple saved function results can share a
+single injection. Each call can be submitted only once, including while queued.
+
+Parallel tool results are queued and sent one frame at a time, since the success
+event identifies the response rather than an individual injection. The relay
+preserves `response.inject.created` and `response.inject.failed`. It keeps the
+connection alive after a response terminal while submitted results await confirmation
+or advertised calls await results, so late asynchronous results are not discarded.
+
+When the server rejects an injection with `response_already_completed`, use its
+returned saved outputs in **one client-sent** `response.create` with the completed
+`previous_response_id`, unchanged model/settings and the same lane. Include each
+outstanding result exactly once; do not include already accepted outputs. The
+relay keeps that continuation on the original account/socket and preserves normal
+request pacing. It never runs the tool again or creates a recovery request itself.
+Other failures remain visible for the client to handle.
+
+A missing acknowledgement or a disconnect means delivery can be **unknown**. Do
+not automatically resend a result, restart a tool or change accounts to retry it.
+The pending queue is limited to 32 frames and 8 MiB, with 1,024 advertised function
+calls, a 32 MiB replay journal and at most 128 responses per owned connection.
+Each sent injection has a 90-second acknowledgement deadline that unrelated output
+cannot extend; a saved-result wait is limited to 30 minutes. Existing frame limits
+and stall timeouts still apply.
+
+Translated providers, custom gateways, Combo/sidecar paths and HTTP fallback do
+not gain injection support. Unsupported attempts return an explicit error instead
+of disappearing. The option stays off by default; synthetic transport tests are
+not live compatibility certification. Set `codexNativeInjection` to `false` and
+restart to roll back. No account or conversation files need to be removed.

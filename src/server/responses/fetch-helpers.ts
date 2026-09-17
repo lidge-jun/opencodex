@@ -1,4 +1,4 @@
-import type { NativeSteeringChannel } from "./native-steering";
+import type { NativeResponseControl } from "./native-response-control";
 import type { Server } from "bun";
 import {
   codexWsUpstreamFetch,
@@ -54,7 +54,7 @@ export interface PaceAwareFetch {
 export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
 
 export interface ProviderFetchOptions {
-  nativeSteering?: NativeSteeringChannel;
+  nativeSteering?: NativeResponseControl;
   providerName?: string;
   modelId?: string;
   /** One pacing slot was acquired immediately before this fetch wrapper was created. */
