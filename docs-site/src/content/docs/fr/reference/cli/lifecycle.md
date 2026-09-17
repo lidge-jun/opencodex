@@ -194,10 +194,10 @@ Une confirmation UAC peut être nécessaire. Une priorité déjà normale ou hau
 
 | Sous-commande | Action |
 | --- | --- |
-| aucune | Installe et démarre le service s’il est absent ; sinon, actualise et redémarre le service existant. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
+| aucune | Installe et démarre le service s’il est absent ; sinon, applique `repair` au service existant. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
 | `install` | Crée et démarre le service. L’enregistrement exige une élévation sous Windows. |
-| `repair` | Actualise sur place un service installé et le redémarre. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
-| `restart` | Alias de `repair`. |
+| `repair` | Actualise sur place un service installé. Sous macOS, le gestionnaire n’est rechargé que lorsque quelque chose a changé : une tâche saine et inchangée continue donc de s’exécuter et la réparation n’est pas une interruption. Sous Linux et Windows, le service est redémarré ; une définition Task Scheduler Windows saine est réutilisée, tandis qu’une définition obsolète peut être réenregistrée et nécessiter une élévation. |
+| `restart` | La même actualisation, avec un redémarrage garanti sur toutes les plateformes. Sous macOS, une tâche inchangée déjà chargée est relancée (kickstart) sur place. N’est pas un alias de `repair`. |
 | `start` | Démarre un service installé. |
 | `stop` | Arrête le service et rétablit le fonctionnement natif de Codex. |
 | `status` | Affiche les diagnostics du service et du proxy, ainsi que les chemins des journaux. |

@@ -293,10 +293,10 @@ UAC onayı gerekebilir. Zaten normal veya yüksek öncelik ayarlanmışsa yalnı
 
 | Alt komut | Eylem |
 | --- | --- |
-| none | Servis yoksa kurup başlatın; varsa yenileyip yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
+| none | Servis yoksa kurup başlatın; varsa mevcut servise `repair` uygulayın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
 | `install` | Servisi oluşturun ve başlatın. Kaydeder, bu da Windows'ta yükseltme gerektirir. |
-| `repair` | Kurulu bir servisi yerinde yenileyin ve yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
-| `restart` | `repair` komutunun takma adıdır. |
+| `repair` | Kurulu bir servisi yerinde yenileyin. macOS'ta yönetici yalnızca bir şey değiştiğinde yeniden yüklenir; böylece sağlıklı, değişmemiş bir iş çalışmaya devam eder ve yenileme bir kesinti olmaz. Linux ve Windows'ta servis yeniden başlatılır; sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır, eski bir tanım ise yeniden kaydedilebilir ve yükseltme gerektirebilir. |
+| `restart` | Aynı yenileme ve her platformda garantili yeniden başlatma. macOS'ta değişmemiş, zaten yüklü bir iş yerinde kickstart edilir. `repair` komutunun takma adı değildir. |
 | `start` | Kurulu bir servisi başlatın. |
 | `stop` | Servisi durdurun ve yerel Codex'i geri yükleyin. |
 | `status` | Servis ve proxy tanılamalarını artı günlük yollarını bildirin. |
