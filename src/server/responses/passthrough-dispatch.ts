@@ -254,11 +254,11 @@ export async function preparePassthroughExchange(
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
         rememberResponseState(parsed._rawBody, response, undefined, responseStateOptions(true))
       : undefined;
-    if (options.nativeSteering && nativeResponseControlEligible(route.provider, options.nativeSteering)
+    if (options.nativeControl && nativeResponseControlEligible(route.provider, options.nativeControl)
       && options.inboundTransport === "websocket" && !options.comboAttempt) {
       const body = parsed._rawBody as Record<string, unknown>;
-      const Replay = options.nativeSteering.kind === "injection" ? NativeInjectionReplay : NativeSteeringReplay;
-      options.nativeSteering.replayFactory = () => new Replay(body.input, (input, response) => {
+      const Replay = options.nativeControl.kind === "injection" ? NativeInjectionReplay : NativeSteeringReplay;
+      options.nativeControl.replayFactory = () => new Replay(body.input, (input, response) => {
         if (passthroughRecordEligible && !isBodyNonPersistable(body)) {
           rememberResponseState({ ...body, input }, response, undefined, responseStateOptions(true));
         }
@@ -785,9 +785,9 @@ export async function preparePassthroughExchange(
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              nativeSteering: nativeResponseControlEligible(route.provider, options.nativeSteering) && options.inboundTransport === "websocket" && !options.comboAttempt
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
-                ? options.nativeSteering : undefined,
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -884,9 +884,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, innerRecovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              nativeSteering: nativeResponseControlEligible(route.provider, options.nativeSteering) && options.inboundTransport === "websocket" && !options.comboAttempt
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
-                ? options.nativeSteering : undefined,
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -993,9 +993,9 @@ export async function preparePassthroughExchange(
           // here on is a genuine transport attempt.
           storedPoolReplayDispatchNotifier(
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              nativeSteering: nativeResponseControlEligible(route.provider, options.nativeSteering) && options.inboundTransport === "websocket" && !options.comboAttempt
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
-                ? options.nativeSteering : undefined,
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -1117,9 +1117,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              nativeSteering: nativeResponseControlEligible(route.provider, options.nativeSteering) && options.inboundTransport === "websocket" && !options.comboAttempt
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
-                ? options.nativeSteering : undefined,
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -1242,9 +1242,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              nativeSteering: nativeResponseControlEligible(route.provider, options.nativeSteering) && options.inboundTransport === "websocket" && !options.comboAttempt
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
-                ? options.nativeSteering : undefined,
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,

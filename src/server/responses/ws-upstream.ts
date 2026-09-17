@@ -132,7 +132,7 @@ export function codexWsUpstreamFetch(
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
   onQuota?: CodexWsQuotaObserver,
   beforeDispatch?: (headers: Headers) => void,
-  nativeSteering?: NativeResponseControl,
+  nativeControl?: NativeResponseControl,
   beforeContinuation?: () => Promise<void>,
 ): Promise<Response> {
   const prepared = prepareCodexWsRequest(url, init);
@@ -148,9 +148,9 @@ export function codexWsUpstreamFetch(
 
   const { frameText, headers } = prepared;
   // Never infer backend support from a model name or enable controls on a gateway.
-  const control = nativeSteering?.kind === "injection"
-    ? ((prepared.canonical || url === OPENAI_API_RESPONSES_URL) && isInjectionRequest(JSON.parse(frameText)) ? nativeSteering : undefined)
-    : prepared.canonical ? nativeSteering : undefined;
+  const control = nativeControl?.kind === "injection"
+    ? ((prepared.canonical || url === OPENAI_API_RESPONSES_URL) && isInjectionRequest(JSON.parse(frameText)) ? nativeControl : undefined)
+    : prepared.canonical ? nativeControl : undefined;
   if (control?.kind === "injection" && url === OPENAI_API_RESPONSES_URL) {
     const beta = headers["openai-beta"];
     if (!beta?.split(",").some(value => value.trim() === "responses_multi_agent=v1")) {
@@ -199,7 +199,7 @@ export function codexWsUpstreamFetch(
   }
   return codexWsExchange({
     session, url, init, prepared, sseFallback, onQuota, beforeDispatch,
-    nativeSteering: control,
+    nativeControl: control,
     beforeContinuation,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
   });

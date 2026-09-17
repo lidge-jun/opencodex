@@ -53,7 +53,7 @@ export interface HandleResponsesOptions {
   onRequestBodyRead?: () => void;
   forceEmptyResponseId?: boolean;
   /** Internal, connection-owned control channel; never reconstructed from headers. */
-  nativeSteering?: NativeResponseControl;
+  nativeControl?: NativeResponseControl;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;

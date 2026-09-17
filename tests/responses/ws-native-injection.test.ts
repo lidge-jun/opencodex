@@ -30,7 +30,7 @@ test.each([false, true])("real handler sends saved results over the same connect
   expect(socket.frames[1]).toEqual(frame);
   acknowledgeInjection(socket);
   completeInjection(socket, { output: [call], usage: { input_tokens: 10, output_tokens: 5 } });
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(sent.some(event => event.type === "response.inject.created")).toBe(true);
   expect(sent.at(-1)?.type).toBe("response.completed");
   expect(InjectionSocket.all).toHaveLength(1); expect(fallbackCalls).toBe(0);
@@ -50,9 +50,9 @@ test("terminal before acknowledgement is relayed without dropping the late succe
   send({ type: "response.inject", response_id: id, input: [savedResult()] });
   completeInjection(socket, { output: [call] });
   await waitForInjection(() => sent.some(event => event.type === "response.completed"));
-  expect(socket.readyState).toBe(1); expect(ws.data.nativeSteering).toBeDefined();
+  expect(socket.readyState).toBe(1); expect(ws.data.nativeControl).toBeDefined();
   acknowledgeInjection(socket);
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.type).toBe("response.inject.created");
   expect(socket.readyState).toBe(3); expect(fallbackCalls).toBe(0);
 });
@@ -66,7 +66,7 @@ test("asynchronous tool completion after the response terminal still reaches the
   send({ type: "response.inject", response_id: id, input: [savedResult()] });
   expect(socket.frames[1]?.type).toBe("response.inject");
   acknowledgeInjection(socket);
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.type).toBe("response.inject.created");
 });
 
@@ -91,7 +91,7 @@ test("completion rejection is preserved; only an explicit caller continuation re
   expect(sent.at(-1)?.error.code).toBe("injection_pending");
   socket.emit({ type: "response.created", response: { id: "successor", previous_response_id: id } });
   completeInjection(socket, {}, "successor");
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(InjectionSocket.all).toHaveLength(1); expect(fallbackCalls).toBe(0);
 });
 
@@ -105,9 +105,9 @@ test("parallel tool results serialize by acknowledgement without losing caller o
   acknowledgeInjection(socket);
   await waitForInjection(() => socket.frames.length === 3);
   expect(socket.frames[2].input).toEqual([savedResult("call-2")]);
-  expect(ws.data.nativeSteering).toBeDefined();
+  expect(ws.data.nativeControl).toBeDefined();
   acknowledgeInjection(socket, 101);
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(sent.filter(event => event.type === "response.inject.created")).toHaveLength(2);
 });
 
@@ -120,7 +120,7 @@ test("duplicate results are refused both while pending and after successful acce
   acknowledgeInjection(socket); send(frame);
   expect(sent.at(-1)?.error.code).toBe("duplicate_injection"); expect(socket.frames).toHaveLength(2);
   completeInjection(socket, { output: [call] });
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
 });
 
 test("different response, lane, unadvertised and hosted-tool results never reach upstream", async () => {
@@ -134,7 +134,7 @@ test("different response, lane, unadvertised and hosted-tool results never reach
     { ...base, input: [{ type: "message", role: "system", content: "no" }] },
   ]) { send(frame); expect(sent.at(-1)?.type).toBe("error"); }
   expect(socket.frames).toHaveLength(1);
-  ws.close(); await waitForInjection(() => !ws.data.nativeSteering);
+  ws.close(); await waitForInjection(() => !ws.data.nativeControl);
 });
 
 test("two connections cannot inject results into each other's response or credentials", async () => {
@@ -145,7 +145,7 @@ test("two connections cannot inject results into each other's response or creden
   expect(a.sent.at(-1)?.error.code).toBe("injection_response_mismatch");
   expect(a.socket.frames).toHaveLength(1); expect(b.socket.frames).toHaveLength(1);
   a.ws.close(); b.ws.close();
-  await waitForInjection(() => !a.ws.data.nativeSteering && !b.ws.data.nativeSteering);
+  await waitForInjection(() => !a.ws.data.nativeControl && !b.ws.data.nativeControl);
 });
 
 test.each(["disabled", "no-multi-agent", "warmup", "steering-only"])("unsupported %s does not silently discard an injection", async mode => {
@@ -167,14 +167,14 @@ test("a pending injection prevents a new create from cancelling the owned socket
   send({ type: "response.create", model: "different-model", input: "new work" });
   expect(sent.at(-1)?.error.code).toBe("injection_pending");
   expect(socket.readyState).toBe(1); expect(socket.frames).toHaveLength(2);
-  ws.close(); await waitForInjection(() => !ws.data.nativeSteering);
+  ws.close(); await waitForInjection(() => !ws.data.nativeControl);
 });
 
 test("unknown delivery closes without HTTP fallback or resending the control", async () => {
   const { socket, send, sent, ws, id } = await beginInjection();
   advertiseInjection(socket); socket.throwOnInject = true;
   send({ type: "response.inject", response_id: id, input: [savedResult()] });
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(socket.readyState).toBe(3); expect(fallbackCalls).toBe(0);
   expect(InjectionSocket.all).toHaveLength(1);
   expect(sent.some(event => event.error?.message?.includes("unknown"))).toBe(true);
@@ -193,7 +193,7 @@ test("accepted function results survive ordinary subsequent delta turns; no user
   const call = advertiseInjection(socket);
   send({ type: "response.inject", response_id: id, input: [savedResult("call-1", "accepted-result")] });
   acknowledgeInjection(socket); completeInjection(socket, { output: [call] });
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   send({ type: "response.create", model: "gpt-5.6-sol", multi_agent: { enabled: true }, previous_response_id: id, input: "followup" });
   await waitForInjection(() => InjectionSocket.all.length === 2 && InjectionSocket.all[1].frames.length > 0);
   const next = InjectionSocket.all[1];
@@ -201,7 +201,7 @@ test("accepted function results survive ordinary subsequent delta turns; no user
   expect(history.filter(item => item.type === "function_call_output")).toEqual([savedResult("call-1", "accepted-result")]);
   expect(history.findIndex(item => item.type === "function_call_output")).toBe(history.findIndex(item => item.type === "function_call") + 1);
   expect(JSON.stringify(history)).toContain("followup");
-  completeInjection(next); await waitForInjection(() => !ws.data.nativeSteering);
+  completeInjection(next); await waitForInjection(() => !ws.data.nativeControl);
   expect(sent.at(-1)?.type).toBe("response.completed");
 });
 
@@ -366,7 +366,7 @@ test("a foreign acknowledgement closes the real exchange without exposing input 
   advertiseInjection(socket);
   send({ type: "response.inject", response_id: id, input: [savedResult("call-1", "PRIVATE_FIXTURE_RESULT")] });
   acknowledgeInjection(socket, 100, "another-response");
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(socket.readyState).toBe(3);
   expect(InjectionSocket.all).toHaveLength(1); expect(fallbackCalls).toBe(0);
   expect(sent.some(event => event.type === "response.inject.created")).toBe(false);
@@ -378,7 +378,7 @@ test("downstream disconnect discards queued injection without a second physical 
   advertiseInjection(socket); advertiseInjection(socket, "call-2", 1);
   for (const call of ["call-1", "call-2"]) send({ type: "response.inject", response_id: id, input: [savedResult(call)] });
   handler.close(ws, 1000, "fixture disconnect");
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   acknowledgeInjection(socket);
   await Bun.sleep(0);
   expect(socket.frames.filter(frame => frame.type === "response.inject")).toHaveLength(1);
@@ -394,5 +394,5 @@ test("HTTP fallback never acquires injection ownership or replays a control fram
   send({ type: "response.inject", response_id: "unknown", input: [savedResult()] });
   expect(sent.at(-1)?.error.code).toBe("injection_not_supported");
   expect(fallbackCalls).toBe(requests); expect(InjectionSocket.all).toHaveLength(0);
-  expect(ws.data.nativeSteering).toBeUndefined();
+  expect(ws.data.nativeControl).toBeUndefined();
 });

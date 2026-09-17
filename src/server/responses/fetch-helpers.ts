@@ -54,7 +54,7 @@ export interface PaceAwareFetch {
 export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
 
 export interface ProviderFetchOptions {
-  nativeSteering?: NativeResponseControl;
+  nativeControl?: NativeResponseControl;
   providerName?: string;
   modelId?: string;
   /** One pacing slot was acquired immediately before this fetch wrapper was created. */
@@ -103,7 +103,7 @@ export function providerFetch(
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
       // there would silently negotiate a transport the operator ruled out.
-      return codexWsUpstreamFetch(input, init, httpFetch, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeSteering,
+      return codexWsUpstreamFetch(input, init, httpFetch, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
         () => waitForPacing(init.signal ?? undefined));
     }
     return httpFetch(input, init);

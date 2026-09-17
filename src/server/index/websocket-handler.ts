@@ -193,19 +193,19 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
         } catch {
           return; // text-only contract; ignore unparseable frames
         }
-        if (frame.type === "response.inject" || frame.type === "response.steer" || (frame.type === "response.create" && ws.data.nativeSteering)) {
+        if (frame.type === "response.inject" || frame.type === "response.steer" || (frame.type === "response.create" && ws.data.nativeControl)) {
           try {
             if (frame.type === "response.inject") {
-              if (!ws.data.nativeSteering?.inject) throw new NativeSteeringError("injection_not_supported", "Native injection is disabled or unavailable on this route.");
-              ws.data.nativeSteering.inject(frame);
+              if (!ws.data.nativeControl?.inject) throw new NativeSteeringError("injection_not_supported", "Native injection is disabled or unavailable on this route.");
+              ws.data.nativeControl.inject(frame);
               return;
             }
             if (frame.type === "response.steer") {
-              if (!ws.data.nativeSteering) throw new NativeSteeringError("steering_not_supported", "Native steering is disabled or unavailable on this route.");
-              ws.data.nativeSteering.steer(frame);
+              if (!ws.data.nativeControl) throw new NativeSteeringError("steering_not_supported", "Native steering is disabled or unavailable on this route.");
+              ws.data.nativeControl.steer(frame);
               return;
             }
-            if (ws.data.nativeSteering?.continue(frame)) return;
+            if (ws.data.nativeControl?.continue(frame)) return;
           } catch (error) {
             sendJsonFrame(ws, buildWsErrorFrame(400, {
               type: "invalid_request_error",
@@ -221,12 +221,12 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
 
         ws.data.cancel?.();
         // A superseded turn must not keep ownership during warmup or refusal.
-        ws.data.nativeSteering = undefined;
-        let nativeSteering: NativeResponseControl | undefined;
+        ws.data.nativeControl = undefined;
+        let nativeControl: NativeResponseControl | undefined;
         try {
           const idleMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec)
             ? Math.max(1, config.stallTimeoutSec) * 1000 : 300_000;
-          nativeSteering = config.codexNativeInjection === true && isInjectionRequest(frame)
+          nativeControl = config.codexNativeInjection === true && isInjectionRequest(frame)
             ? new NativeInjectionChannel(frame, idleMs)
             : config.codexNativeSteering === true ? new NativeSteeringChannel(frame, idleMs) : undefined;
         } catch {
@@ -268,7 +268,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
         }
 
         // Only a genuinely admitted turn may receive steering or continuations.
-        ws.data.nativeSteering = nativeSteering;
+        ws.data.nativeControl = nativeControl;
         const payload: Record<string, unknown> = { ...frame };
         delete payload.type;
         turnAdmissionLease.bindAbortController(turnAbort);
@@ -309,7 +309,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
               ...(wsAdmission ? { admission: wsAdmission } : {}),
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
-              nativeSteering,
+              nativeControl,
               abortSignal: turnAbort.signal,
               turnAdmissionLease,
               onFirstOutput: () => recordFirstOutput(logCtx, start),
@@ -320,8 +320,8 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
               },
             });
             await sendResponseToWebSocket(ws, response, isCurrent, {
-              untilEof: nativeSteering?.relayActive === true,
-              onSsePayload: nativeSteering?.relayActive
+              untilEof: nativeControl?.relayActive === true,
+              onSsePayload: nativeControl?.relayActive
                 ? createNativeSteeringLogObserver(logCtx, () => recordFirstOutput(logCtx, start))
                 : payload => inspectResponseLogSsePayload(logCtx, payload),
               onTerminal: status => {
@@ -359,7 +359,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
             }
           } finally {
             turnAdmissionLease.release();
-            if (ws.data.nativeSteering === nativeSteering) ws.data.nativeSteering = undefined;
+            if (ws.data.nativeControl === nativeControl) ws.data.nativeControl = undefined;
             if (!logged && turnAbort.signal.aborted) finalizeLog(499);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
           }

@@ -18,6 +18,12 @@ export interface NativeResponseControl {
 
 export const OPENAI_API_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
+const nativeControlResponses = new WeakSet<Response>();
+/** Mark the exact response for multi-response delivery without serializing a wire field. */
+export function markNativeControlResponse(response: Response): Response { nativeControlResponses.add(response); return response; }
+/** Recognize a marked native response by identity, not by caller-controlled content. */
+export function isNativeControlResponse(response: Response): boolean { return nativeControlResponses.has(response); }
+
 /** Preserve canonical ChatGPT eligibility; public API injection is separately opted in. */
 export function nativeResponseControlEligible(provider: OcxProviderConfig, control?: NativeResponseControl): boolean {
   if (isCanonicalOpenAiForwardProvider(provider)) return true;

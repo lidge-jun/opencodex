@@ -10,11 +10,6 @@ export const NATIVE_STEERING_TOOL_WAIT_MS = 30 * 60_000;
 
 type Frame = Record<string, unknown>;
 type Send = (frame: Frame) => void;
-const responses = new WeakSet<Response>();
-/** Mark the exact response for multi-response delivery without serializing a wire field. */
-export function markNativeSteeringResponse(response: Response): Response { responses.add(response); return response; }
-/** Recognize a marked native response by identity, not by caller-controlled content. */
-export function isNativeSteeringResponse(response: Response): boolean { return responses.has(response); }
 
 /** Narrow JSON object envelopes while excluding arrays and null. */
 function record(value: unknown): value is Frame {
