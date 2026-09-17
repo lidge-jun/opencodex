@@ -42,7 +42,10 @@ test("PUT /api/settings reports Codex write-lock contention as retryable", async
     writeRuntimePort({ pid: process.pid, port: config.port });
     const request = new Request("http://127.0.0.1:10100/api/settings", {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      // `host` is not optional here. `managementRequestOrigin` derives the allowed origin
+      // from the Host header, and an in-process `new Request` carries none, so the settings
+      // handler is never reached and the response is a 403 cross-origin rejection.
+      headers: { host: "127.0.0.1:10100", "content-type": "application/json" },
       body: JSON.stringify({ codexDesktopAuthless: true }),
     });
     const response = await handleManagementAPI(request, new URL(request.url), config, {
