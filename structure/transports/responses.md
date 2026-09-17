@@ -1092,3 +1092,5 @@ Regression coverage: `tests/server/input-admission.test.ts` and
 `tests/helpers/combo-context-headroom-cases.ts`.
 
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

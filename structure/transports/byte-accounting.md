@@ -102,3 +102,5 @@ its active source; cancellation at an assistant boundary does not start the cont
 The same focused tests cover these lifecycle paths and Unicode code-unit limit boundaries.
 
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

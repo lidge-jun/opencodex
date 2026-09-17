@@ -1,3 +1,4 @@
+import { isSteeringMutableSetting, validSteeringSettings } from "./native-steering-settings";
 import type { NativeSteeringReplayObserver } from "./native-steering-replay";
 import { createHash } from "node:crypto";
 import { CODEX_WS_ID_MAX_BYTES, CodexWsCorrelation } from "./codex-ws-correlation";
@@ -94,9 +95,11 @@ function matchesRequirement(item: Frame, stub: Frame): boolean {
  * caller-supplied response ID in global state; never lent to another account.
  *
  * Opt-in single-lane implementation. Continuations may supply saved tool results and new user messages
- * but cannot change settings/routing. General new turns still use normal dispatch.
+ * and validated generation overrides, but cannot change routing or tools. General new turns still use normal dispatch.
  */
 export class NativeSteeringChannel {
+  readonly kind = "steering" as const;
+  normalizeContinuation?: (frame: Frame) => Frame;
   relayActive = false;
   replayFactory?: () => NativeSteeringReplayObserver;
   private replay?: NativeSteeringReplayObserver;
@@ -288,8 +291,9 @@ export class NativeSteeringChannel {
     if (frame.stream_id !== this.lane || frame.generate === false) throw new NativeSteeringError("invalid_input", "The continuation must use the same WebSocket lane and generate a response.");
     for (const [key, value] of Object.entries(frame)) {
       if (["type", "input", "previous_response_id", "stream", "stream_id"].includes(key)) continue;
-      if (this.settings.get(key) !== fingerprint(value)) throw new NativeSteeringError("steering_settings_changed", "The experimental native steering continuation cannot change model or request settings; start a separate turn instead.");
+      if (!isSteeringMutableSetting(key) && this.settings.get(key) !== fingerprint(value)) throw new NativeSteeringError("steering_settings_changed", "The native steering continuation cannot change routing, tools or non-generation settings; start a separate turn instead.");
     }
+    if (!validSteeringSettings(frame)) throw new NativeSteeringError("invalid_input", "Invalid or oversized native steering generation settings.");
     const input = frame.input;
     if (!Array.isArray(input) || !input.length) throw new NativeSteeringError("invalid_input", "Supply the saved results for the required_input stubs exactly once; do not resend steering text.");
     const used = new Set<number>();
@@ -305,6 +309,9 @@ export class NativeSteeringChannel {
       used.add(match);
     }
     if (used.size !== required.length) throw new NativeSteeringError("invalid_input", "Every required tool output or approval must be supplied exactly once.");
+    // Snapshot before asynchronous pacing; later caller mutation must not alter the authorized frame.
+    frame = structuredClone(frame);
+    if (this.normalizeContinuation) frame = this.normalizeContinuation(frame);
     this.continuationSent = true;
     this.continuationDeadline = performance.now() + NATIVE_STEERING_WAIT_MS;
     this.armTimer();

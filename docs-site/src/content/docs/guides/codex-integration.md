@@ -896,7 +896,7 @@ options in `~/.opencodex/config.json` and restart OpenCodex before starting a fr
 ```
 
 Merge these keys into the existing configuration; do not replace your provider/account settings.
-This option is off by default. It forwards steering to the same native ChatGPT WebSocket
+This option is off by default. It forwards steering to the same explicitly configured native WebSocket
 connection and selected account, preserving automatic successor responses and pending
 saved-tool-result continuations. Acceptance means queued, not yet applied.
 
@@ -905,15 +905,15 @@ Results can arrive before `response.steer.pending`: the relay also matches the c
 parent's advertised calls and approvals. A `name` on a pending function-output stub is
 optional on the result, as in the native schema. Additional user messages may accompany
 these results; system/developer messages, duplicate results and unrelated call IDs are refused.
-Do not rerun tools or resend accepted steering text. This first implementation requires
-unchanged model and request settings. A changed model/settings requires an explicitly stopped or finished turn
-and normal new dispatch. Multiple independent conversations use independent connections.
+Do not rerun tools or resend accepted steering text. Model, account, tool declarations and routing stay unchanged. Validated generation settings
+may change in an explicit saved-result continuation as described below. Other changes
+require an explicitly stopped or finished turn and normal new dispatch. Multiple independent conversations use independent connections.
 
-HTTP fallback, other providers, translated models, sidecars, Combo attempts and plaintext V2
+HTTP fallback, noncanonical gateways, translated models, sidecars, Combo attempts and plaintext V2
 restoration do not support this option. It does not add steering capability to a model or
 a client that lacks it. Unsupported routes return a protocol error rather than silently
 ignoring input. Disconnected or timed-out delivery may be unknown: never automatically
-resubmit tools or steering text. Pending controls have fixed 90-second acknowledgement or successor deadlines;
+resubmit tools or steering text. Pending controls have per-submission absolute 90-second confirmation deadlines;
 saved-tool-result waits have a 30-minute cap.
 
 The implementation has synthetic protocol and regression coverage, not live Astra/client
@@ -1066,3 +1066,76 @@ result remains available for a later explicit continuation. There is no automati
 conversion, retry, tool rerun or account/API switch. A single-agent steering turn
 can follow a completed multi-agent turn as a new explicit request using ordinary
 routing. Client support and backend entitlement still require live verification.
+
+
+## Steering continuation settings and public API
+
+An explicit saved-result `response.create` may override `reasoning` (effort and
+summary), `text` (verbosity and supported structured-output format), and
+`stream_options`. On an explicitly configured public API route it may also
+change `max_output_tokens`. Subscription routes refuse that token-limit override
+instead of silently ignoring it. Normal provider pins, subagent caps, effort
+mapping and summary/verbosity capability exclusions still apply.
+
+Omitted settings retain the current effective values; explicit null resets that
+setting where the upstream accepts null. Overrides replace the supplied setting
+object, not individual nested fields. Changed values carry into later explicit
+continuations. A rejected override does not reserve the saved result, so a
+corrected request can be submitted without rerunning its tool. The server still
+decides which settings the chosen model accepts. Changes to model, account,
+provider, tools, instructions or service tier require a separate ordinary turn.
+
+For public API steering, configure an `openai-responses` provider with exactly
+`https://api.openai.com/v1`, its API key and `upstreamWebsocket: true`, then use its
+normal prefixed model selector with `websockets: true` and
+`codexNativeSteering: true`. This does not buy API credit or redirect a ChatGPT
+subscription to separately billed usage. A supporting single-agent model/execution
+mode is still required. Conversation-bound responses and API automatic compaction
+are not steerable; their ordinary responses are preserved and a steering attempt
+receives an explanatory error. The multi-agent injection path stays separate.
+
+### Executable direct-versus-proxy wire probe
+
+From a source checkout, run the offline positive control:
+
+```sh
+bun scripts/steering-smoke.ts --self-test
+```
+
+Plan a comparison without reading tokens or opening any connection:
+
+```sh
+bun scripts/steering-smoke.ts --direct wss://api.openai.com/v1/responses \
+  --proxy ws://127.0.0.1:1455/v1/responses --model <supported-model> \
+  --proxy-model <provider-prefix/same-model>
+```
+
+For a subscription comparison the direct URL is
+`wss://chatgpt.com/backend-api/codex/responses`. Select the same actual model and
+account on both routes; the script cannot prove that a proxy configuration selected
+the same account. The proxy URL must be a loopback Responses endpoint and must not
+contain credentials, query parameters or a fragment.
+
+Only after reviewing the plan, supply `STEERING_DIRECT_TOKEN` and
+`STEERING_PROXY_TOKEN` through your shell environment and add **both** `--live`
+and `--allow-model-requests`. A direct ChatGPT connection may additionally need
+`STEERING_DIRECT_ACCOUNT_ID`; that header is never copied to the public API or the
+proxy. Do not put credentials in command arguments, logs, screenshots or PRs.
+The script does not read your saved Codex login, refresh tokens or change settings.
+
+Live execution sends four synthetic initial requests (two scenarios per route),
+plus any resulting successors or required-result continuations, and **can consume
+model usage**. One scenario checks an automatic successor; the other returns a
+fixed synthetic result only for the script's own advertised function and changes
+reasoning/verbosity on its explicit continuation. No external tool is executed and
+no approval is inferred. There are no retries or automatic recovery requests.
+Each scenario is limited to 120 seconds, 5,000 events and 2 MiB received data.
+
+The JSON report contains only outcomes, timing and boolean checkpoints. A pass
+requires queued acceptance, a created successor and the synthetic marker in its
+completed output. Missing confirmations are `unknown`; if the model never enters
+the required-input path the result is `not_exercised`. Neither is counted as pass.
+The process exits 0 only if all four live scenarios pass, 1 otherwise, and 2 for
+invalid arguments or missing credentials. This is a **wire diagnostic**, not an
+end-to-end Codex App/CLI interface test, live certification or instruction to enable
+the experimental feature for production work.
