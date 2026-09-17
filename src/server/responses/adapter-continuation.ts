@@ -25,6 +25,7 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
+  isNonReplayableResponse,
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
 import { redactSecretString } from "../../lib/redact";
@@ -262,9 +263,12 @@ export function createAdapterContinuations(
       // Same-target 429 wait-and-retry (opt-in `retryOn429`) before key/account failover:
       // a primary-key rate-limit blip replays on the SAME key, matching the main recovery
       // loop; only after the attempts are exhausted does the continuation fail over.
-      while (
-        response.status === 429
-        && rateLimitPolicy !== null
+     while (
+       response.status === 429
+        // A synthesized replay refusal is not a rate limit; replaying the continuation on
+        // it would re-send a turn whose first send may already have been processed.
+        && !isNonReplayableResponse(response)
+       && rateLimitPolicy !== null
         && adapterExchange.rateLimitRetries < rateLimitPolicy.attempts
         // The main recovery loop and the passthrough ladder both consult the shared remainder
         // here; this loop did not, so a request whose budget was already spent could still
@@ -311,7 +315,7 @@ export function createAdapterContinuations(
         }
       }
 
-      if (response.status === 429 && hasKeyPoolFailover(route.provider)) {
+      if (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(route.provider)) {
         const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
@@ -344,10 +348,11 @@ export function createAdapterContinuations(
           continue;
         }
       }
-      if (
-        response.status === 429
-        && transportState.anthropicPoolAccountId
-        && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
+     if (
+       response.status === 429
+       && transportState.anthropicPoolAccountId
+        && !isNonReplayableResponse(response)
+       && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
         const nextAccountId = rotateAnthropicAccountOn429(
           config,
@@ -385,10 +390,11 @@ export function createAdapterContinuations(
       // 429 stayed terminal even with failover fully active -- the same class of divergence the
       // two sidecars already produced once. Request-local state is shared with the other arms so
       // the per-request bound cannot be silently re-armed by reaching a different loop.
-      if (
-        response.status === 429
-        && transportState.genericFailoverAccountId
-        && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+     if (
+       response.status === 429
+       && transportState.genericFailoverAccountId
+        && !isNonReplayableResponse(response)
+       && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
         // Intersection with the shared request budget. The continuation loop re-sends the
