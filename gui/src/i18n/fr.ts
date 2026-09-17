@@ -51,7 +51,7 @@ export const fr: Record<TKey, string> = {
   "models.pickerOrder.retry": "Réessayer",
   "models.pickerOrder.hint": "Enregistre l’ordre des modèles routés pour Codex et la découverte Claude. Les plages prioritaires et natives sont conservées. Les usages sont un instantané ; les choix annoncés nativement peuvent changer.",
   "models.fastRows.title": "Afficher les lignes de modèles rapides",
-  "models.fastRows.desc": "Ajoute les sélecteurs « Model Fast » éligibles aux sélecteurs de modèles des clients externes. Cela ne modifie pas les options d'effort de raisonnement sur le modèle de base.",
+  "models.fastRows.desc": "Ajoute les sélecteurs « Model Fast » éligibles aux sélecteurs de modèles des clients externes. Cela ne modifie pas les options d'effort de raisonnement sur le modèle de base. L'enregistrement actualise les intégrations connectées lorsque c'est possible ; sinon, actualisez l'intégration ou le catalogue du client.",
   "models.fastRows.refreshHint": "Enregistré. L'actualisation du catalogue est en attente.",
   "models.fastRows.enabled": "Lignes de modèles rapides activées.",
   "models.fastRows.disabled": "Lignes de modèles rapides désactivées.",

@@ -186,7 +186,8 @@ interface ClientIntegrationSyncOutcome {
 export async function syncEnabledClientIntegrations(
   port: number | undefined,
   config: OcxConfig,
-  deps: Pick<ManagementContext["deps"], "fetchAllModels" | "writeDesktop3pConfig"> = {},
+  deps: Pick<ManagementContext["deps"],
+    "fetchAllModels" | "refreshOwnedCatalogIntegrations" | "writeDesktop3pConfig"> = {},
 ): Promise<ClientIntegrationSyncOutcome[]> {
   if (port === undefined) return [];
   const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
@@ -235,7 +236,8 @@ export async function syncEnabledClientIntegrations(
   }
 
   const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
-  out.push(...await refreshOwnedCatalogIntegrations({
+  const refreshOwned = deps.refreshOwnedCatalogIntegrations ?? refreshOwnedCatalogIntegrations;
+  out.push(...await refreshOwned({
     models: async () => {
       const { loadExportModels } = await import("./model-rows");
       return loadExportModels(config);
@@ -636,6 +638,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || desktopSwitchesChanged || fastRowsChanged
       ? await convergeCodexCatalog()
       : undefined;
+    if (fastRowsChanged) {
+      const { readRuntimePort } = await import("../../config/process-state");
+      const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
+      await syncEnabledClientIntegrations(runtime?.port, config, deps);
+    }
     // Injection second, matching `syncModelsToCodex`: the injected `model_catalog_json` should
     // point at a catalog that has already settled. And it runs here rather than inside the save
     // because coordinated Codex writes acquire the Codex write lock N before the config mutation

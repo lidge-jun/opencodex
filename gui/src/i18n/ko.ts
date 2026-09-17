@@ -51,7 +51,7 @@ export const ko: Record<TKey, string> = {
   "models.pickerOrder.retry": "다시 시도",
   "models.pickerOrder.hint": "Codex·Claude 검색 목록의 라우팅 모델 순서를 저장합니다. 지정 모델·네이티브 모델의 우선순위 구간은 유지됩니다. 사용량순은 스냅샷이며, 네이티브 도구에 표시되는 후보는 달라질 수 있습니다.",
   "models.fastRows.title": "빠른 모델 행 표시",
-  "models.fastRows.desc": "외부 클라이언트 모델 선택기에 지원되는 'Model Fast' 선택기를 추가합니다. 기본 모델의 추론 강도 옵션은 변경되지 않습니다.",
+  "models.fastRows.desc": "외부 클라이언트 모델 선택기에 지원되는 'Model Fast' 선택기를 추가합니다. 기본 모델의 추론 강도 옵션은 변경되지 않습니다. 저장할 때 가능한 연결된 통합을 새로 고치며, 반영되지 않으면 통합 또는 클라이언트 카탈로그를 새로 고치세요.",
   "models.fastRows.refreshHint": "저장되었습니다. 카탈로그 새로고침 대기 중입니다.",
   "models.fastRows.enabled": "빠른 모델 행이 활성화되었습니다.",
   "models.fastRows.disabled": "빠른 모델 행이 비활성화되었습니다.",

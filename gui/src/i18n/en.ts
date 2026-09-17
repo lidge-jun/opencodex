@@ -53,7 +53,7 @@ export const en = {
   "models.pickerOrder.retry": "Retry",
   "models.pickerOrder.hint": "Saves routed order for Codex and Claude discovery. Featured/native bands stay in place; Most used is a snapshot. Native advertised choices may change.",
   "models.fastRows.title": "Show Fast model rows",
-  "models.fastRows.desc": "Adds eligible “Model Fast” selectors to external client model pickers. This does not change reasoning-effort options on the base model.",
+  "models.fastRows.desc": "Adds eligible “Model Fast” selectors to external client model pickers. This does not change reasoning-effort options on the base model. Saving refreshes connected integrations when possible; otherwise refresh the integration or client catalog.",
   "models.fastRows.refreshHint": "Saved. Catalog refresh is pending.",
   "models.fastRows.enabled": "Fast model rows enabled.",
   "models.fastRows.disabled": "Fast model rows disabled.",

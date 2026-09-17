@@ -174,6 +174,25 @@ describe("FastRowsSetting", () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Failed to update");
   });
 
+  test("reconciles an ambiguous save from server truth and refreshes the catalog", async () => {
+    let request = 0;
+    let savedCalled = false;
+    const host = await mount((async (_input: RequestInfo | URL, init?: RequestInit) => {
+      request += 1;
+      if (init?.method === "PUT") throw new TypeError("response lost");
+      return response({ fastRows: request === 1 });
+    }) as typeof fetch, () => { savedCalled = true; });
+
+    await act(async () => {
+      toggle(host).click();
+      await flush();
+    });
+    expect(request).toBe(3);
+    expect(toggle(host).getAttribute("aria-pressed")).toBe("false");
+    expect(savedCalled).toBe(true);
+    expect(host.textContent).toContain("Catalog refresh is pending");
+  });
+
   test("contains an initial load failure and recovers on retry", async () => {
     let shouldFail = true;
     const host = await mount((async () => {

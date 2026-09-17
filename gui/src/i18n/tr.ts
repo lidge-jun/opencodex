@@ -52,7 +52,7 @@ export const tr: Record<TKey, string> = {
   "models.pickerOrder.retry": "Yeniden dene",
   "models.pickerOrder.hint": "Codex ve Claude keşfi için yönlendirilen model sırasını kaydeder. Öne çıkan/yerel öncelik aralıkları korunur. Kullanım bir anlık görüntüdür; yerel araçta sunulan seçenekler değişebilir.",
   "models.fastRows.title": "Hızlı model satırlarını göster",
-  "models.fastRows.desc": "Harici istemci model seçicilerine uygun „Model Fast“ seçicilerini ekler. Bu, temel modeldeki akıl yürütme çabası seçeneklerini değiştirmez.",
+  "models.fastRows.desc": "Harici istemci model seçicilerine uygun „Model Fast“ seçicilerini ekler. Bu, temel modeldeki akıl yürütme çabası seçeneklerini değiştirmez. Kaydetme işlemi mümkün olduğunda bağlı entegrasyonları yeniler; aksi durumda entegrasyonu veya istemci kataloğunu yenileyin.",
   "models.fastRows.refreshHint": "Kaydedildi. Katalog yenilemesi bekleniyor.",
   "models.fastRows.enabled": "Hızlı model satırları etkinleştirildi.",
   "models.fastRows.disabled": "Hızlı model satırları devre dışı bırakıldı.",

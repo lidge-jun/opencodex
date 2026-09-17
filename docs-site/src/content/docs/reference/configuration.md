@@ -67,8 +67,9 @@ service tier — the same Fast the Codex app exposes through its picker toggle. 
 listed, so the row is an addition rather than a replacement.
 
 Set `"fastRows": false` to hide generated Fast selectors. Malformed values also disable them.
-Refresh the client model list or regenerate/refresh an existing managed client configuration to
-receive the new entries. Connected clients use the serving proxy's availability metadata; older
+The Models Dashboard exposes the same setting and refreshes connected integrations when possible.
+If an external picker does not change after saving, refresh its integration or client catalog.
+Connected clients use the serving proxy's availability metadata; older
 proxies without that metadata do not gain guessed Fast entries. Codex keeps its native Fast toggle.
 
 The suffix is `--fast`, with two hyphens, because a terminal `-fast` is already a real model id for

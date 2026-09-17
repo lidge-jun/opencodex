@@ -52,7 +52,7 @@ export const de: Record<TKey, string> = {
   "models.pickerOrder.retry": "Erneut versuchen",
   "models.pickerOrder.hint": "Speichert geroutete Modelle für Codex- und Claude-Listen. Prioritätsbereiche bevorzugter/nativer Modelle bleiben erhalten. Nutzung ist eine Momentaufnahme; nativ angebotene Optionen können sich ändern.",
   "models.fastRows.title": "Schnelle Modellzeilen anzeigen",
-  "models.fastRows.desc": "Fügt berechtigte „Model Fast“-Auswahlmöglichkeiten zu externen Client-Modellauswahlen hinzu. Dies ändert nicht die Optionen für den Denkaufwand des Basismodells.",
+  "models.fastRows.desc": "Fügt berechtigte „Model Fast“-Auswahlmöglichkeiten zu externen Client-Modellauswahlen hinzu. Dies ändert nicht die Optionen für den Denkaufwand des Basismodells. Beim Speichern werden verbundene Integrationen nach Möglichkeit aktualisiert; andernfalls aktualisieren Sie die Integration oder den Client-Katalog.",
   "models.fastRows.refreshHint": "Gespeichert. Katalogaktualisierung steht aus.",
   "models.fastRows.enabled": "Schnelle Modellzeilen aktiviert.",
   "models.fastRows.disabled": "Schnelle Modellzeilen deaktiviert.",

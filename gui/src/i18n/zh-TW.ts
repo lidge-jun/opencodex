@@ -49,7 +49,7 @@ export const zhTW: Record<TKey, string> = {
   "models.pickerOrder.retry": "重試",
   "models.pickerOrder.hint": "儲存 Codex 與 Claude 探索清單中的路由模型順序。保留精選與原生模型的優先級區間；使用量排序是快照，原生工具顯示的候選可能改變。",
   "models.fastRows.title": "顯示快速模型項目",
-  "models.fastRows.desc": "在外部客戶端模型選擇器中加入適用的「Model Fast」項目。這不會影響基礎模型上的推理力度選項。",
+  "models.fastRows.desc": "在外部客戶端模型選擇器中加入適用的「Model Fast」項目。這不會影響基礎模型上的推理力度選項。儲存時會盡可能重新整理已連線的整合；若未生效，請重新整理整合或客戶端目錄。",
   "models.fastRows.refreshHint": "已儲存。目錄重新整理處理中。",
   "models.fastRows.enabled": "已啟用快速模型項目。",
   "models.fastRows.disabled": "已停用快速模型項目。",

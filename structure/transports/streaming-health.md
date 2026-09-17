@@ -472,3 +472,5 @@ Codex App/CLI UI certification. The fixture suite also exercises real loopback s
 `tests/responses/ws-steering-completion.test.ts` and `ws-steering-smoke.test.ts`
 cover effective wire settings, immutable-route refusals, policy preservation,
 independent API credentials, unavailable-mode diagnostics and safe probe outcomes.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

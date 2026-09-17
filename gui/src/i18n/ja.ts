@@ -51,7 +51,7 @@ export const ja: Record<TKey, string> = {
   "models.pickerOrder.retry": "再試行",
   "models.pickerOrder.hint": "CodexとClaudeの検出一覧のルーティングモデル順を保存します。優先・ネイティブの順位帯は維持されます。使用量順はスナップショットで、ネイティブツールの候補表示は変わる場合があります。",
   "models.fastRows.title": "高速モデル行を表示",
-  "models.fastRows.desc": "外部クライアントのモデル選択メニューに対象の「Model Fast」項目を追加します。ベースモデルの推論エフォート設定には影響しません。",
+  "models.fastRows.desc": "外部クライアントのモデル選択メニューに対象の「Model Fast」項目を追加します。ベースモデルの推論エフォート設定には影響しません。保存時に可能な範囲で接続済みインテグレーションを更新します。反映されない場合は、インテグレーションまたはクライアントのカタログを更新してください。",
   "models.fastRows.refreshHint": "保存しました。カタログの更新を待機しています。",
   "models.fastRows.enabled": "高速モデル行を有効にしました。",
   "models.fastRows.disabled": "高速モデル行を無効にしました。",

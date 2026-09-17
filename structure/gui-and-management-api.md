@@ -120,7 +120,7 @@ this document owns is which module holds which area and what invariant that area
 
 | Endpoint area | Responsibility |
 | --- | --- |
-| Config/settings | Read safe config/settings views; mutate supported settings only. Full `PUT /api/config` is disabled so masked secrets are not round-tripped. `PUT /api/settings` accepts `codexAutoStart`, `streamMode`, integer `appOwnedMemoryBudgetMb` (64..4096), strict boolean `codexAccountPickerEnabled`, and a validated per-account `codexQuotaAutoRefresh` toggle (each optional, at least one required). Picker enable initializes an empty UI-managed selector map, persists before one bounded catalog convergence, and reports only `catalogRefreshPending`; allocation/save failure restores every touched live field and skips convergence. Budget changes synchronously enforce the process-wide evictable retained-state cap; this is separate from RSS/native memory. `streamMode` persists the #314 stream-shape selection in config.json (Windows services need persisted input; macOS eager relay is explicit-only). |
+| Config/settings | Read safe config/settings views; mutate supported settings only. Full `PUT /api/config` is disabled so masked secrets are not round-tripped. `PUT /api/settings` accepts `codexAutoStart`, `streamMode`, integer `appOwnedMemoryBudgetMb` (64..4096), strict boolean `codexAccountPickerEnabled`, strict boolean `fastRows`, and a validated per-account `codexQuotaAutoRefresh` toggle (each optional, at least one required). `fastRows` defaults on when absent: false is persisted, true deletes the key, and successful writes echo the effective boolean. An effective change converges the Codex catalog and refreshes enabled or already-owned client integrations after persistence. Picker enable initializes an empty UI-managed selector map, persists before one bounded catalog convergence, and reports only `catalogRefreshPending`; allocation/save failure restores every touched live field and skips convergence. Budget changes synchronously enforce the process-wide evictable retained-state cap; this is separate from RSS/native memory. `streamMode` persists the #314 stream-shape selection in config.json (Windows services need persisted input; macOS eager relay is explicit-only). |
 | Startup safety | `GET /api/startup-health` reports whether injected Codex routing is restart-safe, with secret-free service/shim diagnostics. `POST /api/startup-action` provides allowlisted one-click installation for the background service or launcher shim. On Windows a healthy script shim is CLI-only; Codex Desktop requires the background service for full protection. |
 | Windows tray | `GET/POST /api/windows-tray` controls an owned, per-user HKCU login tray. The tray delegates fixed actions to the CLI and is never a proxy supervisor or restart-protection signal. |
 | Updates | `GET /api/update/check`, `POST /api/update/run`, and `GET /api/update/status` own dashboard self-update state. A launched worker PID is persisted in `update-job.json`; dead PIDs recover immediately, while legacy active records without a PID recover only after ten minutes. Live PIDs remain exclusive regardless of record age. `GET /api/update/badge` backs the sidebar badge: it reports that an update exists and links to the update surface rather than gating other actions. |
@@ -154,6 +154,13 @@ this document owns is which module holds which area and what invariant that area
 Provider writes must not round-trip masked API keys as real secrets. Dashboard actions that change
 model visibility or subagent selection should trigger catalog/cache sync behavior through the server
 path that owns it.
+
+### Fast selector rows setting
+
+The Models Dashboard loads `fastRows` only from a strict boolean settings response. It optimistically
+updates the switch, then trusts the successful PUT echo; if the response is lost or malformed after
+persistence, it reads settings again and refreshes the displayed catalog. The copy still directs the
+operator to refresh the integration or client catalog when an external picker has not regenerated.
 
 The UI must show one provider card and one Models group for Codex-login OpenAI, describe Pool and
 Direct accurately, and keep the main account inside Pool. Public model state keeps virtual Pro ids

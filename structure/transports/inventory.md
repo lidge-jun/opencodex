@@ -211,3 +211,5 @@ The passthrough, adapter, continuation, sidecar and run-turn execution owners pa
 the same routed model during account rotation, without bypassing their send-budget
 admission or account-snapshot pairing. The forwarding contract is covered in
 `tests/oauth/oauth-account-quota-rank.test.ts`; the core facade remains orchestration-only.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

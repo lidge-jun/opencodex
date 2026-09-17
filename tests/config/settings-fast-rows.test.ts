@@ -109,16 +109,25 @@ describe("/api/settings fastRows", () => {
     expect(Object.hasOwn(raw, "fastRows")).toBe(false);
   });
 
-  test("triggers catalog convergence when fastRows changes", async () => {
+  test("converges Codex and refreshes enabled client integrations when fastRows changes", async () => {
     let converged = 0;
+    let integrationsRefreshed = 0;
     const config = baseConfig();
+    config.clientIntegrations = { grok: false, "claude-desktop": false };
     saveConfig(config);
     const res = await settingsRequest(config, { fastRows: false }, {
       createManagementConvergeCodex: catalogConvergenceFactory(() => {
         converged += 1;
       }),
+      readRuntimePort: pid => ({ pid, port: 12345 }),
+      refreshOwnedCatalogIntegrations: async input => {
+        expect(input.port).toBe(12345);
+        integrationsRefreshed += 1;
+        return [];
+      },
     });
     expect(res!.status).toBe(200);
     expect(converged).toBe(1);
+    expect(integrationsRefreshed).toBe(1);
   });
 });
