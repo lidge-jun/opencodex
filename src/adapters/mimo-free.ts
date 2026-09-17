@@ -267,14 +267,17 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
         try {
           return await send({ url: request.url, sendClass: "auth-recovery", recovery: "oauth-401",
             beforeDispatch: async () => {
-              // Drain the first response body and refresh the JWT only after admission.
+              // Drain the first response body and refresh the JWT only after admission: a
+              // refused replay still returns THIS response to the caller, body intact.
+              // Draining comes first within the block because getMimoJwt issues its own
+              // network call and may throw, and the 401 body would then never be released.
+              try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
               resetMimoJwtCache();
               const freshJwt = await getMimoJwt(ctx?.abortSignal);
               retryHeaders = {
                 ...(request.headers as Record<string, string>),
                 "Authorization": `Bearer ${freshJwt}`,
               };
-              try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
             },
             dispatch: executor => executor(request.url, {
               method: request.method,

@@ -394,6 +394,35 @@ describe("mimo-free auth retry predicate", () => {
       resetMimoJwtCache();
     }
   });
+
+  test("a rejected JWT refresh still releases the first 401 body", async () => {
+    // The drain belongs inside `beforeDispatch` so that a budget-refused replay can still hand
+    // the 401 back with a readable body. Within that block it has to come FIRST, because
+    // `getMimoJwt` issues its own bootstrap request and can reject -- and the 401 body would
+    // then never be released.
+    const originalFetch = globalThis.fetch;
+    let cancelled = false;
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      if (String(url).includes("/bootstrap")) {
+        return new Response(JSON.stringify({ jwt: "x".repeat(64 * 1024 + 1) }), { status: 200 });
+      }
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode("expired")); },
+        cancel() { cancelled = true; },
+      }), { status: 401 });
+    }) as unknown as typeof fetch;
+    try {
+      const adapter = adapterForRetry();
+      await expect(adapter.fetchResponse!(
+        { url: MIMO_CHAT_URL, method: "POST", headers: { "Authorization": "Bearer stale" }, body: "{}" },
+        {} as never,
+      )).rejects.toThrow("MiMo bootstrap response too large");
+      expect(cancelled).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetMimoJwtCache();
+    }
+  });
 });
 
 describe("mimo-free adapter request building", () => {
