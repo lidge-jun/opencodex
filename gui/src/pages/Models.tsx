@@ -2499,14 +2499,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                 onClick={() => {
                   const modelId = customFormModelId.trim();
                   const displayName = customFormDisplayName.trim();
-                  // Same parser/guard as the provider-level context dialog: an invalid draft
-                  // (e.g. "350k" — the format the UI itself uses to display window sizes) must
-                  // not silently fall through to "field omitted / override cleared".
                   const parsedContextWindow = parseContextWindowDraft(customFormContextWindow);
-                  if (parsedContextWindow === undefined) {
-                    setCustomError(t("models.contextInvalid"));
-                    return;
-                  }
+                  if (parsedContextWindow === undefined) return setCustomError(t("models.contextInvalid"));
                   if (customModalMode === "add") {
                     const reasoningEfforts = customFormReasoning ? customFormReasoningEfforts : undefined;
                     void addCustomModel(
