@@ -42,6 +42,72 @@ async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, summaryLines(result));
 }
 
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" ? value as Record<string, unknown> : undefined;
+}
+
+function desktopSwitchInertReason(reason: unknown): string {
+  if (reason === "client_role") return "this proxy is running in the client role";
+  if (reason === "non_loopback_bind_requires_admission_token") {
+    return "a non-loopback bind requires an admission token, so this flag is inert";
+  }
+  return "the stored setting is not effective in the current runtime configuration";
+}
+
+function desktopSwitchApplyReason(reason: unknown): string {
+  if (reason === "not_requested") return "no desktop switch rewrite was requested";
+  if (reason === "proxy_not_running") return "the proxy is not running";
+  if (reason === "integration_disabled") return "Codex integration is disabled";
+  if (reason === "write_lock_busy") return "the Codex config write lock is busy";
+  if (reason === "injection_refused") return "Codex config injection was refused";
+  return "the rewrite could not be completed";
+}
+
+function settingsUpdateLines(
+  result: unknown,
+  changed: { desktopAuthless: boolean; clientCompaction: boolean },
+): string[] {
+  if (!changed.desktopAuthless && !changed.clientCompaction) return ["System settings updated."];
+  const switches = recordValue(recordValue(result)?.codexDesktopSwitches);
+  if (!switches) return ["System settings updated."];
+
+  const lines: string[] = [];
+  const appendSwitch = (key: string, label: string): boolean => {
+    const state = recordValue(switches[key]);
+    if (!state || typeof state.stored !== "boolean" || typeof state.effective !== "boolean") return false;
+    lines.push(`${label}: stored ${state.stored ? "on" : "off"}.`);
+    // The effective value is always stated, even when it matches. Printing it only on a
+    // mismatch would make silence ambiguous — the reader could not tell "the stored value is
+    // in force" from "this build does not report effective state", and that ambiguity is a
+    // smaller version of the defect being fixed.
+    lines.push(state.effective === state.stored
+      ? `${label}: effective ${state.effective ? "on" : "off"}.`
+      : `${label}: effective ${state.effective ? "on" : "off"} because ${desktopSwitchInertReason(state.inertReason)}.`);
+    return true;
+  };
+
+  if (changed.desktopAuthless && !appendSwitch("codexDesktopAuthless", "Codex desktop authless")) {
+    return ["System settings updated."];
+  }
+  if (changed.clientCompaction && !appendSwitch("codexClientCompaction", "Codex client compaction")) {
+    return ["System settings updated."];
+  }
+
+  const apply = recordValue(switches.apply);
+  const authSource = recordValue(switches.authSource);
+  if (!apply || typeof apply.applied !== "boolean" || !authSource || typeof authSource.summary !== "string") {
+    return ["System settings updated."];
+  }
+  if (apply.applied) {
+    lines.push("Codex config: ~/.codex/config.toml was rewritten.");
+  } else {
+    const detail = typeof apply.detail === "string" && apply.detail.length > 0 ? ` Details: ${apply.detail}` : "";
+    lines.push(`Codex config: ~/.codex/config.toml was not rewritten because ${desktopSwitchApplyReason(apply.reason)}.${detail} Run 'ocx sync' to apply the stored settings.`);
+  }
+  lines.push(`Auth source: ${authSource.summary}`);
+  return lines;
+}
+
 async function settings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -63,7 +129,10 @@ async function settings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     ...(clientCompaction !== undefined ? { codexClientCompaction: clientCompaction } : {}),
   };
   const result = await runtimeRequest("/api/settings", { method: "PUT", body: JSON.stringify(body) }, deps);
-  printData(result, wantsJson, ["System settings updated."]);
+  printData(result, wantsJson, settingsUpdateLines(result, {
+    desktopAuthless: desktopAuthless !== undefined,
+    clientCompaction: clientCompaction !== undefined,
+  }));
 }
 
 async function startup(argv: string[], deps: RuntimeApiDeps): Promise<void> {

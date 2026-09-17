@@ -75,6 +75,8 @@ export const CURSOR_ROUTING_LEVEL_PARAMETER_ID = "optimization";
 export const CURSOR_EXTERNAL_ROOT_BLOB_LIMIT = 192;
 /** Approximate prompt-size guard; tool schemas and protocol framing consume context separately. */
 export const CURSOR_EXTERNAL_ROOT_BYTE_LIMIT = 512 * 1024;
+/** Honest placeholder when native Composer history has a toolCall with no matching toolResult. */
+export const CURSOR_MISSING_TOOL_RESULT = "[missing tool_result for this tool_use in history]";
 /**
  * Byte budget for the serialized arguments named inside ONE replayed tool-result envelope. The
  * invocation identifies the call; the result is the payload. Without an independent cap, a single
@@ -1218,6 +1220,20 @@ function argBytes(value: unknown): Uint8Array {
   }
 }
 
+function missingToolResultFor(
+  part: Extract<OcxAssistantContentPart, { type: "toolCall" }>,
+): OcxToolResultMessage {
+  return {
+    role: "toolResult",
+    toolCallId: part.id,
+    toolName: part.name,
+    ...(part.namespace ? { toolNamespace: part.namespace } : {}),
+    content: CURSOR_MISSING_TOOL_RESULT,
+    isError: true,
+    timestamp: 0,
+  };
+}
+
 function toolCallStep(
   part: Extract<OcxAssistantContentPart, { type: "toolCall" }>,
   requestScope: CursorBlobRequestScopeToken,
@@ -1332,7 +1348,9 @@ function conversationTurns(
   const pendingToolCalls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
   const flush = () => {
     if (!current) return;
-    for (const part of pendingToolCalls.values()) current.steps.push(toolCallStep(part, requestScope));
+    for (const part of pendingToolCalls.values()) {
+      current.steps.push(toolCallStep(part, requestScope, missingToolResultFor(part), codeMode));
+    }
     turns.push(storeCursorBlob(toBinary(ConversationTurnStructureSchema, create(ConversationTurnStructureSchema, {
       turn: {
         case: "agentConversationTurn",

@@ -54,10 +54,15 @@ export const SPAWN_BUDGET_MS = 45_000;
  * production secret writer, which on Windows runs two `hardenSecretPath(..., required: true)`
  * passes, each able to spawn PowerShell for SID resolution and several 30s-budgeted `icacls`
  * calls. That publication is now a plain temp-file rename, so the ceremony is out of the
- * measured window entirely. Across 30 Windows shard logs the surviving readiness waits are
- * 2.0s to 19.7s. 45s covers them; this ceiling covers the possibility that some part of the
- * 50.7s was cold process start rather than ACL work, which the new phase timestamps in
- * `tests/helpers/native-profile-startup-child.ts` will settle on the next slow run.
+ * measured window entirely, and the outlier went with it: across all six Windows shards of run
+ * 35141541461 every readiness wait in that file measured 2.0s to 4.9s, the first child
+ * included. 45s covers that with room to spare.
+ *
+ * This ceiling is kept anyway, for the part of the 50.7s that one run cannot rule out — a
+ * genuinely cold runner rather than ACL work. It costs nothing while the fix holds, because
+ * nothing approaches it. If a breach ever happens the phase timestamps in
+ * `tests/helpers/native-profile-startup-child.ts` name which phase spent the time, and this
+ * constant should be deleted rather than raised.
  *
  * ## Ablation
  *

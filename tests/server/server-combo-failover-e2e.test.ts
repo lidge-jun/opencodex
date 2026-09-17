@@ -844,6 +844,60 @@ describe("server combo failover 030 activation matrix", () => {
     }
   });
 
+  test("zero-output bare Responses SSE error hops before committing the child stream", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return new Response([
+        "event: response.created",
+        `data: ${JSON.stringify({ type: "response.created", response: { id: "r1", status: "in_progress" } })}`,
+        "",
+        "event: error",
+        `data: ${JSON.stringify({
+          type: "error",
+          message: "An error occurred while processing your request. Please include request ID r1.",
+        })}`,
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return new Response([
+        "event: response.completed",
+        `data: ${JSON.stringify({
+          type: "response.completed",
+          response: { ...responsesSuccess("bare-error backup", "m2"), status: "completed" },
+        })}`,
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    });
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    });
+
+    const parent: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+    }), config, parent);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("bare-error backup");
+    expect(hits).toEqual(["a", "b"]);
+    expect(parent).toMatchObject({
+      provider: "combo",
+      model: "combo/free",
+      resolvedModel: "m2",
+      attempts: [
+        { ordinal: 1, provider: "a", model: "m1", status: 502 },
+        { ordinal: 2, provider: "b", model: "m2" },
+      ],
+    });
+  });
+
   test("zero-output adapter EOF hops to the next combo target", async () => {
     const hits: string[] = [];
     const a = serve(() => {
@@ -2214,6 +2268,59 @@ describe("server combo failover 030 activation matrix", () => {
     expect(unavailable.status).toBe(503);
     expect(await unavailable.text()).toContain("No available targets for combo: free");
     expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
+  });
+
+  test("single-target combo with waitForCooldownMs waits and retries on failure", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return hits === 1
+        ? Response.json({ error: { message: "service unavailable" } }, { status: 503 })
+        : chatSuccess("single target recovered", "m1");
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const cooldown = { cooldownMs: 50, waitForCooldownMs: 500 };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], cooldown));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("single target recovered");
+    expect(hits).toBe(2);
+  });
+
+  test("single-target combo with waitForCooldownMs stops after one retry when upstream fails continuously", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return Response.json({ error: { message: "service unavailable" } }, { status: 503 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const cooldown = { cooldownMs: 50, waitForCooldownMs: 500 };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], cooldown));
+    expect(response.status).toBe(503);
+    expect(hits).toBe(2);
+  });
+
+  test("single-target combo with unset waitForCooldownMs fails immediately on 503", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return Response.json({ error: { message: "service unavailable" } }, { status: 503 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], { cooldownMs: 50 }));
+    expect(response.status).toBe(503);
+    expect(hits).toBe(1);
   });
 
   test("a past Retry-After date remains immediate through response consumption", async () => {
