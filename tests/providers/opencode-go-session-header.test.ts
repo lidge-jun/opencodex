@@ -14,15 +14,15 @@ const MUSE_MODEL = "muse-spark-1.3-contributor";
 const CHAT_MODEL = "glm-5.2";
 const SESSION_HEADER = "x-opencode-session";
 const CHAT_SESSION_VECTORS = {
-  metadataA: "ocx_42277b042271219b5fa1fe994ecba9f3",
-  metadataB: "ocx_c75bcddfc1125af3c380ddfc2951c529",
+  metadataA: "ocx_402dc1464c08a86e3c55073186a7a8b1",
+  metadataB: "ocx_db71da58bc580eca9aa75a5979573122",
   client: "ocx_2225190737b6ba32dad580bee01ba899",
   native: "ocx_5010ddace206624d21c39711cbb786c0",
   prefixed: "ocx_d956cf086e3f7fc34f56f465ee4c7601",
   codex: "ocx_b7724df20a058b5cbf53f86b6dd829ff",
 } as const;
 const RESPONSES_SESSION_VECTORS = {
-  metadataA: "ocx_81d96c2a4115d3b09207dbb9d77827db",
+  metadataA: "ocx_8eb3fc0d524fea055a33e64c0f4c1914",
   client: "ocx_7f1566030d3ebd6516c6fabb460fbda1",
   native: "ocx_409bae0177f90ebdc0653aff6b0e979f",
   prefixed: "ocx_c974cef031af8717276b933929f0c073",
