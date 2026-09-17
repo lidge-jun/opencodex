@@ -358,7 +358,10 @@ export function resolveCursorConversationId(
   if (options.forceFreshConversation === true) return generatedCursorConversationId();
   if (parsed._cursorIsolateConversation === true) return generatedCursorConversationId();
   const threadId = cursorClientThreadOwner(parsed);
-  if (threadId) {
+  // A compaction turn carries its own conversation id and must not be pulled onto the parent's
+  // thread override. It is isolated in effect without ever setting the isolate flag, which is why
+  // the override check has to exclude it explicitly rather than rely on that flag.
+  if (threadId && parsed._compactionRequest !== true) {
     const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
     if (recovered) return recovered;
   }

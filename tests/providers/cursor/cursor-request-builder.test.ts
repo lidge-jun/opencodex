@@ -122,6 +122,27 @@ describe("Cursor request builder", () => {
     }
   });
 
+  test("a compaction turn keeps its own conversation id over the parent thread override", () => {
+    // Compaction never sets the isolate flag, so preferring the thread override unconditionally
+    // pulled the compaction turn onto the parent conversation. It carries its own id and is
+    // isolated in effect; the override exists to beat a STALE stored id, not this one.
+    clearCursorThreadContinuityForTests();
+    rememberCursorThreadConversation("thread-compaction", "cursor_parent_stable", "acct-compaction");
+    try {
+      const request = createCursorRequest({
+        ...base,
+        modelId: "cursor/grok-4.6",
+        _clientThreadId: "thread-compaction",
+        _cursorConversationId: "cursor_compaction_turn",
+        _cursorIdentityScope: "acct-compaction",
+        _compactionRequest: true,
+      });
+      expect(request.conversationId).toBe("cursor_compaction_turn");
+    } finally {
+      clearCursorThreadContinuityForTests();
+    }
+  });
+
   test("uses a Cursor-only Desktop owner without widening Responses replay scope", () => {
     const a = createCursorRequest({
       ...base,
