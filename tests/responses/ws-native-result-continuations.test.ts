@@ -87,7 +87,7 @@ test.each([false, true])("rich/custom/approval continuation uses one original so
   emitItem(socket, custom, 1); emitItem(socket, approval, 2);
   completeInjection(socket, { output: [func, custom, approval] });
   await waitForInjection(() => sent.some(frame => frame.type === "response.completed"));
-  expect(ws.data.nativeSteering).toBeDefined();
+  expect(ws.data.nativeControl).toBeDefined();
   const frame = continuationFrame({ type: "response.create", previous_response_id: id,
     input: [savedResult("call-1", "text"), customResult(), approvalResult(false)] }, api);
   send(frame);
@@ -95,7 +95,7 @@ test.each([false, true])("rich/custom/approval continuation uses one original so
   expect(socket.frames[1]).toMatchObject({ ...frame, model: "gpt-5.6-sol" });
   socket.emit({ type: "response.created", response: { id: "r2", previous_response_id: id, output: [] } });
   completeInjection(socket, {}, "r2");
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(InjectionSocket.all).toHaveLength(1); expect(fallbackCalls).toBe(0);
   expect(socket.options.headers.authorization).toBe(api ? "Bearer fixture-public-key" : "Bearer test");
   expect(sent.filter(frame => frame.type === "response.created")).toHaveLength(2);
@@ -133,7 +133,7 @@ test("accepted injection and unsent custom/approval results have separate comple
   emitItem(socket, custom, 1); emitItem(socket, approval, 2);
   send({ type: "response.inject", response_id: id, input: [savedResult()] });
   acknowledgeInjection(socket); completeInjection(socket, { output: [func, custom, approval] });
-  expect(ws.data.nativeSteering).toBeDefined();
+  expect(ws.data.nativeControl).toBeDefined();
   send(continuationFrame({ type: "response.create", previous_response_id: id, input: [savedResult(), customResult(), approvalResult(true)] }));
   expect(socket.frames).toHaveLength(2);
   send(continuationFrame({ type: "response.create", previous_response_id: id, input: [customResult(), approvalResult(true)] }));
@@ -220,7 +220,7 @@ test("hosted actions and encrypted messages survive wire relay and sparse termin
   expect(socket.frames).toHaveLength(1);
   const message = { type: "message", id: "last-message", role: "assistant", content: [{ type: "output_text", text: "done", annotations: [] }] };
   emitItem(socket, message, 3); completeInjection(socket, { output: [message] });
-  await waitForInjection(() => !ws.data.nativeSteering);
+  await waitForInjection(() => !ws.data.nativeControl);
   expect(sent.filter(frame => frame.type === "response.output_item.done").map(frame => frame.item)).toEqual([...hosted, message]);
   expect(fallbackCalls).toBe(0);
 });
@@ -255,10 +255,10 @@ test("direct steering construction cannot bypass the single-agent mode boundary"
 });
 test("a completed injection turn may be followed by an explicit ordinary steering turn", async () => {
   const { socket, ws, send } = await beginInjection({}, { ...injectionConfig(), codexNativeSteering: true });
-  completeInjection(socket); await waitForInjection(() => !ws.data.nativeSteering);
+  completeInjection(socket); await waitForInjection(() => !ws.data.nativeControl);
   send({ type: "response.create", model: "gpt-5.6-sol", input: "new explicit turn" });
   await waitForInjection(() => InjectionSocket.all.length === 2);
-  expect(ws.data.nativeSteering).toBeInstanceOf(NativeSteeringChannel);
+  expect(ws.data.nativeControl).toBeInstanceOf(NativeSteeringChannel);
   expect(socket.frames).toHaveLength(1); expect(fallbackCalls).toBe(0);
 });
 
