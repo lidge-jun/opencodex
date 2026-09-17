@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   installInjectionFixture, beginInjection, injectionClient, injectionConfig, InjectionSocket,
-  advertiseInjection, completeInjection, acknowledgeInjection, savedResult, waitForInjection, fallbackCalls,
+  advertiseInjection, completeInjection, acknowledgeInjection, continuationFrame, savedResult, waitForInjection, fallbackCalls,
 } from "../helpers/native-injection-fixture";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { getRequestLogEntries } from "../../src/server/request-log";
@@ -81,9 +81,9 @@ test("completion rejection is preserved; only an explicit caller continuation re
   socket.emit(failed);
   await waitForInjection(() => sent.some(event => event.type === failed.type));
   expect(sent.at(-1)).toEqual(failed); expect(socket.frames).toHaveLength(2);
-  send({ type: "response.create", previous_response_id: id, input: [savedResult("call-1", "changed output")] });
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [savedResult("call-1", "changed output")] }));
   expect(sent.at(-1)?.error.code).toBe("invalid_injection"); expect(socket.frames).toHaveLength(2);
-  const continuation = { type: "response.create", previous_response_id: id, input };
+  const continuation = continuationFrame({ type: "response.create", previous_response_id: id, input });
   send(continuation); send(continuation);
   await waitForInjection(() => socket.frames.length === 3);
   expect(socket.frames[2].input).toEqual(input); expect(socket.frames[2].previous_response_id).toBe(id);

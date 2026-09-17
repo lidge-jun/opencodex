@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { nativeResponseRecord as injectionRecord } from "./native-response-json";
+export { nativeResponseRecord as injectionRecord, nativeResponseFingerprint as injectionFingerprint } from "./native-response-json";
 import { CODEX_WS_ID_MAX_BYTES } from "./codex-ws-correlation";
 import { NativeSteeringError } from "./native-steering";
 
@@ -10,21 +11,10 @@ export const MAX_NATIVE_INJECTION_CALLS = 1024;
 export const NATIVE_INJECTION_ACK_MS = 90_000;
 export const NATIVE_INJECTION_TOOL_MS = 30 * 60_000;
 
-/** Narrow a JSON object without accepting arrays or null. */
-export function injectionRecord(value: unknown): value is InjectionFrame {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 /** Bound identities and exclude control characters, without changing their spelling. */
 export function injectionId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= CODEX_WS_ID_MAX_BYTES
     && !/[\u0000-\u001f\u007f]/.test(value);
-}
-/** Stable setting comparison; only the digest is retained by the connection owner. */
-export function injectionFingerprint(value: unknown): string {
-  const canonical = (item: unknown): string => Array.isArray(item) ? `[${item.map(canonical).join(",")}]`
-    : injectionRecord(item) ? `{${Object.keys(item).sort().map(key => `${JSON.stringify(key)}:${canonical(item[key])}`).join(",")}}`
-    : JSON.stringify(item) ?? "null";
-  return createHash("sha256").update(canonical(value)).digest("hex");
 }
 /** Throw only fixed, content-free errors, never tool output or caller identifiers. */
 export function injectionError(code: string, message: string): never {

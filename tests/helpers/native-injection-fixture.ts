@@ -67,6 +67,15 @@ export async function beginInjection(fields: Frame = {}, settings = injectionCon
   expect(socket).toBeDefined();
   return { ...client, socket, id: socket.root };
 }
+/** A saved-result continuation must restate the settings the opening frame pinned. */
+export function continuationFrame(fields: Frame, api = false): Frame {
+  return {
+    model: api ? "api/gpt-5.6-sol" : "gpt-5.6-sol",
+    multi_agent: { enabled: true },
+    tools: [{ type: "function", name: "get_value", parameters: { type: "object", properties: {} } }],
+    ...fields,
+  };
+}
 export function advertiseInjection(socket: InjectionSocket, call = "call-1", index = 0) {
   const item = { id: `item-${call}`, type: "function_call", call_id: call, name: "get_value", arguments: "{}" };
   socket.emit({ type: "response.output_item.added", output_index: index, item });

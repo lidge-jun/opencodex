@@ -150,7 +150,7 @@ export function codexWsUpstreamFetch(
   // Never infer backend support from a model name or enable controls on a gateway.
   const control = nativeControl?.kind === "injection"
     ? ((prepared.canonical || url === OPENAI_API_RESPONSES_URL) && isInjectionRequest(JSON.parse(frameText)) ? nativeControl : undefined)
-    : prepared.canonical ? nativeControl : undefined;
+    : (prepared.canonical || url === OPENAI_API_RESPONSES_URL) ? nativeControl : undefined;
   if (control?.kind === "injection" && url === OPENAI_API_RESPONSES_URL) {
     const beta = headers["openai-beta"];
     if (!beta?.split(",").some(value => value.trim() === "responses_multi_agent=v1")) {
