@@ -1,5 +1,6 @@
 /**
- * The Bun crash classifier is one definition, every lane sources it, and a crash fails the shard.
+ * The Bun crash classifier is one definition, every direct lane or shared runner uses it, and a
+ * crash fails the shard.
  *
  * Two separate defects are pinned here.
  *
@@ -15,9 +16,9 @@
  * success when that sweep passed. The sweep is not a retry of a flaky test: one file per process
  * is a configuration in which this class of defect cannot occur, so it was guaranteed to pass and
  * guaranteed to report nothing. Linux CI segfaulted twelve to fourteen times per run from
- * 2026-09-08 while reporting green, and the Windows lane -- which has no sweep -- was the only
- * place the Bun 1.4.2 regression was visible at all. The sweep is kept for attribution; the shard
- * now fails regardless of its result.
+ * 2026-09-08 while reporting green, and the then-unbatched Windows lane was the only place the
+ * Bun 1.4.2 regression was visible at all. The sweep is kept for attribution; the shard now fails
+ * regardless of its result.
  *
  * What this file may and may not assert. Reading shell SOURCE TEXT proves only that a string is
  * present, which is why the disposition contract does NOT live here any more: the old
@@ -65,7 +66,6 @@ describe("the Bun crash classifier is shared", () => {
   const workflow = read(".github", "workflows", "ci.yml");
 
   const lanes = {
-    windows: runBlockContaining(workflow, "bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/6"),
     "macos-shard": runBlockContaining(workflow, "run_macos_suite tests"),
     "macos-control": runBlockContaining(workflow, "bun test --isolate --timeout 60000 tests 2>&1"),
   };
@@ -89,7 +89,7 @@ describe("the Bun crash classifier is shared", () => {
     }
   });
 
-  test("every lane sources the classifier and calls the shared predicate", () => {
+  test("every direct lane and the shared batch runner use the classifier", () => {
     for (const [name, text] of Object.entries(lanes)) {
       expect(`${name}:sources:${text.includes(SOURCE_LINE)}`).toBe(`${name}:sources:true`);
       expect(`${name}:calls:${text.includes("is_bun_runtime_crash \"$suite_status\" \"$suite_log\"")}`)
@@ -97,6 +97,7 @@ describe("the Bun crash classifier is shared", () => {
     }
     expect(batchScript).toContain("bun-crash-signatures.sh");
     expect(batchScript).toContain('is_bun_runtime_crash "$status" "$log_file"');
+    expect(workflow.match(/run: bash scripts\/ci\/run-bun-test-batches\.sh/g)).toHaveLength(2);
   });
 
   test("the thread-numbered panic form is the anchor nowhere", () => {

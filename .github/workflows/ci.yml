@@ -720,7 +720,7 @@ jobs:
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
   platform-windows:
-    name: windows ${{ matrix.shard }}/6
+    name: windows ${{ matrix.shard }}/9
     needs: select-windows-runner
     if: >-
       github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
@@ -747,13 +747,23 @@ jobs:
     # inside the margin 25 was chosen to provide.
     # Shard 1 of run 34036848646 then reached that wall with 2736 passing tests
     # and no test failures. The matched tests were 25% slower than the prior
-    # complete run; about one minute of tests remained. Keep every test deadline
-    # and all six shards, but leave the whole batch and cleanup a 30-minute bound.
+    # complete run; about one minute of tests remained. That change kept every
+    # test deadline and all six shards, but left the whole batch and cleanup a
+    # 30-minute bound.
+    #
+    # Six shards then grew into the 30-minute ceiling too. Across seven lane=all
+    # dispatches the six shard totals were 114.3-133.2 minutes. The worst observed
+    # shard imbalance was 1.43x its dispatch's per-shard average. Eight shards leave
+    # no margin: 133.2 / 8 * 1.43 * 1.25 = 29.8 minutes after the already-observed
+    # 25% run-to-run slowdown. Nine gives 133.2 / 9 * 1.43 * 1.25 = 26.5 minutes.
+    # Keep the 30-minute bound and pay for three more concurrent runners plus their
+    # repeated checkout/install/build setup so test work, rather than the ceiling,
+    # shrinks. Per-batch bounds below make a future wedge a named failure.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
     steps:
       - name: Show selected runner
         shell: bash
@@ -804,34 +814,21 @@ jobs:
           cd gui
           bun run build
 
-      - name: Test
+      - name: Test in fresh-process batches
         # --timeout: the Linux batches and the macOS control both pass 60000; this leg was
         # the only one left on Bun's 5s default, and it is the slowest hardware on the board.
         # Three of its failures were the default firing on tests that had not hung — the
         # composed-acceptance cases spawn a real `ocx start` and were still working at 41s.
         #
-        # Nothing is retried. This leg was the only one that reported a Bun panic honestly on
-        # BOTH attempts, which is the single reason the 1.4.2 preload segfault was visible at
-        # all while Linux swept it and macOS retried it. A crash fails the shard on the first
-        # occurrence; the shared classifier only chooses the message.
+        # Nothing is retried. The shared runner gives each at-most-12-file process 120 seconds;
+        # a timeout or crash makes the shard irreversibly red before the diagnostic singleton
+        # sweep starts. scope=all preserves the full Windows suite: Linux alone excludes the
+        # storage-policy and api-usage families because separate Linux jobs own them.
         shell: bash
-        run: |
-          set +e
-          set -uo pipefail
-          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
-          source scripts/ci/bun-crash-signatures.sh
-          suite_log="$(mktemp -t ocx-windows-suite.XXXXXX)"
-          bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/6 2>&1 | tee "$suite_log"
-          suite_status="${PIPESTATUS[0]}"
-          if [ "$suite_status" -eq 0 ]; then
-            exit 0
-          fi
-          if is_bun_runtime_crash "$suite_status" "$suite_log"; then
-            echo "::error::Bun runtime crash in Windows shard ${{ matrix.shard }}/6 (exit ${suite_status}); a crash is process death, not a test result, and it fails this shard on the first occurrence."
-          else
-            echo "::error::Windows shard ${{ matrix.shard }}/6 failed (exit ${suite_status})."
-          fi
-          exit "$suite_status"
+        env:
+          TEST_SHARD: ${{ matrix.shard }}/9
+          BUN_TEST_FILE_SCOPE: all
+        run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
@@ -1099,10 +1096,10 @@ jobs:
           # started: five successes and one skipped leg roll up to `success`. No matrix here
           # carries a per-leg `if:`, so a leg can only be skipped when its whole job is, which
           # the expectation table above already catches. What that table cannot catch is a
-          # matrix that produced FEWER legs than the six a dispatch is run to read, so count
-          # them by name. The six Windows legs are the entire output of that dispatch.
+          # matrix that produced FEWER legs than the nine a dispatch is run to read, so count
+          # them by name. The nine Windows legs are the entire output of that dispatch.
           if [ "$windows" = requested ]; then
-            shards=6
+            shards=9
             # `filter=latest` (the default) is the latest execution of each job in the run,
             # which is what a human reading the run sees. Asking for one ATTEMPT instead would
             # fail every partial re-run: "Re-run failed jobs" puts only the repaired shard in

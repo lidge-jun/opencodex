@@ -5,6 +5,7 @@ readonly SHARD_SPEC="${1:-}"
 readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"
 readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"
 readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
+readonly TEST_FILE_SCOPE="${BUN_TEST_FILE_SCOPE:-general}"
 # Runtime under test. Defaults to whatever `bun` PATH resolves to; the Bun 1.4
 # qualification lane sets OPENCODEX_BUN_PATH so the batches actually execute on
 # the candidate binary. Without this the lane would export an override, run the
@@ -42,6 +43,10 @@ if [[ ! "$BATCH_KILL_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "BUN_TEST_BATCH_KILL_GRACE_SECONDS must be a positive integer, got: $BATCH_KILL_GRACE_SECONDS" >&2
   exit 64
 fi
+if [[ "$TEST_FILE_SCOPE" != "general" && "$TEST_FILE_SCOPE" != "all" ]]; then
+  echo "BUN_TEST_FILE_SCOPE must be general or all, got: $TEST_FILE_SCOPE" >&2
+  exit 64
+fi
 if ! command -v timeout >/dev/null 2>&1; then
   echo "GNU timeout is required to bound Bun test batches." >&2
   exit 69
@@ -50,13 +55,17 @@ fi
 is_general_test_file() {
   local path="$1"
 
-  case "$path" in
-    # Dedicated CI jobs run these in their own Bun process (ci.yml storage-policy / api-usage).
-    # Match by basename at any depth so the exclusion survives the tests/ domain layout.
-    */api-storage-policy*.test.ts|*/api-storage.test.ts|*/api-usage.test.ts)
-      return 1
-      ;;
-  esac
+  if [[ "$TEST_FILE_SCOPE" == "general" ]]; then
+    case "$path" in
+      # Dedicated Linux CI jobs run these in their own Bun process (ci.yml storage-policy /
+      # api-usage). Windows sets scope=all because its manual platform leg has always covered
+      # the full suite and batching must not silently shrink that platform contract.
+      # Match by basename at any depth so the exclusion survives the tests/ domain layout.
+      */api-storage-policy*.test.ts|*/api-storage.test.ts|*/api-usage.test.ts)
+        return 1
+        ;;
+    esac
+  fi
 
   case "$path" in
     *.test.js|*.test.jsx|*.test.ts|*.test.tsx|*_test.js|*_test.jsx|*_test.ts|*_test.tsx|*.spec.js|*.spec.jsx|*.spec.ts|*.spec.tsx|*_spec.js|*_spec.jsx|*_spec.ts|*_spec.tsx)
@@ -186,7 +195,7 @@ if (( ${#SELECTED_FILES[@]} == 0 )); then
 fi
 
 readonly TOTAL_BATCHES=$(( (${#SELECTED_FILES[@]} + BATCH_SIZE - 1) / BATCH_SIZE ))
-echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
+echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (scope ${TEST_FILE_SCOPE}, batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
 echo "Nothing here is retried. A test failure, a process timeout and a Bun runtime crash each fail this shard on their first occurrence."
 echo "A timeout or a crash is additionally swept one file per process for attribution, after the shard has already failed; that sweep cannot turn it green."
 

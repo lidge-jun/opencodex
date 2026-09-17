@@ -193,20 +193,23 @@ describe("GitHub Actions hardening", () => {
       expect(`${jobName}:${String(checkout?.with?.["fetch-tags"])}`).toBe(`${jobName}:true`);
     }
 
-    // Windows shards more finely than Linux: the same suite takes 17-25 minutes per
-    // quarter on windows-latest, which is the leg's own 25-minute ceiling (run
-    // 33934756997 cancelled a green 3/4 at 25m12s). The invariant that matters is the
-    // one above — the matrix and the divisor tile the suite exactly — so pin the
-    // Windows matrix to its own divisor rather than to Linux's, and pin it to be
-    // contiguous from 1 so a dropped entry cannot leave a slice of the suite unrun.
+    // Windows shards more finely than Linux. Six shards grew to 13-30 minutes against
+    // the 30-minute wall; nine restores margin while keeping the bound unchanged. The
+    // matrix, runner shard spec, job name and aggregate leg count must move together.
     const windowsShards = (ci.jobs?.["platform-windows"] as {
       strategy?: { matrix?: { shard?: number[] } };
     })?.strategy?.matrix?.shard ?? [];
-    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(windowsShards).toEqual(windowsShards.map((_, i) => i + 1));
-    const windowsSteps = (ci.jobs?.["platform-windows"] as { steps?: Array<{ run?: string }> })?.steps ?? [];
-    expect(windowsSteps.some(step => step.run?.includes(`--shard=\${{ matrix.shard }}/${windowsShards.length}`))).toBe(true);
+    const windowsSteps = (ci.jobs?.["platform-windows"] as {
+      steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }>;
+    })?.steps ?? [];
+    const windowsTest = windowsSteps.find(step => step.name === "Test in fresh-process batches");
+    expect(windowsTest?.env?.TEST_SHARD).toBe(`\${{ matrix.shard }}/${windowsShards.length}`);
+    expect(windowsTest?.env?.BUN_TEST_FILE_SCOPE).toBe("all");
+    expect(windowsTest?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
     expect(ci.jobs?.["platform-windows"]?.name).toBe(`windows \${{ matrix.shard }}/${windowsShards.length}`);
+    expect(workflow).toContain(`shards=${windowsShards.length}`);
 
     // The aggregate gate is the check a human trusts. Three ways to break it
     // silently: drop `if: always()` so it skips (and a skipped job reports
@@ -335,35 +338,26 @@ describe("GitHub Actions hardening", () => {
     // self-hosted workspace wipe. Without the wipe a deleted file survives on
     // the runner's disk and the suite passes against a tree that no longer
     // exists in git.
-    const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
-    // --timeout is part of the contract, not incidental: this leg ran on Bun's 5s default
-    // while Linux and macOS both pass 60000, and it is the slowest hardware on the board.
-    // Three composed-acceptance failures were that default firing on tests still working
-    // at 41s. Pin the flag so the leg cannot silently drift back to the default.
-    const windowsTestCommand = `bun test --isolate --timeout 60000 tests --shard=\${{ matrix.shard }}/${windowsShards.length}`;
-    expect(hasShellCommandHead(`echo ${windowsTestCommand}`, windowsTestCommand)).toBe(false);
-    // Binding the assertion to an executable line is only half the guarantee: a
-    // step carrying the exact command still runs nothing under `if: false`, and
-    // the suite would stay green against a Windows leg that never tests. Require
-    // the matching step to be unconditional.
-    const windowsTestSteps = winSteps.filter(step => hasShellCommandHead(step.run, windowsTestCommand));
-    expect(windowsTestSteps.length).toBeGreaterThan(0);
-    expect(windowsTestSteps.every(step => step.if === undefined)).toBe(true);
+    const winSteps = (ci.jobs?.["platform-windows"] as {
+      steps?: { if?: string; name?: string; run?: string }[];
+    })?.steps ?? [];
+    const windowsBatchStep = winSteps.find(step => step.name === "Test in fresh-process batches");
+    expect(windowsBatchStep?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
+    // A step carrying the runner still runs nothing under `if: false`; require the
+    // suite step to be unconditional.
+    expect(windowsBatchStep?.if).toBeUndefined();
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
 
-    // The crash-signature list lives in exactly one file now, and every lane sources it.
-    // ci-bun-crash-classifier.test.ts owns that contract, including the rule that no lane may
-    // reintroduce an inline copy and that a runtime crash fails the shard instead of being swept.
-    const windowsTestRun = windowsTestSteps[0]?.run ?? "";
-
-    // Windows carries the same single-attempt disposition as macOS. It is also the lane
-    // that proved why: it was the only one reporting a Bun panic honestly on both of its
-    // attempts, which is the single reason the 1.4.2 preload segfault was visible at all.
-    expect(hasExactShellCommand(windowsTestRun, "set +e")).toBe(true);
-    expect(windowsTestRun).not.toContain("for attempt in");
-    expect(windowsTestRun).not.toContain("while true");
-    expect(windowsTestRun).toContain("it fails this shard on the first occurrence");
+    // Windows now shares Linux's bounded process runner. Pin the two bounds and the
+    // 60-second per-test deadline at their executable owner, and keep retries absent.
+    const batchRunner = await readText("scripts/ci/run-bun-test-batches.sh");
+    expect(batchRunner).toContain('readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"');
+    expect(batchRunner).toContain('readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"');
+    expect(batchRunner).toContain('"$BUN_BIN" test --isolate --timeout 60000 "${files[@]}"');
+    expect(batchRunner).not.toContain("for attempt in");
+    expect(batchRunner).not.toContain("while true");
+    expect(batchRunner).toContain("fail this shard on their first occurrence");
 
     // Every job that runs the root suite must build the GUI first, unconditionally.
     // Tests that fetch the served dashboard read their session bootstrap out of

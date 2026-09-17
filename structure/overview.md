@@ -106,6 +106,12 @@ still cover the rule, which is a judgement only review makes.
   through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`.
   Enforced by `tests/test-layout.test.ts`.
 
+CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
+scope leaves the dedicated Linux storage-policy and api-usage jobs out of the general shards; the
+manual Windows matrix selects all-file scope so batching changes process size without changing
+the platform suite's file set. The workflow contract and process bounds live in
+[`ops/docs-and-release.md`](ops/docs-and-release.md#cross-platform-ci).
+
 Two invariants are stated here without a binding, and `grace.unboundInvariants` in
 [`manifest.json`](manifest.json) carries the reason for each. They are true statements about the system;
 no test in this repository currently pins them, and saying so is more useful than naming a test that

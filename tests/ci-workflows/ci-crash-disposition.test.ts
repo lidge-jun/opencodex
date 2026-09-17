@@ -16,12 +16,11 @@
  * `timeout` that reproduce a crash, a hang and an assertion failure on demand. The assertion
  * in every runner case is the process exit status, which is the only thing GitHub reads.
  *
- * The two halves have different platform reach on purpose. The classifier is portable shell, so
- * it runs wherever a POSIX shell exists. The batch runner is Linux-only CI tooling --
- * `mapfile -d ''` needs Bash 4.4 and macOS ships Bash 3.2 -- and its job is
- * `runs-on: ubuntu-latest`, so it is executed on the platform that actually runs it. That is
- * coverage matched to where the code lives rather than a platform skip that dodges a failure:
- * the Linux shards run this file on every push and every pull request.
+ * The two halves have different local harness reach on purpose. The classifier is portable shell,
+ * so it runs wherever a POSIX shell exists. The batch runner executes in Linux and Windows CI;
+ * this fake-toolchain harness stays Linux-only because it synthesizes GNU `timeout` and POSIX
+ * process statuses. The manual Windows matrix exercises the real Git-for-Windows Bash/coreutils
+ * path. That is platform evidence matched to the actual runner rather than a local emulation.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -103,6 +102,7 @@ describe.skipIf(process.platform === "win32")("the shared Bun crash classifier, 
 // stops rather than continuing to collect batches it can no longer pass.
 const FIXTURE_FILES = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
   .map(name => `${name}.test.ts`);
+const DEDICATED_FILE = "api-usage.test.ts";
 const FIRST_BATCH = FIXTURE_FILES.slice(0, 3);
 const SECOND_BATCH = FIXTURE_FILES.slice(3);
 
@@ -159,7 +159,10 @@ const FAKE_BUN = [
 
 type RunnerResult = { status: number | null; output: string; calls: string[] };
 
-function runBatches(mode: "green" | "crash" | "timeout" | "assert"): RunnerResult {
+function runBatches(
+  mode: "green" | "crash" | "timeout" | "assert",
+  fileScope: "general" | "all" = "general",
+): RunnerResult {
   const directory = mkdtempSync(join(tmpdir(), "ocx-batch-disposition-"));
   try {
     const binDirectory = join(directory, "bin");
@@ -167,6 +170,7 @@ function runBatches(mode: "green" | "crash" | "timeout" | "assert"): RunnerResul
     mkdirSync(join(directory, "tmp"));
     mkdirSync(join(directory, "tests"));
     for (const file of FIXTURE_FILES) writeFileSync(join(directory, "tests", file), "");
+    writeFileSync(join(directory, "tests", DEDICATED_FILE), "");
     writeFileSync(join(binDirectory, "timeout"), FAKE_TIMEOUT, { mode: 0o755 });
     writeFileSync(join(binDirectory, "bun"), FAKE_BUN, { mode: 0o755 });
     const calls = join(directory, "calls.log");
@@ -180,6 +184,7 @@ function runBatches(mode: "green" | "crash" | "timeout" | "assert"): RunnerResul
         TMPDIR: join(directory, "tmp"),
         CI: "true",
         BUN_TEST_BATCH_SIZE: "3",
+        BUN_TEST_FILE_SCOPE: fileScope,
         OPENCODEX_BUN_PATH: join(binDirectory, "bun"),
         FIXTURE_MODE: mode,
         FIXTURE_CALLS: calls,
@@ -208,6 +213,15 @@ describe.skipIf(process.platform !== "linux")("the Linux batch runner, executed"
     const run = runBatches("green");
     expect(`status:${run.status}`, run.output).toBe("status:0");
     expect(batchCalls(run)).toHaveLength(2);
+    expect(singletonCalls(run)).toEqual([]);
+    expect(run.calls.some(call => call.includes(DEDICATED_FILE))).toBe(false);
+  }, SPAWN_BUDGET_MS);
+
+  test("all scope preserves the dedicated families in the Windows suite", () => {
+    const run = runBatches("green", "all");
+    expect(`status:${run.status}`, run.output).toBe("status:0");
+    expect(batchCalls(run)).toHaveLength(3);
+    expect(run.calls.some(call => call.includes(DEDICATED_FILE))).toBe(true);
     expect(singletonCalls(run)).toEqual([]);
   }, SPAWN_BUDGET_MS);
 
