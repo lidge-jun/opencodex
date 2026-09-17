@@ -78,10 +78,50 @@ the tool surface so request-local aliases remain available for response restorat
 item records which tool actually ran, so re-pointing it at a same-named namespace child would
 rewrite that record on a coincidence rather than translate it.
 
+A namespaced tool is registered under every coordinate a provider might echo — `ns__name`, the
+dotted `ns.name`, and the bare `name` — but six spellings never reach a DECLARED-NAME set under
+the bare one: `exec`, `exec_command`, `shell_command`, `write_stdin`, `apply_patch`,
+`view_image` (`NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES`). A declared-name set is what decides
+nested-helper normalization, so bare `exec` from a namespace turns it on for a catalog that never
+declared the shell, and `normalizeDeclaredToolName` then rewrites an undeclared `apply_patch`
+onto it. The fence is a property of the SPELLING, not of the declaring namespace and not of why
+the alias was being added — both copies drifted once, one to `collaboration` only and one to
+`exec` only, and each drift was a live authorization widening. Every site that builds a
+declared-name set reads the one list: `buildToolBridgeMaps` for the echo and `tool_choice`
+selector paths, and `collectDeclaredWireToolNames` for the passthrough catalog.
+
+Declaration and restoration are separate, and only declaration is fenced. Passthrough rewrites an
+echoed bare name to its namespaced identity before authorizing anything
+(`authorizedBareNamespaceToolAliases`, built from `toolNsMap`), and the guard then authorizes
+`ns__name`, so a `tool_choice` that nominates one helper tool by its bare name keeps the
+`toolNsMap` entry and loses only the declaration. The echo path withholds both, because a bare
+echo is a guess rather than a nomination. The bridges check the declared set before consulting
+`toolNsMap`, so there a bare helper echo is refused either way. A genuine namespace-free
+declaration is untouched throughout: that is the caller declaring the tool, not a namespace being
+discarded to manufacture a bare name.
+
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
 web-search variant, and `defer_loading` on any declaration, which `activateDeferredTool` clears only
 for tools a `tool_search_output` already loaded. A new private bit is a row there.
+
+OpenAI-private TOP-LEVEL request keys have their own table, `CANONICAL_ONLY_TOP_LEVEL_FIELDS`, with
+the same discipline and a different scope. It currently holds `access_programs`, which Codex 0.155
+mints from ChatGPT auth alone and never from the destination URL, so loopback injection — which
+keeps Codex pointed at its built-in `openai` provider on purpose — leaves it attached wherever the
+turn is routed. A gateway that validates its top-level schema rejects the request before inference:
+Console Go answers with an unknown-parameter error naming the field, and every turn of that thread
+fails (#4853). The key is scoped by DESTINATION rather than by the canonical surface, because
+`src/server/responses/compact.ts` spreads the caller's raw body into the native
+`/responses/compact` request without passing through this adapter, and that endpoint is offered
+only to OpenAI-operated destinations; stripping on the canonical predicate would make
+`openai-apikey` behave differently on its two endpoints.
+
+This table is not an unknown-parameter sanitizer, and the distinction is the point. It lists keys a
+client is observed to send, so an unrecognized top-level key reaches the wire untouched rather than
+being deleted on the theory that the destination would have rejected it. `codex_output_schema` is
+deliberately absent for that reason: in codex-rs it is the `name` of the JSON-schema `text.format`
+object, not a top-level key, so listing it would remove a field this client never sends.
 
 After that namespace boundary has produced public function tools, the Grok CLI Responses transport
 applies the same root-schema policy as its Chat transport. A root `oneOf`/`anyOf` is flattened only
@@ -626,9 +666,11 @@ request-log accounting without promoting a truncated repair candidate.
 Chat Completions streams do not carry the Responses `message.phase` field. The bridge keeps an
 unphased live message provisional while its deltas arrive, then assigns `commentary` when a later
 tool, search, reasoning, or assistant boundary proves that more work follows, and assigns
-`final_answer` only when a clean terminal `done` closes the current message. Explicit adapter
-phases always win. Streaming `output_item.added` remains unphased until that future boundary is
-known; `output_item.done` and the terminal response snapshot carry the authoritative inferred phase
+`final_answer` when a terminal `done` closes the current message unless the shared stop-reason
+classifier marks that reason as truncated. Normal provider reasons such as `end_turn`,
+`stop_sequence`, and `tool_use` therefore remain final answers, as does an absent reason. Explicit
+adapter phases always win. Streaming `output_item.added` remains unphased until that future boundary
+is known; `output_item.done` and the terminal response snapshot carry the authoritative inferred phase
 with the same item id. The batch/non-streaming bridge follows the same rule.
 
 > Decision record: [ADR-0069](../decisions/ADR-0069-chat-to-responses-message-phase-inference.md)
@@ -966,8 +1008,7 @@ both are non-replayable, but only one is ours to restate.
 Because the refusal now carries 429, a 429 is no longer sufficient evidence of a provider
 rate limit. Every same-target replay, key rotation, account rotation and pool-quota recorder
 that keys on 429 first asks `isNonReplayableResponse`:
-`src/server/responses/adapter-dispatch.ts` (at the top of its recovery loop, which also
-covers a reset reached by a 401/429/413 refetch), `src/server/responses/adapter-continuation.ts`,
+`src/server/responses/adapter-dispatch.ts`, `src/server/responses/adapter-continuation.ts`,
 `src/server/responses/passthrough-dispatch.ts`, `src/server/responses/compact.ts` and
 `src/server/chat-native.ts`. Compact additionally records the transport outcome rather than
 the client-facing status, so pool health sees exactly what it saw before the correction.
@@ -975,6 +1016,33 @@ Rotating on a synthetic 429 would both re-send an inference that may already hav
 write a cooldown against a credential that refused nothing — a false signal that outlives the
 request, which is the same hazard `rotateRunTurnAdapterOnPreflight429` already guards for the
 send budget.
+
+In `adapter-dispatch.ts` the guard at the top of the recovery loop is necessary and was not
+sufficient. The refusal can also be produced by a refetch made INSIDE an arm, and that arm
+then still holds it: the same-target loop re-enters while `rateLimitRetries` is below the
+configured attempts, and the key, Anthropic-pool and generic-OAuth rotations re-enter while a
+credential is left to try. The key-401 arm is in the same class from the other direction — its
+refetch answers 429 and it falls through into the arms below. So every arm that reassigns
+`upstreamResponse` from `rebuildAndRefetch` re-enters the loop guard rather than continuing,
+which is what makes the top-of-loop check the single exit for this verdict.
+
+**A refusal this proxy made never acquires a `Retry-After` and never becomes quota evidence.**
+Guarding the ten call sites that READ 429 as a rate limit left the sites that WRITE evidence,
+synthesize a wait, or re-classify the status on the way out. `isNonReplayableResponse` is the
+wrong question for those, because it also covers the WebSocket post-send verdicts, which are
+genuine upstream observations; the question is whether any upstream produced this status at
+all. `isReplayRefusalResponse` in `src/lib/upstream-retry.ts` answers exactly that, applied
+where the refusal is synthesized and reapplied by `src/bridge/errors.ts` when the formatter
+re-wraps it after combo failure consumption. Three writers consult it or the code:
+`src/server/responses/passthrough-delivery.ts` skips `recordCodexUpstreamOutcome`, which would
+otherwise classify the synthetic 429 as quota exhaustion and cool the account;
+`src/server/responses/passthrough-error.ts` suppresses the retryable-429 default and drops any
+inherited header, taking provenance from the caller that still holds the response and falling
+back to the code in the body — provenance is not optional there, because the bounded read
+answers with an empty string for anything not display-safe and an empty body is exactly what
+the default fires on; and `src/server/chat-native.ts` restores the code its own classifier overwrote —
+429 maps to `rate_limit_error`, which already carries a code, so the branch that copies an
+upstream code could never reach it — and suppresses the same synthetic wait.
 
 The existing provider HTTP-status policy and the shared physical-send budget remain
 independent: zero refuses dispatch, invalid counts fail, and a stopped send is counted once.
@@ -985,7 +1053,12 @@ client back a retryable status. Other upstream codes keep the existing classific
 cyber-policy hard blocks retain precedence. The helper, formatter and public Responses count
 regressions live in `tests/lib/upstream-retry.test.ts`,
 `tests/responses/responses-send-budget-counts.test.ts` and
-`tests/codex-integration/reserve-dispatch.test.ts`.
+`tests/codex-integration/reserve-dispatch.test.ts`. The three write-side paths are pinned
+separately: a second armed same-target attempt in
+`tests/responses/responses-send-budget-counts.test.ts`, the absent cooldown and absent
+`Retry-After` on a Codex pool account in `tests/responses/responses-account-label.test.ts`,
+the formatter in `tests/server/retry-after-429.test.ts`, and the native Chat classification in
+`tests/providers/upstream-transient-retry.test.ts`.
 
 ## Combo output headroom
 

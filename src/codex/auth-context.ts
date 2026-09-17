@@ -97,6 +97,44 @@ function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
 }
 
 /**
+ * Whether a request carrying its OWN main credential still serves on main because the operator
+ * manually pinned it (#3166), split from the surrounding resolution so request preview can ask
+ * the identical question (#4850).
+ *
+ * Exported for exactly one reason: two copies of this fence is how #4850 happened. Final
+ * authentication honoured the ownership boundary while request preview, computing its fence from
+ * recovery and drain state alone, still handed pool eligibility the default liveness probe and
+ * opened the physical `auth.json` twice per spawn. A predicate one caller can forget is a
+ * predicate the other caller will eventually disagree with.
+ *
+ * Read-free by construction, which is what makes it usable on the fenced side. Every input is
+ * config, policy, or in-memory runtime state: the pin fields, the paused list, the cached quota
+ * score, and `callerMatchesObservedMain`, which compares HMAC digests against the observed
+ * credential record in `main-account-cache.ts`. Nothing here opens a file.
+ *
+ * `candidate` is the pin before the hard-lock question, because the caller still owes the
+ * pending-binding check that only final authentication can fail closed on.
+ */
+export function requestOwnedMainPinState(
+  headers: Headers,
+  config: OcxConfig,
+  policy: CodexAuthPolicyConfig,
+  requestScopedMainCredential: boolean,
+  fixedAccountId: string | undefined,
+): { candidate: boolean; preserve: boolean } {
+  const candidate = requestScopedMainCredential
+    && fixedAccountId === undefined
+    && config.activeCodexAccountPinned === MAIN_CODEX_ACCOUNT_ID
+    && isEffectiveCodexAccountPinned(config)
+    && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
+    && requestOwnedMainPinHasQuotaHeadroom(config);
+  return {
+    candidate,
+    preserve: candidate && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy)),
+  };
+}
+
+/**
  * Every thread keys as ITSELF, never as its parent (#4546, wp8).
  *
  * The old rule preferred `x-codex-parent-thread-id`, so every child of one parent bound under
@@ -816,19 +854,15 @@ export async function resolveCodexAuthContext(
     throw new CodexReserveUnavailableError();
   }
   const fixedAccountId = reserve ? MAIN_CODEX_ACCOUNT_ID : options.accountId;
-  const requestOwnedMainPinCandidate = requestScopedMainCredential
-    && fixedAccountId === undefined
-    && config.activeCodexAccountPinned === MAIN_CODEX_ACCOUNT_ID
-    && isEffectiveCodexAccountPinned(config)
-    && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
-    && requestOwnedMainPinHasQuotaHeadroom(config);
+  const {
+    candidate: requestOwnedMainPinCandidate,
+    preserve: preserveRequestOwnedMainPin,
+  } = requestOwnedMainPinState(headers, config, policy, requestScopedMainCredential, fixedAccountId);
   // During an owned startup, equality cannot be established until recovery and the
   // memory-only policy binding finish. This read-only fence never probes a foreign home.
   if (policy.codexMainAccountHardLock === true && requestOwnedMainPinCandidate && isMainAccountPolicyBindingPending()) {
     throw new CodexMainProfileDrainingError();
   }
-  const preserveRequestOwnedMainPin = requestOwnedMainPinCandidate
-    && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy));
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
   }
@@ -989,7 +1023,18 @@ export async function resolveCodexAuthContext(
     // already gathered -- no upstream fetch joins the request path for the most commonly
     // requested models in the product -- and passed to selection as a preference that is dropped
     // whenever honouring it would leave no candidate.
-    const deniedModelAccountIds = cachedDeniedCodexAccountIdsForModel(options.modelId);
+    //
+    // Under the SAME exclusion the entitlement snapshot above uses. The reader validates each
+    // cached roster against the account's current credential, and for native main that is a
+    // synchronous read of the physical stored token -- exactly what this request is forbidden to
+    // touch while a profile switch drains it or while it is served by a request-owned credential.
+    // Excluding main here costs nothing: the preference is an ordering hint, so main becomes
+    // unknown rather than denied, and unknown leaves selection exactly as it was.
+    const deniedModelAccountIds = cachedDeniedCodexAccountIdsForModel(
+      options.modelId,
+      undefined,
+      { excludeAccountIds },
+    );
     const selectionOptions = {
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.

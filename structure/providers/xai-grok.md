@@ -5,6 +5,12 @@ Native steering follows [the shared WebSocket contract](../transports/streaming-
 xAI uses the same shared credential and delivery policies through the Responses
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
+One Responses capability is seeded for xAI alone: `requiresPairedResponsesToolResults`, which
+answers a replayed tool call whose output never arrived. It is deliberately not the same flag as
+`requiresAdjacentResponsesToolResults`, which xAI also carries and shares with the Kimi presets.
+The contract for both, and the reason they do not collapse into one, is specified in
+[chat-compat](./chat-compat.md); it is not restated here.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 

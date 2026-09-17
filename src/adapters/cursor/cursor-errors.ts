@@ -46,6 +46,21 @@ export class CursorStreamTruncatedError extends Error {
   }
 }
 
+export const CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX =
+  "Cursor stream ended with incomplete tool call(s):";
+
+/**
+ * True when Cursor ended the stream with a client tool still open. The adapter fail-closes
+ * the current turn (no partial `tool_call_start`) and remints the conversation afterwards
+ * so the next turn does not resume a session left waiting for `mcpResult`.
+ */
+export function isCursorIncompleteToolCallMessage(value: unknown): boolean {
+  const message = typeof value === "string" ? value : errorMessage(value);
+  const lower = message.toLowerCase();
+  return lower.includes(CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX.toLowerCase())
+    || lower.includes("tool call(s) left incomplete");
+}
+
 /**
  * A cancel-shaped stream failure that WE did not request. `cancelCursorRun` is the only place
  * that cancels our own stream, and it sets `expectedClose` first, so a cancel arriving without it

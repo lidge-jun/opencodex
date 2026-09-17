@@ -76,6 +76,22 @@ export function setHistoryDbBusyTimeoutForTests(ms: number): void {
   historyDbBusyTimeoutMs = ms;
 }
 
+/**
+ * Carry that timeout across a realm boundary. A Worker starts from the default above and cannot
+ * observe a parent that shortened the window — the same reason its run message carries the homes
+ * explicitly — so `history-job.ts` sends this value and `history-worker.ts` adopts it. In
+ * production both sides already hold the codex-rs-matching 5s. A non-finite or negative value is
+ * refused rather than allowed to disable the wait the app expects.
+ */
+export function currentHistoryDbBusyTimeoutMs(): number {
+  return historyDbBusyTimeoutMs;
+}
+
+export function adoptHistoryDbBusyTimeout(ms: number): void {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  historyDbBusyTimeoutMs = Math.floor(ms);
+}
+
 function openStateDb(stateDbPath: string): Database {
   const db = new Database(stateDbPath);
   try {
@@ -311,6 +327,19 @@ class CodexHistoryIntegrityError extends Error {
  * O_APPEND does not allocate an ordinal or update that writer's in-memory cursor.
  * Refuse before changing the DB, manifest, or first-line provider; never guess N+1.
  */
+/**
+ * The one refusal reason that means "the native writer owns this history", as opposed
+ * to "something is wrong". It is a stand-down for the relabel unit on apply
+ * (`src/codex/inject.ts`) and for the history half of a restore; every other reason is
+ * a hard refusal in both directions.
+ *
+ * Exported as a constant rather than repeated as a literal because the apply and restore
+ * directions have to agree on it exactly. They drifted once already: apply learned to
+ * stand down while restore kept refusing, which is how #4812's uninstall deadlock
+ * survived the fix that was supposed to end it.
+ */
+export const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
+
 function assertLegacyHistoryRecord(line: string): void {
   let value: unknown;
   try { value = JSON.parse(line); } catch { throw new CodexHistoryIntegrityError("history_rollout_record_invalid"); }
@@ -320,7 +349,7 @@ function assertLegacyHistoryRecord(line: string): void {
   const record = value as Record<string, unknown>;
   const payload = record.payload;
   if (Object.hasOwn(record, "ordinal") || (payload !== null && typeof payload === "object" && (payload as Record<string, unknown>).history_mode === "paginated")) {
-    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+    throw new CodexHistoryIntegrityError(HISTORY_RELABEL_STANDS_DOWN);
   }
 }
 
@@ -381,7 +410,7 @@ function assertLegacyHistoryWritable(path: string, heldFd?: number): void {
 function assertLegacyHistoryStore(db: Database): void {
   const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
   if (columns.some(column => column.name === "history_mode")) {
-    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+    throw new CodexHistoryIntegrityError(HISTORY_RELABEL_STANDS_DOWN);
   }
 }
 
@@ -407,7 +436,7 @@ export function preflightCodexHistoryInjection(
     db = new Database(resolvedPath, { readonly: true });
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
     const paginatedColumn = columns.some(column => column.name === "history_mode");
-    if (paginatedColumn && restoreEntries.length > 0) return "history_paginated_requires_native_writer";
+    if (paginatedColumn && restoreEntries.length > 0) return HISTORY_RELABEL_STANDS_DOWN;
     for (const entry of restoreEntries) assertLegacyHistoryWritable(entry.rolloutPath);
     const rows = db.query<{ rollout_path: string; history_mode: string | null }, []>(`
       SELECT rollout_path, ${paginatedColumn ? "history_mode" : "NULL AS history_mode"}
@@ -417,7 +446,7 @@ export function preflightCodexHistoryInjection(
         : "model_provider = 'opencodex'"}
     `).all();
     for (const row of rows) {
-      if (paginatedColumn || row.history_mode === "paginated") return "history_paginated_requires_native_writer";
+      if (paginatedColumn || row.history_mode === "paginated") return HISTORY_RELABEL_STANDS_DOWN;
       assertLegacyHistoryWritable(row.rollout_path);
     }
     return null;

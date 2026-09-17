@@ -147,9 +147,28 @@ That pass is gated by `requiresAdjacentResponsesToolResults`, not by provider na
 Responses endpoint enforces the same strict shape and rejects a hook-split pair with HTTP 400 (#4726),
 so `kimi` and `kimi-code` carry the flag as well. The flag is inert while those presets use the Chat
 wire and takes effect when a row is configured onto `openai-responses`, which is the configuration the
-report exercised. No upstream specification documents the requirement; the evidence is the observed
+report exercised. xAI Grok 4.6/4.5 subscription Responses carries the same flag: after a mid-stream
+interrupt, Codex can replay a `function_call` with hook-injected developer context between it and
+its output, and later turns 400. The adjacency pass itself still does not invent duplicate or
+backwards pairs. No upstream specification documents the adjacency requirement; the evidence is the observed
 400 and DeepSeek's identical failure shape, which is why this stays a per-provider capability rather
 than a wire-wide default — upstream Codex leaves an intervening developer message where it is.
+
+A mid-stream interrupt produces a second, different shape: a call whose output never arrived at all.
+That is `requiresPairedResponsesToolResults`, a separate capability, and the separation is the whole
+point. Adjacency reorders items the upstream would accept in some order; pairing synthesizes an item
+the client never sent, which puts a tool turn into the conversation that did not happen. The evidence
+differs too — #4726 shows Kimi accepting a call with no result at all, so `kimi` and `kimi-code` keep
+adjacency and do not receive placeholders. `xai` carries both. `statelessResponses` implies pairing,
+which is how DeepSeek already had it: an upstream that stores nothing cannot resolve the missing half
+from its own history either.
+
+xAI's public Responses API is stateful (`store` defaults true; `previous_response_id` continues a
+stored conversation), so the provider is not marked `statelessResponses`. The pairing repair
+synthesizes an honest unknown-status placeholder without touching `store` or
+`previous_response_id`: repairing an interrupted history must not cost the thread its server-side
+state. Forward auth suppresses the synthesis regardless of the flag, because the backend that holds
+the conversation can resolve the pair itself.
 
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
 
@@ -357,7 +376,7 @@ real image blocks rather than flattening them to the text `[image]`, and orders 
 blocks chronologically — history before current — so attachment order matches the
 prose the model reads beside them. Vendor tool execution stays disabled on both
 adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
-container followed by a `functions.*` invoke control line in either output channel; it
+container followed by a named bare or namespaced invoke control line in either output channel; it
 preserves preceding answer text, never promotes vendor prose into execution authority,
 and leaves discussed or quoted literals and code examples untouched. Qoder's explicit
 refusal of original images is unchanged.

@@ -913,6 +913,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   commandCodeVersion: "editor",
   statelessResponses: "editor",
   requiresAdjacentResponsesToolResults: "editor",
+  requiresPairedResponsesToolResults: "editor",
   annotateEmptyToolOutputs: "editor",
   supportsServiceTier: "editor",
   modelSupportsServiceTier: "editor",
