@@ -220,9 +220,13 @@ describe.skipIf(process.platform !== "linux")("the Linux batch runner, executed"
   test("all scope preserves the dedicated families in the Windows suite", () => {
     const run = runBatches("green", "all");
     expect(`status:${run.status}`, run.output).toBe("status:0");
-    expect(batchCalls(run)).toHaveLength(3);
+    // Seven files at batch size three produce two full primary batches and one
+    // one-file primary batch. `singletonCalls` deliberately classifies by file
+    // count for the failure fixtures below, so it cannot distinguish that final
+    // primary batch from attribution. Assert the complete green call sequence.
+    expect(run.calls.map(call => Number(call.split("|", 1)[0]))).toEqual([3, 3, 1]);
+    expect(run.output).toContain("7 files in 3 primary Bun processes (scope all");
     expect(run.calls.some(call => call.includes(DEDICATED_FILE))).toBe(true);
-    expect(singletonCalls(run)).toEqual([]);
   }, SPAWN_BUDGET_MS);
 
   test("a runtime crash fails the shard even though every file passes alone", () => {
