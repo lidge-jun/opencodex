@@ -67,9 +67,9 @@ describe("SSE payload rewrite composition", () => {
     expect(replaceSseDataPayload(block, '{"text":"changed"}')).toBe(
       ["event: update", 'data: {"text":"changed"}', "database: unchanged"].join(newline),
     );
-   expect(sseDataPayload("data")).toBe("");
-   expect(sseDataPayload("database")).toBeNull();
- });
+    expect(sseDataPayload("data")).toBe("");
+    expect(sseDataPayload("database")).toBeNull();
+  });
 
   test("sseDataPayload handles complex multiline, colonless data, and boundary cases", () => {
     // No data lines
