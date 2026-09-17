@@ -2065,5 +2065,43 @@ describe("3-state multi-agent mode", () => {
     // gpt-5.5 has no upstream pin — cleared (codex flag decides)
     expect(native.multi_agent_version).toBeUndefined();
   });
+
+  test("mode default prefers pristine-baseline pins over the bundled snapshot", () => {
+    // The installed pristine backup is authoritative for the rows it contains: a
+    // baseline pin wins even when the bundled snapshot pins a different value, and
+    // a baseline row with no pin still gets stale forced-stamp cleanup.
+    const diskSol = { ...template(), slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", multi_agent_version: "v2" };
+    const diskLuna = { ...template(), slug: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", multi_agent_version: "v2" };
+    const diskNative = { ...template(), slug: "gpt-5.5", display_name: "gpt-5.5", multi_agent_version: "v2" };
+    const merged = mergeCatalogEntriesForSync(
+      [diskSol as never, diskLuna as never, diskNative as never],
+      [], new Map(), [], false, new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [], new Set(), new Set(), undefined, false,
+      new Map<string, string | null>([
+        ["gpt-5.6-sol", "v1"],
+        ["gpt-5.6-luna", "v1"],
+        ["gpt-5.5", null],
+      ]),
+    );
+    // Baseline says v1 — applied instead of the bundled snapshot's v2 pin.
+    expect(merged.find(e => e.slug === "gpt-5.6-sol")?.multi_agent_version).toBe("v1");
+    expect(merged.find(e => e.slug === "gpt-5.6-luna")?.multi_agent_version).toBe("v1");
+    // Baseline contains the row with no pin — stale forced stamp is cleared.
+    expect(merged.find(e => e.slug === "gpt-5.5")?.multi_agent_version).toBeUndefined();
+  });
+
+  test("mode default preserves pins on live native rows outside the pristine baseline", () => {
+    // A preserved on-disk row the pristine backup never contained may carry a
+    // user- or provider-preserved pin newer than our bundled snapshot. It was not
+    // stamped by us, so default mode must not delete it.
+    const liveNative = { ...template(), slug: "custom-native", display_name: "Custom Native", multi_agent_version: "v2" };
+    const merged = mergeCatalogEntriesForSync(
+      [liveNative as never],
+      [], new Map(), [], false, new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [], new Set(), new Set(), undefined, false,
+      new Map([["gpt-5.6-sol", "v2"]]),
+    );
+    expect(merged.find(e => e.slug === "custom-native")?.multi_agent_version).toBe("v2");
+  });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";

@@ -36,6 +36,7 @@ import {
   catalogHasRoutedEntries,
   findSupportedNativeTemplate,
   legacyCatalogBackupPath,
+  nativeMultiAgentDefaults,
   parseCatalogJson,
   type RawCatalog,
   type RawEntry,
@@ -373,6 +374,7 @@ function prepareCatalog(
     suppressedBareNativeSlugs,
     openaiContextCap,
     nativeDisplayNames: config.providers[OPENAI_CODEX_PROVIDER_ID]?.modelDisplayNames,
+    nativeMultiAgentDefaults: nativeMultiAgentDefaults(baselineCatalogModels),
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],

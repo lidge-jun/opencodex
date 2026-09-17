@@ -627,6 +627,14 @@ export interface MultiAgentModeOptions {
    * so they can still spawn Grok/Claude — ChatGPT encrypts v2 NEW_TASK bodies.
    */
   keepNativeChatGptOnV1?: boolean;
+  /**
+   * Pristine installed-catalog pins keyed by bare native slug. When provided, the
+   * backup — not the bundled snapshot — is authoritative for the rows it contains,
+   * and a preserved live/native row outside it keeps the pin it already carries:
+   * an absent baseline entry cannot distinguish a stale forced stamp from a
+   * legitimate user- or provider-preserved pin, so the non-destructive read wins.
+   */
+  nativeDefaults?: ReadonlyMap<string, string | null>;
 }
 
 /** Catalog rows that run on the ChatGPT backend (encrypt v2 child tasks). */
@@ -707,13 +715,25 @@ export function applyMultiAgentMode(
         && hasNativeOpenAiCapabilityMetadata(routedNativeSlug)
         ? routedNativeSlug
         : undefined;
+      const nativeLookupSlug = trustedAccountBoundNativeCatalogSlug(entry) ?? slug;
+      const hasNativeDefault = !nativeAlias
+        && codexForwardCapabilityAlias === undefined
+        && options.nativeDefaults?.has(nativeLookupSlug) === true;
       const upstreamPin = nativeAlias
         ? nativeMultiAgentVersion(slug)
         : codexForwardCapabilityAlias
           ? nativeMultiAgentVersion(codexForwardCapabilityAlias)
-          : UPSTREAM_NATIVE_ENTRIES.get(trustedAccountBoundNativeCatalogSlug(entry) ?? slug)?.multi_agent_version;
+          : hasNativeDefault
+            ? options.nativeDefaults?.get(nativeLookupSlug)
+            : UPSTREAM_NATIVE_ENTRIES.get(nativeLookupSlug)?.multi_agent_version;
       if (typeof upstreamPin === "string") {
         entry.multi_agent_version = upstreamPin;
+      } else if (options.nativeDefaults !== undefined
+        && !nativeAlias
+        && codexForwardCapabilityAlias === undefined
+        && !hasNativeDefault
+        && typeof entry.multi_agent_version === "string") {
+        continue;
       } else if (v2FeatureEnabled) {
         entry.multi_agent_version = "v2";
       } else {
@@ -885,6 +905,22 @@ export function readNativeBaseline(catalogPath: string): Map<string, number> {
     if (typeof e.slug === "string" && !e.slug.includes("/") && typeof e.priority === "number") {
       out.set(e.slug, e.priority);
     }
+  }
+  return out;
+}
+
+/**
+ * Extract the pristine baseline's per-slug multi-agent pins. A bare native row that
+ * carried no pin maps to null so "baseline says unpinned" stays distinguishable
+ * from "baseline never contained this row".
+ */
+export function nativeMultiAgentDefaults(
+  models: readonly Readonly<Record<string, unknown>>[] | null | undefined,
+): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  for (const entry of models ?? []) {
+    if (typeof entry.slug !== "string" || entry.slug.includes("/")) continue;
+    out.set(entry.slug, typeof entry.multi_agent_version === "string" ? entry.multi_agent_version : null);
   }
   return out;
 }

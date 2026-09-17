@@ -33,6 +33,7 @@ import {
   readCodexCatalogPath,
   readCodexCatalogPathForHome,
   readNativeBaseline,
+  nativeMultiAgentDefaults,
 } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import {
@@ -443,6 +444,7 @@ function writeRetainedCatalogSync({
   // like `gpt-5.5`; those must not delete the native OpenAI/Codex base row.
   const baselineCatalog = readCatalogBackup(catalogPath);
   const baseline = readNativeBaseline(catalogPath);
+  const nativePinBaseline = nativeMultiAgentDefaults(baselineCatalog?.models);
   const gatheredProviderNames = new Set(
     Object.entries(config.providers ?? {})
       .filter(([, prov]) => prov.disabled !== true)
@@ -514,6 +516,7 @@ function writeRetainedCatalogSync({
     suppressedBareNativeSlugs,
     openaiContextCap,
     nativeDisplayNames: config.providers[OPENAI_CODEX_PROVIDER_ID]?.modelDisplayNames,
+    nativeMultiAgentDefaults: nativePinBaseline,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],
