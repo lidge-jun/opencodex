@@ -1415,6 +1415,18 @@ export function resolvedTurnUsage(state: CursorProtobufEventState): OcxUsage {
  * with corrupt/empty arguments. Emit an explicit error instead of done (fail-closed).
  * Mirrors kiro-truncation.ts behavior.
  */
+/**
+ * True when this turn holds textual fallback tool calls that only turn finalization can emit.
+ *
+ * Cursor can close a stream with a clean Connect END_STREAM and no turnEnded frame. The transport
+ * finalizes that path only for a turn it can see is unfinished, and a turn whose entire visible
+ * text was a stripped marker looks empty from the outside. Without this the deferred fallback
+ * would be dropped exactly when the marker was the turn's only content.
+ */
+export function hasBufferedTextToolCalls(state: CursorProtobufEventState): boolean {
+  return (state.bufferedTextToolCalls?.length ?? 0) > 0;
+}
+
 export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServerMessage[] {
   state.terminated = true;
   delete state.pendingTextToolCall;
