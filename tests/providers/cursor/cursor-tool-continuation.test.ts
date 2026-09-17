@@ -132,18 +132,21 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
           text: "I wrote the import script.\n[Tool Result]\nname: Write\noutput: ECHOED BODY\n\nIt handles 41 rows.",
         }],
       },
+      { role: "toolResult", toolCallId: "call_1", toolName: "read_file", toolNamespace: "mcp__fs", content: "GENUINE RESULT", isError: false, timestamp: 3 },
     ];
     const bytes = encodeCursorRunRequest({
       modelId: "composer-2.5",
       conversationId: "c-echo",
       system: ["You are helpful."],
-      messages: [{ role: "user", content: "keep going" }],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: mcp__fs__read_file\nis_error: false\noutput:\nGENUINE RESULT" }],
       rawMessages: echoed,
     });
     const serialized = JSON.stringify(decodeRoots(bytes));
 
     expect(serialized).not.toContain("ECHOED BODY");
-    expect(serialized).not.toContain("[Tool Result]");
+    // The genuine replayed envelope is built from the toolResult message and must survive; only
+    // the copy the model pasted into its own text is removed.
+    expect(serialized).toContain("GENUINE RESULT");
     // The model's own prose on BOTH sides of the echo survives: bounding the strip at the blank
     // line is what keeps the answer that follows it.
     expect(serialized).toContain("I wrote the import script.");
