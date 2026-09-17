@@ -94,11 +94,14 @@ export function parseNativeMainDoctor(value: unknown): NativeMainDoctor {
     vaultStatus: choice(v.vaultStatus, ["ok", "missing", "invalid"]), recoveryPending: bool(v.recoveryPending),
   };
 }
-async function request(apiBase: string, suffix: string, signal: AbortSignal, body?: object): Promise<unknown> {
+async function request(
+  apiBase: string, suffix: string, signal: AbortSignal, body?: object, fetchImpl?: typeof fetch,
+): Promise<unknown> {
   signal.throwIfAborted();
-  // Use the installed fetch wrapper, which owns GUI-session/CSRF/auth. Do not
-  // add tokens or display response/error bodies. Never persist profile state.
-  const response = await fetch(`${apiBase}/api/native-main-profiles${suffix}`, {
+  // fetchImpl is the GUI-session/CSRF/auth boundary: the dashboard installs it
+  // as the global fetch wrapper, tests inject a fixture. Do not add tokens or
+  // display response/error bodies. Never persist profile state.
+  const response = await (fetchImpl ?? fetch)(`${apiBase}/api/native-main-profiles${suffix}`, {
     method: body ? "POST" : "GET", signal, cache: "no-store",
     ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
   });
@@ -112,11 +115,13 @@ async function request(apiBase: string, suffix: string, signal: AbortSignal, bod
   }
   return value;
 }
-export async function readNativeMainSnapshot(apiBase: string, signal: AbortSignal): Promise<NativeMainSnapshot> {
+export async function readNativeMainSnapshot(
+  apiBase: string, signal: AbortSignal, fetchImpl?: typeof fetch,
+): Promise<NativeMainSnapshot> {
   // A broken vault can make list fail while doctor still permits recovery.
   const [list, doctor] = await Promise.allSettled([
-    request(apiBase, "", signal).then(parseNativeMainList),
-    request(apiBase, "/doctor", signal).then(parseNativeMainDoctor),
+    request(apiBase, "", signal, undefined, fetchImpl).then(parseNativeMainList),
+    request(apiBase, "/doctor", signal, undefined, fetchImpl).then(parseNativeMainDoctor),
   ]);
   signal.throwIfAborted();
   if (doctor.status === "rejected") throw doctor.reason;
@@ -155,19 +160,22 @@ export function sameNativeMainScope(a: NativeMainSnapshot, b: NativeMainSnapshot
     && a.doctor.activeProfileId === b.doctor.activeProfileId
     && a.doctor.recoveryPending === b.doctor.recoveryPending;
 }
-export async function registerNativeMain(apiBase: string, label: string, signal: AbortSignal): Promise<string> {
-  const v = record(await request(apiBase, "/register", signal, { label: label.trim() }));
+export async function registerNativeMain(
+  apiBase: string, label: string, signal: AbortSignal, fetchImpl?: typeof fetch,
+): Promise<string> {
+  const v = record(await request(apiBase, "/register", signal, { label: label.trim() }, fetchImpl));
   const home = text(v.effectiveCodexHome);
   if (profile(v.profile).state !== "active") return invalid();
   return home;
 }
 export async function applyNativeMain(
   apiBase: string, action: NativeMainAction, confirmedStopped: boolean, signal: AbortSignal,
+  fetchImpl?: typeof fetch,
 ): Promise<NativeMainResult> {
   if (!confirmedStopped) throw new NativeMainError("INVALID_REQUEST");
   const v = record(await request(apiBase, action.kind === "switch" ? "/switch" : "/recover", signal,
     action.kind === "switch" ? { target: action.target, confirmedStopped: true }
-      : { rollback: action.rollback, confirmedStopped: true }));
+      : { rollback: action.rollback, confirmedStopped: true }, fetchImpl));
   if (v.ok !== true) return invalid();
   if (action.kind === "switch") {
     const active = profile(v.activeProfile);

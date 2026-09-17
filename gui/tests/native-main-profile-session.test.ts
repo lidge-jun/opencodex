@@ -15,7 +15,7 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
-function fixture(accountRefreshTimeoutMs?: number) {
+function fixture(accountRefreshTimeoutMs?: number, injectFetch = false) {
   let home = "/srv/codex-fixture";
   let active = a.id;
   let recovery = false;
@@ -53,8 +53,11 @@ function fixture(accountRefreshTimeoutMs?: number) {
     }
     throw new Error("unexpected route");
   };
-  globalThis.fetch = fakeFetch as typeof fetch;
-  const session = new NativeMainProfileSession("/proxy-a", accountRefreshTimeoutMs);
+  globalThis.fetch = injectFetch
+    ? (() => { throw new Error("fixture: the session bypassed its injected fetch boundary"); }) as typeof fetch
+    : fakeFetch as typeof fetch;
+  const session = new NativeMainProfileSession("/proxy-a", accountRefreshTimeoutMs,
+    injectFetch ? fakeFetch : undefined);
   let refreshes = 0;
   let accountReadOk = true;
   let accountReadHangs = false;
@@ -320,5 +323,23 @@ describe("native-main disclosure session", () => {
     assert.equal(next.state.confirmedStopped, false);
     await next.toggle();
     assert.ok(f.calls.slice(-2).every(c => c.url.startsWith("/proxy-b/")));
+  });
+
+  test("an injected fetch carries the read and the confirmed write on one boundary", async () => {
+    const f = fixture(undefined, true);
+    await select(f); await f.session.confirm();
+    assert.deepEqual(f.posts().map(p => p.body), [{ target: b.id, confirmedStopped: true }]);
+    assert.equal(f.posts()[0].url, "/proxy-a/api/native-main-profiles/switch");
+    assert.equal(f.session.state.snapshot?.doctor.activeProfileId, b.id);
+    assert.equal(f.session.state.result, "restart");
+  });
+
+  test("an injected fetch carries registration on the same boundary", async () => {
+    const f = fixture(undefined, true);
+    await f.session.toggle();
+    f.session.setLabel("  renamed  ");
+    await f.session.register();
+    assert.deepEqual(f.posts().map(p => p.body), [{ label: "renamed" }]);
+    assert.equal(f.session.state.result, "saved");
   });
 });

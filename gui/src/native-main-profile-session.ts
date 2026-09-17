@@ -38,10 +38,12 @@ export class NativeMainProfileSession {
 
   private readonly apiBase: string;
   private readonly accountRefreshTimeoutMs: number;
+  private readonly fetchImpl: typeof fetch | undefined;
 
-  constructor(apiBase: string, accountRefreshTimeoutMs = ACCOUNT_REFRESH_TIMEOUT_MS) {
+  constructor(apiBase: string, accountRefreshTimeoutMs = ACCOUNT_REFRESH_TIMEOUT_MS, fetchImpl?: typeof fetch) {
     this.apiBase = apiBase;
     this.accountRefreshTimeoutMs = accountRefreshTimeoutMs;
+    this.fetchImpl = fetchImpl;
   }
 
   attach(listener: Listener): () => void {
@@ -117,7 +119,7 @@ export class NativeMainProfileSession {
     await this.run(async (epoch, signal) => {
       const retryAccountRead = this.state.refreshFailed;
       this.set({ error: null });
-      const snapshot = await readNativeMainSnapshot(this.apiBase, signal);
+      const snapshot = await readNativeMainSnapshot(this.apiBase, signal, this.fetchImpl);
       if (!this.current(epoch)) return;
       this.accept(snapshot);
       this.set({ refreshFailed: false });
@@ -154,7 +156,7 @@ export class NativeMainProfileSession {
     this.pending = controller;
     const timeout = setTimeout(() => controller.abort(), 20_000);
     try {
-      const snapshot = await readNativeMainSnapshot(this.apiBase, controller.signal);
+      const snapshot = await readNativeMainSnapshot(this.apiBase, controller.signal, this.fetchImpl);
       if (!this.current(epoch)) return;
       this.accept(snapshot);
     } catch {
@@ -180,7 +182,7 @@ export class NativeMainProfileSession {
       this.set({ error: null, result: this.restartRequired ? "restart" : null, refreshFailed: false });
       let dispatched = false;
       try {
-        const current = await readNativeMainSnapshot(this.apiBase, signal);
+        const current = await readNativeMainSnapshot(this.apiBase, signal, this.fetchImpl);
         signal.throwIfAborted();
         if (!this.current(epoch) || this.state.blocked) return;
         this.accept(current);
@@ -190,13 +192,13 @@ export class NativeMainProfileSession {
         }
         dispatched = true;
         if ("label" in input) {
-          const home = await registerNativeMain(this.apiBase, input.label, signal);
+          const home = await registerNativeMain(this.apiBase, input.label, signal, this.fetchImpl);
           if (!this.current(epoch)) return;
           if (home !== before.doctor.effectiveCodexHome) throw new NativeMainError("STATE_CHANGED");
           this.resultHome = home;
           this.set({ label: "", result: this.restartRequired ? "restart" : "saved" });
         } else {
-          const outcome = await applyNativeMain(this.apiBase, input.action, true, signal);
+          const outcome = await applyNativeMain(this.apiBase, input.action, true, signal, this.fetchImpl);
           if (!this.current(epoch)) return;
           if (outcome.effectiveCodexHome !== before.doctor.effectiveCodexHome) throw new NativeMainError("STATE_CHANGED");
           this.resultHome = outcome.effectiveCodexHome;
