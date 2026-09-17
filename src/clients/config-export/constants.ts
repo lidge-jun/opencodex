@@ -37,9 +37,8 @@ export const OPENCLAW_API_KEY_ENV_REF = `\${${OPENCLAW_API_KEY_ENV}}`;
 export const LOOPBACK_API_KEY_PLACEHOLDER = "opencodex-loopback";
 
 /**
- * Gajae's `apiKeyEnv` is env-name-only and fail-closed. Its sibling `apiKey`
- * falls back to treating the literal text as the token when the variable is
- * unset, which would silently ship a bogus credential — so we never emit it.
+ * Legacy name retained for existing consumers. Gajae exports now use the
+ * non-secret loopback placeholder and do not emit an environment reference.
  */
 export const GAJAE_API_KEY_ENV = "OPENCODEX_GAJAE_API_KEY";
 
