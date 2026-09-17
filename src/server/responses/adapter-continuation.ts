@@ -78,6 +78,7 @@ export function createAdapterContinuations(
     | "genericFailoverAccountId"
     | "genericFailovers"
     | "applyFailoverSnapshot"
+    | "replayOAuthCredentialSnapshot"
     | "noteRoutedAttemptSend"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
@@ -436,6 +437,22 @@ export function createAdapterContinuations(
                 resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
                 config.cacheRetention,
               );
+              bindRouteReasoningReplayScope({
+                parsed: nextParsed,
+                providerName: route.providerName,
+                provider: route.provider,
+                adapterName: transportState.activeAdapter.name,
+                oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+              });
+              // Response persistence closes over the outer parsed request; keep its owner binding in
+              // sync with the terminal-guard clone that builds the rotated continuation request.
+              bindRouteReasoningReplayScope({
+                parsed,
+                providerName: route.providerName,
+                provider: route.provider,
+                adapterName: transportState.activeAdapter.name,
+                oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+              });
               sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
               // The replay goes out on the next iteration. An adapter that owns its ladder
