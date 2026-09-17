@@ -213,6 +213,47 @@ describe("multi-account auth store", () => {
     }
   });
 
+  test("logout migrates a legacy store without retaining its credential backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(authPath, JSON.stringify({
+      xai: { access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 1000 },
+    }));
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    expect(JSON.parse(readFileSync(authPath, "utf-8"))).toEqual({});
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
+  });
+
+  test("account deletion removes an existing legacy credential backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    const legacy = {
+      xai: { access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 1000 },
+    };
+    writeFileSync(authPath, JSON.stringify(legacy));
+    writeFileSync(`${authPath}.pre-multiauth`, JSON.stringify(legacy));
+    const accountId = getAccountSet("xai")!.activeAccountId;
+
+    expect(await removeAccount("xai", accountId)).toBe(true);
+
+    expect(JSON.parse(readFileSync(authPath, "utf-8"))).toEqual({});
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
+  });
+
+  test("logout on a migrated store still removes a stale credential backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    // A backup left over from an earlier migration holds copies of removed credentials.
+    writeFileSync(`${authPath}.pre-multiauth`, JSON.stringify({ xai: { access: "stale", refresh: "stale", expires: 1 } }));
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
+  });
+
   test("legacy credential WITHOUT identity gets a deterministic account id across loads", async () => {
     // Legacy stores are re-normalized on EVERY load without being persisted, so the
     // derived id must be stable: a time-salted id would make getAccountSet and
