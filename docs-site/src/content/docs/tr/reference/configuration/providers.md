@@ -161,7 +161,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor eski boolean değeri, yalnızca daha yeni alan ayarlanmadığında `nativeLocalExec: "on"` değerine eşdeğerdir. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor yerel yürütme politikası. `off` varsayılandır; `codex-sandbox` şu anda `off` gibi kapalı olarak başarısız olur. |
 
-Sağlayıcı kaydı ve değiştirme (`POST /api/providers`), bellekteki veya diskteki yapılandırmayı değiştirmeden önce `responsesPath` ve `chatCompletionsPath` değerlerini doğrular. Aynı yol kuralları yapılandırma dosyası yüklenirken de uygulanır.
+Sağlayıcı kaydı ve değiştirme (`POST /api/providers`), bellekteki veya diskteki yapılandırmayı değiştirmeden önce `responsesPath` ve `chatCompletionsPath` değerlerini doğrular. `PATCH /api/providers?name=<provider>`, istek gövdesini kayıtlı sağlayıcıyla birleştirir; `disabled` dışındaki alanlara dokunan güncellemeler (yalnızca `requestPacing` içeren güncellemeler hariç), kaydetmeden önce birleştirilmiş sağlayıcının yollarını aynı şekilde doğrular ve geçersiz bir korunmuş yol `400` döndürüp yapılandırmayı değiştirmez. Aynı yol kuralları yapılandırma dosyası yüklenirken de uygulanır.
 
 API anahtarı sağlayıcıları değişmez bir anahtar veya bir ortam referansı
 tutabilir. OAuth sağlayıcıları `ocx login` tarafından doldurulan kimlik bilgisi

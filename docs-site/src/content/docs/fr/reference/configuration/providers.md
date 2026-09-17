@@ -155,7 +155,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `unsafeAllowNativeLocalExec?` | `boolean` | Ancien booléen de Cursor, équivalent à `nativeLocalExec: "on"` uniquement lorsque le champ plus récent n'est pas défini. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Politique d'exécution locale de Cursor. `off` est la valeur par défaut ; actuellement, `codex-sandbox` échoue de manière sûre comme `off`. |
 
-La création et le remplacement d’un fournisseur (`POST /api/providers`) valident `responsesPath` et `chatCompletionsPath` avant de modifier la configuration en mémoire ou sur disque. Les mêmes règles de chemin s’appliquent au chargement d’un fichier de configuration.
+La création et le remplacement d’un fournisseur (`POST /api/providers`) valident `responsesPath` et `chatCompletionsPath` avant de modifier la configuration en mémoire ou sur disque. `PATCH /api/providers?name=<provider>` fusionne le corps de la requête avec le fournisseur enregistré ; les mises à jour qui touchent des champs autres que `disabled` — à l’exception des mises à jour portant uniquement sur `requestPacing` — valident de la même manière les chemins du fournisseur fusionné avant l’enregistrement, et un chemin conservé invalide renvoie `400` sans modifier la configuration. Les mêmes règles de chemin s’appliquent au chargement d’un fichier de configuration.
 
 Les fournisseurs à clé API peuvent détenir une clé littérale ou une référence à une variable d'environnement. Les fournisseurs OAuth utilisent le
 magasin d'identifiants alimenté par `ocx login` ; le comportement de lancement de Claude Code avec abonnement est

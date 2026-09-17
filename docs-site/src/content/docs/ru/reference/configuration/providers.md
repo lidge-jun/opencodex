@@ -160,7 +160,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `unsafeAllowNativeLocalExec?` | `boolean` | Legacy boolean Cursor, эквивалентен `nativeLocalExec: "on"` только если новое поле не задано. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Политика local-exec для Cursor. `off` — дефолт; `codex-sandbox` сейчас ведёт себя fail-closed как `off`. |
 
-Регистрация и замена провайдера (`POST /api/providers`) проверяют `responsesPath` и `chatCompletionsPath` до изменения конфигурации в памяти или на диске. Те же правила путей применяются при загрузке файла конфигурации.
+Регистрация и замена провайдера (`POST /api/providers`) проверяют `responsesPath` и `chatCompletionsPath` до изменения конфигурации в памяти или на диске. `PATCH /api/providers?name=<provider>` объединяет тело запроса с сохранённым провайдером; обновления, затрагивающие поля помимо `disabled`, — кроме обновлений только `requestPacing` — так же проверяют пути объединённого провайдера перед сохранением, а недопустимый сохранённый путь возвращает `400` без изменения конфигурации. Те же правила путей применяются при загрузке файла конфигурации.
 
 Провайдеры с API-key могут хранить literal key или environment-reference. OAuth-провайдеры
 используют credential store, заполняемый через `ocx login`; поведение subscription-backed launcher'а
