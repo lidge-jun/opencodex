@@ -1,4 +1,4 @@
-import type { NativeSteeringChannel } from "./responses/native-steering";
+import type { NativeResponseControl } from "./responses/native-response-control";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -18,7 +18,9 @@ type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
 type ResponsesPayloadObserver = (payload: string) => void;
 
 export interface WsData {
-  nativeSteering?: NativeSteeringChannel;
+  nativeControl?: NativeResponseControl;
+  /** Content-free per-turn explanation; never a model capability assertion. */
+  nativeSteeringUnavailable?: string;
   headers?: Headers; // base inbound forward headers only; per-turn auth refresh injects current pool tokens
   /**
    * Resolved once at the handshake. Auth is handshake-time only on this path, so

@@ -402,6 +402,23 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   unconfirmed, expired and too-old-client rosters stay unknown and change nothing; a grant under any
   client version clears a denial recorded under another. Nothing refuses before dispatch, and the
   bounded alternate-account retry on an exact unsupported-model 400 remains the safety net (#4768).
+  A cached roster lives five minutes and nothing on the flagship request path refetches it, so the
+  roster alone left that evidence absent for most requests and both ordering rules became the
+  identity function — the pool then selected on quota, which is #4906. The refusal itself is
+  therefore the second source: an exact pre-stream unsupported-model 400 from a Pool account is
+  recorded per (account, model) in `src/codex/observed-model-denials.ts` and unioned into
+  `cachedDeniedCodexAccountIdsForModel`. It is confirmed, authenticated evidence, never a plan
+  name and never remaining quota. It is bounded and retained for six hours, it is outranked by any
+  confirmed roster grant for the same pair, it is cleared when that account successfully serves
+  that model, and it is discarded when the account's credential identity changes. Recording is
+  scoped to the always-visible flagships, so a 400 anywhere else cannot steer routing. Every
+  consumer treats it exactly like a roster denial, so the restore-on-empty and pin-exempt rules
+  above continue to hold and no request is refused before dispatch.
+  Detection reads the model upstream actually named rather than rebuilding the sentence from
+  `route.modelId`, because `applyCodexAccountGatedWireNormalization` rewrites Daybreak to
+  `gpt-5.6-sol` before dispatch; comparing against the route model alone never matched for the
+  one model that is still account-gated, which disabled both its alternate-account retry and its
+  same-account ladder.
   `getEligiblePoolAccounts` is not the only door, so `preferModelEntitledAccount` applies the same
   evidence to an already-active shared cursor: the replacement is drawn from the eligible list, the
   active account is returned unchanged when no entitled alternative exists, and the correction is

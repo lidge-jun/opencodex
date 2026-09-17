@@ -258,9 +258,9 @@ Provider-scoped approval reviewer settings are projected by the [catalog owner](
 ## Experimental native mid-turn steering
 
 `codexNativeSteering: true` is an independent, default-off opt-in for the client-facing
-Responses WebSocket endpoint. It requires `websockets: true`, the canonical ChatGPT forward
-route, an eligible Bun runtime, and an upstream model/execution mode that supports steering.
-HTTP fallback and translated/provider/sidecar/Combo paths do not gain steering. Plaintext V2
+Responses WebSocket endpoint. It requires `websockets: true`, a canonical ChatGPT forward
+route or explicitly opted-in canonical OpenAI API route, an eligible Bun runtime, and a
+supporting model/execution mode. HTTP fallback and translated/sidecar/Combo paths do not gain steering. Plaintext V2
 restoration is excluded because it is not a transparent native event stream.
 
 `src/server/responses/native-steering.ts` owns one downstream turn and one private physical
@@ -279,7 +279,8 @@ the saved results. Results may arrive before the pending event: completed output
 terminal output advertise the permitted call/approval IDs. Stub `name` is optional on a
 returned function output; a different supplied name is still refused. New user messages may
 accompany results, but privileged messages, unrelated IDs and duplicate results cannot. This
-initial implementation pins model/settings to the initial request. A failed steer does not
+implementation pins routing, models and tools; validated generation overrides follow the
+[continuation-setting contract](#steering-settings-public-api-and-diagnostic-probe). A failed steer does not
 cancel an explicit continuation already dispatched. Explicit continuations
 are paced and recheck the captured dispatch guard after waiting. No tools, accepted input
 or ambiguously delivered sends are automatically replayed.
@@ -310,3 +311,164 @@ compatibility certification. End-to-end live client/backend verification remains
 before promoting this experimental option to a default.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+
+## Experimental native function-result injection
+
+`codexNativeInjection` is a separate, default-off opt-in on the Responses WebSocket
+ingress. An initial request must explicitly set `multi_agent.enabled: true`. The
+canonical ChatGPT forward route remains experimental; public API injection requires
+the exact `https://api.openai.com/v1` provider, non-forward authentication and
+`upstreamWebsocket: true`. Only that public route adds `responses_multi_agent=v1`
+to the outgoing beta header. No client/model capability or subscription entitlement
+is inferred. Translated, Combo, sidecar, plaintext-restoration and HTTP-fallback
+paths cannot receive controls. The common interface lives in
+`src/server/responses/native-response-control.ts`; it shares transport ownership,
+not protocol semantics, with steering. Mode selection excludes multi-agent turns from
+steering even when injection is disabled. An explicit new turn after completion can
+select another mode through ordinary dispatch; no queued work or acceptance is invented.
+
+`src/server/responses/native-injection.ts` retains the normally selected credential
+and private socket. `src/server/responses/native-injection-protocol.ts` validates
+only string-valued developer `function_call_output` items for completed calls
+advertised by that response and lane. IDs are never global lookup keys. One physical
+injection awaits acknowledgement at a time because success carries a response ID,
+not an injection ID; further submissions remain in a bounded FIFO. Repeated call
+results, mismatched/repeated acknowledgements and unsupported shapes fail closed.
+
+A response terminal is relayed immediately, but pending acknowledgements and
+unreturned advertised calls retain the socket. Late tool results still reach that
+socket. A `response_already_completed` failure is relayed unchanged, including its
+returned input; only an explicit same-parent/lane/settings client create can supply
+those saved outputs once. The existing continuation pacing and captured dispatch
+guard run again. The proxy never reruns tools, invents acceptance, switches accounts
+or automatically creates a recovery response. Unknown delivery terminates without
+HTTP fallback or replay. The client decides how to recover other failures.
+
+`src/server/responses/native-injection-replay.ts` commits accepted outputs only,
+after all acknowledgements settle, inserting results after their owning calls and
+preserving the original non-persistable-body policy. Failed inputs do not enter
+continuation history. The existing numeric usage observer excludes inject events,
+including echoed failed tool outputs, from log samples. All private bodies and
+timers are disposed on teardown.
+
+Limits: 32 pending submissions including the on-wire frame, 8 MiB queued frame
+bytes, 1,024 function identities / 256 KiB identity bytes, 128 response IDs and a
+32 MiB replay journal. An on-wire injection has an absolute 90-second acknowledgement
+deadline independent of incoming output; saved-tool-result waits use 30 minutes.
+Existing socket/SSE frame limits and the active-response stall deadline also apply.
+`tests/responses/ws-native-injection.test.ts` exercises the real handler, captured
+auth, dispatch, relay, replay and synthetic failure paths. It is not live backend
+or Codex App/CLI compatibility certification.
+
+
+### Rich saved-result continuations and server-owned output
+
+`src/server/responses/native-tool-results.ts` validates the wider **continuation**
+contract: function/custom results accept strings or bounded arrays of `input_text`,
+`input_image` and `input_file`; MCP approval responses require an explicit boolean.
+Absent and explicit direct callers compare alike; program callers must match the
+server-advertised origin. Call and approval namespaces are distinct. Type, call,
+item, caller and agent provenance remain bound to this connection. Hosted calls
+never advertise client-owned result slots. References are forwarded, not fetched,
+uploaded, interpreted as local paths, flattened or split into separate requests.
+Result contents compare structurally with array order preserved. The parser
+allows documented detail/cache-breakpoint fields; unknown shapes are refused.
+
+Only an explicit same-parent/lane/settings `response.create` after the terminal
+can return all remaining saved results and approval decisions, once. An early
+same-parent create cannot cancel into normal dispatch. Missing decisions never
+become approval; rejected and accepted results remain distinguishable. Rich,
+custom and approval **inject** frames still fail before physical send: a general
+Responses input shape is not evidence that a beta injection operation accepts it.
+The existing count, byte, acknowledgement and account-ownership limits remain.
+
+`src/server/responses/native-response-output.ts` reconciles completed wire items
+with sparse terminal output without losing hosted calls, their results, encrypted
+agent messages or provenance. Shared IDs must preserve content and relative order;
+a contradiction fails rather than silently choosing one transcript. Continuation
+bodies are copied before retention; accepted results alone enter replay history.
+The wire relay does not synthesize or modify server-owned events or approvals.
+`tests/responses/ws-native-result-continuations.test.ts` covers those contracts,
+including false approval decisions, typed identity, content order, unsupported
+injection batches, sparse terminals and explicit mode transitions. No test asserts
+that a live subscription backend accepts these optional execution modes.
+
+### Steering deadlines and replay completeness
+
+`src/server/responses/native-steering.ts` uses monotonic, per-submission 90-second
+acknowledgement deadlines. Accepting or rejecting a steer removes only that
+submission's deadline; later steers or unrelated output never extend another
+submission's time. Accepted input can wait for a safe boundary while the active
+response retains ordinary sliding idle liveness. At a parent terminal, outstanding
+steering gets a fixed 90-second successor deadline. The first valid
+`waiting_for_required_input` notification replaces that parent's successor wait
+with a 30-minute tool/approval deadline; repeated notifications cannot restart it.
+An explicit saved-result continuation starts a fresh 90-second successor bound
+at local submission, including any existing pacing/auth wait. Late pending events
+or a rejected steer cannot extend or cancel that in-flight continuation's bound.
+Unacknowledged steers retain their own earlier deadlines during these phase changes.
+
+One unrefed timer tracks the earliest deadline. A late control or response event
+cannot rescue an expired deadline before the timer callback runs. Expiry settles
+once, clears retained replay bodies and follows the existing connection-failure
+path. It reports unknown delivery, not a synthesized rejection or success, and
+never resends instructions/results, reruns a tool or chooses another account.
+Normal completion and detach cancel the timer. Defaults and frame/count limits
+remain unchanged; no capability or execution-mode allowance is added.
+
+`src/server/responses/native-steering-replay.ts` uses the same
+`src/server/responses/native-response-output.ts` reconciliation as injection
+replay: retain completed wire items omitted by a sparse terminal, match shared
+identities by content and relative order, and reject contradictions before calling
+the continuation-cache writer. This affects local replay, not the original wire
+terminal. Completed parents can be remembered; failed/incomplete parent output
+stays private until a validated successor commits the prefix. Merged output is
+charged against the unchanged 32 MiB serialized history budget. The existing
+body-persistence eligibility and accepted-only steering commit rules still apply.
+`tests/responses/ws-steering-stability.test.ts` binds these deadline and replay
+contracts to deterministic clocks and a synthetic real-handler continuation test.
+`src/server/responses/native-response-json.ts` owns content comparison without
+importing either control owner, keeping the replay dependency graph acyclic.
+Injection retains its existing helper export names and comparison semantics.
+
+## Steering settings, public API and diagnostic probe
+
+`native-steering-settings.ts` validates a bounded allowlist for explicit saved-result
+continuations: `reasoning`, `text` (including structured-output format),
+`stream_options` and public-API `max_output_tokens`. Unknown/malformed overrides
+fail before result reservation. Null resets the supplied setting; omission keeps
+the current authorized wire value. Models, tools, instructions, account, lane,
+service tier, execution mode and other settings remain pinned. The schema uses
+`REASONING_SUMMARY_DELIVERY_VALUES`, not a second invented enum.
+
+`native-steering-policy.ts` reuses normal selector pins, subagent caps, native
+clamps, provider effort mapping, empty-ladder handling and summary/verbosity
+capabilities on private generation-only data. Subscription output-token overrides
+are explicitly refused. `codex-ws-exchange.ts` overlays normalized keys on the
+current wire base, retaining new values across later explicit continuations.
+Normal pacing and captured account/dispatch guards still run before physical send.
+No tool results are transformed by generation normalization or rerun on rejection.
+
+Public API steering requires `openai-responses`, key-mode authentication,
+`upstreamWebsocket: true` and exactly `https://api.openai.com/v1`. It uses its own
+configured API key; subscription traffic is never migrated there. Injection-only
+beta metadata is not attached to steering. Initial mode selection explains disabled,
+multi-agent, conversation-bound and automatic-compaction exclusions without breaking
+ordinary creates or inventing model entitlement. HTTP fallback remains non-steerable.
+
+`scripts/steering-probe.ts` and `scripts/steering-smoke.ts` provide a bounded,
+content-free direct/proxy wire check. Default operation is plan-only; `--self-test`
+is offline. Live runs require both consent flags and distinct explicit environment
+credentials. Destinations are canonical upstream plus loopback, with no URL secrets,
+query or fragments. The script never discovers stored credentials, modifies config,
+executes tools/approvals, retries sends, or logs payloads/IDs. It checks acceptance,
+successor creation and a synthetic result marker separately; an unobserved required-
+input path is `not_exercised`, not pass. The live run uses at most four initial
+synthetic requests plus resulting continuations, each bounded to 120 seconds,
+5,000 events and 2 MiB received bytes. It can consume model usage and is not a
+Codex App/CLI UI certification. The fixture suite also exercises real loopback sockets.
+
+`tests/responses/ws-steering-completion.test.ts` and `ws-steering-smoke.test.ts`
+cover effective wire settings, immutable-route refusals, policy preservation,
+independent API credentials, unavailable-mode diagnostics and safe probe outcomes.

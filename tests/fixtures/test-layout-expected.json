@@ -339,6 +339,7 @@
   "codex-management-convergence.test.ts": "codex-integration",
   "codex-metadata-integrity.test.ts": "codex-integration",
   "codex-model-entitlements.test.ts": "codex-integration",
+  "codex-model-denial-evidence.test.ts": "codex-integration",
   "codex-model-availability-error.test.ts": "codex-integration",
   "codex-models-cache-invalidate.test.ts": "codex-integration",
   "codex-native-residue.test.ts": "codex-integration",
@@ -1255,6 +1256,7 @@
   "warmup.test.ts": "codex-integration",
   "web-search-anthropic.test.ts": "web-search",
   "web-search-backend-union.test.ts": "web-search",
+  "web-search-bridge-replay.test.ts": "web-search",
   "web-search-candidates.test.ts": "web-search",
   "web-search-parse.test.ts": "web-search",
   "web-search-passthrough-bridge.test.ts": "web-search",
@@ -1322,5 +1324,10 @@
   "responses-account-change-scrub.test.ts": "responses",
   "response-log-inspection.test.ts": "server",
   "request-log-nonstream.test.ts": "usage",
-  "ws-native-steering.test.ts": "responses"
+  "ws-native-result-continuations.test.ts": "responses",
+  "ws-native-injection.test.ts": "responses",
+  "ws-native-steering.test.ts": "responses",
+  "ws-steering-stability.test.ts": "responses",
+  "ws-steering-completion.test.ts": "responses",
+  "ws-steering-smoke.test.ts": "responses"
 }

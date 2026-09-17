@@ -57,7 +57,6 @@ const GOOGLE_BREVITY_INSTRUCTION = [
 
 const ANTIGRAVITY_REJECTED_CLAUDE_SDK_PARAGRAPH =
   "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
-
 /**
  * CCA Flash generations that reject the Claude-Agent identity paragraph.
  *
@@ -100,6 +99,20 @@ function stripAntigravityRejectedClaudeSdkParagraph(systemText: string): string 
     .split("\n\n")
     .filter(paragraph => paragraph !== ANTIGRAVITY_REJECTED_CLAUDE_SDK_PARAGRAPH)
     .join("\n\n");
+}
+
+/**
+ * Strips Claude Code CLI's internal billing header (`x-anthropic-billing-header: ...`)
+ * at the start of the system prompt, because Cloud Code Assist / Google Antigravity inspects
+ * `systemInstruction` and rejects requests containing Anthropic billing metadata with
+ * HTTP 429 RESOURCE_EXHAUSTED.
+ *
+ * Matching is restricted to the prompt start (`^` without the `/m` multiline flag) so that
+ * user prompts discussing billing headers in intermediate lines are never modified, and
+ * prompts without a billing header preserve their leading whitespace untouched.
+ */
+function stripAntigravityBillingHeader(systemText: string): string {
+  return systemText.replace(/^x-anthropic-billing-header:[^\n]*\n*/, "");
 }
 
 /**
@@ -276,6 +289,7 @@ function messagesToGeminiFormat(
   parsed: OcxParsedRequest,
   identityModelId: string,
   stripRejectedClaudeSdkParagraph = false,
+  isCloudCodeAssist = false,
 ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -285,9 +299,12 @@ function messagesToGeminiFormat(
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
     GOOGLE_BREVITY_INSTRUCTION,
   ].join("\n\n"), identityModelId);
-  const systemText = stripRejectedClaudeSdkParagraph
-    ? stripAntigravityRejectedClaudeSdkParagraph(identifiedSystemText)
+  let systemText = isCloudCodeAssist
+    ? stripAntigravityBillingHeader(identifiedSystemText)
     : identifiedSystemText;
+  if (stripRejectedClaudeSdkParagraph) {
+    systemText = stripAntigravityRejectedClaudeSdkParagraph(systemText);
+  }
   const systemInstruction = { parts: [{ text: systemText }] };
 
   const contents: unknown[] = [];
@@ -833,12 +850,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         && /^gemini-/.test(routedModelId) && !isImageCapableModel(parsed.modelId);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
-      const stripRejectedClaudeSdkParagraph = provider.googleMode === "cloud-code-assist"
+      const isCloudCodeAssist = provider.googleMode === "cloud-code-assist";
+      const stripRejectedClaudeSdkParagraph = isCloudCodeAssist
         && rejectsClaudeSdkParagraph(parsed.modelId, routedModelId);
       const { systemInstruction, contents, replayedCallIds } = messagesToGeminiFormat(
         parsed,
         identityModelId,
         stripRejectedClaudeSdkParagraph,
+        isCloudCodeAssist,
       );
       lastInjectedCallIds = [...replayedCallIds];
       lastReasoningReplayScope = parsed._reasoningReplayScope;
