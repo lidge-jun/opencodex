@@ -4,8 +4,10 @@
  * Multiauth shape (260706): each provider value is a ProviderAccountSet
  * `{ activeAccountId, accounts: [{ id, credential, needsReauth?, addedAt? }] }`.
  * Legacy single-credential values (`{ access, refresh, expires, ... }`) normalize on load,
- * and the first new-shape persist writes a one-time `auth.json.pre-multiauth` backup so a
- * downgraded loader (which silently drops unknown shapes) cannot destroy refresh tokens.
+ * and the first non-destructive new-shape persist writes a one-time
+ * `auth.json.pre-multiauth` backup so a downgraded loader (which silently drops unknown
+ * shapes) cannot destroy refresh tokens. Destructive mutations remove that backup so
+ * logout and account deletion do not retain the deleted credentials.
  *
  * Exceptions:
  * - `chatgpt` stays single-slot (always replaced): codex-auth-api uses it as a scratch slot
@@ -448,6 +450,24 @@ function backupLegacyOnce(): void {
   } catch { /* best-effort */ }
 }
 
+/**
+ * Destructive mutations (logout, account deletion) also drop the downgrade backup: it
+ * holds a copy of the very credentials the user removed, so keeping it would retain
+ * tokens the user asked to destroy. Best-effort like the create path — the removal runs
+ * after persist, so a failed unlink must not report a failed logout for an account that
+ * is already gone. A stale uninstall-manifest entry is harmless: removeOwnedConfigState
+ * skips paths that no longer exist.
+ */
+function removeLegacyBackup(): void {
+  try {
+    unlinkSync(`${getAuthStorePath()}.pre-multiauth`);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") {
+      console.warn(`[oauth] could not remove legacy credential backup: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
 function isCredentialSource(value: unknown): value is OAuthCredentialSource {
   return value === "oauth" || value === "local-cli" || value === "credential-file" || value === "environment" || value === "manual";
 }
@@ -712,9 +732,9 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; removeLegacyBackup?: boolean }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
-    if (hadLegacy) backupLegacyOnce();
+    if (hadLegacy && !options?.removeLegacyBackup) backupLegacyOnce();
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
       set,
       accountId: set.activeAccountId,
@@ -743,6 +763,7 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
       }
     }
     persist(store);
+    if (options?.removeLegacyBackup) removeLegacyBackup();
     for (const provider of changedProviders) publishAccountSelection(provider, "oauth");
     return result;
   }finally{guard.release();}}, retainedValues, options?.waitMs);
@@ -886,7 +907,7 @@ export async function removeCredential(provider: string): Promise<"removed" | "n
     }
     set.activeAccountId = set.accounts[0]!.id;
     return "removed" as const;
-  }, [provider]);
+  }, [provider], { removeLegacyBackup: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,7 +1050,7 @@ export async function removeAccount(provider: string, accountId: string): Promis
     }
     if (set.activeAccountId === accountId) set.activeAccountId = set.accounts[0]!.id;
     return true;
-  }, [provider, accountId]);
+  }, [provider, accountId], { removeLegacyBackup: true });
   return removed;
 }
 
