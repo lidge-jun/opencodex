@@ -5,6 +5,7 @@ import { clearCompactHandoffRoutesForTests } from "../../src/server/responses/co
 import { decodeCompactionSummary, SUMMARY_PREFIX } from "../../src/responses/compaction";
 import { getDefaultConfig, validateConfigCandidate } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
+import { warnDegradedManualCompaction } from "../../src/config/load-degrade";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
@@ -153,6 +154,25 @@ describe("manual compaction config", () => {
       expect(loaded.providers).toEqual(config().providers);
     }
   });
+
+  test("a dropped hand-edited block warns at load; valid or absent blocks stay silent", () => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (message: unknown) => { warnings.push(String(message)); };
+    try {
+      const invalid = { ...config(), manualCompaction: { model: "gateway/cheap", reasoningEffort: "Low" } };
+      warnDegradedManualCompaction(invalid, configSchema.parse(invalid) as OcxConfig);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("manualCompaction is invalid");
+      warnDegradedManualCompaction(config(), configSchema.parse(config()) as OcxConfig);
+      const absent = config();
+      delete absent.manualCompaction;
+      warnDegradedManualCompaction(absent, configSchema.parse(absent) as OcxConfig);
+      expect(warnings).toHaveLength(1);
+    } finally {
+      console.warn = original;
+    }
+  });
 });
 
 describe("manual compaction reuses existing handlers", () => {
@@ -168,11 +188,14 @@ describe("manual compaction reuses existing handlers", () => {
     const input = body(version !== "v1");
     if (version === "v2-body" || version === "v2-websocket") input.client_metadata = { "x-codex-turn-metadata": metadata() };
     const manualRequest = request(input, version === "v2-body" ? undefined : version === "v2-websocket" ? "auto" : "manual");
+    const logCtx = { model: "", provider: "" } as { model: string; provider: string; requestedModel?: string };
     const response = version === "v2-websocket"
-      ? await handleResponses(manualRequest, settings, { model: "", provider: "" }, { inboundTransport: "websocket" })
-      : await handler(manualRequest, settings, { model: "", provider: "" });
+      ? await handleResponses(manualRequest, settings, logCtx, { inboundTransport: "websocket" })
+      : await handler(manualRequest, settings, logCtx);
     const result = await response.json() as { output: Array<Record<string, any>> };
     expect(response.status).toBe(200);
+    expect(logCtx.requestedModel).toBe("gateway/normal");
+    expect(logCtx.model).toBe("cheap");
     expect(calls[0]!.model).toBe("cheap");
     expect(calls[0]!.reasoning.effort).toBe("low");
     if (version === "v1") expect(JSON.stringify(result.output)).toContain(SUMMARY_PREFIX);

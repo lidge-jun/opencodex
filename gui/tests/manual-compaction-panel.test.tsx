@@ -15,7 +15,7 @@ let setting: { model: string; reasoningEffort?: string } | null;
 let failLoad: boolean;
 let failSave: boolean;
 let writes: unknown[];
-const models = [{ id: "cheap", provider: "gateway", namespaced: "gateway/cheap" }];
+const models = [{ id: "cheap", provider: "gateway", namespaced: "gateway/cheap" }, { id: "compact", provider: "combo", namespaced: "combo/compact" }];
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
@@ -113,4 +113,16 @@ test("retains a saved model missing from the current catalog", async () => {
   await render();
   expect(container.querySelector('#manual-compaction-model')?.textContent).toContain("gateway/retired");
   expect(saveButton().disabled).toBe(true);
+});
+
+test("discloses that the selected provider receives the full conversation", async () => {
+  await render();
+  expect(container.textContent).toContain("sends the entire conversation to the selected model's provider");
+  expect(container.querySelector('[role="note"]')).toBeNull();
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("sends the full conversation contents to gateway for summarization");
+  await choose("model", "combo/compact");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("sends the full conversation contents to combo/compact for summarization");
+  await choose("model", "Use conversation model");
+  expect(container.querySelector('[role="note"]')).toBeNull();
 });

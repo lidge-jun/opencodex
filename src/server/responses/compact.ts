@@ -591,7 +591,8 @@ export async function handleResponsesCompact(
   // The client's own selector, kept for the request log: `raw.model` is rewritten to the
   // base id above, and logCtx.requestedModel is assigned from it further down, so without
   // this the log would lose which id the client actually asked for.
-  const compactRequestedModel = compactFastRow ? compactFastRow.baseId + "--fast" : raw.model;
+  const compactRequestedModel = options.manualCompactionOverride?.sourceModel
+    ?? (compactFastRow ? compactFastRow.baseId + "--fast" : raw.model);
 
   // Recall the last completed client-visible bare model after a combo switch (#3891).
   // Configured selectors take precedence over this implicit session hint.

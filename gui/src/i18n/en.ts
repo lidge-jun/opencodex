@@ -370,6 +370,8 @@ export const en = {
   "manualCompact.currentModel": "Use conversation model",
   "manualCompact.currentEffort": "Keep request effort",
   "manualCompact.effortHint": "Reasoning applies where supported by the compaction endpoint. The model must accept the full conversation.",
+  "manualCompact.dataNotice": "Manual /compact sends the entire conversation to the selected model's provider for summarization, even when the conversation runs on another provider.",
+  "manualCompact.providerWarning": "With this setting, every manual /compact sends the full conversation contents to {provider} for summarization.",
   "manualCompact.loadFailed": "Could not load compaction settings.",
   "manualCompact.saved": "Compaction settings saved.",
   "manualCompact.saveFailed": "Could not save. Your changes are still here; try again.",

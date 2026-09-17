@@ -361,6 +361,8 @@ export const ru: Record<TKey, string> = {
   "manualCompact.currentModel": "Использовать модель разговора",
   "manualCompact.currentEffort": "Сохранить уровень из запроса",
   "manualCompact.effortHint": "Уровень рассуждений применяется, если его поддерживает конечная точка сжатия. Модель должна вмещать весь разговор.",
+  "manualCompact.dataNotice": "Ручной /compact отправляет весь разговор провайдеру выбранной модели для составления сводки, даже если разговор идёт у другого провайдера.",
+  "manualCompact.providerWarning": "С этой настройкой каждый ручной /compact отправляет полное содержимое разговора провайдеру {provider} для составления сводки.",
   "manualCompact.loadFailed": "Не удалось загрузить настройки сжатия.",
   "manualCompact.saved": "Настройки сжатия сохранены.",
   "manualCompact.saveFailed": "Не удалось сохранить. Изменения остались; попробуйте снова.",

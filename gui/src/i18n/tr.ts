@@ -362,6 +362,8 @@ export const tr: Record<TKey, string> = {
   "manualCompact.currentModel": "Konuşma modelini kullan",
   "manualCompact.currentEffort": "İsteğin düzeyini koru",
   "manualCompact.effortHint": "Akıl yürütme, sıkıştırma uç noktası destekliyorsa uygulanır. Model tüm konuşmayı kabul edebilmelidir.",
+  "manualCompact.dataNotice": "Manuel /compact, konuşma başka bir sağlayıcıda yürütülse bile konuşmanın tamamını özetlenmek üzere seçilen modelin sağlayıcısına gönderir.",
+  "manualCompact.providerWarning": "Bu ayarla her manuel /compact, konuşmanın tüm içeriğini özetlenmek üzere {provider} sağlayıcısına gönderir.",
   "manualCompact.loadFailed": "Sıkıştırma ayarları yüklenemedi.",
   "manualCompact.saved": "Sıkıştırma ayarları kaydedildi.",
   "manualCompact.saveFailed": "Kaydedilemedi. Değişiklikleriniz korunuyor; tekrar deneyin.",

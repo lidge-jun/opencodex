@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
+import { IconAlert } from "../icons";
 import { Select } from "../ui";
 import { createBoundedFetch } from "../bounded-fetch";
 import { requireJson, type ModelInfo } from "../pages/dashboard-shared";
@@ -101,11 +102,14 @@ function ManualCompactionControls({ apiBase, models }: { apiBase: string; models
       .map(value => ({ value, label: formatNamespacedModelId(value, t) }))];
   const disabled = busy || saved === undefined || loadError;
   const dirty = model !== (saved?.model ?? "") || effort !== (saved?.reasoningEffort ?? "");
+  const namespace = model.slice(0, Math.max(model.indexOf("/"), 0));
+  const provider = namespace && namespace !== "combo" ? namespace : model;
 
   return (
     <section className="panel" aria-labelledby="manual-compaction-title" aria-busy={busy || (saved === undefined && !loadError)}>
       <strong id="manual-compaction-title">{t("manualCompact.title")}</strong>
       <p className="card-sub">{t("manualCompact.description")}</p>
+      <p className="card-sub">{t("manualCompact.dataNotice")}</p>
       <div className="row" style={{ flexWrap: "wrap", alignItems: "end", gap: 12 }}>
         <div style={{ flex: "1 1 240px", minWidth: 0 }}>
           <label htmlFor="manual-compaction-model" className="card-sub">{t("manualCompact.model")}</label>
@@ -125,6 +129,7 @@ function ManualCompactionControls({ apiBase, models }: { apiBase: string; models
         </button>
       </div>
       <p className="card-sub">{t("manualCompact.effortHint")}</p>
+      {provider && <div className="notice-warn" role="note"><IconAlert width={14} /> {t("manualCompact.providerWarning", { provider })}</div>}
       {loadError && <div role="alert">{t("manualCompact.loadFailed")} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button></div>}
       {feedback && <div role={feedback === "failed" ? "alert" : "status"}>{t(feedback === "saved" ? "manualCompact.saved" : "manualCompact.saveFailed")}</div>}
     </section>

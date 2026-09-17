@@ -356,6 +356,8 @@ export const ko: Record<TKey, string> = {
   "manualCompact.currentModel": "대화 모델 사용",
   "manualCompact.currentEffort": "요청의 추론 수준 유지",
   "manualCompact.effortHint": "압축 엔드포인트가 지원하는 경우 추론 설정이 적용됩니다. 모델은 전체 대화를 수용할 수 있어야 합니다.",
+  "manualCompact.dataNotice": "수동 /compact는 대화가 다른 프로바이더에서 실행 중이더라도 전체 대화를 선택한 모델의 프로바이더로 보내 요약합니다.",
+  "manualCompact.providerWarning": "이 설정을 사용하면 수동 /compact마다 전체 대화 내용이 요약을 위해 {provider}로 전송됩니다.",
   "manualCompact.loadFailed": "압축 설정을 불러올 수 없습니다.",
   "manualCompact.saved": "압축 설정을 저장했습니다.",
   "manualCompact.saveFailed": "저장하지 못했습니다. 변경 사항은 유지됩니다. 다시 시도하세요.",

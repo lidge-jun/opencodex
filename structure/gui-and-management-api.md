@@ -665,6 +665,8 @@ Native steering generation overrides, explicit public-API eligibility and the co
 
 `manualCompaction` is a persisted configuration setting. Its model and optional effort follow the
 [Responses trigger contract](transports/responses.md#manual-compaction-overrides). Dashboard Overview
-provides model and effort selectors with an explicit Save action. `GET /api/settings` returns
+provides model and effort selectors with an explicit Save action, a standing note that the selected
+model's provider receives the entire conversation, and a warning naming that provider once a model
+is chosen. `GET /api/settings` returns
 the override or null; `PUT /api/settings` accepts a complete validated object or null to clear it.
 Save failure restores live settings and deletion provenance; the dashboard retains the draft for retry.

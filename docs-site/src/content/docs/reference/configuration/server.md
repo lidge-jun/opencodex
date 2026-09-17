@@ -490,7 +490,9 @@ keep their original routing and settings. Missing, malformed, or conflicting met
 not activate the override, including on older clients without trigger metadata. WebSocket
 requests use each frame's metadata rather than the connection's earlier handshake metadata.
 
-The override reuses the existing compaction handlers and summary formats. When the selected
+The selected model's provider receives the entire conversation for summarization, including
+conversations that normally run on another provider. The dashboard panel states this next to
+the model picker. The override reuses the existing compaction handlers and summary formats. When the selected
 model lives on the same provider as the conversation model, the request keeps the caller's
 credential and may use that backend's native compact endpoint. When it lives on a different
 provider, OpenCodex runs the portable summarizer instead, so the summary stays readable when

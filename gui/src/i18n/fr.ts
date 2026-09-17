@@ -360,6 +360,8 @@ export const fr: Record<TKey, string> = {
   "manualCompact.currentModel": "Utiliser le modèle de la conversation",
   "manualCompact.currentEffort": "Conserver l’effort de la requête",
   "manualCompact.effortHint": "Le raisonnement s’applique si le point de terminaison de compression le prend en charge. Le modèle doit accepter toute la conversation.",
+  "manualCompact.dataNotice": "Un /compact manuel envoie toute la conversation au fournisseur du modèle choisi pour la résumer, même si la conversation s’exécute chez un autre fournisseur.",
+  "manualCompact.providerWarning": "Avec ce réglage, chaque /compact manuel envoie l’intégralité du contenu de la conversation à {provider} pour la résumer.",
   "manualCompact.loadFailed": "Impossible de charger les paramètres de compression.",
   "manualCompact.saved": "Paramètres de compression enregistrés.",
   "manualCompact.saveFailed": "Échec de l’enregistrement. Vos modifications sont conservées ; réessayez.",

@@ -352,6 +352,8 @@ export const de: Record<TKey, string> = {
   "manualCompact.currentModel": "Gesprächsmodell verwenden",
   "manualCompact.currentEffort": "Anfrageaufwand beibehalten",
   "manualCompact.effortHint": "Der Denkaufwand gilt, wenn der Komprimierungsendpunkt ihn unterstützt. Das Modell muss das gesamte Gespräch verarbeiten können.",
+  "manualCompact.dataNotice": "Manuelles /compact sendet das gesamte Gespräch zur Zusammenfassung an den Anbieter des gewählten Modells, auch wenn das Gespräch bei einem anderen Anbieter läuft.",
+  "manualCompact.providerWarning": "Mit dieser Einstellung sendet jedes manuelle /compact den vollständigen Gesprächsinhalt zur Zusammenfassung an {provider}.",
   "manualCompact.loadFailed": "Komprimierungseinstellungen konnten nicht geladen werden.",
   "manualCompact.saved": "Komprimierungseinstellungen gespeichert.",
   "manualCompact.saveFailed": "Speichern fehlgeschlagen. Deine Änderungen sind noch vorhanden; versuche es erneut.",

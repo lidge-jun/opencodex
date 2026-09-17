@@ -375,7 +375,7 @@ export async function prepareResponsesRequest(
   if (!logCtx.conversationId) {
     logCtx.conversationId = resolvedConversationId;
   }
-  logCtx.requestedModel = parsed.modelId;
+  logCtx.requestedModel = options.manualCompactionOverride?.sourceModel ?? parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
   // What this request may spend beyond its input, for the durable spend reservation (#4707).
   // Read from the caller rather than from the adapter's serialized body, because the
