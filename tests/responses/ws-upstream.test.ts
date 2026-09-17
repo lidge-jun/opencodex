@@ -1148,6 +1148,37 @@ describe("codexWsUpstreamFetch", () => {
         expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
       } finally { session.dispose(); }
     });
+
+    test("a native-control attach conflict fails the turn instead of falling back to HTTP", async () => {
+      installFake(ws => { ws.emit("open", {}); });
+      const init = streamingInit();
+      const prepared = prepareCodexWsRequest(CODEX_URL, init)!;
+      const session = new CodexWsSession("wss://chatgpt.com/backend-api/codex/responses", prepared.headers, true);
+      let fallbacks = 0;
+      const nativeControl = {
+        kind: "injection" as const,
+        relayActive: false,
+        attached: true,
+        ended: false,
+        attach() { throw new Error("Native injection transport is already owned."); },
+        observe() { return false; },
+        steer() { throw new Error("unreachable"); },
+        continue() { return false; },
+      };
+      const options = { session, url: CODEX_URL, init, prepared, nativeControl,
+        sseFallback: (async () => { fallbacks++; throw new Error("attach conflict must not fall back"); }) as typeof fetch };
+      try {
+        expect(session.reserve()).toBe(true);
+        const response = await codexWsExchange(options);
+        const ws = FakeWebSocket.instances.at(-1)!;
+        expect(fallbacks).toBe(0);
+        expect(ws.sent).toHaveLength(0);
+        expect(response.status).toBe(502);
+        expect(((await response.json()) as { error: { message: string } }).error.message).toContain("already owned");
+        expect(ws.closed).toBe(true);
+        expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
+      } finally { session.dispose(); }
+    });
   });
 
   test.each(["error", "response.completed"])("multiline upstream %s JSON remains one valid SSE data value", async type => {

@@ -369,6 +369,15 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             } else sendControl();
           }, error => failStream(error));
         }
+      } catch (error) {
+        // An attach failure is an ownership conflict, not a failed send: no frame
+        // left the process, but the channel can never bind, so resolving the HTTP
+        // fallback here would silently degrade a multi-agent turn into an ordinary
+        // one. Fail the turn visibly instead.
+        failStream(error);
+        return;
+      }
+      try {
         ws.send(frameText);
         sentAt = Date.now();
       } catch {
