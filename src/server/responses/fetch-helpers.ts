@@ -104,25 +104,29 @@ export function providerFetch(
   // Rebuilt dispatches must use the same physical-send boundary as ordinary HTTP sends.
   // Return the original 3xx so the response owner retains its retry/health/relay contract.
   const dispatch = Object.assign(
-    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
-      base(input, { ...init, redirect: "manual" }),
+    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const fresh = wantsFreshConnection(input);
+      if (fresh) {
+        headers.set("Connection", "close");
+      }
+      return base(input, {
+        ...init,
+        headers,
+        redirect: "manual",
+        ...(fresh ? { keepalive: false } : {}),
+      });
+    },
     { preconnect },
   ) as typeof globalThis.fetch;
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      const fresh = wantsFreshConnection(input);
-      options.beforeDispatch?.(headers);
-      if (fresh) {
-        headers.set("Connection", "close");
-      }
-      const versioned = withUpstreamHttpVersion(input, init, provider);
-      const dispatchInit = {
-        ...versioned,
-        timeout: 0,
-        headers,
-        ...(fresh ? { keepalive: false } : {}),
-      };
+      // The hook inspects the outgoing headers and refuses the send by throwing; it is not a
+      // mutator, and the copy it receives is deliberately not threaded onward. `Connection`
+      // is decided inside `dispatch`, which runs after this, so the fresh-connection policy
+      // wins regardless of what any caller or hook put in the header.
+      options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
+      const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 };
       return options.dispatchOverride
         ? options.dispatchOverride(input, dispatchInit, dispatch)
         : dispatch(input, dispatchInit);
@@ -250,4 +254,3 @@ export async function fetchWithHeaderTimeout(
     clearTimeout(timer);
   }
 }
-

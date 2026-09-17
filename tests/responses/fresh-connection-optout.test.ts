@@ -140,4 +140,109 @@ describe("providerFetch fresh connection dispatch", () => {
       if (previous !== undefined) process.env.OCX_FRESH_CONNECTION_HOSTS = previous;
     }
   });
+
+  test("matches the destination introduced by a dispatch override", async () => {
+    const previous = process.env.OCX_FRESH_CONNECTION_HOSTS;
+    process.env.OCX_FRESH_CONNECTION_HOSTS = "special-relay.test";
+    let observedInput: Parameters<typeof globalThis.fetch>[0] | undefined;
+    let observedInit: RequestInit | undefined;
+
+    const dummyProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://normal-relay.test/v1",
+      fetch: (async (input, init) => {
+        observedInput = input;
+        observedInit = init;
+        return new Response("ok", { status: 200 });
+      }) as typeof globalThis.fetch,
+    };
+
+    try {
+      const fetcher = providerFetch(dummyProvider, undefined, {
+        dispatchOverride: (_input, init, execute) =>
+          execute("https://special-relay.test/v1/responses", init),
+      });
+      await fetcher("https://normal-relay.test/v1/responses", { method: "POST" });
+
+      expect(observedInput).toBe("https://special-relay.test/v1/responses");
+      expect((observedInit as any)?.keepalive).toBe(false);
+      const headers = new Headers(observedInit?.headers);
+      expect(headers.get("Connection")).toBe("close");
+    } finally {
+      if (previous === undefined) delete process.env.OCX_FRESH_CONNECTION_HOSTS;
+      else process.env.OCX_FRESH_CONNECTION_HOSTS = previous;
+    }
+  });
+
+  test("does not match a destination removed by a dispatch override", async () => {
+    const previous = process.env.OCX_FRESH_CONNECTION_HOSTS;
+    process.env.OCX_FRESH_CONNECTION_HOSTS = "special-relay.test";
+    let observedInput: Parameters<typeof globalThis.fetch>[0] | undefined;
+    let observedInit: RequestInit | undefined;
+
+    const dummyProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://special-relay.test/v1",
+      fetch: (async (input, init) => {
+        observedInput = input;
+        observedInit = init;
+        return new Response("ok", { status: 200 });
+      }) as typeof globalThis.fetch,
+    };
+
+    try {
+      const fetcher = providerFetch(dummyProvider, undefined, {
+        dispatchOverride: (_input, init, execute) =>
+          execute("https://normal-relay.test/v1/responses", init),
+      });
+      await fetcher("https://special-relay.test/v1/responses", { method: "POST" });
+
+      expect(observedInput).toBe("https://normal-relay.test/v1/responses");
+      expect((observedInit as any)?.keepalive).toBeUndefined();
+      const headers = new Headers(observedInit?.headers);
+      expect(headers.has("Connection")).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.OCX_FRESH_CONNECTION_HOSTS;
+      else process.env.OCX_FRESH_CONNECTION_HOSTS = previous;
+    }
+  });
+
+  test("a beforeDispatch hook cannot defeat the fresh-connection decision", async () => {
+    // The hook receives a copy it cannot send. Even if it could, `Connection` is decided
+    // inside the executor, which runs after the hook, so the policy wins either way.
+    const previous = process.env.OCX_FRESH_CONNECTION_HOSTS;
+    process.env.OCX_FRESH_CONNECTION_HOSTS = "special-relay.test";
+    let observedInit: RequestInit | undefined;
+    let sawHeaders = false;
+
+    const dummyProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://special-relay.test/v1",
+      fetch: (async (_input, init) => {
+        observedInit = init;
+        return new Response("ok", { status: 200 });
+      }) as typeof globalThis.fetch,
+    };
+
+    try {
+      const fetcher = providerFetch(dummyProvider, undefined, {
+        beforeDispatch: headers => {
+          sawHeaders = headers.get("x-custom") === "value";
+          headers.set("Connection", "keep-alive");
+        },
+      });
+      await fetcher("https://special-relay.test/v1/responses", {
+        method: "POST",
+        headers: { "x-custom": "value" },
+      });
+
+      expect(sawHeaders).toBe(true);
+      const headers = new Headers(observedInit?.headers);
+      expect(headers.get("Connection")).toBe("close");
+      expect(headers.get("x-custom")).toBe("value");
+    } finally {
+      if (previous === undefined) delete process.env.OCX_FRESH_CONNECTION_HOSTS;
+      else process.env.OCX_FRESH_CONNECTION_HOSTS = previous;
+    }
+  });
 });

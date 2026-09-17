@@ -43,6 +43,12 @@ the upstream HTTP-version helper. Server, provider, and WebSocket data types rem
 It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
 modules merely because those imports existed in the pre-split `responses.ts` monolith.
 
+`OCX_FRESH_CONNECTION_HOSTS` accepts comma-separated hostnames whose outbound HTTP sends bypass
+keep-alive reuse with `Connection: close` and `keepalive: false`; exact hosts and their subdomains
+match case-insensitively. The helper applies this policy at the final executor boundary, after a
+dispatch override has selected or rebuilt the destination, so matching follows the URL sent on the
+wire rather than the URL supplied before credential revalidation.
+
 ### Semantic progress ownership
 
 The Responses proxy does not treat transcript growth as repository progress. It can observe request
