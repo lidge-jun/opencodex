@@ -852,28 +852,48 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   };
 }
 
-let ensuredUsageLogDir: string | null = null;
-let ensuredUsageLogFile: string | null = null;
+// Bound hot-path filesystem hardening to once per second while ensuring an external mode
+// widening cannot suppress write-triggered repair for the lifetime of the process.
+const USAGE_LOG_PERMISSION_RECHECK_MS = 1_000;
 
-function ensureUsageLogDir(): void {
+type UsageLogPermissionCheck = {
+  path: string;
+  checkedAt: number;
+};
+
+let ensuredUsageLogDir: UsageLogPermissionCheck | null = null;
+let ensuredUsageLogFile: UsageLogPermissionCheck | null = null;
+
+function usageLogPermissionCheckIsCurrent(
+  check: UsageLogPermissionCheck | null,
+  path: string,
+  now: number,
+): boolean {
+  return check?.path === path
+    && now >= check.checkedAt
+    && now - check.checkedAt < USAGE_LOG_PERMISSION_RECHECK_MS;
+}
+
+function ensureUsageLogDir(now: number): void {
   const dir = getConfigDir();
-  if (ensuredUsageLogDir === dir) return;
+  if (usageLogPermissionCheckIsCurrent(ensuredUsageLogDir, dir, now)) return;
   recordOwnedConfigPath(dir, usageLogPath());
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { chmodSync(dir, 0o700); } catch { /* best-effort on platforms that ignore chmod */ }
-  ensuredUsageLogDir = dir;
+  ensuredUsageLogDir = { path: dir, checkedAt: now };
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
   const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
   const path = usageLogPath();
+  const now = Date.now();
   const doAppend = (): void => {
-    ensureUsageLogDir();
-    const fileAlreadyEnsured = ensuredUsageLogFile === path;
+    ensureUsageLogDir(now);
+    const filePermissionsCurrent = usageLogPermissionCheckIsCurrent(ensuredUsageLogFile, path, now);
     appendFileSync(path, line, { encoding: "utf-8", mode: 0o600 });
-    if (!fileAlreadyEnsured) {
+    if (!filePermissionsCurrent) {
       try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
-      ensuredUsageLogFile = path;
+      ensuredUsageLogFile = { path, checkedAt: now };
     }
   };
   try {

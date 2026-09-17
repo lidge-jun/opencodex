@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { STORE_BUDGET_MS } from "../helpers/test-budget";
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1017,6 +1017,10 @@ describe("usage log", () => {
     const nodeFs = await import("node:fs");
     const mkdirSpy = spyOn(nodeFs, "mkdirSync");
     const chmodSpy = spyOn(nodeFs, "chmodSync");
+    // Pinned so the count measures the cache and not the runner's scheduling: five
+    // appends that happen to straddle the one-second boundary would legitimately
+    // harden twice, and a saturated CI runner can take that long.
+    const clock = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
     try {
       for (let i = 0; i < 5; i++) {
@@ -1032,12 +1036,51 @@ describe("usage log", () => {
       }
 
       expect(mkdirSpy.mock.calls.length).toBe(1);
-      expect(chmodSpy.mock.calls.length).toBeLessThanOrEqual(2);
+      // One for the directory, one for the file. Not five.
+      expect(chmodSpy.mock.calls.length).toBe(2);
     } finally {
+      clock.mockRestore();
       mkdirSpy.mockRestore();
       chmodSpy.mockRestore();
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    "appendUsageEntry re-narrows externally widened permissions after the bounded cache window",
+    () => {
+      const now = Date.now();
+      const clock = spyOn(Date, "now").mockReturnValue(now);
+      try {
+        appendUsageEntry({
+          requestId: "ocx-permission-initial",
+          timestamp: now,
+          provider: "openai",
+          model: "gpt-4o",
+          status: 200,
+          durationMs: 10,
+          usageStatus: "unreported",
+        });
+        chmodSync(testDir, 0o755);
+        chmodSync(usageLogPath(), 0o644);
+
+        clock.mockReturnValue(now + 1_000);
+        appendUsageEntry({
+          requestId: "ocx-permission-recheck",
+          timestamp: now + 1_000,
+          provider: "openai",
+          model: "gpt-4o",
+          status: 200,
+          durationMs: 11,
+          usageStatus: "unreported",
+        });
+
+        expect(statSync(testDir).mode & 0o777).toBe(0o700);
+        expect(statSync(usageLogPath()).mode & 0o777).toBe(0o600);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   test("appendUsageEntry recovers cleanly on ENOENT if usage directory is deleted between calls", () => {
     const entry1: PersistedUsageEntry = {

@@ -405,7 +405,10 @@ fingerprint mismatch are named separately rather than all reported as a missing 
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in
+[usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented
+as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
+their bounded cache.
 
 Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, using its enrolled data key and checking connection/token ownership before and after the read. It reports hub/client scope and never substitutes local totals on failure. Standalone commands retain their management endpoint.
 
