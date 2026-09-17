@@ -688,6 +688,7 @@ export const ru: Record<TKey, string> = {
   "models.reasoningEffort.high": "Высокий",
   "models.reasoningEffort.xhigh": "Очень высокий",
   "models.reasoningEffort.max": "Максимальный",
+  "models.reasoningEffort.ultra": "Ультра",
   "models.tipProvider": "Провайдер",
   "models.tipContext": "Контекст",
   "models.tipModalities": "Модальности",

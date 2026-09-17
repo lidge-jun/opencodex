@@ -118,7 +118,7 @@ describe("manual compaction request selection", () => {
       const input = body();
       if (frame) input.client_metadata = { "x-codex-turn-metadata": metadata(frame) };
       const headers = new Headers({ "x-codex-turn-metadata": metadata(handshake) });
-      expect(applyManualCompactionOverride(input, headers, config(), "websocket")).toEqual(expected ? { sourceModel: "gateway/normal" } : null);
+      expect(applyManualCompactionOverride(input, headers, config(), { transport: "websocket" })).toEqual(expected ? { sourceModel: "gateway/normal" } : null);
       expect(input.model).toBe(expected ? "gateway/cheap" : "gateway/normal");
     }
   });
@@ -140,7 +140,19 @@ describe("manual compaction request selection", () => {
     expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toBeNull();
     expect(input).toEqual(before);
   });
+
+  test("manual metadata on an ordinary turn never rewrites the request", () => {
+    const input = body(false);
+    const before = structuredClone(input);
+    const headers = new Headers({ "x-codex-turn-metadata": metadata() });
+    expect(applyManualCompactionOverride(input, headers, config())).toBeNull();
+    expect(applyManualCompactionOverride(input, headers, config(), { endpoint: "responses" })).toBeNull();
+    expect(input).toEqual(before);
+    expect(applyManualCompactionOverride(input, headers, config(), { endpoint: "compact" })).toEqual({ sourceModel: "gateway/normal" });
+    expect(input.model).toBe("gateway/cheap");
+  });
 });
+
 
 describe("manual compaction config", () => {
   test("validates optional settings without resetting providers on malformed hand edits", () => {
@@ -176,6 +188,20 @@ describe("manual compaction config", () => {
 });
 
 describe("manual compaction reuses existing handlers", () => {
+  test("an ordinary turn carrying manual metadata stays on the conversation model", async () => {
+    const settings = config();
+    const calls: string[] = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body));
+      calls.push(input.model);
+      return upstreamCompletion(input);
+    }) as typeof fetch;
+    const response = await handleResponses(request(body(false), "manual"), settings, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(calls).toEqual(["normal"]);
+  });
+
   test.each(["v1", "v2", "v2-body", "v2-websocket"])("%s changes only the manual request and returns the existing summary format", async version => {
     const settings = config();
     const saved = structuredClone(settings);

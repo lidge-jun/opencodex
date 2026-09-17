@@ -575,7 +575,7 @@ export async function handleResponsesCompact(
     return formatErrorResponse(400, "invalid_request_error", "Invalid compaction request body");
   }
   if (!options.manualCompactionOverride) {
-    options = { ...options, manualCompactionOverride: applyManualCompactionOverride(body, req.headers, config) };
+    options = { ...options, manualCompactionOverride: applyManualCompactionOverride(body, req.headers, config, { endpoint: "compact" }) };
   }
   const raw = body as { model?: unknown; input?: unknown };
   if (typeof raw.model !== "string" || raw.model.length === 0) {

@@ -2543,6 +2543,7 @@ export const ja: Record<TKey, string> = {
   "models.reasoningEffort.high": "高",
   "models.reasoningEffort.xhigh": "非常に高",
   "models.reasoningEffort.max": "最大",
+  "models.reasoningEffort.ultra": "ウルトラ",
   "models.tipProvider": "Provider",
   "models.tipContext": "Context",
   "models.tipModalities": "Modalities",

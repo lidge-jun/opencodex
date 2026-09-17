@@ -686,6 +686,7 @@ export const ko: Record<TKey, string> = {
   "models.reasoningEffort.high": "높음",
   "models.reasoningEffort.xhigh": "매우 높음",
   "models.reasoningEffort.max": "최대",
+  "models.reasoningEffort.ultra": "울트라",
   "models.tipProvider": "프로바이더",
   "models.tipContext": "컨텍스트",
   "models.tipModalities": "모달리티",

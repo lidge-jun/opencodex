@@ -683,6 +683,7 @@ export const zh: Record<TKey, string> = {
   "models.reasoningEffort.high": "高",
   "models.reasoningEffort.xhigh": "极高",
   "models.reasoningEffort.max": "最高",
+  "models.reasoningEffort.ultra": "超高",
   "models.tipProvider": "提供方",
   "models.tipContext": "上下文",
   "models.tipModalities": "模态",

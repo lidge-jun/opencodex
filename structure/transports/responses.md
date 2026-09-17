@@ -807,8 +807,9 @@ Provider-scoped approval reviewer settings are projected by the [catalog owner](
 `src/server/responses/manual-compaction.ts` applies `manualCompaction` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"`
 and `compaction.trigger: "manual"` in `x-codex-turn-metadata`, supplied as a header or embedded
-in Responses `client_metadata`. Every supplied metadata copy must agree; malformed, absent,
-automatic, and ordinary-turn metadata leave the request unchanged. WebSocket requests use
+in Responses `client_metadata`, and on `/v1/responses` a `compaction_trigger` input item as
+well, so metadata alone cannot move an ordinary turn. Every supplied metadata copy must agree;
+malformed, absent, automatic, and ordinary-turn metadata leave the request unchanged. WebSocket requests use
 only per-frame metadata; handshake headers can describe an earlier request.
 
 The override changes only the model and optional reasoning effort. Existing native forwarding,

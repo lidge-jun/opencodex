@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useT } from "../i18n/shared";
+import { useT, type TKey } from "../i18n/shared";
 import { IconAlert } from "../icons";
 import { Select } from "../ui";
 import { createBoundedFetch } from "../bounded-fetch";
@@ -11,7 +11,7 @@ const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ul
 
 function readSetting(payload: { manualCompaction?: unknown }): Setting {
   const value = payload.manualCompaction;
-  if (value === null) return null;
+  if (value == null) return null;
   if (!value || typeof value !== "object" || !("model" in value) || typeof value.model !== "string" || !value.model.trim()) {
     throw new Error("invalid settings");
   }
@@ -121,7 +121,7 @@ function ManualCompactionControls({ apiBase, models }: { apiBase: string; models
           <label htmlFor="manual-compaction-effort" className="card-sub">{t("manualCompact.effort")}</label>
           <Select id="manual-compaction-effort" value={effort} disabled={disabled || !model}
             style={{ width: "100%" }} label={t("manualCompact.effort")}
-            options={[{ value: "", label: t("manualCompact.currentEffort") }, ...EFFORTS.map(value => ({ value, label: value }))]}
+            options={[{ value: "", label: t("manualCompact.currentEffort") }, ...EFFORTS.map(value => ({ value, label: t(`models.reasoningEffort.${value}` as TKey) }))]}
             onChange={value => { setEffort(value); setFeedback(null); }} />
         </div>
         <button type="button" className="btn btn-primary" disabled={disabled || !dirty} onClick={() => { void save(); }}>

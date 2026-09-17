@@ -14,11 +14,17 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+export interface ManualCompactionOverrideOptions {
+  /** `responses` requires a `compaction_trigger` input item; the native compact endpoint carries none. */
+  endpoint?: "responses" | "compact";
+  transport?: "websocket";
+}
+
 export function applyManualCompactionOverride(
   body: unknown,
   headers: Headers,
   config: OcxConfig,
-  transport?: "websocket",
+  options: ManualCompactionOverrideOptions = {},
 ): ManualCompactionOverride | null {
   const override = config.manualCompaction;
   const raw = record(body);
@@ -26,10 +32,12 @@ export function applyManualCompactionOverride(
     || typeof override?.model !== "string" || !override.model.trim()) return null;
   if (override.reasoningEffort !== undefined
     && (typeof override.reasoningEffort !== "string" || !isDeclaredReasoningEffort(override.reasoningEffort))) return null;
+  if (options.endpoint !== "compact"
+    && !(Array.isArray(raw.input) && raw.input.some(item => record(item)?.type === "compaction_trigger"))) return null;
 
   const metadata: unknown[] = [];
   const header = headers.get("x-codex-turn-metadata");
-  if (transport !== "websocket" && header !== null) metadata.push(header);
+  if (options.transport !== "websocket" && header !== null) metadata.push(header);
   const client = record(raw.client_metadata);
   if (client && Object.hasOwn(client, "x-codex-turn-metadata")) metadata.push(client["x-codex-turn-metadata"]);
   if (metadata.length === 0) return null;

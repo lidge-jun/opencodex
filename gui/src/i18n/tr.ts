@@ -691,6 +691,7 @@ export const tr: Record<TKey, string> = {
   "models.reasoningEffort.high": "Yüksek",
   "models.reasoningEffort.xhigh": "Çok yüksek",
   "models.reasoningEffort.max": "Maksimum",
+  "models.reasoningEffort.ultra": "Ultra",
   "models.tipProvider": "Sağlayıcı",
   "models.tipContext": "Bağlam",
   "models.tipModalities": "Girdi Türleri",

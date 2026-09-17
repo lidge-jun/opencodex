@@ -485,7 +485,8 @@ Existing provider effort rules still apply. The native `/responses/compact` endp
 its existing behavior and does not forward reasoning settings.
 
 OpenCodex changes only requests with explicit `request_kind: "compaction"` and
-`compaction.trigger: "manual"` metadata. Automatic compaction and later conversation turns
+`compaction.trigger: "manual"` metadata, sent to `/v1/responses/compact` or to `/v1/responses`
+with a `compaction_trigger` input item. Automatic compaction and later conversation turns
 keep their original routing and settings. Missing, malformed, or conflicting metadata does
 not activate the override, including on older clients without trigger metadata. WebSocket
 requests use each frame's metadata rather than the connection's earlier handshake metadata.

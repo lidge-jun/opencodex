@@ -69,12 +69,12 @@ test("saves model and optional effort, reloads, removes effort, and clears overr
   await render();
   expect(saveButton().disabled).toBe(true);
   await choose("model", "gateway/cheap");
-  await choose("effort", "low");
+  await choose("effort", "Low");
   await save();
   expect(writes).toEqual([{ manualCompaction: { model: "gateway/cheap", reasoningEffort: "low" } }]);
   expect(container.querySelector('[role="status"]')?.textContent).toBe("Compaction settings saved.");
   await render("/reloaded");
-  expect(container.querySelector('#manual-compaction-effort')?.textContent).toContain("low");
+  expect(container.querySelector('#manual-compaction-effort')?.textContent).toContain("Low");
   await choose("effort", "Keep request effort");
   await save();
   expect(writes.at(-1)).toEqual({ manualCompaction: { model: "gateway/cheap" } });

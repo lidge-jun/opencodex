@@ -704,6 +704,7 @@ export const en = {
   "models.reasoningEffort.high": "High",
   "models.reasoningEffort.xhigh": "Extra high",
   "models.reasoningEffort.max": "Maximum",
+  "models.reasoningEffort.ultra": "Ultra",
   "models.tipProvider": "Provider",
   "models.tipContext": "Context",
   "models.tipModalities": "Modalities",

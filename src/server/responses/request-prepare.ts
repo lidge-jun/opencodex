@@ -149,7 +149,10 @@ export async function prepareResponsesRequest(
     return decodeRequestErrorResponse(err, "responses");
   }
   if (!options.comboAttempt && !options.manualCompactionOverride && inboundWire === "responses") {
-    options.manualCompactionOverride = applyManualCompactionOverride(body, req.headers, config, options.inboundTransport);
+    options.manualCompactionOverride = applyManualCompactionOverride(body, req.headers, config, {
+      endpoint: "responses",
+      transport: options.inboundTransport,
+    });
   }
   // An effort row naming a table-less combo (`combo/x--high`) must reach the combo dispatcher
   // as its base id, so the selector is normalized here, before comboIdFromRawBody reads model.

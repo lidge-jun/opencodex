@@ -132,4 +132,4 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
-The [manual compaction override](responses.md#manual-compaction-overrides) changes model and effort scalars on the already parsed request, within the existing body-reader budget.
+The [manual compaction override](responses.md#manual-compaction-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.
