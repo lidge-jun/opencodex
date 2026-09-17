@@ -8,8 +8,10 @@ import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaW
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
 import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
+import { CODEX_EXHAUSTED_USAGE_PERCENT } from "./quota-types";
 import type { PoolQuotaWriter, StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
 export type { StoredAccountQuota, WhamUsageResponse } from "./quota-types";
+export { CODEX_EXHAUSTED_USAGE_PERCENT } from "./quota-types";
 
 /** Disk snapshot: quota, private non-secret publication UUIDs and policy identity; never token-derived fingerprints. */
 const QUOTA_CACHE_FILENAME = "codex-quota-cache.json";
@@ -75,14 +77,6 @@ function mayCommitAccountQuota(accountId: string, writerGeneration: number): boo
 // Valid upstream percentages are normalized to 0..100. Keep "unknown" outside that domain so an
 // actually exhausted account is still eligible for threshold rotation.
 export const CODEX_UNKNOWN_USAGE_SCORE = 101;
-/**
- * A window reading at or above this is a measured refusal, not a position on a scale.
- *
- * Separate from `CODEX_UNKNOWN_USAGE_SCORE` because they mean opposite things: unknown is
- * "we have not observed this account", 100 is "we observed it and it is full".
- */
-export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
-
 export function isCodexQuotaExhausted(
   quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent" | "shortPercent"> | null,
   plan?: unknown,

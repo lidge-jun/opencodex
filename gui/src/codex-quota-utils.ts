@@ -1,3 +1,5 @@
+import { CODEX_EXHAUSTED_USAGE_PERCENT, TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../../src/codex/quota-types";
+
 export interface AccountQuota {
   weeklyPercent?: number;
   fiveHourPercent?: number;
@@ -7,6 +9,8 @@ export interface AccountQuota {
   weeklyResetAt?: number;
   fiveHourResetAt?: number;
   shortResetAt?: number;
+  /** Local observation time for the short-window percentage. */
+  shortObservedAt?: number;
   shortWindowSeconds?: number;
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number }[];
@@ -80,9 +84,14 @@ export function computeCodexUsageScore(
   const knownLong = longWindows.filter(finite);
   if (knownLong.length === 0) {
     const shortReset = quota.fiveHourResetAt ?? quota.shortResetAt;
-    const isExhausted = finite(shortPercent) && shortPercent >= 100 && (
+    const shortObservationAge = typeof quota.shortObservedAt === "number"
+      ? now - quota.shortObservedAt
+      : undefined;
+    const isExhausted = finite(shortPercent) && shortPercent >= CODEX_EXHAUSTED_USAGE_PERCENT && (
       (typeof shortReset === "number" && shortReset > now) ||
-      (typeof quota.updatedAt === "number" && now - quota.updatedAt < 5 * 60 * 60 * 1000)
+      (typeof shortObservationAge === "number"
+        && shortObservationAge >= 0
+        && shortObservationAge <= TERMINAL_SHORT_WINDOW_FRESHNESS_MS)
     );
     return isExhausted ? 100 : null;
   }

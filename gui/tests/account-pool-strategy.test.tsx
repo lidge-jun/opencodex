@@ -10,8 +10,9 @@ import {
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimitDraft,
-  
 } from "../src/account-pool-strategy";
+import { computeCodexUsageScore } from "../src/codex-quota-utils";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../../src/codex/quota-types";
 import AccountPoolStrategyControls from "../src/components/AccountPoolStrategyControls";
 import CodexPoolStrategySetting from "../src/components/CodexPoolStrategySetting";
 import { CodexAccountSwitchModal } from "../src/components/codex-account-switch-modal";
@@ -88,6 +89,50 @@ async function teardownDom(): Promise<void> {
 }
 
 describe("account pool strategy helpers", () => {
+  test("uses the server short-observation clock for reset-less terminal usage", () => {
+    const now = 1_800_000_000_000;
+
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now - 5 * 60_000,
+      updatedAt: now - 6 * 60 * 60_000,
+    }, undefined, now)).toBe(100);
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now - 5 * 60_000 - 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now + 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+  });
+
+  // Both halves of the boundary are now one value each, shared by import from the types leaf.
+  // These assert the dashboard actually uses them rather than a literal that happens to match.
+  test("the dashboard's terminal-burst boundary is the server's boundary", () => {
+    const now = 1_800_000_000_000;
+    const atBoundary = { shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT, shortObservedAt: now, updatedAt: now };
+    const belowBoundary = { shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT - 1, shortObservedAt: now, updatedAt: now };
+    expect(computeCodexUsageScore(atBoundary, undefined, now)).toBe(CODEX_EXHAUSTED_USAGE_PERCENT);
+    expect(computeCodexUsageScore(belowBoundary, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT,
+      shortObservedAt: now - TERMINAL_SHORT_WINDOW_FRESHNESS_MS,
+      updatedAt: now,
+    }, undefined, now)).toBe(CODEX_EXHAUSTED_USAGE_PERCENT);
+    expect(computeCodexUsageScore({
+      shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT,
+      shortObservedAt: now - TERMINAL_SHORT_WINDOW_FRESHNESS_MS - 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+  });
+
   test("normalizes known strategies and defaults unknowns to quota", () => {
     expect(normalizeAccountPoolStrategy("quota")).toBe("quota");
     expect(normalizeAccountPoolStrategy("round-robin")).toBe("round-robin");

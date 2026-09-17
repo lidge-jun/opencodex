@@ -376,7 +376,7 @@ described in [Responses transport](transports/responses.md), not upstream policy
 
 Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 The Cline client keeps connection settings and models in a separate native file pair; client path overrides and reversible writes follow [Cline paired files](clients/integrations.md#cline-paired-files).
 
